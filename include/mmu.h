@@ -144,6 +144,8 @@ public:
      * @return Count of pages in page table
      */
     size_t GetMappedPageCount() const { return pageTable_.size(); }
+    const std::map<uint64_t, PageEntry>& GetPageTable() const { return pageTable_; }
+    void RestorePageTable(const std::map<uint64_t, PageEntry>& pageTable);
 
     /**
      * Dump page table contents for debugging

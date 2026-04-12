@@ -32,6 +32,9 @@ A Windows-only user-mode emulator for the IA-64 (Intel Itanium) architecture, wr
 - **Basic Execution**: NOP and MOV-like instructions
 - **ELF Loader**: Validation stub for IA-64 ELF binaries
 - **ABI Layer**: Linux IA-64 syscall stubs (read, write, brk, etc.)
+- **MMU**: Full memory management unit with page tables and permissions
+- **Multi-CPU**: Support for multiple CPU contexts and scheduling
+- **Profiler**: Runtime performance analysis with instruction frequency, hot paths, register pressure, memory access classification, and control flow graphs
 
 ### Not Yet Implemented
 - Full IA-64 instruction set
@@ -40,6 +43,43 @@ A Windows-only user-mode emulator for the IA-64 (Intel Itanium) architecture, wr
 - VLIW bundle scheduling
 - Complete ELF loading
 - Dynamic linking
+
+## Profiling Support
+
+The emulator includes a comprehensive profiling system for analyzing program execution:
+
+```cpp
+#include "Profiler.h"
+
+// Configure profiler
+ia64::ProfilerConfig config;
+config.trackInstructionFrequency = true;
+config.trackRegisterPressure = true;
+config.trackMemoryAccess = true;
+
+ia64::Profiler profiler(config);
+cpu.setProfiler(&profiler);
+
+// Run program
+// ... execute code ...
+
+// Export results
+std::string json = profiler.exportToJSON();
+std::string dot = profiler.exportControlFlowGraphDOT();
+```
+
+**Features:**
+- Instruction frequency tracking
+- Hot execution path detection
+- Register pressure analysis
+- Memory access classification (stack/heap/code)
+- Control flow graph generation
+- Multiple export formats (JSON, DOT, CSV)
+
+**Documentation:**
+- Full guide: `docs/PROFILER.md`
+- Quick reference: `docs/PROFILER_QUICK_REFERENCE.md`
+- Example: `examples/profiler_example.cpp`
 
 ## Building
 

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
+#include <algorithm>
 
 namespace ia64 {
 
@@ -28,6 +29,8 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs)
       state_(VMState::UNINITIALIZED),
       activeCPUIndex_(-1),
       debuggerAttached_(false),
+      nextMemoryBreakpointId_(1),
+      maxSnapshotHistory_(256),
       cyclesExecuted_(0) {
     
     if (numCPUs == 0) {
@@ -125,7 +128,11 @@ bool VirtualMachine::init() {
         
         // Reset execution state
         cyclesExecuted_ = 0;
-        breakpoints_.clear();
+        instructionBreakpoints_.clear();
+        memoryBreakpoints_.clear();
+        snapshotHistory_.clear();
+        nextMemoryBreakpointId_ = 1;
+        lastBreakReason_.clear();
         debuggerAttached_ = false;
         
         state_ = VMState::INITIALIZED;
@@ -169,6 +176,8 @@ bool VirtualMachine::reset() {
         
         // Reset execution state
         cyclesExecuted_ = 0;
+        snapshotHistory_.clear();
+        lastBreakReason_.clear();
         
         // Keep breakpoints and debugger attachment
         
@@ -202,79 +211,34 @@ void VirtualMachine::halt() {
 // ============================================================================
 
 bool VirtualMachine::step() {
-    // Check state
     if (state_ == VMState::UNINITIALIZED) {
         LOG_ERROR("Cannot step - VM not initialized");
         return false;
     }
-    
+
     if (state_ == VMState::ERROR) {
         LOG_ERROR("Cannot step - VM in error state");
         return false;
     }
-    
-    // Set running state
+
     if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
         state_ = VMState::RUNNING;
     }
-    
+
     try {
-        // Use scheduler to select next CPU
         std::vector<CPUContext*> cpuPtrs;
         for (auto& ctx : cpus_) {
             cpuPtrs.push_back(&ctx);
         }
-        
-        int cpuIndex = scheduler_->selectNextCPU(cpuPtrs);
-        
-        if (cpuIndex < 0 || cpuIndex >= static_cast<int>(cpus_.size())) {
-            // No runnable CPU
+
+        const int cpuIndex = scheduler_->selectNextCPU(cpuPtrs);
+        if (!isValidCPUIndex(cpuIndex)) {
             LOG_DEBUG("No runnable CPU found");
             state_ = VMState::HALTED;
             return false;
         }
-        
-        // Update active CPU
-        activeCPUIndex_ = cpuIndex;
-        CPUContext& ctx = cpus_[cpuIndex];
-        
-        // Check for breakpoint before execution
-        uint64_t currentIP = ctx.cpu->getIP();
-        if (debuggerAttached_ && checkBreakpoint(currentIP)) {
-            std::ostringstream oss;
-            oss << "Breakpoint hit at IP: 0x" << std::hex << currentIP << std::dec
-                << " on CPU " << cpuIndex;
-            LOG_DEBUG(oss.str());
-            state_ = VMState::DEBUG_BREAK;
-            return false;  // Stop execution
-        }
-        
-        // Execute one instruction on selected CPU
-        bool shouldContinue = ctx.cpu->step();
 
-        if (timerDevice_) {
-            timerDevice_->Tick(1);
-        }
-        
-        // Update CPU context statistics
-        ctx.cyclesExecuted++;
-        ctx.instructionsExecuted++;
-        
-        // Increment global cycle count
-        cyclesExecuted_++;
-        
-        // Notify scheduler
-        scheduler_->onCPUExecuted(cpuIndex, 1);
-        
-        // Check execution result
-        if (!shouldContinue) {
-            LOG_INFO("CPU signaled halt");
-            state_ = VMState::HALTED;
-            return false;
-        }
-        
-        return true;
-        
+        return stepCPU(cpuIndex);
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during step: " + std::string(e.what()));
         state_ = VMState::ERROR;
@@ -312,11 +276,11 @@ uint64_t VirtualMachine::run(uint64_t maxCycles) {
         }
         
         // Execute one step
+        const uint64_t cyclesBeforeStep = cyclesExecuted_;
         bool shouldContinue = step();
+        cyclesThisRun += (cyclesExecuted_ - cyclesBeforeStep);
         
-        if (shouldContinue) {
-            cyclesThisRun++;
-        } else {
+        if (!shouldContinue) {
             // step() already set state appropriately
             break;
         }
@@ -413,7 +377,12 @@ void VirtualMachine::detach_debugger() {
     debuggerAttached_ = false;
     
     // Clear all breakpoints on detach
-    breakpoints_.clear();
+    instructionBreakpoints_.clear();
+    for (const auto& entry : memoryBreakpoints_) {
+        memory_->GetMMU().UnregisterWatchpoint(entry.first);
+    }
+    memoryBreakpoints_.clear();
+    lastBreakReason_.clear();
 }
 
 bool VirtualMachine::setBreakpoint(uint64_t address) {
@@ -422,14 +391,14 @@ bool VirtualMachine::setBreakpoint(uint64_t address) {
         return false;
     }
     
-    auto result = breakpoints_.insert(address);
-    if (result.second) {
-        LOG_INFO("Breakpoint set at 0x" + std::to_string(address));
-        return true;
-    } else {
+    if (instructionBreakpoints_.find(address) != instructionBreakpoints_.end()) {
         LOG_WARN("Breakpoint already exists at 0x" + std::to_string(address));
         return false;
     }
+
+    instructionBreakpoints_[address].address = address;
+    LOG_INFO("Breakpoint set at 0x" + std::to_string(address));
+    return true;
 }
 
 bool VirtualMachine::clearBreakpoint(uint64_t address) {
@@ -438,7 +407,7 @@ bool VirtualMachine::clearBreakpoint(uint64_t address) {
         return false;
     }
     
-    size_t removed = breakpoints_.erase(address);
+    size_t removed = instructionBreakpoints_.erase(address);
     if (removed > 0) {
         LOG_INFO("Breakpoint cleared at 0x" + std::to_string(address));
         return true;
@@ -574,11 +543,13 @@ void VirtualMachine::dump() const {
     std::cout << "Active CPU: " << activeCPUIndex_ << "\n";
     std::cout << "Total Cycles Executed: " << cyclesExecuted_ << "\n";
     std::cout << "Debugger Attached: " << (debuggerAttached_ ? "Yes" : "No") << "\n";
-    std::cout << "Breakpoints: " << breakpoints_.size() << "\n";
+    std::cout << "Instruction Breakpoints: " << instructionBreakpoints_.size() << "\n";
+    std::cout << "Memory Breakpoints: " << memoryBreakpoints_.size() << "\n";
     
-    if (!breakpoints_.empty()) {
+    if (!instructionBreakpoints_.empty()) {
         std::cout << "  Breakpoint addresses:\n";
-        for (uint64_t addr : breakpoints_) {
+        for (const auto& entry : instructionBreakpoints_) {
+            const uint64_t addr = entry.first;
             std::cout << "    0x" << std::hex << addr << std::dec << "\n";
         }
     }
@@ -669,12 +640,288 @@ const BasicInterruptController* VirtualMachine::getInterruptController() const {
     return interruptController_.get();
 }
 
+bool VirtualMachine::setConditionalBreakpoint(uint64_t address, const DebugCondition& condition) {
+    if (!setBreakpoint(address)) {
+        return false;
+    }
+
+    instructionBreakpoints_[address].condition = condition;
+    return true;
+}
+
+size_t VirtualMachine::setMemoryBreakpoint(uint64_t addressStart, uint64_t addressEnd, WatchpointType type, const DebugCondition& condition) {
+    if (!debuggerAttached_) {
+        LOG_ERROR("Cannot set memory breakpoint - no debugger attached");
+        return 0;
+    }
+
+    if (addressEnd <= addressStart) {
+        LOG_ERROR("Invalid memory breakpoint range");
+        return 0;
+    }
+
+    MemoryBreakpoint breakpoint;
+    breakpoint.id = nextMemoryBreakpointId_++;
+    breakpoint.addressStart = addressStart;
+    breakpoint.addressEnd = addressEnd;
+    breakpoint.type = type;
+    breakpoint.condition = condition;
+    breakpoint.enabled = true;
+
+    memoryBreakpoints_[breakpoint.id] = breakpoint;
+    registerMemoryBreakpointHook(breakpoint);
+    return breakpoint.id;
+}
+
+bool VirtualMachine::clearMemoryBreakpoint(size_t breakpointId) {
+    const auto it = memoryBreakpoints_.find(breakpointId);
+    if (it == memoryBreakpoints_.end()) {
+        return false;
+    }
+
+    memory_->GetMMU().UnregisterWatchpoint(breakpointId);
+    memoryBreakpoints_.erase(it);
+    return true;
+}
+
+bool VirtualMachine::stepBundle() {
+    if (!isValidCPUIndex(activeCPUIndex_)) {
+        if (cpus_.empty()) {
+            return false;
+        }
+        activeCPUIndex_ = 0;
+    }
+
+    CPU* cpu = getCPUForIndex(activeCPUIndex_);
+    if (cpu == nullptr) {
+        return false;
+    }
+
+    do {
+        if (!stepCPU(activeCPUIndex_)) {
+            return false;
+        }
+    } while (!cpu->isAtBundleBoundary());
+
+    return true;
+}
+
+std::vector<uint8_t> VirtualMachine::inspectMemory(uint64_t address, size_t size) const {
+    std::vector<uint8_t> buffer(size, 0);
+    if (size == 0) {
+        return buffer;
+    }
+
+    const uint8_t* raw = memory_->GetRawData();
+    if (address + size > memory_->GetTotalSize()) {
+        throw std::out_of_range("Memory inspection range out of bounds");
+    }
+
+    std::copy(raw + address, raw + address + size, buffer.begin());
+    return buffer;
+}
+
+uint64_t VirtualMachine::inspectRegister(size_t index) const {
+    return readGR(index);
+}
+
+bool VirtualMachine::inspectPredicate(size_t index) const {
+    const CPU* cpu = getCPUForIndex(activeCPUIndex_);
+    if (cpu == nullptr) {
+        throw std::runtime_error("No active CPU");
+    }
+
+    return cpu->readPR(index);
+}
+
+DebuggerControlFlowState VirtualMachine::inspectControlFlow() const {
+    const CPU* cpu = getCPUForIndex(activeCPUIndex_);
+    if (cpu == nullptr) {
+        throw std::runtime_error("No active CPU");
+    }
+
+    DebuggerControlFlowState controlFlow;
+    controlFlow.instructionPointer = cpu->getIP();
+    controlFlow.currentFrameMarker = cpu->getCFM();
+    controlFlow.processorStatus = cpu->getState().GetPSR();
+    controlFlow.currentSlot = cpu->getCurrentSlot();
+    controlFlow.atBundleBoundary = cpu->isAtBundleBoundary();
+    return controlFlow;
+}
+
+DebuggerSnapshot VirtualMachine::createSnapshot() const {
+    DebuggerSnapshot snapshot;
+    snapshot.memory = memory_->CreateSnapshot();
+    snapshot.vmState = state_;
+    snapshot.activeCPUIndex = activeCPUIndex_;
+    snapshot.cyclesExecuted = cyclesExecuted_;
+    snapshot.cpus.reserve(cpus_.size());
+
+    for (const auto& ctx : cpus_) {
+        DebuggerSnapshot::CPURecord record;
+        if (ctx.cpu) {
+            record.runtime = ctx.cpu->createSnapshot();
+        }
+        record.executionState = ctx.state;
+        record.cyclesExecuted = ctx.cyclesExecuted;
+        record.instructionsExecuted = ctx.instructionsExecuted;
+        record.idleCycles = ctx.idleCycles;
+        record.enabled = ctx.enabled;
+        record.lastActivationTime = ctx.lastActivationTime;
+        snapshot.cpus.push_back(record);
+    }
+
+    return snapshot;
+}
+
+bool VirtualMachine::restoreSnapshot(const DebuggerSnapshot& snapshot) {
+    if (snapshot.cpus.size() != cpus_.size()) {
+        return false;
+    }
+
+    memory_->RestoreSnapshot(snapshot.memory);
+    for (size_t i = 0; i < cpus_.size(); ++i) {
+        if (cpus_[i].cpu) {
+            cpus_[i].cpu->restoreSnapshot(snapshot.cpus[i].runtime);
+        }
+        cpus_[i].state = snapshot.cpus[i].executionState;
+        cpus_[i].cyclesExecuted = snapshot.cpus[i].cyclesExecuted;
+        cpus_[i].instructionsExecuted = snapshot.cpus[i].instructionsExecuted;
+        cpus_[i].idleCycles = snapshot.cpus[i].idleCycles;
+        cpus_[i].enabled = snapshot.cpus[i].enabled;
+        cpus_[i].lastActivationTime = snapshot.cpus[i].lastActivationTime;
+    }
+
+    state_ = VMState::DEBUG_BREAK;
+    activeCPUIndex_ = snapshot.activeCPUIndex;
+    cyclesExecuted_ = snapshot.cyclesExecuted;
+    lastBreakReason_ = "rewind";
+    return true;
+}
+
+bool VirtualMachine::rewindToLastSnapshot() {
+    if (snapshotHistory_.empty()) {
+        return false;
+    }
+
+    const DebuggerSnapshot snapshot = snapshotHistory_.back();
+    snapshotHistory_.pop_back();
+    return restoreSnapshot(snapshot);
+}
+
 // ============================================================================
 // Internal Helpers
 // ============================================================================
 
 bool VirtualMachine::checkBreakpoint(uint64_t address) const {
-    return breakpoints_.find(address) != breakpoints_.end();
+    const auto it = instructionBreakpoints_.find(address);
+    return it != instructionBreakpoints_.end() && it->second.enabled;
+}
+
+bool VirtualMachine::evaluateCondition(const DebugCondition& condition, const CPU& cpu) const {
+    return evaluateCondition(condition, cpu.getState());
+}
+
+bool VirtualMachine::evaluateCondition(const DebugCondition& condition, const CPUState& cpuState) const {
+    if (condition.target == DebugConditionTarget::NONE || condition.op == DebugConditionOperator::ANY) {
+        return true;
+    }
+
+    uint64_t lhs = 0;
+    switch (condition.target) {
+        case DebugConditionTarget::GENERAL_REGISTER:
+            lhs = cpuState.GetGR(condition.index);
+            break;
+        case DebugConditionTarget::PREDICATE_REGISTER:
+            lhs = cpuState.GetPR(condition.index) ? 1ULL : 0ULL;
+            break;
+        case DebugConditionTarget::INSTRUCTION_POINTER:
+            lhs = cpuState.GetIP();
+            break;
+        case DebugConditionTarget::NONE:
+        default:
+            return true;
+    }
+
+    switch (condition.op) {
+        case DebugConditionOperator::ANY:
+            return true;
+        case DebugConditionOperator::EQUAL:
+            return lhs == condition.value;
+        case DebugConditionOperator::NOT_EQUAL:
+            return lhs != condition.value;
+        case DebugConditionOperator::GREATER:
+            return lhs > condition.value;
+        case DebugConditionOperator::GREATER_OR_EQUAL:
+            return lhs >= condition.value;
+        case DebugConditionOperator::LESS:
+            return lhs < condition.value;
+        case DebugConditionOperator::LESS_OR_EQUAL:
+            return lhs <= condition.value;
+        case DebugConditionOperator::IS_TRUE:
+            return lhs != 0;
+        case DebugConditionOperator::IS_FALSE:
+            return lhs == 0;
+        default:
+            return false;
+    }
+}
+
+size_t VirtualMachine::registerMemoryBreakpointHook(const MemoryBreakpoint& breakpoint) {
+    Watchpoint watchpoint(breakpoint.addressStart, breakpoint.addressEnd, breakpoint.type,
+        [this, breakpoint](WatchpointContext& context) {
+            const CPU* cpu = getCPUForIndex(activeCPUIndex_);
+            if (cpu == nullptr || !evaluateCondition(breakpoint.condition, cpu->getState())) {
+                return;
+            }
+
+            state_ = VMState::DEBUG_BREAK;
+            lastBreakReason_ = "memory breakpoint";
+        });
+
+    watchpoint.enabled = breakpoint.enabled;
+    watchpoint.description = "vm memory breakpoint";
+    return memory_->GetMMU().RegisterWatchpoint(watchpoint);
+}
+
+void VirtualMachine::captureSnapshotIfBoundary(int cpuIndex) {
+    if (!debuggerAttached_ || !isValidCPUIndex(cpuIndex)) {
+        return;
+    }
+
+    CPU* cpu = getCPUForIndex(cpuIndex);
+    if (cpu == nullptr) {
+        return;
+    }
+
+    if (!snapshotHistory_.empty() && snapshotHistory_.back().cyclesExecuted == cyclesExecuted_) {
+        return;
+    }
+
+    snapshotHistory_.push_back(createSnapshot());
+    trimSnapshotHistory();
+}
+
+void VirtualMachine::trimSnapshotHistory() {
+    while (snapshotHistory_.size() > maxSnapshotHistory_) {
+        snapshotHistory_.pop_front();
+    }
+}
+
+CPU* VirtualMachine::getCPUForIndex(int cpuIndex) {
+    if (!isValidCPUIndex(cpuIndex) || !cpus_[cpuIndex].cpu) {
+        return nullptr;
+    }
+
+    return cpus_[cpuIndex].cpu.get();
+}
+
+const CPU* VirtualMachine::getCPUForIndex(int cpuIndex) const {
+    if (!isValidCPUIndex(cpuIndex) || !cpus_[cpuIndex].cpu) {
+        return nullptr;
+    }
+
+    return cpus_[cpuIndex].cpu.get();
 }
 
 bool VirtualMachine::initializeSubsystems() {
@@ -737,48 +984,76 @@ bool VirtualMachine::isValidCPUIndex(int cpuIndex) const {
 // ============================================================================
 
 bool VirtualMachine::stepCPU(int cpuIndex) {
-    // Check VM state
     if (state_ == VMState::UNINITIALIZED) {
         LOG_ERROR("Cannot step CPU - VM not initialized");
         return false;
     }
-    
+
     if (state_ == VMState::ERROR) {
         LOG_ERROR("Cannot step CPU - VM in error state");
         return false;
     }
-    
-    // Validate CPU index
+
     if (!isValidCPUIndex(cpuIndex)) {
         LOG_ERROR("Invalid CPU index: " + std::to_string(cpuIndex));
         return false;
     }
-    
+
     try {
-        // Set running state if needed
         if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
             state_ = VMState::RUNNING;
         }
-        
-        // Prepare CPU context pointers
-        std::vector<CPUContext*> cpuPtrs;
-        for (auto& ctx : cpus_) {
-            cpuPtrs.push_back(&ctx);
-        }
-        
-        // Use scheduler to step specific CPU
-        bool success = scheduler_->stepCPU(cpuPtrs, cpuIndex);
 
-        if (success && timerDevice_) {
+        CPUContext& ctx = cpus_[cpuIndex];
+        CPU* cpu = getCPUForIndex(cpuIndex);
+        if (cpu == nullptr) {
+            throw std::runtime_error("CPU not initialized");
+        }
+
+        activeCPUIndex_ = cpuIndex;
+        memory_->GetMMU().SetCPUStateReference(&cpu->getState());
+        captureSnapshotIfBoundary(cpuIndex);
+
+        const uint64_t currentIP = cpu->getIP();
+        const bool bypassInstructionBreakpoint =
+            state_ == VMState::DEBUG_BREAK &&
+            lastBreakReason_ == "instruction breakpoint" &&
+            cpu->isAtBundleBoundary();
+
+        if (debuggerAttached_ && !bypassInstructionBreakpoint && cpu->isAtBundleBoundary() &&
+            checkBreakpoint(currentIP) && evaluateCondition(instructionBreakpoints_.find(currentIP)->second.condition, *cpu)) {
+            state_ = VMState::DEBUG_BREAK;
+            lastBreakReason_ = "instruction breakpoint";
+            return false;
+        }
+
+        if (bypassInstructionBreakpoint) {
+            lastBreakReason_.clear();
+            state_ = VMState::RUNNING;
+        }
+
+        const bool success = cpu->step();
+        if (!success) {
+            state_ = VMState::HALTED;
+            return false;
+        }
+
+        ctx.cyclesExecuted++;
+        ctx.instructionsExecuted++;
+        cyclesExecuted_++;
+        scheduler_->onCPUExecuted(cpuIndex, 1);
+
+        if (timerDevice_) {
             timerDevice_->Tick(1);
         }
-        
-        if (success) {
-            cyclesExecuted_++;
+
+        if (state_ == VMState::DEBUG_BREAK) {
+            return false;
         }
-        
-        return success;
-        
+
+        state_ = VMState::RUNNING;
+        return true;
+
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during stepCPU: " + std::string(e.what()));
         state_ = VMState::ERROR;
@@ -787,38 +1062,40 @@ bool VirtualMachine::stepCPU(int cpuIndex) {
 }
 
 int VirtualMachine::stepAllCPUs() {
-    // Check VM state
     if (state_ == VMState::UNINITIALIZED) {
         LOG_ERROR("Cannot step all CPUs - VM not initialized");
         return 0;
     }
-    
+
     if (state_ == VMState::ERROR) {
         LOG_ERROR("Cannot step all CPUs - VM in error state");
         return 0;
     }
-    
+
     try {
-        // Set running state if needed
         if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
             state_ = VMState::RUNNING;
         }
-        
-        // Prepare CPU context pointers
-        std::vector<CPUContext*> cpuPtrs;
-        for (auto& ctx : cpus_) {
-            cpuPtrs.push_back(&ctx);
+
+        int successCount = 0;
+        for (size_t i = 0; i < cpus_.size(); ++i) {
+            if (!cpus_[i].enabled) {
+                continue;
+            }
+
+            if (!stepCPU(static_cast<int>(i))) {
+                if (state_ == VMState::DEBUG_BREAK) {
+                    break;
+                }
+                continue;
+            }
+
+            successCount++;
         }
-        
-        // Use scheduler to step all CPUs
-        int successCount = scheduler_->stepAllCPUs(cpuPtrs);
-        
-        // Update global cycle count (each successful CPU step = 1 cycle)
-        cyclesExecuted_ += successCount;
-        
+
         LOG_DEBUG("Stepped " + std::to_string(successCount) + " CPUs");
         return successCount;
-        
+
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during stepAllCPUs: " + std::string(e.what()));
         state_ = VMState::ERROR;
@@ -827,52 +1104,42 @@ int VirtualMachine::stepAllCPUs() {
 }
 
 uint64_t VirtualMachine::stepQuantum(int cpuIndex, uint64_t bundleCount) {
-    // Check VM state
     if (state_ == VMState::UNINITIALIZED) {
         LOG_ERROR("Cannot step quantum - VM not initialized");
         return 0;
     }
-    
+
     if (state_ == VMState::ERROR) {
         LOG_ERROR("Cannot step quantum - VM in error state");
         return 0;
     }
-    
-    // Validate CPU index
+
     if (!isValidCPUIndex(cpuIndex)) {
         LOG_ERROR("Invalid CPU index: " + std::to_string(cpuIndex));
         return 0;
     }
-    
+
     try {
-        // Set running state if needed
         if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
             state_ = VMState::RUNNING;
         }
-        
-        // Prepare CPU context pointers
-        std::vector<CPUContext*> cpuPtrs;
-        for (auto& ctx : cpus_) {
-            cpuPtrs.push_back(&ctx);
-        }
-        
-        // Use scheduler to step quantum
-        uint64_t bundlesExecuted = scheduler_->stepQuantum(cpuPtrs, cpuIndex, bundleCount);
 
-        if (bundlesExecuted > 0 && timerDevice_) {
-            timerDevice_->Tick(bundlesExecuted * 3);
+        activeCPUIndex_ = cpuIndex;
+
+        uint64_t bundlesExecuted = 0;
+        for (; bundlesExecuted < bundleCount; ++bundlesExecuted) {
+            if (!stepBundle()) {
+                break;
+            }
         }
-        
-        // Update global cycle count (each bundle = 3 instructions)
-        cyclesExecuted_ += (bundlesExecuted * 3);
-        
+
         std::ostringstream oss;
         oss << "Executed " << bundlesExecuted << " bundles (" 
             << (bundlesExecuted * 3) << " instructions) on CPU " << cpuIndex;
         LOG_DEBUG(oss.str());
-        
+
         return bundlesExecuted;
-        
+
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during stepQuantum: " + std::string(e.what()));
         state_ = VMState::ERROR;

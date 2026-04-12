@@ -1,14 +1,22 @@
 #pragma once
 
+#pragma once
+
 #include "IVirtualMachine.h"
 #include "CPUContext.h"
+#include "Watchpoint.h"
 #include "ICPUScheduler.h"
 #include "ICPU.h"
 #include "IMemory.h"
 #include "IDecoder.h"
+#include "cpu.h"
 #include <memory>
 #include <vector>
 #include <set>
+#include <map>
+#include <deque>
+#include <string>
+#include <functional>
 #include <cstdint>
 
 namespace ia64 {
@@ -20,6 +28,115 @@ class InstructionDecoder;
 class BasicInterruptController;
 class VirtualConsole;
 class VirtualTimer;
+
+enum class DebugConditionTarget {
+    NONE,
+    GENERAL_REGISTER,
+    PREDICATE_REGISTER,
+    INSTRUCTION_POINTER
+};
+
+enum class DebugConditionOperator {
+    ANY,
+    EQUAL,
+    NOT_EQUAL,
+    GREATER,
+    GREATER_OR_EQUAL,
+    LESS,
+    LESS_OR_EQUAL,
+    IS_TRUE,
+    IS_FALSE
+};
+
+struct DebugCondition {
+    DebugConditionTarget target;
+    DebugConditionOperator op;
+    size_t index;
+    uint64_t value;
+
+    DebugCondition()
+        : target(DebugConditionTarget::NONE)
+        , op(DebugConditionOperator::ANY)
+        , index(0)
+        , value(0) {}
+};
+
+struct InstructionBreakpoint {
+    uint64_t address;
+    DebugCondition condition;
+    bool enabled;
+
+    InstructionBreakpoint()
+        : address(0)
+        , condition()
+        , enabled(true) {}
+};
+
+struct MemoryBreakpoint {
+    size_t id;
+    uint64_t addressStart;
+    uint64_t addressEnd;
+    WatchpointType type;
+    DebugCondition condition;
+    bool enabled;
+
+    MemoryBreakpoint()
+        : id(0)
+        , addressStart(0)
+        , addressEnd(0)
+        , type(WatchpointType::ACCESS)
+        , condition()
+        , enabled(true) {}
+};
+
+struct DebuggerControlFlowState {
+    uint64_t instructionPointer;
+    uint64_t currentFrameMarker;
+    uint64_t processorStatus;
+    size_t currentSlot;
+    bool atBundleBoundary;
+
+    DebuggerControlFlowState()
+        : instructionPointer(0)
+        , currentFrameMarker(0)
+        , processorStatus(0)
+        , currentSlot(0)
+        , atBundleBoundary(true) {}
+};
+
+struct DebuggerSnapshot {
+    struct CPURecord {
+        CPURuntimeStateSnapshot runtime;
+        CPUExecutionState executionState;
+        uint64_t cyclesExecuted;
+        uint64_t instructionsExecuted;
+        uint64_t idleCycles;
+        bool enabled;
+        uint64_t lastActivationTime;
+
+        CPURecord()
+            : runtime()
+            , executionState(CPUExecutionState::IDLE)
+            , cyclesExecuted(0)
+            , instructionsExecuted(0)
+            , idleCycles(0)
+            , enabled(false)
+            , lastActivationTime(0) {}
+    };
+
+    MemorySnapshot memory;
+    std::vector<CPURecord> cpus;
+    VMState vmState;
+    int activeCPUIndex;
+    uint64_t cyclesExecuted;
+
+    DebuggerSnapshot()
+        : memory()
+        , cpus()
+        , vmState(VMState::UNINITIALIZED)
+        , activeCPUIndex(-1)
+        , cyclesExecuted(0) {}
+};
 
 /**
  * VirtualMachine - Complete IA-64 virtual machine implementation
@@ -196,6 +313,17 @@ public:
     uint64_t getTimerBaseAddress() const;
     BasicInterruptController* getInterruptController();
     const BasicInterruptController* getInterruptController() const;
+    bool setConditionalBreakpoint(uint64_t address, const DebugCondition& condition);
+    size_t setMemoryBreakpoint(uint64_t addressStart, uint64_t addressEnd, WatchpointType type, const DebugCondition& condition = DebugCondition());
+    bool clearMemoryBreakpoint(size_t breakpointId);
+    bool stepBundle();
+    std::vector<uint8_t> inspectMemory(uint64_t address, size_t size) const;
+    uint64_t inspectRegister(size_t index) const;
+    bool inspectPredicate(size_t index) const;
+    DebuggerControlFlowState inspectControlFlow() const;
+    DebuggerSnapshot createSnapshot() const;
+    bool restoreSnapshot(const DebuggerSnapshot& snapshot);
+    bool rewindToLastSnapshot();
 
 private:
     // ========================================================================
@@ -217,8 +345,13 @@ private:
     VMState state_;                                 // Current execution state
     int activeCPUIndex_;                            // Currently active CPU (-1 = none)
     bool debuggerAttached_;                         // Debugger attached?
-    std::set<uint64_t> breakpoints_;               // Breakpoint addresses
+    std::map<uint64_t, InstructionBreakpoint> instructionBreakpoints_;
+    std::map<size_t, MemoryBreakpoint> memoryBreakpoints_;
+    std::deque<DebuggerSnapshot> snapshotHistory_;
+    size_t nextMemoryBreakpointId_;
+    size_t maxSnapshotHistory_;
     uint64_t cyclesExecuted_;                       // Total cycles executed (all CPUs)
+    std::string lastBreakReason_;
 
     // ========================================================================
     // Internal Helpers
@@ -230,6 +363,13 @@ private:
      * @return true if breakpoint hit
      */
     bool checkBreakpoint(uint64_t address) const;
+    bool evaluateCondition(const DebugCondition& condition, const CPU& cpu) const;
+    bool evaluateCondition(const DebugCondition& condition, const CPUState& cpuState) const;
+    size_t registerMemoryBreakpointHook(const MemoryBreakpoint& breakpoint);
+    void captureSnapshotIfBoundary(int cpuIndex);
+    void trimSnapshotHistory();
+    CPU* getCPUForIndex(int cpuIndex);
+    const CPU* getCPUForIndex(int cpuIndex) const;
 
     /**
      * Initialize all subsystems

@@ -1,4 +1,6 @@
 #pragma once
+#pragma once
+
 
 #include <cstdint>
 #include <vector>
@@ -7,11 +9,23 @@
 #include <cassert>
 #include <memory>
 #include <utility>
+#include <map>
 #include "IMemory.h"
 #include "IODevice.h"
 #include "mmu.h"
 
 namespace ia64 {
+
+struct MemorySnapshot {
+    std::vector<uint8_t> data;
+    std::map<uint64_t, PageEntry> pageTable;
+    bool mmuEnabled;
+
+    MemorySnapshot()
+        : data()
+        , pageTable()
+        , mmuEnabled(true) {}
+};
 
 /**
 * Memory - 64-bit virtual memory system with MMU support
@@ -131,6 +145,8 @@ public:
      * @return true if enabled, false otherwise
      */
     bool IsMMUEnabled() const { return mmu_->IsEnabled(); }
+    MemorySnapshot CreateSnapshot() const;
+    void RestoreSnapshot(const MemorySnapshot& snapshot);
 
 private:
 /**

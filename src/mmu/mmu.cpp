@@ -310,6 +310,10 @@ void MMU::ClearPageTable() {
     pageTable_.clear();
 }
 
+void MMU::RestorePageTable(const std::map<uint64_t, PageEntry>& pageTable) {
+    pageTable_ = pageTable;
+}
+
 std::string MMU::DumpPageTable(uint64_t startAddr, size_t count) const {
     std::ostringstream oss;
     

@@ -128,6 +128,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
+    <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="src\abi\abi.cpp" />
     <ClCompile Include="src\core\cpu.cpp" />
@@ -140,14 +141,17 @@
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
+    <ClCompile Include="src\profiler\Profiler.cpp" />
     <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
     <ClCompile Include="src\vm\CPUContext.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
     <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_io_devices.cpp" />
+    <ClCompile Include="tests\test_io_devices.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mmu.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mov_imm.cpp" ExcludedFromBuild="true" />
@@ -178,6 +182,7 @@
     <ClInclude Include="include\memory.h" />
     <ClInclude Include="include\mmu.h" />
     <ClInclude Include="include\PageFault.h" />
+    <ClInclude Include="include\Profiler.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
     <ClInclude Include="include\SyscallDispatcher.h" />
     <ClInclude Include="include\Timer.h" />
@@ -198,6 +203,9 @@
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
     <None Include="docs\MMU_SUMMARY.md" />
     <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />
+    <None Include="docs\PROFILER.md" />
+    <None Include="docs\PROFILER_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\PROFILER_QUICK_REFERENCE.md" />
     <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="guideXOS Hypervisor.vcxproj" />

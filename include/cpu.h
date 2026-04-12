@@ -1,4 +1,6 @@
 #pragma once
+#pragma once
+
 
 
 
@@ -7,11 +9,30 @@
 #include "decoder.h"
 #include "memory.h"
 #include "ICPU.h"
+#include "Profiler.h"
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <vector>
 
 namespace ia64 {
+
+struct CPURuntimeStateSnapshot {
+    CPUState architecturalState;
+    Bundle currentBundle;
+    size_t currentSlot;
+    bool bundleValid;
+    std::vector<uint8_t> pendingInterrupts;
+    uint64_t interruptVectorBase;
+
+    CPURuntimeStateSnapshot()
+        : architecturalState()
+        , currentBundle()
+        , currentSlot(0)
+        , bundleValid(false)
+        , pendingInterrupts()
+        , interruptVectorBase(0) {}
+};
 
 // Forward declarations
 class Memory;
@@ -164,12 +185,21 @@ public:
         return syscallDispatcher_; 
     }
 
+    // Profiler support
+    void setProfiler(Profiler* profiler) { profiler_ = profiler; }
+    Profiler* getProfiler() const { return profiler_; }
+    bool isProfilingEnabled() const { return profiler_ != nullptr && profiler_->isEnabled(); }
+
     void queueInterrupt(uint8_t vector);
     bool hasPendingInterrupt() const;
     void setInterruptsEnabled(bool enabled);
     bool areInterruptsEnabled() const;
     void setInterruptVectorBase(uint64_t baseAddress);
     uint64_t getInterruptVectorBase() const;
+    bool isAtBundleBoundary() const;
+    size_t getCurrentSlot() const;
+    CPURuntimeStateSnapshot createSnapshot() const;
+    void restoreSnapshot(const CPURuntimeStateSnapshot& snapshot);
     
     
 private:
@@ -177,6 +207,7 @@ CPUState state_;                    // Architectural state
 IMemory& memory_;                   // Reference to memory system interface
 IDecoder& decoder_;                 // Reference to instruction decoder interface
 SyscallDispatcher* syscallDispatcher_; // Optional syscall dispatcher
+Profiler* profiler_;                // Optional profiler for performance analysis
     
 // Current bundle tracking (for multi-instruction execution)
 Bundle currentBundle_;

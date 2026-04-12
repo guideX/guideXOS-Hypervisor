@@ -50,8 +50,17 @@ set(IO_SOURCES
     src/io/InterruptController.cpp
 )
 
+set(VM_SOURCES
+    src/vm/VirtualMachine.cpp
+    src/vm/CPUContext.cpp
+)
+
 set(SYSCALL_SOURCES
     src/syscall/SyscallDispatcher.cpp
+)
+
+set(PROFILER_SOURCES
+    src/profiler/Profiler.cpp
 )
 
 set(ALL_SOURCES
@@ -61,7 +70,9 @@ set(ALL_SOURCES
     ${LOADER_SOURCES}
     ${ABI_SOURCES}
     ${IO_SOURCES}
+    ${VM_SOURCES}
     ${SYSCALL_SOURCES}
+    ${PROFILER_SOURCES}
 )
 
 # Header files (for IDE organization)
@@ -78,9 +89,14 @@ set(HEADERS
     include/ICPU.h
     include/IMemory.h
     include/SyscallDispatcher.h
+    include/CPUContext.h
+    include/IVirtualMachine.h
+    include/VirtualMachine.h
+    include/Watchpoint.h
     include/Console.h
     include/Timer.h
     include/InterruptController.h
+    include/Profiler.h
 )
 
 # Main executable
@@ -209,11 +225,39 @@ else()
     target_compile_options(test_io_devices PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Debugger test
+add_executable(test_debugger
+    tests/test_debugger.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_debugger PRIVATE /W4)
+else()
+    target_compile_options(test_debugger PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Profiler test
+add_executable(test_profiler
+    tests/test_profiler.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_profiler PRIVATE /W4)
+else()
+    target_compile_options(test_profiler PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 # Enable testing
 enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
+add_test(NAME DebuggerTests COMMAND test_debugger)
+add_test(NAME ProfilerTests COMMAND test_profiler)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)

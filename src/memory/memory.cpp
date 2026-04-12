@@ -110,6 +110,24 @@ void Memory::Clear() {
     std::fill(data_.begin(), data_.end(), static_cast<uint8_t>(0));
 }
 
+MemorySnapshot Memory::CreateSnapshot() const {
+    MemorySnapshot snapshot;
+    snapshot.data = data_;
+    snapshot.pageTable = mmu_->GetPageTable();
+    snapshot.mmuEnabled = mmu_->IsEnabled();
+    return snapshot;
+}
+
+void Memory::RestoreSnapshot(const MemorySnapshot& snapshot) {
+    if (snapshot.data.size() != data_.size()) {
+        throw std::invalid_argument("Memory snapshot size mismatch");
+    }
+
+    data_ = snapshot.data;
+    mmu_->RestorePageTable(snapshot.pageTable);
+    mmu_->SetEnabled(snapshot.mmuEnabled);
+}
+
 void Memory::checkBounds(uint64_t address, size_t size) const {
     // Debug mode: use assertions for fast checks
     assert(address < data_.size() && "Memory address out of bounds");

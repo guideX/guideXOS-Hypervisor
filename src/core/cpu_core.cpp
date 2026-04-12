@@ -78,6 +78,7 @@ CPU::CPU(IMemory& memory, IDecoder& decoder)
       memory_(memory), 
       decoder_(decoder),
       syscallDispatcher_(nullptr),
+      profiler_(nullptr),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -90,6 +91,7 @@ CPU::CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatche
       memory_(memory), 
       decoder_(decoder),
       syscallDispatcher_(syscallDispatcher),
+      profiler_(nullptr),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -141,6 +143,11 @@ bool CPU::step() {
     
     // Get the current instruction
     const InstructionEx& instr = currentBundle_.instructions[currentSlot_];
+    
+    // Profile instruction execution
+    if (isProfilingEnabled()) {
+        profiler_->recordInstructionExecution(state_.GetIP(), instr.GetDisassembly());
+    }
     
     // Log instruction execution
     std::cout << "[IP=0x" << std::hex << state_.GetIP() << std::dec 
@@ -309,6 +316,34 @@ uint64_t CPU::getInterruptVectorBase() const {
     return interruptVectorBase_;
 }
 
+bool CPU::isAtBundleBoundary() const {
+    return !bundleValid_ || currentSlot_ == 0 || currentSlot_ >= currentBundle_.instructions.size();
+}
+
+size_t CPU::getCurrentSlot() const {
+    return currentSlot_;
+}
+
+CPURuntimeStateSnapshot CPU::createSnapshot() const {
+    CPURuntimeStateSnapshot snapshot;
+    snapshot.architecturalState = state_;
+    snapshot.currentBundle = currentBundle_;
+    snapshot.currentSlot = currentSlot_;
+    snapshot.bundleValid = bundleValid_;
+    snapshot.pendingInterrupts.assign(pendingInterrupts_.begin(), pendingInterrupts_.end());
+    snapshot.interruptVectorBase = interruptVectorBase_;
+    return snapshot;
+}
+
+void CPU::restoreSnapshot(const CPURuntimeStateSnapshot& snapshot) {
+    state_ = snapshot.architecturalState;
+    currentBundle_ = snapshot.currentBundle;
+    currentSlot_ = snapshot.currentSlot;
+    bundleValid_ = snapshot.bundleValid;
+    pendingInterrupts_.assign(snapshot.pendingInterrupts.begin(), snapshot.pendingInterrupts.end());
+    interruptVectorBase_ = snapshot.interruptVectorBase;
+}
+
 bool CPU::servicePendingInterrupt() {
     if (!areInterruptsEnabled() || pendingInterrupts_.empty()) {
         return false;
@@ -330,30 +365,65 @@ bool CPU::servicePendingInterrupt() {
 uint64_t CPU::readGR(size_t index) const {
     // Apply rotation for stacked registers
     size_t physical = applyRegisterRotation(index, 'G');
+    
+    // Profile register read
+    if (isProfilingEnabled()) {
+        const_cast<Profiler*>(profiler_)->recordGeneralRegisterRead(physical);
+    }
+    
     return state_.GetGR(physical);
 }
 
 void CPU::writeGR(size_t index, uint64_t value) {
     size_t physical = applyRegisterRotation(index, 'G');
+    
+    // Profile register write
+    if (isProfilingEnabled()) {
+        profiler_->recordGeneralRegisterWrite(physical);
+    }
+    
     state_.SetGR(physical, value);
 }
 
 bool CPU::readPR(size_t index) const {
     size_t physical = applyRegisterRotation(index, 'P');
+    
+    // Profile register read
+    if (isProfilingEnabled()) {
+        const_cast<Profiler*>(profiler_)->recordPredicateRegisterRead(physical);
+    }
+    
     return state_.GetPR(physical);
 }
 
 void CPU::writePR(size_t index, bool value) {
     size_t physical = applyRegisterRotation(index, 'P');
+    
+    // Profile register write
+    if (isProfilingEnabled()) {
+        profiler_->recordPredicateRegisterWrite(physical);
+    }
+    
     state_.SetPR(physical, value);
 }
 
 uint64_t CPU::readBR(size_t index) const {
     // Branch registers are never rotated
+    
+    // Profile register read
+    if (isProfilingEnabled()) {
+        const_cast<Profiler*>(profiler_)->recordBranchRegisterRead(index);
+    }
+    
     return state_.GetBR(index);
 }
 
 void CPU::writeBR(size_t index, uint64_t value) {
+    // Profile register write
+    if (isProfilingEnabled()) {
+        profiler_->recordBranchRegisterWrite(index);
+    }
+    
     state_.SetBR(index, value);
 }
 
