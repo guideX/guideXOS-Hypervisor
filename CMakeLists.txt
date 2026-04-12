@@ -59,6 +59,11 @@ set(IO_SOURCES
 set(VM_SOURCES
     src/vm/VirtualMachine.cpp
     src/vm/CPUContext.cpp
+    src/vm/VMManager.cpp
+)
+
+set(STORAGE_SOURCES
+    src/storage/RawDiskDevice.cpp
 )
 
 set(SYSCALL_SOURCES
@@ -82,6 +87,7 @@ set(ALL_SOURCES
     ${ABI_SOURCES}
     ${IO_SOURCES}
     ${VM_SOURCES}
+    ${STORAGE_SOURCES}
     ${SYSCALL_SOURCES}
     ${PROFILER_SOURCES}
     ${FUZZER_SOURCES}
@@ -108,6 +114,11 @@ set(HEADERS
     include/CPUContext.h
     include/IVirtualMachine.h
     include/VirtualMachine.h
+    include/VMConfiguration.h
+    include/VMMetadata.h
+    include/VMManager.h
+    include/IStorageDevice.h
+    include/RawDiskDevice.h
     include/Watchpoint.h
     include/Console.h
     include/Timer.h
@@ -267,6 +278,20 @@ if(MSVC)
 else()
     target_compile_options(test_isa_plugin PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# VMManager test
+add_executable(test_vmmanager
+    tests/test_vmmanager.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_vmmanager PRIVATE /W4)
+else()
+    target_compile_options(test_vmmanager PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 if(MSVC)
     target_compile_options(test_debugger PRIVATE /W4)

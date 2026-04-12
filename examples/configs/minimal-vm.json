@@ -1,0 +1,33 @@
+{
+  "name": "example-minimal-vm",
+  "description": "Minimal IA-64 VM with 16 MB RAM",
+  "uuid": "",
+  "cpu": {
+    "isaType": "IA-64",
+    "cpuCount": 1,
+    "clockFrequency": 0,
+    "enableProfiling": false
+  },
+  "memory": {
+    "memorySize": 16777216,
+    "enableMMU": true,
+    "enablePaging": false,
+    "pageSize": 4096
+  },
+  "storageDevices": [
+  ],
+  "boot": {
+    "bootDevice": "disk0",
+    "kernelPath": "",
+    "initrdPath": "",
+    "bootArgs": "",
+    "entryPoint": 0,
+    "directBoot": false
+  },
+  "networkInterfaces": [
+  ],
+  "enableDebugger": false,
+  "enableSnapshots": true,
+  "autoStart": false,
+  "maxCycles": 0
+}

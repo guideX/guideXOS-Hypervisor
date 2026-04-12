@@ -1,0 +1,49 @@
+{
+  "name": "example-standard-vm",
+  "description": "Standard IA-64 VM with 256 MB RAM and disk",
+  "uuid": "",
+  "cpu": {
+    "isaType": "IA-64",
+    "cpuCount": 2,
+    "clockFrequency": 1000000000,
+    "enableProfiling": true
+  },
+  "memory": {
+    "memorySize": 268435456,
+    "enableMMU": true,
+    "enablePaging": true,
+    "pageSize": 4096
+  },
+  "storageDevices": [
+    {
+      "deviceId": "disk0",
+      "deviceType": "raw",
+      "imagePath": "/path/to/disk0.img",
+      "readOnly": false,
+      "sizeBytes": 1073741824,
+      "blockSize": 512
+    }
+  ],
+  "boot": {
+    "bootDevice": "disk0",
+    "kernelPath": "",
+    "initrdPath": "",
+    "bootArgs": "",
+    "entryPoint": 0,
+    "directBoot": false
+  },
+  "networkInterfaces": [
+    {
+      "interfaceId": "eth0",
+      "interfaceType": "user",
+      "macAddress": "",
+      "enableDHCP": true,
+      "ipAddress": "",
+      "gateway": ""
+    }
+  ],
+  "enableDebugger": true,
+  "enableSnapshots": true,
+  "autoStart": false,
+  "maxCycles": 0
+}

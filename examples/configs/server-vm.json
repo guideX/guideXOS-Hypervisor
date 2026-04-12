@@ -1,0 +1,65 @@
+{
+  "name": "example-server-vm",
+  "description": "Server IA-64 VM with 1 GB RAM, multiple disks, and network",
+  "uuid": "",
+  "cpu": {
+    "isaType": "IA-64",
+    "cpuCount": 4,
+    "clockFrequency": 2000000000,
+    "enableProfiling": false
+  },
+  "memory": {
+    "memorySize": 1073741824,
+    "enableMMU": true,
+    "enablePaging": true,
+    "pageSize": 4096
+  },
+  "storageDevices": [
+    {
+      "deviceId": "disk0",
+      "deviceType": "raw",
+      "imagePath": "/path/to/system-disk.img",
+      "readOnly": false,
+      "sizeBytes": 10737418240,
+      "blockSize": 4096
+    },
+    {
+      "deviceId": "disk1",
+      "deviceType": "raw",
+      "imagePath": "/path/to/data-disk.img",
+      "readOnly": false,
+      "sizeBytes": 53687091200,
+      "blockSize": 4096
+    }
+  ],
+  "boot": {
+    "bootDevice": "disk0",
+    "kernelPath": "/boot/vmlinuz",
+    "initrdPath": "/boot/initrd.img",
+    "bootArgs": "root=/dev/sda1 console=ttyS0",
+    "entryPoint": 0,
+    "directBoot": true
+  },
+  "networkInterfaces": [
+    {
+      "interfaceId": "eth0",
+      "interfaceType": "bridge",
+      "macAddress": "52:54:00:12:34:56",
+      "enableDHCP": false,
+      "ipAddress": "192.168.1.100",
+      "gateway": "192.168.1.1"
+    },
+    {
+      "interfaceId": "eth1",
+      "interfaceType": "bridge",
+      "macAddress": "52:54:00:12:34:57",
+      "enableDHCP": true,
+      "ipAddress": "",
+      "gateway": ""
+    }
+  ],
+  "enableDebugger": false,
+  "enableSnapshots": true,
+  "autoStart": true,
+  "maxCycles": 0
+}
