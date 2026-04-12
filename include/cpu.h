@@ -16,6 +16,7 @@ namespace ia64 {
 class Memory;
 using MemorySystem = Memory; // Alias for backward compatibility
 class InstructionDecoder;
+class SyscallDispatcher;
 
 /**
  * RegisterFile - Helper class for managing rotating register files
@@ -109,6 +110,11 @@ public:
     CPU(IMemory& memory, IDecoder& decoder);
     
     /**
+     * Constructor with syscall dispatcher
+     */
+    CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatcher);
+    
+    /**
      * Destructor
      */
     ~CPU();
@@ -147,11 +153,22 @@ public:
     // Dump CPU state for debugging
     void dump() const override;
     
+    // Set syscall dispatcher (optional)
+    void setSyscallDispatcher(SyscallDispatcher* dispatcher) { 
+        syscallDispatcher_ = dispatcher; 
+    }
+    
+    // Get syscall dispatcher
+    SyscallDispatcher* getSyscallDispatcher() const { 
+        return syscallDispatcher_; 
+    }
+    
     
 private:
 CPUState state_;                    // Architectural state
 IMemory& memory_;                   // Reference to memory system interface
 IDecoder& decoder_;                 // Reference to instruction decoder interface
+SyscallDispatcher* syscallDispatcher_; // Optional syscall dispatcher
     
 // Current bundle tracking (for multi-instruction execution)
 Bundle currentBundle_;

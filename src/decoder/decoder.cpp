@@ -114,6 +114,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                           << value << std::dec << std::endl;
             }
             break;
+        
+        case InstructionType::BREAK:
+            // Break instruction - handled specially by CPU
+            // This is just a placeholder; actual syscall handling is in CPU
+            std::cout << "  -> break 0x" << std::hex << immediate_ << std::dec << std::endl;
+            break;
             
         default:
             // Unknown instruction - ignore for now
@@ -154,6 +160,10 @@ std::string InstructionEx::GetDisassembly() const {
             
         case InstructionType::ST8:
             oss << "st8 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            break;
+        
+        case InstructionType::BREAK:
+            oss << "break 0x" << std::hex << immediate_ << std::dec;
             break;
             
         default:
@@ -267,7 +277,7 @@ InstructionEx InstructionDecoder::DecodeInstruction(uint64_t rawBits, UnitType u
     
     // Check for basic patterns (simplified encoding for testing):
     // Bits [40:37] = major opcode (4 bits)
-    //   0x0 = NOP
+    //   0x0 = BREAK/NOP
     //   0x1 = MOV immediate
     //   0x2 = MOV register
     //   0x3 = ADD
@@ -278,6 +288,14 @@ InstructionEx InstructionDecoder::DecodeInstruction(uint64_t rawBits, UnitType u
     uint8_t majorOpcode = (rawBits >> 37) & 0x0F;  // Bits [40:37]
     
     if (majorOpcode == 0) {
+        // Could be NOP or BREAK - check immediate field
+        uint64_t immediate = rawBits & 0x1FFFFF;  // 21-bit immediate for break
+        if (immediate == 0x100000) {
+            // This is a syscall break instruction
+            InstructionEx insn(InstructionType::BREAK, unit);
+            insn.SetImmediate(immediate);
+            return insn;
+        }
         return DecodeNop(rawBits);
     }
     else if (majorOpcode == 1) {

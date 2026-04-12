@@ -2,6 +2,7 @@
 #include "cpu.h"
 #include "decoder.h"
 #include "memory.h"
+#include "SyscallDispatcher.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -76,6 +77,17 @@ CPU::CPU(IMemory& memory, IDecoder& decoder)
     : state_(), 
       memory_(memory), 
       decoder_(decoder),
+      syscallDispatcher_(nullptr),
+      currentSlot_(0),
+      bundleValid_(false) {
+    reset();
+}
+
+CPU::CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatcher)
+    : state_(), 
+      memory_(memory), 
+      decoder_(decoder),
+      syscallDispatcher_(syscallDispatcher),
       currentSlot_(0),
       bundleValid_(false) {
     reset();
@@ -158,6 +170,21 @@ bool CPU::step() {
 void CPU::executeInstruction(const InstructionEx& instr) {
     // Safe execution with error handling
     try {
+        // Check if this is a syscall (break 0x100000)
+        if (instr.GetType() == InstructionType::BREAK && 
+            instr.HasImmediate() && 
+            instr.GetImmediate() == 0x100000) {
+            
+            // This is a syscall - dispatch through syscall dispatcher
+            if (syscallDispatcher_) {
+                syscallDispatcher_->DispatchSyscall(state_, memory_);
+            } else {
+                std::cerr << "Warning: Syscall encountered but no dispatcher registered\n";
+            }
+            return;
+        }
+        
+        // Normal instruction execution
         // InstructionEx already has Execute() method that handles execution
         // It also handles predication internally if needed
         instr.Execute(state_, memory_);

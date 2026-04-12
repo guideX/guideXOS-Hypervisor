@@ -68,6 +68,7 @@ enum class InstructionType {
     LD8,        // Load 8 bytes
     ST8,        // Store 8 bytes
     BR,         // Branch
+    BREAK,      // Break instruction (used for syscalls)
     UNKNOWN
 };
 
@@ -106,6 +107,13 @@ public:
     // Operands (simplified - real IA-64 has complex encoding)
     void SetOperands(uint8_t dst, uint8_t src1, uint8_t src2 = 0);
     void SetImmediate(uint64_t imm);
+    
+    // Accessors for execution
+    uint8_t GetDst() const { return dst_; }
+    uint8_t GetSrc1() const { return src1_; }
+    uint8_t GetSrc2() const { return src2_; }
+    uint64_t GetImmediate() const { return immediate_; }
+    bool HasImmediate() const { return hasImmediate_; }
     
 private:
     InstructionType type_;

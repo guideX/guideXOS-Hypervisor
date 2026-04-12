@@ -137,17 +137,20 @@
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
+    <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
     <ClCompile Include="src\vm\CPUContext.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
     <ClCompile Include="tests\test_bootstrap.cpp" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_elf_validation.cpp" />
     <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mmu.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mov_imm.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_multi_cpu.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_page_fault.cpp" />
     <ClCompile Include="tests\test_scheduler_stepping.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_syscall_dispatcher.cpp" />
     <ClCompile Include="tests\test_watchpoint.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -169,6 +172,7 @@
     <ClInclude Include="include\mmu.h" />
     <ClInclude Include="include\PageFault.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
+    <ClInclude Include="include\SyscallDispatcher.h" />
     <ClInclude Include="include\VirtualMachine.h" />
     <ClInclude Include="include\Watchpoint.h" />
   </ItemGroup>
@@ -180,6 +184,8 @@
     <None Include="docs\BOOTSTRAP_QUICK_START.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
     <None Include="docs\ELF64_LOADER.md" />
+    <None Include="docs\ELF_VALIDATION.md" />
+    <None Include="docs\ELF_VALIDATION_SUMMARY.md" />
     <None Include="docs\EXECUTION_LOOP_IMPLEMENTATION.md" />
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
     <None Include="docs\MMU_SUMMARY.md" />

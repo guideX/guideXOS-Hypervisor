@@ -44,12 +44,17 @@ set(ABI_SOURCES
     src/abi/abi.cpp
 )
 
+set(SYSCALL_SOURCES
+    src/syscall/SyscallDispatcher.cpp
+)
+
 set(ALL_SOURCES
     ${CORE_SOURCES}
     ${DECODER_SOURCES}
     ${MEMORY_SOURCES}
     ${LOADER_SOURCES}
     ${ABI_SOURCES}
+    ${SYSCALL_SOURCES}
 )
 
 # Header files (for IDE organization)
@@ -65,6 +70,7 @@ set(HEADERS
     include/IDecoder.h
     include/ICPU.h
     include/IMemory.h
+    include/SyscallDispatcher.h
 )
 
 # Main executable
@@ -165,10 +171,24 @@ else()
     target_compile_options(test_bootstrap PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Syscall dispatcher test
+add_executable(test_syscall_dispatcher
+    tests/test_syscall_dispatcher.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_syscall_dispatcher PRIVATE /W4)
+else()
+    target_compile_options(test_syscall_dispatcher PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 # Enable testing
 enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
+add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)

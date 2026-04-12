@@ -9,6 +9,7 @@ namespace ia64 {
 LinuxABI::LinuxABI()
     : brkAddress_(0x40000000)  // Initial heap address
     , pid_(1000)               // Fake PID
+    , mmapHint_(0x60000000)    // Initial mmap region
 {}
 
 SyscallResult LinuxABI::ExecuteSyscall(CPUState& cpu, MemorySystem& memory) {
@@ -59,6 +60,14 @@ SyscallResult LinuxABI::ExecuteSyscall(CPUState& cpu, MemorySystem& memory) {
             result = SysBrk(arg0);
             break;
 
+        case Syscall::MMAP:
+            result = SysMmap(arg0, arg1, arg2, arg3, arg4, arg5, memory);
+            break;
+
+        case Syscall::MUNMAP:
+            result = SysMunmap(arg0, arg1, memory);
+            break;
+
         default:
             result = SysUnknown(syscallNum);
             break;
@@ -83,6 +92,7 @@ std::string LinuxABI::GetSyscallName(Syscall syscall) {
         case Syscall::FSTAT: return "fstat";
         case Syscall::LSEEK: return "lseek";
         case Syscall::MMAP: return "mmap";
+        case Syscall::MPROTECT: return "mprotect";
         case Syscall::MUNMAP: return "munmap";
         case Syscall::BRK: return "brk";
         case Syscall::EXIT: return "exit";
@@ -163,6 +173,68 @@ SyscallResult LinuxABI::SysBrk(uint64_t addr) {
 SyscallResult LinuxABI::SysUnknown(uint64_t syscallNum) {
     std::cout << "[SYSCALL] unknown syscall #" << syscallNum << "\n";
     return SyscallResult::Error(38);  // ENOSYS
+}
+
+SyscallResult LinuxABI::SysMmap(uint64_t addr, uint64_t length, uint64_t prot, 
+                                 uint64_t flags, uint64_t fd, uint64_t offset, 
+                                 MemorySystem& memory) {
+    // IA-64 mmap arguments:
+    // addr: requested address (0 = let kernel choose)
+    // length: size of mapping
+    // prot: memory protection (PROT_READ, PROT_WRITE, PROT_EXEC)
+    // flags: mapping flags (MAP_SHARED, MAP_PRIVATE, MAP_ANONYMOUS, etc.)
+    // fd: file descriptor (or -1 for anonymous)
+    // offset: file offset
+    
+    std::cout << "[SYSCALL] mmap(addr=0x" << std::hex << addr 
+              << ", length=0x" << length 
+              << ", prot=0x" << prot 
+              << ", flags=0x" << flags 
+              << ", fd=" << std::dec << static_cast<int64_t>(fd)
+              << ", offset=0x" << std::hex << offset << std::dec << ")";
+    
+    // Stub implementation: return a valid address from mmap region
+    uint64_t mappedAddr;
+    
+    if (addr != 0 && (flags & MAP_FIXED)) {
+        // MAP_FIXED: use exact address requested
+        mappedAddr = addr;
+    } else if (addr != 0) {
+        // Address hint provided, use it if reasonable
+        mappedAddr = addr;
+    } else {
+        // No hint, allocate from our mmap region
+        mappedAddr = mmapHint_;
+        // Align to page boundary (16KB on IA-64)
+        const uint64_t pageSize = 16 * 1024;
+        mappedAddr = (mappedAddr + pageSize - 1) & ~(pageSize - 1);
+    }
+    
+    // Round length up to page size
+    const uint64_t pageSize = 16 * 1024;
+    uint64_t alignedLength = (length + pageSize - 1) & ~(pageSize - 1);
+    
+    // For anonymous mappings, we could zero-initialize the memory
+    // For file-backed mappings, we'd need to read from the file
+    // For now, we just reserve the address space
+    
+    // Update hint for next allocation (if we chose the address)
+    if (addr == 0 || !(flags & MAP_FIXED)) {
+        mmapHint_ = mappedAddr + alignedLength;
+    }
+    
+    std::cout << " -> 0x" << std::hex << mappedAddr << std::dec << " (stub)\n";
+    
+    return SyscallResult(static_cast<int64_t>(mappedAddr));
+}
+
+SyscallResult LinuxABI::SysMunmap(uint64_t addr, uint64_t length, MemorySystem& memory) {
+    std::cout << "[SYSCALL] munmap(addr=0x" << std::hex << addr 
+              << ", length=0x" << length << std::dec << ") -> 0 (stub)\n";
+    
+    // Stub: just return success
+    // Real implementation would free the mapped region
+    return SyscallResult(0);
 }
 
 } // namespace ia64
