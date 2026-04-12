@@ -26,6 +26,12 @@ set(CORE_SOURCES
     src/core/cpu_core.cpp
 )
 
+set(ISA_SOURCES
+    src/isa/IA64ISAPlugin.cpp
+    src/isa/ISAPluginRegistry.cpp
+    src/isa/ExampleISAPlugin.cpp
+)
+
 set(DECODER_SOURCES
     src/decoder/decoder.cpp
 )
@@ -69,6 +75,7 @@ set(FUZZER_SOURCES
 
 set(ALL_SOURCES
     ${CORE_SOURCES}
+    ${ISA_SOURCES}
     ${DECODER_SOURCES}
     ${MEMORY_SOURCES}
     ${LOADER_SOURCES}
@@ -93,6 +100,10 @@ set(HEADERS
     include/IDecoder.h
     include/ICPU.h
     include/IMemory.h
+    include/IISA.h
+    include/IA64ISAPlugin.h
+    include/ISAPluginRegistry.h
+    include/ExampleISAPlugin.h
     include/SyscallDispatcher.h
     include/CPUContext.h
     include/IVirtualMachine.h
@@ -237,6 +248,25 @@ add_executable(test_debugger
     ${ALL_SOURCES}
     ${HEADERS}
 )
+
+if(MSVC)
+    target_compile_options(test_debugger PRIVATE /W4)
+else()
+    target_compile_options(test_debugger PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# ISA Plugin test
+add_executable(test_isa_plugin
+    tests/test_isa_plugin.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_isa_plugin PRIVATE /W4)
+else()
+    target_compile_options(test_isa_plugin PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 if(MSVC)
     target_compile_options(test_debugger PRIVATE /W4)

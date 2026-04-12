@@ -76,9 +76,10 @@ size_t RegisterFile::MapToPhysical(size_t logical, uint64_t rotationBase) const 
 CPU::CPU(IMemory& memory, IDecoder& decoder)
     : state_(), 
       memory_(memory), 
-      decoder_(decoder),
+      decoder_(&decoder),
       syscallDispatcher_(nullptr),
       profiler_(nullptr),
+      isaPlugin_(nullptr),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -89,9 +90,24 @@ CPU::CPU(IMemory& memory, IDecoder& decoder)
 CPU::CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatcher)
     : state_(), 
       memory_(memory), 
-      decoder_(decoder),
+      decoder_(&decoder),
       syscallDispatcher_(syscallDispatcher),
       profiler_(nullptr),
+      isaPlugin_(nullptr),
+      currentSlot_(0),
+      bundleValid_(false),
+      pendingInterrupts_(),
+      interruptVectorBase_(0) {
+    reset();
+}
+
+CPU::CPU(IMemory& memory, IISA& isaPlugin)
+    : state_(),
+      memory_(memory),
+      decoder_(nullptr),
+      syscallDispatcher_(nullptr),
+      profiler_(nullptr),
+      isaPlugin_(&isaPlugin),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -104,8 +120,21 @@ CPU::~CPU() {
 }
 
 void CPU::reset() {
-    // Reset CPU state (registers, IP, etc.)
-    state_.Reset();
+// If using ISA plugin, delegate reset to it
+if (isaPlugin_) {
+    isaPlugin_->reset();
+    // Sync local state if needed
+    currentSlot_ = 0;
+    bundleValid_ = false;
+    currentBundle_ = Bundle();
+    pendingInterrupts_.clear();
+    interruptVectorBase_ = 0;
+    return;
+}
+    
+// Legacy reset implementation
+// Reset CPU state (registers, IP, etc.)
+state_.Reset();
     
     // Reset bundle tracking
     currentSlot_ = 0;
@@ -127,7 +156,36 @@ void CPU::reset() {
 }
 
 bool CPU::step() {
+// If using ISA plugin, delegate execution to it
+if (isaPlugin_) {
     servicePendingInterrupt();
+        
+    ISAExecutionResult result = isaPlugin_->step(memory_);
+        
+    switch (result) {
+        case ISAExecutionResult::CONTINUE:
+            return true;
+        case ISAExecutionResult::HALT:
+            return false;
+        case ISAExecutionResult::EXCEPTION:
+            std::cerr << "Exception during execution\n";
+            return false;
+        case ISAExecutionResult::INTERRUPT:
+            // Interrupt was handled, continue
+            return true;
+        case ISAExecutionResult::SYSCALL:
+            // Syscall was handled, continue
+            return true;
+        case ISAExecutionResult::BREAKPOINT:
+            // Breakpoint hit, pause execution
+            return false;
+        default:
+            return true;
+    }
+}
+    
+// Legacy implementation
+servicePendingInterrupt();
 
     // Fetch bundle if needed (every 3 instructions, or if invalid)
     if (!bundleValid_ || currentSlot_ >= currentBundle_.instructions.size()) {
@@ -213,6 +271,13 @@ void CPU::executeInstruction(const InstructionEx& instr) {
 }
 
 void CPU::fetchBundle() {
+    // Only used in legacy mode (not with ISA plugin)
+    if (!decoder_) {
+        std::cerr << "Error: fetchBundle() called but no decoder available\\n";
+        bundleValid_ = false;
+        return;
+    }
+    
     // Read 16 bytes (128 bits) from memory at current IP
     uint64_t ip = state_.GetIP();
     uint8_t bundleData[16];
@@ -227,7 +292,7 @@ void CPU::fetchBundle() {
     }
     
     // Decode the bundle
-    currentBundle_ = decoder_.DecodeBundle(bundleData);
+    currentBundle_ = decoder_->DecodeBundle(bundleData);
     bundleValid_ = true;
 }
 

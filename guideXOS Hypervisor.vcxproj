@@ -138,6 +138,9 @@
     <ClCompile Include="src\io\Console.cpp" />
     <ClCompile Include="src\io\InterruptController.cpp" />
     <ClCompile Include="src\io\Timer.cpp" />
+    <ClCompile Include="src\isa\ExampleISAPlugin.cpp" />
+    <ClCompile Include="src\isa\IA64ISAPlugin.cpp" />
+    <ClCompile Include="src\isa\ISAPluginRegistry.cpp" />
     <ClCompile Include="src\loader\bootstrap.cpp" />
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
@@ -150,6 +153,7 @@
     <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_fuzzer.cpp" />
+    <ClCompile Include="tests\test_isa_plugin.cpp" />
     <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
@@ -171,14 +175,18 @@
     <ClInclude Include="include\CPUContext.h" />
     <ClInclude Include="include\cpu_state.h" />
     <ClInclude Include="include\decoder.h" />
+    <ClInclude Include="include\ExampleISAPlugin.h" />
     <ClInclude Include="include\Fuzzer.h" />
+    <ClInclude Include="include\IA64ISAPlugin.h" />
     <ClInclude Include="include\ICPU.h" />
     <ClInclude Include="include\ICPUScheduler.h" />
     <ClInclude Include="include\IDecoder.h" />
+    <ClInclude Include="include\IISA.h" />
     <ClInclude Include="include\IMemory.h" />
     <ClInclude Include="include\IMMU.h" />
     <ClInclude Include="include\InterruptController.h" />
     <ClInclude Include="include\IODevice.h" />
+    <ClInclude Include="include\ISAPluginRegistry.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\loader.h" />
     <ClInclude Include="include\logger.h" />
@@ -204,7 +212,9 @@
     <None Include="docs\ELF_VALIDATION_SUMMARY.md" />
     <None Include="docs\EXECUTION_LOOP_IMPLEMENTATION.md" />
     <None Include="docs\FUZZER.md" />
+    <None Include="docs\FUZZER_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
+    <None Include="docs\ISA_PLUGIN_ARCHITECTURE.md" />
     <None Include="docs\MMU_SUMMARY.md" />
     <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />
     <None Include="docs\PROFILER.md" />

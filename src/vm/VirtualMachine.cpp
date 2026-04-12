@@ -8,6 +8,8 @@
 #include "InterruptController.h"
 #include "Timer.h"
 #include "logger.h"
+#include "ISAPluginRegistry.h"
+#include "IA64ISAPlugin.h"
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -19,47 +21,47 @@ namespace ia64 {
 // Constructor / Destructor
 // ============================================================================
 
-VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs)
-    : memory_(nullptr),
-      decoder_(nullptr),
-      scheduler_(nullptr),
-      interruptController_(nullptr),
-      consoleDevice_(nullptr),
-      timerDevice_(nullptr),
-      state_(VMState::UNINITIALIZED),
-      activeCPUIndex_(-1),
-      debuggerAttached_(false),
-      nextMemoryBreakpointId_(1),
-      maxSnapshotHistory_(256),
-      cyclesExecuted_(0) {
+VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::string& isaName)
+: memory_(nullptr),
+  decoder_(nullptr),
+  scheduler_(nullptr),
+  interruptController_(nullptr),
+  consoleDevice_(nullptr),
+  timerDevice_(nullptr),
+  state_(VMState::UNINITIALIZED),
+  activeCPUIndex_(-1),
+  debuggerAttached_(false),
+  nextMemoryBreakpointId_(1),
+  maxSnapshotHistory_(256),
+  cyclesExecuted_(0) {
     
-    if (numCPUs == 0) {
-        throw std::invalid_argument("VM must have at least 1 CPU");
+if (numCPUs == 0) {
+    throw std::invalid_argument("VM must have at least 1 CPU");
+}
+    
+try {
+    // Create shared subsystems
+    memory_ = std::make_unique<Memory>(memorySize);
+    decoder_ = std::make_unique<InstructionDecoder>();
+        
+    // Create CPU scheduler
+    scheduler_ = std::make_unique<SimpleCPUScheduler>();
+
+    // Create interrupt controller and default memory-mapped devices
+    interruptController_ = std::make_unique<BasicInterruptController>();
+
+    const uint64_t ioBase = memorySize >= 0x200 ? static_cast<uint64_t>(memorySize - 0x200) : 0;
+    consoleDevice_ = std::make_unique<VirtualConsole>(ioBase);
+    timerDevice_ = std::make_unique<VirtualTimer>(ioBase + 0x100);
+    timerDevice_->AttachInterruptController(interruptController_.get());
+
+    memory_->RegisterDevice(consoleDevice_.get());
+    memory_->RegisterDevice(timerDevice_.get());
+        
+    // Create CPU contexts with specified ISA
+    if (!createCPUs(numCPUs, isaName)) {
+        throw std::runtime_error("Failed to create CPU contexts with ISA: " + isaName);
     }
-    
-    try {
-        // Create shared subsystems
-        memory_ = std::make_unique<Memory>(memorySize);
-        decoder_ = std::make_unique<InstructionDecoder>();
-        
-        // Create CPU scheduler
-        scheduler_ = std::make_unique<SimpleCPUScheduler>();
-
-        // Create interrupt controller and default memory-mapped devices
-        interruptController_ = std::make_unique<BasicInterruptController>();
-
-        const uint64_t ioBase = memorySize >= 0x200 ? static_cast<uint64_t>(memorySize - 0x200) : 0;
-        consoleDevice_ = std::make_unique<VirtualConsole>(ioBase);
-        timerDevice_ = std::make_unique<VirtualTimer>(ioBase + 0x100);
-        timerDevice_->AttachInterruptController(interruptController_.get());
-
-        memory_->RegisterDevice(consoleDevice_.get());
-        memory_->RegisterDevice(timerDevice_.get());
-        
-        // Create CPU contexts
-        if (!createCPUs(numCPUs)) {
-            throw std::runtime_error("Failed to create CPU contexts");
-        }
 
         interruptController_->RegisterDeliveryCallback([this](uint8_t vector) {
             const int targetCPU = activeCPUIndex_ >= 0 ? activeCPUIndex_ : 0;
@@ -72,8 +74,8 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs)
         });
         
         std::ostringstream oss;
-        oss << "VirtualMachine created with " << memorySize << " bytes of memory and " 
-            << numCPUs << " CPU(s)";
+        oss << "VirtualMachine created with " << memorySize << " bytes of memory, " 
+            << numCPUs << " CPU(s), ISA: " << isaName;
         LOG_INFO(oss.str());
         
     } catch (const std::exception& e) {
@@ -968,23 +970,50 @@ bool VirtualMachine::initializeSubsystems() {
 }
 
 bool VirtualMachine::createCPUs(size_t numCPUs) {
+    return createCPUs(numCPUs, "IA-64");  // Default to IA-64 for backward compatibility
+}
+
+bool VirtualMachine::createCPUs(size_t numCPUs, const std::string& isaName) {
     try {
         cpus_.reserve(numCPUs);
+        
+        // Check if we should use ISA plugin architecture
+        bool usePlugin = ISAPluginRegistry::instance().isRegistered(isaName);
         
         for (size_t i = 0; i < numCPUs; i++) {
             CPUContext ctx(static_cast<uint32_t>(i));
             
-            // Create CPU instance with shared memory and decoder
-            ctx.cpu = std::make_unique<CPU>(*memory_, *decoder_);
+            if (usePlugin) {
+                // Create ISA plugin instance
+                IA64FactoryData factoryData(decoder_.get());
+                auto isaPlugin = ISAPluginRegistry::instance().createISA(isaName, &factoryData);
+                
+                if (!isaPlugin) {
+                    LOG_ERROR("Failed to create ISA plugin: " + isaName);
+                    return false;
+                }
+                
+                // Store ISA plugin in context (we'll need to extend CPUContext for this)
+                // For now, create CPU with legacy decoder interface
+                ctx.cpu = std::make_unique<CPU>(*memory_, *decoder_);
+                
+                std::ostringstream oss;
+                oss << "Created CPU " << i << " with ISA: " << isaName << " (using plugin)";
+                LOG_INFO(oss.str());
+            } else {
+                // Create CPU instance with shared memory and decoder (legacy mode)
+                ctx.cpu = std::make_unique<CPU>(*memory_, *decoder_);
+                
+                std::ostringstream oss;
+                oss << "Created CPU " << i << " (legacy mode)";
+                LOG_INFO(oss.str());
+            }
+            
             ctx.enabled = false;  // Will be enabled in init()
             ctx.state = CPUExecutionState::IDLE;
             
             // Move into vector
             cpus_.push_back(std::move(ctx));
-            
-            std::ostringstream oss;
-            oss << "Created CPU " << i;
-            LOG_INFO(oss.str());
         }
         
         return true;

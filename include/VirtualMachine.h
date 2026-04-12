@@ -191,12 +191,15 @@ struct DebuggerSnapshot {
 class VirtualMachine : public IVirtualMachine {
 public:
     /**
-     * Constructor
+     * Constructor - Creates VM with specific ISA
      * 
      * @param memorySize Size of virtual memory in bytes (default 16MB)
      * @param numCPUs Number of virtual CPUs to create (default 1)
+     * @param isaName Name of ISA to use (default "IA-64")
      */
-    explicit VirtualMachine(size_t memorySize = 16 * 1024 * 1024, size_t numCPUs = 1);
+    explicit VirtualMachine(size_t memorySize = 16 * 1024 * 1024, 
+                          size_t numCPUs = 1,
+                          const std::string& isaName = "IA-64");
 
     /**
      * Destructor - cleans up all subsystems
@@ -390,6 +393,14 @@ private:
      * @return true if CPUs created successfully
      */
     bool createCPUs(size_t numCPUs);
+    
+    /**
+     * Create and initialize CPU contexts with specific ISA
+     * @param numCPUs Number of CPUs to create
+     * @param isaName Name of ISA to use (e.g., "IA-64")
+     * @return true if CPUs created successfully
+     */
+    bool createCPUs(size_t numCPUs, const std::string& isaName);
 
     /**
      * Validate CPU index

@@ -10,6 +10,7 @@
 #include "memory.h"
 #include "ICPU.h"
 #include "Profiler.h"
+#include "IISA.h"
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -137,6 +138,16 @@ public:
     CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatcher);
     
     /**
+     * Constructor with ISA plugin (new plugin architecture)
+     * When using ISA plugin, the CPU delegates all ISA-specific operations to the plugin.
+     * This enables multiple ISA support in the same VM framework.
+     * 
+     * @param memory Memory system reference
+     * @param isaPlugin ISA plugin implementing IISA interface
+     */
+    CPU(IMemory& memory, IISA& isaPlugin);
+    
+    /**
      * Destructor
      */
     ~CPU();
@@ -189,6 +200,10 @@ public:
     void setProfiler(Profiler* profiler) { profiler_ = profiler; }
     Profiler* getProfiler() const { return profiler_; }
     bool isProfilingEnabled() const { return profiler_ != nullptr && profiler_->isEnabled(); }
+    
+    // ISA plugin support
+    bool isUsingISAPlugin() const { return isaPlugin_ != nullptr; }
+    IISA* getISAPlugin() const { return isaPlugin_; }
 
     void queueInterrupt(uint8_t vector);
     bool hasPendingInterrupt() const;
@@ -205,9 +220,10 @@ public:
 private:
 CPUState state_;                    // Architectural state
 IMemory& memory_;                   // Reference to memory system interface
-IDecoder& decoder_;                 // Reference to instruction decoder interface
+IDecoder* decoder_;                 // Reference to instruction decoder interface (optional if using plugin)
 SyscallDispatcher* syscallDispatcher_; // Optional syscall dispatcher
 Profiler* profiler_;                // Optional profiler for performance analysis
+IISA* isaPlugin_;                   // Optional ISA plugin (new architecture)
     
 // Current bundle tracking (for multi-instruction execution)
 Bundle currentBundle_;
