@@ -309,6 +309,13 @@ public:
      */
     ICPU* getActiveCPU();
     const ICPU* getActiveCPU() const;
+    
+    /**
+     * Get CPU by index (for fuzzing/testing)
+     */
+    CPU& getCPU();
+    const CPU& getCPU() const;
+    
     uint64_t getConsoleBaseAddress() const;
     uint64_t getTimerBaseAddress() const;
     BasicInterruptController* getInterruptController();

@@ -134,6 +134,7 @@
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
     <ClCompile Include="src\decoder\decoder.cpp" />
+    <ClCompile Include="src\fuzzer\Fuzzer.cpp" />
     <ClCompile Include="src\io\Console.cpp" />
     <ClCompile Include="src\io\InterruptController.cpp" />
     <ClCompile Include="src\io\Timer.cpp" />
@@ -148,6 +149,7 @@
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
     <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_fuzzer.cpp" />
     <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
@@ -169,6 +171,7 @@
     <ClInclude Include="include\CPUContext.h" />
     <ClInclude Include="include\cpu_state.h" />
     <ClInclude Include="include\decoder.h" />
+    <ClInclude Include="include\Fuzzer.h" />
     <ClInclude Include="include\ICPU.h" />
     <ClInclude Include="include\ICPUScheduler.h" />
     <ClInclude Include="include\IDecoder.h" />
@@ -200,6 +203,7 @@
     <None Include="docs\ELF_VALIDATION.md" />
     <None Include="docs\ELF_VALIDATION_SUMMARY.md" />
     <None Include="docs\EXECUTION_LOOP_IMPLEMENTATION.md" />
+    <None Include="docs\FUZZER.md" />
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
     <None Include="docs\MMU_SUMMARY.md" />
     <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />

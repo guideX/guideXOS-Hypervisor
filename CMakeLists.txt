@@ -63,6 +63,10 @@ set(PROFILER_SOURCES
     src/profiler/Profiler.cpp
 )
 
+set(FUZZER_SOURCES
+    src/fuzzer/Fuzzer.cpp
+)
+
 set(ALL_SOURCES
     ${CORE_SOURCES}
     ${DECODER_SOURCES}
@@ -73,6 +77,7 @@ set(ALL_SOURCES
     ${VM_SOURCES}
     ${SYSCALL_SOURCES}
     ${PROFILER_SOURCES}
+    ${FUZZER_SOURCES}
 )
 
 # Header files (for IDE organization)
@@ -97,6 +102,7 @@ set(HEADERS
     include/Timer.h
     include/InterruptController.h
     include/Profiler.h
+    include/Fuzzer.h
 )
 
 # Main executable
@@ -251,6 +257,19 @@ else()
     target_compile_options(test_profiler PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Fuzzer test
+add_executable(test_fuzzer
+    tests/test_fuzzer.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_fuzzer PRIVATE /W4)
+else()
+    target_compile_options(test_fuzzer PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 # Enable testing
 enable_testing()
@@ -258,6 +277,7 @@ add_test(NAME BasicTests COMMAND ia64emu_tests)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)
+add_test(NAME FuzzerTests COMMAND test_fuzzer)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)

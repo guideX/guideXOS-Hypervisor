@@ -624,6 +624,26 @@ const ICPU* VirtualMachine::getActiveCPU() const {
     return cpus_[activeCPUIndex_].cpu.get();
 }
 
+CPU& VirtualMachine::getCPU() {
+    if (activeCPUIndex_ < 0 || activeCPUIndex_ >= static_cast<int>(cpus_.size())) {
+        if (!cpus_.empty()) {
+            return *dynamic_cast<CPU*>(cpus_[0].cpu.get());
+        }
+        throw std::runtime_error("No CPU available");
+    }
+    return *dynamic_cast<CPU*>(cpus_[activeCPUIndex_].cpu.get());
+}
+
+const CPU& VirtualMachine::getCPU() const {
+    if (activeCPUIndex_ < 0 || activeCPUIndex_ >= static_cast<int>(cpus_.size())) {
+        if (!cpus_.empty()) {
+            return *dynamic_cast<const CPU*>(cpus_[0].cpu.get());
+        }
+        throw std::runtime_error("No CPU available");
+    }
+    return *dynamic_cast<const CPU*>(cpus_[activeCPUIndex_].cpu.get());
+}
+
 uint64_t VirtualMachine::getConsoleBaseAddress() const {
     return consoleDevice_ ? consoleDevice_->GetBaseAddress() : 0;
 }
