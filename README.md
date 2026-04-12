@@ -1,93 +1,167 @@
-# guideXOS Hypervisor
+# IA-64 (Intel Itanium) Emulator
 
+A Windows-only user-mode emulator for the IA-64 (Intel Itanium) architecture, written in C++20.
 
-
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Project Structure
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/guideX/guidexos-hypervisor.git
-git branch -M main
-git push -uf origin main
+??? include/              # Public headers
+?   ??? cpu_state.h      # CPU register state
+?   ??? decoder.h        # Instruction decoder
+?   ??? memory.h         # Memory management
+?   ??? loader.h         # ELF loader (stubbed)
+?   ??? abi.h            # Linux IA-64 ABI (stubbed)
+??? src/
+?   ??? core/            # CPU emulation core
+?   ??? decoder/         # Instruction decoding (IA-64 bundles)
+?   ??? memory/          # Virtual memory system
+?   ??? loader/          # ELF loader stubs
+?   ??? abi/             # Syscall layer stubs
+??? tests/               # Unit tests
+??? main.cpp             # Entry point with demo
+??? CMakeLists.txt       # CMake build configuration
+
 ```
 
-## Integrate with your tools
+## Features (Scaffolding Phase)
 
-* [Set up project integrations](https://gitlab.com/guideX/guidexos-hypervisor/-/settings/integrations)
+### Implemented
+- **CPU State**: 128 general registers, 128 FP registers, 64 predicate registers, 8 branch registers
+- **Memory System**: Paged virtual memory (4KB pages) with protection flags
+- **Instruction Decoder**: Bundle extraction (128-bit bundles, template + 3 slots)
+- **Basic Execution**: NOP and MOV-like instructions
+- **ELF Loader**: Validation stub for IA-64 ELF binaries
+- **ABI Layer**: Linux IA-64 syscall stubs (read, write, brk, etc.)
 
-## Collaborate with your team
+### Not Yet Implemented
+- Full IA-64 instruction set
+- Register stack engine (RSE)
+- Predication execution
+- VLIW bundle scheduling
+- Complete ELF loading
+- Dynamic linking
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Building
 
-## Test and Deploy
+### Option 1: CMake (Recommended)
 
-Use the built-in continuous integration in GitLab.
+```powershell
+# Configure
+cmake -B build -G "Visual Studio 17 2022" -A x64
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+# Build
+cmake --build build --config Debug
 
-***
+# Run
+.\build\bin\Debug\ia64emu.exe
 
-# Editing this README
+# Run tests
+.\build\bin\Debug\ia64emu_tests.exe
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+### Option 2: Visual Studio
 
-## Suggestions for a good README
+If you prefer to use the Visual Studio project directly:
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+1. Open `guideXOS Hypervisor.sln` in Visual Studio 2022
+2. **Important**: Configure project properties:
+   - Right-click project ? Properties
+   - C/C++ ? General ? Additional Include Directories: Add `$(ProjectDir)include`
+   - C/C++ ? Language ? C++ Language Standard: Select **ISO C++20 Standard (/std:c++20)**
+   - Apply to all configurations (Debug/Release, Win32/x64)
+3. Ensure all source files are added:
+   - main.cpp
+   - src\core\cpu.cpp
+   - src\decoder\decoder.cpp
+   - src\memory\memory.cpp
+   - src\loader\loader.cpp
+   - src\abi\abi.cpp
+4. Build and run
 
-## Name
-Choose a self-explaining name for your project.
+## Usage Example
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+The `main.cpp` demonstrates basic emulator usage:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```cpp
+// Initialize components
+ia64::CPUState cpu;
+ia64::MemorySystem memory(16 * 1024 * 1024);
+ia64::InstructionDecoder decoder;
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+// Load program
+memory.Write(loadAddress, programCode.data(), programCode.size());
+cpu.SetIP(loadAddress);
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+// Execute
+while (...) {
+    std::vector<uint8_t> bundleData(16);
+    memory.Read(cpu.GetIP(), bundleData.data(), 16);
+    
+    auto bundle = decoder.DecodeBundle(bundleData.data());
+    
+    for (const auto& insn : bundle.instructions) {
+        insn.Execute(cpu, memory);
+    }
+    
+    cpu.SetIP(cpu.GetIP() + 16);
+}
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Architecture Notes
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### IA-64 Specifics
+- **VLIW Architecture**: Explicitly Parallel Instruction Computing (EPIC)
+- **Instruction Bundles**: 128 bits containing 3 instructions (41 bits each) + 5-bit template
+- **Templates**: Specify execution units and dependencies for the 3 slots
+- **Execution Units**: M (memory/ALU), I (integer), F (floating-point), B (branch), L/X (extended immediate)
+- **Predication**: All instructions can be predicated on predicate registers
+- **Register Stack**: Hardware-managed register windows (not yet implemented)
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+### Current Limitations
+- Only NOP and basic MOV instructions decoded
+- No actual ELF binary loading
+- Syscalls are stubbed (print debug info only)
+- No RSE (Register Stack Engine)
+- No advanced addressing modes
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Development Roadmap
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+1. **Phase 1** (Current): Scaffolding and architecture
+   - ? CPU state management
+   - ? Memory system
+   - ? Bundle decoding framework
+   - ? Basic execution loop
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+2. **Phase 2**: Core instructions
+   - Integer ALU (ADD, SUB, AND, OR, XOR, shifts)
+   - Loads/stores (LD1/2/4/8, ST1/2/4/8)
+   - Branches (BR, BRL, conditional branches)
+   - Compares and predicates
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+3. **Phase 3**: Advanced features
+   - Register Stack Engine (RSE)
+   - Floating-point instructions
+   - Full ELF loader
+   - System emulation
+
+4. **Phase 4**: Optimization
+   - Just-in-time (JIT) compilation
+   - Binary translation
+   - Performance profiling
+
+## Requirements
+
+- Windows 10/11
+- Visual Studio 2022 (v143 toolset)
+- C++20 compiler support
+- CMake 3.20+ (for CMake build)
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+This is a research/educational project. See appropriate licensing for production use.
+
+## References
+
+- Intel® Itanium® Architecture Software Developer's Manual
+- IA-64 Linux ABI Specification
+- ELF-64 Object File Format

@@ -1,0 +1,9 @@
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/ia64emu.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/ia64emu_tests.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/test_cpu_execution.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/test_mov_imm.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/debug_harness.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/RUN_TESTS.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/INSTALL.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/ALL_BUILD.dir
+D:/devgitlab/guideXOS.Hypervisor/guideXOS Hypervisor/build/CMakeFiles/ZERO_CHECK.dir

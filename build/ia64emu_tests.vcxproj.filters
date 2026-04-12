@@ -1,0 +1,69 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\tests\test_main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\core\cpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\core\cpu_core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\decoder\decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\memory\memory.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\loader\loader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\abi\abi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\cpu_state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\cpu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\decoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\memory.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\loader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\abi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\IDecoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\ICPU.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\include\IMemory.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{917227C1-020C-306F-8425-ED8E5C8F80C4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{02249528-22E7-356F-A1A1-38B3780F4EAA}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
