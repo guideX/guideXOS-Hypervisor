@@ -1,6 +1,8 @@
 #include "loader.h"
+#include "loader.h"
 #include "memory.h"
 #include "cpu_state.h"
+#include "bootstrap.h"
 #include <fstream>
 #include <stdexcept>
 #include <cstring>
@@ -9,33 +11,7 @@
 namespace ia64 {
 
 // IA-64 specific constants
-constexpr uint64_t DEFAULT_STACK_SIZE = 8 * 1024 * 1024;  // 8 MB stack
-constexpr uint64_t DEFAULT_STACK_TOP = 0x7FFFFFF0000ULL;
 constexpr uint64_t PAGE_SIZE = 4096;
-
-// Auxiliary vector types (for Linux ABI)
-enum class AuxVecType : uint64_t {
-    AT_NULL = 0,
-    AT_IGNORE = 1,
-    AT_EXECFD = 2,
-    AT_PHDR = 3,
-    AT_PHENT = 4,
-    AT_PHNUM = 5,
-    AT_PAGESZ = 6,
-    AT_BASE = 7,
-    AT_FLAGS = 8,
-    AT_ENTRY = 9,
-    AT_NOTELF = 10,
-    AT_UID = 11,
-    AT_EUID = 12,
-    AT_GID = 13,
-    AT_EGID = 14
-};
-
-struct AuxVec {
-    uint64_t type;
-    uint64_t value;
-};
 
 ELFLoader::ELFLoader()
     : entryPoint_(0)
@@ -92,13 +68,19 @@ uint64_t ELFLoader::LoadBuffer(const uint8_t* buffer, size_t size, MemorySystem&
         throw std::runtime_error("Failed to process relocations");
     }
 
-    // Setup initial stack with arguments and environment
-    std::vector<std::string> argv = { "program" };  // Default argv[0]
-    std::vector<std::string> envp;  // Empty environment for now
-    uint64_t stackPointer = SetupStack(memory, argv, envp);
+    // Setup bootstrap configuration
+    BootstrapConfig config;
+    config.entryPoint = entryPoint_;
+    config.argv = { "program" };  // Default argv[0]
+    config.envp = {};  // Empty environment for now
+    config.globalPointer = 0;  // For static executables
+    config.programHeaderAddr = baseAddress_ + header_.e_phoff;
+    config.programHeaderEntrySize = header_.e_phentsize;
+    config.programHeaderCount = header_.e_phnum;
+    config.baseAddress = baseAddress_;
 
-    // Initialize CPU state
-    InitializeCPU(cpu, stackPointer);
+    // Initialize CPU and memory state using bootstrap module
+    InitializeBootstrapState(cpu, memory, config);
 
     isLoaded_ = true;
     return entryPoint_;
@@ -346,129 +328,6 @@ bool ELFLoader::ApplyRelocation(const ELF64_Rela& rela, uint64_t symValue, Memor
     }
 
     return true;
-}
-
-uint64_t ELFLoader::SetupStack(MemorySystem& memory, const std::vector<std::string>& argv,
-                                const std::vector<std::string>& envp) {
-    // Calculate total stack size needed
-    size_t stackDataSize = 0;
-    
-    // Space for argv strings
-    for (const auto& arg : argv) {
-        stackDataSize += arg.size() + 1;  // +1 for null terminator
-    }
-    
-    // Space for envp strings
-    for (const auto& env : envp) {
-        stackDataSize += env.size() + 1;
-    }
-    
-    // Space for pointers and auxiliary vectors
-    size_t argc = argv.size();
-    size_t envc = envp.size();
-    size_t pointerSpace = (1 + argc + 1 + envc + 1) * 8;  // argc + argv[] + NULL + envp[] + NULL
-    size_t auxvSpace = 16 * 16;  // Up to 16 aux vectors (type + value)
-    
-    stackDataSize += pointerSpace + auxvSpace;
-    
-    // Align to 16 bytes
-    stackDataSize = (stackDataSize + 15) & ~15;
-    
-    // Calculate stack top
-    uint64_t stackTop = DEFAULT_STACK_TOP;
-    uint64_t stackStart = stackTop - stackDataSize;
-    
-    // Build stack from bottom up
-    uint64_t currentPtr = stackStart;
-    
-    // Write argc
-    memory.write<uint64_t>(currentPtr, argc);
-    currentPtr += 8;
-    
-    // Reserve space for argv pointers
-    uint64_t argvPtrBase = currentPtr;
-    currentPtr += (argc + 1) * 8;
-    
-    // Reserve space for envp pointers
-    uint64_t envpPtrBase = currentPtr;
-    currentPtr += (envc + 1) * 8;
-    
-    // Reserve space for auxiliary vectors
-    uint64_t auxvBase = currentPtr;
-    
-    // Write string data after pointers
-    uint64_t stringPtr = auxvBase + auxvSpace;
-    
-    // Write argv strings and pointers
-    for (size_t i = 0; i < argc; ++i) {
-        memory.write<uint64_t>(argvPtrBase + i * 8, stringPtr);
-        memory.loadBuffer(stringPtr, reinterpret_cast<const uint8_t*>(argv[i].c_str()), argv[i].size() + 1);
-        stringPtr += argv[i].size() + 1;
-    }
-    memory.write<uint64_t>(argvPtrBase + argc * 8, 0);  // NULL terminator
-    
-    // Write envp strings and pointers
-    for (size_t i = 0; i < envc; ++i) {
-        memory.write<uint64_t>(envpPtrBase + i * 8, stringPtr);
-        memory.loadBuffer(stringPtr, reinterpret_cast<const uint8_t*>(envp[i].c_str()), envp[i].size() + 1);
-        stringPtr += envp[i].size() + 1;
-    }
-    memory.write<uint64_t>(envpPtrBase + envc * 8, 0);  // NULL terminator
-    
-    // Write auxiliary vectors
-    currentPtr = auxvBase;
-    
-    auto writeAuxVec = [&](AuxVecType type, uint64_t value) {
-        memory.write<uint64_t>(currentPtr, static_cast<uint64_t>(type));
-        currentPtr += 8;
-        memory.write<uint64_t>(currentPtr, value);
-        currentPtr += 8;
-    };
-    
-    writeAuxVec(AuxVecType::AT_PAGESZ, PAGE_SIZE);
-    writeAuxVec(AuxVecType::AT_PHDR, baseAddress_ + header_.e_phoff);
-    writeAuxVec(AuxVecType::AT_PHENT, header_.e_phentsize);
-    writeAuxVec(AuxVecType::AT_PHNUM, header_.e_phnum);
-    writeAuxVec(AuxVecType::AT_BASE, baseAddress_);
-    writeAuxVec(AuxVecType::AT_ENTRY, entryPoint_);
-    writeAuxVec(AuxVecType::AT_UID, 1000);
-    writeAuxVec(AuxVecType::AT_EUID, 1000);
-    writeAuxVec(AuxVecType::AT_GID, 1000);
-    writeAuxVec(AuxVecType::AT_EGID, 1000);
-    writeAuxVec(AuxVecType::AT_NULL, 0);  // Terminator
-    
-    return stackStart;
-}
-
-void ELFLoader::InitializeCPU(CPUState& cpu, uint64_t stackPointer) {
-    // Initialize CPU state for program execution
-    cpu.Reset();
-    
-    // Set instruction pointer to entry point
-    cpu.SetIP(entryPoint_);
-    
-    // Set up stack pointer (GR12 is conventional stack pointer)
-    cpu.SetGR(12, stackPointer);
-    
-    // Initialize backing store pointer (AR.BSP - AR36)
-    // RSE backing store grows upward from a different region
-    uint64_t backingStoreBase = 0x80000000000ULL;
-    cpu.SetAR(36, backingStoreBase);  // AR.BSP
-    
-    // Initialize RSE configuration (AR.RSC - AR16)
-    // Mode: eager stores, privilege level 0
-    cpu.SetAR(16, 0x0003);  // AR.RSC
-    
-    // Initialize predicate register 0 (always true)
-    cpu.SetPR(0, true);
-    
-    // Initialize CFM (current frame marker) - minimal frame
-    // SOF = 0 (no frame yet), SOL = 0, SOR = 0
-    cpu.SetCFM(0);
-    
-    // Set initial PSR (processor status register)
-    // Enable instruction address translation, data address translation
-    cpu.SetPSR(0x0000001000000000ULL);
 }
 
 } // namespace ia64

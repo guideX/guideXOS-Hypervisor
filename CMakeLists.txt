@@ -37,6 +37,7 @@ set(MEMORY_SOURCES
 
 set(LOADER_SOURCES
     src/loader/loader.cpp
+    src/loader/bootstrap.cpp
 )
 
 set(ABI_SOURCES
@@ -58,6 +59,7 @@ set(HEADERS
     include/decoder.h
     include/memory.h
     include/loader.h
+    include/bootstrap.h
     include/abi.h
     include/logger.h
     include/IDecoder.h
@@ -149,6 +151,20 @@ if(MSVC)
 else()
     target_compile_options(debug_harness PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# Bootstrap test
+add_executable(test_bootstrap
+    tests/test_bootstrap.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_bootstrap PRIVATE /W4)
+else()
+    target_compile_options(test_bootstrap PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 # Enable testing
 enable_testing()

@@ -244,13 +244,6 @@ private:
     // Apply a single relocation
     bool ApplyRelocation(const ELF64_Rela& rela, uint64_t symValue, MemorySystem& memory);
 
-    // Setup initial stack with auxiliary vectors
-    uint64_t SetupStack(MemorySystem& memory, const std::vector<std::string>& argv, 
-                        const std::vector<std::string>& envp);
-
-    // Initialize CPU state for execution
-    void InitializeCPU(CPUState& cpu, uint64_t stackPointer);
-
     // Parsed ELF header
     ELF64_Ehdr header_;
 

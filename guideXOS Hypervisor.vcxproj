@@ -133,12 +133,14 @@
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
     <ClCompile Include="src\decoder\decoder.cpp" />
+    <ClCompile Include="src\loader\bootstrap.cpp" />
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
     <ClCompile Include="src\vm\CPUContext.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
+    <ClCompile Include="tests\test_bootstrap.cpp" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mmu.cpp" ExcludedFromBuild="true" />
@@ -150,6 +152,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
+    <ClInclude Include="include\bootstrap.h" />
     <ClInclude Include="include\cpu.h" />
     <ClInclude Include="include\CPUContext.h" />
     <ClInclude Include="include\cpu_state.h" />
@@ -173,7 +176,9 @@
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
+    <None Include="docs\ELF64_LOADER.md" />
     <None Include="docs\EXECUTION_LOOP_IMPLEMENTATION.md" />
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
     <None Include="docs\MMU_SUMMARY.md" />
