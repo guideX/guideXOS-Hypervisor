@@ -32,6 +32,7 @@ set(DECODER_SOURCES
 
 set(MEMORY_SOURCES
     src/memory/memory.cpp
+    src/mmu/mmu.cpp
 )
 
 set(LOADER_SOURCES
@@ -117,6 +118,23 @@ if(MSVC)
     target_compile_options(test_mov_imm PRIVATE /W4)
 else()
     target_compile_options(test_mov_imm PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Watchpoint test
+add_executable(test_watchpoint
+    tests/test_watchpoint.cpp
+    ${CORE_SOURCES}
+    ${DECODER_SOURCES}
+    ${MEMORY_SOURCES}
+    ${LOADER_SOURCES}
+    ${ABI_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_watchpoint PRIVATE /W4)
+else()
+    target_compile_options(test_watchpoint PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Debug harness executable

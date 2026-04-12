@@ -146,6 +146,7 @@
     <ClCompile Include="tests\test_multi_cpu.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_page_fault.cpp" />
     <ClCompile Include="tests\test_scheduler_stepping.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_watchpoint.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
@@ -166,6 +167,7 @@
     <ClInclude Include="include\PageFault.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
     <ClInclude Include="include\VirtualMachine.h" />
+    <ClInclude Include="include\Watchpoint.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
@@ -177,6 +179,7 @@
     <None Include="docs\MMU_SUMMARY.md" />
     <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />
     <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
+    <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
