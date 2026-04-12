@@ -214,11 +214,11 @@ public:
     virtual bool clearBreakpoint(uint64_t address) = 0;
 
     // ========================================================================
-    // Register Access (delegated to CPU)
+    // Register Access (delegated to active CPU)
     // ========================================================================
 
     /**
-     * Read general register
+     * Read general register from active CPU
      * 
      * @param index Register index (0-127)
      * @return Register value
@@ -226,7 +226,7 @@ public:
     virtual uint64_t readGR(size_t index) const = 0;
 
     /**
-     * Write general register
+     * Write general register to active CPU
      * 
      * @param index Register index (0-127)
      * @param value Value to write
@@ -237,6 +237,145 @@ public:
      * Dump VM state for debugging
      */
     virtual void dump() const = 0;
+
+    // ========================================================================
+    // Multi-CPU Management
+    // ========================================================================
+
+    /**
+     * Get number of CPUs in the system
+     * 
+     * @return Number of virtual CPUs
+     */
+    virtual size_t getCPUCount() const = 0;
+
+    /**
+     * Get active CPU index
+     * 
+     * The active CPU is the one currently executing or
+     * the one that will execute on next step().
+     * 
+     * @return Index of active CPU (0-based)
+     */
+    virtual int getActiveCPUIndex() const = 0;
+
+    /**
+     * Set active CPU
+     * 
+     * Switches execution to a different CPU. The CPU must
+     * be enabled and in RUNNING or IDLE state.
+     * 
+     * @param cpuIndex Index of CPU to activate
+     * @return true if CPU was activated
+     */
+    virtual bool setActiveCPU(int cpuIndex) = 0;
+
+    /**
+     * Get CPU state for a specific CPU
+     * 
+     * @param cpuIndex Index of CPU
+     * @return Reference to CPU state
+     */
+    virtual const CPUState& getCPUState(int cpuIndex) const = 0;
+
+    /**
+     * Read general register from specific CPU
+     * 
+     * @param cpuIndex Index of CPU
+     * @param regIndex Register index (0-127)
+     * @return Register value
+     */
+    virtual uint64_t readGR(int cpuIndex, size_t regIndex) const = 0;
+
+    /**
+     * Write general register to specific CPU
+     * 
+     * @param cpuIndex Index of CPU
+     * @param regIndex Register index (0-127)
+     * @param value Value to write
+     */
+    virtual void writeGR(int cpuIndex, size_t regIndex, uint64_t value) = 0;
+
+    /**
+     * Get instruction pointer for specific CPU
+     * 
+     * @param cpuIndex Index of CPU
+     * @return IP value
+     */
+    virtual uint64_t getIP(int cpuIndex) const = 0;
+
+    /**
+     * Set instruction pointer for specific CPU
+     * 
+     * @param cpuIndex Index of CPU
+     * @param address IP value
+     */
+    virtual void setIP(int cpuIndex, uint64_t address) = 0;
+    
+    // ========================================================================
+    // Extended Execution Control - Scheduler Interface
+    // ========================================================================
+    
+    /**
+     * Step a specific CPU by one instruction
+     * 
+     * Executes a single instruction on the specified CPU, bypassing
+     * the scheduler's normal policy. Useful for debugging specific CPUs.
+     * 
+     * @param cpuIndex Index of CPU to step (0-based)
+     * @return true if instruction executed successfully, false otherwise
+     */
+    virtual bool stepCPU(int cpuIndex) = 0;
+    
+    /**
+     * Step all CPUs by one instruction each
+     * 
+     * Executes one instruction on each enabled/running CPU.
+     * This simulates a single "cycle" where all CPUs advance in parallel.
+     * The order of execution is CPU 0, 1, 2, ... N-1.
+     * 
+     * @return Number of CPUs that successfully executed an instruction
+     */
+    virtual int stepAllCPUs() = 0;
+    
+    /**
+     * Step by instruction bundle quantum
+     * 
+     * Executes a specified number of IA-64 instruction bundles on a CPU.
+     * Each bundle contains 3 instructions (128-bit bundle format).
+     * This is useful for time-slicing where each CPU gets a quantum
+     * of execution time before switching.
+     * 
+     * Example: stepQuantum(0, 10) executes 10 bundles (30 instructions) on CPU 0
+     * 
+     * @param cpuIndex Index of CPU to step
+     * @param bundleCount Number of bundles to execute
+     * @return Number of bundles actually executed (may be less if CPU halts)
+     */
+    virtual uint64_t stepQuantum(int cpuIndex, uint64_t bundleCount) = 0;
+    
+    /**
+     * Get current quantum size (in bundles)
+     * 
+     * Returns the scheduler's quantum size, which determines how many
+     * bundles each CPU executes before switching in time-sliced mode.
+     * 
+     * @return Number of bundles per quantum
+     */
+    virtual uint64_t getQuantumSize() const = 0;
+    
+    /**
+     * Set quantum size (in bundles)
+     * 
+     * Sets the scheduler's quantum size. Affects stepQuantum behavior
+     * and can be used for preemptive scheduling policies.
+     * 
+     * @param bundleCount Number of bundles per quantum
+     */
+    virtual void setQuantumSize(uint64_t bundleCount) = 0;
 };
 
 } // namespace ia64
+
+
+

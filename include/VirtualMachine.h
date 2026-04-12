@@ -1,10 +1,13 @@
 #pragma once
 
 #include "IVirtualMachine.h"
+#include "CPUContext.h"
+#include "ICPUScheduler.h"
 #include "ICPU.h"
 #include "IMemory.h"
 #include "IDecoder.h"
 #include <memory>
+#include <vector>
 #include <set>
 #include <cstdint>
 
@@ -19,38 +22,49 @@ class InstructionDecoder;
  * VirtualMachine - Complete IA-64 virtual machine implementation
  * 
  * This class encapsulates:
- * - CPU core (IA-64 processor)
- * - Memory system (paged virtual memory)
- * - Instruction decoder (bundle decoder)
+ * - Multiple CPU cores (IA-64 processors with isolated state)
+ * - Memory system (shared across all CPUs)
+ * - Instruction decoder (shared across all CPUs)
+ * - CPU scheduler (selects which CPU executes)
  * - Execution state management
  * - Debugging infrastructure
  * 
- * The VM owns all subsystems and manages their lifecycle.
- * CPU state is fully encapsulated - external code interacts
- * through the VM interface, not directly with CPU.
- * 
- * Architecture:
+ * Multi-CPU Architecture:
  * 
  *   VirtualMachine
- *   +------------------+
- *   | - CPU (owned)    |
- *   | - Memory (owned) |
- *   | - Decoder (owned)|
- *   | - VMState        |
- *   | - Breakpoints    |
- *   +------------------+
+ *   +------------------------+
+ *   | - CPUs[] (owned)       |
+ *   | - Memory (owned/shared)|
+ *   | - Decoder (owned/shared)|
+ *   | - Scheduler (owned)    |
+ *   | - VMState              |
+ *   | - Breakpoints          |
+ *   +------------------------+
  *          |
  *          v
- *   CPU executes instructions
- *   using Memory and Decoder
+ *   Scheduler selects CPU
+ *   CPU executes instruction
+ *   using shared Memory/Decoder
+ * 
+ * The VM owns all subsystems and manages their lifecycle.
+ * Each CPU has isolated register state but shares memory.
+ * External code interacts through the VM interface.
  * 
  * Ownership Model:
- * - VM owns CPU, Memory, Decoder (unique_ptr)
- * - CPU holds references to Memory and Decoder (injected)
+ * - VM owns all CPUContexts (vector of CPUContext)
+ * - VM owns Memory, Decoder (unique_ptr, shared by all CPUs)
+ * - VM owns Scheduler (unique_ptr)
+ * - Each CPU holds references to Memory and Decoder (injected)
  * - Clean destruction order guaranteed
  * 
+ * Multi-CPU Isolation:
+ * - Each CPU has completely isolated register state
+ * - Memory is shared (all CPUs see same physical memory)
+ * - Decoder is shared (stateless, read-only)
+ * - No register state sharing between CPUs
+ * 
  * Thread Safety:
- * - Single-threaded execution model
+ * - Single-threaded execution model (interleaved simulation)
  * - No concurrent access to CPU state
  * - Future: Add mutex for multi-threaded debugging
  */
@@ -60,8 +74,9 @@ public:
      * Constructor
      * 
      * @param memorySize Size of virtual memory in bytes (default 16MB)
+     * @param numCPUs Number of virtual CPUs to create (default 1)
      */
-    explicit VirtualMachine(size_t memorySize = 16 * 1024 * 1024);
+    explicit VirtualMachine(size_t memorySize = 16 * 1024 * 1024, size_t numCPUs = 1);
 
     /**
      * Destructor - cleans up all subsystems
@@ -115,11 +130,34 @@ public:
     bool clearBreakpoint(uint64_t address) override;
 
     // ========================================================================
-    // IVirtualMachine Implementation - Register Access
+    // IVirtualMachine Implementation - Register Access (active CPU)
     // ========================================================================
 
     uint64_t readGR(size_t index) const override;
     void writeGR(size_t index, uint64_t value) override;
+
+    // ========================================================================
+    // IVirtualMachine Implementation - Multi-CPU Management
+    // ========================================================================
+
+    size_t getCPUCount() const override;
+    int getActiveCPUIndex() const override;
+    bool setActiveCPU(int cpuIndex) override;
+    const CPUState& getCPUState(int cpuIndex) const override;
+    uint64_t readGR(int cpuIndex, size_t regIndex) const override;
+    void writeGR(int cpuIndex, size_t regIndex, uint64_t value) override;
+    uint64_t getIP(int cpuIndex) const override;
+    void setIP(int cpuIndex, uint64_t address) override;
+
+    // ========================================================================
+    // IVirtualMachine Implementation - Extended Execution Control
+    // ========================================================================
+
+    bool stepCPU(int cpuIndex) override;
+    int stepAllCPUs() override;
+    uint64_t stepQuantum(int cpuIndex, uint64_t bundleCount) override;
+    uint64_t getQuantumSize() const override;
+    void setQuantumSize(uint64_t bundleCount) override;
 
     // ========================================================================
     // Debug Support
@@ -139,29 +177,38 @@ public:
     const IMemory& getMemory() const;
 
     /**
-     * Get CPU (for advanced access)
+     * Get CPU context (for advanced access)
      * Use with caution - bypasses VM encapsulation
      */
-    ICPU& getCPU();
-    const ICPU& getCPU() const;
+    CPUContext* getCPUContext(int cpuIndex);
+    const CPUContext* getCPUContext(int cpuIndex) const;
+
+    /**
+     * Get active CPU (for advanced access)
+     * Use with caution - bypasses VM encapsulation
+     */
+    ICPU* getActiveCPU();
+    const ICPU* getActiveCPU() const;
 
 private:
     // ========================================================================
     // Subsystems (owned by VM)
     // ========================================================================
 
-    std::unique_ptr<Memory> memory_;                // Memory system
-    std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder
-    std::unique_ptr<CPU> cpu_;                      // CPU core
+    std::unique_ptr<Memory> memory_;                // Memory system (shared)
+    std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder (shared)
+    std::vector<CPUContext> cpus_;                  // CPU contexts (isolated state)
+    std::unique_ptr<ICPUScheduler> scheduler_;      // CPU scheduler
 
     // ========================================================================
     // VM State
     // ========================================================================
 
     VMState state_;                                 // Current execution state
+    int activeCPUIndex_;                            // Currently active CPU (-1 = none)
     bool debuggerAttached_;                         // Debugger attached?
     std::set<uint64_t> breakpoints_;               // Breakpoint addresses
-    uint64_t cyclesExecuted_;                       // Total cycles executed
+    uint64_t cyclesExecuted_;                       // Total cycles executed (all CPUs)
 
     // ========================================================================
     // Internal Helpers
@@ -179,6 +226,21 @@ private:
      * @return true if initialization succeeded
      */
     bool initializeSubsystems();
+
+    /**
+     * Create and initialize CPU contexts
+     * @param numCPUs Number of CPUs to create
+     * @return true if CPUs created successfully
+     */
+    bool createCPUs(size_t numCPUs);
+
+    /**
+     * Validate CPU index
+     * @param cpuIndex Index to validate
+     * @return true if index is valid
+     */
+    bool isValidCPUIndex(int cpuIndex) const;
 };
 
 } // namespace ia64
+

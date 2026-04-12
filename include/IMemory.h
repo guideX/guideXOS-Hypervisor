@@ -6,29 +6,39 @@
 namespace ia64 {
 
 /**
- * IMemory - Abstract interface for memory system operations
- * 
- * This interface provides abstraction for memory access, allowing:
- * - Swapping between flat memory and paged memory implementations
- * - Future integration with hardware memory (shared memory, mapped devices)
- * - Plugin-style architecture for different memory models
- * - Testing with mock memory implementations
- * - Virtual to physical address translation layers
- * 
- * Design Philosophy:
- * - Simple, flat address space abstraction
- * - Typed access for common data sizes
- * - Bulk operations for efficiency
- * - Bounds checking enforcement
- * 
- * Future Extensions:
- * - Page table management
- * - Memory protection (read/write/execute permissions)
- * - Memory-mapped I/O regions
- * - Cache simulation
- * - DMA support
- * - Shared memory between VMs
- */
+* IMemory - Abstract interface for memory system operations
+* 
+* This interface provides abstraction for memory access, allowing:
+* - Swapping between flat memory and paged memory implementations
+* - Future integration with hardware memory (shared memory, mapped devices)
+* - Plugin-style architecture for different memory models
+* - Testing with mock memory implementations
+* - Virtual to physical address translation layers
+* - MMU integration with page mapping and permission checks
+* - Memory access hooks for debugging and monitoring
+* 
+* Design Philosophy:
+* - Simple, flat address space abstraction
+* - Typed access for common data sizes
+* - Bulk operations for efficiency
+* - Bounds checking enforcement
+* - Optional MMU for enhanced security and debugging
+* 
+* MMU Integration:
+* - Implementations may include an MMU for address translation
+* - Read/Write operations go through MMU hooks when enabled
+* - Permission checks (read/write/execute) enforced at page level
+* - Hooks allow monitoring and modification of memory accesses
+* - MMU can be disabled for direct access (backward compatibility)
+* 
+* Future Extensions:
+* - Multi-level page tables (IA-64 uses 4-level)
+* - TLB simulation for performance modeling
+* - Memory-mapped I/O regions
+* - Cache simulation
+* - DMA support
+* - Shared memory between VMs
+*/
 class IMemory {
 public:
     virtual ~IMemory() = default;

@@ -1,43 +1,47 @@
 #pragma once
 
-
-#pragma once
-
 #include <cstdint>
 #include <vector>
 #include <cstring>
 #include <stdexcept>
 #include <cassert>
+#include <memory>
 #include "IMemory.h"
+#include "mmu.h"
 
 namespace ia64 {
 
 /**
- * Memory - Simple flat 64-bit virtual memory system
- * 
- * Provides a flat address space backed by a single std::vector<uint8_t>.
- * This is a simple, deterministic implementation suitable for emulation.
- * 
- * Features:
- * - Flat 64-bit address space
- * - Typed read/write operations (uint8_t, uint32_t, uint64_t)
- * - Bulk buffer loading
- * - Bounds checking in debug mode
- * - Extensible design for future page tables and protection flags
- * 
- * Design Notes:
- * - Uses contiguous memory for simplicity and performance
- * - Thread-safe operations not guaranteed (single-threaded emulator)
- * - Bounds checking via assertions (debug) and exceptions (release)
- * - Future extensions: page tables, memory protection, memory-mapped I/O
- */
+* Memory - 64-bit virtual memory system with MMU support
+* 
+* Provides a flat address space backed by a single std::vector<uint8_t>
+* with optional MMU for address translation and permission checking.
+* 
+* Features:
+* - Flat 64-bit address space
+* - Typed read/write operations (uint8_t, uint32_t, uint64_t)
+* - Bulk buffer loading
+* - MMU with page-based permissions (read/write/execute)
+* - Memory access hooks for debugging and monitoring
+* - Bounds checking in debug mode
+* 
+* Design Notes:
+* - Uses contiguous memory for simplicity and performance
+* - MMU can be disabled for direct access (backward compatibility)
+* - Thread-safe operations not guaranteed (single-threaded emulator)
+* - Bounds checking via assertions (debug) and exceptions (release)
+* - Hooks are invoked before actual memory access
+* - Permission violations throw exceptions
+*/
 class Memory : public IMemory {
 public:
     /**
      * Construct a memory system with specified size
      * @param size Total size of virtual address space in bytes
+     * @param enableMMU Whether to enable MMU (default true)
+     * @param pageSize MMU page size in bytes (default 4KB)
      */
-    explicit Memory(size_t size = 64 * 1024 * 1024); // Default 64MB
+    explicit Memory(size_t size = 64 * 1024 * 1024, bool enableMMU = true, size_t pageSize = 4096);
     
     ~Memory() = default;
 
@@ -100,16 +104,56 @@ public:
     void Clear() override;
     const uint8_t* GetRawData() const override { return data_.data(); }
 
-private:
-    /**
-     * Check if memory access is within bounds
-     * @param address Starting address
-     * @param size Number of bytes to access
-     * @throws std::out_of_range if access is out of bounds
-     */
-    void checkBounds(uint64_t address, size_t size) const;
+    // ========================================================================
+    // MMU Access
+    // ========================================================================
 
-    std::vector<uint8_t> data_;  // Flat memory storage
+    /**
+     * Get MMU instance for advanced configuration
+     * @return Reference to MMU
+     */
+    MMU& GetMMU() { return *mmu_; }
+    const MMU& GetMMU() const { return *mmu_; }
+
+    /**
+     * Enable or disable MMU
+     * @param enabled true to enable, false to disable
+     */
+    void SetMMUEnabled(bool enabled) { mmu_->SetEnabled(enabled); }
+
+    /**
+     * Check if MMU is enabled
+     * @return true if enabled, false otherwise
+     */
+    bool IsMMUEnabled() const { return mmu_->IsEnabled(); }
+
+private:
+/**
+ * Check if memory access is within bounds
+ * @param address Starting address
+ * @param size Number of bytes to access
+ * @throws std::out_of_range if access is out of bounds
+ */
+void checkBounds(uint64_t address, size_t size) const;
+
+/**
+ * Perform MMU-aware read with permission checks and hooks
+ * @param address Virtual address
+ * @param dest Destination buffer
+ * @param size Size to read
+ */
+void mmuRead(uint64_t address, uint8_t* dest, size_t size) const;
+
+/**
+ * Perform MMU-aware write with permission checks and hooks
+ * @param address Virtual address
+ * @param src Source buffer
+ * @param size Size to write
+ */
+void mmuWrite(uint64_t address, const uint8_t* src, size_t size);
+
+std::vector<uint8_t> data_;      // Flat physical memory storage
+std::unique_ptr<MMU> mmu_;       // Memory Management Unit
 };
 
 // Legacy alias for compatibility
