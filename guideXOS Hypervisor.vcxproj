@@ -177,6 +177,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
+    <None Include="docs\BOOTSTRAP_QUICK_START.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
     <None Include="docs\ELF64_LOADER.md" />
     <None Include="docs\EXECUTION_LOOP_IMPLEMENTATION.md" />

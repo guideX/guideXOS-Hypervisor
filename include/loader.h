@@ -244,6 +244,12 @@ private:
     // Apply a single relocation
     bool ApplyRelocation(const ELF64_Rela& rela, uint64_t symValue, MemorySystem& memory);
 
+    // Enhanced validation methods
+    bool ValidateArchitecture(const ELF64_Ehdr* ehdr) const;
+    bool ValidateEntryPoint(const ELF64_Ehdr* ehdr, const std::vector<ELF64_Phdr>& phdrs) const;
+    bool ValidateSegmentAlignment(const ELF64_Phdr& phdr) const;
+    bool ValidateMemorySafety(const ELF64_Phdr& phdr, size_t fileSize, size_t memorySize) const;
+
     // Parsed ELF header
     ELF64_Ehdr header_;
 
