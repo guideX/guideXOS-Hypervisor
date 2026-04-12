@@ -3,10 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <iomanip>
-#include "cpu.h"
-#include "cpu_state.h"
-#include "decoder.h"
-#include "memory.h"
+#include "VirtualMachine.h"
 #include "logger.h"
 
 using namespace ia64;
@@ -104,15 +101,13 @@ void printProgramInfo(const std::vector<uint8_t>& program, uint64_t loadAddr) {
               << std::setfill('0') << loadAddr << std::dec << "\n\n";
 }
 
-void printInitialState(const CPU& cpu) {
-    std::cout << "Initial CPU State:\n";
+void printInitialState(const VirtualMachine& vm) {
+    std::cout << "Initial VM State:\n";
     std::cout << "-----------------\n";
     std::cout << "  IP: 0x" << std::hex << std::setw(16) << std::setfill('0') 
-              << cpu.getIP() << std::dec << "\n";
+              << vm.getIP() << std::dec << "\n";
     std::cout << "  GR0: 0x" << std::hex << std::setw(16) << std::setfill('0') 
-              << cpu.readGR(0) << std::dec << " (should always be 0)\n";
-    std::cout << "  PR0: " << (cpu.readPR(0) ? "true" : "false") 
-              << " (should always be true)\n\n";
+              << vm.readGR(0) << std::dec << " (should always be 0)\n\n";
 }
 
 void printExecutionSummary(int cyclesExecuted, uint64_t finalIP) {
@@ -124,10 +119,10 @@ void printExecutionSummary(int cyclesExecuted, uint64_t finalIP) {
               << std::setfill('0') << finalIP << std::dec << "\n\n";
 }
 
-void printFinalState(const CPU& cpu) {
-    std::cout << "Final CPU State:\n";
+void printFinalState(const VirtualMachine& vm) {
+    std::cout << "Final VM State:\n";
     std::cout << "================\n";
-    cpu.dump();
+    vm.dump();
 }
 
 int main(int argc, char* argv[]) {
@@ -149,33 +144,34 @@ int main(int argc, char* argv[]) {
             logger.setLogLevel(LogLevel::INFO);
         }
         
-        // Initialize memory system (16MB)
-        LOG_INFO("Initializing memory system (16MB)...");
-        Memory memory(16 * 1024 * 1024);
+        // Initialize Virtual Machine (16MB)
+        LOG_INFO("Initializing Virtual Machine (16MB)...");
+        VirtualMachine vm(16 * 1024 * 1024);
         
-        // Initialize decoder
-        LOG_INFO("Initializing instruction decoder...");
-        InstructionDecoder decoder;
-        
-        // Initialize CPU
-        LOG_INFO("Initializing CPU...");
-        CPU cpu(memory, decoder);
+        // Initialize VM
+        if (!vm.init()) {
+            LOG_ERROR("Failed to initialize VM");
+            return 1;
+        }
         
         // Create test program
         LOG_INFO("Creating test program...");
         std::vector<uint8_t> program = createTestProgram();
         
-        // Load program into memory
+        // Load program into VM memory
         uint64_t loadAddress = 0x100000;  // 1MB offset
-        LOG_INFO("Loading program into memory...");
-        memory.Write(loadAddress, program.data(), program.size());
+        LOG_INFO("Loading program into VM memory...");
+        if (!vm.loadProgram(program.data(), program.size(), loadAddress)) {
+            LOG_ERROR("Failed to load program");
+            return 1;
+        }
         
         printProgramInfo(program, loadAddress);
         
-        // Set instruction pointer
-        cpu.setIP(loadAddress);
+        // Set entry point
+        vm.setEntryPoint(loadAddress);
         
-        printInitialState(cpu);
+        printInitialState(vm);
         
         // Execute
         std::cout << "======================================\n";
@@ -193,15 +189,15 @@ int main(int argc, char* argv[]) {
                 std::cout << "\n--- Cycle " << (cyclesExecuted + 1) << " ---\n";
             }
             
-            uint64_t ipBefore = cpu.getIP();
+            uint64_t ipBefore = vm.getIP();
             
             // Execute one step
             try {
-                shouldContinue = cpu.step();
+                shouldContinue = vm.step();
                 cyclesExecuted++;
                 
                 // Log IP change
-                uint64_t ipAfter = cpu.getIP();
+                uint64_t ipAfter = vm.getIP();
                 if (logger.getLogLevel() >= LogLevel::DEBUG) {
                     std::stringstream ss;
                     ss << "IP: 0x" << std::hex << std::setw(16) << std::setfill('0') 
@@ -220,11 +216,11 @@ int main(int argc, char* argv[]) {
             LOG_INFO("Maximum cycles reached");
         }
         if (!shouldContinue) {
-            LOG_INFO("CPU halted");
+            LOG_INFO("VM halted");
         }
         
-        printExecutionSummary(cyclesExecuted, cpu.getIP());
-        printFinalState(cpu);
+        printExecutionSummary(cyclesExecuted, vm.getIP());
+        printFinalState(vm);
         
         return 0;
         

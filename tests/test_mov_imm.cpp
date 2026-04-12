@@ -1,10 +1,8 @@
 #include <iostream>
 #include <vector>
 #include <cstdint>
-#include "../include/cpu.h"
+#include "../include/VirtualMachine.h"
 #include "../include/cpu_state.h"
-#include "../include/decoder.h"
-#include "../include/memory.h"
 
 using namespace ia64;
 
@@ -78,21 +76,20 @@ void encodeBundle(uint8_t* out, uint8_t tmpl, uint64_t slot0, uint64_t slot1, ui
 }
 
 int main() {
-    std::cout << "IA-64 CPU MOV_IMM Test\n";
-    std::cout << "======================\n\n";
+    std::cout << "IA-64 VM MOV_IMM Test\n";
+    std::cout << "=====================\n\n";
 
     try {
-        // Initialize memory system (1MB)
-        Memory memory(1024 * 1024);
-        std::cout << "Memory system initialized (1MB)\n";
+        // Initialize Virtual Machine (1MB)
+        VirtualMachine vm(1024 * 1024);
+        std::cout << "Virtual Machine created (1MB)\n";
 
-        // Initialize decoder
-        InstructionDecoder decoder;
-        std::cout << "Instruction decoder initialized\n";
-
-        // Initialize CPU
-        CPU cpu(memory, decoder);
-        std::cout << "CPU initialized\n\n";
+        // Initialize VM
+        if (!vm.init()) {
+            std::cerr << "Failed to initialize VM\n";
+            return 1;
+        }
+        std::cout << "Virtual Machine initialized\n\n";
 
         // Create a test program with MOV_IMM instructions
         std::vector<uint8_t> program(32);  // 2 bundles = 32 bytes
@@ -123,15 +120,18 @@ int main() {
             program[i + 16] = bundle1[i];
         }
 
-        // Load program into memory at address 0x1000
+        // Load program into VM memory at address 0x1000
         uint64_t startAddr = 0x1000;
-        memory.Write(startAddr, program.data(), program.size());
+        if (!vm.loadProgram(program.data(), program.size(), startAddr)) {
+            std::cerr << "Failed to load program\n";
+            return 1;
+        }
         std::cout << "Loaded " << program.size() << " bytes at 0x" 
                   << std::hex << startAddr << std::dec << "\n\n";
 
-        // Set IP to start of program
-        cpu.setIP(startAddr);
-        std::cout << "IP set to 0x" << std::hex << startAddr << std::dec << "\n\n";
+        // Set entry point
+        vm.setEntryPoint(startAddr);
+        std::cout << "Entry point set to 0x" << std::hex << startAddr << std::dec << "\n\n";
 
         // Execute instructions
         std::cout << "Beginning execution...\n";
@@ -140,11 +140,11 @@ int main() {
         // Execute 6 steps (2 bundles * 3 instructions each)
         for (int i = 0; i < 6; i++) {
             std::cout << "Step " << (i + 1) << ":\n";
-            bool shouldContinue = cpu.step();
+            bool shouldContinue = vm.step();
             std::cout << "\n";
             
             if (!shouldContinue) {
-                std::cout << "CPU halted.\n";
+                std::cout << "VM halted.\n";
                 break;
             }
         }
@@ -152,11 +152,11 @@ int main() {
         std::cout << "\nExecution complete.\n";
         std::cout << "\nFinal Register Values:\n";
         std::cout << "======================\n";
-        std::cout << "r1 = 0x" << std::hex << cpu.getState().GetGR(1) << std::dec << " (expected 0x1234)\n";
-        std::cout << "r2 = 0x" << std::hex << cpu.getState().GetGR(2) << std::dec << " (expected 0x5678)\n";
-        std::cout << "r3 = 0x" << std::hex << cpu.getState().GetGR(3) << std::dec << " (expected 0x9ABC)\n";
-        std::cout << "r4 = 0x" << std::hex << cpu.getState().GetGR(4) << std::dec << " (expected 0x1234)\n";
-        std::cout << "r5 = 0x" << std::hex << cpu.getState().GetGR(5) << std::dec << " (expected 0x68AC = 0x1234 + 0x5678)\n";
+        std::cout << "r1 = 0x" << std::hex << vm.getCPUState().GetGR(1) << std::dec << " (expected 0x1234)\n";
+        std::cout << "r2 = 0x" << std::hex << vm.getCPUState().GetGR(2) << std::dec << " (expected 0x5678)\n";
+        std::cout << "r3 = 0x" << std::hex << vm.getCPUState().GetGR(3) << std::dec << " (expected 0x9ABC)\n";
+        std::cout << "r4 = 0x" << std::hex << vm.getCPUState().GetGR(4) << std::dec << " (expected 0x1234)\n";
+        std::cout << "r5 = 0x" << std::hex << vm.getCPUState().GetGR(5) << std::dec << " (expected 0x68AC = 0x1234 + 0x5678)\n";
 
         return 0;
     }

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -76,6 +76,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -90,6 +91,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -102,6 +104,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -116,6 +119,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -124,16 +128,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="src\abi\abi.cpp" />
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
     <ClCompile Include="src\decoder\decoder.cpp" />
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
-    <ClCompile Include="tests\test_cpu_execution.cpp" />
-    <ClCompile Include="tests\test_main.cpp" />
-    <ClCompile Include="tests\test_mov_imm.cpp" />
+    <ClCompile Include="src\vm\VirtualMachine.cpp" />
+    <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_mov_imm.cpp" ExcludedFromBuild="true" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
@@ -143,9 +148,11 @@
     <ClInclude Include="include\ICPU.h" />
     <ClInclude Include="include\IDecoder.h" />
     <ClInclude Include="include\IMemory.h" />
+    <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\loader.h" />
     <ClInclude Include="include\logger.h" />
     <ClInclude Include="include\memory.h" />
+    <ClInclude Include="include\VirtualMachine.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
