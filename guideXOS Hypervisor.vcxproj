@@ -160,6 +160,7 @@
     <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_vmconfig_serialization.cpp" />
     <ClCompile Include="tests\test_vmmanager.cpp" />
+    <ClCompile Include="tests\test_vm_isolation.cpp" />
     <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_io_devices.cpp" ExcludedFromBuild="true" />
@@ -235,8 +236,10 @@
     <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
     <None Include="docs\VMMANAGER.md" />
     <None Include="docs\VMMANAGER_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VM_CONFIGURATION_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\VM_CONFIGURATION_QUICK_REFERENCE.md" />
     <None Include="docs\VM_CONFIGURATION_SCHEMA.md" />
+    <None Include="docs\VM_ISOLATION.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />

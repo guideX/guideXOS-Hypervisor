@@ -325,6 +325,19 @@ else()
     target_compile_options(test_fuzzer PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# VM Isolation test
+add_executable(test_vm_isolation
+    tests/test_vm_isolation.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_vm_isolation PRIVATE /W4)
+else()
+    target_compile_options(test_vm_isolation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 # Enable testing
 enable_testing()
@@ -333,6 +346,7 @@ add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)
 add_test(NAME FuzzerTests COMMAND test_fuzzer)
+add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
