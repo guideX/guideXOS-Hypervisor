@@ -1,6 +1,6 @@
 #include "abi.h"
 #include "cpu_state.h"
-#include "memory.h"
+#include "IMemory.h"
 #include <iostream>
 #include <sstream>
 
@@ -12,7 +12,7 @@ LinuxABI::LinuxABI()
     , mmapHint_(0x60000000)    // Initial mmap region
 {}
 
-SyscallResult LinuxABI::ExecuteSyscall(CPUState& cpu, MemorySystem& memory) {
+SyscallResult LinuxABI::ExecuteSyscall(CPUState& cpu, IMemory& memory) {
     // On IA-64 Linux ABI:
     // r15 = syscall number
     // r32-r37 (out0-out5) = arguments 0-5
@@ -103,14 +103,14 @@ std::string LinuxABI::GetSyscallName(Syscall syscall) {
 
 // Syscall implementations (all stubs)
 
-SyscallResult LinuxABI::SysRead(uint64_t fd, uint64_t buf, uint64_t count, MemorySystem& memory) {
+SyscallResult LinuxABI::SysRead(uint64_t fd, uint64_t buf, uint64_t count, IMemory& memory) {
     // Stub: just return 0 (EOF)
     std::cout << "[SYSCALL] read(fd=" << fd << ", buf=0x" << std::hex << buf 
               << ", count=" << std::dec << count << ") -> 0 (stub)\n";
     return SyscallResult(0);
 }
 
-SyscallResult LinuxABI::SysWrite(uint64_t fd, uint64_t buf, uint64_t count, MemorySystem& memory) {
+SyscallResult LinuxABI::SysWrite(uint64_t fd, uint64_t buf, uint64_t count, IMemory& memory) {
     // Stub: for stdout/stderr (fd 1/2), try to print the data
     if (fd == 1 || fd == 2) {
         try {
@@ -133,7 +133,7 @@ SyscallResult LinuxABI::SysWrite(uint64_t fd, uint64_t buf, uint64_t count, Memo
     return SyscallResult(static_cast<int64_t>(count));
 }
 
-SyscallResult LinuxABI::SysOpen(uint64_t pathname, uint64_t flags, uint64_t mode, MemorySystem& memory) {
+SyscallResult LinuxABI::SysOpen(uint64_t pathname, uint64_t flags, uint64_t mode, IMemory& memory) {
     // Stub: return fake file descriptor
     std::cout << "[SYSCALL] open(pathname=0x" << std::hex << pathname 
               << ", flags=" << flags << ", mode=" << mode << std::dec 
@@ -176,8 +176,8 @@ SyscallResult LinuxABI::SysUnknown(uint64_t syscallNum) {
 }
 
 SyscallResult LinuxABI::SysMmap(uint64_t addr, uint64_t length, uint64_t prot, 
-                                 uint64_t flags, uint64_t fd, uint64_t offset, 
-                                 MemorySystem& memory) {
+uint64_t flags, uint64_t fd, uint64_t offset, 
+IMemory& memory) {
     // IA-64 mmap arguments:
     // addr: requested address (0 = let kernel choose)
     // length: size of mapping
