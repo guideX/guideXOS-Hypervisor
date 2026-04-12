@@ -133,6 +133,9 @@
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
     <ClCompile Include="src\decoder\decoder.cpp" />
+    <ClCompile Include="src\io\Console.cpp" />
+    <ClCompile Include="src\io\InterruptController.cpp" />
+    <ClCompile Include="src\io\Timer.cpp" />
     <ClCompile Include="src\loader\bootstrap.cpp" />
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
@@ -141,21 +144,23 @@
     <ClCompile Include="src\vm\CPUContext.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
-    <ClCompile Include="tests\test_bootstrap.cpp" />
+    <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_elf_validation.cpp" />
+    <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_io_devices.cpp" />
     <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mmu.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_mov_imm.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_multi_cpu.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_page_fault.cpp" />
+    <ClCompile Include="tests\test_page_fault.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_scheduler_stepping.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_syscall_dispatcher.cpp" />
-    <ClCompile Include="tests\test_watchpoint.cpp" />
+    <ClCompile Include="tests\test_syscall_dispatcher.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_watchpoint.cpp" ExcludedFromBuild="true" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
     <ClInclude Include="include\bootstrap.h" />
+    <ClInclude Include="include\Console.h" />
     <ClInclude Include="include\cpu.h" />
     <ClInclude Include="include\CPUContext.h" />
     <ClInclude Include="include\cpu_state.h" />
@@ -165,6 +170,8 @@
     <ClInclude Include="include\IDecoder.h" />
     <ClInclude Include="include\IMemory.h" />
     <ClInclude Include="include\IMMU.h" />
+    <ClInclude Include="include\InterruptController.h" />
+    <ClInclude Include="include\IODevice.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\loader.h" />
     <ClInclude Include="include\logger.h" />
@@ -173,6 +180,7 @@
     <ClInclude Include="include\PageFault.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
     <ClInclude Include="include\SyscallDispatcher.h" />
+    <ClInclude Include="include\Timer.h" />
     <ClInclude Include="include\VirtualMachine.h" />
     <ClInclude Include="include\Watchpoint.h" />
   </ItemGroup>

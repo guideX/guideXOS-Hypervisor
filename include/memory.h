@@ -6,7 +6,9 @@
 #include <stdexcept>
 #include <cassert>
 #include <memory>
+#include <utility>
 #include "IMemory.h"
+#include "IODevice.h"
 #include "mmu.h"
 
 namespace ia64 {
@@ -104,6 +106,9 @@ public:
     void Clear() override;
     const uint8_t* GetRawData() const override { return data_.data(); }
 
+    void RegisterDevice(IMemoryMappedDevice* device);
+    bool UnregisterDevice(IMemoryMappedDevice* device);
+
     // ========================================================================
     // MMU Access
     // ========================================================================
@@ -152,8 +157,12 @@ void mmuRead(uint64_t address, uint8_t* dest, size_t size) const;
  */
 void mmuWrite(uint64_t address, const uint8_t* src, size_t size);
 
+ bool tryDeviceRead(uint64_t address, uint8_t* dest, size_t size) const;
+ bool tryDeviceWrite(uint64_t address, const uint8_t* src, size_t size);
+
 std::vector<uint8_t> data_;      // Flat physical memory storage
 std::unique_ptr<MMU> mmu_;       // Memory Management Unit
+ std::vector<IMemoryMappedDevice*> devices_;
 };
 
 // Legacy alias for compatibility

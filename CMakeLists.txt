@@ -44,6 +44,12 @@ set(ABI_SOURCES
     src/abi/abi.cpp
 )
 
+set(IO_SOURCES
+    src/io/Console.cpp
+    src/io/Timer.cpp
+    src/io/InterruptController.cpp
+)
+
 set(SYSCALL_SOURCES
     src/syscall/SyscallDispatcher.cpp
 )
@@ -54,6 +60,7 @@ set(ALL_SOURCES
     ${MEMORY_SOURCES}
     ${LOADER_SOURCES}
     ${ABI_SOURCES}
+    ${IO_SOURCES}
     ${SYSCALL_SOURCES}
 )
 
@@ -71,6 +78,9 @@ set(HEADERS
     include/ICPU.h
     include/IMemory.h
     include/SyscallDispatcher.h
+    include/Console.h
+    include/Timer.h
+    include/InterruptController.h
 )
 
 # Main executable
@@ -182,6 +192,21 @@ if(MSVC)
     target_compile_options(test_syscall_dispatcher PRIVATE /W4)
 else()
     target_compile_options(test_syscall_dispatcher PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# IO Devices test
+add_executable(test_io_devices
+    tests/test_io_devices.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+target_compile_definitions(test_io_devices PRIVATE IA64EMU_IO_TEST_STANDALONE=1)
+
+if(MSVC)
+    target_compile_options(test_io_devices PRIVATE /W4)
+else()
+    target_compile_options(test_io_devices PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 

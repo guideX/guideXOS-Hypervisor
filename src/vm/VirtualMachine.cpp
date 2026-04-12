@@ -4,6 +4,9 @@
 #include "memory.h"
 #include "decoder.h"
 #include "cpu_state.h"
+#include "Console.h"
+#include "InterruptController.h"
+#include "Timer.h"
 #include "logger.h"
 #include <iostream>
 #include <stdexcept>
@@ -19,6 +22,9 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs)
     : memory_(nullptr),
       decoder_(nullptr),
       scheduler_(nullptr),
+      interruptController_(nullptr),
+      consoleDevice_(nullptr),
+      timerDevice_(nullptr),
       state_(VMState::UNINITIALIZED),
       activeCPUIndex_(-1),
       debuggerAttached_(false),
@@ -35,11 +41,32 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs)
         
         // Create CPU scheduler
         scheduler_ = std::make_unique<SimpleCPUScheduler>();
+
+        // Create interrupt controller and default memory-mapped devices
+        interruptController_ = std::make_unique<BasicInterruptController>();
+
+        const uint64_t ioBase = memorySize >= 0x200 ? static_cast<uint64_t>(memorySize - 0x200) : 0;
+        consoleDevice_ = std::make_unique<VirtualConsole>(ioBase);
+        timerDevice_ = std::make_unique<VirtualTimer>(ioBase + 0x100);
+        timerDevice_->AttachInterruptController(interruptController_.get());
+
+        memory_->RegisterDevice(consoleDevice_.get());
+        memory_->RegisterDevice(timerDevice_.get());
         
         // Create CPU contexts
         if (!createCPUs(numCPUs)) {
             throw std::runtime_error("Failed to create CPU contexts");
         }
+
+        interruptController_->RegisterDeliveryCallback([this](uint8_t vector) {
+            const int targetCPU = activeCPUIndex_ >= 0 ? activeCPUIndex_ : 0;
+            if (isValidCPUIndex(targetCPU) && cpus_[targetCPU].cpu) {
+                cpus_[targetCPU].cpu->queueInterrupt(vector);
+                if (cpus_[targetCPU].state == CPUExecutionState::WAITING) {
+                    cpus_[targetCPU].state = CPUExecutionState::RUNNING;
+                }
+            }
+        });
         
         std::ostringstream oss;
         oss << "VirtualMachine created with " << memorySize << " bytes of memory and " 
@@ -224,6 +251,10 @@ bool VirtualMachine::step() {
         
         // Execute one instruction on selected CPU
         bool shouldContinue = ctx.cpu->step();
+
+        if (timerDevice_) {
+            timerDevice_->Tick(1);
+        }
         
         // Update CPU context statistics
         ctx.cyclesExecuted++;
@@ -622,6 +653,22 @@ const ICPU* VirtualMachine::getActiveCPU() const {
     return cpus_[activeCPUIndex_].cpu.get();
 }
 
+uint64_t VirtualMachine::getConsoleBaseAddress() const {
+    return consoleDevice_ ? consoleDevice_->GetBaseAddress() : 0;
+}
+
+uint64_t VirtualMachine::getTimerBaseAddress() const {
+    return timerDevice_ ? timerDevice_->GetBaseAddress() : 0;
+}
+
+BasicInterruptController* VirtualMachine::getInterruptController() {
+    return interruptController_.get();
+}
+
+const BasicInterruptController* VirtualMachine::getInterruptController() const {
+    return interruptController_.get();
+}
+
 // ============================================================================
 // Internal Helpers
 // ============================================================================
@@ -721,6 +768,10 @@ bool VirtualMachine::stepCPU(int cpuIndex) {
         
         // Use scheduler to step specific CPU
         bool success = scheduler_->stepCPU(cpuPtrs, cpuIndex);
+
+        if (success && timerDevice_) {
+            timerDevice_->Tick(1);
+        }
         
         if (success) {
             cyclesExecuted_++;
@@ -807,6 +858,10 @@ uint64_t VirtualMachine::stepQuantum(int cpuIndex, uint64_t bundleCount) {
         
         // Use scheduler to step quantum
         uint64_t bundlesExecuted = scheduler_->stepQuantum(cpuPtrs, cpuIndex, bundleCount);
+
+        if (bundlesExecuted > 0 && timerDevice_) {
+            timerDevice_->Tick(bundlesExecuted * 3);
+        }
         
         // Update global cycle count (each bundle = 3 instructions)
         cyclesExecuted_ += (bundlesExecuted * 3);

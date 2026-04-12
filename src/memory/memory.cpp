@@ -47,6 +47,10 @@ void Memory::Read(uint64_t address, uint8_t* dest, size_t size) const {
     if (dest == nullptr) {
         throw std::invalid_argument("Destination pointer cannot be null");
     }
+
+    if (tryDeviceRead(address, dest, size)) {
+        return;
+    }
     
     // Use MMU-aware read
     mmuRead(address, dest, size);
@@ -60,9 +64,46 @@ void Memory::Write(uint64_t address, const uint8_t* src, size_t size) {
     if (src == nullptr) {
         throw std::invalid_argument("Source pointer cannot be null");
     }
+
+    if (tryDeviceWrite(address, src, size)) {
+        return;
+    }
     
     // Use MMU-aware write
     mmuWrite(address, src, size);
+}
+
+void Memory::RegisterDevice(IMemoryMappedDevice* device) {
+    if (device == nullptr) {
+        throw std::invalid_argument("Device pointer cannot be null");
+    }
+
+    for (IMemoryMappedDevice* existing : devices_) {
+        if (existing == device) {
+            return;
+        }
+
+        const uint64_t existingBase = existing->GetBaseAddress();
+        const uint64_t existingEnd = existingBase + static_cast<uint64_t>(existing->GetSize());
+        const uint64_t deviceBase = device->GetBaseAddress();
+        const uint64_t deviceEnd = deviceBase + static_cast<uint64_t>(device->GetSize());
+
+        if (deviceBase < existingEnd && existingBase < deviceEnd) {
+            throw std::invalid_argument("Memory-mapped device range overlaps an existing device");
+        }
+    }
+
+    devices_.push_back(device);
+}
+
+bool Memory::UnregisterDevice(IMemoryMappedDevice* device) {
+    const auto it = std::find(devices_.begin(), devices_.end(), device);
+    if (it == devices_.end()) {
+        return false;
+    }
+
+    devices_.erase(it);
+    return true;
 }
 
 void Memory::Clear() {
@@ -167,6 +208,26 @@ void Memory::mmuWrite(uint64_t address, const uint8_t* src, size_t size) {
         // Re-throw for caller to handle
         throw;
     }
+}
+
+bool Memory::tryDeviceRead(uint64_t address, uint8_t* dest, size_t size) const {
+    for (IMemoryMappedDevice* device : devices_) {
+        if (device != nullptr && device->HandlesRange(address, size)) {
+            return device->Read(address, dest, size);
+        }
+    }
+
+    return false;
+}
+
+bool Memory::tryDeviceWrite(uint64_t address, const uint8_t* src, size_t size) {
+    for (IMemoryMappedDevice* device : devices_) {
+        if (device != nullptr && device->HandlesRange(address, size)) {
+            return device->Write(address, src, size);
+        }
+    }
+
+    return false;
 }
 
 } // namespace ia64

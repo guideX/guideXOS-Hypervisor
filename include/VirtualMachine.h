@@ -17,6 +17,9 @@ namespace ia64 {
 class CPU;
 class Memory;
 class InstructionDecoder;
+class BasicInterruptController;
+class VirtualConsole;
+class VirtualTimer;
 
 /**
  * VirtualMachine - Complete IA-64 virtual machine implementation
@@ -189,6 +192,10 @@ public:
      */
     ICPU* getActiveCPU();
     const ICPU* getActiveCPU() const;
+    uint64_t getConsoleBaseAddress() const;
+    uint64_t getTimerBaseAddress() const;
+    BasicInterruptController* getInterruptController();
+    const BasicInterruptController* getInterruptController() const;
 
 private:
     // ========================================================================
@@ -199,6 +206,9 @@ private:
     std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder (shared)
     std::vector<CPUContext> cpus_;                  // CPU contexts (isolated state)
     std::unique_ptr<ICPUScheduler> scheduler_;      // CPU scheduler
+    std::unique_ptr<BasicInterruptController> interruptController_;
+    std::unique_ptr<VirtualConsole> consoleDevice_;
+    std::unique_ptr<VirtualTimer> timerDevice_;
 
     // ========================================================================
     // VM State

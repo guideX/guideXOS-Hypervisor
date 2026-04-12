@@ -79,7 +79,9 @@ CPU::CPU(IMemory& memory, IDecoder& decoder)
       decoder_(decoder),
       syscallDispatcher_(nullptr),
       currentSlot_(0),
-      bundleValid_(false) {
+      bundleValid_(false),
+      pendingInterrupts_(),
+      interruptVectorBase_(0) {
     reset();
 }
 
@@ -89,7 +91,9 @@ CPU::CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatche
       decoder_(decoder),
       syscallDispatcher_(syscallDispatcher),
       currentSlot_(0),
-      bundleValid_(false) {
+      bundleValid_(false),
+      pendingInterrupts_(),
+      interruptVectorBase_(0) {
     reset();
 }
 
@@ -105,6 +109,8 @@ void CPU::reset() {
     currentSlot_ = 0;
     bundleValid_ = false;
     currentBundle_ = Bundle();
+    pendingInterrupts_.clear();
+    interruptVectorBase_ = 0;
     
     // IA-64 specific initialization:
     // - GR0 is hardwired to 0 (enforced in CPUState)
@@ -119,6 +125,8 @@ void CPU::reset() {
 }
 
 bool CPU::step() {
+    servicePendingInterrupt();
+
     // Fetch bundle if needed (every 3 instructions, or if invalid)
     if (!bundleValid_ || currentSlot_ >= currentBundle_.instructions.size()) {
         fetchBundle();
@@ -274,6 +282,47 @@ bool CPU::checkPredicate(size_t predicateReg) const {
     
     // Return the predicate value
     return state_.GetPR(physical);
+}
+
+void CPU::queueInterrupt(uint8_t vector) {
+    pendingInterrupts_.push_back(vector);
+}
+
+bool CPU::hasPendingInterrupt() const {
+    return !pendingInterrupts_.empty();
+}
+
+void CPU::setInterruptsEnabled(bool enabled) {
+    const uint64_t psr = state_.GetPSR();
+    state_.SetPSR(enabled ? (psr | 0x1ULL) : (psr & ~0x1ULL));
+}
+
+bool CPU::areInterruptsEnabled() const {
+    return (state_.GetPSR() & 0x1ULL) != 0;
+}
+
+void CPU::setInterruptVectorBase(uint64_t baseAddress) {
+    interruptVectorBase_ = baseAddress;
+}
+
+uint64_t CPU::getInterruptVectorBase() const {
+    return interruptVectorBase_;
+}
+
+bool CPU::servicePendingInterrupt() {
+    if (!areInterruptsEnabled() || pendingInterrupts_.empty()) {
+        return false;
+    }
+
+    const uint8_t vector = pendingInterrupts_.front();
+    pendingInterrupts_.pop_front();
+
+    state_.SetAR(0, vector);
+    state_.SetAR(1, state_.GetIP());
+    state_.SetIP(interruptVectorBase_ + (static_cast<uint64_t>(vector) * 16ULL));
+    bundleValid_ = false;
+    currentSlot_ = 0;
+    return true;
 }
 
 // Register access methods (delegates to CPUState)

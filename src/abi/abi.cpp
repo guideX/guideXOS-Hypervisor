@@ -228,7 +228,7 @@ IMemory& memory) {
     return SyscallResult(static_cast<int64_t>(mappedAddr));
 }
 
-SyscallResult LinuxABI::SysMunmap(uint64_t addr, uint64_t length, MemorySystem& memory) {
+SyscallResult LinuxABI::SysMunmap(uint64_t addr, uint64_t length, IMemory& memory) {
     std::cout << "[SYSCALL] munmap(addr=0x" << std::hex << addr 
               << ", length=0x" << length << std::dec << ") -> 0 (stub)\n";
     
@@ -238,3 +238,4 @@ SyscallResult LinuxABI::SysMunmap(uint64_t addr, uint64_t length, MemorySystem& 
 }
 
 } // namespace ia64
+

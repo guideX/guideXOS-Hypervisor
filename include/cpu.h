@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "ICPU.h"
 #include <cstdint>
+#include <deque>
 #include <memory>
 
 namespace ia64 {
@@ -162,6 +163,13 @@ public:
     SyscallDispatcher* getSyscallDispatcher() const { 
         return syscallDispatcher_; 
     }
+
+    void queueInterrupt(uint8_t vector);
+    bool hasPendingInterrupt() const;
+    void setInterruptsEnabled(bool enabled);
+    bool areInterruptsEnabled() const;
+    void setInterruptVectorBase(uint64_t baseAddress);
+    uint64_t getInterruptVectorBase() const;
     
     
 private:
@@ -174,6 +182,8 @@ SyscallDispatcher* syscallDispatcher_; // Optional syscall dispatcher
 Bundle currentBundle_;
 size_t currentSlot_;                // Which instruction slot (0-2) we're executing
 bool bundleValid_;                  // Is currentBundle_ loaded?
+    std::deque<uint8_t> pendingInterrupts_;
+    uint64_t interruptVectorBase_;
     
     /**
      * fetchBundle() - Fetch and decode the bundle at current IP
@@ -196,6 +206,7 @@ bool bundleValid_;                  // Is currentBundle_ loaded?
      * @return true if instruction should execute
      */
     bool checkPredicate(size_t predicateReg) const;
+    bool servicePendingInterrupt();
 };
 
 } // namespace ia64
