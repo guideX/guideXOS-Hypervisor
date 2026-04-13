@@ -230,6 +230,39 @@ GET /api/v1/vms/{vm_id}/logs?limit=100&level=info
 }
 ```
 
+#### 13. Get VM Console Output
+```http
+GET /api/v1/vms/{vm_id}/console?start=0&count=100
+GET /api/v1/vms/{vm_id}/console?bytes=4096
+```
+
+**Query Parameters:**
+- `start` - Start line number (0-based, optional)
+- `count` - Number of lines to retrieve (optional, default: 100)
+- `bytes` - Get recent N bytes instead of lines (optional)
+
+**Response:**
+```json
+{
+  "vm_id": "550e8400-e29b-41d4-a716-446655440000",
+  "start_line": 0,
+  "total_lines": 1523,
+  "total_bytes": 45678,
+  "lines": [
+    "Starting IA-64 VM...",
+    "Loading kernel...",
+    "Kernel initialized"
+  ]
+}
+```
+
+**Features:**
+- Real-time console output capture
+- Configurable scrollback buffer (default: 10,000 lines)
+- Line-based or byte-based retrieval
+- Thread-safe access
+- Automatic FIFO overflow handling
+
 ### Error Responses
 
 All API errors follow this format:

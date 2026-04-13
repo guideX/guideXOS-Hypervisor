@@ -1,5 +1,6 @@
 #include "ConsoleOutputBuffer.h"
 #include <algorithm>
+#include <vector>
 
 namespace ia64 {
 
@@ -9,6 +10,7 @@ ConsoleOutputBuffer::ConsoleOutputBuffer(size_t maxLines)
     , currentLine_()
     , maxLines_(maxLines)
     , totalBytesWritten_(0) {
+
 }
 
 ConsoleOutputBuffer::~ConsoleOutputBuffer() {

@@ -61,6 +61,7 @@ function initializeUI() {
 
 function initializeEventListeners() {
     document.getElementById('btn-create-vm').addEventListener('click', () => openModal('modal-create-vm'));
+    document.getElementById('btn-quick-run').addEventListener('click', () => openModal('modal-quick-run'));
     document.getElementById('btn-refresh').addEventListener('click', () => refreshVMList());
     document.getElementById('toggle-auto-refresh').addEventListener('change', function() {
         autoRefreshEnabled = this.checked;
@@ -454,6 +455,176 @@ function exportConfig() {
 }
 
 // ============================================================================
+// Snapshot Management
+// ============================================================================
+
+async function refreshSnapshots() {
+    if (!selectedVmId) return;
+
+    try {
+        const snapshots = await apiRequest('GET', `/vms/${selectedVmId}/snapshots`);
+        renderSnapshots(snapshots.snapshots || []);
+    } catch (error) {
+        console.error('Failed to load snapshots:', error);
+        document.getElementById('snapshots-list').innerHTML = 
+            '<div class="empty-state-small">Failed to load snapshots</div>';
+    }
+}
+
+function renderSnapshots(snapshots) {
+    const container = document.getElementById('snapshots-list');
+    
+    if (snapshots.length === 0) {
+        container.innerHTML = '<div class="empty-state-small">No snapshots available</div>';
+        return;
+    }
+    
+    container.innerHTML = snapshots.map(snapshot => `
+        <div class="snapshot-item">
+            <div class="snapshot-header">
+                <span class="snapshot-name">${escapeHtml(snapshot.name || snapshot.snapshot_id)}</span>
+                <span class="snapshot-timestamp">${formatDate(snapshot.timestamp)}</span>
+            </div>
+            ${snapshot.description ? `<div class="snapshot-description">${escapeHtml(snapshot.description)}</div>` : ''}
+            <div class="snapshot-actions">
+                <button class="btn btn-sm btn-primary" onclick="restoreSnapshot('${snapshot.snapshot_id}')">Restore</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteSnapshot('${snapshot.snapshot_id}')">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function showCreateSnapshotDialog() {
+    document.getElementById('snapshot-name').value = '';
+    document.getElementById('snapshot-description').value = '';
+    openModal('modal-create-snapshot');
+}
+
+async function createSnapshot() {
+    if (!selectedVmId) return;
+    
+    const name = document.getElementById('snapshot-name').value.trim();
+    const description = document.getElementById('snapshot-description').value.trim();
+    
+    if (!name) {
+        showToast('Please enter a snapshot name', 'error');
+        return;
+    }
+    
+    try {
+        const request = {
+            name: name,
+            description: description
+        };
+        
+        await apiRequest('POST', `/vms/${selectedVmId}/snapshot`, request);
+        showToast('Snapshot created successfully', 'success');
+        closeModal('modal-create-snapshot');
+        await refreshSnapshots();
+    } catch (error) {
+        showToast(`Failed to create snapshot: ${error.message}`, 'error');
+    }
+}
+
+async function restoreSnapshot(snapshotId) {
+    if (!selectedVmId) return;
+    
+    if (!confirm('Restore this snapshot? Current VM state will be replaced.')) {
+        return;
+    }
+    
+    try {
+        const request = {
+            snapshot_id: snapshotId
+        };
+        
+        await apiRequest('POST', `/vms/${selectedVmId}/restore`, request);
+        showToast('Snapshot restored successfully', 'success');
+        await refreshVMList();
+    } catch (error) {
+        showToast(`Failed to restore snapshot: ${error.message}`, 'error');
+    }
+}
+
+async function deleteSnapshot(snapshotId) {
+    if (!selectedVmId) return;
+    
+    if (!confirm('Delete this snapshot? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        await apiRequest('DELETE', `/vms/${selectedVmId}/snapshots/${snapshotId}`);
+        showToast('Snapshot deleted successfully', 'success');
+        await refreshSnapshots();
+    } catch (error) {
+        showToast(`Failed to delete snapshot: ${error.message}`, 'error');
+    }
+}
+
+// ============================================================================
+// Quick Run
+// ============================================================================
+
+async function quickRunVM() {
+    const name = document.getElementById('quick-run-name').value.trim();
+    const imagePath = document.getElementById('quick-run-image').value.trim();
+    const memory = parseInt(document.getElementById('quick-run-memory').value);
+    const cpus = parseInt(document.getElementById('quick-run-cpus').value);
+    const entryPoint = document.getElementById('quick-run-entry').value.trim();
+    
+    if (!name || !imagePath) {
+        showToast('Please fill in all required fields', 'error');
+        return;
+    }
+    
+    try {
+        // Create VM with default configuration
+        const config = {
+            name: name,
+            config: {
+                memory: { size_mb: memory },
+                cpu: { count: cpus },
+                storage: [{
+                    device_id: 'boot-disk',
+                    device_type: 'raw',
+                    image_path: imagePath,
+                    read_only: false
+                }]
+            },
+            auto_start: true
+        };
+        
+        const result = await apiRequest('POST', '/vms', config);
+        showToast(`VM "${name}" created and starting...`, 'success');
+        
+        // If custom entry point specified, set it
+        if (entryPoint) {
+            try {
+                const entryAddr = parseInt(entryPoint, 16);
+                // Note: This would require an API endpoint to set entry point
+                console.log(`Entry point: 0x${entryAddr.toString(16)}`);
+            } catch (e) {
+                console.error('Invalid entry point format:', e);
+            }
+        }
+        
+        closeModal('modal-quick-run');
+        document.getElementById('form-quick-run').reset();
+        await refreshVMList();
+        
+        // Open VM details to show console output
+        if (result.vm_id) {
+            setTimeout(() => showVMDetails(result.vm_id), 500);
+        }
+    } catch (error) {
+        showToast(`Failed to create VM: ${error.message}`, 'error');
+    }
+}
+
+
+
+// ============================================================================
 // UI Utilities
 // ============================================================================
 
@@ -489,6 +660,11 @@ function switchTab(tabName) {
         }
     } else {
         stopConsoleAutoRefresh();
+    }
+    
+    // Handle snapshots tab activation
+    if (tabName === 'snapshots') {
+        refreshSnapshots();
     }
 }
 
@@ -586,6 +762,12 @@ function formatBytes(bytes) {
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+function formatDate(timestamp) {
+    if (!timestamp) return 'Unknown';
+    const date = new Date(timestamp * 1000); // Assuming Unix timestamp
+    return date.toLocaleString();
 }
 
 function escapeHtml(text) {

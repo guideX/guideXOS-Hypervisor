@@ -672,6 +672,87 @@ body {
     padding: 40px;
 }
 
+/* Snapshots */
+.snapshots-header {
+    padding: 12px;
+    background-color: #f8f9fa;
+    border-bottom: 1px solid var(--border-color);
+    border-radius: var(--border-radius) var(--border-radius) 0 0;
+}
+
+.snapshots-list {
+    padding: 16px;
+    min-height: 200px;
+}
+
+.snapshot-item {
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 16px;
+    margin-bottom: 12px;
+    transition: var(--transition);
+}
+
+.snapshot-item:hover {
+    box-shadow: var(--shadow-sm);
+    border-color: var(--primary-color);
+}
+
+.snapshot-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.snapshot-name {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text-color);
+}
+
+.snapshot-timestamp {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.snapshot-description {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+}
+
+.snapshot-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.empty-state-small {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Form Help Text */
+.form-help {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Success Button */
+.btn-success {
+    background-color: var(--success-color);
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: #218838;
+}
+
 /* Toast Notifications */
 .toast-container {
     position: fixed;

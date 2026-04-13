@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <deque>
 #include <mutex>
 #include <cstddef>
@@ -14,6 +15,7 @@ namespace ia64 {
  * Stores console output with configurable scrollback limit. Provides
  * efficient line-based storage with real-time access to recent output.
  * 
+
  * Features:
  * - Thread-safe read/write operations
  * - Configurable maximum line count (scrollback buffer)

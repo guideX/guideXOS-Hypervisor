@@ -24,6 +24,9 @@
             <button id="btn-create-vm" class="btn btn-primary">
                 <span class="icon">?</span> Create VM
             </button>
+            <button id="btn-quick-run" class="btn btn-success">
+                <span class="icon">??</span> Quick Run
+            </button>
             <button id="btn-refresh" class="btn btn-secondary">
                 <span class="icon">??</span> Refresh
             </button>
@@ -129,6 +132,7 @@
                     <button class="tab-button active" data-tab="overview">Overview</button>
                     <button class="tab-button" data-tab="configuration">Configuration</button>
                     <button class="tab-button" data-tab="console">Console</button>
+                    <button class="tab-button" data-tab="snapshots">Snapshots</button>
                     <button class="tab-button" data-tab="logs">Logs</button>
                 </div>
 
@@ -194,6 +198,18 @@
                     </div>
                 </div>
 
+                <!-- Snapshots Tab -->
+                <div id="tab-snapshots" class="tab-content">
+                    <div class="snapshots-header">
+                        <button class="btn btn-primary btn-sm" onclick="showCreateSnapshotDialog()">
+                            <span class="icon">??</span> Create Snapshot
+                        </button>
+                    </div>
+                    <div class="snapshots-list" id="snapshots-list">
+                        <div class="empty-state-small">No snapshots available</div>
+                    </div>
+                </div>
+
                 <!-- Logs Tab -->
                 <div id="tab-logs" class="tab-content">
                     <div class="logs-container">
@@ -225,6 +241,77 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeModal('modal-confirm-delete')">Cancel</button>
                 <button class="btn btn-danger" onclick="confirmDelete()">Delete VM</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Snapshot Modal -->
+    <div id="modal-create-snapshot" class="modal">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h2>Create Snapshot</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="form-create-snapshot">
+                    <div class="form-group">
+                        <label for="snapshot-name">Snapshot Name</label>
+                        <input type="text" id="snapshot-name" class="form-control" placeholder="checkpoint-1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="snapshot-description">Description (optional)</label>
+                        <textarea id="snapshot-description" class="form-control" rows="3" placeholder="Describe this snapshot..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-create-snapshot')">Cancel</button>
+                <button class="btn btn-primary" onclick="createSnapshot()">Create Snapshot</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Run Modal -->
+    <div id="modal-quick-run" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Quick Run - IA-64 Image</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="form-quick-run">
+                    <div class="form-group">
+                        <label for="quick-run-name">VM Name</label>
+                        <input type="text" id="quick-run-name" class="form-control" placeholder="quick-vm" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="quick-run-image">Image File Path</label>
+                        <input type="text" id="quick-run-image" class="form-control" placeholder="/path/to/ia64-image.bin" required>
+                        <small class="form-help">Path to IA-64 binary or ELF image</small>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="quick-run-memory">Memory (MB)</label>
+                            <input type="number" id="quick-run-memory" class="form-control" value="512" min="64" step="64" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="quick-run-cpus">CPU Count</label>
+                            <input type="number" id="quick-run-cpus" class="form-control" value="1" min="1" max="8" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="quick-run-entry">Entry Point (hex, optional)</label>
+                        <input type="text" id="quick-run-entry" class="form-control" placeholder="0x4000000000000000">
+                        <small class="form-help">Override default entry point if needed</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-quick-run')">Cancel</button>
+                <button class="btn btn-primary" onclick="quickRunVM()">Create &amp; Run</button>
             </div>
         </div>
     </div>

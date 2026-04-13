@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 namespace ia64 {
 
@@ -9,6 +10,7 @@ VirtualConsole::VirtualConsole(uint64_t baseAddress, std::ostream& output, size_
     : baseAddress_(baseAddress),
       output_(&output),
       outputBuffer_(std::make_unique<ConsoleOutputBuffer>(scrollbackLines)) {
+
 }
 
 VirtualConsole::~VirtualConsole() {

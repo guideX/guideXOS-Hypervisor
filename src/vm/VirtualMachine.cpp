@@ -28,7 +28,7 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::str
   interruptController_(nullptr),
   consoleDevice_(nullptr),
   timerDevice_(nullptr),
-  state_(VMState::UNINITIALIZED),
+  state_(VMState::CREATED),
   activeCPUIndex_(-1),
   debuggerAttached_(false),
   nextMemoryBreakpointId_(1),
@@ -137,7 +137,7 @@ bool VirtualMachine::init() {
         lastBreakReason_.clear();
         debuggerAttached_ = false;
         
-        state_ = VMState::INITIALIZED;
+        state_ = VMState::STOPPED;
         LOG_INFO("VirtualMachine initialized successfully");
         return true;
         
@@ -183,7 +183,7 @@ bool VirtualMachine::reset() {
         
         // Keep breakpoints and debugger attachment
         
-        state_ = VMState::INITIALIZED;
+        state_ = VMState::STOPPED;
         LOG_INFO("VirtualMachine reset successfully");
         return true;
         
@@ -195,9 +195,9 @@ bool VirtualMachine::reset() {
 }
 
 void VirtualMachine::halt() {
-    if (state_ == VMState::RUNNING) {
-        LOG_INFO("Halting VirtualMachine execution");
-        state_ = VMState::HALTED;
+if (state_ == VMState::RUNNING) {
+    LOG_INFO("Halting VirtualMachine execution");
+    state_ = VMState::STOPPED;
         
         // Halt all running CPUs
         for (auto& ctx : cpus_) {
@@ -213,7 +213,7 @@ void VirtualMachine::halt() {
 // ============================================================================
 
 bool VirtualMachine::step() {
-    if (state_ == VMState::UNINITIALIZED) {
+    if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot step - VM not initialized");
         return false;
     }
@@ -223,7 +223,7 @@ bool VirtualMachine::step() {
         return false;
     }
 
-    if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
+    if (state_ != VMState::RUNNING && state_ != VMState::PAUSED) {
         state_ = VMState::RUNNING;
     }
 
@@ -236,7 +236,7 @@ bool VirtualMachine::step() {
         const int cpuIndex = scheduler_->selectNextCPU(cpuPtrs);
         if (!isValidCPUIndex(cpuIndex)) {
             LOG_DEBUG("No runnable CPU found");
-            state_ = VMState::HALTED;
+            state_ = VMState::STOPPED;
             return false;
         }
 
@@ -253,7 +253,7 @@ uint64_t VirtualMachine::run(uint64_t maxCycles) {
              (maxCycles > 0 ? " (max cycles: " + std::to_string(maxCycles) + ")" : " (unlimited)"));
     
     // Check state
-    if (state_ == VMState::UNINITIALIZED) {
+    if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot run - VM not initialized");
         return 0;
     }
@@ -273,7 +273,7 @@ uint64_t VirtualMachine::run(uint64_t maxCycles) {
         // Check cycle limit
         if (maxCycles > 0 && cyclesThisRun >= maxCycles) {
             LOG_INFO("Maximum cycle count reached: " + std::to_string(maxCycles));
-            state_ = VMState::HALTED;
+            state_ = VMState::STOPPED;
             break;
         }
         
@@ -533,12 +533,12 @@ void VirtualMachine::dump() const {
     // VM state
     std::cout << "VM State: ";
     switch (state_) {
-        case VMState::UNINITIALIZED: std::cout << "UNINITIALIZED\n"; break;
-        case VMState::INITIALIZED:   std::cout << "INITIALIZED\n"; break;
-        case VMState::RUNNING:       std::cout << "RUNNING\n"; break;
-        case VMState::HALTED:        std::cout << "HALTED\n"; break;
-        case VMState::ERROR:         std::cout << "ERROR\n"; break;
-        case VMState::DEBUG_BREAK:   std::cout << "DEBUG_BREAK\n"; break;
+        case VMState::CREATED:   std::cout << "CREATED\n"; break;
+        case VMState::STOPPED:   std::cout << "STOPPED\n"; break;
+        case VMState::RUNNING:   std::cout << "RUNNING\n"; break;
+        case VMState::PAUSED:    std::cout << "PAUSED\n"; break;
+        case VMState::ERROR:     std::cout << "ERROR\n"; break;
+        default:                 std::cout << "OTHER (" << static_cast<int>(state_) << ")\n"; break;
     }
     
     std::cout << "CPUs: " << cpus_.size() << "\n";
@@ -866,7 +866,7 @@ bool VirtualMachine::restoreSnapshot(const DebuggerSnapshot& snapshot) {
         cpus_[i].lastActivationTime = snapshot.cpus[i].lastActivationTime;
     }
 
-    state_ = VMState::DEBUG_BREAK;
+    state_ = VMState::PAUSED;
     activeCPUIndex_ = snapshot.activeCPUIndex;
     cyclesExecuted_ = snapshot.cyclesExecuted;
     lastBreakReason_ = "rewind";
@@ -949,7 +949,7 @@ size_t VirtualMachine::registerMemoryBreakpointHook(const MemoryBreakpoint& brea
                 return;
             }
 
-            state_ = VMState::DEBUG_BREAK;
+            state_ = VMState::PAUSED;
             lastBreakReason_ = "memory breakpoint";
         });
 
@@ -1084,24 +1084,25 @@ bool VirtualMachine::isValidCPUIndex(int cpuIndex) const {
 // Extended Execution Control - Scheduler Interface
 // ============================================================================
 
+
 bool VirtualMachine::stepCPU(int cpuIndex) {
-    if (state_ == VMState::UNINITIALIZED) {
-        LOG_ERROR("Cannot step CPU - VM not initialized");
-        return false;
-    }
+if (state_ == VMState::CREATED) {
+    LOG_ERROR("Cannot step CPU - VM not initialized");
+    return false;
+}
 
-    if (state_ == VMState::ERROR) {
-        LOG_ERROR("Cannot step CPU - VM in error state");
-        return false;
-    }
+if (state_ == VMState::ERROR) {
+    LOG_ERROR("Cannot step CPU - VM in error state");
+    return false;
+}
 
-    if (!isValidCPUIndex(cpuIndex)) {
-        LOG_ERROR("Invalid CPU index: " + std::to_string(cpuIndex));
-        return false;
-    }
+if (!isValidCPUIndex(cpuIndex)) {
+    LOG_ERROR("Invalid CPU index: " + std::to_string(cpuIndex));
+    return false;
+}
 
     try {
-        if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
+        if (state_ != VMState::RUNNING && state_ != VMState::PAUSED) {
             state_ = VMState::RUNNING;
         }
 
@@ -1113,17 +1114,18 @@ bool VirtualMachine::stepCPU(int cpuIndex) {
 
         activeCPUIndex_ = cpuIndex;
         memory_->GetMMU().SetCPUStateReference(&cpu->getState());
+
         captureSnapshotIfBoundary(cpuIndex);
 
         const uint64_t currentIP = cpu->getIP();
         const bool bypassInstructionBreakpoint =
-            state_ == VMState::DEBUG_BREAK &&
+            state_ == VMState::PAUSED &&
             lastBreakReason_ == "instruction breakpoint" &&
             cpu->isAtBundleBoundary();
 
         if (debuggerAttached_ && !bypassInstructionBreakpoint && cpu->isAtBundleBoundary() &&
             checkBreakpoint(currentIP) && evaluateCondition(instructionBreakpoints_.find(currentIP)->second.condition, *cpu)) {
-            state_ = VMState::DEBUG_BREAK;
+            state_ = VMState::PAUSED;
             lastBreakReason_ = "instruction breakpoint";
             return false;
         }
@@ -1135,7 +1137,7 @@ bool VirtualMachine::stepCPU(int cpuIndex) {
 
         const bool success = cpu->step();
         if (!success) {
-            state_ = VMState::HALTED;
+            state_ = VMState::STOPPED;
             return false;
         }
 
@@ -1148,7 +1150,7 @@ bool VirtualMachine::stepCPU(int cpuIndex) {
             timerDevice_->Tick(1);
         }
 
-        if (state_ == VMState::DEBUG_BREAK) {
+        if (state_ == VMState::PAUSED) {
             return false;
         }
 
@@ -1163,7 +1165,7 @@ bool VirtualMachine::stepCPU(int cpuIndex) {
 }
 
 int VirtualMachine::stepAllCPUs() {
-    if (state_ == VMState::UNINITIALIZED) {
+    if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot step all CPUs - VM not initialized");
         return 0;
     }
@@ -1174,9 +1176,11 @@ int VirtualMachine::stepAllCPUs() {
     }
 
     try {
-        if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
+        if (state_ != VMState::RUNNING && state_ != VMState::PAUSED) {
             state_ = VMState::RUNNING;
         }
+
+
 
         int successCount = 0;
         for (size_t i = 0; i < cpus_.size(); ++i) {
@@ -1185,7 +1189,7 @@ int VirtualMachine::stepAllCPUs() {
             }
 
             if (!stepCPU(static_cast<int>(i))) {
-                if (state_ == VMState::DEBUG_BREAK) {
+                if (state_ == VMState::PAUSED) {
                     break;
                 }
                 continue;
@@ -1205,7 +1209,7 @@ int VirtualMachine::stepAllCPUs() {
 }
 
 uint64_t VirtualMachine::stepQuantum(int cpuIndex, uint64_t bundleCount) {
-    if (state_ == VMState::UNINITIALIZED) {
+    if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot step quantum - VM not initialized");
         return 0;
     }
@@ -1216,12 +1220,13 @@ uint64_t VirtualMachine::stepQuantum(int cpuIndex, uint64_t bundleCount) {
     }
 
     if (!isValidCPUIndex(cpuIndex)) {
+
         LOG_ERROR("Invalid CPU index: " + std::to_string(cpuIndex));
         return 0;
     }
 
     try {
-        if (state_ != VMState::RUNNING && state_ != VMState::DEBUG_BREAK) {
+        if (state_ != VMState::RUNNING && state_ != VMState::PAUSED) {
             state_ = VMState::RUNNING;
         }
 

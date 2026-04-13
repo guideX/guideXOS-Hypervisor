@@ -10,18 +10,7 @@ class CPUState;
 class ICPU;
 class IMemory;
 class IDecoder;
-
-/**
- * VMState - Virtual Machine execution state
- */
-enum class VMState {
-    UNINITIALIZED,  // VM not initialized
-    INITIALIZED,    // VM initialized but not running
-    RUNNING,        // VM actively executing
-    HALTED,         // VM halted (normal stop)
-    ERROR,          // VM stopped due to error
-    DEBUG_BREAK     // VM paused at debugger breakpoint
-};
+enum class VMState;  // Defined in VMMetadata.h
 
 /**
  * IVirtualMachine - Abstract interface for IA-64 virtual machine

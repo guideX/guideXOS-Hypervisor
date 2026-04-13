@@ -1,8 +1,10 @@
 #pragma once
 
+
 #pragma once
 
 #include "IVirtualMachine.h"
+#include "VMMetadata.h"
 #include "CPUContext.h"
 #include "Watchpoint.h"
 #include "ICPUScheduler.h"
@@ -28,6 +30,7 @@ class InstructionDecoder;
 class BasicInterruptController;
 class VirtualConsole;
 class VirtualTimer;
+
 
 enum class DebugConditionTarget {
     NONE,
@@ -133,7 +136,7 @@ struct DebuggerSnapshot {
     DebuggerSnapshot()
         : memory()
         , cpus()
-        , vmState(VMState::UNINITIALIZED)
+        , vmState(VMState::CREATED)
         , activeCPUIndex(-1)
         , cyclesExecuted(0) {}
 };

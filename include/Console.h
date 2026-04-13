@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iosfwd>
 #include <string>
+#include <vector>
 #include <memory>
 
 namespace ia64 {
@@ -14,6 +15,7 @@ namespace ia64 {
 class VirtualConsole : public IMemoryMappedDevice {
 public:
     static constexpr uint64_t kDefaultBaseAddress = 0xFFFF0000ULL;
+
     static constexpr size_t kRegisterSize = 8;
     static constexpr uint64_t kDataRegisterOffset = 0;
     static constexpr uint64_t kStatusRegisterOffset = 4;

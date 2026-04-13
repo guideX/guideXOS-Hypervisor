@@ -139,6 +139,7 @@
     <ClCompile Include="src\decoder\decoder.cpp" />
     <ClCompile Include="src\fuzzer\Fuzzer.cpp" />
     <ClCompile Include="src\io\Console.cpp" />
+    <ClCompile Include="src\io\ConsoleOutputBuffer.cpp" />
     <ClCompile Include="src\io\InterruptController.cpp" />
     <ClCompile Include="src\io\Timer.cpp" />
     <ClCompile Include="src\isa\ExampleISAPlugin.cpp" />
@@ -183,6 +184,7 @@
     <ClInclude Include="include\APITypes.h" />
     <ClInclude Include="include\bootstrap.h" />
     <ClInclude Include="include\Console.h" />
+    <ClInclude Include="include\ConsoleOutputBuffer.h" />
     <ClInclude Include="include\cpu.h" />
     <ClInclude Include="include\CPUContext.h" />
     <ClInclude Include="include\cpu_state.h" />
@@ -256,6 +258,7 @@
     <None Include="docs\VM_ISOLATION_SUMMARY.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="docs\WEB_UI.md" />
+    <None Include="docs\WEB_UI_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\WEB_UI_QUICK_REFERENCE.md" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
