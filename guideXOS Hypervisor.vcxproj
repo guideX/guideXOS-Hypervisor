@@ -240,6 +240,7 @@
     <None Include="docs\VM_CONFIGURATION_QUICK_REFERENCE.md" />
     <None Include="docs\VM_CONFIGURATION_SCHEMA.md" />
     <None Include="docs\VM_ISOLATION.md" />
+    <None Include="docs\VM_ISOLATION_SUMMARY.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
