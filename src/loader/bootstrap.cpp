@@ -404,4 +404,193 @@ std::vector<AuxVec> BuildDefaultAuxiliaryVector(const BootstrapConfig& config) {
     return auxv;
 }
 
+// ===================================================================
+// Kernel Bootstrap Implementation
+// ===================================================================
+
+uint64_t InitializeKernelBootstrapState(CPUState& cpu, MemorySystem& memory, const KernelBootstrapConfig& config) {
+    // Reset CPU to a clean state
+    cpu.Reset();
+    
+    // Setup kernel stack (simple allocation, no user-space layout)
+    uint64_t stackPointer = SetupKernelStack(memory, config);
+    
+    // Initialize general registers for kernel mode
+    InitializeKernelGeneralRegisters(cpu, stackPointer, config.globalPointer, config.bootParamAddress);
+    
+    // Initialize predicate and branch registers (same as user mode)
+    InitializePredicateAndBranchRegisters(cpu);
+    
+    // Initialize application registers for kernel mode
+    InitializeKernelApplicationRegisters(cpu, config);
+    
+    // Set instruction pointer to kernel entry point
+    cpu.SetIP(config.entryPoint);
+    
+    // Initialize Current Frame Marker (CFM)
+    // Initial state: SOF=0, SOL=0, SOR=0, RRB.gr=0, RRB.fr=0, RRB.pr=0
+    cpu.SetCFM(0);
+    
+    // Set Processor Status Register for kernel mode
+    uint64_t psr = BootstrapConstants::INITIAL_KERNEL_PSR;
+    
+    // If virtual addressing is enabled, add translation bits
+    if (config.enableVirtualAddressing) {
+        psr |= BootstrapConstants::PSR_IC;  // Enable interruption collection
+        psr |= BootstrapConstants::PSR_DT;  // Enable data address translation
+        psr |= BootstrapConstants::PSR_RT;  // Enable register stack translation
+        psr |= BootstrapConstants::PSR_IT;  // Enable instruction address translation
+    }
+    
+    cpu.SetPSR(psr);
+    
+    return stackPointer;
+}
+
+uint64_t SetupKernelStack(MemorySystem& memory, const KernelBootstrapConfig& config) {
+    // For kernel stack, we just need to allocate the space and return the top address
+    // The stack grows downward, so we return stackTop aligned to 16 bytes
+    
+    uint64_t stackPointer = config.stackTop & ~15ULL;  // 16-byte align
+    
+    // Note: In a real implementation, you might want to:
+    // 1. Allocate/map physical pages for the kernel stack
+    // 2. Set up guard pages
+    // 3. Initialize stack memory to a known pattern
+    // For now, we just return the aligned stack pointer
+    
+    return stackPointer;
+}
+
+void InitializeKernelApplicationRegisters(CPUState& cpu, const KernelBootstrapConfig& config) {
+    // ===================================================================
+    // RSE (Register Stack Engine) Configuration - Kernel Mode
+    // ===================================================================
+    
+    // AR.RSC (Register Stack Configuration Register) - AR16
+    // For kernel mode: privilege level = 0
+    cpu.SetAR(BootstrapConstants::AR_RSC, BootstrapConstants::INITIAL_KERNEL_RSC);
+    
+    // AR.BSP (Backing Store Pointer) - AR17
+    cpu.SetAR(BootstrapConstants::AR_BSP, config.backingStoreBase);
+    
+    // AR.BSPSTORE (BSP Store) - AR18
+    cpu.SetAR(BootstrapConstants::AR_BSPSTORE, config.backingStoreBase);
+    
+    // AR.RNAT (RSE NaT Collection Register) - AR19
+    cpu.SetAR(BootstrapConstants::AR_RNAT, 0);
+    
+    // ===================================================================
+    // Floating-Point Configuration
+    // ===================================================================
+    
+    // AR.FPSR (Floating-Point Status Register) - AR40
+    cpu.SetAR(BootstrapConstants::AR_FPSR, 0x0009804C0270033FULL);
+    
+    // ===================================================================
+    // Control Registers
+    // ===================================================================
+    
+    // AR.PFS (Previous Function State) - AR64
+    cpu.SetAR(BootstrapConstants::AR_PFS, 0);
+    
+    // AR.LC (Loop Count) - AR65
+    cpu.SetAR(BootstrapConstants::AR_LC, 0);
+    
+    // AR.EC (Epilog Count) - AR66
+    cpu.SetAR(BootstrapConstants::AR_EC, 0);
+    
+    // ===================================================================
+    // User NaT and Compare Registers
+    // ===================================================================
+    
+    // AR.UNAT (User NaT Collection Register) - AR36
+    cpu.SetAR(BootstrapConstants::AR_UNAT, 0);
+    
+    // AR.CCV (Compare and Exchange Compare Value) - AR32
+    cpu.SetAR(BootstrapConstants::AR_CCV, 0);
+    
+    // AR.CSD (Compare and Store Data) - AR25
+    cpu.SetAR(BootstrapConstants::AR_CSD, 0);
+    
+    // ===================================================================
+    // Kernel-Specific Application Registers
+    // ===================================================================
+    
+    // AR.KR0-AR.KR7 (Kernel Registers) - AR0-AR7
+    // These are available for kernel use. Initialize to 0.
+    for (size_t i = 0; i < 8; ++i) {
+        cpu.SetAR(i, 0);
+    }
+    
+    // Initialize remaining ARs to 0
+    for (size_t i = 8; i < 128; ++i) {
+        // Skip the ones we already initialized
+        if (i == BootstrapConstants::AR_RSC ||
+            i == BootstrapConstants::AR_BSP ||
+            i == BootstrapConstants::AR_BSPSTORE ||
+            i == BootstrapConstants::AR_RNAT ||
+            i == BootstrapConstants::AR_CSD ||
+            i == BootstrapConstants::AR_CCV ||
+            i == BootstrapConstants::AR_UNAT ||
+            i == BootstrapConstants::AR_FPSR ||
+            i == BootstrapConstants::AR_PFS ||
+            i == BootstrapConstants::AR_LC ||
+            i == BootstrapConstants::AR_EC) {
+            continue;
+        }
+        cpu.SetAR(i, 0);
+    }
+}
+
+void InitializeKernelGeneralRegisters(CPUState& cpu, uint64_t stackPointer, 
+                                      uint64_t globalPointer, uint64_t bootParamAddress) {
+    // ===================================================================
+    // Special-Purpose General Registers for Kernel Mode
+    // ===================================================================
+    
+    // r0: Hardwired to 0 (reads always return 0, writes are ignored)
+    cpu.SetGR(0, 0);
+    
+    // r1: Global Pointer (gp) - points to kernel small data area
+    cpu.SetGR(BootstrapConstants::GP_REGISTER, globalPointer);
+    
+    // r12: Stack Pointer (sp) - kernel stack
+    cpu.SetGR(BootstrapConstants::SP_REGISTER, stackPointer);
+    
+    // r13: Thread Pointer (tp) - for kernel, may point to per-CPU data
+    // Initialize to 0 for now
+    cpu.SetGR(BootstrapConstants::TP_REGISTER, 0);
+    
+    // ===================================================================
+    // IA-64 Linux Kernel Boot Protocol Registers
+    // ===================================================================
+    
+    // r28: Boot parameter address (pointer to boot parameter structure)
+    // This is the standard register for passing boot info to IA-64 Linux kernel
+    cpu.SetGR(28, bootParamAddress);
+    
+    // ===================================================================
+    // Static General Registers (r2-r11, r14-r31 except r28)
+    // ===================================================================
+    // Initialize all to 0
+    for (size_t i = 2; i < 32; ++i) {
+        if (i == BootstrapConstants::GP_REGISTER ||
+            i == BootstrapConstants::SP_REGISTER ||
+            i == BootstrapConstants::TP_REGISTER ||
+            i == 28) {  // Already set
+            continue;
+        }
+        cpu.SetGR(i, 0);
+    }
+    
+    // ===================================================================
+    // Stacked General Registers (r32-r127)
+    // ===================================================================
+    // Initialize all to 0
+    for (size_t i = 32; i < 128; ++i) {
+        cpu.SetGR(i, 0);
+    }
+}
+
 } // namespace ia64

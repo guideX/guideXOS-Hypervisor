@@ -264,6 +264,7 @@
     <None Include="docs\VM_CONFIGURATION_SCHEMA.md" />
     <None Include="docs\VM_ISOLATION.md" />
     <None Include="docs\VM_ISOLATION_SUMMARY.md" />
+    <None Include="docs\VM_RESET_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="docs\WEB_UI.md" />
     <None Include="docs\WEB_UI_IMPLEMENTATION_SUMMARY.md" />

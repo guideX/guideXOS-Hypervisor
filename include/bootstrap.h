@@ -68,6 +68,34 @@ namespace BootstrapConstants {
     // Default UIDs/GIDs for emulation
     constexpr uint64_t DEFAULT_UID = 1000;
     constexpr uint64_t DEFAULT_GID = 1000;
+    
+    // Kernel bootstrap constants
+    constexpr uint64_t KERNEL_STACK_SIZE = 16 * 1024;        // 16 KB kernel stack
+    constexpr uint64_t KERNEL_STACK_TOP = 0xA000000000000ULL; // High address for kernel stack
+    
+    // Kernel PSR (Processor Status Register) flags
+    // For kernel mode: CPL=0, physical addressing initially
+    constexpr uint64_t PSR_CPL_KERNEL = (0ULL << 32);        // Current privilege level = 0 (kernel)
+    constexpr uint64_t PSR_BN = (1ULL << 44);                 // Bank 1 enabled (kernel bank)
+    
+    // Initial PSR for kernel mode (physical addressing, interrupts disabled)
+    // - IC = 0 (interruption collection disabled initially)
+    // - I = 0 (interrupts disabled initially)
+    // - DT = 0 (data address translation disabled - physical mode)
+    // - RT = 0 (register stack translation disabled)
+    // - IT = 0 (instruction address translation disabled)
+    // - CPL = 0 (kernel privilege level)
+    // - BN = 1 (use bank 1 for kernel general registers)
+    constexpr uint64_t INITIAL_KERNEL_PSR = PSR_BN | PSR_CPL_KERNEL;
+    
+    // Kernel RSE configuration (eager mode, kernel privilege)
+    constexpr uint64_t RSC_PL_KERNEL = (0ULL << 2);          // Privilege level 0 (kernel)
+    constexpr uint64_t INITIAL_KERNEL_RSC = RSC_MODE_EAGER | RSC_PL_KERNEL;
+    
+    // Kernel memory regions (typical IA-64 Linux kernel layout)
+    constexpr uint64_t KERNEL_REGION_START = 0xE000000000000000ULL;  // Region 7 (kernel)
+    constexpr uint64_t KERNEL_PHYSICAL_START = 0x100000ULL;           // 1 MB physical
+    constexpr uint64_t KERNEL_VIRTUAL_BASE = KERNEL_REGION_START + KERNEL_PHYSICAL_START;
 }
 
 /**
@@ -159,6 +187,68 @@ struct BootstrapConfig {
     {
         // Default argv
         argv.push_back("program");
+    }
+};
+
+/**
+ * Kernel Bootstrap Configuration
+ * 
+ * Contains all parameters needed to initialize CPU state for IA-64 kernel execution.
+ * Unlike user-mode bootstrap, kernel bootstrap:
+ * - Runs at privilege level 0 (CPL=0)
+ * - Uses physical addressing initially
+ * - Has no argc/argv/envp stack setup
+ * - Has simpler register initialization
+ * - Receives boot parameters in specific registers
+ */
+struct KernelBootstrapConfig {
+    // Entry point (kernel start address)
+    uint64_t entryPoint;
+    
+    // Kernel stack configuration
+    uint64_t stackTop;
+    uint64_t stackSize;
+    
+    // Backing store (RSE) configuration
+    uint64_t backingStoreBase;
+    uint64_t backingStoreSize;
+    
+    // Global pointer (for kernel code)
+    uint64_t globalPointer;
+    
+    // Boot parameters (passed in registers per IA-64 Linux boot protocol)
+    uint64_t bootParamAddress;      // Address of boot parameter structure (r28)
+    uint64_t commandLineAddress;    // Address of kernel command line (optional)
+    
+    // Memory map information
+    uint64_t memoryMapAddress;      // Address of E820/EFI memory map
+    uint64_t memoryMapSize;         // Size of memory map
+    
+    // Initial page tables (if virtual addressing enabled)
+    uint64_t pageTableBase;         // Base of initial page tables
+    
+    // EFI System Table (for EFI-booted kernels)
+    uint64_t efiSystemTable;        // EFI system table pointer
+    
+    // Enable virtual addressing on startup
+    bool enableVirtualAddressing;
+    
+    // Constructor with defaults
+    KernelBootstrapConfig()
+        : entryPoint(0)
+        , stackTop(BootstrapConstants::KERNEL_STACK_TOP)
+        , stackSize(BootstrapConstants::KERNEL_STACK_SIZE)
+        , backingStoreBase(BootstrapConstants::DEFAULT_BACKING_STORE_BASE)
+        , backingStoreSize(BootstrapConstants::DEFAULT_BACKING_STORE_SIZE)
+        , globalPointer(0)
+        , bootParamAddress(0)
+        , commandLineAddress(0)
+        , memoryMapAddress(0)
+        , memoryMapSize(0)
+        , pageTableBase(0)
+        , efiSystemTable(0)
+        , enableVirtualAddressing(false)
+    {
     }
 };
 
@@ -288,5 +378,72 @@ void InitializePredicateAndBranchRegisters(CPUState& cpu);
  * @return Vector of auxiliary vector entries
  */
 std::vector<AuxVec> BuildDefaultAuxiliaryVector(const BootstrapConfig& config);
+
+// ===================================================================
+// Kernel Bootstrap Functions
+// ===================================================================
+
+/**
+ * Initialize CPU and memory state for kernel bootstrap according to IA-64 kernel boot protocol
+ * 
+ * This function sets up:
+ * 1. All CPU registers to their kernel boot protocol values
+ * 2. Simple kernel stack (no user-space argc/argv layout)
+ * 3. Backing store for the Register Stack Engine (RSE)
+ * 4. Application registers (AR.RSC, AR.BSP, AR.FPSR, etc.) for kernel mode
+ * 5. Processor Status Register (PSR) for kernel mode execution (CPL=0)
+ * 6. Boot parameters in designated registers (r28, etc.)
+ * 7. Initial register stack frame (CFM)
+ * 
+ * @param cpu CPU state to initialize
+ * @param memory Memory system for stack/backing store setup
+ * @param config Kernel bootstrap configuration
+ * @return Stack pointer value after initialization
+ */
+uint64_t InitializeKernelBootstrapState(CPUState& cpu, MemorySystem& memory, const KernelBootstrapConfig& config);
+
+/**
+ * Initialize application registers for kernel mode
+ * 
+ * Sets up ARs for kernel execution:
+ * - AR.RSC: RSE configuration (kernel privilege level)
+ * - AR.BSP/AR.BSPSTORE: Backing store configuration
+ * - AR.FPSR: Floating-point status
+ * - AR.PFS, AR.LC, AR.EC: Control registers
+ * 
+ * @param cpu CPU state to modify
+ * @param config Kernel bootstrap configuration
+ */
+void InitializeKernelApplicationRegisters(CPUState& cpu, const KernelBootstrapConfig& config);
+
+/**
+ * Initialize general registers for kernel mode
+ * 
+ * Sets up:
+ * - r0: Always 0 (hardwired)
+ * - r1: Global pointer (kernel gp)
+ * - r12: Kernel stack pointer
+ * - r28: Boot parameter address (IA-64 Linux boot protocol)
+ * - Other registers: Set to 0
+ * 
+ * @param cpu CPU state to modify
+ * @param stackPointer Kernel stack pointer value
+ * @param globalPointer Kernel global pointer value
+ * @param bootParamAddress Boot parameter structure address
+ */
+void InitializeKernelGeneralRegisters(CPUState& cpu, uint64_t stackPointer, 
+                                      uint64_t globalPointer, uint64_t bootParamAddress);
+
+/**
+ * Setup simple kernel stack (no user-space layout)
+ * 
+ * Just allocates and aligns the kernel stack, no argc/argv/envp.
+ * Returns the stack pointer (top of stack, 16-byte aligned).
+ * 
+ * @param memory Memory system
+ * @param config Kernel bootstrap configuration
+ * @return Stack pointer (top of stack)
+ */
+uint64_t SetupKernelStack(MemorySystem& memory, const KernelBootstrapConfig& config);
 
 } // namespace ia64
