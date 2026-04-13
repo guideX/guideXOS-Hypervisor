@@ -349,10 +349,47 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             return ISAExecutionResult::SYSCALL;
         }
         
+        // Check for branch instructions
+        bool isBranch = false;
+        uint64_t branchTarget = 0;
+        
+        switch (cachedInstruction_.GetType()) {
+            case InstructionType::BR_COND:
+                if (cachedInstruction_.HasBranchTarget()) {
+                    branchTarget = cachedInstruction_.GetBranchTarget();
+                    isBranch = true;
+                }
+                break;
+                
+            case InstructionType::BR_CALL:
+                if (cachedInstruction_.HasBranchTarget()) {
+                    branchTarget = cachedInstruction_.GetBranchTarget();
+                    isBranch = true;
+                }
+                break;
+                
+            case InstructionType::BR_RET:
+                branchTarget = state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                isBranch = true;
+                break;
+                
+            default:
+                break;
+        }
+        
         // Execute instruction
         executeInstruction(memory, cachedInstruction_);
         
-        // Advance to next instruction
+        // Handle branch after execution
+        if (isBranch) {
+            state_.getCPUState().SetIP(branchTarget);
+            state_.bundleValid_ = false;
+            state_.currentSlot_ = 0;
+            hasCachedInstruction_ = false;
+            return ISAExecutionResult::CONTINUE;
+        }
+        
+        // Advance to next instruction (non-branch)
         state_.currentSlot_++;
         if (state_.currentSlot_ >= state_.currentBundle_.instructions.size()) {
             state_.getCPUState().SetIP(state_.getCPUState().GetIP() + 16);

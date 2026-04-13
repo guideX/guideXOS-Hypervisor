@@ -128,6 +128,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
+    <ClCompile Include="examples\bare_metal_example.cpp" />
     <ClCompile Include="examples\boot_state_machine_example.cpp" />
     <ClCompile Include="examples\boot_trace_example.cpp" />
     <ClCompile Include="examples\config_example.cpp" />
@@ -187,6 +188,7 @@
     <ClCompile Include="tests\test_isa_plugin.cpp" />
     <ClCompile Include="tests\test_kernel_bootstrap.cpp" />
     <ClCompile Include="tests\test_libc_bridge.cpp" />
+    <ClCompile Include="tests\test_new_instructions.cpp" />
     <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_vmconfig_serialization.cpp" />
     <ClCompile Include="tests\test_vmmanager.cpp" />
@@ -274,6 +276,7 @@
   <ItemGroup>
     <None Include="docs\API_DOCUMENTATION.md" />
     <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\BARE_METAL_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
     <None Include="docs\BOOTSTRAP_QUICK_START.md" />
     <None Include="docs\BOOT_STATE_MACHINE.md" />
@@ -293,6 +296,7 @@
     <None Include="docs\INITRAMFS_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\INITRAMFS_QUICK_REFERENCE.md" />
     <None Include="docs\INITRAMFS_SUPPORT.md" />
+    <None Include="docs\INSTRUCTION_SET_STATUS.md" />
     <None Include="docs\ISA_PLUGIN_ARCHITECTURE.md" />
     <None Include="docs\ISA_PLUGIN_REFACTORING_SUMMARY.md" />
     <None Include="docs\KERNEL_BOOTSTRAP.md" />

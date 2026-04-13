@@ -257,10 +257,48 @@ void CPU::executeInstruction(const InstructionEx& instr) {
             return;
         }
         
+        // Check for branch instructions - handle before normal execution
+        bool isBranch = false;
+        uint64_t branchTarget = 0;
+        
+        switch (instr.GetType()) {
+            case InstructionType::BR_COND:
+                // Conditional branch - target from instruction
+                if (instr.HasBranchTarget()) {
+                    branchTarget = instr.GetBranchTarget();
+                    isBranch = true;
+                }
+                break;
+                
+            case InstructionType::BR_CALL:
+                // Branch and link - target from instruction
+                if (instr.HasBranchTarget()) {
+                    branchTarget = instr.GetBranchTarget();
+                    isBranch = true;
+                }
+                break;
+                
+            case InstructionType::BR_RET:
+                // Return - target from branch register
+                branchTarget = state_.GetBR(instr.GetSrc1());
+                isBranch = true;
+                break;
+                
+            default:
+                break;
+        }
+        
         // Normal instruction execution
         // InstructionEx already has Execute() method that handles execution
         // It also handles predication internally if needed
         instr.Execute(state_, memory_);
+        
+        // Handle branch after execution (so br.call can save return address)
+        if (isBranch) {
+            state_.SetIP(branchTarget);
+            bundleValid_ = false;  // Invalidate current bundle
+            currentSlot_ = 0;      // Reset to first slot
+        }
     } catch (const std::exception& e) {
         // Handle execution errors safely - don't crash
         std::cerr << "Error executing instruction at IP 0x" << std::hex << state_.GetIP() << std::dec
