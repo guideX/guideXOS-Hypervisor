@@ -361,6 +361,172 @@ void TestUnknownSyscall() {
     std::cout << "PASS: Unknown syscall handled correctly\n";
 }
 
+// Test: Error code propagation - EBADF
+void TestErrorPropagationEBADF() {
+    std::cout << "\n=== Test: Error Propagation - EBADF ===\n";
+    
+    Memory memory(1024 * 1024);
+    InstructionDecoder decoder;
+    LinuxABI abi;
+    SyscallDispatcher dispatcher(abi);
+    CPU cpu(memory, decoder, &dispatcher);
+    
+    // Try to write to invalid file descriptor
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::WRITE));
+    cpu.getState().SetGR(32, 9999);  // Invalid fd
+    cpu.getState().SetGR(33, 0x1000);
+    cpu.getState().SetGR(34, 10);
+    
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    // Check error code in r10
+    uint64_t errorCode = cpu.getState().GetGR(10);
+    assert(errorCode == 9);  // EBADF
+    
+    // Check return value in r8 (should be -1)
+    int64_t retVal = static_cast<int64_t>(cpu.getState().GetGR(8));
+    assert(retVal == -1);
+    
+    std::cout << "PASS: EBADF error propagated correctly\n";
+}
+
+// Test: Error code propagation - EFAULT
+void TestErrorPropagationEFAULT() {
+    std::cout << "\n=== Test: Error Propagation - EFAULT ===\n";
+    
+    Memory memory(1024 * 1024);
+    InstructionDecoder decoder;
+    LinuxABI abi;
+    SyscallDispatcher dispatcher(abi);
+    CPU cpu(memory, decoder, &dispatcher);
+    
+    // Try to write with null buffer
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::WRITE));
+    cpu.getState().SetGR(32, 1);  // stdout
+    cpu.getState().SetGR(33, 0);  // null buffer
+    cpu.getState().SetGR(34, 10);
+    
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    // Check error code in r10
+    uint64_t errorCode = cpu.getState().GetGR(10);
+    assert(errorCode == 14);  // EFAULT
+    
+    // Check return value in r8 (should be -1)
+    int64_t retVal = static_cast<int64_t>(cpu.getState().GetGR(8));
+    assert(retVal == -1);
+    
+    std::cout << "PASS: EFAULT error propagated correctly\n";
+}
+
+// Test: Error code propagation - EINVAL (mmap)
+void TestErrorPropagationEINVAL() {
+    std::cout << "\n=== Test: Error Propagation - EINVAL ===\n";
+    
+    Memory memory(1024 * 1024);
+    InstructionDecoder decoder;
+    LinuxABI abi;
+    SyscallDispatcher dispatcher(abi);
+    CPU cpu(memory, decoder, &dispatcher);
+    
+    // Try to mmap with zero length
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::MMAP));
+    cpu.getState().SetGR(32, 0);
+    cpu.getState().SetGR(33, 0);  // zero length - invalid
+    cpu.getState().SetGR(34, PROT_READ);
+    cpu.getState().SetGR(35, MAP_PRIVATE | MAP_ANONYMOUS);
+    cpu.getState().SetGR(36, static_cast<uint64_t>(-1));
+    cpu.getState().SetGR(37, 0);
+    
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    // Check error code in r10
+    uint64_t errorCode = cpu.getState().GetGR(10);
+    assert(errorCode == 22);  // EINVAL
+    
+    // Check return value in r8 (should be -1)
+    int64_t retVal = static_cast<int64_t>(cpu.getState().GetGR(8));
+    assert(retVal == -1);
+    
+    std::cout << "PASS: EINVAL error propagated correctly\n";
+}
+
+// Test: Negative return value handling
+void TestNegativeReturnValues() {
+    std::cout << "\n=== Test: Negative Return Value Handling ===\n";
+    
+    Memory memory(1024 * 1024);
+    InstructionDecoder decoder;
+    LinuxABI abi;
+    SyscallDispatcher dispatcher(abi);
+    CPU cpu(memory, decoder, &dispatcher);
+    
+    // Execute a syscall that will fail
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::CLOSE));
+    cpu.getState().SetGR(32, 0);  // Try to close stdin - should fail
+    
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    // r8 should contain -1 (as signed value)
+    uint64_t r8 = cpu.getState().GetGR(8);
+    int64_t retVal = static_cast<int64_t>(r8);
+    assert(retVal == -1);
+    
+    // r10 should contain errno (EBADF = 9)
+    uint64_t r10 = cpu.getState().GetGR(10);
+    assert(r10 == 9);
+    
+    // Verify trace shows failure
+    const auto& history = dispatcher.GetTraceHistory();
+    assert(history.size() > 0);
+    const auto& lastTrace = history.back();
+    assert(!lastTrace.success);
+    assert(lastTrace.returnValue == -1);
+    assert(lastTrace.errorCode == 9);
+    
+    std::cout << "PASS: Negative return values handled correctly\n";
+}
+
+// Test: Success vs failure statistics
+void TestSuccessFailureStats() {
+    std::cout << "\n=== Test: Success/Failure Statistics ===\n";
+    
+    Memory memory(1024 * 1024);
+    InstructionDecoder decoder;
+    LinuxABI abi;
+    SyscallDispatcher dispatcher(abi);
+    CPU cpu(memory, decoder, &dispatcher);
+    
+    dispatcher.ResetStatistics();
+    
+    // Execute some successful syscalls
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::GETPID));
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::BRK));
+    cpu.getState().SetGR(32, 0);
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    // Execute some failing syscalls
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::CLOSE));
+    cpu.getState().SetGR(32, 9999);  // Invalid fd
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    cpu.getState().SetGR(15, static_cast<uint64_t>(Syscall::WRITE));
+    cpu.getState().SetGR(32, 9999);  // Invalid fd
+    cpu.getState().SetGR(33, 0x1000);
+    cpu.getState().SetGR(34, 10);
+    dispatcher.DispatchSyscall(cpu.getState(), memory);
+    
+    // Check statistics
+    const auto& stats = dispatcher.GetStatistics();
+    assert(stats.totalCalls == 4);
+    assert(stats.successfulCalls == 2);
+    assert(stats.failedCalls == 2);
+    
+    std::cout << "PASS: Success/failure statistics tracked correctly\n";
+}
+
 int main() {
     std::cout << "===================================\n";
     std::cout << "Syscall Dispatcher Test Suite\n";
@@ -376,6 +542,13 @@ int main() {
         TestMultipleSyscalls();
         TestTracingConfiguration();
         TestUnknownSyscall();
+        
+        // Error propagation tests
+        TestErrorPropagationEBADF();
+        TestErrorPropagationEFAULT();
+        TestErrorPropagationEINVAL();
+        TestNegativeReturnValues();
+        TestSuccessFailureStats();
         
         std::cout << "\n===================================\n";
         std::cout << "All tests PASSED!\n";

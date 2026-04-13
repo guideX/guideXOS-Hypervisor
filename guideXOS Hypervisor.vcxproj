@@ -130,6 +130,7 @@
     <ClCompile Include="debug_harness.cpp" />
     <ClCompile Include="examples\boot_state_machine_example.cpp" />
     <ClCompile Include="examples\config_example.cpp" />
+    <ClCompile Include="examples\initramfs_example.cpp" />
     <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="examples\webui_example.cpp" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
@@ -213,6 +214,7 @@
     <ClInclude Include="include\IStorageDevice.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\JsonUtils.h" />
+    <ClInclude Include="include\linux_errno.h" />
     <ClInclude Include="include\loader.h" />
     <ClInclude Include="include\logger.h" />
     <ClInclude Include="include\memory.h" />
@@ -252,10 +254,14 @@
     <None Include="docs\FUZZER.md" />
     <None Include="docs\FUZZER_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
+    <None Include="docs\INITRAMFS_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\INITRAMFS_QUICK_REFERENCE.md" />
     <None Include="docs\INITRAMFS_SUPPORT.md" />
     <None Include="docs\ISA_PLUGIN_ARCHITECTURE.md" />
     <None Include="docs\ISA_PLUGIN_REFACTORING_SUMMARY.md" />
+    <None Include="docs\KERNEL_BOOTSTRAP.md" />
+    <None Include="docs\KERNEL_BOOTSTRAP_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\KERNEL_BOOTSTRAP_QUICK_REFERENCE.md" />
     <None Include="docs\MMU_SUMMARY.md" />
     <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />
     <None Include="docs\PROFILER.md" />
@@ -263,6 +269,8 @@
     <None Include="docs\PROFILER_QUICK_REFERENCE.md" />
     <None Include="docs\README_UPDATE_SUMMARY.md" />
     <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
+    <None Include="docs\SYSCALL_ABI.md" />
+    <None Include="docs\SYSCALL_QUICK_REFERENCE.md" />
     <None Include="docs\VMMANAGER.md" />
     <None Include="docs\VMMANAGER_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\VM_CONFIGURATION_IMPLEMENTATION_SUMMARY.md" />
