@@ -12,6 +12,9 @@ namespace ia64 {
 
 using InterruptDeliveryCallback = std::function<void(uint8_t vector)>;
 
+// Forward declaration
+struct InterruptControllerState;
+
 struct InterruptSource {
     size_t id;
     std::string name;
@@ -48,6 +51,10 @@ public:
     bool GetNextPendingInterrupt(uint8_t& vector) override;
     void DeliverPendingInterrupts() override;
     void Reset() override;
+    
+    // Snapshot support
+    InterruptControllerState createSnapshot() const;
+    void restoreSnapshot(const InterruptControllerState& snapshot);
 
 private:
     InterruptDeliveryCallback deliveryCallback_;

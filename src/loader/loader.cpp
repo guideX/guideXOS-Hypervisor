@@ -3,10 +3,12 @@
 #include "cpu_state.h"
 #include "bootstrap.h"
 #include "dynamic_linker.h"
+#include "KernelValidator.h"
 #include <fstream>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
+#include <cerrno>
 
 namespace ia64 {
 
@@ -23,6 +25,8 @@ ELFLoader::ELFLoader()
     , hasInterpreter_(false)
     , interpreterPath_("")
     , dynamicLinker_(nullptr)
+    , kernelValidationEnabled_(false)
+    , kernelValidator_(nullptr)
 {
     std::memset(&header_, 0, sizeof(header_));
 }
@@ -72,6 +76,30 @@ if (!ValidateArchitecture(ehdr)) {
 // Validate entry point
 if (!ValidateEntryPoint(ehdr, programHeaders_)) {
     throw std::runtime_error("Invalid entry point: not aligned or not in executable segment");
+}
+
+// Optional kernel-specific validation
+if (kernelValidationEnabled_) {
+    KernelValidator* validator = kernelValidator_;
+    bool ownsValidator = false;
+    
+    // Create temporary validator if none provided
+    if (!validator) {
+        validator = new KernelValidator();
+        ownsValidator = true;
+    }
+    
+    // Perform kernel validation
+    auto requirements = validator->ValidateKernelBuffer(
+        buffer, size, ValidationMode::KERNEL);
+    
+    if (!validator->CanBootKernel(requirements)) {
+        std::string report = validator->GetValidationReport(requirements);
+        if (ownsValidator) delete validator;
+        throw std::runtime_error("Kernel validation failed:\n" + report);
+    }
+    
+    if (ownsValidator) delete validator;
 }
 
 // Validate segment alignment and memory safety

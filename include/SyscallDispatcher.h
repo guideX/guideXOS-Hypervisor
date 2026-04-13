@@ -11,6 +11,7 @@ namespace ia64 {
 class CPUState;
 class IMemory;
 class LinuxABI;
+class BootTraceSystem;
 
 /**
  * Syscall trace entry - captures complete syscall information
@@ -173,12 +174,28 @@ public:
      */
     void PrintTraceHistory() const;
     
+    /**
+     * Set boot trace system for integration
+     * 
+     * @param bootTrace Boot trace system pointer (can be nullptr to disable)
+     */
+    void setBootTraceSystem(BootTraceSystem* bootTrace) { bootTrace_ = bootTrace; }
+    
+    /**
+     * Get boot trace system
+     * 
+     * @return Boot trace system pointer (may be nullptr)
+     */
+    BootTraceSystem* getBootTraceSystem() const { return bootTrace_; }
+    
 private:
     LinuxABI& abi_;                         // ABI handler for actual syscall execution
     SyscallTracingConfig tracingConfig_;    // Tracing configuration
     std::vector<SyscallTrace> traceHistory_; // History of traced syscalls
     SyscallStatistics statistics_;          // Syscall statistics
     uint64_t traceCounter_;                 // Counter for trace timestamps
+    BootTraceSystem* bootTrace_;            // Optional boot trace system integration
+    bool firstSyscallRecorded_;             // Track if we've seen first syscall
     
     /**
      * Capture syscall arguments from CPU state

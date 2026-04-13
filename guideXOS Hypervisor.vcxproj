@@ -129,12 +129,16 @@
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
     <ClCompile Include="examples\boot_state_machine_example.cpp" />
+    <ClCompile Include="examples\boot_trace_example.cpp" />
     <ClCompile Include="examples\config_example.cpp" />
     <ClCompile Include="examples\initramfs_example.cpp" />
+    <ClCompile Include="examples\kernel_validation_example.cpp" />
     <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="examples\virtual_devices_example.cpp" />
     <ClCompile Include="examples\virtual_disk_example.cpp" />
+    <ClCompile Include="examples\vm_snapshot_example.cpp" />
     <ClCompile Include="examples\webui_example.cpp" />
+    <ClCompile Include="kernels\minimal_kernel.c" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="src\abi\abi.cpp" />
     <ClCompile Include="src\api\RestAPIServer.cpp" />
@@ -153,6 +157,7 @@
     <ClCompile Include="src\loader\bootstrap.cpp" />
     <ClCompile Include="src\loader\crt0.cpp" />
     <ClCompile Include="src\loader\dynamic_linker.cpp" />
+    <ClCompile Include="src\loader\KernelValidator.cpp" />
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
@@ -165,11 +170,14 @@
     <ClCompile Include="src\storage\VirtualBlockDevice.cpp" />
     <ClCompile Include="src\storage\VirtualDiskManager.cpp" />
     <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
+    <ClCompile Include="src\vm\BootTraceSystem.cpp" />
     <ClCompile Include="src\vm\CPUContext.cpp" />
+    <ClCompile Include="src\vm\KernelPanic.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
     <ClCompile Include="src\vm\VMBootStateMachine.cpp" />
     <ClCompile Include="src\vm\VMManager.cpp" />
+    <ClCompile Include="src\vm\VMSnapshotManager.cpp" />
     <ClCompile Include="src\webui\WebUIServer.cpp" />
     <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_boot_state_machine.cpp" />
@@ -202,6 +210,7 @@
     <ClInclude Include="include\APIServer.h" />
     <ClInclude Include="include\APITypes.h" />
     <ClInclude Include="include\bootstrap.h" />
+    <ClInclude Include="include\BootTraceSystem.h" />
     <ClInclude Include="include\Console.h" />
     <ClInclude Include="include\ConsoleOutputBuffer.h" />
     <ClInclude Include="include\cpu.h" />
@@ -229,6 +238,8 @@
     <ClInclude Include="include\IStorageDevice.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\JsonUtils.h" />
+    <ClInclude Include="include\KernelPanic.h" />
+    <ClInclude Include="include\KernelValidator.h" />
     <ClInclude Include="include\libc_bridge.h" />
     <ClInclude Include="include\linux_errno.h" />
     <ClInclude Include="include\loader.h" />
@@ -251,6 +262,8 @@
     <ClInclude Include="include\VMConfiguration.h" />
     <ClInclude Include="include\VMManager.h" />
     <ClInclude Include="include\VMMetadata.h" />
+    <ClInclude Include="include\VMSnapshot.h" />
+    <ClInclude Include="include\VMSnapshotManager.h" />
     <ClInclude Include="include\Watchpoint.h" />
     <ClInclude Include="include\WebSocketServer.h" />
     <ClInclude Include="include\WebUIServer.h" />
@@ -266,6 +279,8 @@
     <None Include="docs\BOOT_STATE_MACHINE.md" />
     <None Include="docs\BOOT_STATE_MACHINE_QUICK_REF.md" />
     <None Include="docs\BOOT_STATE_MACHINE_SUMMARY.md" />
+    <None Include="docs\BOOT_TRACE_AND_PANIC.md" />
+    <None Include="docs\BOOT_TRACE_QUICK_REF.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
     <None Include="docs\ELF64_LOADER.md" />
     <None Include="docs\ELF_VALIDATION.md" />
@@ -282,6 +297,9 @@
     <None Include="docs\KERNEL_BOOTSTRAP.md" />
     <None Include="docs\KERNEL_BOOTSTRAP_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\KERNEL_BOOTSTRAP_QUICK_REFERENCE.md" />
+    <None Include="docs\KERNEL_VALIDATION.md" />
+    <None Include="docs\KERNEL_VALIDATION_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\KERNEL_VALIDATION_QUICK_REF.md" />
     <None Include="docs\MMU_SUMMARY.md" />
     <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />
     <None Include="docs\PROFILER.md" />
@@ -293,6 +311,8 @@
     <None Include="docs\SYSCALL_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\SYSCALL_QUICK_REFERENCE.md" />
     <None Include="docs\VIRTUAL_DEVICES.md" />
+    <None Include="docs\VIRTUAL_DEVICES_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VIRTUAL_DEVICES_QUICK_REF.md" />
     <None Include="docs\VIRTUAL_DISK_IMPLEMENTATION.md" />
     <None Include="docs\VIRTUAL_DISK_QUICK_REF.md" />
     <None Include="docs\VMMANAGER.md" />
@@ -303,6 +323,9 @@
     <None Include="docs\VM_ISOLATION.md" />
     <None Include="docs\VM_ISOLATION_SUMMARY.md" />
     <None Include="docs\VM_RESET_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VM_SNAPSHOT_IMPLEMENTATION.md" />
+    <None Include="docs\VM_SNAPSHOT_QUICK_REF.md" />
+    <None Include="docs\VM_SNAPSHOT_SUMMARY.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
     <None Include="docs\WEB_UI.md" />
     <None Include="docs\WEB_UI_IMPLEMENTATION_SUMMARY.md" />
@@ -313,6 +336,8 @@
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
+    <None Include="kernels\kernel.ld" />
+    <None Include="kernels\minimal_kernel.s" />
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="README.md" />
     <None Include="VS_SETUP.md" />

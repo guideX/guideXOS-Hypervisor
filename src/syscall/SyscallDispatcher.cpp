@@ -2,6 +2,7 @@
 #include "cpu_state.h"
 #include "memory.h"
 #include "abi.h"
+#include "BootTraceSystem.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -31,7 +32,9 @@ SyscallDispatcher::SyscallDispatcher(LinuxABI& abi)
     , tracingConfig_()
     , traceHistory_()
     , statistics_()
-    , traceCounter_(0) {
+    , traceCounter_(0)
+    , bootTrace_(nullptr)
+    , firstSyscallRecorded_(false) {
 }
 
 SyscallDispatcher::~SyscallDispatcher() {
@@ -73,6 +76,18 @@ bool SyscallDispatcher::DispatchSyscall(CPUState& cpu, IMemory& memory) {
     trace.errorCode = result.errorCode;
     trace.success = result.success;
     trace.timestamp = traceCounter_++;
+    
+    // Record to boot trace system if available
+    if (bootTrace_ && bootTrace_->isEnabled()) {
+        if (!firstSyscallRecorded_) {
+            bootTrace_->recordFirstSyscall(trace.syscallNumber, trace.syscallName, 
+                                          trace.timestamp, trace.instructionAddress);
+            firstSyscallRecorded_ = true;
+        } else {
+            bootTrace_->recordSyscall(trace.syscallNumber, trace.syscallName,
+                                     trace.timestamp, trace.instructionAddress);
+        }
+    }
     
     // Log the trace if tracing is enabled
     if (tracingConfig_.enabled) {

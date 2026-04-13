@@ -1,4 +1,5 @@
 #include "InterruptController.h"
+#include "VMSnapshot.h"
 
 namespace ia64 {
 
@@ -85,4 +86,45 @@ void BasicInterruptController::Reset() {
     // as they represent configuration, not state
 }
 
+InterruptControllerState BasicInterruptController::createSnapshot() const {
+    InterruptControllerState state;
+    
+    // Capture pending interrupts
+    state.pendingInterrupts.resize(256, false);
+    for (uint8_t vector : pendingVectors_) {
+        state.pendingInterrupts[vector] = true;
+    }
+    
+    // Capture masked interrupts (sources that are disabled)
+    state.maskedInterrupts.resize(256, false);
+    for (const auto& source : sources_) {
+        if (!source.enabled) {
+            state.maskedInterrupts[source.vector] = true;
+        }
+    }
+    
+    state.vectorBase = 0;  // Not currently used
+    state.enabled = true;  // Always enabled in current implementation
+    
+    return state;
+}
+
+void BasicInterruptController::restoreSnapshot(const InterruptControllerState& snapshot) {
+    // Restore pending interrupts
+    pendingVectors_.clear();
+    for (size_t i = 0; i < snapshot.pendingInterrupts.size(); ++i) {
+        if (snapshot.pendingInterrupts[i]) {
+            pendingVectors_.push_back(static_cast<uint8_t>(i));
+        }
+    }
+    
+    // Restore masked state for sources
+    for (auto& source : sources_) {
+        if (source.vector < snapshot.maskedInterrupts.size()) {
+            source.enabled = !snapshot.maskedInterrupts[source.vector];
+        }
+    }
+}
+
 } // namespace ia64
+

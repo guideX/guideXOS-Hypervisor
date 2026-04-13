@@ -1,4 +1,5 @@
 #include "Console.h"
+#include "VMSnapshot.h"
 
 #include <cstring>
 #include <iostream>
@@ -126,4 +127,29 @@ void VirtualConsole::Reset() {
     }
 }
 
+ConsoleDeviceState VirtualConsole::createSnapshot() const {
+    ConsoleDeviceState state;
+    state.baseAddress = baseAddress_;
+    state.currentBuffer = buffer_;
+    state.outputLines = getAllOutputLines();
+    state.totalBytesWritten = getTotalBytesWritten();
+    return state;
+}
+
+void VirtualConsole::restoreSnapshot(const ConsoleDeviceState& snapshot) {
+    baseAddress_ = snapshot.baseAddress;
+    buffer_ = snapshot.currentBuffer;
+    
+    if (outputBuffer_) {
+        outputBuffer_->clear();
+        for (const auto& line : snapshot.outputLines) {
+            for (char c : line) {
+                outputBuffer_->appendChar(c);
+            }
+            outputBuffer_->appendChar('\n');
+        }
+    }
+}
+
 } // namespace ia64
+

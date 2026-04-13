@@ -10,6 +10,8 @@
 #include "logger.h"
 #include "ISAPluginRegistry.h"
 #include "IA64ISAPlugin.h"
+#include "VMSnapshot.h"
+#include "VMSnapshotManager.h"
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -29,17 +31,25 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::str
   consoleDevice_(nullptr),
   timerDevice_(nullptr),
   state_(VMState::CREATED),
+  bootStateMachine_(),
+  bootTraceSystem_(10000),  // 10K event circular buffer
+  panicDetector_(),
+  lastPanic_(),
   activeCPUIndex_(-1),
   debuggerAttached_(false),
   nextMemoryBreakpointId_(1),
   maxSnapshotHistory_(256),
-  cyclesExecuted_(0) {
+  cyclesExecuted_(0),
+  snapshotManager_(std::make_unique<VMSnapshotManager>()) {
     
 if (numCPUs == 0) {
     throw std::invalid_argument("VM must have at least 1 CPU");
 }
     
 try {
+    // Initialize panic detector with boot trace system
+    panicDetector_.setBootTraceSystem(&bootTraceSystem_);
+    
     // Create shared subsystems
     memory_ = std::make_unique<Memory>(memorySize);
     decoder_ = std::make_unique<InstructionDecoder>();
@@ -105,23 +115,34 @@ VirtualMachine::~VirtualMachine() {
 // ============================================================================
 
 bool VirtualMachine::init() {
-    LOG_INFO("Initializing VirtualMachine...");
+LOG_INFO("Initializing VirtualMachine...");
     
-    // Transition to POWER_ON state
-    if (!bootStateMachine_.powerOn()) {
-        LOG_ERROR("Failed to power on VM");
-        return false;
-    }
+// Record memory allocation in boot trace
+bootTraceSystem_.recordMemoryAllocation(memory_->GetTotalSize(), cyclesExecuted_);
+    
+// Transition to POWER_ON state
+if (!bootStateMachine_.powerOn()) {
+    LOG_ERROR("Failed to power on VM");
+    return false;
+}
+    
+    // Record power on event
+    bootTraceSystem_.recordEvent(BootTraceEventType::POWER_ON, cyclesExecuted_, 0,
+                                 VMBootState::POWER_ON, "Virtual machine powered on");
     
     try {
         // Transition to firmware init
         bootStateMachine_.transition(VMBootState::FIRMWARE_INIT, "Starting firmware initialization");
+        bootTraceSystem_.recordBootStateChange(VMBootState::POWER_ON, VMBootState::FIRMWARE_INIT,
+                                              cyclesExecuted_, 0, "Starting firmware initialization");
         
         // Initialize all subsystems
         if (!initializeSubsystems()) {
             LOG_ERROR("Failed to initialize subsystems");
             state_ = VMState::ERROR;
             bootStateMachine_.transition(VMBootState::BOOT_FAILED, "Subsystem initialization failed");
+            bootTraceSystem_.recordEvent(BootTraceEventType::BOOT_FAILURE, cyclesExecuted_, 0,
+                                        VMBootState::BOOT_FAILED, "Subsystem initialization failed");
             return false;
         }
         
@@ -159,6 +180,8 @@ bool VirtualMachine::init() {
         LOG_ERROR("Exception during initialization: " + std::string(e.what()));
         state_ = VMState::ERROR;
         bootStateMachine_.transition(VMBootState::BOOT_FAILED, "Exception: " + std::string(e.what()));
+        bootTraceSystem_.recordEvent(BootTraceEventType::BOOT_FAILURE, cyclesExecuted_, 0,
+                                    VMBootState::BOOT_FAILED, "Exception: " + std::string(e.what()));
         return false;
     }
 }
@@ -355,12 +378,20 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
     VMBootState currentBootState = bootStateMachine_.getCurrentState();
     if (currentBootState == VMBootState::FIRMWARE_INIT) {
         bootStateMachine_.transition(VMBootState::BOOTLOADER_EXEC, "Bootloader starting");
+        bootTraceSystem_.recordBootStateChange(currentBootState, VMBootState::BOOTLOADER_EXEC,
+                                              cyclesExecuted_, 0, "Bootloader starting");
+        
         bootStateMachine_.transition(VMBootState::KERNEL_LOAD, "Loading kernel into memory");
+        bootTraceSystem_.recordBootStateChange(VMBootState::BOOTLOADER_EXEC, VMBootState::KERNEL_LOAD,
+                                              cyclesExecuted_, 0, "Loading kernel into memory");
     }
     
     try {
         // Write program to memory
         memory_->Write(loadAddress, data, size);
+        
+        // Record kernel load in boot trace
+        bootTraceSystem_.recordKernelLoad(loadAddress, size, cyclesExecuted_);
         
         LOG_INFO("Program loaded successfully");
         return true;
@@ -368,6 +399,8 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to load program: " + std::string(e.what()));
         bootStateMachine_.transition(VMBootState::BOOT_FAILED, "Kernel load failed");
+        bootTraceSystem_.recordEvent(BootTraceEventType::BOOT_FAILURE, cyclesExecuted_, 0,
+                                    VMBootState::BOOT_FAILED, "Kernel load failed: " + std::string(e.what()));
         return false;
     }
 }
@@ -384,6 +417,9 @@ void VirtualMachine::setEntryPoint(uint64_t address) {
         VMBootState currentBootState = bootStateMachine_.getCurrentState();
         if (currentBootState == VMBootState::KERNEL_LOAD) {
             bootStateMachine_.transition(VMBootState::KERNEL_ENTRY, "Jumping to kernel entry point");
+            bootTraceSystem_.recordBootStateChange(currentBootState, VMBootState::KERNEL_ENTRY,
+                                                  cyclesExecuted_, address, "Jumping to kernel entry point");
+            bootTraceSystem_.recordKernelEntry(address, cyclesExecuted_);
         }
     }
 }
@@ -1195,7 +1231,16 @@ if (!isValidCPUIndex(cpuIndex)) {
 
         const bool success = cpu->step();
         if (!success) {
-            state_ = VMState::STOPPED;
+            // CPU step failed - this could be a kernel panic condition
+            // Capture panic state
+            KernelPanic panic = panicDetector_.captureExceptionPanic(
+                "CPU execution failed", cpu->getState(), Bundle(), 0,
+                cyclesExecuted_, cyclesExecuted_
+            );
+            lastPanic_ = std::make_unique<KernelPanic>(panic);
+            
+            state_ = VMState::ERROR;
+            bootStateMachine_.transition(VMBootState::KERNEL_PANIC, "CPU execution failed");
             return false;
         }
 
@@ -1203,6 +1248,11 @@ if (!isValidCPUIndex(cpuIndex)) {
         ctx.instructionsExecuted++;
         cyclesExecuted_++;
         scheduler_->onCPUExecuted(cpuIndex, 1);
+        
+        // Record instruction milestone every 10000 instructions
+        if (bootTraceSystem_.isEnabled() && ctx.instructionsExecuted % 10000 == 0) {
+            bootTraceSystem_.recordInstructionMilestone(ctx.instructionsExecuted, cyclesExecuted_, currentIP);
+        }
 
         if (timerDevice_) {
             timerDevice_->Tick(1);
@@ -1217,7 +1267,19 @@ if (!isValidCPUIndex(cpuIndex)) {
 
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during stepCPU: " + std::string(e.what()));
+        
+        // Capture exception as kernel panic
+        CPU* cpu = getCPUForIndex(cpuIndex);
+        if (cpu) {
+            KernelPanic panic = panicDetector_.captureExceptionPanic(
+                e.what(), cpu->getState(), Bundle(), 0,
+                cyclesExecuted_, cyclesExecuted_
+            );
+            lastPanic_ = std::make_unique<KernelPanic>(panic);
+        }
+        
         state_ = VMState::ERROR;
+        bootStateMachine_.transition(VMBootState::KERNEL_PANIC, std::string("Exception: ") + e.what());
         return false;
     }
 }
@@ -1332,5 +1394,268 @@ void VirtualMachine::setQuantumSize(uint64_t bundleCount) {
     LOG_INFO(oss.str());
 }
 
+// ============================================================================
+// VM Snapshotting - Full State Capture
+// ============================================================================
+
+std::string VirtualMachine::createFullSnapshot(const std::string& name, const std::string& description) {
+    if (!snapshotManager_) {
+        LOG_ERROR("Snapshot manager not initialized");
+        return "";
+    }
+    
+    std::string snapshotId = snapshotManager_->createFullSnapshot(*this, name, description);
+    
+    if (!snapshotId.empty()) {
+        std::ostringstream oss;
+        oss << "Created full snapshot: " << (name.empty() ? snapshotId : name);
+        LOG_INFO(oss.str());
+    }
+    
+    return snapshotId;
+}
+
+std::string VirtualMachine::createDeltaSnapshot(const std::string& parentSnapshotId, 
+                                                 const std::string& name, 
+                                                 const std::string& description) {
+    if (!snapshotManager_) {
+        LOG_ERROR("Snapshot manager not initialized");
+        return "";
+    }
+    
+    std::string snapshotId = snapshotManager_->createDeltaSnapshot(*this, parentSnapshotId, name, description);
+    
+    if (!snapshotId.empty()) {
+        std::ostringstream oss;
+        oss << "Created delta snapshot: " << (name.empty() ? snapshotId : name);
+        LOG_INFO(oss.str());
+        
+        // Log compression stats
+        auto stats = snapshotManager_->getCompressionStats(snapshotId);
+        if (stats.fullSnapshotSize > 0) {
+            std::ostringstream statsOss;
+            statsOss << "Delta snapshot compression: " 
+                     << stats.deltaSnapshotSize << " bytes (delta) vs " 
+                     << stats.fullSnapshotSize << " bytes (full) - "
+                     << (stats.compressionRatio * 100.0) << "% of full size";
+            LOG_INFO(statsOss.str());
+        }
+    }
+    
+    return snapshotId;
+}
+
+bool VirtualMachine::restoreFromSnapshot(const std::string& snapshotId) {
+if (!snapshotManager_) {
+    LOG_ERROR("Snapshot manager not initialized");
+    return false;
+}
+    
+// Get the snapshot
+VMStateSnapshot snapshot = snapshotManager_->resolveSnapshot(snapshotId);
+    
+    if (snapshot.metadata.snapshotId.empty()) {
+        LOG_ERROR("Snapshot not found: " + snapshotId);
+        return false;
+    }
+    
+    // Restore the snapshot
+    bool success = restoreVMSnapshot(snapshot);
+    
+    if (success) {
+        std::ostringstream oss;
+        oss << "Restored snapshot: " << snapshot.metadata.snapshotName;
+        LOG_INFO(oss.str());
+    } else {
+        LOG_ERROR("Failed to restore snapshot: " + snapshotId);
+    }
+    
+    return success;
+}
+
+VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
+    VMStateSnapshot snapshot;
+    
+    // Capture CPU states
+    for (size_t i = 0; i < cpus_.size(); ++i) {
+        CPUSnapshotRecord cpuRecord;
+        cpuRecord.cpuId = static_cast<uint32_t>(i);
+        
+        const CPUContext& ctx = cpus_[i];
+        if (ctx.cpu) {
+            cpuRecord.architecturalState = ctx.cpu->getState();
+            cpuRecord.executionState = ctx.state;
+            cpuRecord.cyclesExecuted = ctx.cyclesExecuted;
+            cpuRecord.instructionsExecuted = ctx.instructionsExecuted;
+            cpuRecord.idleCycles = ctx.idleCycles;
+            cpuRecord.enabled = ctx.enabled;
+            cpuRecord.lastActivationTime = ctx.lastActivationTime;
+            
+            // Capture runtime state
+            auto runtimeSnapshot = ctx.cpu->createSnapshot();
+            cpuRecord.currentSlot = runtimeSnapshot.currentSlot;
+            cpuRecord.bundleValid = runtimeSnapshot.bundleValid;
+            cpuRecord.pendingInterrupts = runtimeSnapshot.pendingInterrupts;
+            cpuRecord.interruptVectorBase = runtimeSnapshot.interruptVectorBase;
+        }
+        
+        snapshot.cpus.push_back(cpuRecord);
+    }
+    
+    snapshot.activeCPUIndex = activeCPUIndex_;
+    
+    // Capture memory state
+    if (memory_) {
+        snapshot.memoryState = memory_->CreateSnapshot();
+    }
+    
+    // Capture console device state
+    if (consoleDevice_) {
+        snapshot.consoleState = consoleDevice_->createSnapshot();
+    }
+    
+    // Capture timer device state
+    if (timerDevice_) {
+        snapshot.timerState = timerDevice_->createSnapshot();
+    }
+    
+    // Capture interrupt controller state
+    if (interruptController_) {
+        snapshot.interruptControllerState = interruptController_->createSnapshot();
+    }
+    
+    // Capture VM state
+    snapshot.vmStateValue = static_cast<uint32_t>(state_);
+    snapshot.totalCyclesExecuted = cyclesExecuted_;
+    snapshot.quantumSize = getQuantumSize();
+    
+    return snapshot;
+}
+
+bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot) {
+    // Validate snapshot
+    if (snapshot.cpus.size() != cpus_.size()) {
+        LOG_ERROR("Snapshot CPU count mismatch");
+        return false;
+    }
+    
+    // Restore memory state
+    if (memory_) {
+        memory_->RestoreSnapshot(snapshot.memoryState);
+    }
+    
+    // Restore CPU states
+    for (size_t i = 0; i < cpus_.size() && i < snapshot.cpus.size(); ++i) {
+        CPUContext& ctx = cpus_[i];
+        const CPUSnapshotRecord& cpuRecord = snapshot.cpus[i];
+        
+        if (ctx.cpu) {
+            // Restore architectural state
+            CPURuntimeStateSnapshot runtimeState;
+            runtimeState.architecturalState = cpuRecord.architecturalState;
+            runtimeState.currentSlot = cpuRecord.currentSlot;
+            runtimeState.bundleValid = cpuRecord.bundleValid;
+            runtimeState.pendingInterrupts = cpuRecord.pendingInterrupts;
+            runtimeState.interruptVectorBase = cpuRecord.interruptVectorBase;
+            
+            ctx.cpu->restoreSnapshot(runtimeState);
+        }
+        
+        // Restore execution context
+        ctx.state = cpuRecord.executionState;
+        ctx.cyclesExecuted = cpuRecord.cyclesExecuted;
+        ctx.instructionsExecuted = cpuRecord.instructionsExecuted;
+        ctx.idleCycles = cpuRecord.idleCycles;
+        ctx.enabled = cpuRecord.enabled;
+        ctx.lastActivationTime = cpuRecord.lastActivationTime;
+    }
+    
+    // Restore active CPU
+    activeCPUIndex_ = snapshot.activeCPUIndex;
+    
+    // Restore console device state
+    if (consoleDevice_) {
+        consoleDevice_->restoreSnapshot(snapshot.consoleState);
+    }
+    
+    // Restore timer device state
+    if (timerDevice_) {
+        timerDevice_->restoreSnapshot(snapshot.timerState);
+    }
+    
+    // Restore interrupt controller state
+    if (interruptController_) {
+        interruptController_->restoreSnapshot(snapshot.interruptControllerState);
+    }
+    
+    // Restore VM state
+    state_ = static_cast<VMState>(snapshot.vmStateValue);
+    cyclesExecuted_ = snapshot.totalCyclesExecuted;
+    
+    if (scheduler_ && snapshot.quantumSize > 0) {
+        scheduler_->setQuantumSize(snapshot.quantumSize);
+    }
+    
+    return true;
+}
+
+// ============================================================================
+// Kernel Panic Detection
+// ============================================================================
+
+KernelPanic VirtualMachine::triggerKernelPanic(KernelPanicReason reason, const std::string& description) {
+    LOG_ERROR("KERNEL PANIC: " + description);
+    
+    // Get active CPU state
+    const CPU* cpu = getCPUForIndex(activeCPUIndex_);
+    if (!cpu) {
+        // Create empty panic if no active CPU
+        KernelPanic panic;
+        panic.reason = reason;
+        panic.description = description;
+        panic.timestamp = cyclesExecuted_;
+        panic.cyclesExecuted = cyclesExecuted_;
+        panic.bundleValid = false;
+        lastPanic_ = std::make_unique<KernelPanic>(panic);
+        
+        // Halt the VM
+        state_ = VMState::ERROR;
+        bootStateMachine_.transition(VMBootState::KERNEL_PANIC, description);
+        
+        return panic;
+    }
+    
+    // Capture last executed bundle (if available)
+    Bundle lastBundle;
+    size_t lastSlot = 0;
+    bool bundleValid = false;
+    
+    try {
+        // Try to fetch current bundle (16 bytes for IA-64 bundle)
+        uint64_t bundleAddr = cpu->getIP();
+        uint8_t bundleData[16];
+        memory_->Read(bundleAddr & ~0xFULL, bundleData, 16);
+        lastBundle = decoder_->DecodeBundle(bundleData);
+        bundleValid = true;
+    } catch (...) {
+        // Bundle fetch failed, continue with invalid bundle
+    }
+    
+    // Trigger panic with CPU state
+    KernelPanic panic = panicDetector_.triggerPanic(
+        reason, description, cpu->getState(), lastBundle, lastSlot,
+        cyclesExecuted_, cyclesExecuted_
+    );
+    
+    lastPanic_ = std::make_unique<KernelPanic>(panic);
+    
+    // Halt the VM
+    state_ = VMState::ERROR;
+    bootStateMachine_.transition(VMBootState::KERNEL_PANIC, description);
+    
+    return panic;
+}
+
 } // namespace ia64
+
 

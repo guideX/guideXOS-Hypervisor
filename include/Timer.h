@@ -10,6 +10,9 @@ namespace ia64 {
 
 class IInterruptController;
 
+// Forward declaration
+struct TimerDeviceState;
+
 class VirtualTimer : public IMemoryMappedDevice, public ITickableDevice {
 public:
     static constexpr uint64_t kDefaultBaseAddress = 0xFFFF0100ULL;
@@ -38,6 +41,11 @@ public:
     bool HasPendingInterrupt() const { return interruptPending_; }
     uint64_t GetIntervalCycles() const { return intervalCycles_; }
     uint8_t GetInterruptVector() const { return interruptVector_; }
+    uint64_t GetElapsedCycles() const { return elapsedCycles_; }
+    
+    // Snapshot support
+    TimerDeviceState createSnapshot() const;
+    void restoreSnapshot(const TimerDeviceState& snapshot);
 
 private:
     void Raise();

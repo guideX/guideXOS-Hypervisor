@@ -1,4 +1,5 @@
 #include "Timer.h"
+#include "VMSnapshot.h"
 
 #include "InterruptController.h"
 
@@ -124,4 +125,27 @@ void VirtualTimer::Reset() {
     interruptPending_ = false;
 }
 
+TimerDeviceState VirtualTimer::createSnapshot() const {
+    TimerDeviceState state;
+    state.baseAddress = baseAddress_;
+    state.intervalCycles = intervalCycles_;
+    state.elapsedCycles = elapsedCycles_;
+    state.interruptVector = interruptVector_;
+    state.enabled = enabled_;
+    state.periodic = periodic_;
+    state.interruptPending = interruptPending_;
+    return state;
+}
+
+void VirtualTimer::restoreSnapshot(const TimerDeviceState& snapshot) {
+    baseAddress_ = snapshot.baseAddress;
+    intervalCycles_ = snapshot.intervalCycles;
+    elapsedCycles_ = snapshot.elapsedCycles;
+    interruptVector_ = snapshot.interruptVector;
+    enabled_ = snapshot.enabled;
+    periodic_ = snapshot.periodic;
+    interruptPending_ = snapshot.interruptPending;
+}
+
 } // namespace ia64
+

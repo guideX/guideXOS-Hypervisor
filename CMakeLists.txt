@@ -46,6 +46,7 @@ set(LOADER_SOURCES
     src/loader/bootstrap.cpp
     src/loader/dynamic_linker.cpp
     src/loader/crt0.cpp
+    src/loader/KernelValidator.cpp
 )
 
 set(ABI_SOURCES
@@ -70,6 +71,8 @@ set(VM_SOURCES
     src/vm/VMManager.cpp
     src/vm/VMBootStateMachine.cpp
     src/vm/SimpleCPUScheduler.cpp
+    src/vm/BootTraceSystem.cpp
+    src/vm/KernelPanic.cpp
 )
 
 set(STORAGE_SOURCES
@@ -132,6 +135,7 @@ set(HEADERS
     include/dynamic_linker.h
     include/crt0.h
     include/logger.h
+    include/KernelValidator.h
     include/IDecoder.h
     include/ICPU.h
     include/IMemory.h
@@ -417,6 +421,32 @@ if(MSVC)
     target_compile_options(virtual_devices_example PRIVATE /W4)
 else()
     target_compile_options(virtual_devices_example PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Boot Trace Example
+add_executable(boot_trace_example
+    examples/boot_trace_example.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(boot_trace_example PRIVATE /W4)
+else()
+    target_compile_options(boot_trace_example PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Kernel Validation Example
+add_executable(kernel_validation_example
+    examples/kernel_validation_example.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(kernel_validation_example PRIVATE /W4)
+else()
+    target_compile_options(kernel_validation_example PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Copy web files to build directory

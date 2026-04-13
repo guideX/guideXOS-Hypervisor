@@ -12,6 +12,7 @@ class Memory;
 using MemorySystem = Memory; // Alias for backward compatibility
 class CPUState;
 class DynamicLinker;
+class KernelValidator;
 
 // ELF header constants (IA-64 specific)
 constexpr uint8_t ELFMAG0 = 0x7F;
@@ -232,6 +233,12 @@ public:
     // Validate if buffer contains valid IA-64 ELF
     bool ValidateELF(const uint8_t* buffer, size_t size) const;
     
+    // Enable/disable kernel validation before load
+    void SetKernelValidationEnabled(bool enabled) { kernelValidationEnabled_ = enabled; }
+    
+    // Set kernel validator instance (optional, for custom validation)
+    void SetKernelValidator(KernelValidator* validator) { kernelValidator_ = validator; }
+    
     // Check if binary is dynamically linked
     bool IsDynamic() const { return elfType_ == ELFType::DYN || hasInterpreter_; }
     
@@ -287,6 +294,10 @@ private:
     bool hasInterpreter_;
     std::string interpreterPath_;
     DynamicLinker* dynamicLinker_;
+    
+    // Kernel validation support
+    bool kernelValidationEnabled_;
+    KernelValidator* kernelValidator_;
 };
 
 } // namespace ia64

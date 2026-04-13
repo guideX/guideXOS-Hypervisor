@@ -7,6 +7,7 @@
 #include "IVirtualMachine.h"
 #include "VMMetadata.h"
 #include "VMBootStateMachine.h"
+#include "VMSnapshot.h"
 #include "CPUContext.h"
 #include "Watchpoint.h"
 #include "ICPUScheduler.h"
@@ -14,6 +15,8 @@
 #include "IMemory.h"
 #include "IDecoder.h"
 #include "cpu.h"
+#include "BootTraceSystem.h"
+#include "KernelPanic.h"
 #include <memory>
 #include <vector>
 #include <set>
@@ -425,6 +428,114 @@ public:
      */
     std::string getBootDiagnostics() const { return bootStateMachine_.getDiagnostics(); }
     
+    // ========================================================================
+    // Boot Trace System
+    // ========================================================================
+    
+    /**
+     * Get boot trace system
+     * 
+     * @return Reference to boot trace system
+     */
+    BootTraceSystem& getBootTraceSystem() { return bootTraceSystem_; }
+    const BootTraceSystem& getBootTraceSystem() const { return bootTraceSystem_; }
+    
+    /**
+     * Get boot trace report
+     * 
+     * @return Formatted boot trace report
+     */
+    std::string getBootTraceReport() const { return bootTraceSystem_.generateTraceReport(); }
+    
+    /**
+     * Get boot timeline
+     * 
+     * @return Formatted boot timeline
+     */
+    std::string getBootTimeline() const { return bootTraceSystem_.generateBootTimeline(); }
+    
+    /**
+     * Get syscall summary
+     * 
+     * @return Formatted syscall summary
+     */
+    std::string getSyscallSummary() const { return bootTraceSystem_.generateSyscallSummary(); }
+    
+    /**
+     * Enable/disable boot tracing
+     * 
+     * @param enabled True to enable, false to disable
+     */
+    void setBootTraceEnabled(bool enabled) { bootTraceSystem_.setEnabled(enabled); }
+    
+    /**
+     * Check if boot tracing is enabled
+     * 
+     * @return True if enabled
+     */
+    bool isBootTraceEnabled() const { return bootTraceSystem_.isEnabled(); }
+    
+    /**
+     * Set boot trace verbosity
+     * 
+     * @param level Verbosity level (0=critical, 1=major, 2=all)
+     */
+    void setBootTraceVerbosity(int level) { bootTraceSystem_.setVerbosity(level); }
+    
+    // ========================================================================
+    // Kernel Panic Detection
+    // ========================================================================
+    
+    /**
+     * Get kernel panic detector
+     * 
+     * @return Reference to kernel panic detector
+     */
+    KernelPanicDetector& getKernelPanicDetector() { return panicDetector_; }
+    const KernelPanicDetector& getKernelPanicDetector() const { return panicDetector_; }
+    
+    /**
+     * Trigger a kernel panic manually
+     * 
+     * @param reason Panic reason
+     * @param description Description of panic
+     * @return Kernel panic structure
+     */
+    KernelPanic triggerKernelPanic(KernelPanicReason reason, const std::string& description);
+    
+    /**
+     * Check if kernel panic has occurred
+     * 
+     * @return True if panic occurred
+     */
+    bool hasKernelPanic() const { return lastPanic_ != nullptr; }
+    
+    /**
+     * Get last kernel panic
+     * 
+     * @return Last kernel panic (if any)
+     */
+    const KernelPanic* getLastPanic() const { 
+        return lastPanic_.get();
+    }
+    
+    /**
+     * Get panic report for last panic
+     * 
+     * @return Formatted panic report
+     */
+    std::string getLastPanicReport() const {
+        if (lastPanic_) {
+            return panicDetector_.generatePanicReport(*lastPanic_);
+        }
+        return "No kernel panic recorded";
+    }
+    
+    /**
+     * Clear panic state
+     */
+    void clearPanicState() { lastPanic_.reset(); }
+    
     bool setConditionalBreakpoint(uint64_t address, const DebugCondition& condition);
     size_t setMemoryBreakpoint(uint64_t addressStart, uint64_t addressEnd, WatchpointType type, const DebugCondition& condition = DebugCondition());
     bool clearMemoryBreakpoint(size_t breakpointId);
@@ -436,6 +547,54 @@ public:
     DebuggerSnapshot createSnapshot() const;
     bool restoreSnapshot(const DebuggerSnapshot& snapshot);
     bool rewindToLastSnapshot();
+    
+    // ========================================================================
+    // VM Snapshotting - Full State Capture
+    // ========================================================================
+    
+    /**
+     * Create a full snapshot of VM state
+     * @param name Snapshot name (optional)
+     * @param description Snapshot description (optional)
+     * @return Snapshot ID
+     */
+    std::string createFullSnapshot(const std::string& name = "", const std::string& description = "");
+    
+    /**
+     * Create a delta snapshot (only changes from parent)
+     * @param parentSnapshotId Parent snapshot ID
+     * @param name Snapshot name (optional)
+     * @param description Snapshot description (optional)
+     * @return Snapshot ID
+     */
+    std::string createDeltaSnapshot(const std::string& parentSnapshotId, const std::string& name = "", const std::string& description = "");
+    
+    /**
+     * Restore VM to a snapshot
+     * @param snapshotId Snapshot ID
+     * @return true if restoration succeeded
+     */
+    bool restoreFromSnapshot(const std::string& snapshotId);
+    
+    /**
+     * Get snapshot manager
+     * @return Reference to snapshot manager
+     */
+    class VMSnapshotManager& getSnapshotManager() { return *snapshotManager_; }
+    const class VMSnapshotManager& getSnapshotManager() const { return *snapshotManager_; }
+    
+    /**
+     * Capture current VM state as a snapshot structure
+     * @return Full VM snapshot
+     */
+    VMStateSnapshot captureVMSnapshot() const;
+    
+    /**
+     * Restore VM from a snapshot structure
+     * @param snapshot Snapshot to restore
+     * @return true if restoration succeeded
+     */
+    bool restoreVMSnapshot(const VMStateSnapshot& snapshot);
 
 private:
     // ========================================================================
@@ -456,6 +615,9 @@ private:
 
     VMState state_;                                 // Current execution state
     VMBootStateMachine bootStateMachine_;           // Boot state machine
+    BootTraceSystem bootTraceSystem_;               // Boot trace system
+    KernelPanicDetector panicDetector_;             // Kernel panic detector
+    std::unique_ptr<KernelPanic> lastPanic_;        // Last kernel panic (if any)
     int activeCPUIndex_;                            // Currently active CPU (-1 = none)
     bool debuggerAttached_;                         // Debugger attached?
     std::map<uint64_t, InstructionBreakpoint> instructionBreakpoints_;
@@ -465,10 +627,14 @@ private:
     size_t maxSnapshotHistory_;
     uint64_t cyclesExecuted_;                       // Total cycles executed (all CPUs)
     std::string lastBreakReason_;
+    
+    // VM Snapshot Manager
+    std::unique_ptr<class VMSnapshotManager> snapshotManager_;
 
     // ========================================================================
     // Internal Helpers
     // ========================================================================
+
 
 
     /**

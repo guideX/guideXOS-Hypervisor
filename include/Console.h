@@ -12,6 +12,9 @@
 
 namespace ia64 {
 
+// Forward declaration
+struct ConsoleDeviceState;
+
 class VirtualConsole : public IMemoryMappedDevice {
 public:
     static constexpr uint64_t kDefaultBaseAddress = 0xFFFF0000ULL;
@@ -45,6 +48,10 @@ public:
     uint64_t getTotalBytesWritten() const;
     void clearOutput();
     void Reset();
+    
+    // Snapshot support
+    ConsoleDeviceState createSnapshot() const;
+    void restoreSnapshot(const ConsoleDeviceState& snapshot);
 
 private:
     uint64_t baseAddress_;
