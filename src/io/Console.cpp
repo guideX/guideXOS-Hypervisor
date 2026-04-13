@@ -119,4 +119,11 @@ void VirtualConsole::clearOutput() {
     }
 }
 
+void VirtualConsole::Reset() {
+    buffer_.clear();
+    if (outputBuffer_) {
+        outputBuffer_->clear();
+    }
+}
+
 } // namespace ia64

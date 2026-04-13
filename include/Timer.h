@@ -31,6 +31,7 @@ public:
     void SetCallback(std::function<void()> callback);
     void Configure(uint64_t intervalCycles, uint8_t vector, bool periodic, bool enabled);
     void Acknowledge();
+    void Reset();
 
     bool IsEnabled() const { return enabled_; }
     bool IsPeriodic() const { return periodic_; }

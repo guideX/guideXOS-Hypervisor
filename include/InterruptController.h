@@ -31,6 +31,7 @@ public:
     virtual bool HasPendingInterrupt() const = 0;
     virtual bool GetNextPendingInterrupt(uint8_t& vector) = 0;
     virtual void DeliverPendingInterrupts() = 0;
+    virtual void Reset() = 0;
 };
 
 class BasicInterruptController : public IInterruptController {
@@ -46,6 +47,7 @@ public:
     bool HasPendingInterrupt() const override;
     bool GetNextPendingInterrupt(uint8_t& vector) override;
     void DeliverPendingInterrupts() override;
+    void Reset() override;
 
 private:
     InterruptDeliveryCallback deliveryCallback_;

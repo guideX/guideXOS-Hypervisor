@@ -44,6 +44,7 @@ public:
     size_t getOutputLineCount() const;
     uint64_t getTotalBytesWritten() const;
     void clearOutput();
+    void Reset();
 
 private:
     uint64_t baseAddress_;

@@ -79,4 +79,10 @@ void BasicInterruptController::DeliverPendingInterrupts() {
     }
 }
 
+void BasicInterruptController::Reset() {
+    pendingVectors_.clear();
+    // Note: We preserve deliveryCallback_ and sources_ across reset
+    // as they represent configuration, not state
+}
+
 } // namespace ia64

@@ -115,4 +115,13 @@ void VirtualTimer::Raise() {
     }
 }
 
+void VirtualTimer::Reset() {
+    intervalCycles_ = 0;
+    elapsedCycles_ = 0;
+    interruptVector_ = 0x20;
+    enabled_ = false;
+    periodic_ = true;
+    interruptPending_ = false;
+}
+
 } // namespace ia64

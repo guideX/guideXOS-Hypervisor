@@ -128,6 +128,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
+    <ClCompile Include="examples\boot_state_machine_example.cpp" />
     <ClCompile Include="examples\config_example.cpp" />
     <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="examples\webui_example.cpp" />
@@ -155,9 +156,11 @@
     <ClCompile Include="src\vm\CPUContext.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
+    <ClCompile Include="src\vm\VMBootStateMachine.cpp" />
     <ClCompile Include="src\vm\VMManager.cpp" />
     <ClCompile Include="src\webui\WebUIServer.cpp" />
     <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="tests\test_boot_state_machine.cpp" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_fuzzer.cpp" />
     <ClCompile Include="tests\test_isa_plugin.cpp" />
@@ -165,6 +168,7 @@
     <ClCompile Include="tests\test_vmconfig_serialization.cpp" />
     <ClCompile Include="tests\test_vmmanager.cpp" />
     <ClCompile Include="tests\test_vm_isolation.cpp" />
+    <ClCompile Include="tests\test_vm_reset.cpp" />
     <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_io_devices.cpp" ExcludedFromBuild="true" />
@@ -217,6 +221,7 @@
     <ClInclude Include="include\SyscallDispatcher.h" />
     <ClInclude Include="include\Timer.h" />
     <ClInclude Include="include\VirtualMachine.h" />
+    <ClInclude Include="include\VMBootStateMachine.h" />
     <ClInclude Include="include\VMConfiguration.h" />
     <ClInclude Include="include\VMManager.h" />
     <ClInclude Include="include\VMMetadata.h" />
@@ -232,6 +237,9 @@
     <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
     <None Include="docs\BOOTSTRAP_QUICK_START.md" />
+    <None Include="docs\BOOT_STATE_MACHINE.md" />
+    <None Include="docs\BOOT_STATE_MACHINE_QUICK_REF.md" />
+    <None Include="docs\BOOT_STATE_MACHINE_SUMMARY.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
     <None Include="docs\ELF64_LOADER.md" />
     <None Include="docs\ELF_VALIDATION.md" />

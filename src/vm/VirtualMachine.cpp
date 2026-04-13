@@ -99,6 +99,7 @@ VirtualMachine::~VirtualMachine() {
     LOG_INFO("VirtualMachine destroyed");
 }
 
+
 // ============================================================================
 // Lifecycle Management
 // ============================================================================
@@ -106,11 +107,21 @@ VirtualMachine::~VirtualMachine() {
 bool VirtualMachine::init() {
     LOG_INFO("Initializing VirtualMachine...");
     
+    // Transition to POWER_ON state
+    if (!bootStateMachine_.powerOn()) {
+        LOG_ERROR("Failed to power on VM");
+        return false;
+    }
+    
     try {
+        // Transition to firmware init
+        bootStateMachine_.transition(VMBootState::FIRMWARE_INIT, "Starting firmware initialization");
+        
         // Initialize all subsystems
         if (!initializeSubsystems()) {
             LOG_ERROR("Failed to initialize subsystems");
             state_ = VMState::ERROR;
+            bootStateMachine_.transition(VMBootState::BOOT_FAILED, "Subsystem initialization failed");
             return false;
         }
         
@@ -138,12 +149,16 @@ bool VirtualMachine::init() {
         debuggerAttached_ = false;
         
         state_ = VMState::STOPPED;
+        
+        // Boot state machine now ready for kernel load
+        // This will be advanced when loadProgram is called
         LOG_INFO("VirtualMachine initialized successfully");
         return true;
         
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during initialization: " + std::string(e.what()));
         state_ = VMState::ERROR;
+        bootStateMachine_.transition(VMBootState::BOOT_FAILED, "Exception: " + std::string(e.what()));
         return false;
     }
 }
@@ -173,6 +188,26 @@ bool VirtualMachine::reset() {
         // Reset scheduler
         scheduler_->reset();
         
+        // Reset all IO devices
+        if (timerDevice_) {
+            timerDevice_->Reset();
+        }
+        
+        if (consoleDevice_) {
+            consoleDevice_->Reset();
+        }
+        
+        if (interruptController_) {
+            interruptController_->Reset();
+        }
+        
+        // Clear all memory watchpoints (from debugger)
+        for (const auto& entry : memoryBreakpoints_) {
+            memory_->GetMMU().UnregisterWatchpoint(entry.first);
+        }
+        memoryBreakpoints_.clear();
+        nextMemoryBreakpointId_ = 1;
+        
         // Note: We don't clear memory - this allows program to persist
         // If you want to clear memory, call memory_->Clear() here
         
@@ -181,10 +216,19 @@ bool VirtualMachine::reset() {
         snapshotHistory_.clear();
         lastBreakReason_.clear();
         
-        // Keep breakpoints and debugger attachment
+        // Keep instruction breakpoints and debugger attachment
+        // as they represent debugging configuration, not runtime state
+        
+        // Reset boot state machine and transition to POWER_ON
+        bootStateMachine_.reset();
+        if (!bootStateMachine_.powerOn()) {
+            LOG_ERROR("Failed to transition to POWER_ON state during reset");
+            state_ = VMState::ERROR;
+            return false;
+        }
         
         state_ = VMState::STOPPED;
-        LOG_INFO("VirtualMachine reset successfully");
+        LOG_INFO("VirtualMachine reset successfully to POWER_ON state");
         return true;
         
     } catch (const std::exception& e) {
@@ -307,6 +351,13 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
     LOG_INFO("Loading program: " + std::to_string(size) + " bytes at 0x" + 
              std::to_string(loadAddress));
     
+    // Transition to kernel load state if coming from firmware
+    VMBootState currentBootState = bootStateMachine_.getCurrentState();
+    if (currentBootState == VMBootState::FIRMWARE_INIT) {
+        bootStateMachine_.transition(VMBootState::BOOTLOADER_EXEC, "Bootloader starting");
+        bootStateMachine_.transition(VMBootState::KERNEL_LOAD, "Loading kernel into memory");
+    }
+    
     try {
         // Write program to memory
         memory_->Write(loadAddress, data, size);
@@ -316,6 +367,7 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
         
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to load program: " + std::string(e.what()));
+        bootStateMachine_.transition(VMBootState::BOOT_FAILED, "Kernel load failed");
         return false;
     }
 }
@@ -327,6 +379,12 @@ void VirtualMachine::setEntryPoint(uint64_t address) {
     int cpuIndex = (activeCPUIndex_ >= 0) ? activeCPUIndex_ : 0;
     if (cpuIndex < static_cast<int>(cpus_.size()) && cpus_[cpuIndex].cpu) {
         cpus_[cpuIndex].cpu->setIP(address);
+        
+        // Transition to kernel entry if we're in KERNEL_LOAD state
+        VMBootState currentBootState = bootStateMachine_.getCurrentState();
+        if (currentBootState == VMBootState::KERNEL_LOAD) {
+            bootStateMachine_.transition(VMBootState::KERNEL_ENTRY, "Jumping to kernel entry point");
+        }
     }
 }
 

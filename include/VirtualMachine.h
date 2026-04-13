@@ -1,10 +1,12 @@
 #pragma once
 
 
+
 #pragma once
 
 #include "IVirtualMachine.h"
 #include "VMMetadata.h"
+#include "VMBootStateMachine.h"
 #include "CPUContext.h"
 #include "Watchpoint.h"
 #include "ICPUScheduler.h"
@@ -30,6 +32,7 @@ class InstructionDecoder;
 class BasicInterruptController;
 class VirtualConsole;
 class VirtualTimer;
+
 
 
 enum class DebugConditionTarget {
@@ -382,6 +385,46 @@ public:
      */
     void clearConsoleOutput();
     
+    // ========================================================================
+    // Boot State Machine
+    // ========================================================================
+    
+    /**
+     * Get boot state machine
+     * 
+     * @return Reference to boot state machine
+     */
+    VMBootStateMachine& getBootStateMachine() { return bootStateMachine_; }
+    const VMBootStateMachine& getBootStateMachine() const { return bootStateMachine_; }
+    
+    /**
+     * Get current boot state
+     * 
+     * @return Current boot state
+     */
+    VMBootState getBootState() const { return bootStateMachine_.getCurrentState(); }
+    
+    /**
+     * Check if boot is complete
+     * 
+     * @return True if VM has fully booted to userspace
+     */
+    bool isBootComplete() const { return bootStateMachine_.isBootComplete(); }
+    
+    /**
+     * Get total boot time
+     * 
+     * @return Boot time in milliseconds (0 if not booted)
+     */
+    uint64_t getBootTime() const { return bootStateMachine_.getTotalBootTime(); }
+    
+    /**
+     * Get boot diagnostics
+     * 
+     * @return Diagnostic information string
+     */
+    std::string getBootDiagnostics() const { return bootStateMachine_.getDiagnostics(); }
+    
     bool setConditionalBreakpoint(uint64_t address, const DebugCondition& condition);
     size_t setMemoryBreakpoint(uint64_t addressStart, uint64_t addressEnd, WatchpointType type, const DebugCondition& condition = DebugCondition());
     bool clearMemoryBreakpoint(size_t breakpointId);
@@ -412,6 +455,7 @@ private:
     // ========================================================================
 
     VMState state_;                                 // Current execution state
+    VMBootStateMachine bootStateMachine_;           // Boot state machine
     int activeCPUIndex_;                            // Currently active CPU (-1 = none)
     bool debuggerAttached_;                         // Debugger attached?
     std::map<uint64_t, InstructionBreakpoint> instructionBreakpoints_;
@@ -425,6 +469,7 @@ private:
     // ========================================================================
     // Internal Helpers
     // ========================================================================
+
 
     /**
      * Check if we hit a breakpoint
