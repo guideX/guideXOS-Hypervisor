@@ -132,6 +132,7 @@
     <ClCompile Include="examples\config_example.cpp" />
     <ClCompile Include="examples\initramfs_example.cpp" />
     <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="examples\virtual_devices_example.cpp" />
     <ClCompile Include="examples\virtual_disk_example.cpp" />
     <ClCompile Include="examples\webui_example.cpp" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
@@ -291,6 +292,9 @@
     <None Include="docs\SYSCALL_ABI.md" />
     <None Include="docs\SYSCALL_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\SYSCALL_QUICK_REFERENCE.md" />
+    <None Include="docs\VIRTUAL_DEVICES.md" />
+    <None Include="docs\VIRTUAL_DISK_IMPLEMENTATION.md" />
+    <None Include="docs\VIRTUAL_DISK_QUICK_REF.md" />
     <None Include="docs\VMMANAGER.md" />
     <None Include="docs\VMMANAGER_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\VM_CONFIGURATION_IMPLEMENTATION_SUMMARY.md" />

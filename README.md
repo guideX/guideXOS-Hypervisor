@@ -616,16 +616,19 @@ Comprehensive documentation is available in the [`docs/`](docs/) directory:
 - [`BOOTSTRAP_INITIALIZATION.md`](docs/BOOTSTRAP_INITIALIZATION.md) - Bootstrap process
 - [`PAGE_FAULT_DIAGNOSTICS.md`](docs/PAGE_FAULT_DIAGNOSTICS.md) - Page fault handling
 - [`WATCHPOINT_USAGE.md`](docs/WATCHPOINT_USAGE.md) - Memory watchpoints
+- [`VIRTUAL_DEVICES.md`](docs/VIRTUAL_DEVICES.md) - Virtual Console, Timer, and Interrupt Controller
 
 ### Quick References
 - [`PROFILER_QUICK_REFERENCE.md`](docs/PROFILER_QUICK_REFERENCE.md)
 - [`VM_CONFIGURATION_QUICK_REFERENCE.md`](docs/VM_CONFIGURATION_QUICK_REFERENCE.md)
 - [`BOOTSTRAP_QUICK_START.md`](docs/BOOTSTRAP_QUICK_START.md)
+- [`VIRTUAL_DEVICES_QUICK_REF.md`](docs/VIRTUAL_DEVICES_QUICK_REF.md)
 
 ## Examples
 
 Example programs are available in the [`examples/`](examples/) directory:
 
+- [`virtual_devices_example.cpp`](examples/virtual_devices_example.cpp) - Virtual Console, Timer, and Interrupt Controller
 - [`profiler_example.cpp`](examples/profiler_example.cpp) - Profiling usage
 - [`config_example.cpp`](examples/config_example.cpp) - VM configuration
 - [`configs/`](examples/configs/) - Sample JSON configurations

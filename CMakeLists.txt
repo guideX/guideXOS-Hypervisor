@@ -58,14 +58,18 @@ set(LIBC_SOURCES
 
 set(IO_SOURCES
     src/io/Console.cpp
+    src/io/ConsoleOutputBuffer.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
+    src/io/InitramfsDevice.cpp
 )
 
 set(VM_SOURCES
     src/vm/VirtualMachine.cpp
     src/vm/CPUContext.cpp
     src/vm/VMManager.cpp
+    src/vm/VMBootStateMachine.cpp
+    src/vm/SimpleCPUScheduler.cpp
 )
 
 set(STORAGE_SOURCES
@@ -400,6 +404,19 @@ if(MSVC)
     target_compile_options(virtual_disk_example PRIVATE /W4)
 else()
     target_compile_options(virtual_disk_example PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Virtual Devices Example
+add_executable(virtual_devices_example
+    examples/virtual_devices_example.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(virtual_devices_example PRIVATE /W4)
+else()
+    target_compile_options(virtual_devices_example PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Copy web files to build directory
