@@ -230,6 +230,10 @@ struct KernelBootstrapConfig {
     // EFI System Table (for EFI-booted kernels)
     uint64_t efiSystemTable;        // EFI system table pointer
     
+    // Initramfs (initial ramdisk) configuration
+    uint64_t initramfsAddress;      // Physical address of initramfs in memory
+    uint64_t initramfsSize;         // Size of initramfs in bytes
+    
     // Enable virtual addressing on startup
     bool enableVirtualAddressing;
     
@@ -247,6 +251,8 @@ struct KernelBootstrapConfig {
         , memoryMapSize(0)
         , pageTableBase(0)
         , efiSystemTable(0)
+        , initramfsAddress(0)
+        , initramfsSize(0)
         , enableVirtualAddressing(false)
     {
     }
@@ -445,5 +451,24 @@ void InitializeKernelGeneralRegisters(CPUState& cpu, uint64_t stackPointer,
  * @return Stack pointer (top of stack)
  */
 uint64_t SetupKernelStack(MemorySystem& memory, const KernelBootstrapConfig& config);
+
+/**
+ * Write kernel boot parameters to memory
+ * 
+ * Creates a boot parameter structure in memory containing:
+ * - Command line address and length
+ * - Memory map address and size
+ * - Initramfs address and size (if present)
+ * - EFI system table pointer (if present)
+ * - Other boot protocol fields
+ * 
+ * The structure layout follows the IA-64 Linux boot protocol.
+ * 
+ * @param memory Memory system to write parameters
+ * @param address Address where to write boot parameters
+ * @param config Kernel bootstrap configuration
+ * @return Number of bytes written
+ */
+uint64_t WriteKernelBootParameters(MemorySystem& memory, uint64_t address, const KernelBootstrapConfig& config);
 
 } // namespace ia64

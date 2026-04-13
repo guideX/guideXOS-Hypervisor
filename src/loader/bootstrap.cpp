@@ -570,6 +570,10 @@ void InitializeKernelGeneralRegisters(CPUState& cpu, uint64_t stackPointer,
     // This is the standard register for passing boot info to IA-64 Linux kernel
     cpu.SetGR(28, bootParamAddress);
     
+    // Note: Initramfs information is typically passed via the boot parameter
+    // structure pointed to by r28, not in separate registers. The structure
+    // contains fields for initramfs address and size.
+    
     // ===================================================================
     // Static General Registers (r2-r11, r14-r31 except r28)
     // ===================================================================
@@ -591,6 +595,67 @@ void InitializeKernelGeneralRegisters(CPUState& cpu, uint64_t stackPointer,
     for (size_t i = 32; i < 128; ++i) {
         cpu.SetGR(i, 0);
     }
+}
+
+uint64_t WriteKernelBootParameters(MemorySystem& memory, uint64_t address, const KernelBootstrapConfig& config) {
+    // IA-64 Linux Boot Parameter Structure
+    // This is a simplified version of the boot_params structure used by Linux
+    // The actual structure is platform-dependent, but typically includes:
+    // 
+    // Offset  Size  Field
+    // ------  ----  -----
+    // 0x00    8     command_line (pointer)
+    // 0x08    4     command_line_size
+    // 0x0C    4     reserved/padding
+    // 0x10    8     initramfs_start (physical address)
+    // 0x18    8     initramfs_size
+    // 0x20    8     memory_map (pointer)
+    // 0x28    8     memory_map_size
+    // 0x30    8     efi_system_table (pointer)
+    // 0x38    8     reserved for future use
+    
+    uint64_t offset = address;
+    
+    // Command line address and size
+    memory.write<uint64_t>(offset, config.commandLineAddress);
+    offset += 8;
+    
+    // Calculate command line size (if address is set)
+    uint32_t cmdLineSize = 0;
+    if (config.commandLineAddress != 0) {
+        // For now, we don't track the command line size
+        // In a real implementation, this would be calculated or provided
+        cmdLineSize = 256;  // Default max size
+    }
+    memory.write<uint32_t>(offset, cmdLineSize);
+    offset += 4;
+    
+    // Reserved/padding
+    memory.write<uint32_t>(offset, 0);
+    offset += 4;
+    
+    // Initramfs start address and size
+    memory.write<uint64_t>(offset, config.initramfsAddress);
+    offset += 8;
+    memory.write<uint64_t>(offset, config.initramfsSize);
+    offset += 8;
+    
+    // Memory map address and size
+    memory.write<uint64_t>(offset, config.memoryMapAddress);
+    offset += 8;
+    memory.write<uint64_t>(offset, config.memoryMapSize);
+    offset += 8;
+    
+    // EFI system table pointer
+    memory.write<uint64_t>(offset, config.efiSystemTable);
+    offset += 8;
+    
+    // Reserved for future use
+    memory.write<uint64_t>(offset, 0);
+    offset += 8;
+    
+    // Return total bytes written
+    return offset - address;
 }
 
 } // namespace ia64

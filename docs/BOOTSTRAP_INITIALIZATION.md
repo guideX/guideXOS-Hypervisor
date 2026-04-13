@@ -424,3 +424,62 @@ cmake --build . --target test_bootstrap
 **Symptom**: Corruption during function calls  
 **Cause**: Insufficient backing store size  
 **Solution**: Increase `backingStoreSize` in config
+
+---
+
+## Kernel Mode Bootstrap
+
+### Overview
+
+The kernel bootstrap initializer provides a separate initialization path for IA-64 kernel execution. Unlike user-mode bootstrap, kernel bootstrap runs at privilege level 0 (CPL=0), uses physical or virtual addressing, and follows the IA-64 Linux kernel boot protocol.
+
+### Key Differences from User Mode
+
+| Aspect | User Mode | Kernel Mode |
+|--------|-----------|-------------|
+| **Privilege Level** | CPL=3 | CPL=0 |
+| **Addressing** | Virtual only | Physical or virtual |
+| **Stack Layout** | argc/argv/envp/auxv | Simple stack |
+| **Boot Parameters** | Auxiliary vector | r28 boot param structure |
+| **PSR Configuration** | User mode flags | Kernel mode flags |
+
+### Kernel Bootstrap API
+
+```cpp
+uint64_t InitializeKernelBootstrapState(
+    CPUState& cpu,
+    MemorySystem& memory,
+    const KernelBootstrapConfig& config
+);
+```
+
+Complete kernel bootstrap initialization according to IA-64 Linux kernel boot protocol.
+
+### Usage Example
+
+```cpp
+#include "bootstrap.h"
+
+using namespace ia64;
+
+CPUState cpu;
+Memory memory;
+
+// Configure kernel bootstrap
+KernelBootstrapConfig config;
+config.entryPoint = 0x100000;              // Kernel at 1 MB physical
+config.globalPointer = 0x600000;
+config.bootParamAddress = 0x10000;         // Boot params at 64 KB
+config.enableVirtualAddressing = false;    // Start in physical mode
+
+// Initialize kernel bootstrap state
+uint64_t kernelSp = InitializeKernelBootstrapState(cpu, memory, config);
+
+// CPU is ready for kernel execution
+assert(cpu.GetIP() == 0x100000);
+assert(cpu.GetGR(28) == 0x10000);          // Boot params in r28
+assert((cpu.GetPSR() & PSR_CPL) == 0);     // CPL=0 (kernel mode)
+```
+
+For detailed kernel bootstrap documentation, see **KERNEL_BOOTSTRAP.md**.
+

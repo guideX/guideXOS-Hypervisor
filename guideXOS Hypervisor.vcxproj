@@ -151,6 +151,7 @@
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
     <ClCompile Include="src\profiler\Profiler.cpp" />
+    <ClCompile Include="src\storage\InitramfsDevice.cpp" />
     <ClCompile Include="src\storage\RawDiskDevice.cpp" />
     <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
     <ClCompile Include="src\vm\CPUContext.cpp" />
@@ -163,7 +164,9 @@
     <ClCompile Include="tests\test_boot_state_machine.cpp" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_fuzzer.cpp" />
+    <ClCompile Include="tests\test_initramfs.cpp" />
     <ClCompile Include="tests\test_isa_plugin.cpp" />
+    <ClCompile Include="tests\test_kernel_bootstrap.cpp" />
     <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_vmconfig_serialization.cpp" />
     <ClCompile Include="tests\test_vmmanager.cpp" />
@@ -202,6 +205,7 @@
     <ClInclude Include="include\IISA.h" />
     <ClInclude Include="include\IMemory.h" />
     <ClInclude Include="include\IMMU.h" />
+    <ClInclude Include="include\InitramfsDevice.h" />
     <ClInclude Include="include\InterruptController.h" />
     <ClInclude Include="include\IODevice.h" />
     <ClInclude Include="include\IPCAPIServer.h" />
@@ -248,6 +252,8 @@
     <None Include="docs\FUZZER.md" />
     <None Include="docs\FUZZER_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\IA64_BUNDLE_DECODER.md" />
+    <None Include="docs\INITRAMFS_QUICK_REFERENCE.md" />
+    <None Include="docs\INITRAMFS_SUPPORT.md" />
     <None Include="docs\ISA_PLUGIN_ARCHITECTURE.md" />
     <None Include="docs\ISA_PLUGIN_REFACTORING_SUMMARY.md" />
     <None Include="docs\MMU_SUMMARY.md" />
