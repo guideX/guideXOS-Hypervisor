@@ -973,4 +973,108 @@ InstructionEx InstructionDecoder::DecodeMov(uint64_t rawBits, UnitType unit) con
     return insn;
 }
 
+// ============================================================================
+// NEW: Binary Instruction Decoder Integration
+// ============================================================================
+
+#include "ia64_formats.h"
+#include "ia64_opcodes.h"
+#include "ia64_decoders.h"
+
+uint8_t InstructionDecoder::ExtractMajorOpcode(uint64_t slotBits) const {
+    // Major opcode is in bits [37:40] (4 bits)
+    return static_cast<uint8_t>((slotBits >> 37) & 0x0F);
+}
+
+bool InstructionDecoder::IsMLXTemplate(uint8_t template_field) const {
+    return (template_field == 0x04 || template_field == 0x05);
+}
+
+InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitType, uint64_t ip) const {
+    InstructionEx result;
+    
+    // Extract major opcode
+    uint8_t major = ExtractMajorOpcode(slotBits);
+    
+    // Route to appropriate decoder based on unit type and major opcode
+    switch (unitType) {
+        case UnitType::M_UNIT:
+            // M-unit can execute M-type (memory) or A-type (ALU) instructions
+            if (major == 0x4 || major == 0x5 || major == 0x6 || major == 0x7) {
+                // M-type: Load/Store operations
+                formats::MFormat mfmt;
+                if (decoder::MTypeDecoder::decode(slotBits, mfmt)) {
+                    if (decoder::MTypeDecoder::toInstruction(mfmt, result)) {
+                        return result;
+                    }
+                }
+            }
+            // Try A-type for M-unit ALU operations
+            if (major >= 0x8 && major <= 0xD) {
+                formats::AFormat afmt;
+                if (decoder::ATypeDecoder::decode(slotBits, afmt)) {
+                    if (decoder::ATypeDecoder::toInstruction(afmt, result)) {
+                        return result;
+                    }
+                }
+            }
+            break;
+            
+        case UnitType::I_UNIT:
+            // I-unit can execute A-type (ALU) or I-type (non-ALU integer) instructions
+            if (major >= 0x8 && major <= 0xD) {
+                // A-type: Integer ALU operations
+                formats::AFormat afmt;
+                if (decoder::ATypeDecoder::decode(slotBits, afmt)) {
+                    if (decoder::ATypeDecoder::toInstruction(afmt, result)) {
+                        return result;
+                    }
+                }
+            }
+            
+            if (major == 0x0 || major == 0x5 || major == 0x7) {
+                // I-type: Shifts, deposits, extends, ALLOC
+                formats::IFormat ifmt;
+                if (decoder::ITypeDecoder::decode(slotBits, ifmt)) {
+                    if (decoder::ITypeDecoder::toInstruction(ifmt, result)) {
+                        return result;
+                    }
+                }
+            }
+            break;
+            
+        case UnitType::B_UNIT:
+            // B-unit executes branch instructions
+            if (major == 0x0 || major == 0x4) {
+                formats::BFormat bfmt;
+                if (decoder::BTypeDecoder::decode(slotBits, bfmt, ip)) {
+                    if (decoder::BTypeDecoder::toInstruction(bfmt, result)) {
+                        return result;
+                    }
+                }
+            }
+            break;
+            
+        case UnitType::F_UNIT:
+            // F-unit for floating-point (not yet implemented)
+            // Return NOP for now
+            result = InstructionEx(InstructionType::NOP, UnitType::F_UNIT);
+            return result;
+            
+        case UnitType::L_UNIT:
+        case UnitType::X_UNIT:
+            // L and X units are handled specially in DecodeBundle for MOVL
+            // Should not reach here normally
+            result = InstructionEx(InstructionType::NOP, unitType);
+            return result;
+            
+        default:
+            break;
+    }
+    
+    // If no decoder matched, return NOP
+    result = InstructionEx(InstructionType::NOP, unitType);
+    return result;
+}
+
 } // namespace ia64

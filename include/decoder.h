@@ -1,14 +1,30 @@
 #pragma once
 
-
-
-
-
-
 #include <cstdint>
 #include <vector>
 #include <string>
 #include "IDecoder.h"
+
+// Forward declare format structures and decoders
+namespace ia64 {
+namespace formats {
+    struct AFormat;
+    struct IFormat;
+    struct MFormat;
+    struct BFormat;
+    struct LFormat;
+    struct XFormat;
+}
+
+namespace decoder {
+    class ATypeDecoder;
+    class ITypeDecoder;
+    class MTypeDecoder;
+    class BTypeDecoder;
+    class LXDecoder;
+    class MOVLBuilder;
+}
+}
 
 namespace ia64 {
 
@@ -260,6 +276,9 @@ public:
     Bundle DecodeBundle(const uint8_t* bundleData) const override;
     InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override;
     
+    // New: Decode a single slot with binary format decoders
+    InstructionEx DecodeSlot(uint64_t slotBits, UnitType unitType, uint64_t ip) const;
+    
 private:
     // Helper to extract template from bundle (bits 0-4)
     TemplateType ExtractTemplate(const uint8_t* bundleData) const;
@@ -283,6 +302,12 @@ private:
     // Decode specific instruction types
     InstructionEx DecodeNop(uint64_t rawBits) const;
     InstructionEx DecodeMov(uint64_t rawBits, UnitType unit) const;
+    
+    // Helper to extract major opcode from 41-bit instruction
+    uint8_t ExtractMajorOpcode(uint64_t slotBits) const;
+    
+    // Helper to check if template is MLX (for MOVL)
+    bool IsMLXTemplate(uint8_t template_field) const;
 };
 
 } // namespace ia64

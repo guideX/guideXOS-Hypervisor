@@ -42,6 +42,11 @@ set(ISA_SOURCES
 
 set(DECODER_SOURCES
     src/decoder/decoder.cpp
+    src/decoder/atype_decoder.cpp
+    src/decoder/itype_decoder.cpp
+    src/decoder/mtype_decoder.cpp
+    src/decoder/btype_decoder.cpp
+    src/decoder/lx_decoder.cpp
 )
 
 set(MEMORY_SOURCES

@@ -145,7 +145,12 @@
     <ClCompile Include="src\api\RestAPIServer.cpp" />
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
+    <ClCompile Include="src\decoder\atype_decoder.cpp" />
+    <ClCompile Include="src\decoder\btype_decoder.cpp" />
     <ClCompile Include="src\decoder\decoder.cpp" />
+    <ClCompile Include="src\decoder\itype_decoder.cpp" />
+    <ClCompile Include="src\decoder\lx_decoder.cpp" />
+    <ClCompile Include="src\decoder\mtype_decoder.cpp" />
     <ClCompile Include="src\fuzzer\Fuzzer.cpp" />
     <ClCompile Include="src\io\Console.cpp" />
     <ClCompile Include="src\io\ConsoleOutputBuffer.cpp" />
@@ -225,6 +230,9 @@
     <ClInclude Include="include\FilesystemMount.h" />
     <ClInclude Include="include\Fuzzer.h" />
     <ClInclude Include="include\IA64ISAPlugin.h" />
+    <ClInclude Include="include\ia64_decoders.h" />
+    <ClInclude Include="include\ia64_formats.h" />
+    <ClInclude Include="include\ia64_opcodes.h" />
     <ClInclude Include="include\ICPU.h" />
     <ClInclude Include="include\ICPUScheduler.h" />
     <ClInclude Include="include\IDecoder.h" />
@@ -277,6 +285,8 @@
     <None Include="docs\API_DOCUMENTATION.md" />
     <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\BARE_METAL_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\BINARY_DECODER_COMPLETE.md" />
+    <None Include="docs\BINARY_DECODER_IMPLEMENTATION_GUIDE.md" />
     <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
     <None Include="docs\BOOTSTRAP_QUICK_START.md" />
     <None Include="docs\BOOT_STATE_MACHINE.md" />

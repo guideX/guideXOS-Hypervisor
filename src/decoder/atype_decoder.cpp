@@ -1,3 +1,4 @@
+#include "ia64_decoders.h"
 #include "ia64_formats.h"
 #include "decoder.h"
 #include <iostream>
