@@ -132,6 +132,7 @@
     <ClCompile Include="examples\config_example.cpp" />
     <ClCompile Include="examples\initramfs_example.cpp" />
     <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="examples\virtual_disk_example.cpp" />
     <ClCompile Include="examples\webui_example.cpp" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="src\abi\abi.cpp" />
@@ -155,8 +156,13 @@
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
     <ClCompile Include="src\profiler\Profiler.cpp" />
+    <ClCompile Include="src\storage\FilesystemMount.cpp" />
     <ClCompile Include="src\storage\InitramfsDevice.cpp" />
+    <ClCompile Include="src\storage\PathResolver.cpp" />
     <ClCompile Include="src\storage\RawDiskDevice.cpp" />
+    <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp" />
+    <ClCompile Include="src\storage\VirtualBlockDevice.cpp" />
+    <ClCompile Include="src\storage\VirtualDiskManager.cpp" />
     <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
     <ClCompile Include="src\vm\CPUContext.cpp" />
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
@@ -204,11 +210,13 @@
     <ClInclude Include="include\decoder.h" />
     <ClInclude Include="include\dynamic_linker.h" />
     <ClInclude Include="include\ExampleISAPlugin.h" />
+    <ClInclude Include="include\FilesystemMount.h" />
     <ClInclude Include="include\Fuzzer.h" />
     <ClInclude Include="include\IA64ISAPlugin.h" />
     <ClInclude Include="include\ICPU.h" />
     <ClInclude Include="include\ICPUScheduler.h" />
     <ClInclude Include="include\IDecoder.h" />
+    <ClInclude Include="include\IFilesystem.h" />
     <ClInclude Include="include\IISA.h" />
     <ClInclude Include="include\IMemory.h" />
     <ClInclude Include="include\IMMU.h" />
@@ -227,12 +235,16 @@
     <ClInclude Include="include\memory.h" />
     <ClInclude Include="include\mmu.h" />
     <ClInclude Include="include\PageFault.h" />
+    <ClInclude Include="include\PathResolver.h" />
     <ClInclude Include="include\Profiler.h" />
     <ClInclude Include="include\RawDiskDevice.h" />
     <ClInclude Include="include\RestAPIServer.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
+    <ClInclude Include="include\SimpleReadOnlyFS.h" />
     <ClInclude Include="include\SyscallDispatcher.h" />
     <ClInclude Include="include\Timer.h" />
+    <ClInclude Include="include\VirtualBlockDevice.h" />
+    <ClInclude Include="include\VirtualDiskManager.h" />
     <ClInclude Include="include\VirtualMachine.h" />
     <ClInclude Include="include\VMBootStateMachine.h" />
     <ClInclude Include="include\VMConfiguration.h" />

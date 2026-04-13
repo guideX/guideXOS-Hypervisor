@@ -70,6 +70,11 @@ set(VM_SOURCES
 
 set(STORAGE_SOURCES
     src/storage/RawDiskDevice.cpp
+    src/storage/VirtualBlockDevice.cpp
+    src/storage/FilesystemMount.cpp
+    src/storage/SimpleReadOnlyFS.cpp
+    src/storage/PathResolver.cpp
+    src/storage/VirtualDiskManager.cpp
 )
 
 set(SYSCALL_SOURCES
@@ -139,6 +144,12 @@ set(HEADERS
     include/VMManager.h
     include/IStorageDevice.h
     include/RawDiskDevice.h
+    include/VirtualBlockDevice.h
+    include/IFilesystem.h
+    include/FilesystemMount.h
+    include/SimpleReadOnlyFS.h
+    include/PathResolver.h
+    include/VirtualDiskManager.h
     include/Watchpoint.h
     include/Console.h
     include/Timer.h
@@ -376,6 +387,19 @@ if(MSVC)
     target_compile_options(webui_example PRIVATE /W4)
 else()
     target_compile_options(webui_example PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Virtual Disk Example
+add_executable(virtual_disk_example
+    examples/virtual_disk_example.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(virtual_disk_example PRIVATE /W4)
+else()
+    target_compile_options(virtual_disk_example PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Copy web files to build directory
