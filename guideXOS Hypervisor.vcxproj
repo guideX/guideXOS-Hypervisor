@@ -147,7 +147,10 @@
     <ClCompile Include="src\isa\ExampleISAPlugin.cpp" />
     <ClCompile Include="src\isa\IA64ISAPlugin.cpp" />
     <ClCompile Include="src\isa\ISAPluginRegistry.cpp" />
+    <ClCompile Include="src\libc\libc_bridge.cpp" />
     <ClCompile Include="src\loader\bootstrap.cpp" />
+    <ClCompile Include="src\loader\crt0.cpp" />
+    <ClCompile Include="src\loader\dynamic_linker.cpp" />
     <ClCompile Include="src\loader\loader.cpp" />
     <ClCompile Include="src\memory\memory.cpp" />
     <ClCompile Include="src\mmu\mmu.cpp" />
@@ -168,6 +171,7 @@
     <ClCompile Include="tests\test_initramfs.cpp" />
     <ClCompile Include="tests\test_isa_plugin.cpp" />
     <ClCompile Include="tests\test_kernel_bootstrap.cpp" />
+    <ClCompile Include="tests\test_libc_bridge.cpp" />
     <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_vmconfig_serialization.cpp" />
     <ClCompile Include="tests\test_vmmanager.cpp" />
@@ -196,7 +200,9 @@
     <ClInclude Include="include\cpu.h" />
     <ClInclude Include="include\CPUContext.h" />
     <ClInclude Include="include\cpu_state.h" />
+    <ClInclude Include="include\crt0.h" />
     <ClInclude Include="include\decoder.h" />
+    <ClInclude Include="include\dynamic_linker.h" />
     <ClInclude Include="include\ExampleISAPlugin.h" />
     <ClInclude Include="include\Fuzzer.h" />
     <ClInclude Include="include\IA64ISAPlugin.h" />
@@ -214,6 +220,7 @@
     <ClInclude Include="include\IStorageDevice.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\JsonUtils.h" />
+    <ClInclude Include="include\libc_bridge.h" />
     <ClInclude Include="include\linux_errno.h" />
     <ClInclude Include="include\loader.h" />
     <ClInclude Include="include\logger.h" />
@@ -270,6 +277,7 @@
     <None Include="docs\README_UPDATE_SUMMARY.md" />
     <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
     <None Include="docs\SYSCALL_ABI.md" />
+    <None Include="docs\SYSCALL_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\SYSCALL_QUICK_REFERENCE.md" />
     <None Include="docs\VMMANAGER.md" />
     <None Include="docs\VMMANAGER_IMPLEMENTATION_SUMMARY.md" />

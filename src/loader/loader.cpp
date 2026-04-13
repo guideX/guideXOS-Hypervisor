@@ -1,8 +1,8 @@
 #include "loader.h"
-#include "loader.h"
 #include "memory.h"
 #include "cpu_state.h"
 #include "bootstrap.h"
+#include "dynamic_linker.h"
 #include <fstream>
 #include <stdexcept>
 #include <cstring>
@@ -20,6 +20,9 @@ ELFLoader::ELFLoader()
     , dynamicSize_(0)
     , isLoaded_(false)
     , elfType_(ELFType::NONE)
+    , hasInterpreter_(false)
+    , interpreterPath_("")
+    , dynamicLinker_(nullptr)
 {
     std::memset(&header_, 0, sizeof(header_));
 }
@@ -183,7 +186,22 @@ bool ELFLoader::ParseHeader(const uint8_t* buffer, size_t size) {
                 dynamicAddr_ = phdr.p_vaddr;
                 dynamicSize_ = phdr.p_memsz;
             }
+            
+            // Track interpreter (dynamic linker)
+            if (phdr.p_type == static_cast<uint32_t>(SegmentType::PT_INTERP)) {
+                hasInterpreter_ = true;
+                // Read interpreter path from file
+                if (phdr.p_offset + phdr.p_filesz <= size) {
+                    const char* interpPath = reinterpret_cast<const char*>(buffer + phdr.p_offset);
+                    interpreterPath_ = std::string(interpPath, phdr.p_filesz - 1);  // Exclude null
+                }
+            }
         }
+    }
+    
+    // If we have a dynamic linker and found PT_DYNAMIC or PT_INTERP, handle dynamic linking
+    if (dynamicLinker_ && (hasInterpreter_ || dynamicAddr_ != 0)) {
+        // Will be processed after segments are loaded
     }
 
     return true;

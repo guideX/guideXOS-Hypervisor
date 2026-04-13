@@ -11,6 +11,7 @@ namespace ia64 {
 class Memory;
 using MemorySystem = Memory; // Alias for backward compatibility
 class CPUState;
+class DynamicLinker;
 
 // ELF header constants (IA-64 specific)
 constexpr uint8_t ELFMAG0 = 0x7F;
@@ -230,6 +231,15 @@ public:
 
     // Validate if buffer contains valid IA-64 ELF
     bool ValidateELF(const uint8_t* buffer, size_t size) const;
+    
+    // Check if binary is dynamically linked
+    bool IsDynamic() const { return elfType_ == ELFType::DYN || hasInterpreter_; }
+    
+    // Get interpreter path (if PT_INTERP exists)
+    std::string GetInterpreterPath() const { return interpreterPath_; }
+    
+    // Set dynamic linker instance
+    void SetDynamicLinker(DynamicLinker* linker) { dynamicLinker_ = linker; }
 
 private:
     // Parse ELF header
@@ -272,6 +282,11 @@ private:
     // Load state
     bool isLoaded_;
     ELFType elfType_;
+    
+    // Dynamic linking support
+    bool hasInterpreter_;
+    std::string interpreterPath_;
+    DynamicLinker* dynamicLinker_;
 };
 
 } // namespace ia64

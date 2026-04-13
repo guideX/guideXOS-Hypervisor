@@ -44,10 +44,16 @@ set(MEMORY_SOURCES
 set(LOADER_SOURCES
     src/loader/loader.cpp
     src/loader/bootstrap.cpp
+    src/loader/dynamic_linker.cpp
+    src/loader/crt0.cpp
 )
 
 set(ABI_SOURCES
     src/abi/abi.cpp
+)
+
+set(LIBC_SOURCES
+    src/libc/libc_bridge.cpp
 )
 
 set(IO_SOURCES
@@ -93,6 +99,7 @@ set(ALL_SOURCES
     ${MEMORY_SOURCES}
     ${LOADER_SOURCES}
     ${ABI_SOURCES}
+    ${LIBC_SOURCES}
     ${IO_SOURCES}
     ${VM_SOURCES}
     ${STORAGE_SOURCES}
@@ -112,6 +119,9 @@ set(HEADERS
     include/loader.h
     include/bootstrap.h
     include/abi.h
+    include/libc_bridge.h
+    include/dynamic_linker.h
+    include/crt0.h
     include/logger.h
     include/IDecoder.h
     include/ICPU.h

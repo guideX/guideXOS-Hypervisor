@@ -248,7 +248,7 @@ struct SyscallResult {
 class LinuxABI {
 public:
     LinuxABI();
-    ~LinuxABI() = default;
+    ~LinuxABI();
 
     /**
      * Execute a syscall based on CPU register state
@@ -272,6 +272,9 @@ public:
      * @return String name of syscall
      */
     static std::string GetSyscallName(Syscall syscall);
+    
+    // Make LibCBridge a friend so it can access syscall methods
+    friend class LibCBridge;
 
 private:
     // ===== Individual syscall handlers =====
@@ -367,6 +370,16 @@ private:
     SyscallResult SysMunmap(uint64_t addr, uint64_t length, IMemory& memory);
     
     /**
+     * lseek - Reposition read/write file offset
+     * 
+     * @param fd File descriptor
+     * @param offset Offset value
+     * @param whence Seek origin (SEEK_SET, SEEK_CUR, SEEK_END)
+     * @return New file offset, or error
+     */
+    SyscallResult SysLseek(uint64_t fd, int64_t offset, uint64_t whence);
+    
+    /**
      * Unknown syscall handler
      * 
      * @param syscallNum Syscall number
@@ -394,10 +407,23 @@ private:
      */
     bool IsValidFd(int64_t fd) const;
 
+public:
+    // ===== libc Bridge Integration =====
+    
+    /**
+     * Get libc bridge instance for direct function calls
+     * @return Pointer to libc bridge
+     */
+    class LibCBridge* GetLibCBridge();
+
+private:
     // ===== Process state =====
     uint64_t brkAddress_;  // Current brk pointer for heap management
     int32_t pid_;          // Emulated process ID
     uint64_t mmapHint_;    // Next suggested mmap address
+    
+    // Forward declaration for libc bridge
+    class LibCBridge* libcBridge_;  // libc compatibility bridge
 };
 
 } // namespace ia64

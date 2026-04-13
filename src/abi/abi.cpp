@@ -1,6 +1,8 @@
 #include "abi.h"
+#include "abi.h"
 #include "cpu_state.h"
 #include "IMemory.h"
+#include "libc_bridge.h"
 #include <iostream>
 #include <sstream>
 #include <cstring>
@@ -12,7 +14,17 @@ LinuxABI::LinuxABI()
     : brkAddress_(0x40000000)  // Initial heap address
     , pid_(1000)               // Fake PID
     , mmapHint_(0x60000000)    // Initial mmap region
-{}
+    , libcBridge_(nullptr)
+{
+    // Initialize libc bridge
+    libcBridge_ = new LibCBridge();
+    libcBridge_->Initialize(this);
+}
+
+LinuxABI::~LinuxABI() {
+    delete libcBridge_;
+    libcBridge_ = nullptr;
+}
 
 SyscallResult LinuxABI::ExecuteSyscall(CPUState& cpu, IMemory& memory) {
     // On IA-64 Linux ABI:
@@ -439,6 +451,31 @@ SyscallResult LinuxABI::SysMunmap(uint64_t addr, uint64_t length, IMemory& memor
     // Real implementation would free the mapped region
     std::cout << " -> 0 (stub)\n";
     return SyscallResult(0);
+}
+
+SyscallResult LinuxABI::SysLseek(uint64_t fd, int64_t offset, uint64_t whence) {
+    std::cout << "[SYSCALL] lseek(fd=" << fd << ", offset=" << offset 
+              << ", whence=" << whence << ")";
+    
+    // Validate file descriptor
+    if (!IsValidFd(static_cast<int64_t>(fd))) {
+        std::cout << " -> ERROR: EBADF\n";
+        return SyscallResult::Error(linux::Errno::EBADF);
+    }
+    
+    // Validate whence parameter
+    if (whence > 2) {  // SEEK_SET=0, SEEK_CUR=1, SEEK_END=2
+        std::cout << " -> ERROR: EINVAL\n";
+        return SyscallResult::Error(linux::Errno::EINVAL);
+    }
+    
+    // Stub: just return the offset (as if file position is now at offset)
+    std::cout << " -> " << offset << " (stub)\n";
+    return SyscallResult(offset);
+}
+
+LibCBridge* LinuxABI::GetLibCBridge() {
+    return libcBridge_;
 }
 
 } // namespace ia64
