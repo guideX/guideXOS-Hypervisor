@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IA-64 Hypervisor - VM Management Console</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>IA-64 Hypervisor Console</h1>
+                <div class="header-info">
+                    <span id="server-status" class="status-badge status-unknown">Disconnected</span>
+                    <span id="total-vms" class="badge">0 VMs</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <button id="btn-create-vm" class="btn btn-primary">
+                <span class="icon">?</span> Create VM
+            </button>
+            <button id="btn-refresh" class="btn btn-secondary">
+                <span class="icon">??</span> Refresh
+            </button>
+            <div class="toolbar-spacer"></div>
+            <label class="auto-refresh-toggle">
+                <input type="checkbox" id="toggle-auto-refresh" checked>
+                Auto-refresh (<span id="refresh-interval">3s</span>)
+            </label>
+        </div>
+
+        <!-- VM List -->
+        <div class="vm-list-container">
+            <table class="vm-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>VM ID</th>
+                        <th>Status</th>
+                        <th>CPUs</th>
+                        <th>Memory</th>
+                        <th>Uptime</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="vm-list">
+                    <!-- VM rows will be inserted here -->
+                </tbody>
+            </table>
+            <div id="empty-state" class="empty-state">
+                <div class="empty-state-icon">??</div>
+                <p>No virtual machines found</p>
+                <button class="btn btn-primary" onclick="document.getElementById('btn-create-vm').click()">
+                    Create Your First VM
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="loading-indicator">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+        </div>
+    </div>
+
+    <!-- Create VM Modal -->
+    <div id="modal-create-vm" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Virtual Machine</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="form-create-vm">
+                    <div class="form-group">
+                        <label for="vm-name">VM Name</label>
+                        <input type="text" id="vm-name" class="form-control" placeholder="my-vm" required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="vm-memory">Memory (MB)</label>
+                            <input type="number" id="vm-memory" class="form-control" value="512" min="64" step="64" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="vm-cpus">CPU Count</label>
+                            <input type="number" id="vm-cpus" class="form-control" value="2" min="1" max="32" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="vm-template">Template</label>
+                        <select id="vm-template" class="form-control">
+                            <option value="minimal">Minimal (128MB, 1 CPU)</option>
+                            <option value="standard" selected>Standard (512MB, 2 CPUs)</option>
+                            <option value="server">Server (2048MB, 4 CPUs)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="vm-auto-start">
+                            Auto-start VM after creation
+                        </label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-create-vm')">Cancel</button>
+                <button class="btn btn-primary" onclick="createVM()">Create VM</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- VM Details Modal -->
+    <div id="modal-vm-details" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 id="details-vm-name">VM Details</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="details-tabs">
+                    <button class="tab-button active" data-tab="overview">Overview</button>
+                    <button class="tab-button" data-tab="configuration">Configuration</button>
+                    <button class="tab-button" data-tab="console">Console</button>
+                    <button class="tab-button" data-tab="logs">Logs</button>
+                </div>
+
+                <!-- Overview Tab -->
+                <div id="tab-overview" class="tab-content active">
+                    <div class="details-grid">
+                        <div class="detail-item">
+                            <label>VM ID:</label>
+                            <span id="details-vm-id">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>State:</label>
+                            <span id="details-vm-state" class="status-badge">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Memory:</label>
+                            <span id="details-vm-memory">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>CPUs:</label>
+                            <span id="details-vm-cpus">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Instructions:</label>
+                            <span id="details-vm-instructions">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <label>Uptime:</label>
+                            <span id="details-vm-uptime">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Configuration Tab -->
+                <div id="tab-configuration" class="tab-content">
+                    <div class="config-editor">
+                        <pre id="config-json">{}</pre>
+                    </div>
+                    <div class="config-actions">
+                        <button class="btn btn-secondary" onclick="exportConfig()">Export Config</button>
+                    </div>
+                </div>
+
+                <!-- Console Tab -->
+                <div id="tab-console" class="tab-content">
+                    <div class="console-header">
+                        <div class="console-info">
+                            <span id="console-line-count">0 lines</span>
+                            <span class="separator">|</span>
+                            <span id="console-byte-count">0 bytes</span>
+                        </div>
+                        <div class="console-actions">
+                            <label class="auto-scroll-toggle">
+                                <input type="checkbox" id="console-auto-scroll" checked>
+                                Auto-scroll
+                            </label>
+                            <button class="btn btn-secondary btn-sm" onclick="refreshConsole()">Refresh</button>
+                            <button class="btn btn-secondary btn-sm" onclick="clearConsoleView()">Clear</button>
+                        </div>
+                    </div>
+                    <div class="console-output" id="console-output">
+                        <div class="console-placeholder">No console output</div>
+                    </div>
+                </div>
+
+                <!-- Logs Tab -->
+                <div id="tab-logs" class="tab-content">
+                    <div class="logs-container">
+                        <pre id="vm-logs">No logs available</pre>
+                    </div>
+                    <div class="logs-actions">
+                        <button class="btn btn-secondary" onclick="refreshLogs()">Refresh</button>
+                        <button class="btn btn-secondary" onclick="clearLogsView()">Clear</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-vm-details')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Delete Modal -->
+    <div id="modal-confirm-delete" class="modal">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h2>Confirm Delete</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete VM <strong id="delete-vm-name"></strong>?</p>
+                <p class="warning">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-confirm-delete')">Cancel</button>
+                <button class="btn btn-danger" onclick="confirmDelete()">Delete VM</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

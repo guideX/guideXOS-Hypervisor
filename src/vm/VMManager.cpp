@@ -822,4 +822,69 @@ void VMManager::updateResourceUsage(VMInstance* instance) {
     // Other resource updates can be added here
 }
 
+// ============================================================================
+// Console Output Access
+// ============================================================================
+
+std::vector<std::string> VMManager::getConsoleOutput(const std::string& vmId) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return std::vector<std::string>();
+    }
+    return instance->vm->getConsoleOutput();
+}
+
+std::vector<std::string> VMManager::getConsoleOutput(const std::string& vmId, 
+                                                     size_t startLine, 
+                                                     size_t count) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return std::vector<std::string>();
+    }
+    return instance->vm->getConsoleOutput(startLine, count);
+}
+
+std::string VMManager::getRecentConsoleOutput(const std::string& vmId, 
+                                              size_t maxBytes) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return std::string();
+    }
+    return instance->vm->getRecentConsoleOutput(maxBytes);
+}
+
+std::vector<std::string> VMManager::getConsoleOutputSince(const std::string& vmId, 
+                                                          size_t lineNumber) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return std::vector<std::string>();
+    }
+    return instance->vm->getConsoleOutputSince(lineNumber);
+}
+
+size_t VMManager::getConsoleLineCount(const std::string& vmId) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return 0;
+    }
+    return instance->vm->getConsoleLineCount();
+}
+
+uint64_t VMManager::getConsoleTotalBytes(const std::string& vmId) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return 0;
+    }
+    return instance->vm->getConsoleTotalBytes();
+}
+
+bool VMManager::clearConsoleOutput(const std::string& vmId) {
+    auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return false;
+    }
+    instance->vm->clearConsoleOutput();
+    return true;
+}
+
 } // namespace ia64

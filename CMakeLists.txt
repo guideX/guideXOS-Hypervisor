@@ -78,6 +78,14 @@ set(FUZZER_SOURCES
     src/fuzzer/Fuzzer.cpp
 )
 
+set(API_SOURCES
+    src/api/RestAPIServer.cpp
+)
+
+set(WEBUI_SOURCES
+    src/webui/WebUIServer.cpp
+)
+
 set(ALL_SOURCES
     ${CORE_SOURCES}
     ${ISA_SOURCES}
@@ -91,6 +99,8 @@ set(ALL_SOURCES
     ${SYSCALL_SOURCES}
     ${PROFILER_SOURCES}
     ${FUZZER_SOURCES}
+    ${API_SOURCES}
+    ${WEBUI_SOURCES}
 )
 
 # Header files (for IDE organization)
@@ -125,6 +135,13 @@ set(HEADERS
     include/InterruptController.h
     include/Profiler.h
     include/Fuzzer.h
+    include/APITypes.h
+    include/APIServer.h
+    include/APISerializer.h
+    include/RestAPIServer.h
+    include/IPCAPIServer.h
+    include/WebSocketServer.h
+    include/WebUIServer.h
 )
 
 # Main executable
@@ -337,6 +354,29 @@ if(MSVC)
 else()
     target_compile_options(test_vm_isolation PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# Web UI Example
+add_executable(webui_example
+    examples/webui_example.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(webui_example PRIVATE /W4)
+else()
+    target_compile_options(webui_example PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Copy web files to build directory
+add_custom_target(copy_web_files ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/web
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/web
+    COMMENT "Copying web UI files to build directory"
+)
+
+add_dependencies(webui_example copy_web_files)
 
 
 # Enable testing

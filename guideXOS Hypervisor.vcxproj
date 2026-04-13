@@ -130,8 +130,10 @@
     <ClCompile Include="debug_harness.cpp" />
     <ClCompile Include="examples\config_example.cpp" />
     <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="examples\webui_example.cpp" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="src\abi\abi.cpp" />
+    <ClCompile Include="src\api\RestAPIServer.cpp" />
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
     <ClCompile Include="src\decoder\decoder.cpp" />
@@ -153,6 +155,7 @@
     <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
     <ClCompile Include="src\vm\VirtualMachine.cpp" />
     <ClCompile Include="src\vm\VMManager.cpp" />
+    <ClCompile Include="src\webui\WebUIServer.cpp" />
     <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="tests\test_fuzzer.cpp" />
@@ -175,6 +178,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
+    <ClInclude Include="include\APISerializer.h" />
+    <ClInclude Include="include\APIServer.h" />
+    <ClInclude Include="include\APITypes.h" />
     <ClInclude Include="include\bootstrap.h" />
     <ClInclude Include="include\Console.h" />
     <ClInclude Include="include\cpu.h" />
@@ -192,6 +198,7 @@
     <ClInclude Include="include\IMMU.h" />
     <ClInclude Include="include\InterruptController.h" />
     <ClInclude Include="include\IODevice.h" />
+    <ClInclude Include="include\IPCAPIServer.h" />
     <ClInclude Include="include\ISAPluginRegistry.h" />
     <ClInclude Include="include\IStorageDevice.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
@@ -203,6 +210,7 @@
     <ClInclude Include="include\PageFault.h" />
     <ClInclude Include="include\Profiler.h" />
     <ClInclude Include="include\RawDiskDevice.h" />
+    <ClInclude Include="include\RestAPIServer.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
     <ClInclude Include="include\SyscallDispatcher.h" />
     <ClInclude Include="include\Timer.h" />
@@ -211,11 +219,15 @@
     <ClInclude Include="include\VMManager.h" />
     <ClInclude Include="include\VMMetadata.h" />
     <ClInclude Include="include\Watchpoint.h" />
+    <ClInclude Include="include\WebSocketServer.h" />
+    <ClInclude Include="include\WebUIServer.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="docs\API_DOCUMENTATION.md" />
+    <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
     <None Include="docs\BOOTSTRAP_QUICK_START.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
@@ -233,6 +245,7 @@
     <None Include="docs\PROFILER.md" />
     <None Include="docs\PROFILER_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\PROFILER_QUICK_REFERENCE.md" />
+    <None Include="docs\README_UPDATE_SUMMARY.md" />
     <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
     <None Include="docs\VMMANAGER.md" />
     <None Include="docs\VMMANAGER_IMPLEMENTATION_SUMMARY.md" />
@@ -242,6 +255,8 @@
     <None Include="docs\VM_ISOLATION.md" />
     <None Include="docs\VM_ISOLATION_SUMMARY.md" />
     <None Include="docs\WATCHPOINT_USAGE.md" />
+    <None Include="docs\WEB_UI.md" />
+    <None Include="docs\WEB_UI_QUICK_REFERENCE.md" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
     <None Include="examples\configs\standard-vm.json" />
@@ -251,6 +266,9 @@
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="README.md" />
     <None Include="VS_SETUP.md" />
+    <None Include="web\app.js" />
+    <None Include="web\index.html" />
+    <None Include="web\style.css" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

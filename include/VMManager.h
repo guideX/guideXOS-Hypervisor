@@ -397,6 +397,74 @@ public:
      */
     std::string getStatistics() const;
     
+    // ========================================================================
+    // Console Output Access
+    // ========================================================================
+    
+    /**
+     * Get all console output from a VM
+     * 
+     * @param vmId VM identifier
+     * @return Vector of all output lines
+     */
+    std::vector<std::string> getConsoleOutput(const std::string& vmId) const;
+    
+    /**
+     * Get console output lines in a range
+     * 
+     * @param vmId VM identifier
+     * @param startLine Start line index (0-based)
+     * @param count Number of lines (0 = all remaining)
+     * @return Vector of output lines
+     */
+    std::vector<std::string> getConsoleOutput(const std::string& vmId, 
+                                              size_t startLine, 
+                                              size_t count = 0) const;
+    
+    /**
+     * Get recent console output from a VM
+     * 
+     * @param vmId VM identifier
+     * @param maxBytes Maximum bytes to retrieve
+     * @return Recent console output
+     */
+    std::string getRecentConsoleOutput(const std::string& vmId, 
+                                       size_t maxBytes = 4096) const;
+    
+    /**
+     * Get console output since a line number
+     * 
+     * @param vmId VM identifier
+     * @param lineNumber Line number (0-based)
+     * @return Vector of lines since the specified line
+     */
+    std::vector<std::string> getConsoleOutputSince(const std::string& vmId, 
+                                                   size_t lineNumber) const;
+    
+    /**
+     * Get console line count for a VM
+     * 
+     * @param vmId VM identifier
+     * @return Number of console output lines
+     */
+    size_t getConsoleLineCount(const std::string& vmId) const;
+    
+    /**
+     * Get total bytes written to console
+     * 
+     * @param vmId VM identifier
+     * @return Total bytes written
+     */
+    uint64_t getConsoleTotalBytes(const std::string& vmId) const;
+    
+    /**
+     * Clear console output buffer
+     * 
+     * @param vmId VM identifier
+     * @return True if successful
+     */
+    bool clearConsoleOutput(const std::string& vmId);
+    
 private:
     // ========================================================================
     // Internal Helpers

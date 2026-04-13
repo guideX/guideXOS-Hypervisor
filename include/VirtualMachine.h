@@ -323,6 +323,62 @@ public:
     uint64_t getTimerBaseAddress() const;
     BasicInterruptController* getInterruptController();
     const BasicInterruptController* getInterruptController() const;
+    
+    // ========================================================================
+    // Console Output Access
+    // ========================================================================
+    
+    /**
+     * Get all console output lines
+     * 
+     * @return Vector of all output lines
+     */
+    std::vector<std::string> getConsoleOutput() const;
+    
+    /**
+     * Get console output lines in a range
+     * 
+     * @param startLine Start line index (0-based)
+     * @param count Number of lines (0 = all remaining)
+     * @return Vector of output lines
+     */
+    std::vector<std::string> getConsoleOutput(size_t startLine, size_t count = 0) const;
+    
+    /**
+     * Get recent console output
+     * 
+     * @param maxBytes Maximum bytes to retrieve
+     * @return Recent console output
+     */
+    std::string getRecentConsoleOutput(size_t maxBytes = 4096) const;
+    
+    /**
+     * Get console output since a line number
+     * 
+     * @param lineNumber Line number (0-based)
+     * @return Vector of lines since the specified line
+     */
+    std::vector<std::string> getConsoleOutputSince(size_t lineNumber) const;
+    
+    /**
+     * Get console output line count
+     * 
+     * @return Number of console output lines
+     */
+    size_t getConsoleLineCount() const;
+    
+    /**
+     * Get total bytes written to console
+     * 
+     * @return Total bytes written
+     */
+    uint64_t getConsoleTotalBytes() const;
+    
+    /**
+     * Clear console output buffer
+     */
+    void clearConsoleOutput();
+    
     bool setConditionalBreakpoint(uint64_t address, const DebugCondition& condition);
     size_t setMemoryBreakpoint(uint64_t addressStart, uint64_t addressEnd, WatchpointType type, const DebugCondition& condition = DebugCondition());
     bool clearMemoryBreakpoint(size_t breakpointId);

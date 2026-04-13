@@ -662,6 +662,58 @@ const BasicInterruptController* VirtualMachine::getInterruptController() const {
     return interruptController_.get();
 }
 
+// ============================================================================
+// Console Output Access
+// ============================================================================
+
+std::vector<std::string> VirtualMachine::getConsoleOutput() const {
+    if (!consoleDevice_) {
+        return std::vector<std::string>();
+    }
+    return consoleDevice_->getAllOutputLines();
+}
+
+std::vector<std::string> VirtualMachine::getConsoleOutput(size_t startLine, size_t count) const {
+    if (!consoleDevice_) {
+        return std::vector<std::string>();
+    }
+    return consoleDevice_->getOutputLines(startLine, count);
+}
+
+std::string VirtualMachine::getRecentConsoleOutput(size_t maxBytes) const {
+    if (!consoleDevice_) {
+        return std::string();
+    }
+    return consoleDevice_->getRecentOutput(maxBytes);
+}
+
+std::vector<std::string> VirtualMachine::getConsoleOutputSince(size_t lineNumber) const {
+    if (!consoleDevice_) {
+        return std::vector<std::string>();
+    }
+    return consoleDevice_->getOutputSince(lineNumber);
+}
+
+size_t VirtualMachine::getConsoleLineCount() const {
+    if (!consoleDevice_) {
+        return 0;
+    }
+    return consoleDevice_->getOutputLineCount();
+}
+
+uint64_t VirtualMachine::getConsoleTotalBytes() const {
+    if (!consoleDevice_) {
+        return 0;
+    }
+    return consoleDevice_->getTotalBytesWritten();
+}
+
+void VirtualMachine::clearConsoleOutput() {
+    if (consoleDevice_) {
+        consoleDevice_->clearOutput();
+    }
+}
+
 bool VirtualMachine::setConditionalBreakpoint(uint64_t address, const DebugCondition& condition) {
     if (!setBreakpoint(address)) {
         return false;
