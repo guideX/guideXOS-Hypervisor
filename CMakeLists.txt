@@ -12,6 +12,14 @@ if(NOT WIN32)
     message(FATAL_ERROR "This project is Windows-only")
 endif()
 
+# Workaround for MSVC xloctime EINVAL bug
+if(MSVC)
+    add_compile_definitions(_CRT_DECLARE_NONSTDC_NAMES=1)
+    add_compile_definitions(_CRT_NONSTDC_NO_WARNINGS=1)
+    # Force include errno.h before any other headers
+    add_compile_options(/FI"errno.h")
+endif()
+
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

@@ -281,6 +281,7 @@
     <None Include="docs\BOOT_STATE_MACHINE_SUMMARY.md" />
     <None Include="docs\BOOT_TRACE_AND_PANIC.md" />
     <None Include="docs\BOOT_TRACE_QUICK_REF.md" />
+    <None Include="docs\BUILD_FIX_SUMMARY.md" />
     <None Include="docs\CPU_IMPLEMENTATION.md" />
     <None Include="docs\ELF64_LOADER.md" />
     <None Include="docs\ELF_VALIDATION.md" />
