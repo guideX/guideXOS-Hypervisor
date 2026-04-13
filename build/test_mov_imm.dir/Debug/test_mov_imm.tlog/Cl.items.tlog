@@ -1,7 +1,0 @@
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\tests\test_mov_imm.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\test_mov_imm.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\core\cpu.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\cpu.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\core\cpu_core.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\cpu_core.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\decoder\decoder.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\decoder.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\memory\memory.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\memory.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\loader\loader.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\loader.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\abi\abi.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\test_mov_imm.dir\Debug\abi.obj

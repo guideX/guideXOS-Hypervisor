@@ -1,7 +1,0 @@
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\tests\test_main.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\test_main.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\core\cpu.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\cpu.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\core\cpu_core.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\cpu_core.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\decoder\decoder.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\decoder.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\memory\memory.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\memory.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\loader\loader.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\loader.obj
-D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\src\abi\abi.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\ia64emu_tests.dir\Debug\abi.obj

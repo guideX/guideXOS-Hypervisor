@@ -58,17 +58,101 @@ enum class UnitType {
     INVALID
 };
 
-// Instruction opcode types (simplified for scaffolding)
+// Instruction opcode types (expanded for bare-metal execution)
 enum class InstructionType {
     NOP,
+    
+    // Move operations
     MOV_GR,     // Move between general registers
     MOV_IMM,    // Move immediate to register
+    MOVL,       // Move 64-bit immediate (L+X slots)
+    
+    // Arithmetic operations (A-type)
     ADD,
+    ADD_IMM,    // Add immediate (14-bit)
     SUB,
+    SUB_IMM,
+    ADDP4,      // Add pointer (32-bit)
+    
+    // Bitwise operations (A-type)
+    AND,
+    AND_IMM,
+    OR,
+    OR_IMM,
+    XOR,
+    XOR_IMM,
+    ANDCM,      // AND complement
+    ANDCM_IMM,
+    
+    // Shift operations (I-type)
+    SHL,        // Shift left
+    SHR,        // Shift right logical
+    SHRA,       // Shift right arithmetic
+    SHLADD,     // Shift left and add
+    
+    // Extract/Deposit (I-type)
+    EXTR,       // Extract bits
+    DEP,        // Deposit bits
+    ZXT1,       // Zero extend 1 byte
+    ZXT2,       // Zero extend 2 bytes
+    ZXT4,       // Zero extend 4 bytes
+    SXT1,       // Sign extend 1 byte
+    SXT2,       // Sign extend 2 bytes
+    SXT4,       // Sign extend 4 bytes
+    
+    // Compare operations (A-type)
+    CMP_EQ,     // Compare equal
+    CMP_NE,     // Compare not equal
+    CMP_LT,     // Compare less than (signed)
+    CMP_LE,     // Compare less or equal (signed)
+    CMP_GT,     // Compare greater than (signed)
+    CMP_GE,     // Compare greater or equal (signed)
+    CMP_LTU,    // Compare less than (unsigned)
+    CMP_LEU,    // Compare less or equal (unsigned)
+    CMP_GTU,    // Compare greater than (unsigned)
+    CMP_GEU,    // Compare greater or equal (unsigned)
+    CMP4_EQ,    // Compare 32-bit equal
+    CMP4_NE,
+    CMP4_LT,
+    CMP4_LE,
+    CMP4_GT,
+    CMP4_GE,
+    CMP4_LTU,
+    CMP4_LEU,
+    CMP4_GTU,
+    CMP4_GEU,
+    
+    // Memory operations (M-type)
+    LD1,        // Load 1 byte
+    LD2,        // Load 2 bytes
+    LD4,        // Load 4 bytes
     LD8,        // Load 8 bytes
+    ST1,        // Store 1 byte
+    ST2,        // Store 2 bytes
+    ST4,        // Store 4 bytes
     ST8,        // Store 8 bytes
-    BR,         // Branch
+    LD1_S,      // Load 1 byte speculative
+    LD2_S,      // Load 2 byte speculative
+    LD4_S,      // Load 4 byte speculative
+    LD8_S,      // Load 8 byte speculative
+    
+    // Branch operations (B-type)
+    BR_COND,    // Conditional branch
+    BR_CALL,    // Branch and link (call)
+    BR_RET,     // Return from call
+    BR_IA,      // Branch to IA-32 mode
+    BR_CLOOP,   // Counted loop branch
+    BR_CTOP,    // Counted top-of-loop branch
+    BR_CEXIT,   // Counted exit branch
+    BR_WTOP,    // While top-of-loop branch
+    BR_WEXIT,   // While exit branch
+    
+    // Register stack (I-type)
+    ALLOC,      // Allocate register stack frame
+    
+    // System (special)
     BREAK,      // Break instruction (used for syscalls)
+    
     UNKNOWN
 };
 
@@ -106,14 +190,22 @@ public:
     
     // Operands (simplified - real IA-64 has complex encoding)
     void SetOperands(uint8_t dst, uint8_t src1, uint8_t src2 = 0);
+    void SetOperands4(uint8_t dst, uint8_t src1, uint8_t src2, uint8_t src3);
+    void SetPredicate(uint8_t pred) { predicate_ = pred; }
     void SetImmediate(uint64_t imm);
+    void SetBranchTarget(uint64_t target);
     
     // Accessors for execution
+    uint8_t GetPredicate() const { return predicate_; }
     uint8_t GetDst() const { return dst_; }
     uint8_t GetSrc1() const { return src1_; }
     uint8_t GetSrc2() const { return src2_; }
+    uint8_t GetSrc3() const { return src3_; }
     uint64_t GetImmediate() const { return immediate_; }
     bool HasImmediate() const { return hasImmediate_; }
+    uint64_t GetBranchTarget() const { return branchTarget_; }
+    bool HasBranchTarget() const { return hasBranchTarget_; }
+    
     
 private:
     InstructionType type_;
@@ -121,11 +213,15 @@ private:
     uint64_t rawBits_;      // Raw 41-bit instruction
     
     // Simplified operand storage
+    uint8_t predicate_;     // Qualifying predicate (qp)
     uint8_t dst_;
     uint8_t src1_;
     uint8_t src2_;
+    uint8_t src3_;
     uint64_t immediate_;
     bool hasImmediate_;
+    uint64_t branchTarget_;
+    bool hasBranchTarget_;
 };
 
 // IA-64 Instruction Bundle (128-bit container)

@@ -13,22 +13,30 @@ InstructionEx::InstructionEx()
     : type_(InstructionType::NOP)
     , unit_(UnitType::I_UNIT)
     , rawBits_(0)
+    , predicate_(0)
     , dst_(0)
     , src1_(0)
     , src2_(0)
+    , src3_(0)
     , immediate_(0)
     , hasImmediate_(false)
+    , branchTarget_(0)
+    , hasBranchTarget_(false)
 {}
 
 InstructionEx::InstructionEx(InstructionType type, UnitType unit)
     : type_(type)
     , unit_(unit)
     , rawBits_(0)
+    , predicate_(0)
     , dst_(0)
     , src1_(0)
     , src2_(0)
+    , src3_(0)
     , immediate_(0)
     , hasImmediate_(false)
+    , branchTarget_(0)
+    , hasBranchTarget_(false)
 {}
 
 void InstructionEx::SetOperands(uint8_t dst, uint8_t src1, uint8_t src2) {
@@ -37,92 +45,494 @@ void InstructionEx::SetOperands(uint8_t dst, uint8_t src1, uint8_t src2) {
     src2_ = src2;
 }
 
+void InstructionEx::SetOperands4(uint8_t dst, uint8_t src1, uint8_t src2, uint8_t src3) {
+    dst_ = dst;
+    src1_ = src1;
+    src2_ = src2;
+    src3_ = src3;
+}
+
 void InstructionEx::SetImmediate(uint64_t imm) {
     immediate_ = imm;
     hasImmediate_ = true;
 }
 
+void InstructionEx::SetBranchTarget(uint64_t target) {
+    branchTarget_ = target;
+    hasBranchTarget_ = true;
+}
+
+// Helper function to check if predicate is true
+static bool CheckPredicate(const CPUState& cpu, uint8_t predReg) {
+    if (predReg == 0) {
+        return true;  // PR0 is always true
+    }
+    return cpu.GetPR(predReg);
+}
+
+// Helper for sign extension
+static int64_t SignExtend(uint64_t value, int bits) {
+    uint64_t sign_bit = 1ULL << (bits - 1);
+    if (value & sign_bit) {
+        uint64_t mask = ~((1ULL << bits) - 1);
+        return static_cast<int64_t>(value | mask);
+    }
+    return static_cast<int64_t>(value);
+}
+
 void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
+    // Check qualifying predicate
+    if (!CheckPredicate(cpu, predicate_)) {
+        // Predicate is false, instruction is nullified
+        return;
+    }
+    
     switch (type_) {
         case InstructionType::NOP:
             // Nothing to do
             break;
             
+        // ===== MOVE OPERATIONS =====
+        
         case InstructionType::MOV_GR:
             // mov rDst = rSrc1
-            {
-                uint64_t oldValue = cpu.GetGR(dst_);
-                uint64_t newValue = cpu.GetGR(src1_);
-                cpu.SetGR(dst_, newValue);
-                std::cout << "  -> r" << static_cast<int>(dst_) << ": 0x" << std::hex 
-                          << oldValue << " => 0x" << newValue << std::dec << std::endl;
-            }
+            cpu.SetGR(dst_, cpu.GetGR(src1_));
             break;
             
         case InstructionType::MOV_IMM:
             // mov rDst = immediate
             if (hasImmediate_) {
-                uint64_t oldValue = cpu.GetGR(dst_);
                 cpu.SetGR(dst_, immediate_);
-                std::cout << "  -> r" << static_cast<int>(dst_) << ": 0x" << std::hex 
-                          << oldValue << " => 0x" << immediate_ << std::dec << std::endl;
             }
             break;
             
+        case InstructionType::MOVL:
+            // movl rDst = immediate64
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, immediate_);
+            }
+            break;
+            
+        // ===== ARITHMETIC OPERATIONS =====
+            
         case InstructionType::ADD:
             // add rDst = rSrc1, rSrc2
-            {
-                uint64_t oldValue = cpu.GetGR(dst_);
-                uint64_t newValue = cpu.GetGR(src1_) + cpu.GetGR(src2_);
-                cpu.SetGR(dst_, newValue);
-                std::cout << "  -> r" << static_cast<int>(dst_) << ": 0x" << std::hex 
-                          << oldValue << " => 0x" << newValue << std::dec << std::endl;
+            cpu.SetGR(dst_, cpu.GetGR(src1_) + cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::ADD_IMM:
+            // add rDst = rSrc1, imm14
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) + immediate_);
             }
             break;
             
         case InstructionType::SUB:
             // sub rDst = rSrc1, rSrc2
+            cpu.SetGR(dst_, cpu.GetGR(src1_) - cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::SUB_IMM:
+            // sub rDst = rSrc1, imm14
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) - immediate_);
+            }
+            break;
+            
+        case InstructionType::ADDP4:
+            // addp4 rDst = rSrc1, rSrc2 (32-bit pointer add)
             {
-                uint64_t oldValue = cpu.GetGR(dst_);
-                uint64_t newValue = cpu.GetGR(src1_) - cpu.GetGR(src2_);
-                cpu.SetGR(dst_, newValue);
-                std::cout << "  -> r" << static_cast<int>(dst_) << ": 0x" << std::hex 
-                          << oldValue << " => 0x" << newValue << std::dec << std::endl;
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetGR(dst_, static_cast<uint64_t>(val1 + val2));
+            }
+            break;
+            
+        // ===== BITWISE OPERATIONS =====
+            
+        case InstructionType::AND:
+            // and rDst = rSrc1, rSrc2
+            cpu.SetGR(dst_, cpu.GetGR(src1_) & cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::AND_IMM:
+            // and rDst = rSrc1, imm
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) & immediate_);
+            }
+            break;
+            
+        case InstructionType::OR:
+            // or rDst = rSrc1, rSrc2
+            cpu.SetGR(dst_, cpu.GetGR(src1_) | cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::OR_IMM:
+            // or rDst = rSrc1, imm
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) | immediate_);
+            }
+            break;
+            
+        case InstructionType::XOR:
+            // xor rDst = rSrc1, rSrc2
+            cpu.SetGR(dst_, cpu.GetGR(src1_) ^ cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::XOR_IMM:
+            // xor rDst = rSrc1, imm
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) ^ immediate_);
+            }
+            break;
+            
+        case InstructionType::ANDCM:
+            // andcm rDst = rSrc1, rSrc2 (AND complement)
+            cpu.SetGR(dst_, cpu.GetGR(src1_) & ~cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::ANDCM_IMM:
+            // andcm rDst = rSrc1, imm
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) & ~immediate_);
+            }
+            break;
+            
+        // ===== SHIFT OPERATIONS =====
+            
+        case InstructionType::SHL:
+            // shl rDst = rSrc1, rSrc2
+            cpu.SetGR(dst_, cpu.GetGR(src1_) << (cpu.GetGR(src2_) & 0x3F));
+            break;
+            
+        case InstructionType::SHR:
+            // shr rDst = rSrc1, rSrc2 (logical right shift)
+            cpu.SetGR(dst_, cpu.GetGR(src1_) >> (cpu.GetGR(src2_) & 0x3F));
+            break;
+            
+        case InstructionType::SHRA:
+            // shra rDst = rSrc1, rSrc2 (arithmetic right shift)
+            {
+                int64_t val = static_cast<int64_t>(cpu.GetGR(src1_));
+                int shift = static_cast<int>(cpu.GetGR(src2_) & 0x3F);
+                cpu.SetGR(dst_, static_cast<uint64_t>(val >> shift));
+            }
+            break;
+            
+        case InstructionType::SHLADD:
+            // shladd rDst = rSrc1, count, rSrc2
+            if (hasImmediate_) {
+                uint64_t shifted = cpu.GetGR(src1_) << (immediate_ & 0x3);
+                cpu.SetGR(dst_, shifted + cpu.GetGR(src2_));
+            }
+            break;
+            
+        // ===== EXTRACT/DEPOSIT OPERATIONS =====
+            
+        case InstructionType::EXTR:
+            // extr rDst = rSrc1, pos, len
+            if (hasImmediate_) {
+                uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
+                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
+                uint64_t mask = (1ULL << len) - 1;
+                uint64_t extracted = (cpu.GetGR(src1_) >> pos) & mask;
+                cpu.SetGR(dst_, extracted);
+            }
+            break;
+            
+        case InstructionType::DEP:
+            // dep rDst = rSrc1, rSrc2, pos, len
+            if (hasImmediate_) {
+                uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
+                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
+                uint64_t mask = ((1ULL << len) - 1) << pos;
+                uint64_t dest_val = cpu.GetGR(dst_);
+                uint64_t src_val = cpu.GetGR(src1_);
+                uint64_t new_val = (dest_val & ~mask) | ((src_val << pos) & mask);
+                cpu.SetGR(dst_, new_val);
+            }
+            break;
+            
+        case InstructionType::ZXT1:
+            cpu.SetGR(dst_, cpu.GetGR(src1_) & 0xFF);
+            break;
+            
+        case InstructionType::ZXT2:
+            cpu.SetGR(dst_, cpu.GetGR(src1_) & 0xFFFF);
+            break;
+            
+        case InstructionType::ZXT4:
+            cpu.SetGR(dst_, cpu.GetGR(src1_) & 0xFFFFFFFF);
+            break;
+            
+        case InstructionType::SXT1:
+            cpu.SetGR(dst_, static_cast<uint64_t>(SignExtend(cpu.GetGR(src1_) & 0xFF, 8)));
+            break;
+            
+        case InstructionType::SXT2:
+            cpu.SetGR(dst_, static_cast<uint64_t>(SignExtend(cpu.GetGR(src1_) & 0xFFFF, 16)));
+            break;
+            
+        case InstructionType::SXT4:
+            cpu.SetGR(dst_, static_cast<uint64_t>(SignExtend(cpu.GetGR(src1_) & 0xFFFFFFFF, 32)));
+            break;
+            
+        // ===== COMPARE OPERATIONS (64-bit) =====
+            
+        case InstructionType::CMP_EQ:
+            cpu.SetPR(dst_, cpu.GetGR(src1_) == cpu.GetGR(src2_));
+            cpu.SetPR(src3_, cpu.GetGR(src1_) != cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::CMP_NE:
+            cpu.SetPR(dst_, cpu.GetGR(src1_) != cpu.GetGR(src2_));
+            cpu.SetPR(src3_, cpu.GetGR(src1_) == cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::CMP_LT:
+            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) < static_cast<int64_t>(cpu.GetGR(src2_)));
+            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) >= static_cast<int64_t>(cpu.GetGR(src2_)));
+            break;
+            
+        case InstructionType::CMP_LE:
+            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) <= static_cast<int64_t>(cpu.GetGR(src2_)));
+            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) > static_cast<int64_t>(cpu.GetGR(src2_)));
+            break;
+            
+        case InstructionType::CMP_GT:
+            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) > static_cast<int64_t>(cpu.GetGR(src2_)));
+            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) <= static_cast<int64_t>(cpu.GetGR(src2_)));
+            break;
+            
+        case InstructionType::CMP_GE:
+            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) >= static_cast<int64_t>(cpu.GetGR(src2_)));
+            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) < static_cast<int64_t>(cpu.GetGR(src2_)));
+            break;
+            
+        case InstructionType::CMP_LTU:
+            cpu.SetPR(dst_, cpu.GetGR(src1_) < cpu.GetGR(src2_));
+            cpu.SetPR(src3_, cpu.GetGR(src1_) >= cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::CMP_LEU:
+            cpu.SetPR(dst_, cpu.GetGR(src1_) <= cpu.GetGR(src2_));
+            cpu.SetPR(src3_, cpu.GetGR(src1_) > cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::CMP_GTU:
+            cpu.SetPR(dst_, cpu.GetGR(src1_) > cpu.GetGR(src2_));
+            cpu.SetPR(src3_, cpu.GetGR(src1_) <= cpu.GetGR(src2_));
+            break;
+            
+        case InstructionType::CMP_GEU:
+            cpu.SetPR(dst_, cpu.GetGR(src1_) >= cpu.GetGR(src2_));
+            cpu.SetPR(src3_, cpu.GetGR(src1_) < cpu.GetGR(src2_));
+            break;
+            
+        // ===== COMPARE OPERATIONS (32-bit) =====
+            
+        case InstructionType::CMP4_EQ:
+            {
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 == val2);
+                cpu.SetPR(src3_, val1 != val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_NE:
+            {
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 != val2);
+                cpu.SetPR(src3_, val1 == val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_LT:
+            {
+                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 < val2);
+                cpu.SetPR(src3_, val1 >= val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_LE:
+            {
+                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 <= val2);
+                cpu.SetPR(src3_, val1 > val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_GT:
+            {
+                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 > val2);
+                cpu.SetPR(src3_, val1 <= val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_GE:
+            {
+                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 >= val2);
+                cpu.SetPR(src3_, val1 < val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_LTU:
+            {
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 < val2);
+                cpu.SetPR(src3_, val1 >= val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_LEU:
+            {
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 <= val2);
+                cpu.SetPR(src3_, val1 > val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_GTU:
+            {
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 > val2);
+                cpu.SetPR(src3_, val1 <= val2);
+            }
+            break;
+            
+        case InstructionType::CMP4_GEU:
+            {
+                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, val1 >= val2);
+                cpu.SetPR(src3_, val1 < val2);
+            }
+            break;
+            
+        // ===== MEMORY OPERATIONS =====
+            
+        case InstructionType::LD1:
+        case InstructionType::LD1_S:
+            {
+                uint64_t addr = cpu.GetGR(src1_);
+                uint8_t value = 0;
+                memory.Read(addr, &value, 1);
+                cpu.SetGR(dst_, static_cast<uint64_t>(value));
+            }
+            break;
+            
+        case InstructionType::LD2:
+        case InstructionType::LD2_S:
+            {
+                uint64_t addr = cpu.GetGR(src1_);
+                uint16_t value = 0;
+                memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 2);
+                cpu.SetGR(dst_, static_cast<uint64_t>(value));
+            }
+            break;
+            
+        case InstructionType::LD4:
+        case InstructionType::LD4_S:
+            {
+                uint64_t addr = cpu.GetGR(src1_);
+                uint32_t value = 0;
+                memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 4);
+                cpu.SetGR(dst_, static_cast<uint64_t>(value));
             }
             break;
             
         case InstructionType::LD8:
-            // ld8 rDst = [rSrc1]
+        case InstructionType::LD8_S:
             {
                 uint64_t addr = cpu.GetGR(src1_);
-                uint64_t oldValue = cpu.GetGR(dst_);
                 uint64_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 8);
                 cpu.SetGR(dst_, value);
-                std::cout << "  -> r" << static_cast<int>(dst_) << ": 0x" << std::hex 
-                          << oldValue << " => 0x" << value << std::dec << std::endl;
+            }
+            break;
+            
+        case InstructionType::ST1:
+            {
+                uint64_t addr = cpu.GetGR(dst_);
+                uint8_t value = static_cast<uint8_t>(cpu.GetGR(src1_));
+                memory.Write(addr, &value, 1);
+            }
+            break;
+            
+        case InstructionType::ST2:
+            {
+                uint64_t addr = cpu.GetGR(dst_);
+                uint16_t value = static_cast<uint16_t>(cpu.GetGR(src1_));
+                memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 2);
+            }
+            break;
+            
+        case InstructionType::ST4:
+            {
+                uint64_t addr = cpu.GetGR(dst_);
+                uint32_t value = static_cast<uint32_t>(cpu.GetGR(src1_));
+                memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 4);
             }
             break;
             
         case InstructionType::ST8:
-            // st8 [rDst] = rSrc1
             {
                 uint64_t addr = cpu.GetGR(dst_);
                 uint64_t value = cpu.GetGR(src1_);
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 8);
-                std::cout << "  -> [0x" << std::hex << addr << "] = 0x" 
-                          << value << std::dec << std::endl;
+            }
+            break;
+            
+        // ===== BRANCH OPERATIONS =====
+            
+        case InstructionType::BR_COND:
+        case InstructionType::BR_CALL:
+            // br.call saves return address
+            if (type_ == InstructionType::BR_CALL && hasBranchTarget_) {
+                cpu.SetBR(dst_, cpu.GetIP() + 16);
+            }
+            break;
+            
+        case InstructionType::BR_RET:
+            break;
+            
+        // ===== REGISTER STACK OPERATIONS =====
+            
+        case InstructionType::ALLOC:
+            // alloc rDst = ar.pfs, sof, sol, sor
+            if (hasImmediate_) {
+                // Save current CFM
+                uint64_t old_cfm = cpu.GetCFM();
+                cpu.SetGR(dst_, old_cfm);
+                
+                // Extract fields from immediate
+                uint8_t sof = static_cast<uint8_t>(immediate_ & 0x7F);
+                uint8_t sol = static_cast<uint8_t>((immediate_ >> 7) & 0x7F);
+                uint8_t sor = static_cast<uint8_t>((immediate_ >> 14) & 0xF);
+                
+                // Build new CFM
+                uint64_t new_cfm = sof | (static_cast<uint64_t>(sol) << 7) | 
+                                   (static_cast<uint64_t>(sor) << 14);
+                cpu.SetCFM(new_cfm);
             }
             break;
         
         case InstructionType::BREAK:
-            // Break instruction - handled specially by CPU
-            // This is just a placeholder; actual syscall handling is in CPU
-            std::cout << "  -> break 0x" << std::hex << immediate_ << std::dec << std::endl;
             break;
             
         default:
-            // Unknown instruction - ignore for now
             break;
     }
 }
@@ -154,17 +564,137 @@ std::string InstructionEx::GetDisassembly() const {
                 << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
             break;
             
+        case InstructionType::ADD_IMM:
+            oss << "add r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", " << static_cast<int64_t>(immediate_);
+            break;
+            
+        case InstructionType::SUB_IMM:
+            oss << "sub r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", " << static_cast<int64_t>(immediate_);
+            break;
+            
+        case InstructionType::MOVL:
+            oss << "movl r" << static_cast<int>(dst_) << " = 0x" << std::hex << immediate_ << std::dec;
+            break;
+            
+        case InstructionType::AND:
+            oss << "and r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::OR:
+            oss << "or r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::XOR:
+            oss << "xor r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::SHL:
+            oss << "shl r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::SHR:
+            oss << "shr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::CMP_EQ:
+            oss << "cmp.eq p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::CMP_NE:
+            oss << "cmp.ne p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::CMP_LT:
+            oss << "cmp.lt p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::CMP_GT:
+            oss << "cmp.gt p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+            break;
+            
+        case InstructionType::LD1:
+        case InstructionType::LD1_S:
+            oss << "ld1 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            break;
+            
+        case InstructionType::LD2:
+        case InstructionType::LD2_S:
+            oss << "ld2 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            break;
+            
+        case InstructionType::LD4:
+        case InstructionType::LD4_S:
+            oss << "ld4 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            break;
+            
         case InstructionType::LD8:
+        case InstructionType::LD8_S:
             oss << "ld8 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            break;
+            
+        case InstructionType::ST1:
+            oss << "st1 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            break;
+            
+        case InstructionType::ST2:
+            oss << "st2 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            break;
+            
+        case InstructionType::ST4:
+            oss << "st4 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
             break;
             
         case InstructionType::ST8:
             oss << "st8 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
             break;
+            
+        case InstructionType::BR_COND:
+            if (hasBranchTarget_) {
+                oss << "br.cond 0x" << std::hex << branchTarget_ << std::dec;
+            } else {
+                oss << "br.cond";
+            }
+            break;
+            
+        case InstructionType::BR_CALL:
+            oss << "br.call b" << static_cast<int>(dst_);
+            if (hasBranchTarget_) {
+                oss << " = 0x" << std::hex << branchTarget_ << std::dec;
+            }
+            break;
+            
+        case InstructionType::BR_RET:
+            oss << "br.ret b" << static_cast<int>(src1_);
+            break;
+            
+        case InstructionType::ALLOC:
+            if (hasImmediate_) {
+                uint8_t sof = static_cast<uint8_t>(immediate_ & 0x7F);
+                uint8_t sol = static_cast<uint8_t>((immediate_ >> 7) & 0x7F);
+                uint8_t sor = static_cast<uint8_t>((immediate_ >> 14) & 0xF);
+                oss << "alloc r" << static_cast<int>(dst_) << " = ar.pfs, " 
+                    << static_cast<int>(sof) << ", " << static_cast<int>(sol) 
+                    << ", " << static_cast<int>(sor);
+            } else {
+                oss << "alloc r" << static_cast<int>(dst_);
+            }
+            break;
         
         case InstructionType::BREAK:
             oss << "break 0x" << std::hex << immediate_ << std::dec;
             break;
+            
             
         default:
             oss << "unknown (0x" << std::hex << rawBits_ << std::dec << ")";

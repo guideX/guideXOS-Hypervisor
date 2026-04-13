@@ -70,7 +70,6 @@ set(IO_SOURCES
     src/io/ConsoleOutputBuffer.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
-    src/io/InitramfsDevice.cpp
 )
 
 set(VM_SOURCES
@@ -90,6 +89,7 @@ set(STORAGE_SOURCES
     src/storage/SimpleReadOnlyFS.cpp
     src/storage/PathResolver.cpp
     src/storage/VirtualDiskManager.cpp
+    src/storage/InitramfsDevice.cpp
 )
 
 set(SYSCALL_SOURCES

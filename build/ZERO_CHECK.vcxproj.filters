@@ -1,13 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <CustomBuild Include="D:\devgitlab\guideXOS.Hypervisor\guideXOS Hypervisor\build\CMakeFiles\e3fa8c81c62a5b7e3a031e726549f880\generate.stamp.rule">
+    <CustomBuild Include="D:\devgitlab\guideXOS.Hypervisor\build\CMakeFiles\4cf09ee3b65dfddd8efd3bc4b46c1e4b\generate.stamp.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="CMake Rules">
-      <UniqueIdentifier>{E6221D40-4CF5-3D4D-B715-207892D37E33}</UniqueIdentifier>
+      <UniqueIdentifier>{7DC43053-678C-3EEA-ACCF-C0A419D7F21C}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
