@@ -1,5 +1,6 @@
 #include "ia64_decoders.h"
 #include "ia64_formats.h"
+#include "ia64_decoders.h"
 #include "decoder.h"
 #include <iostream>
 
@@ -19,29 +20,30 @@ namespace decoder {
  * Major opcodes: 0, 4
  */
 
-class BTypeDecoder {
-public:
-    /**
-     * Decode a B-type instruction from raw 41-bit data
-     * @param current_ip Current instruction pointer (needed for IP-relative targets)
-     */
-    static bool decode(uint64_t raw_instruction, formats::BFormat& result, uint64_t current_ip) {
+// Forward declarations of helper functions
+static bool decodeIPRelative(uint64_t raw, uint8_t btype, uint8_t x6,
+                             uint64_t current_ip, formats::BFormat& result);
+static bool decodeIndirect(uint64_t raw, uint8_t btype, uint8_t x6,
+                           formats::BFormat& result);
+
+// BTypeDecoder::decode implementation
+bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, uint64_t current_ip) {
         // Extract common fields
-        result.qp = extractBits(raw_instruction, 0, 6);
-        result.b1 = extractBits(raw_instruction, 6, 3);   // Destination branch register
-        result.b2 = extractBits(raw_instruction, 13, 3);  // Source branch register
+        result.qp = formats::extractBits(raw_instruction, 0, 6);
+        result.b1 = formats::extractBits(raw_instruction, 6, 3);   // Destination branch register
+        result.b2 = formats::extractBits(raw_instruction, 13, 3);  // Source branch register
         
         // Extract major opcode (bits 37-40)
-        uint8_t major = extractBits(raw_instruction, 37, 4);
+        uint8_t major = formats::extractBits(raw_instruction, 37, 4);
         
         // Extract extended opcode fields
-        uint8_t btype = extractBits(raw_instruction, 6, 3);   // Branch type
-        uint8_t x6 = extractBits(raw_instruction, 27, 6);     // Extended opcode
+        uint8_t btype = formats::extractBits(raw_instruction, 6, 3);   // Branch type
+        uint8_t x6 = formats::extractBits(raw_instruction, 27, 6);     // Extended opcode
         
         // Extract prediction hints
-        result.wh = extractBits(raw_instruction, 33, 2);  // Whether hint
-        result.dh = extractBits(raw_instruction, 35, 1);  // Deallocation hint
-        result.ph = extractBits(raw_instruction, 12, 1);  // Prefetch hint
+        result.wh = formats::extractBits(raw_instruction, 33, 2);  // Whether hint
+        result.dh = formats::extractBits(raw_instruction, 35, 1);  // Deallocation hint
+        result.ph = formats::extractBits(raw_instruction, 12, 1);  // Prefetch hint
         
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
@@ -59,10 +61,8 @@ public:
         }
     }
     
-    /**
-     * Convert decoded B-format to InstructionEx
-     */
-    static bool toInstruction(const formats::BFormat& fmt, InstructionEx& instr) {
+// BTypeDecoder::toInstruction implementation
+bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& instr) {
         instr.SetPredicate(fmt.qp);
         
         // Determine instruction type based on branch type
@@ -127,9 +127,8 @@ public:
         
         return true;
     }
-
-private:
-    static bool decodeIPRelative(uint64_t raw, uint8_t btype, uint8_t x6,
+// Helper function implementations
+static bool decodeIPRelative(uint64_t raw, uint8_t btype, uint8_t x6,
                                   uint64_t current_ip, formats::BFormat& result) {
         // Determine branch type from btype field
         result.indirect = false;
@@ -173,11 +172,11 @@ private:
         
         // Extract IP-relative target offset (25-bit signed immediate)
         // imm25 = s:imm20b:imm4
-        uint32_t imm20b = extractBits(raw, 13, 20);
-        uint32_t imm4 = extractBits(raw, 6, 4);
-        uint32_t s = extractBits(raw, 36, 1);
+        uint32_t imm20b = formats::extractBits(raw, 13, 20);
+        uint32_t imm4 = formats::extractBits(raw, 6, 4);
+        uint32_t s = formats::extractBits(raw, 36, 1);
         
-        int64_t offset = signExtend((s << 24) | (imm20b << 4) | imm4, 25);
+        int64_t offset = formats::signExtend((s << 24) | (imm20b << 4) | imm4, 25);
         
         // IA-64 branch targets are in units of 16 bytes (bundle size)
         // So multiply offset by 16
@@ -186,8 +185,7 @@ private:
         
         return true;
     }
-    
-    static bool decodeIndirect(uint64_t raw, uint8_t btype, uint8_t x6,
+static bool decodeIndirect(uint64_t raw, uint8_t btype, uint8_t x6,
                                 formats::BFormat& result) {
         // Indirect branches use branch registers
         result.indirect = true;
@@ -221,14 +219,6 @@ private:
         return true;
     }
     
-    static uint64_t extractBits(uint64_t value, int start, int length) {
-        return formats::extractBits(value, start, length);
-    }
-    
-    static int64_t signExtend(uint64_t value, int bits) {
-        return formats::signExtend(value, bits);
-    }
-};
-
 } // namespace decoder
 } // namespace ia64
+

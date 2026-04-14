@@ -2,12 +2,44 @@
 
 ## Summary
 
-Successfully completed **Steps 1-3** of the binary decoder integration:
+Successfully completed **Steps 1-4** of the binary decoder integration:
 
 ? **Step 1: Integration into InstructionDecoder** - Complete
 ? **Step 2: CMakeLists.txt Update** - Complete  
 ? **Step 3: Unit Tests Creation** - Complete
-?? **Step 4: Build Verification** - Needs refactoring
+? **Step 4: Build Verification** - Complete
+? **Step 5: Code Housekeeping & Refactoring** - Complete
+
+---
+
+## Latest Updates (Housekeeping Complete)
+
+### ? Step 5: Code Housekeeping & Separation of Concerns
+
+**Completed:** Comprehensive refactoring to separate class declarations from implementations
+
+**Files Refactored:**
+- `src/decoder/atype_decoder.cpp` - A-Type instruction decoder
+- `src/decoder/itype_decoder.cpp` - I-Type instruction decoder  
+- `src/decoder/mtype_decoder.cpp` - M-Type instruction decoder
+- `src/decoder/btype_decoder.cpp` - B-Type instruction decoder
+- `src/decoder/lx_decoder.cpp` - L+X format decoder (MOVL)
+
+**Changes Applied:**
+1. ? Removed inline class definitions from all .cpp files
+2. ? Added proper header includes (`ia64_decoders.h`, `ia64_formats.h`)
+3. ? Converted all methods to use scope resolution operators (`ClassName::methodName`)
+4. ? Converted private helper methods to static functions with forward declarations
+5. ? Removed wrapper functions for `extractBits` and `signExtend` (use `formats::` prefix directly)
+6. ? Fixed indentation and code formatting throughout
+7. ? Verified compilation - all decoder files compile without errors
+
+**Architecture:**
+- **Header files** (`ia64_decoders.h`): Contain class declarations with public static methods
+- **Implementation files** (`.cpp`): Contain method implementations using scope resolution
+- **Helper functions**: Declared as `static` functions within `.cpp` files for encapsulation
+
+**Build Status:** ? All decoder compilation errors resolved
 
 ---
 

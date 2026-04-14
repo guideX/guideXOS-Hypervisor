@@ -1,5 +1,6 @@
 #include "ia64_decoders.h"
 #include "ia64_formats.h"
+#include "ia64_decoders.h"
 #include "decoder.h"
 #include <iostream>
 
@@ -20,26 +21,28 @@ namespace decoder {
  * Major opcodes: 0, 5, 7
  */
 
-class ITypeDecoder {
-public:
-    /**
-     * Decode an I-type instruction from raw 41-bit data
-     */
-    static bool decode(uint64_t raw_instruction, formats::IFormat& result) {
+// Forward declarations of helper functions
+static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
+                         uint8_t x6, formats::IFormat& result);
+static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& result);
+static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result);
+
+// ITypeDecoder::decode implementation
+bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
         // Extract common fields
-        result.qp = extractBits(raw_instruction, 0, 6);
-        result.r1 = extractBits(raw_instruction, 6, 7);
-        result.r2 = extractBits(raw_instruction, 13, 7);
-        result.r3 = extractBits(raw_instruction, 20, 7);
+        result.qp = formats::extractBits(raw_instruction, 0, 6);
+        result.r1 = formats::extractBits(raw_instruction, 6, 7);
+        result.r2 = formats::extractBits(raw_instruction, 13, 7);
+        result.r3 = formats::extractBits(raw_instruction, 20, 7);
         
         // Extract major opcode (bits 37-40)
-        uint8_t major = extractBits(raw_instruction, 37, 4);
+        uint8_t major = formats::extractBits(raw_instruction, 37, 4);
         
         // Extract extended opcode fields
-        uint8_t x = extractBits(raw_instruction, 27, 1);
-        uint8_t x2 = extractBits(raw_instruction, 28, 2);
-        uint8_t x3 = extractBits(raw_instruction, 33, 3);
-        uint8_t x6 = extractBits(raw_instruction, 27, 6);
+        uint8_t x = formats::extractBits(raw_instruction, 27, 1);
+        uint8_t x2 = formats::extractBits(raw_instruction, 28, 2);
+        uint8_t x3 = formats::extractBits(raw_instruction, 33, 3);
+        uint8_t x6 = formats::extractBits(raw_instruction, 27, 6);
         
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
@@ -60,10 +63,8 @@ public:
         }
     }
     
-    /**
-     * Convert decoded I-format to InstructionEx
-     */
-    static bool toInstruction(const formats::IFormat& fmt, InstructionEx& instr) {
+// ITypeDecoder::toInstruction implementation
+bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& instr) {
         instr.SetPredicate(fmt.qp);
         
         uint8_t op = fmt.opcode;
@@ -162,9 +163,8 @@ public:
         
         return false;
     }
-
-private:
-    static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
+// Helper function implementations
+static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
                               uint8_t x6, formats::IFormat& result) {
         // Major opcode 0 has many sub-types
         
@@ -177,9 +177,9 @@ private:
         // Check for ALLOC (x3 = 0, x6 = 0x06)
         if (x3 == 0 && x6 == 0x06) {
             // ALLOC r1 = ar.pfs, sof, sol, sor
-            result.sof = extractBits(raw, 20, 7);  // bits [20:26]
-            result.sol = extractBits(raw, 13, 7);  // bits [13:19]
-            result.sor = extractBits(raw, 27, 4);  // bits [27:30]
+            result.sof = formats::extractBits(raw, 20, 7);  // bits [20:26]
+            result.sol = formats::extractBits(raw, 13, 7);  // bits [13:19]
+            result.sor = formats::extractBits(raw, 27, 4);  // bits [27:30]
             return true;
         }
         
@@ -191,41 +191,35 @@ private:
         
         return true; // Allow unknown I-type for now
     }
-    
-    static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& result) {
+static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& result) {
         // Deposit and extract operations
         // DEP: r1[pos:pos+len-1] = r2[0:len-1]
         // EXTR: r1 = r3[pos:pos+len-1]
         
-        result.pos = extractBits(raw, 14, 6);   // Position
-        result.len = extractBits(raw, 27, 6);   // Length
+        result.pos = formats::extractBits(raw, 14, 6);   // Position
+        result.len = formats::extractBits(raw, 27, 6);   // Length
         
         // Check if it's immediate form
         if (x2 == 0x3) {
             result.has_imm = true;
-            uint8_t imm = extractBits(raw, 13, 8);
+            uint8_t imm = formats::extractBits(raw, 13, 8);
             result.imm = imm;
         }
         
         return true;
     }
-    
-    static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result) {
+static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result) {
         // Shift operations: SHL, SHR, SHRA
         
         // Check for immediate form (count encoded in instruction)
         if (x2 == 0x3) {
             result.has_imm = true;
-            result.count = extractBits(raw, 20, 6);  // 6-bit count
+            result.count = formats::extractBits(raw, 20, 6);  // 6-bit count
         }
         
         return true;
     }
     
-    static uint64_t extractBits(uint64_t value, int start, int length) {
-        return formats::extractBits(value, start, length);
-    }
-};
-
 } // namespace decoder
 } // namespace ia64
+

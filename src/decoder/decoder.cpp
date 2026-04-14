@@ -1,5 +1,7 @@
 #include "decoder.h"
 #include "decoder.h"
+#include "ia64_decoders.h"
+#include "ia64_formats.h"
 #include "cpu_state.h"
 #include "memory.h"
 #include <sstream>

@@ -1,5 +1,6 @@
 #include "ia64_decoders.h"
 #include "ia64_formats.h"
+#include "ia64_decoders.h"
 #include "decoder.h"
 #include <iostream>
 
@@ -20,25 +21,27 @@ namespace decoder {
  * Major opcodes: 4, 5, 6, 7
  */
 
-class MTypeDecoder {
-public:
-    /**
-     * Decode an M-type instruction from raw 41-bit data
-     */
-    static bool decode(uint64_t raw_instruction, formats::MFormat& result) {
+// Forward declarations of helper functions
+static bool decodeLoad(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
+                       uint8_t hint, formats::MFormat& result);
+static bool decodeStore(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
+                        uint8_t hint, formats::MFormat& result);
+
+// MTypeDecoder::decode implementation
+bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         // Extract common fields
-        result.qp = extractBits(raw_instruction, 0, 6);
-        result.r1 = extractBits(raw_instruction, 6, 7);
-        result.r3 = extractBits(raw_instruction, 20, 7);  // Address/increment register
+        result.qp = formats::extractBits(raw_instruction, 0, 6);
+        result.r1 = formats::extractBits(raw_instruction, 6, 7);
+        result.r3 = formats::extractBits(raw_instruction, 20, 7);  // Address/increment register
         
         // Extract major opcode (bits 37-40)
-        uint8_t major = extractBits(raw_instruction, 37, 4);
+        uint8_t major = formats::extractBits(raw_instruction, 37, 4);
         
         // Extract extended opcode fields
-        uint8_t m = extractBits(raw_instruction, 36, 1);   // Memory ordering
-        uint8_t x = extractBits(raw_instruction, 27, 1);   // Extended form
-        uint8_t x6 = extractBits(raw_instruction, 30, 6);  // Extended opcode
-        uint8_t hint = extractBits(raw_instruction, 28, 2); // Locality hint
+        uint8_t m = formats::extractBits(raw_instruction, 36, 1);   // Memory ordering
+        uint8_t x = formats::extractBits(raw_instruction, 27, 1);   // Extended form
+        uint8_t x6 = formats::extractBits(raw_instruction, 30, 6);  // Extended opcode
+        uint8_t hint = formats::extractBits(raw_instruction, 28, 2); // Locality hint
         
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
@@ -65,10 +68,8 @@ public:
         }
     }
     
-    /**
-     * Convert decoded M-format to InstructionEx
-     */
-    static bool toInstruction(const formats::MFormat& fmt, InstructionEx& instr) {
+// MTypeDecoder::toInstruction implementation
+bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& instr) {
         instr.SetPredicate(fmt.qp);
         
         // Determine instruction type based on operation and size
@@ -133,9 +134,8 @@ public:
         
         return false;
     }
-
-private:
-    static bool decodeLoad(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
+// Helper function implementations
+static bool decodeLoad(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
                             uint8_t hint, formats::MFormat& result) {
         result.operation = formats::MFormat::MemOp::LOAD;
         
@@ -168,16 +168,15 @@ private:
         if (x == 0) {
             result.has_imm = true;
             // Extract 9-bit signed immediate (bits 13-19, 27-28)
-            uint16_t imm7b = extractBits(raw, 13, 7);
-            uint16_t imm2 = extractBits(raw, 27, 2);
-            uint16_t s = extractBits(raw, 36, 1);
-            result.imm9 = static_cast<int16_t>(signExtend((s << 8) | (imm2 << 7) | imm7b, 9));
+            uint16_t imm7b = formats::extractBits(raw, 13, 7);
+            uint16_t imm2 = formats::extractBits(raw, 27, 2);
+            uint16_t s = formats::extractBits(raw, 36, 1);
+            result.imm9 = static_cast<int16_t>(formats::signExtend((s << 8) | (imm2 << 7) | imm7b, 9));
         }
         
         return true;
     }
-    
-    static bool decodeStore(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
+static bool decodeStore(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
                              uint8_t hint, formats::MFormat& result) {
         result.operation = formats::MFormat::MemOp::STORE;
         
@@ -204,23 +203,15 @@ private:
         // Check for immediate offset form
         if (x == 0) {
             result.has_imm = true;
-            uint16_t imm7b = extractBits(raw, 13, 7);
-            uint16_t imm2 = extractBits(raw, 27, 2);
-            uint16_t s = extractBits(raw, 36, 1);
-            result.imm9 = static_cast<int16_t>(signExtend((s << 8) | (imm2 << 7) | imm7b, 9));
+            uint16_t imm7b = formats::extractBits(raw, 13, 7);
+            uint16_t imm2 = formats::extractBits(raw, 27, 2);
+            uint16_t s = formats::extractBits(raw, 36, 1);
+            result.imm9 = static_cast<int16_t>(formats::signExtend((s << 8) | (imm2 << 7) | imm7b, 9));
         }
         
         return true;
     }
     
-    static uint64_t extractBits(uint64_t value, int start, int length) {
-        return formats::extractBits(value, start, length);
-    }
-    
-    static int64_t signExtend(uint64_t value, int bits) {
-        return formats::signExtend(value, bits);
-    }
-};
-
 } // namespace decoder
 } // namespace ia64
+

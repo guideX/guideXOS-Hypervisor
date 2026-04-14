@@ -1,5 +1,6 @@
 #include "ia64_decoders.h"
 #include "ia64_formats.h"
+#include "ia64_decoders.h"
 #include "decoder.h"
 #include <iostream>
 
@@ -19,8 +20,6 @@ namespace decoder {
  * imm64 = sign_ext(ic:imm5c:imm9d:imm7b:imm20b:i)
  */
 
-class LXDecoder {
-public:
     /**
      * Decode MOVL instruction from L and X slots
      * 
@@ -29,7 +28,7 @@ public:
      * @param result Output LFormat structure
      * @return true if successfully decoded
      */
-    static bool decodeL(uint64_t l_slot, formats::LFormat& result) {
+bool LXDecoder::decodeL(uint64_t l_slot, formats::LFormat& result) {
         // L-unit format for MOVL
         // Bits [0:5]:   qp (qualifying predicate)
         // Bits [6:12]:  r1 (destination register)
@@ -37,13 +36,13 @@ public:
         // Bits [20:26]: imm7a
         // Bits [27:40]: Part of immediate
         
-        result.r1 = extractBits(l_slot, 6, 7);
+        result.r1 = formats::extractBits(l_slot, 6, 7);
         
         // Extract immediate fragments from L-slot
-        uint64_t imm7b = extractBits(l_slot, 13, 7);
-        uint64_t imm7a = extractBits(l_slot, 20, 7);
-        uint64_t imm13c = extractBits(l_slot, 27, 13);
-        uint64_t i = extractBits(l_slot, 40, 1);
+        uint64_t imm7b = formats::extractBits(l_slot, 13, 7);
+        uint64_t imm7a = formats::extractBits(l_slot, 20, 7);
+        uint64_t imm13c = formats::extractBits(l_slot, 27, 13);
+        uint64_t i = formats::extractBits(l_slot, 40, 1);
         
         // Store in imm41 for later combination with X-slot
         result.imm41 = (i << 40) | (imm13c << 27) | (imm7a << 20) | imm7b;
@@ -54,17 +53,17 @@ public:
     /**
      * Decode X-unit slot of MOVL
      */
-    static bool decodeX(uint64_t x_slot, formats::XFormat& result) {
+bool LXDecoder::decodeX(uint64_t x_slot, formats::XFormat& result) {
         // X-unit format for MOVL
         // Contains additional immediate bits
         
-        result.qp = extractBits(x_slot, 0, 6);
+        result.qp = formats::extractBits(x_slot, 0, 6);
         
         // Extract remaining immediate fragments
-        uint64_t imm20b = extractBits(x_slot, 6, 20);
-        uint64_t imm9d = extractBits(x_slot, 27, 9);
-        uint64_t ic = extractBits(x_slot, 36, 1);
-        uint64_t imm5c = extractBits(x_slot, 37, 4);  // Note: only 4 bits here
+        uint64_t imm20b = formats::extractBits(x_slot, 6, 20);
+        uint64_t imm9d = formats::extractBits(x_slot, 27, 9);
+        uint64_t ic = formats::extractBits(x_slot, 36, 1);
+        uint64_t imm5c = formats::extractBits(x_slot, 37, 4);  // Note: only 4 bits here
         
         // Store for combination
         result.imm64 = (ic << 60) | (imm5c << 56) | (imm9d << 47) | imm20b;
@@ -75,7 +74,7 @@ public:
     /**
      * Combine L and X slots to produce final MOVL instruction
      */
-    static bool combineMOVL(const formats::LFormat& l_fmt, 
+bool LXDecoder::combineMOVL(const formats::LFormat& l_fmt, 
                              const formats::XFormat& x_fmt,
                              InstructionEx& instr) {
         // Reconstruct 64-bit immediate
@@ -96,7 +95,7 @@ public:
                            (imm7b << 41) | (imm20b << 21) | (i << 20);
         
         // Sign extend from 63 bits
-        int64_t signed_imm = signExtend(combined >> 20, 43);
+        int64_t signed_imm = formats::signExtend(combined >> 20, 43);
         uint64_t final_imm = static_cast<uint64_t>(signed_imm);
         
         // Create MOVL instruction
@@ -111,79 +110,11 @@ public:
     /**
      * Quick check if bundle is MLX template (contains MOVL)
      */
-    static bool isMLXTemplate(uint8_t template_field) {
-        // MLX templates are 0x4 and 0x5
-        return (template_field == 0x4 || template_field == 0x5);
-    }
-    
-private:
-    static uint64_t extractBits(uint64_t value, int start, int length) {
-        return formats::extractBits(value, start, length);
-    }
-    
-    static int64_t signExtend(uint64_t value, int bits) {
-        return formats::signExtend(value, bits);
-    }
-};
-
-/**
- * Helper class to manage MOVL decoding across bundle boundaries
- */
-class MOVLBuilder {
-public:
-    MOVLBuilder() : has_l_slot_(false) {}
-    
-    /**
-     * Process L-slot (must be called first for MOVL)
-     */
-    bool processLSlot(uint64_t l_slot) {
-        if (LXDecoder::decodeL(l_slot, l_fmt_)) {
-            has_l_slot_ = true;
-            return true;
-        }
-        return false;
-    }
-    
-    /**
-     * Process X-slot and build complete MOVL instruction
-     */
-    bool processXSlot(uint64_t x_slot, InstructionEx& instr) {
-        if (!has_l_slot_) {
-            return false;  // Must have L-slot first
-        }
-        
-        formats::XFormat x_fmt;
-        if (!LXDecoder::decodeX(x_slot, x_fmt)) {
-            return false;
-        }
-        
-        // Combine to create MOVL
-        bool success = LXDecoder::combineMOVL(l_fmt_, x_fmt, instr);
-        
-        // Reset state
-        has_l_slot_ = false;
-        
-        return success;
-    }
-    
-    /**
-     * Check if we're waiting for X-slot
-     */
-    bool needsXSlot() const {
-        return has_l_slot_;
-    }
-    
-    /**
-     * Reset state
-     */
-    void reset() {
-        has_l_slot_ = false;
-    }
-
-private:
-    bool has_l_slot_;
-    formats::LFormat l_fmt_;
-};
+bool LXDecoder::isMLXTemplate(uint8_t template_field) {
+    // MLX templates are 0x4 and 0x5
+    return (template_field == 0x4 || template_field == 0x5);
+}
 
 } // namespace decoder
 } // namespace ia64
+

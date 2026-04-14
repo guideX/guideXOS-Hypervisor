@@ -307,6 +307,7 @@
     <None Include="docs\INITRAMFS_QUICK_REFERENCE.md" />
     <None Include="docs\INITRAMFS_SUPPORT.md" />
     <None Include="docs\INSTRUCTION_SET_STATUS.md" />
+    <None Include="docs\INTEGRATION_STATUS.md" />
     <None Include="docs\ISA_PLUGIN_ARCHITECTURE.md" />
     <None Include="docs\ISA_PLUGIN_REFACTORING_SUMMARY.md" />
     <None Include="docs\KERNEL_BOOTSTRAP.md" />
@@ -348,6 +349,8 @@
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
     <None Include="examples\configs\standard-vm.json" />
+    <None Include="fix_all_decoders.ps1" />
+    <None Include="fix_decoders.py" />
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
