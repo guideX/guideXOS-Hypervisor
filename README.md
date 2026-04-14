@@ -18,80 +18,80 @@ This project provides a full-featured virtual machine environment for IA-64 bina
 
 ```
 guideXOS.Hypervisor/
-??? include/                     # Public headers
-?   ??? cpu.h, cpu_state.h      # CPU emulation core
-?   ??? decoder.h                # IA-64 bundle decoder
-?   ??? memory.h, mmu.h         # Memory system with MMU
-?   ??? VirtualMachine.h        # VM implementation
-?   ??? VMManager.h             # VM lifecycle management
-?   ??? VMConfiguration.h       # VM configuration system
-?   ??? ISAPluginRegistry.h     # ISA plugin architecture
-?   ??? Profiler.h              # Performance profiling
-?   ??? Fuzzer.h                # Fuzzing framework
-?   ??? Console.h, Timer.h      # Virtual devices
-?   ??? loader.h, bootstrap.h   # ELF loading & bootstrap
-??? src/
-?   ??? core/                   # CPU implementation
-?   ??? decoder/                # Instruction decoding
-?   ??? memory/                 # Memory & MMU
-?   ??? vm/                     # Virtual machine
-?   ??? isa/                    # ISA plugins
-?   ??? io/                     # Virtual devices
-?   ??? loader/                 # ELF loader & bootstrap
-?   ??? profiler/               # Profiling system
-?   ??? fuzzer/                 # Fuzzing framework
-?   ??? syscall/                # System call layer
-??? tests/                      # Comprehensive test suite
-??? docs/                       # Detailed documentation
-??? examples/                   # Example programs
-??? CMakeLists.txt             # CMake build system
+  include/                     # Public headers
+    cpu.h, cpu_state.h         # CPU emulation core
+    decoder.h                  # IA-64 bundle decoder
+    memory.h, mmu.h            # Memory system with MMU
+    VirtualMachine.h           # VM implementation
+    VMManager.h                # VM lifecycle management
+    VMConfiguration.h          # VM configuration system
+    ISAPluginRegistry.h        # ISA plugin architecture
+    Profiler.h                 # Performance profiling
+    Fuzzer.h                   # Fuzzing framework
+    Console.h, Timer.h         # Virtual devices
+    loader.h, bootstrap.h      # ELF loading & bootstrap
+  src/
+    core/                      # CPU implementation
+    decoder/                   # Instruction decoding
+    memory/                    # Memory & MMU
+    vm/                        # Virtual machine
+    isa/                       # ISA plugins
+    io/                        # Virtual devices
+    loader/                    # ELF loader & bootstrap
+    profiler/                  # Profiling system
+    fuzzer/                    # Fuzzing framework
+    syscall/                   # System call layer
+  tests/                       # Comprehensive test suite
+  docs/                        # Detailed documentation
+  examples/                    # Example programs
+  CMakeLists.txt               # CMake build system
 ```
 
 ## Features
 
 ### Core Emulation
-- ? **CPU State**: Full IA-64 register file (128 GRs, 128 FRs, 64 PRs, 8 BRs)
-- ? **Instruction Decoder**: 128-bit bundle decoding with template parsing
-- ? **Execution Engine**: Instruction execution framework
-- ? **Multi-CPU Support**: SMP emulation with CPU scheduling
-- ? **Register Rotation**: Logical-to-physical register mapping
+- **CPU State**: Full IA-64 register file (128 GRs, 128 FRs, 64 PRs, 8 BRs)
+- **Instruction Decoder**: 128-bit bundle decoding with template parsing
+- **Execution Engine**: Instruction execution framework
+- **Multi-CPU Support**: SMP emulation with CPU scheduling
+- **Register Rotation**: Logical-to-physical register mapping
 
 ### Memory Management
-- ? **Virtual Memory**: 64-bit address space with on-demand paging
-- ? **MMU**: Full memory management unit with page tables
-- ? **Page Faults**: Comprehensive fault handling and diagnostics
-- ? **Watchpoints**: Memory access breakpoints (read/write/execute)
-- ? **Memory Protection**: Read/Write/Execute permission enforcement
-- ? **Memory-Mapped I/O**: Device registration system
+- **Virtual Memory**: 64-bit address space with on-demand paging
+- **MMU**: Full memory management unit with page tables
+- **Page Faults**: Comprehensive fault handling and diagnostics
+- **Watchpoints**: Memory access breakpoints (read/write/execute)
+- **Memory Protection**: Read/Write/Execute permission enforcement
+- **Memory-Mapped I/O**: Device registration system
 
 ### Virtual Machine
-- ? **VirtualMachine**: Complete VM with isolated CPU, memory, and devices
-- ? **VMManager**: Multi-VM lifecycle management
-- ? **VM Isolation**: Guaranteed no shared mutable state between VMs
-- ? **VM Configuration**: JSON-based configuration system
-- ? **Snapshots**: Save/restore VM state
-- ? **Debugging**: Breakpoints, stepping, register inspection
+- **VirtualMachine**: Complete VM with isolated CPU, memory, and devices
+- **VMManager**: Multi-VM lifecycle management
+- **VM Isolation**: Guaranteed no shared mutable state between VMs
+- **VM Configuration**: JSON-based configuration system
+- **Snapshots**: Save/restore VM state
+- **Debugging**: Breakpoints, stepping, register inspection
 
 ### I/O Devices
-- ? **Virtual Console**: Memory-mapped character I/O
-- ? **Virtual Timer**: Programmable interval timer with interrupts
-- ? **Interrupt Controller**: Interrupt queuing and delivery
-- ? **Storage Devices**: Raw disk device support
+- **Virtual Console**: Memory-mapped character I/O
+- **Virtual Timer**: Programmable interval timer with interrupts
+- **Interrupt Controller**: Interrupt queuing and delivery
+- **Storage Devices**: Raw disk device support
 
 ### Development Tools
-- ? **Profiler**: 
+- **Profiler**:
   - Instruction frequency tracking
   - Hot path detection
   - Register pressure analysis
   - Memory access classification
   - Control flow graph generation
   - Multiple export formats (JSON, DOT, CSV)
-- ? **Fuzzer**: 
+- **Fuzzer**:
   - Instruction fuzzing
   - Memory fuzzing
   - State fuzzing
   - Crash detection and reporting
-- ? **Debugger**: 
+- **Debugger**:
   - Breakpoints with conditions
   - Memory watchpoints
   - Single-stepping
@@ -99,43 +99,43 @@ guideXOS.Hypervisor/
   - Snapshot/restore
 
 ### Architecture Features
-- ? **ISA Plugin System**: Extensible instruction set architecture
-- ? **Bootstrap Loader**: IA-64 bootstrap initialization
-- ? **ELF Loader**: ELF64 binary loading and validation
-- ? **Syscall Dispatcher**: Linux IA-64 ABI system calls
-- ? **CPU Scheduler**: Round-robin and quantum-based scheduling
+- **ISA Plugin System**: Extensible instruction set architecture
+- **Bootstrap Loader**: IA-64 bootstrap initialization
+- **ELF Loader**: ELF64 binary loading and validation
+- **Syscall Dispatcher**: Linux IA-64 ABI system calls
+- **CPU Scheduler**: Round-robin and quantum-based scheduling
 
 ### Testing & Documentation
-- ? **Comprehensive Test Suite**: 25+ test executables
-- ? **Complete Documentation**: Architecture guides and API references
-- ? **Example Programs**: Configuration, profiling, and usage examples
+- **Comprehensive Test Suite**: 25+ test executables
+- **Complete Documentation**: Architecture guides and API references
+- **Example Programs**: Configuration, profiling, and usage examples
 
 ### In Development / Planned
-- ? Full IA-64 instruction set implementation
-- ? Register Stack Engine (RSE)
-- ? Predication execution
-- ? VLIW bundle scheduling
-- ? Dynamic linking support
-- ? JIT compilation
+- Full IA-64 instruction set implementation
+- Register Stack Engine (RSE)
+- Predication execution
+- VLIW bundle scheduling
+- Dynamic linking support
+- JIT compilation
 
 ## Project Structure
 
 ```
-??? include/              # Public headers
-?   ??? cpu_state.h      # CPU register state
-?   ??? decoder.h        # Instruction decoder
-?   ??? memory.h         # Memory management
-?   ??? loader.h         # ELF loader (stubbed)
-?   ??? abi.h            # Linux IA-64 ABI (stubbed)
-??? src/
-?   ??? core/            # CPU emulation core
-?   ??? decoder/         # Instruction decoding (IA-64 bundles)
-?   ??? memory/          # Virtual memory system
-?   ??? loader/          # ELF loader stubs
-?   ??? abi/             # Syscall layer stubs
-??? tests/               # Unit tests
-??? main.cpp             # Entry point with demo
-??? CMakeLists.txt       # CMake build configuration
+include/              # Public headers
+  cpu_state.h         # CPU register state
+  decoder.h           # Instruction decoder
+  memory.h            # Memory management
+  loader.h            # ELF loader (stubbed)
+  abi.h               # Linux IA-64 ABI (stubbed)
+src/
+  core/               # CPU emulation core
+  decoder/            # Instruction decoding (IA-64 bundles)
+  memory/             # Virtual memory system
+  loader/             # ELF loader stubs
+  abi/                # Syscall layer stubs
+tests/               # Unit tests
+main.cpp             # Entry point with demo
+CMakeLists.txt       # CMake build configuration
 
 ```
 
