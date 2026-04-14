@@ -797,9 +797,9 @@ This project implements the IA-64 (Intel Itanium) architecture as specified in I
 
 ---
 
-**Project Status**: ? Active Development  
-**Version**: 1.0 (Development)  
-**Last Updated**: 2024
+**Project Status**: Active Development  
+**Version**: 1.0
+**Last Updated**: 2026
 
 ## References
 
