@@ -257,11 +257,11 @@
                                                Style="{StaticResource SecondaryTextStyle}"
                                                FontSize="10"
                                                Margin="0,4,0,0">
-                                        <Run Text="{Binding Architecture}"/>
+                                        <Run Text="{Binding Architecture, Mode=OneWay}"/>
                                         <Run Text=" • "/>
-                                        <Run Text="{Binding CpuCount, StringFormat='{}{0} CPU'}"/>
+                                        <Run Text="{Binding CpuCount, StringFormat='{}{0} CPU', Mode=OneWay}"/>
                                         <Run Text=" • "/>
-                                        <Run Text="{Binding MemoryDisplay}"/>
+                                        <Run Text="{Binding MemoryDisplay, Mode=OneWay}"/>
                                     </TextBlock>
                                 </Grid>
                             </DataTemplate>
@@ -820,3 +820,4 @@
         </Border>
     </Grid>
 </Window>
+

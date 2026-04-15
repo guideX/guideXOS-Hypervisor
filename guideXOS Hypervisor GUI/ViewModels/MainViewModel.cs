@@ -354,9 +354,37 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
 
             StatusMessage = $"Opening settings for {SelectedVM.Name}...";
             
-            // TODO: Show settings dialog
-            MessageBox.Show("Settings dialog not yet implemented", "Settings", 
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            try
+            {
+                // Get the VM state model
+                var vmState = SelectedVM.GetModel();
+                
+                // Open the settings dialog
+                var settingsWindow = new Views.VMSettingsView(vmState);
+                var result = settingsWindow.ShowDialog();
+                
+                if (result == true)
+                {
+                    // Settings were saved, update the VM
+                    SelectedVM.UpdateFromModel(vmState);
+                    
+                    // TODO: Persist changes to VMManager
+                    // VMManagerWrapper.Instance.UpdateVMConfiguration(vmState.Id, settingsWindow.ViewModel.GetSettings());
+                    
+                    StatusMessage = $"Settings saved for {SelectedVM.Name}";
+                    UpdateStatistics();
+                }
+                else
+                {
+                    StatusMessage = $"Settings cancelled for {SelectedVM.Name}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error opening settings: {ex.Message}";
+                MessageBox.Show($"Failed to open settings:\n{ex.Message}", 
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void OnDebugVM()
