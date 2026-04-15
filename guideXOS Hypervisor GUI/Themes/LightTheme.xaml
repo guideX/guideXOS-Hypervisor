@@ -1,0 +1,152 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Light Theme Color Palette -->
+    <!-- Background Colors -->
+    <Color x:Key="BackgroundDark">#FFFFFFFF</Color>
+    <Color x:Key="BackgroundMedium">#FFF5F5F5</Color>
+    <Color x:Key="BackgroundLight">#FFE8E8E8</Color>
+    <Color x:Key="BackgroundHover">#FFD0D0D0</Color>
+    
+    <!-- Border Colors -->
+    <Color x:Key="BorderColor">#FFCCCCCC</Color>
+    <Color x:Key="BorderColorLight">#FFAAAAAA</Color>
+    
+    <!-- Accent Colors -->
+    <Color x:Key="AccentBlue">#FF0078D7</Color>
+    <Color x:Key="AccentBlueHover">#FF1C97EA</Color>
+    <Color x:Key="AccentBluePressed">#FF005A9E</Color>
+    <Color x:Key="AccentBlueDark">#FF004880</Color>
+    
+    <!-- Text Colors -->
+    <Color x:Key="TextPrimary">#FF1E1E1E</Color>
+    <Color x:Key="TextSecondary">#FF6D6D6D</Color>
+    <Color x:Key="TextDisabled">#FFAAAAAA</Color>
+    
+    <!-- Status Colors -->
+    <Color x:Key="SuccessGreen">#FF4CAF50</Color>
+    <Color x:Key="WarningOrange">#FFFF9800</Color>
+    <Color x:Key="ErrorRed">#FFF44336</Color>
+    <Color x:Key="InfoBlue">#FF2196F3</Color>
+    <Color x:Key="PausedYellow">#FFFFC107</Color>
+
+    <!-- Brushes -->
+    <SolidColorBrush x:Key="BackgroundDarkBrush" Color="{StaticResource BackgroundDark}"/>
+    <SolidColorBrush x:Key="BackgroundMediumBrush" Color="{StaticResource BackgroundMedium}"/>
+    <SolidColorBrush x:Key="BackgroundLightBrush" Color="{StaticResource BackgroundLight}"/>
+    <SolidColorBrush x:Key="BackgroundHoverBrush" Color="{StaticResource BackgroundHover}"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}"/>
+    <SolidColorBrush x:Key="BorderBrushLight" Color="{StaticResource BorderColorLight}"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentBlue}"/>
+    <SolidColorBrush x:Key="AccentBlueBrush" Color="{StaticResource AccentBlue}"/>
+    <SolidColorBrush x:Key="AccentBlueHoverBrush" Color="{StaticResource AccentBlueHover}"/>
+    <SolidColorBrush x:Key="AccentBluePressedBrush" Color="{StaticResource AccentBluePressed}"/>
+    <SolidColorBrush x:Key="AccentBlueDarkBrush" Color="{StaticResource AccentBlueDark}"/>
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimary}"/>
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondary}"/>
+    <SolidColorBrush x:Key="TextDisabledBrush" Color="{StaticResource TextDisabled}"/>
+    <SolidColorBrush x:Key="SuccessGreenBrush" Color="{StaticResource SuccessGreen}"/>
+    <SolidColorBrush x:Key="WarningOrangeBrush" Color="{StaticResource WarningOrange}"/>
+    <SolidColorBrush x:Key="ErrorRedBrush" Color="{StaticResource ErrorRed}"/>
+    <SolidColorBrush x:Key="InfoBlueBrush" Color="{StaticResource InfoBlue}"/>
+    <SolidColorBrush x:Key="PausedYellowBrush" Color="{StaticResource PausedYellow}"/>
+
+    <!-- Font Families -->
+    <FontFamily x:Key="MonospaceFontFamily">Consolas, Courier New, monospace</FontFamily>
+    <FontFamily x:Key="DefaultFontFamily">Segoe UI, Arial, sans-serif</FontFamily>
+
+    <!-- All other styles inherit from DarkTheme with color overrides -->
+    <!-- Button Style -->
+    <Style x:Key="ToolbarButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="10,5"/>
+        <Setter Property="Margin" Value="2,0"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="2">
+                        <ContentPresenter HorizontalAlignment="Center" 
+                                        VerticalAlignment="Center"
+                                        Margin="{TemplateBinding Padding}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{StaticResource BackgroundHoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{StaticResource AccentBlueBrush}"/>
+                            <Setter Property="Foreground" Value="#FFFFFFFF"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- TextBlock Styles -->
+    <Style x:Key="HeaderTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontSize" Value="16"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <Style x:Key="SubHeaderTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="FontWeight" Value="Medium"/>
+    </Style>
+
+    <Style x:Key="NormalTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style x:Key="SecondaryTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+        <Setter Property="FontSize" Value="11"/>
+    </Style>
+
+    <!-- Monospace TextBlock Style -->
+    <Style x:Key="MonospaceTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource MonospaceFontFamily}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+    </Style>
+
+    <!-- Code Display Style -->
+    <Style x:Key="CodeDisplayStyle" TargetType="TextBlock" BasedOn="{StaticResource MonospaceTextStyle}">
+        <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+        <Setter Property="Padding" Value="4"/>
+    </Style>
+
+    <!-- TextBox Styles -->
+    <Style x:Key="TextBoxStyle" TargetType="TextBox">
+        <Setter Property="Background" Value="{StaticResource BackgroundDarkBrush}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="SelectionBrush" Value="{StaticResource AccentBlueBrush}"/>
+    </Style>
+
+    <Style x:Key="SearchTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}"/>
+    <Style x:Key="MonospaceTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}">
+        <Setter Property="FontFamily" Value="{StaticResource MonospaceFontFamily}"/>
+        <Setter Property="FontSize" Value="11"/>
+    </Style>
+
+    <!-- Converter Reference -->
+    <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+
+</ResourceDictionary>

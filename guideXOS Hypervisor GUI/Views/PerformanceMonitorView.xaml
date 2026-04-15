@@ -1,0 +1,640 @@
+<UserControl x:Class="guideXOS_Hypervisor_GUI.Views.PerformanceMonitorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:guideXOS_Hypervisor_GUI.Views"
+             xmlns:vm="clr-namespace:guideXOS_Hypervisor_GUI.ViewModels"
+             xmlns:converters="clr-namespace:guideXOS_Hypervisor_GUI.Converters"
+             mc:Ignorable="d" 
+             d:DesignHeight="600" d:DesignWidth="900"
+             Background="{StaticResource BackgroundDarkBrush}">
+    
+    <UserControl.Resources>
+        <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+        <converters:PercentageToWidthConverter x:Key="PercentageToWidthConverter"/>
+    </UserControl.Resources>
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header with Export Buttons -->
+        <Grid Grid.Row="0" Margin="0,0,0,15">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <StackPanel Grid.Column="0" Orientation="Vertical">
+                <TextBlock Text="Performance Monitor" 
+                           Style="{StaticResource HeaderTextStyle}"
+                           Margin="0,0,0,5"/>
+                <TextBlock Text="{Binding StatusMessage}" 
+                           Style="{StaticResource SecondaryTextStyle}"
+                           FontSize="11"/>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                <Button Content="Export JSON" 
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Command="{Binding ExportJsonCommand}"
+                        ToolTip="Export profiler data as JSON report"
+                        Margin="5,0"/>
+                <Button Content="Export DOT" 
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Command="{Binding ExportDotCommand}"
+                        ToolTip="Export control flow graph as Graphviz DOT file"
+                        Margin="5,0"/>
+                <Button Content="Export CSV" 
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        Command="{Binding ExportCsvCommand}"
+                        ToolTip="Export statistics as CSV file"
+                        Margin="5,0"/>
+            </StackPanel>
+        </Grid>
+        
+        <!-- Summary Stats -->
+        <Border Grid.Row="1" 
+                Background="{StaticResource BackgroundMediumBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="15"
+                Margin="0,0,0,15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Total Instructions" 
+                               Style="{StaticResource SecondaryTextStyle}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding TotalInstructions}" 
+                               Style="{StaticResource NormalTextStyle}"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               Margin="0,5,0,0"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="Average IPC" 
+                               Style="{StaticResource SecondaryTextStyle}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding AverageIPC}" 
+                               Style="{StaticResource NormalTextStyle}"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               Margin="0,5,0,0"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Execution Time" 
+                               Style="{StaticResource SecondaryTextStyle}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding ExecutionTime}" 
+                               Style="{StaticResource NormalTextStyle}"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               FontFamily="Consolas"
+                               Margin="0,5,0,0"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="3">
+                    <TextBlock Text="Last Update" 
+                               Style="{StaticResource SecondaryTextStyle}"
+                               FontSize="11"/>
+                    <TextBlock Text="{Binding LastUpdateTime}" 
+                               Style="{StaticResource NormalTextStyle}"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               FontFamily="Consolas"
+                               Margin="0,5,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- Main Content - ScrollViewer with Sections -->
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                
+                <!-- INSTRUCTION FREQUENCY Section -->
+                <GroupBox Header="INSTRUCTION FREQUENCY (Top 10)" Style="{StaticResource ModernGroupBox}" Margin="0,0,0,15">
+                    <ListView ItemsSource="{Binding TopInstructions}"
+                              Background="Transparent"
+                              BorderThickness="0"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Padding" Value="0,4"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="100"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="100"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <!-- Address -->
+                                    <TextBlock Grid.Row="0" Grid.Column="0"
+                                               Text="{Binding Address, StringFormat='0x{0:X16}'}"
+                                               Style="{StaticResource NormalTextStyle}"
+                                               FontFamily="Consolas"
+                                               FontSize="11"/>
+                                    
+                                    <!-- Instruction -->
+                                    <TextBlock Grid.Row="0" Grid.Column="1"
+                                               Text="{Binding Disassembly}"
+                                               Style="{StaticResource NormalTextStyle}"
+                                               FontFamily="Consolas"
+                                               FontSize="11"
+                                               Margin="10,0"/>
+                                    
+                                    <!-- Count -->
+                                    <TextBlock Grid.Row="0" Grid.Column="2"
+                                               Text="{Binding ExecutionCount, StringFormat='{}{0:N0}'}"
+                                               Style="{StaticResource NormalTextStyle}"
+                                               FontFamily="Consolas"
+                                               FontSize="11"
+                                               HorizontalAlignment="Right"/>
+                                    
+                                    <!-- Progress Bar -->
+                                    <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                                            Height="4"
+                                            Background="{StaticResource BackgroundLightBrush}"
+                                            CornerRadius="2"
+                                            Margin="0,4,0,0">
+                                        <Border Background="{StaticResource AccentBlueBrush}"
+                                                HorizontalAlignment="Left"
+                                                CornerRadius="2"
+                                                Width="{Binding Percentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=800}"/>
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </GroupBox>
+                
+                <!-- HOT EXECUTION PATHS Section -->
+                <GroupBox Header="HOT EXECUTION PATHS (Top 10)" Style="{StaticResource ModernGroupBox}" Margin="0,0,0,15">
+                    <ListView ItemsSource="{Binding HotPaths}"
+                              Background="Transparent"
+                              BorderThickness="0"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Padding" Value="0,4"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    
+                                    <!-- Path Description -->
+                                    <TextBlock Grid.Row="0"
+                                               Text="{Binding PathDescription}"
+                                               Style="{StaticResource NormalTextStyle}"
+                                               FontWeight="Medium"
+                                               TextWrapping="Wrap"/>
+                                    
+                                    <!-- Stats -->
+                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,4">
+                                        <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11">
+                                            <Run Text="Executed:"/>
+                                            <Run Text="{Binding ExecutionCount, StringFormat='{}{0:N0}'}" FontWeight="Bold"/>
+                                            <Run Text="times"/>
+                                        </TextBlock>
+                                        <TextBlock Text="&#x2022;" Style="{StaticResource SecondaryTextStyle}" Margin="10,0" FontSize="11"/>
+                                        <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11">
+                                            <Run Text="Instructions:"/>
+                                            <Run Text="{Binding TotalInstructions}" FontWeight="Bold"/>
+                                        </TextBlock>
+                                        <TextBlock Text="&#x2022;" Style="{StaticResource SecondaryTextStyle}" Margin="10,0" FontSize="11"/>
+                                        <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11">
+                                            <Run Text="{Binding Percentage, StringFormat='{}{0:F1}%'}" FontWeight="Bold"/>
+                                            <Run Text="of total"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    
+                                    <!-- Progress Bar -->
+                                    <Border Grid.Row="2"
+                                            Height="4"
+                                            Background="{StaticResource BackgroundLightBrush}"
+                                            CornerRadius="2">
+                                        <Border Background="{StaticResource SuccessGreenBrush}"
+                                                HorizontalAlignment="Left"
+                                                CornerRadius="2"
+                                                Width="{Binding Percentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=800}"/>
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </GroupBox>
+                
+                <!-- REGISTER PRESSURE Section -->
+                <GroupBox Header="REGISTER PRESSURE" Style="{StaticResource ModernGroupBox}" Margin="0,0,0,15">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        
+                        <!-- General Registers -->
+                        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                            <TextBlock Text="General Registers (Top 10)" 
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"
+                                       Margin="0,0,0,5"/>
+                            <ItemsControl ItemsSource="{Binding GeneralRegisterPressure}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="60"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/>
+                                            </Grid.ColumnDefinitions>
+                                            
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding RegisterName}"
+                                                       Style="{StaticResource NormalTextStyle}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="11"/>
+                                            
+                                            <Border Grid.Column="1"
+                                                    Height="16"
+                                                    Background="{StaticResource BackgroundLightBrush}"
+                                                    CornerRadius="2"
+                                                    Margin="10,0">
+                                                <Border Background="{StaticResource AccentBlueBrush}"
+                                                        HorizontalAlignment="Left"
+                                                        CornerRadius="2"
+                                                        Width="{Binding Percentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                                            </Border>
+                                            
+                                            <TextBlock Grid.Column="2"
+                                                       Style="{StaticResource SecondaryTextStyle}"
+                                                       FontSize="11"
+                                                       HorizontalAlignment="Right">
+                                                <Run Text="R:"/>
+                                                <Run Text="{Binding ReadCount, StringFormat='{}{0:N0}'}"/>
+                                                <Run Text=" W:"/>
+                                                <Run Text="{Binding WriteCount, StringFormat='{}{0:N0}'}"/>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        
+                        <!-- Float Registers -->
+                        <StackPanel Grid.Row="1" Margin="0,0,0,10">
+                            <TextBlock Text="Float Registers (Top 10)" 
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"
+                                       Margin="0,0,0,5"/>
+                            <ItemsControl ItemsSource="{Binding FloatRegisterPressure}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="60"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/>
+                                            </Grid.ColumnDefinitions>
+                                            
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding RegisterName}"
+                                                       Style="{StaticResource NormalTextStyle}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="11"/>
+                                            
+                                            <Border Grid.Column="1"
+                                                    Height="16"
+                                                    Background="{StaticResource BackgroundLightBrush}"
+                                                    CornerRadius="2"
+                                                    Margin="10,0">
+                                                <Border Background="{StaticResource WarningOrangeBrush}"
+                                                        HorizontalAlignment="Left"
+                                                        CornerRadius="2"
+                                                        Width="{Binding Percentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                                            </Border>
+                                            
+                                            <TextBlock Grid.Column="2"
+                                                       Style="{StaticResource SecondaryTextStyle}"
+                                                       FontSize="11"
+                                                       HorizontalAlignment="Right">
+                                                <Run Text="R:"/>
+                                                <Run Text="{Binding ReadCount, StringFormat='{}{0:N0}'}"/>
+                                                <Run Text=" W:"/>
+                                                <Run Text="{Binding WriteCount, StringFormat='{}{0:N0}'}"/>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        
+                        <!-- Predicate Registers -->
+                        <StackPanel Grid.Row="2" Margin="0,0,0,10">
+                            <TextBlock Text="Predicate Registers (Top 10)" 
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"
+                                       Margin="0,0,0,5"/>
+                            <ItemsControl ItemsSource="{Binding PredicateRegisterPressure}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="60"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/>
+                                            </Grid.ColumnDefinitions>
+                                            
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding RegisterName}"
+                                                       Style="{StaticResource NormalTextStyle}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="11"/>
+                                            
+                                            <Border Grid.Column="1"
+                                                    Height="16"
+                                                    Background="{StaticResource BackgroundLightBrush}"
+                                                    CornerRadius="2"
+                                                    Margin="10,0">
+                                                <Border Background="{StaticResource SuccessGreenBrush}"
+                                                        HorizontalAlignment="Left"
+                                                        CornerRadius="2"
+                                                        Width="{Binding Percentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                                            </Border>
+                                            
+                                            <TextBlock Grid.Column="2"
+                                                       Style="{StaticResource SecondaryTextStyle}"
+                                                       FontSize="11"
+                                                       HorizontalAlignment="Right">
+                                                <Run Text="R:"/>
+                                                <Run Text="{Binding ReadCount, StringFormat='{}{0:N0}'}"/>
+                                                <Run Text=" W:"/>
+                                                <Run Text="{Binding WriteCount, StringFormat='{}{0:N0}'}"/>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        
+                        <!-- Branch Registers -->
+                        <StackPanel Grid.Row="3">
+                            <TextBlock Text="Branch Registers" 
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"
+                                       Margin="0,0,0,5"/>
+                            <ItemsControl ItemsSource="{Binding BranchRegisterPressure}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="60"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/>
+                                            </Grid.ColumnDefinitions>
+                                            
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding RegisterName}"
+                                                       Style="{StaticResource NormalTextStyle}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="11"/>
+                                            
+                                            <Border Grid.Column="1"
+                                                    Height="16"
+                                                    Background="{StaticResource BackgroundLightBrush}"
+                                                    CornerRadius="2"
+                                                    Margin="10,0">
+                                                <Border Background="{StaticResource ErrorRedBrush}"
+                                                        HorizontalAlignment="Left"
+                                                        CornerRadius="2"
+                                                        Width="{Binding Percentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                                            </Border>
+                                            
+                                            <TextBlock Grid.Column="2"
+                                                       Style="{StaticResource SecondaryTextStyle}"
+                                                       FontSize="11"
+                                                       HorizontalAlignment="Right">
+                                                <Run Text="R:"/>
+                                                <Run Text="{Binding ReadCount, StringFormat='{}{0:N0}'}"/>
+                                                <Run Text=" W:"/>
+                                                <Run Text="{Binding WriteCount, StringFormat='{}{0:N0}'}"/>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Grid>
+                </GroupBox>
+                
+                <!-- MEMORY ACCESS BREAKDOWN Section -->
+                <GroupBox Header="MEMORY ACCESS BREAKDOWN" Style="{StaticResource ModernGroupBox}">
+                    <StackPanel>
+                        <!-- Stack -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="Stack"
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"/>
+                            
+                            <Border Grid.Row="1" Grid.Column="1"
+                                    Height="24"
+                                    Background="{StaticResource BackgroundLightBrush}"
+                                    CornerRadius="2"
+                                    Margin="10,4,10,0">
+                                <Border Background="{StaticResource AccentBlueBrush}"
+                                        HorizontalAlignment="Left"
+                                        CornerRadius="2"
+                                        Width="{Binding MemoryBreakdown.Stack.BytesPercentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                            </Border>
+                            
+                            <TextBlock Grid.Row="1" Grid.Column="2"
+                                       Style="{StaticResource SecondaryTextStyle}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center">
+                                <Run Text="R:"/>
+                                <Run Text="{Binding MemoryBreakdown.Stack.ReadCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" W:"/>
+                                <Run Text="{Binding MemoryBreakdown.Stack.WriteCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" ("/>
+                                <Run Text="{Binding MemoryBreakdown.Stack.BytesPercentage, StringFormat='{}{0:F1}%'}"/>
+                                <Run Text=")"/>
+                            </TextBlock>
+                        </Grid>
+                        
+                        <!-- Heap -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="Heap"
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"/>
+                            
+                            <Border Grid.Row="1" Grid.Column="1"
+                                    Height="24"
+                                    Background="{StaticResource BackgroundLightBrush}"
+                                    CornerRadius="2"
+                                    Margin="10,4,10,0">
+                                <Border Background="{StaticResource SuccessGreenBrush}"
+                                        HorizontalAlignment="Left"
+                                        CornerRadius="2"
+                                        Width="{Binding MemoryBreakdown.Heap.BytesPercentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                            </Border>
+                            
+                            <TextBlock Grid.Row="1" Grid.Column="2"
+                                       Style="{StaticResource SecondaryTextStyle}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center">
+                                <Run Text="R:"/>
+                                <Run Text="{Binding MemoryBreakdown.Heap.ReadCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" W:"/>
+                                <Run Text="{Binding MemoryBreakdown.Heap.WriteCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" ("/>
+                                <Run Text="{Binding MemoryBreakdown.Heap.BytesPercentage, StringFormat='{}{0:F1}%'}"/>
+                                <Run Text=")"/>
+                            </TextBlock>
+                        </Grid>
+                        
+                        <!-- Code -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="Code"
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"/>
+                            
+                            <Border Grid.Row="1" Grid.Column="1"
+                                    Height="24"
+                                    Background="{StaticResource BackgroundLightBrush}"
+                                    CornerRadius="2"
+                                    Margin="10,4,10,0">
+                                <Border Background="{StaticResource WarningOrangeBrush}"
+                                        HorizontalAlignment="Left"
+                                        CornerRadius="2"
+                                        Width="{Binding MemoryBreakdown.Code.BytesPercentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                            </Border>
+                            
+                            <TextBlock Grid.Row="1" Grid.Column="2"
+                                       Style="{StaticResource SecondaryTextStyle}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center">
+                                <Run Text="R:"/>
+                                <Run Text="{Binding MemoryBreakdown.Code.ReadCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" W:"/>
+                                <Run Text="{Binding MemoryBreakdown.Code.WriteCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" ("/>
+                                <Run Text="{Binding MemoryBreakdown.Code.BytesPercentage, StringFormat='{}{0:F1}%'}"/>
+                                <Run Text=")"/>
+                            </TextBlock>
+                        </Grid>
+                        
+                        <!-- Data -->
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="80"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                       Text="Data"
+                                       Style="{StaticResource NormalTextStyle}"
+                                       FontWeight="Medium"/>
+                            
+                            <Border Grid.Row="1" Grid.Column="1"
+                                    Height="24"
+                                    Background="{StaticResource BackgroundLightBrush}"
+                                    CornerRadius="2"
+                                    Margin="10,4,10,0">
+                                <Border Background="{StaticResource ErrorRedBrush}"
+                                        HorizontalAlignment="Left"
+                                        CornerRadius="2"
+                                        Width="{Binding MemoryBreakdown.Data.BytesPercentage, Converter={StaticResource PercentageToWidthConverter}, ConverterParameter=600}"/>
+                            </Border>
+                            
+                            <TextBlock Grid.Row="1" Grid.Column="2"
+                                       Style="{StaticResource SecondaryTextStyle}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center">
+                                <Run Text="R:"/>
+                                <Run Text="{Binding MemoryBreakdown.Data.ReadCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" W:"/>
+                                <Run Text="{Binding MemoryBreakdown.Data.WriteCount, StringFormat='{}{0:N0}'}"/>
+                                <Run Text=" ("/>
+                                <Run Text="{Binding MemoryBreakdown.Data.BytesPercentage, StringFormat='{}{0:F1}%'}"/>
+                                <Run Text=")"/>
+                            </TextBlock>
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+                
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

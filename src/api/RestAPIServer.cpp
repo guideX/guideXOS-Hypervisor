@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <chrono>
 
+#ifdef DELETE
+#undef DELETE
+#endif
+
 namespace ia64 {
 namespace api {
 
@@ -334,7 +338,226 @@ HTTPResponse RestAPIServer::handleGetConsoleOutput(const std::string& vmId, cons
     return createJSONResponse(200, jsonResponse);
 }
 
-// Continued in next part...
+HTTPResponse RestAPIServer::handlePUT(const HTTPRequest& request) {
+    return createErrorResponse(501, "Not Implemented");
+}
+
+HTTPResponse RestAPIServer::handleCreateVM(const HTTPRequest& request) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::CREATE;
+    apiRequest.body = request.body;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 201 : 400;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleDeleteVM(const std::string& vmId) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::DELETE;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 404;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleStartVM(const std::string& vmId) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::START;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 400;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleStopVM(const std::string& vmId) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::STOP;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 400;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handlePauseVM(const std::string& vmId) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::PAUSE;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 400;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleResumeVM(const std::string& vmId) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::RESUME;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 400;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleListVMs() {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::LIST;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 500;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleGetVMInfo(const std::string& vmId) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::GET_INFO;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 404;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleGetVMLogs(const std::string& vmId, const std::map<std::string, std::string>& params) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::GET_LOGS;
+    apiRequest.parameters["vmId"] = vmId;
+    
+    for (const auto& param : params) {
+        apiRequest.parameters[param.first] = param.second;
+    }
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 200 : 404;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::handleSnapshot(const std::string& vmId, const HTTPRequest& request) {
+    APIRequest apiRequest;
+    apiRequest.requestId = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    apiRequest.operation = VMOperation::SNAPSHOT;
+    apiRequest.parameters["vmId"] = vmId;
+    apiRequest.body = request.body;
+    
+    APIResponse apiResponse = apiHandler_->handleRequest(apiRequest);
+    
+    int statusCode = (apiResponse.status == APIStatus::SUCCESS) ? 201 : 400;
+    std::string jsonResponse = JSONSerializer::serialize(apiResponse);
+    return createJSONResponse(statusCode, jsonResponse);
+}
+
+HTTPResponse RestAPIServer::createJSONResponse(int code, const std::string& body) {
+    HTTPResponse response;
+    response.statusCode = code;
+    
+    switch (code) {
+        case 200: response.statusMessage = "OK"; break;
+        case 201: response.statusMessage = "Created"; break;
+        case 400: response.statusMessage = "Bad Request"; break;
+        case 404: response.statusMessage = "Not Found"; break;
+        case 500: response.statusMessage = "Internal Server Error"; break;
+        case 501: response.statusMessage = "Not Implemented"; break;
+        default: response.statusMessage = "Unknown"; break;
+    }
+    
+    response.body = body;
+    response.headers["Content-Type"] = "application/json";
+    return response;
+}
+
+HTTPResponse RestAPIServer::createErrorResponse(int code, const std::string& message) {
+    std::string jsonBody = "{\"error\":\"" + message + "\",\"code\":" + std::to_string(code) + "}";
+    return createJSONResponse(code, jsonBody);
+}
+
+void RestAPIServer::addCORSHeaders(HTTPResponse& response) {
+    response.headers["Access-Control-Allow-Origin"] = "*";
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+    response.headers["Access-Control-Max-Age"] = "86400";
+}
+
+std::string RestAPIServer::extractPathParameter(const std::string& path, const std::string& pattern) {
+    size_t patternStart = pattern.find("(");
+    size_t patternEnd = pattern.find(")");
+    
+    if (patternStart == std::string::npos || patternEnd == std::string::npos) {
+        return "";
+    }
+    
+    std::string prefix = pattern.substr(0, patternStart);
+    std::string suffix = pattern.substr(patternEnd + 1);
+    
+    if (path.find(prefix) != 0) {
+        return "";
+    }
+    
+    size_t paramStart = prefix.length();
+    size_t paramEnd = path.length();
+    
+    if (!suffix.empty()) {
+        size_t suffixPos = path.find(suffix, paramStart);
+        if (suffixPos != std::string::npos) {
+            paramEnd = suffixPos;
+        }
+    }
+    
+    return path.substr(paramStart, paramEnd - paramStart);
+}
+
+std::map<std::string, std::string> RestAPIServer::parseQueryString(const std::string& query) {
+    std::map<std::string, std::string> params;
+    
+    size_t queryStart = query.find('?');
+    if (queryStart == std::string::npos) {
+        return params;
+    }
+    
+    std::string queryString = query.substr(queryStart + 1);
+    std::istringstream iss(queryString);
+    std::string pair;
+    
+    while (std::getline(iss, pair, '&')) {
+        size_t eqPos = pair.find('=');
+        if (eqPos != std::string::npos) {
+            std::string key = pair.substr(0, eqPos);
+            std::string value = pair.substr(eqPos + 1);
+            params[key] = value;
+        }
+    }
+    
+    return params;
+}
 
 } // namespace api
 } // namespace ia64
