@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <cstddef>
+
 // DLL Export/Import macros
 #ifdef GUIDEXOS_HYPERVISOR_EXPORTS
 #define GUIDEXOS_API __declspec(dllexport)

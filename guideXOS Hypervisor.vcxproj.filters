@@ -571,5 +571,7 @@
     <None Include="guideXOS Hypervisor Core.vcxproj" />
     <None Include="guideXOS Hypervisor DLL.vcxproj" />
     <None Include="MANUAL_PROJECT_SETUP.md" />
+    <None Include="WHY_VM_DOESNT_BOOT.md" />
+    <None Include="HOW_TO_MAKE_VM_BOOT.md" />
   </ItemGroup>
 </Project>

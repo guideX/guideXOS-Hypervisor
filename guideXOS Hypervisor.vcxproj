@@ -109,6 +109,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>D:\devgitlab\guideXOS.Hypervisor\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -124,6 +125,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>D:\devgitlab\guideXOS.Hypervisor\x64\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -366,6 +368,7 @@
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
+    <None Include="HOW_TO_MAKE_VM_BOOT.md" />
     <None Include="kernels\kernel.ld" />
     <None Include="kernels\minimal_kernel.s" />
     <None Include="MANUAL_PROJECT_SETUP.md" />
@@ -375,6 +378,7 @@
     <None Include="web\app.js" />
     <None Include="web\index.html" />
     <None Include="web\style.css" />
+    <None Include="WHY_VM_DOESNT_BOOT.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

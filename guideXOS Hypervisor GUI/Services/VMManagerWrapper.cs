@@ -44,6 +44,8 @@ namespace guideXOS_Hypervisor_GUI.Services
 
         private static VMManagerWrapper? _instance;
         private readonly object _lock = new();
+        private readonly Dictionary<string, CancellationTokenSource> _vmExecutionThreads = new();
+        private readonly Dictionary<string, byte[]> _mockFramebuffers = new();
 
         private VMManagerWrapper()
         {
@@ -93,6 +95,13 @@ namespace guideXOS_Hypervisor_GUI.Services
             lock (_lock)
             {
                 // TODO: Call native VMManager_StartVM
+                
+                // Start mock execution thread for testing
+                var cts = new CancellationTokenSource();
+                _vmExecutionThreads[vmId] = cts;
+                
+                Task.Run(() => VMExecutionLoop(vmId, cts.Token), cts.Token);
+                
                 return true;
             }
         }
@@ -104,6 +113,16 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
+                // Stop execution thread
+                if (_vmExecutionThreads.TryGetValue(vmId, out var cts))
+                {
+                    cts.Cancel();
+                    _vmExecutionThreads.Remove(vmId);
+                }
+                
+                // Clean up mock framebuffer
+                _mockFramebuffers.Remove(vmId);
+                
                 // TODO: Call native VMManager_StopVM
                 return true;
             }
@@ -534,11 +553,86 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
-                // TODO: Call native VMManager_GetFramebuffer
-                // For now, return false to indicate not implemented
                 width = 640;
                 height = 480;
+                
+                // Return mock framebuffer if available
+                if (_mockFramebuffers.TryGetValue(vmId, out byte[]? framebuffer))
+                {
+                    Array.Copy(framebuffer, buffer, Math.Min(buffer.Length, framebuffer.Length));
+                    return true;
+                }
+                
+                // TODO: Call native VMManager_GetFramebuffer when DLL is available
                 return false;
+            }
+        }
+        
+        /// <summary>
+        /// Mock VM execution loop for testing
+        /// This simulates VM execution by updating a framebuffer
+        /// Replace with real P/Invoke call to VMManager_RunVM when DLL is built
+        /// </summary>
+        private void VMExecutionLoop(string vmId, CancellationToken cancellationToken)
+        {
+            // Create mock framebuffer (640x480, BGRA32 = 4 bytes per pixel)
+            byte[] framebuffer = new byte[640 * 480 * 4];
+            
+            lock (_lock)
+            {
+                _mockFramebuffers[vmId] = framebuffer;
+            }
+            
+            int frame = 0;
+            
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // TODO: Replace with real call to VMManager_RunVM(manager, vmId, cyclesPerFrame)
+                    // For now, simulate execution by drawing animated pattern
+                    UpdateMockFramebuffer(framebuffer, frame++);
+                    
+                    // Sleep for ~16ms (60 FPS)
+                    Thread.Sleep(16);
+                }
+                catch (Exception)
+                {
+                    // Stop on error
+                    break;
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Update mock framebuffer with animated pattern
+        /// This proves the framebuffer rendering pipeline works
+        /// </summary>
+        private void UpdateMockFramebuffer(byte[] framebuffer, int frame)
+        {
+            const int width = 640;
+            const int height = 480;
+            
+            // Draw animated pattern (moving vertical bars)
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int offset = (y * width + x) * 4;
+                    
+                    // Create moving wave pattern
+                    int waveX = (x + frame * 2) % 256;
+                    int waveY = y % 256;
+                    
+                    byte r = (byte)((Math.Sin(waveX * 0.05) + 1.0) * 127);
+                    byte g = (byte)((Math.Sin(waveY * 0.05) + 1.0) * 127);
+                    byte b = (byte)((Math.Sin((waveX + waveY) * 0.05) + 1.0) * 127);
+                    
+                    framebuffer[offset + 0] = b;  // Blue
+                    framebuffer[offset + 1] = g;  // Green
+                    framebuffer[offset + 2] = r;  // Red
+                    framebuffer[offset + 3] = 255; // Alpha
+                }
             }
         }
         

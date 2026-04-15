@@ -12,7 +12,11 @@ using namespace ia64;
 
 static char* AllocateString(const std::string& str) {
     char* result = new char[str.length() + 1];
+#ifdef _MSC_VER
+    strcpy_s(result, str.length() + 1, str.c_str());
+#else
     std::strcpy(result, str.c_str());
+#endif
     return result;
 }
 
