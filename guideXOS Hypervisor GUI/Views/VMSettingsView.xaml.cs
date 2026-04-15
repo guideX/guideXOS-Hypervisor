@@ -30,7 +30,10 @@ namespace guideXOS_Hypervisor_GUI.Views
         private void SetupCategoryNavigation()
         {
             // Find all category buttons and wire them up
-            var sidebar = (StackPanel)((Border)((Grid)Content).Children[0]).Child;
+            // Visual tree: Grid (Content) -> Grid (Row 0) -> Border (Column 0) -> StackPanel
+            var mainContentGrid = (Grid)((Grid)Content).Children[0];
+            var sidebarBorder = (Border)mainContentGrid.Children[0];
+            var sidebar = (StackPanel)sidebarBorder.Child;
             
             foreach (var child in sidebar.Children)
             {
@@ -66,7 +69,9 @@ namespace guideXOS_Hypervisor_GUI.Views
         private void ShowCategory(string category)
         {
             // Hide all category panels
-            var scrollViewer = (ScrollViewer)((Grid)Content).Children[0];
+            // Visual tree: Grid (Content) -> Grid (Row 0) -> ScrollViewer (Column 1) -> StackPanel
+            var mainContentGrid = (Grid)((Grid)Content).Children[0];
+            var scrollViewer = (ScrollViewer)mainContentGrid.Children[1];
             var mainStack = (StackPanel)scrollViewer.Content;
 
             GeneralSettings.Visibility = Visibility.Collapsed;
