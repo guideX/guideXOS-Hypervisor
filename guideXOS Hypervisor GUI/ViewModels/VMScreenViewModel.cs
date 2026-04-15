@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using guideXOS_Hypervisor_GUI.Services;
 
 namespace guideXOS_Hypervisor_GUI.ViewModels
 {
@@ -201,9 +202,82 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         {
             if (ScreenBitmap == null) return;
 
-            // TODO: Get framebuffer data from VMManager via P/Invoke
-            // For now, render a test pattern to show it's working
-            RenderTestPattern();
+            // Try to get framebuffer data from VMManager
+            if (!TryUpdateFromFramebuffer())
+            {
+                // Fallback: render a test pattern to show the screen is working
+                RenderTestPattern();
+            }
+        }
+
+        private bool TryUpdateFromFramebuffer()
+        {
+            if (ScreenBitmap == null || string.IsNullOrEmpty(_vmId))
+                return false;
+
+            try
+            {
+                var vmManager = VMManagerWrapper.Instance;
+                
+                // Get framebuffer dimensions first
+                if (!vmManager.GetFramebufferDimensions(_vmId, out int fbWidth, out int fbHeight))
+                {
+                    return false;
+                }
+                
+                // Update resolution if it changed
+                if (fbWidth != _screenWidth || fbHeight != _screenHeight)
+                {
+                    UpdateResolution(fbWidth, fbHeight);
+                    return false; // Skip this frame, bitmap was recreated
+                }
+                
+                // Prepare buffer for framebuffer data (BGRA32 format)
+                int bufferSize = fbWidth * fbHeight * 4; // 4 bytes per pixel (BGRA)
+                byte[] framebufferData = new byte[bufferSize];
+                
+                // Get framebuffer data
+                if (!vmManager.GetFramebuffer(_vmId, framebufferData, out int width, out int height))
+                {
+                    return false;
+                }
+                
+                // Copy framebuffer data to WriteableBitmap
+                ScreenBitmap.Lock();
+                try
+                {
+                    unsafe
+                    {
+                        int* pBackBuffer = (int*)ScreenBitmap.BackBuffer;
+                        int stride = ScreenBitmap.BackBufferStride / 4;
+                        
+                        // Copy BGRA32 data directly
+                        fixed (byte* pSource = framebufferData)
+                        {
+                            int* pSourceInt = (int*)pSource;
+                            for (int y = 0; y < height; y++)
+                            {
+                                for (int x = 0; x < width; x++)
+                                {
+                                    pBackBuffer[y * stride + x] = pSourceInt[y * width + x];
+                                }
+                            }
+                        }
+                    }
+                    
+                    ScreenBitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
+                }
+                finally
+                {
+                    ScreenBitmap.Unlock();
+                }
+                
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private void RenderTestPattern()

@@ -17,6 +17,7 @@
 #include "cpu.h"
 #include "BootTraceSystem.h"
 #include "KernelPanic.h"
+#include "FramebufferDevice.h"
 #include <memory>
 #include <vector>
 #include <set>
@@ -483,6 +484,18 @@ public:
     void setBootTraceVerbosity(int level) { bootTraceSystem_.setVerbosity(level); }
     
     // ========================================================================
+    // Framebuffer Access
+    // ========================================================================
+    
+    /**
+     * Get framebuffer device
+     * 
+     * @return Pointer to framebuffer device (or nullptr if not available)
+     */
+    FramebufferDevice* getFramebufferDevice() { return framebufferDevice_.get(); }
+    const FramebufferDevice* getFramebufferDevice() const { return framebufferDevice_.get(); }
+    
+    // ========================================================================
     // Kernel Panic Detection
     // ========================================================================
     
@@ -608,6 +621,7 @@ private:
     std::unique_ptr<BasicInterruptController> interruptController_;
     std::unique_ptr<VirtualConsole> consoleDevice_;
     std::unique_ptr<VirtualTimer> timerDevice_;
+    std::unique_ptr<FramebufferDevice> framebufferDevice_;
 
     // ========================================================================
     // VM State

@@ -155,6 +155,7 @@
     <ClCompile Include="src\fuzzer\Fuzzer.cpp" />
     <ClCompile Include="src\io\Console.cpp" />
     <ClCompile Include="src\io\ConsoleOutputBuffer.cpp" />
+    <ClCompile Include="src\io\FramebufferDevice.cpp" />
     <ClCompile Include="src\io\InterruptController.cpp" />
     <ClCompile Include="src\io\Timer.cpp" />
     <ClCompile Include="src\isa\ExampleISAPlugin.cpp" />
@@ -229,6 +230,7 @@
     <ClInclude Include="include\dynamic_linker.h" />
     <ClInclude Include="include\ExampleISAPlugin.h" />
     <ClInclude Include="include\FilesystemMount.h" />
+    <ClInclude Include="include\FramebufferDevice.h" />
     <ClInclude Include="include\Fuzzer.h" />
     <ClInclude Include="include\IA64ISAPlugin.h" />
     <ClInclude Include="include\ia64_decoders.h" />

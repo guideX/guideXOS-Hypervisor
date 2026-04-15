@@ -82,37 +82,37 @@
                                Style="{StaticResource SubHeaderTextStyle}"
                                Margin="16,0,16,12"/>
                     
-                    <Button Content="? General"
+                    <Button Content="&#x2699; General"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="General"
                             Style="{StaticResource CategoryButtonStyle}"/>
                     
-                    <Button Content="?? System"
+                    <Button Content="&#x1F4BB; System"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="System"
                             Style="{StaticResource CategoryButtonStyle}"/>
                     
-                    <Button Content="?? Display"
+                    <Button Content="&#x1F5A5; Display"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="Display"
                             Style="{StaticResource CategoryButtonStyle}"/>
                     
-                    <Button Content="?? Storage"
+                    <Button Content="&#x1F4BE; Storage"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="Storage"
                             Style="{StaticResource CategoryButtonStyle}"/>
                     
-                    <Button Content="?? Network"
+                    <Button Content="&#x1F310; Network"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="Network"
                             Style="{StaticResource CategoryButtonStyle}"/>
                     
-                    <Button Content="?? Performance"
+                    <Button Content="&#x1F680; Performance"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="Performance"
                             Style="{StaticResource CategoryButtonStyle}"/>
                     
-                    <Button Content="?? Advanced"
+                    <Button Content="&#x1F527; Advanced"
                             Command="{Binding SelectedCategoryCommand}"
                             CommandParameter="Advanced"
                             Style="{StaticResource CategoryButtonStyle}"/>
@@ -259,7 +259,7 @@
 
                         <GroupBox Header="HARD DISK DRIVES" Style="{StaticResource ModernGroupBox}">
                             <StackPanel>
-                                <Button Content="? Add Hard Disk" 
+                                <Button Content="&#x2795; Add Hard Disk" 
                                         Command="{Binding AddDiskCommand}"
                                         Style="{StaticResource ToolbarButtonStyle}"
                                         HorizontalAlignment="Left"
@@ -347,7 +347,7 @@
                                            TextWrapping="Wrap"
                                            Margin="0,0,0,12"/>
                                 
-                                <Button Content="? Add CD/DVD Drive (ISO)" 
+                                <Button Content="&#x2795; Add CD/DVD Drive (ISO)" 
                                         Command="{Binding AddCDRomCommand}"
                                         Style="{StaticResource ToolbarButtonStyle}"
                                         HorizontalAlignment="Left"
@@ -383,7 +383,7 @@
                                                         <RowDefinition Height="Auto"/>
                                                     </Grid.RowDefinitions>
 
-                                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="?? " Style="{StaticResource NormalTextStyle}" FontSize="20" Margin="0,0,8,0"/>
+                                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="&#x1F4BF; " Style="{StaticResource NormalTextStyle}" FontSize="20" Margin="0,0,8,0"/>
                                                     <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Path}" Style="{StaticResource NormalTextStyle}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
                                                     <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,4">

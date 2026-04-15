@@ -449,6 +449,38 @@ public:
      */
     size_t getConsoleLineCount(const std::string& vmId) const;
     
+    // ========================================================================
+    // Framebuffer Access
+    // ========================================================================
+    
+    /**
+     * Get framebuffer data from a VM
+     * 
+     * @param vmId VM identifier
+     * @param buffer Destination buffer
+     * @param bufferSize Size of destination buffer
+     * @param width Output: framebuffer width
+     * @param height Output: framebuffer height
+     * @return True if successful
+     */
+    bool getFramebuffer(const std::string& vmId, 
+                       uint8_t* buffer, 
+                       size_t bufferSize,
+                       size_t* width,
+                       size_t* height) const;
+    
+    /**
+     * Get framebuffer dimensions
+     * 
+     * @param vmId VM identifier
+     * @param width Output: framebuffer width
+     * @param height Output: framebuffer height
+     * @return True if successful
+     */
+    bool getFramebufferDimensions(const std::string& vmId,
+                                 size_t* width,
+                                 size_t* height) const;
+    
     /**
      * Get total bytes written to console
      * 

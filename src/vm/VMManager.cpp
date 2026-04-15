@@ -887,4 +887,57 @@ bool VMManager::clearConsoleOutput(const std::string& vmId) {
     return true;
 }
 
+// ============================================================================
+// Framebuffer Access
+// ============================================================================
+
+bool VMManager::getFramebuffer(const std::string& vmId, 
+                               uint8_t* buffer, 
+                               size_t bufferSize,
+                               size_t* width,
+                               size_t* height) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return false;
+    }
+    
+    const FramebufferDevice* fb = instance->vm->getFramebufferDevice();
+    if (!fb) {
+        return false;
+    }
+    
+    const size_t fbWidth = fb->GetWidth();
+    const size_t fbHeight = fb->GetHeight();
+    const size_t fbSize = fbWidth * fbHeight * fb->GetBytesPerPixel();
+    
+    if (bufferSize < fbSize) {
+        return false;
+    }
+    
+    if (width) *width = fbWidth;
+    if (height) *height = fbHeight;
+    
+    fb->CopyFramebuffer(buffer, bufferSize);
+    return true;
+}
+
+bool VMManager::getFramebufferDimensions(const std::string& vmId,
+                                        size_t* width,
+                                        size_t* height) const {
+    const auto* instance = getVMInstance(vmId);
+    if (!instance || !instance->vm) {
+        return false;
+    }
+    
+    const FramebufferDevice* fb = instance->vm->getFramebufferDevice();
+    if (!fb) {
+        return false;
+    }
+    
+    if (width) *width = fb->GetWidth();
+    if (height) *height = fb->GetHeight();
+    
+    return true;
+}
+
 } // namespace ia64

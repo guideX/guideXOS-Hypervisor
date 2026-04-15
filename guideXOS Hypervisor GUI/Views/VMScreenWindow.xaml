@@ -14,7 +14,7 @@
     <Window.Resources>
         <Style TargetType="Button" x:Key="ScreenToolbarButton">
             <Setter Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
-            <Setter Property="Foreground" Value="{StaticResource ForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="8,4"/>
@@ -75,15 +75,15 @@
                 
                 <TextBlock Text="{Binding ScreenWidth, StringFormat='Resolution: {0}'}" 
                            VerticalAlignment="Center"
-                           Foreground="{StaticResource ForegroundBrush}"
+                           Foreground="{StaticResource TextPrimaryBrush}"
                            Margin="8,0,0,0"/>
                 <TextBlock Text="x" 
                            VerticalAlignment="Center"
-                           Foreground="{StaticResource ForegroundBrush}"
+                           Foreground="{StaticResource TextPrimaryBrush}"
                            Margin="2,0"/>
                 <TextBlock Text="{Binding ScreenHeight}" 
                            VerticalAlignment="Center"
-                           Foreground="{StaticResource ForegroundBrush}"
+                           Foreground="{StaticResource TextPrimaryBrush}"
                            Margin="0,0,8,0"/>
             </StackPanel>
         </Border>
@@ -141,10 +141,10 @@
                 
                 <StackPanel Orientation="Horizontal" Grid.Column="0">
                     <TextBlock Text="VM: " 
-                               Foreground="{StaticResource ForegroundBrush}"
+                               Foreground="{StaticResource TextPrimaryBrush}"
                                FontWeight="SemiBold"/>
                     <TextBlock Text="{Binding VmName}" 
-                               Foreground="{StaticResource ForegroundBrush}"/>
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
                 </StackPanel>
                 
                 <StackPanel Orientation="Horizontal" Grid.Column="1">
@@ -163,7 +163,7 @@
                         </Ellipse.Style>
                     </Ellipse>
                     <TextBlock VerticalAlignment="Center"
-                               Foreground="{StaticResource ForegroundBrush}">
+                               Foreground="{StaticResource TextPrimaryBrush}">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Text" Value="Stopped"/>

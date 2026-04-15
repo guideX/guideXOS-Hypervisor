@@ -7,6 +7,7 @@
 #include "Console.h"
 #include "InterruptController.h"
 #include "Timer.h"
+#include "FramebufferDevice.h"
 #include "logger.h"
 #include "ISAPluginRegistry.h"
 #include "IA64ISAPlugin.h"
@@ -64,9 +65,13 @@ try {
     consoleDevice_ = std::make_unique<VirtualConsole>(ioBase);
     timerDevice_ = std::make_unique<VirtualTimer>(ioBase + 0x100);
     timerDevice_->AttachInterruptController(interruptController_.get());
+    
+    // Create framebuffer device (default 640x480 at standard VGA region)
+    framebufferDevice_ = std::make_unique<FramebufferDevice>();
 
     memory_->RegisterDevice(consoleDevice_.get());
     memory_->RegisterDevice(timerDevice_.get());
+    memory_->RegisterDevice(framebufferDevice_.get());
         
     // Create CPU contexts with specified ISA
     if (!createCPUs(numCPUs, isaName)) {

@@ -36,6 +36,240 @@
     <ClCompile Include="tests\test_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="debug_harness.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\bare_metal_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\boot_state_machine_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\boot_trace_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\config_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\initramfs_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\kernel_validation_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\profiler_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\virtual_devices_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\virtual_disk_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\vm_snapshot_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="examples\webui_example.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="kernels\minimal_kernel.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\api\RestAPIServer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\api\VMControlAPIHandler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\cpu_core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\atype_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\btype_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\itype_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\lx_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\mtype_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fuzzer\Fuzzer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\Console.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\ConsoleOutputBuffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\InterruptController.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\Timer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\isa\ExampleISAPlugin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\isa\IA64ISAPlugin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\isa\ISAPluginRegistry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\libc\libc_bridge.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\loader\bootstrap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\loader\crt0.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\loader\dynamic_linker.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\loader\KernelValidator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mmu\mmu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\profiler\Profiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\FilesystemMount.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\InitramfsDevice.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\PathResolver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\RawDiskDevice.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\VirtualBlockDevice.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\VirtualDiskManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\syscall\SyscallDispatcher.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\BootTraceSystem.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\CPUContext.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\KernelPanic.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\SimpleCPUScheduler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\VirtualMachine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\VMBootStateMachine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\VMManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\vm\VMSnapshotManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\webui\WebUIServer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_bootstrap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_boot_state_machine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_cpu_execution.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_fuzzer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_initramfs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_isa_plugin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_kernel_bootstrap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_libc_bridge.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_new_instructions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_profiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_vmconfig_serialization.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_vmmanager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_vm_isolation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_vm_reset.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\\test_debugger.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_elf_validation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_io_devices.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_mmu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_mov_imm.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_multi_cpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_page_fault.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_scheduler_stepping.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_syscall_dispatcher.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_watchpoint.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io\FramebufferDevice.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">
@@ -53,6 +287,189 @@
     <ClInclude Include="include\abi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\APISerializer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\APIServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\APITypes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\bootstrap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\BootTraceSystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Console.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ConsoleOutputBuffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\cpu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\CPUContext.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\crt0.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dynamic_linker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ExampleISAPlugin.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\FilesystemMount.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Fuzzer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IA64ISAPlugin.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ia64_decoders.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ia64_formats.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ia64_opcodes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ICPU.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ICPUScheduler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IDecoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IFilesystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IISA.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IMemory.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IMMU.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\InitramfsDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\InterruptController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IODevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IPCAPIServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ISAPluginRegistry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IStorageDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\IVirtualMachine.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\JsonUtils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\KernelPanic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\KernelValidator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\libc_bridge.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\linux_errno.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\mmu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\PageFault.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\PathResolver.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Profiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\RawDiskDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\RestAPIServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\SimpleCPUScheduler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\SimpleReadOnlyFS.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\SyscallDispatcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Timer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VirtualBlockDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VirtualDiskManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VirtualMachine.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VMBootStateMachine.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VMConfiguration.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VMManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VMMetadata.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VMSnapshot.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\VMSnapshotManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Watchpoint.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\WebSocketServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\WebUIServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\FramebufferDevice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
@@ -60,5 +477,85 @@
   <ItemGroup>
     <None Include="guideXOS Hypervisor.vcxproj.new" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
+    <None Include="docs\API_DOCUMENTATION.md" />
+    <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\BARE_METAL_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\BINARY_DECODER_COMPLETE.md" />
+    <None Include="docs\BINARY_DECODER_IMPLEMENTATION_GUIDE.md" />
+    <None Include="docs\BOOTSTRAP_INITIALIZATION.md" />
+    <None Include="docs\BOOTSTRAP_QUICK_START.md" />
+    <None Include="docs\BOOT_STATE_MACHINE.md" />
+    <None Include="docs\BOOT_STATE_MACHINE_QUICK_REF.md" />
+    <None Include="docs\BOOT_STATE_MACHINE_SUMMARY.md" />
+    <None Include="docs\BOOT_TRACE_AND_PANIC.md" />
+    <None Include="docs\BOOT_TRACE_QUICK_REF.md" />
+    <None Include="docs\BUILD_FIX_SUMMARY.md" />
+    <None Include="docs\BUILD_ISSUES_SUMMARY.md" />
+    <None Include="docs\CPU_IMPLEMENTATION.md" />
+    <None Include="docs\ELF64_LOADER.md" />
+    <None Include="docs\ELF_VALIDATION.md" />
+    <None Include="docs\ELF_VALIDATION_SUMMARY.md" />
+    <None Include="docs\EXECUTION_LOOP_IMPLEMENTATION.md" />
+    <None Include="docs\FUZZER.md" />
+    <None Include="docs\FUZZER_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\IA64_BUNDLE_DECODER.md" />
+    <None Include="docs\INITRAMFS_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\INITRAMFS_QUICK_REFERENCE.md" />
+    <None Include="docs\INITRAMFS_SUPPORT.md" />
+    <None Include="docs\INSTRUCTION_SET_STATUS.md" />
+    <None Include="docs\INTEGRATION_STATUS.md" />
+    <None Include="docs\ISA_PLUGIN_ARCHITECTURE.md" />
+    <None Include="docs\ISA_PLUGIN_REFACTORING_SUMMARY.md" />
+    <None Include="docs\KERNEL_BOOTSTRAP.md" />
+    <None Include="docs\KERNEL_BOOTSTRAP_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\KERNEL_BOOTSTRAP_QUICK_REFERENCE.md" />
+    <None Include="docs\KERNEL_VALIDATION.md" />
+    <None Include="docs\KERNEL_VALIDATION_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\KERNEL_VALIDATION_QUICK_REF.md" />
+    <None Include="docs\MMU_SUMMARY.md" />
+    <None Include="docs\PAGE_FAULT_DIAGNOSTICS.md" />
+    <None Include="docs\PROFILER.md" />
+    <None Include="docs\PROFILER_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\PROFILER_QUICK_REFERENCE.md" />
+    <None Include="docs\README_UPDATE_SUMMARY.md" />
+    <None Include="docs\SCHEDULER_STEPPING_MODES.md" />
+    <None Include="docs\SYSCALL_ABI.md" />
+    <None Include="docs\SYSCALL_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\SYSCALL_QUICK_REFERENCE.md" />
+    <None Include="docs\VIRTUAL_DEVICES.md" />
+    <None Include="docs\VIRTUAL_DEVICES_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VIRTUAL_DEVICES_QUICK_REF.md" />
+    <None Include="docs\VIRTUAL_DISK_IMPLEMENTATION.md" />
+    <None Include="docs\VIRTUAL_DISK_QUICK_REF.md" />
+    <None Include="docs\VMMANAGER.md" />
+    <None Include="docs\VMMANAGER_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VM_CONFIGURATION_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VM_CONFIGURATION_QUICK_REFERENCE.md" />
+    <None Include="docs\VM_CONFIGURATION_SCHEMA.md" />
+    <None Include="docs\VM_ISOLATION.md" />
+    <None Include="docs\VM_ISOLATION_SUMMARY.md" />
+    <None Include="docs\VM_RESET_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\VM_SNAPSHOT_IMPLEMENTATION.md" />
+    <None Include="docs\VM_SNAPSHOT_QUICK_REF.md" />
+    <None Include="docs\VM_SNAPSHOT_SUMMARY.md" />
+    <None Include="docs\WATCHPOINT_USAGE.md" />
+    <None Include="docs\WEB_UI.md" />
+    <None Include="docs\WEB_UI_IMPLEMENTATION_SUMMARY.md" />
+    <None Include="docs\WEB_UI_QUICK_REFERENCE.md" />
+    <None Include="examples\configs\minimal-vm.json" />
+    <None Include="examples\configs\server-vm.json" />
+    <None Include="examples\configs\standard-vm.json" />
+    <None Include="fix_all_decoders.ps1" />
+    <None Include="fix_build.ps1" />
+    <None Include="fix_decoders.py" />
+    <None Include="guideXOS Hypervisor.vcxproj" />
+    <None Include="kernels\kernel.ld" />
+    <None Include="kernels\minimal_kernel.s" />
+    <None Include="PROJECT_SUMMARY.md" />
+    <None Include="README.md" />
+    <None Include="VS_SETUP.md" />
+    <None Include="web\app.js" />
+    <None Include="web\index.html" />
+    <None Include="web\style.css" />
   </ItemGroup>
 </Project>
