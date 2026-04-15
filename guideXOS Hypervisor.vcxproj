@@ -142,8 +142,10 @@
     <ClCompile Include="kernels\minimal_kernel.c" />
     <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
     <ClCompile Include="src\abi\abi.cpp" />
+    <ClCompile Include="src\api\dllmain.cpp" />
     <ClCompile Include="src\api\RestAPIServer.cpp" />
     <ClCompile Include="src\api\VMControlAPIHandler.cpp" />
+    <ClCompile Include="src\api\VMManager_DLL.cpp" />
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\core\cpu_core.cpp" />
     <ClCompile Include="src\decoder\atype_decoder.cpp" />
@@ -274,6 +276,7 @@
     <ClInclude Include="include\VMBootStateMachine.h" />
     <ClInclude Include="include\VMConfiguration.h" />
     <ClInclude Include="include\VMManager.h" />
+    <ClInclude Include="include\VMManager_DLL.h" />
     <ClInclude Include="include\VMMetadata.h" />
     <ClInclude Include="include\VMSnapshot.h" />
     <ClInclude Include="include\VMSnapshotManager.h" />
@@ -285,6 +288,8 @@
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="BUILD_DLL_INSTRUCTIONS.md" />
+    <None Include="DLL_MISSING_SUMMARY.md" />
     <None Include="docs\API_DOCUMENTATION.md" />
     <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\BARE_METAL_IMPLEMENTATION_SUMMARY.md" />
@@ -356,11 +361,14 @@
     <None Include="fix_all_decoders.ps1" />
     <None Include="fix_build.ps1" />
     <None Include="fix_decoders.py" />
+    <None Include="guideXOS Hypervisor Core.vcxproj" />
+    <None Include="guideXOS Hypervisor DLL.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
     <None Include="kernels\kernel.ld" />
     <None Include="kernels\minimal_kernel.s" />
+    <None Include="MANUAL_PROJECT_SETUP.md" />
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="README.md" />
     <None Include="VS_SETUP.md" />

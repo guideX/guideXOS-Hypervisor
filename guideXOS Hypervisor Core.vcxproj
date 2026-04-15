@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{B8F4A8E1-2C3D-4E5F-8A9B-1C2D3E4F5A6B}</ProjectGuid>
+    <RootNamespace>guideXOSHypervisorCore</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>
+      </SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp14</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>
+      </SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\abi\abi.cpp" />
+    <ClCompile Include="src\api\RestAPIServer.cpp" />
+    <ClCompile Include="src\api\VMControlAPIHandler.cpp" />
+    <ClCompile Include="src\core\cpu.cpp" />
+    <ClCompile Include="src\core\cpu_core.cpp" />
+    <ClCompile Include="src\decoder\atype_decoder.cpp" />
+    <ClCompile Include="src\decoder\btype_decoder.cpp" />
+    <ClCompile Include="src\decoder\decoder.cpp" />
+    <ClCompile Include="src\decoder\itype_decoder.cpp" />
+    <ClCompile Include="src\decoder\lx_decoder.cpp" />
+    <ClCompile Include="src\decoder\mtype_decoder.cpp" />
+    <ClCompile Include="src\fuzzer\Fuzzer.cpp" />
+    <ClCompile Include="src\io\Console.cpp" />
+    <ClCompile Include="src\io\ConsoleOutputBuffer.cpp" />
+    <ClCompile Include="src\io\FramebufferDevice.cpp" />
+    <ClCompile Include="src\io\InterruptController.cpp" />
+    <ClCompile Include="src\io\Timer.cpp" />
+    <ClCompile Include="src\isa\ExampleISAPlugin.cpp" />
+    <ClCompile Include="src\isa\IA64ISAPlugin.cpp" />
+    <ClCompile Include="src\isa\ISAPluginRegistry.cpp" />
+    <ClCompile Include="src\libc\libc_bridge.cpp" />
+    <ClCompile Include="src\loader\bootstrap.cpp" />
+    <ClCompile Include="src\loader\crt0.cpp" />
+    <ClCompile Include="src\loader\dynamic_linker.cpp" />
+    <ClCompile Include="src\loader\KernelValidator.cpp" />
+    <ClCompile Include="src\loader\loader.cpp" />
+    <ClCompile Include="src\memory\memory.cpp" />
+    <ClCompile Include="src\mmu\mmu.cpp" />
+    <ClCompile Include="src\profiler\Profiler.cpp" />
+    <ClCompile Include="src\storage\FilesystemMount.cpp" />
+    <ClCompile Include="src\storage\InitramfsDevice.cpp" />
+    <ClCompile Include="src\storage\PathResolver.cpp" />
+    <ClCompile Include="src\storage\RawDiskDevice.cpp" />
+    <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp" />
+    <ClCompile Include="src\storage\VirtualBlockDevice.cpp" />
+    <ClCompile Include="src\storage\VirtualDiskManager.cpp" />
+    <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
+    <ClCompile Include="src\vm\BootTraceSystem.cpp" />
+    <ClCompile Include="src\vm\CPUContext.cpp" />
+    <ClCompile Include="src\vm\KernelPanic.cpp" />
+    <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
+    <ClCompile Include="src\vm\VirtualMachine.cpp" />
+    <ClCompile Include="src\vm\VMBootStateMachine.cpp" />
+    <ClCompile Include="src\vm\VMManager.cpp" />
+    <ClCompile Include="src\vm\VMSnapshotManager.cpp" />
+    <ClCompile Include="src\webui\WebUIServer.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\*.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

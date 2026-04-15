@@ -15,7 +15,6 @@ namespace guideXOS_Hypervisor_GUI.Services
         // TODO: P/Invoke declarations for C++ VMManager
         // These will need to be implemented when integrating with the actual C++ backend
         
-        /*
         [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr VMManager_Create();
         
@@ -42,7 +41,6 @@ namespace guideXOS_Hypervisor_GUI.Services
         
         [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr VMManager_GetVMs(IntPtr manager, out int count);
-        */
 
         private static VMManagerWrapper? _instance;
         private readonly object _lock = new();

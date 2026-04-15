@@ -270,6 +270,12 @@
     <ClCompile Include="src\io\FramebufferDevice.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\api\VMManager_DLL.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\api\dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">
@@ -470,6 +476,9 @@
     <ClInclude Include="include\FramebufferDevice.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\VMManager_DLL.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
@@ -557,5 +566,10 @@
     <None Include="web\app.js" />
     <None Include="web\index.html" />
     <None Include="web\style.css" />
+    <None Include="BUILD_DLL_INSTRUCTIONS.md" />
+    <None Include="DLL_MISSING_SUMMARY.md" />
+    <None Include="guideXOS Hypervisor Core.vcxproj" />
+    <None Include="guideXOS Hypervisor DLL.vcxproj" />
+    <None Include="MANUAL_PROJECT_SETUP.md" />
   </ItemGroup>
 </Project>
