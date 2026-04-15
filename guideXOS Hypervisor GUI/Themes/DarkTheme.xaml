@@ -55,7 +55,12 @@
 <FontFamily x:Key="MonospaceFontFamily">Consolas, Courier New, monospace</FontFamily>
 <FontFamily x:Key="DefaultFontFamily">Segoe UI, Arial, sans-serif</FontFamily>
 
-    <!-- Button Style -->
+    <!-- Professional Animation Durations -->
+    <Duration x:Key="FastTransition">0:0:0.15</Duration>
+    <Duration x:Key="NormalTransition">0:0:0.25</Duration>
+    <Duration x:Key="SlowTransition">0:0:0.35</Duration>
+
+    <!-- Button Style with Smooth Transitions -->
     <Style x:Key="ToolbarButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
@@ -64,26 +69,59 @@
         <Setter Property="Padding" Value="10,5"/>
         <Setter Property="Margin" Value="2,0"/>
         <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="{TemplateBinding Background}"
+                    <Border x:Name="Border"
+                            Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="2">
+                            CornerRadius="3">
                         <ContentPresenter HorizontalAlignment="Center" 
                                         VerticalAlignment="Center"
                                         Margin="{TemplateBinding Padding}"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetName="Border"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      To="{StaticResource BackgroundHover}"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                        <ColorAnimation Storyboard.TargetName="Border"
+                                                      Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)"
+                                                      To="{StaticResource BorderColorLight}"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetName="Border"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                        <ColorAnimation Storyboard.TargetName="Border"
+                                                      Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter Property="Background" Value="{StaticResource AccentBlueBrush}"/>
+                            <Setter TargetName="Border" Property="Background" Value="{StaticResource AccentBlueBrush}"/>
+                            <Setter TargetName="Border" Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="0.98" ScaleY="0.98"/>
+                                </Setter.Value>
+                            </Setter>
+                            <Setter TargetName="Border" Property="RenderTransformOrigin" Value="0.5,0.5"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Opacity" Value="0.5"/>
+                            <Setter Property="Opacity" Value="0.4"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -91,67 +129,161 @@
         </Setter>
     </Style>
 
-    <!-- ListBox Item Style -->
+    <!-- Professional ListBox Item Style with Smooth Selection -->
     <Style x:Key="VMListItemStyle" TargetType="ListBoxItem">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
         <Setter Property="BorderBrush" Value="Transparent"/>
-        <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="Padding" Value="8"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="Padding" Value="12,8"/>
+        <Setter Property="Margin" Value="0"/>
+        <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
+                    <Border x:Name="ItemBorder"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{StaticResource BackgroundLightBrush}"/>
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetName="ItemBorder"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      To="{StaticResource BackgroundLight}"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetName="ItemBorder"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter Property="Background" Value="{StaticResource AccentBlueBrush}"/>
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetName="ItemBorder"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      To="{StaticResource AccentBlueDark}"
+                                                      Duration="{StaticResource NormalTransition}"/>
+                                        <ThicknessAnimation Storyboard.TargetName="ItemBorder"
+                                                          Storyboard.TargetProperty="BorderThickness"
+                                                          To="3,0,0,1"
+                                                          Duration="{StaticResource NormalTransition}"/>
+                                        <ColorAnimation Storyboard.TargetName="ItemBorder"
+                                                      Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)"
+                                                      To="{StaticResource AccentBlue}"
+                                                      Duration="{StaticResource NormalTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetName="ItemBorder"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource NormalTransition}"/>
+                                        <ThicknessAnimation Storyboard.TargetName="ItemBorder"
+                                                          Storyboard.TargetProperty="BorderThickness"
+                                                          Duration="{StaticResource NormalTransition}"/>
+                                        <ColorAnimation Storyboard.TargetName="ItemBorder"
+                                                      Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource NormalTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
                         </Trigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsSelected" Value="True"/>
+                                <Condition Property="IsMouseOver" Value="True"/>
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="ItemBorder" Property="Background">
+                                <Setter.Value>
+                                    <SolidColorBrush Color="{StaticResource AccentBlue}"/>
+                                </Setter.Value>
+                            </Setter>
+                        </MultiTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
     </Style>
 
-    <!-- TabControl Style -->
+    <!-- Professional TabControl Style -->
     <Style x:Key="ModernTabControl" TargetType="TabControl">
         <Setter Property="Background" Value="{StaticResource BackgroundDarkBrush}"/>
         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
         <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
     </Style>
 
     <Style x:Key="ModernTabItem" TargetType="TabItem">
-        <Setter Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
+        <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0,0,0,2"/>
-        <Setter Property="Padding" Value="15,8"/>
-        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="16,10"/>
+        <Setter Property="Margin" Value="0,0,8,0"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TabItem">
-                    <Border Background="{TemplateBinding Background}"
+                    <Border x:Name="TabBorder"
+                            Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            Padding="{TemplateBinding Padding}">
-                        <ContentPresenter ContentSource="Header"
+                            Padding="{TemplateBinding Padding}"
+                            CornerRadius="3,3,0,0">
+                        <ContentPresenter x:Name="ContentSite"
+                                        ContentSource="Header"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetProperty="(TextElement.Foreground).(SolidColorBrush.Color)"
+                                                      To="{StaticResource TextPrimary}"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                        <ColorAnimation Storyboard.TargetName="TabBorder"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      To="{StaticResource BackgroundLight}"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <ColorAnimation Storyboard.TargetProperty="(TextElement.Foreground).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                        <ColorAnimation Storyboard.TargetName="TabBorder"
+                                                      Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                      Duration="{StaticResource FastTransition}"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                            <Setter Property="BorderBrush" Value="{StaticResource AccentBlueBrush}"/>
+                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="{StaticResource AccentBlueBrush}"/>
+                            <Setter TargetName="TabBorder" Property="Background" Value="{StaticResource BackgroundMediumBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

@@ -30,60 +30,63 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Toolbar - VirtualBox Style -->
+        <!-- Toolbar - VirtualBox Style with 8px Grid System -->
         <Border Grid.Row="0" 
                 Background="{StaticResource BackgroundMediumBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="12,10">
+                Padding="16,8">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <!-- VM Management Group -->
                 <Border Background="{StaticResource BackgroundLightBrush}" 
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="3"
-                        Padding="5,3"
+                        CornerRadius="4"
+                        Padding="8,4"
                         Margin="0,0,8,0">
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="⊕ New" 
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Command="{Binding NewVMCommand}"
-                                ToolTip="Create a new virtual machine"
-                                Padding="8,4"/>
-                    </StackPanel>
+                    <Button Content="⊕ New" 
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Command="{Binding NewVMCommand}"
+                            ToolTip="Create a new virtual machine"
+                            Padding="12,6"
+                            Margin="0"/>
                 </Border>
                 
                 <!-- VM Control Group -->
                 <Border Background="{StaticResource BackgroundLightBrush}" 
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="3"
-                        Padding="5,3"
+                        CornerRadius="4"
+                        Padding="4"
                         Margin="0,0,8,0">
                     <StackPanel Orientation="Horizontal">
                         <Button Content="▶ Start" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding StartVMCommand}"
                                 ToolTip="Start selected virtual machine"
-                                Padding="8,4"/>
-                        <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="3,0"/>
+                                Padding="12,6"
+                                Margin="0"/>
+                        <Rectangle Width="1" Height="20" Fill="{StaticResource BorderBrush}" Margin="4,0"/>
                         <Button Content="⏸ Pause" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding PauseVMCommand}"
                                 ToolTip="Pause selected virtual machine"
-                                Padding="8,4"/>
-                        <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="3,0"/>
+                                Padding="12,6"
+                                Margin="0"/>
+                        <Rectangle Width="1" Height="20" Fill="{StaticResource BorderBrush}" Margin="4,0"/>
                         <Button Content="⏹ Stop" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding StopVMCommand}"
                                 ToolTip="Stop selected virtual machine"
-                                Padding="8,4"/>
-                        <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="3,0"/>
+                                Padding="12,6"
+                                Margin="0"/>
+                        <Rectangle Width="1" Height="20" Fill="{StaticResource BorderBrush}" Margin="4,0"/>
                         <Button Content="↻ Reset" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding ResetVMCommand}"
                                 ToolTip="Reset selected virtual machine"
-                                Padding="8,4"/>
+                                Padding="12,6"
+                                Margin="0"/>
                     </StackPanel>
                 </Border>
                 
@@ -91,27 +94,30 @@
                 <Border Background="{StaticResource BackgroundLightBrush}" 
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="3"
-                        Padding="5,3"
+                        CornerRadius="4"
+                        Padding="4"
                         Margin="0,0,8,0">
                     <StackPanel Orientation="Horizontal">
                         <Button Content="📷 Snapshot" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding SnapshotVMCommand}"
                                 ToolTip="Manage snapshots"
-                                Padding="8,4"/>
-                        <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="3,0"/>
+                                Padding="12,6"
+                                Margin="0"/>
+                        <Rectangle Width="1" Height="20" Fill="{StaticResource BorderBrush}" Margin="4,0"/>
                         <Button Content="⚙ Settings" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding SettingsVMCommand}"
                                 ToolTip="VM Settings"
-                                Padding="8,4"/>
-                        <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="3,0"/>
+                                Padding="12,6"
+                                Margin="0"/>
+                        <Rectangle Width="1" Height="20" Fill="{StaticResource BorderBrush}" Margin="4,0"/>
                         <Button Content="🐛 Debug" 
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding DebugVMCommand}"
                                 ToolTip="Open debugger"
-                                Padding="8,4"/>
+                                Padding="12,6"
+                                Margin="0"/>
                     </StackPanel>
                 </Border>
                 
@@ -119,13 +125,14 @@
                 <Border Background="{StaticResource BackgroundLightBrush}" 
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="3"
-                        Padding="5,3">
+                        CornerRadius="4"
+                        Padding="8,4">
                     <Button Content="🗑 Delete" 
                             Style="{StaticResource ToolbarButtonStyle}"
                             Command="{Binding DeleteVMCommand}"
                             ToolTip="Delete virtual machine"
-                            Padding="8,4"/>
+                            Padding="12,6"
+                            Margin="0"/>
                 </Border>
             </StackPanel>
         </Border>
@@ -138,7 +145,7 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left Sidebar - VM List (Fixed 260px) -->
+            <!-- Left Sidebar - VM List (Fixed 260px with 8px Grid) -->
             <Border Grid.Column="0"
                     Background="{StaticResource BackgroundMediumBrush}"
                     BorderBrush="{StaticResource BorderBrush}"
@@ -149,13 +156,11 @@
                             Background="{StaticResource BackgroundLightBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="0,0,0,1"
-                            Padding="12,10">
-                        <Grid>
-                            <TextBlock Text="Virtual Machines"
-                                       Style="{StaticResource SubHeaderTextStyle}"
-                                       FontWeight="SemiBold"
-                                       FontSize="14"/>
-                        </Grid>
+                            Padding="16,12">
+                        <TextBlock Text="Virtual Machines"
+                                   Style="{StaticResource SubHeaderTextStyle}"
+                                   FontWeight="SemiBold"
+                                   FontSize="14"/>
                     </Border>
 
                     <!-- Search Box -->
@@ -163,14 +168,14 @@
                             Background="{StaticResource BackgroundMediumBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="0,0,0,1"
-                            Padding="10,10">
+                            Padding="12,12">
                         <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                  Style="{StaticResource SearchTextBoxStyle}"
                                  Foreground="{StaticResource TextPrimaryBrush}"
                                  Background="{StaticResource BackgroundDarkBrush}"
                                  BorderBrush="{StaticResource BorderBrush}"
                                  BorderThickness="1"
-                                 Padding="8,6"
+                                 Padding="10,8"
                                  FontSize="12"/>
                     </Border>
 
@@ -179,7 +184,8 @@
                              SelectedItem="{Binding SelectedVM}"
                              Background="Transparent"
                              BorderThickness="0"
-                             Padding="4"
+                             Padding="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ItemContainerStyle="{StaticResource VMListItemStyle}">
                         <ListBox.ContextMenu>
                             <ContextMenu Style="{StaticResource ModernContextMenu}">
@@ -210,57 +216,54 @@
                         </ListBox.ContextMenu>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="Transparent" 
-                                        Padding="8,6"
-                                        Margin="0,1">
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
+                                <Grid Margin="0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
 
-                                        <!-- State Indicator -->
-                                        <Ellipse Grid.Row="0" Grid.Column="0"
-                                                 Width="12" Height="12"
-                                                 Margin="0,0,10,0"
-                                                 VerticalAlignment="Center">
-                                            <Ellipse.Fill>
-                                                <SolidColorBrush Color="{Binding StateColor}"/>
-                                            </Ellipse.Fill>
-                                        </Ellipse>
+                                    <!-- State Indicator -->
+                                    <Ellipse Grid.Row="0" Grid.Column="0"
+                                             Width="10" Height="10"
+                                             Margin="0,0,12,0"
+                                             VerticalAlignment="Center">
+                                        <Ellipse.Fill>
+                                            <SolidColorBrush Color="{Binding StateColor}"/>
+                                        </Ellipse.Fill>
+                                    </Ellipse>
 
-                                        <!-- VM Name -->
-                                        <TextBlock Grid.Row="0" Grid.Column="1"
-                                                   Text="{Binding Name}"
-                                                   Style="{StaticResource NormalTextStyle}"
-                                                   FontWeight="SemiBold"
-                                                   FontSize="13"/>
+                                    <!-- VM Name -->
+                                    <TextBlock Grid.Row="0" Grid.Column="1"
+                                               Text="{Binding Name}"
+                                               Style="{StaticResource NormalTextStyle}"
+                                               FontWeight="SemiBold"
+                                               FontSize="13"
+                                               TextTrimming="CharacterEllipsis"/>
 
-                                        <!-- VM State -->
-                                        <TextBlock Grid.Row="1" Grid.Column="1"
-                                                   Text="{Binding StateDescription}"
-                                                   Style="{StaticResource SecondaryTextStyle}"
-                                                   FontSize="11"
-                                                   Margin="0,3,0,0"/>
+                                    <!-- VM State -->
+                                    <TextBlock Grid.Row="1" Grid.Column="1"
+                                               Text="{Binding StateDescription}"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               FontSize="11"
+                                               Margin="0,4,0,0"/>
 
-                                        <!-- VM Specs -->
-                                        <TextBlock Grid.Row="2" Grid.Column="1"
-                                                   Style="{StaticResource SecondaryTextStyle}"
-                                                   FontSize="10"
-                                                   Margin="0,2,0,0">
-                                            <Run Text="{Binding Architecture}"/>
-                                            <Run Text="•"/>
-                                            <Run Text="{Binding CpuCount, StringFormat='{}{0} CPU'}"/>
-                                            <Run Text="•"/>
-                                            <Run Text="{Binding MemoryDisplay}"/>
-                                        </TextBlock>
-                                    </Grid>
-                                </Border>
+                                    <!-- VM Specs -->
+                                    <TextBlock Grid.Row="2" Grid.Column="1"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               FontSize="10"
+                                               Margin="0,4,0,0">
+                                        <Run Text="{Binding Architecture}"/>
+                                        <Run Text=" • "/>
+                                        <Run Text="{Binding CpuCount, StringFormat='{}{0} CPU'}"/>
+                                        <Run Text=" • "/>
+                                        <Run Text="{Binding MemoryDisplay}"/>
+                                    </TextBlock>
+                                </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -748,17 +751,17 @@
                                VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- Live VM Metrics - VirtualBox Style -->
+                <!-- Live VM Metrics - Professional 8px Grid -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <!-- Total VMs -->
                     <Border Background="{StaticResource BackgroundLightBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
-                            CornerRadius="2"
-                            Padding="8,4"
-                            Margin="0,0,6,0">
+                            CornerRadius="3"
+                            Padding="10,6"
+                            Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="📊" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="📊" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11" VerticalAlignment="Center">
                                 <Run Text="Total:"/>
                                 <Run Text="{Binding TotalVMs, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
@@ -770,11 +773,11 @@
                     <Border Background="{StaticResource BackgroundLightBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
-                            CornerRadius="2"
-                            Padding="8,4"
-                            Margin="0,0,6,0">
+                            CornerRadius="3"
+                            Padding="10,6"
+                            Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="▶" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#4CAF50"/>
+                            <TextBlock Text="▶" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="#4CAF50"/>
                             <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11" VerticalAlignment="Center">
                                 <Run Text="Running:"/>
                                 <Run Text="{Binding RunningVMs, Mode=OneWay}" FontWeight="SemiBold" Foreground="#4CAF50"/>
@@ -786,11 +789,11 @@
                     <Border Background="{StaticResource BackgroundLightBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
-                            CornerRadius="2"
-                            Padding="8,4"
-                            Margin="0,0,6,0">
+                            CornerRadius="3"
+                            Padding="10,6"
+                            Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="⚡" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="⚡" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11" VerticalAlignment="Center">
                                 <Run Text="CPUs:"/>
                                 <Run Text="{Binding ActiveCPUs, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
@@ -802,10 +805,10 @@
                     <Border Background="{StaticResource BackgroundLightBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
-                            CornerRadius="2"
-                            Padding="8,4">
+                            CornerRadius="3"
+                            Padding="10,6">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="💾" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="💾" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11" VerticalAlignment="Center">
                                 <Run Text="Memory:"/>
                                 <Run Text="{Binding TotalMemoryAllocated, StringFormat='{}{0} MB', Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
