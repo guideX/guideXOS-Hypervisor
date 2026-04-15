@@ -686,5 +686,61 @@ namespace guideXOS_Hypervisor_GUI.Services
             
             return registers.OrderByDescending(r => r.TotalAccess).Take(topN).ToList();
         }
+        
+        #region Framebuffer / Display Methods
+        
+        /// <summary>
+        /// Get framebuffer data for a VM
+        /// </summary>
+        /// <param name="vmId">VM identifier</param>
+        /// <param name="buffer">Buffer to copy framebuffer data into (BGRA format)</param>
+        /// <param name="width">Output: width of framebuffer</param>
+        /// <param name="height">Output: height of framebuffer</param>
+        /// <returns>True if framebuffer data was retrieved</returns>
+        public bool GetFramebuffer(string vmId, byte[] buffer, out int width, out int height)
+        {
+            lock (_lock)
+            {
+                // TODO: P/Invoke to native VMManager_GetFramebuffer
+                // For now, set default resolution and return false (no framebuffer available)
+                /*
+                [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
+                private static extern bool VMManager_GetFramebuffer(
+                    IntPtr manager, 
+                    string vmId, 
+                    IntPtr buffer, 
+                    int bufferSize,
+                    out int width,
+                    out int height);
+                */
+                
+                width = 640;
+                height = 480;
+                return false;
+            }
+        }
+        
+        /// <summary>
+        /// Get framebuffer resolution for a VM
+        /// </summary>
+        public (int width, int height) GetFramebufferResolution(string vmId)
+        {
+            lock (_lock)
+            {
+                // TODO: P/Invoke to native VMManager_GetFramebufferResolution
+                /*
+                [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
+                private static extern void VMManager_GetFramebufferResolution(
+                    IntPtr manager,
+                    string vmId,
+                    out int width,
+                    out int height);
+                */
+                
+                return (640, 480); // Default resolution
+            }
+        }
+        
+        #endregion
     }
 }

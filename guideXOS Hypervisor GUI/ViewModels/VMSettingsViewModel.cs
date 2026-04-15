@@ -26,6 +26,7 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             SaveCommand = new RelayCommand(OnSave, CanSave);
             CancelCommand = new RelayCommand(OnCancel);
             AddDiskCommand = new RelayCommand(OnAddDisk);
+            AddCDRomCommand = new RelayCommand(OnAddCDRom);
             RemoveDiskCommand = new RelayCommand<DiskImageInfo>(OnRemoveDisk, CanRemoveDisk);
             BrowseDiskCommand = new RelayCommand<DiskImageInfo>(OnBrowseDisk);
             GenerateMacCommand = new RelayCommand(OnGenerateMac);
@@ -363,6 +364,7 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         public ICommand SaveCommand { get; }
         public ICommand CancelCommand { get; }
         public ICommand AddDiskCommand { get; }
+        public ICommand AddCDRomCommand { get; }
         public ICommand RemoveDiskCommand { get; }
         public ICommand BrowseDiskCommand { get; }
         public ICommand GenerateMacCommand { get; }
@@ -428,7 +430,33 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                     ReadOnly = false,
                     SizeMB = 0, // TODO: Get actual file size
                     Controller = "SATA",
-                    Port = DiskImages.Count
+                    Port = DiskImages.Count(d => d.Type == "HDD")
+                };
+
+                DiskImages.Add(newDisk);
+                HasChanges = true;
+            }
+        }
+
+        private void OnAddCDRom()
+        {
+            var openDialog = new OpenFileDialog
+            {
+                Title = "Select ISO Image",
+                Filter = "ISO Images (*.iso)|*.iso|All Files (*.*)|*.*",
+                CheckFileExists = true
+            };
+
+            if (openDialog.ShowDialog() == true)
+            {
+                var newDisk = new DiskImageInfo
+                {
+                    Path = openDialog.FileName,
+                    Type = "CD-ROM",
+                    ReadOnly = true,
+                    SizeMB = 0, // ISO size
+                    Controller = "IDE",
+                    Port = DiskImages.Count(d => d.Type == "CD-ROM")
                 };
 
                 DiskImages.Add(newDisk);
@@ -465,10 +493,14 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         {
             if (disk == null) return;
 
+            var filter = disk.Type == "CD-ROM" 
+                ? "ISO Images (*.iso)|*.iso|All Files (*.*)|*.*"
+                : "Disk Images (*.img;*.vdi;*.vmdk;*.vhd)|*.img;*.vdi;*.vmdk;*.vhd|All Files (*.*)|*.*";
+
             var openDialog = new OpenFileDialog
             {
-                Title = "Select Disk Image",
-                Filter = "Disk Images (*.img;*.vdi;*.vmdk;*.vhd)|*.img;*.vdi;*.vmdk;*.vhd|All Files (*.*)|*.*",
+                Title = disk.Type == "CD-ROM" ? "Select ISO Image" : "Select Disk Image",
+                Filter = filter,
                 CheckFileExists = true,
                 FileName = disk.Path
             };

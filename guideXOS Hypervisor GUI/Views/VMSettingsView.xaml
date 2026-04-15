@@ -257,9 +257,9 @@
                                    Style="{StaticResource HeaderTextStyle}"
                                    Margin="0,0,0,20"/>
 
-                        <GroupBox Header="DISK CONTROLLERS" Style="{StaticResource ModernGroupBox}">
+                        <GroupBox Header="HARD DISK DRIVES" Style="{StaticResource ModernGroupBox}">
                             <StackPanel>
-                                <Button Content="? Add Disk Image" 
+                                <Button Content="? Add Hard Disk" 
                                         Command="{Binding AddDiskCommand}"
                                         Style="{StaticResource ToolbarButtonStyle}"
                                         HorizontalAlignment="Left"
@@ -273,6 +273,16 @@
                                                     BorderThickness="1" 
                                                     Padding="12" 
                                                     Margin="0,0,0,8">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Type}" Value="HDD">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*"/>
@@ -314,10 +324,108 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
-                                <TextBlock Text="No disk images attached" 
+                                <TextBlock Text="No hard disk images attached" 
+                                           Margin="0,8">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryTextStyle}">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding DiskImages.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="CD/DVD DRIVES" Style="{StaticResource ModernGroupBox}" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Use ISO images to boot from CD-ROM or install operating systems."
                                            Style="{StaticResource SecondaryTextStyle}"
-                                           Margin="0,8"
-                                           Visibility="{Binding DiskImages.Count, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,12"/>
+                                
+                                <Button Content="? Add CD/DVD Drive (ISO)" 
+                                        Command="{Binding AddCDRomCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,0,0,12"/>
+
+                                <ItemsControl ItemsSource="{Binding DiskImages}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{StaticResource BackgroundLightBrush}" 
+                                                    BorderBrush="{StaticResource AccentBlueBrush}" 
+                                                    BorderThickness="2" 
+                                                    Padding="12" 
+                                                    Margin="0,0,0,8">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Type}" Value="CD-ROM">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                    </Grid.RowDefinitions>
+
+                                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="?? " Style="{StaticResource NormalTextStyle}" FontSize="20" Margin="0,0,8,0"/>
+                                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Path}" Style="{StaticResource NormalTextStyle}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                                                    <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                                                        <TextBlock Text="Controller:" Style="{StaticResource SecondaryTextStyle}" Margin="0,0,8,0"/>
+                                                        <TextBlock Text="{Binding Controller}" Style="{StaticResource NormalTextStyle}" FontWeight="SemiBold"/>
+                                                        <TextBlock Text=" | Port " Style="{StaticResource SecondaryTextStyle}" Margin="8,0,0,0"/>
+                                                        <TextBlock Text="{Binding Port}" Style="{StaticResource NormalTextStyle}" FontWeight="SemiBold"/>
+                                                        <TextBlock Text=" | Read-Only" Style="{StaticResource SecondaryTextStyle}" Margin="8,0,0,0"/>
+                                                    </StackPanel>
+
+                                                    <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                                                        <Button Content="Browse ISO..." 
+                                                                Command="{Binding DataContext.BrowseDiskCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                                Padding="8,4"
+                                                                Margin="0,0,8,0"/>
+                                                        <Button Content="Remove" 
+                                                                Command="{Binding DataContext.RemoveDiskCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                                Padding="8,4"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="No CD/DVD drives attached" 
+                                           Margin="0,8">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryTextStyle}">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding DiskImages.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>

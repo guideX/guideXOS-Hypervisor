@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
@@ -8,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using guideXOS_Hypervisor_GUI.Models;
 using guideXOS_Hypervisor_GUI.Services;
+using guideXOS_Hypervisor_GUI.Views;
 
 namespace guideXOS_Hypervisor_GUI.ViewModels
 {
@@ -21,6 +23,7 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         private string _statusMessage = "Ready";
         private bool _isLoading;
         private string _searchText = string.Empty;
+        private readonly Dictionary<string, VMScreenWindow> _screenWindows = new();
 
         public MainViewModel()
         {
@@ -38,6 +41,7 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             ResetVMCommand = new RelayCommand(OnResetVM, CanResetVM);
             SnapshotVMCommand = new RelayCommand(OnSnapshotVM, CanSnapshotVM);
             SettingsVMCommand = new RelayCommand(OnSettingsVM, CanExecuteVMCommand);
+            ShowScreenCommand = new RelayCommand(OnShowScreen, CanExecuteVMCommand);
             DebugVMCommand = new RelayCommand(OnDebugVM, CanExecuteVMCommand);
             DeleteVMCommand = new RelayCommand(OnDeleteVM, CanExecuteVMCommand);
             RefreshCommand = new RelayCommand(OnRefresh);
@@ -135,6 +139,7 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         public ICommand ResetVMCommand { get; }
         public ICommand SnapshotVMCommand { get; }
         public ICommand SettingsVMCommand { get; }
+        public ICommand ShowScreenCommand { get; }
         public ICommand DebugVMCommand { get; }
         public ICommand DeleteVMCommand { get; }
         public ICommand RefreshCommand { get; }
@@ -187,6 +192,9 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                 VirtualMachines.Add(vmViewModel);
                 SelectedVM = vmViewModel;
 
+                // Save the new VM to disk
+                VMPersistenceService.Instance.SaveVM(newVM);
+
                 StatusMessage = $"Created virtual machine: {newVM.Name}";
                 UpdateStatistics();
             }
@@ -218,6 +226,12 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                     
                     // Start performance monitoring
                     PerformanceMonitorViewModel.StartMonitoring(SelectedVM.Id, VMState.Running);
+                    
+                    // Update screen window if open
+                    if (_screenWindows.TryGetValue(SelectedVM.Id, out var screenWindow))
+                    {
+                        screenWindow.UpdateRunningState(true);
+                    }
                 }
                 else
                 {
@@ -253,6 +267,12 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                     
                     // Stop performance monitoring
                     PerformanceMonitorViewModel.StopMonitoring();
+                    
+                    // Update screen window if open
+                    if (_screenWindows.TryGetValue(SelectedVM.Id, out var screenWindow))
+                    {
+                        screenWindow.UpdateRunningState(false);
+                    }
                 }
                 else
                 {
@@ -368,8 +388,8 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                     // Settings were saved, update the VM
                     SelectedVM.UpdateFromModel(vmState);
                     
-                    // TODO: Persist changes to VMManager
-                    // VMManagerWrapper.Instance.UpdateVMConfiguration(vmState.Id, settingsWindow.ViewModel.GetSettings());
+                    // Save changes to disk
+                    VMPersistenceService.Instance.SaveVM(vmState);
                     
                     StatusMessage = $"Settings saved for {SelectedVM.Name}";
                     UpdateStatistics();
@@ -383,6 +403,47 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             {
                 StatusMessage = $"Error opening settings: {ex.Message}";
                 MessageBox.Show($"Failed to open settings:\n{ex.Message}", 
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void OnShowScreen()
+        {
+            if (SelectedVM == null) return;
+
+            StatusMessage = $"Opening screen for {SelectedVM.Name}...";
+            
+            try
+            {
+                // Check if screen window already exists for this VM
+                if (_screenWindows.TryGetValue(SelectedVM.Id, out var existingWindow))
+                {
+                    // Bring existing window to front
+                    existingWindow.Activate();
+                    existingWindow.Focus();
+                    StatusMessage = $"Screen window for {SelectedVM.Name} is already open";
+                    return;
+                }
+                
+                // Create new screen window
+                var screenWindow = new VMScreenWindow(
+                    SelectedVM.Id, 
+                    SelectedVM.Name, 
+                    SelectedVM.State == VMState.Running);
+                
+                // Track the window
+                _screenWindows[SelectedVM.Id] = screenWindow;
+                
+                // Remove from tracking when closed
+                screenWindow.Closed += (s, e) => _screenWindows.Remove(SelectedVM.Id);
+                
+                screenWindow.Show();
+                StatusMessage = $"Screen opened for {SelectedVM.Name}";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Error opening screen: {ex.Message}";
+                MessageBox.Show($"Failed to open VM screen:\n{ex.Message}", 
                     "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -424,7 +485,12 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                 
                 try
                 {
-                    // TODO: Call VMManager.DeleteVM(SelectedVM.Id)
+                    var vmId = SelectedVM.Id;
+                    
+                    // Remove from disk
+                    VMPersistenceService.Instance.DeleteVM(vmId);
+                    
+                    // Remove from collection
                     VirtualMachines.Remove(SelectedVM);
                     SelectedVM = VirtualMachines.FirstOrDefault();
                     StatusMessage = "Virtual machine deleted";
@@ -433,6 +499,8 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                 catch (Exception ex)
                 {
                     StatusMessage = $"Error deleting VM: {ex.Message}";
+                    MessageBox.Show($"Failed to delete virtual machine:\n{ex.Message}", 
+                        "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
         }
@@ -454,39 +522,11 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             
             try
             {
-                // TODO: Load VMs from VMManager
-                // For now, create sample VMs for demonstration
+                // Load VMs from persistence service
                 VirtualMachines.Clear();
-
-                var sampleVMs = new[]
-                {
-                    new VMStateModel
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        Name = "IA-64 Development",
-                        State = VMState.PoweredOff,
-                        CpuCount = 2,
-                        MemoryMB = 1024,
-                        Architecture = "IA-64",
-                        OperatingSystem = "IA-64 Linux",
-                        CreatedDate = DateTime.Now.AddDays(-7),
-                        ConfigurationPath = "VMs/dev.json"
-                    },
-                    new VMStateModel
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        Name = "Test Environment",
-                        State = VMState.PoweredOff,
-                        CpuCount = 1,
-                        MemoryMB = 512,
-                        Architecture = "IA-64",
-                        OperatingSystem = "IA-64 System",
-                        CreatedDate = DateTime.Now.AddDays(-3),
-                        ConfigurationPath = "VMs/test.json"
-                    }
-                };
-
-                foreach (var vm in sampleVMs)
+                
+                var savedVMs = VMPersistenceService.Instance.LoadAllVMs();
+                foreach (var vm in savedVMs)
                 {
                     VirtualMachines.Add(new VMListItemViewModel(vm));
                 }
@@ -502,6 +542,8 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             catch (Exception ex)
             {
                 StatusMessage = $"Error loading VMs: {ex.Message}";
+                MessageBox.Show($"Failed to load virtual machines:\n{ex.Message}", 
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -577,6 +619,33 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Save all VMs and cleanup resources
+        /// </summary>
+        public void Cleanup()
+        {
+            try
+            {
+                // Stop the update timer
+                _updateTimer?.Stop();
+                
+                // Save all VMs to disk
+                var vmsToSave = VirtualMachines.Select(vm => vm.GetModel()).ToList();
+                VMPersistenceService.Instance.SaveAllVMs(vmsToSave);
+                
+                // Close all screen windows
+                foreach (var window in _screenWindows.Values.ToList())
+                {
+                    window.Close();
+                }
+                _screenWindows.Clear();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error during cleanup: {ex.Message}");
+            }
         }
 
         #endregion

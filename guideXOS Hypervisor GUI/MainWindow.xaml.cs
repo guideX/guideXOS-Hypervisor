@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using guideXOS_Hypervisor_GUI.ViewModels;
 
 namespace guideXOS_Hypervisor_GUI
 {
@@ -19,6 +20,16 @@ namespace guideXOS_Hypervisor_GUI
         public MainWindow()
         {
             InitializeComponent();
+            Closed += MainWindow_Closed;
+        }
+
+        private void MainWindow_Closed(object? sender, EventArgs e)
+        {
+            // Save all VMs when the main window closes
+            if (DataContext is MainViewModel viewModel)
+            {
+                viewModel.Cleanup();
+            }
         }
     }
 }

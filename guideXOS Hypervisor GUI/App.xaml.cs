@@ -18,6 +18,25 @@ namespace guideXOS_Hypervisor_GUI
             InitializeTheme();
         }
 
+        protected override void OnExit(ExitEventArgs e)
+        {
+            base.OnExit(e);
+            
+            // Ensure all VMs are saved when the application exits
+            // This is a safety measure in addition to MainWindow's Closed event
+            try
+            {
+                if (MainWindow?.DataContext is ViewModels.MainViewModel viewModel)
+                {
+                    viewModel.Cleanup();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error saving VMs on exit: {ex.Message}");
+            }
+        }
+
         private void InitializeTheme()
         {
             // Apply dark theme by default (already loaded in App.xaml)

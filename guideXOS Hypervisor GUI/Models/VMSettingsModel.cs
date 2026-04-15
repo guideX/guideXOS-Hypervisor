@@ -24,6 +24,7 @@ namespace guideXOS_Hypervisor_GUI.Models
         // Boot Settings
         public string BootDevice { get; set; } = "disk";
         public int BootOrder { get; set; } = 1;
+        public string BootFromISO { get; set; } = string.Empty; // Path to ISO file for CD-ROM boot
 
         // Display Settings
         public int VideoMemoryMB { get; set; } = 32;

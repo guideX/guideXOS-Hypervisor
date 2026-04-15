@@ -233,5 +233,7 @@ namespace guideXOS_Hypervisor_GUI.Models
         public string DiskPath { get; set; } = string.Empty;
         public bool EnableProfiler { get; set; } = true;
         public bool EnableDebugger { get; set; } = false;
+        public string OperatingSystem { get; set; } = "IA-64 System";
+        public string Architecture { get; set; } = "IA-64";
     }
 }
