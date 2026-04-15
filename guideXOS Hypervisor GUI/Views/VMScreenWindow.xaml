@@ -9,8 +9,7 @@
         Height="540" Width="680"
         MinHeight="480" MinWidth="640"
         Background="{StaticResource BackgroundDarkBrush}"
-        WindowStartupLocation="CenterScreen"
-        Icon="/Resources/vm-icon.png">
+        WindowStartupLocation="CenterScreen">
     
     <Window.Resources>
         <Style TargetType="Button" x:Key="ScreenToolbarButton">
