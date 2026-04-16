@@ -304,9 +304,9 @@ namespace guideXOS_Hypervisor_GUI.Models
             
             // Memory configuration
             json.Append("\"memory\":{");
-            json.Append($"\"sizeBytes\":{MemoryMB * 1024 * 1024},");
+            json.Append($"\"memorySize\":{MemoryMB * 1024 * 1024},");
             json.Append("\"enableMMU\":true,");
-            json.Append("\"pageSizeBytes\":16384"); // 16KB default
+            json.Append("\"pageSize\":16384");  // 16KB default
             json.Append("},");
             
             // Boot configuration
@@ -320,7 +320,7 @@ namespace guideXOS_Hypervisor_GUI.Models
             json.Append("},");
             
             // Storage devices
-            json.Append("\"storage\":[");
+            json.Append("\"storageDevices\":[");
             for (int i = 0; i < Storage.Count; i++)
             {
                 var storage = Storage[i];

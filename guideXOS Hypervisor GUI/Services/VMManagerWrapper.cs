@@ -138,6 +138,26 @@ namespace guideXOS_Hypervisor_GUI.Services
             lock (_lock)
             {
                 Console.WriteLine($"CreateVM called. Mock mode: {_useMockExecution}");
+                Console.WriteLine($"Native manager handle: {_nativeManager}");
+                
+                // Write diagnostic log
+                try
+                {
+                    string diagLog = $@"
+=== VM Creation Diagnostic ===
+Time: {DateTime.Now}
+Mock mode: {_useMockExecution}
+Native manager: {_nativeManager}
+Config name: {config.Name}
+Storage count: {config.Storage.Count}
+";
+                    if (config.Storage.Count > 0)
+                    {
+                        diagLog += $"First storage: {config.Storage[0].ImagePath}\n";
+                    }
+                    System.IO.File.AppendAllText("vm_creation_log.txt", diagLog);
+                }
+                catch { }
                 
                 try
                 {
@@ -147,6 +167,18 @@ namespace guideXOS_Hypervisor_GUI.Services
                         string configJson = config.ToJson();
                         Console.WriteLine("Calling native VMManager_CreateVM with JSON:");
                         Console.WriteLine(configJson);
+                        Console.WriteLine("(JSON length: " + configJson.Length + " characters)");
+                        
+                        // Write JSON to file for inspection
+                        try
+                        {
+                            System.IO.File.WriteAllText("last_vm_config.json", configJson);
+                            Console.WriteLine("JSON saved to: last_vm_config.json");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Could not save JSON: {ex.Message}");
+                        }
                         
                         IntPtr result = VMManager_CreateVM(_nativeManager, configJson);
                         
@@ -166,6 +198,10 @@ namespace guideXOS_Hypervisor_GUI.Services
                             Console.WriteLine("  - Storage device file not found");
                             Console.WriteLine("  - Memory allocation failure");
                             Console.WriteLine("  - C++ exception during creation");
+                            Console.WriteLine("");
+                            Console.WriteLine("The C++ DLL should have printed detailed error messages above.");
+                            Console.WriteLine("If you don't see C++ error messages, the DLL might not be");
+                            Console.WriteLine("printing to this console (check Output window in VS).");
                             throw new Exception("Native VM creation failed. Check C++ logs for details.");
                         }
                     }

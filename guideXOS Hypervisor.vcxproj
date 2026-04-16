@@ -549,7 +549,9 @@
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
     <None Include="BUILD_ERRORS_FIXED.md" />
     <None Include="BUILD_FIX_QUICK.md" />
+    <None Include="COMPLETE_CPP_LOGGING.md" />
     <None Include="COMPLETE_STATUS.md" />
+    <None Include="CONSOLE_NOW_ENABLED.md" />
     <None Include="DIAGNOSTIC_LOGGING_ADDED.md" />
     <None Include="DLL_LINKER_ERRORS_FIX.md" />
     <None Include="DLL_MISSING_SUMMARY.md" />
@@ -618,6 +620,7 @@
     <None Include="docs\WEB_UI.md" />
     <None Include="docs\WEB_UI_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\WEB_UI_QUICK_REFERENCE.md" />
+    <None Include="ENHANCED_DIAGNOSTIC.md" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
     <None Include="examples\configs\standard-vm.json" />
@@ -627,6 +630,7 @@
     <None Include="fix_decoders.py" />
     <None Include="FIX_DLL_EXPORT_ERRORS.md" />
     <None Include="FIX_SUMMARY.md" />
+    <None Include="FOUND_THE_BUG.md" />
     <None Include="guideXOS Hypervisor Core.vcxproj" />
     <None Include="guideXOS Hypervisor DLL.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj" />
@@ -643,8 +647,10 @@
     <None Include="QUICK_FIX_STEPS.md" />
     <None Include="QUICK_START_ISO_BOOT.md" />
     <None Include="README.md" />
+    <None Include="REBUILD_AND_TEST_NOW.md" />
     <None Include="RUN_AND_CHECK_CONSOLE.md" />
     <None Include="STEPS_4_5_COMPLETION_SUMMARY.md" />
+    <None Include="URGENT_FIX.md" />
     <None Include="VM_NOT_BOOTING_SOLUTION.md" />
     <None Include="VS_SETUP.md" />
     <None Include="web\app.js" />
