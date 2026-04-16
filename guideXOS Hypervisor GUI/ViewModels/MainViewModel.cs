@@ -571,19 +571,14 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             
             try
             {
-                // Load VMs from persistence service
+                // Clear any existing VMs
                 VirtualMachines.Clear();
                 
-                var savedVMs = VMPersistenceService.Instance.LoadAllVMs();
-                foreach (var vm in savedVMs)
-                {
-                    VirtualMachines.Add(new VMListItemViewModel(vm));
-                }
-
-                if (VirtualMachines.Any())
-                {
-                    SelectedVM = VirtualMachines[0];
-                }
+                // TODO: Load VMs from persistence and recreate them in C++ backend
+                // For now, start with empty list - VMs are only created via "New" button
+                // This ensures C# and C++ VM lists are in sync
+                
+                Console.WriteLine("VM list initialized (empty). Create VMs using the 'New' button.");
 
                 UpdateStatistics();
                 StatusMessage = $"Loaded {VirtualMachines.Count} virtual machines";

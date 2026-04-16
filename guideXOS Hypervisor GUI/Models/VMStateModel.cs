@@ -337,11 +337,9 @@ namespace guideXOS_Hypervisor_GUI.Models
             }
             json.Append("],");
             
-            // Features
-            json.Append("\"features\":{");
+            // Features (as top-level fields, not nested object)
             json.Append($"\"enableDebugger\":{(EnableDebugger ? "true" : "false")},");
-            json.Append("\"enableSnapshot\":true");
-            json.Append("}");
+            json.Append("\"enableSnapshots\":true");
             
             json.Append("}");
             return json.ToString();
