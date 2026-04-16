@@ -1,7 +1,12 @@
 #include "VMManager_DLL.h"
-// Force GUIDEXOS_HYPERVISOR_EXPORTS to be defined when building DLL
+// CRITICAL: Define this BEFORE any includes to ensure DLL exports work correctly
 #ifndef GUIDEXOS_HYPERVISOR_EXPORTS
 #define GUIDEXOS_HYPERVISOR_EXPORTS
+#endif
+
+// Verify the macro is defined (compile-time check)
+#ifndef GUIDEXOS_HYPERVISOR_EXPORTS
+#error "GUIDEXOS_HYPERVISOR_EXPORTS must be defined for DLL compilation"
 #endif
 
 #include "VMManager_DLL.h"
@@ -9,6 +14,7 @@
 #include "VMConfiguration.h"
 #include <string>
 #include <cstring>
+#include <iostream>
 
 using namespace ia64;
 
@@ -54,35 +60,62 @@ GUIDEXOS_API const char* VMManager_CreateVM(
     VMManagerHandle manager,
     const char* configJson) {
     
-    if (!manager || !configJson) {
+    if (!manager) {
+        std::cerr << "ERROR: VMManager_CreateVM - manager is null" << std::endl;
         return nullptr;
     }
+    
+    if (!configJson) {
+        std::cerr << "ERROR: VMManager_CreateVM - configJson is null" << std::endl;
+        return nullptr;
+    }
+    
+    std::cout << "VMManager_CreateVM called" << std::endl;
+    std::cout << "Config JSON: " << configJson << std::endl;
     
     try {
         VMManager* mgr = reinterpret_cast<VMManager*>(manager);
         
+        std::cout << "Parsing JSON configuration..." << std::endl;
+        
         // Parse JSON configuration
-        VMConfiguration config = VMConfiguration::fromJson(std::string(configJson));
+        VMConfiguration config;
+        try {
+            config = VMConfiguration::fromJson(std::string(configJson));
+            std::cout << "? JSON parsed successfully" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "ERROR: JSON parsing failed: " << e.what() << std::endl;
+            return nullptr;
+        }
+        
+        std::cout << "Validating configuration..." << std::endl;
         
         // Validate configuration
         std::string validationError;
         if (!config.validate(&validationError)) {
-            // Log validation error
+            std::cerr << "ERROR: Configuration validation failed: " << validationError << std::endl;
             return nullptr;
         }
+        
+        std::cout << "? Configuration valid" << std::endl;
+        std::cout << "Creating VM with name: " << config.name << std::endl;
         
         // Create VM with the parsed configuration
         std::string vmId = mgr->createVM(config);
         
         if (vmId.empty()) {
+            std::cerr << "ERROR: VMManager::createVM returned empty string" << std::endl;
             return nullptr;
         }
         
+        std::cout << "? VM created successfully with ID: " << vmId << std::endl;
         return AllocateString(vmId);
+        
     } catch (const std::exception& e) {
-        // Log error: e.what()
+        std::cerr << "ERROR: Exception in VMManager_CreateVM: " << e.what() << std::endl;
         return nullptr;
     } catch (...) {
+        std::cerr << "ERROR: Unknown exception in VMManager_CreateVM" << std::endl;
         return nullptr;
     }
 }

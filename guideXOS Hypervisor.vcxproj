@@ -545,8 +545,12 @@
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="build_dll.ps1" />
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
+    <None Include="BUILD_ERRORS_FIXED.md" />
+    <None Include="BUILD_FIX_QUICK.md" />
     <None Include="COMPLETE_STATUS.md" />
+    <None Include="DIAGNOSTIC_LOGGING_ADDED.md" />
     <None Include="DLL_LINKER_ERRORS_FIX.md" />
     <None Include="DLL_MISSING_SUMMARY.md" />
     <None Include="docs\API_DOCUMENTATION.md" />
@@ -635,15 +639,18 @@
     <None Include="kernels\minimal_kernel.s" />
     <None Include="MANUAL_PROJECT_SETUP.md" />
     <None Include="PROJECT_SUMMARY.md" />
+    <None Include="QUICK_FIX_START_ERROR.md" />
     <None Include="QUICK_FIX_STEPS.md" />
     <None Include="QUICK_START_ISO_BOOT.md" />
     <None Include="README.md" />
+    <None Include="RUN_AND_CHECK_CONSOLE.md" />
     <None Include="STEPS_4_5_COMPLETION_SUMMARY.md" />
     <None Include="VM_NOT_BOOTING_SOLUTION.md" />
     <None Include="VS_SETUP.md" />
     <None Include="web\app.js" />
     <None Include="web\index.html" />
     <None Include="web\style.css" />
+    <None Include="WHY_START_FAILS.md" />
     <None Include="WHY_VM_DOESNT_BOOT.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

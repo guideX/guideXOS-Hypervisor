@@ -252,8 +252,12 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             
             try
             {
+                Console.WriteLine($"OnStartVM: Attempting to start VM {SelectedVM.Id}");
+                
                 // Call VMManager.Start(vmId)
                 bool success = VMManagerWrapper.Instance.StartVM(SelectedVM.Id);
+                
+                Console.WriteLine($"OnStartVM: StartVM returned {success}");
                 
                 if (success)
                 {
@@ -273,15 +277,22 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                 }
                 else
                 {
-                    StatusMessage = $"Failed to start {SelectedVM.Name}";
-                    MessageBox.Show($"Failed to start virtual machine: {SelectedVM.Name}", 
+                    string errorMsg = $"Failed to start {SelectedVM.Name}. Check console output for details.";
+                    StatusMessage = errorMsg;
+                    Console.WriteLine($"ERROR: {errorMsg}");
+                    Console.WriteLine("This usually means:");
+                    Console.WriteLine("1. The C++ VMManager_StartVM returned false");
+                    Console.WriteLine("2. The VM doesn't exist in the C++ backend");
+                    Console.WriteLine("3. The VM is in an invalid state");
+                    MessageBox.Show($"Failed to start virtual machine: {SelectedVM.Name}\n\nCheck the console window for detailed error information.", 
                         "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
             catch (Exception ex)
             {
                 StatusMessage = $"Error starting VM: {ex.Message}";
-                MessageBox.Show($"Failed to start virtual machine:\n{ex.Message}", 
+                Console.WriteLine($"EXCEPTION in OnStartVM: {ex}");
+                MessageBox.Show($"Failed to start virtual machine:\n{ex.Message}\n\nStack trace:\n{ex.StackTrace}", 
                     "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }

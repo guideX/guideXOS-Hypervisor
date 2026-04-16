@@ -199,7 +199,9 @@ bool VMManager::startVM(const std::string& vmId) {
                 
                 // Read boot sector (first 512 bytes for BIOS, or more for EFI)
                 std::vector<uint8_t> bootSector(4096); // 4KB to handle EFI boot
-                if (bootDevice->read(0, bootSector.data(), bootSector.size())) {
+                int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                
+                if (bytesRead > 0) {
                     // For IA-64, load to standard entry point (EFI entry is typically at 1MB)
                     uint64_t bootAddress = bootConfig.entryPoint != 0 ? bootConfig.entryPoint : 0x100000;
                     
@@ -207,7 +209,7 @@ bool VMManager::startVM(const std::string& vmId) {
                             std::to_string(bootAddress));
                     
                     // Load boot sector into VM memory
-                    if (instance->vm->loadProgram(bootSector.data(), bootSector.size(), bootAddress)) {
+                    if (instance->vm->loadProgram(bootSector.data(), static_cast<size_t>(bytesRead), bootAddress)) {
                         // Set entry point to bootloader
                         instance->vm->setEntryPoint(bootAddress);
                         LOG_INFO("Bootloader loaded successfully, entry point: 0x" + 
@@ -826,30 +828,58 @@ bool VMManager::canTransition(VMState from, VMState to) const {
 
 bool VMManager::createStorageDevices(VMInstance* instance,
                                     const std::vector<StorageConfiguration>& configs) {
+    
+    if (configs.empty()) {
+        LOG_INFO("No storage devices to create");
+        return true;
+    }
+    
+    LOG_INFO("Creating " + std::to_string(configs.size()) + " storage device(s)");
+    
     for (const auto& config : configs) {
+        LOG_INFO("  Device ID: " + config.deviceId);
+        LOG_INFO("  Type: " + config.deviceType);
+        LOG_INFO("  Path: " + config.imagePath);
+        LOG_INFO("  Read-only: " + std::string(config.readOnly ? "yes" : "no"));
+        
         // Create appropriate storage device type
         std::unique_ptr<IStorageDevice> device;
         
         if (config.deviceType == "raw") {
-            device = std::make_unique<RawDiskDevice>(
-                config.deviceId,
-                config.imagePath,
-                config.sizeBytes,
-                config.readOnly
-            );
+            try {
+                LOG_INFO("  Creating RawDiskDevice...");
+                device = std::make_unique<RawDiskDevice>(
+                    config.deviceId,
+                    config.imagePath,
+                    config.sizeBytes,
+                    config.readOnly
+                );
+                LOG_INFO("  ? RawDiskDevice created");
+            } catch (const std::exception& e) {
+                LOG_ERROR("  ERROR creating RawDiskDevice: " + std::string(e.what()));
+                return false;
+            }
         } else {
             LOG_ERROR("Unsupported storage device type: " + config.deviceType);
             return false;
         }
         
+        LOG_INFO("  Connecting storage device...");
         if (!device->connect()) {
-            LOG_ERROR("Failed to connect storage device: " + config.deviceId);
+            LOG_ERROR("  ERROR: Failed to connect storage device: " + config.deviceId);
+            LOG_ERROR("  File path: " + config.imagePath);
+            LOG_ERROR("  This usually means:");
+            LOG_ERROR("    - File doesn't exist");
+            LOG_ERROR("    - File is locked by another process");
+            LOG_ERROR("    - Insufficient permissions");
             return false;
         }
         
+        LOG_INFO("  ? Storage device connected successfully");
         instance->storageDevices.push_back(std::move(device));
     }
     
+    LOG_INFO("? All storage devices created successfully");
     return true;
 }
 

@@ -66,21 +66,36 @@ namespace guideXOS_Hypervisor_GUI.Services
             // Try to initialize native VMManager
             try
             {
+                System.Diagnostics.Debug.WriteLine("Attempting to load native VMManager DLL...");
                 _nativeManager = VMManager_Create();
                 if (_nativeManager != IntPtr.Zero)
                 {
                     _useMockExecution = false; // DLL is available!
+                    System.Diagnostics.Debug.WriteLine("? Native VMManager DLL loaded successfully!");
+                    Console.WriteLine("? Native VMManager DLL loaded successfully!");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("? VMManager_Create returned null - using mock execution");
+                    Console.WriteLine("? VMManager_Create returned null - using mock execution");
                 }
             }
-            catch (DllNotFoundException)
+            catch (DllNotFoundException ex)
             {
                 // DLL not found - use mock execution
                 _useMockExecution = true;
+                System.Diagnostics.Debug.WriteLine($"? DLL not found: {ex.Message}");
+                Console.WriteLine($"? DLL not found: {ex.Message}");
+                Console.WriteLine("Using mock execution mode");
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // Other error - use mock execution
                 _useMockExecution = true;
+                System.Diagnostics.Debug.WriteLine($"? Error loading DLL: {ex.Message}");
+                Console.WriteLine($"? Error loading native DLL: {ex.Message}");
+                Console.WriteLine($"   Type: {ex.GetType().Name}");
+                Console.WriteLine("Using mock execution mode");
             }
         }
         
@@ -122,29 +137,53 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
+                Console.WriteLine($"CreateVM called. Mock mode: {_useMockExecution}");
+                
                 try
                 {
                     if (!_useMockExecution && _nativeManager != IntPtr.Zero)
                     {
                         // Convert config to JSON and call native function
                         string configJson = config.ToJson();
+                        Console.WriteLine("Calling native VMManager_CreateVM with JSON:");
+                        Console.WriteLine(configJson);
+                        
                         IntPtr result = VMManager_CreateVM(_nativeManager, configJson);
                         
                         if (result != IntPtr.Zero)
                         {
                             string vmId = Marshal.PtrToStringAnsi(result) ?? string.Empty;
                             VMManager_FreeString(result);
+                            Console.WriteLine($"? VM created with ID: {vmId}");
                             return vmId;
                         }
+                        else
+                        {
+                            Console.WriteLine("? VMManager_CreateVM returned null");
+                            Console.WriteLine("ERROR: Native VM creation failed!");
+                            Console.WriteLine("This could be due to:");
+                            Console.WriteLine("  - Invalid configuration");
+                            Console.WriteLine("  - Storage device file not found");
+                            Console.WriteLine("  - Memory allocation failure");
+                            Console.WriteLine("  - C++ exception during creation");
+                            throw new Exception("Native VM creation failed. Check C++ logs for details.");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("Using mock VM creation (DLL not loaded)");
+                        // Mock: Return a new VM ID
+                        Console.WriteLine("Returning mock VM ID");
+                        return Guid.NewGuid().ToString();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Fall through to mock
+                    Console.WriteLine($"? Error in CreateVM: {ex.Message}");
+                    Console.WriteLine($"   Exception type: {ex.GetType().Name}");
+                    Console.WriteLine($"   Stack trace: {ex.StackTrace}");
+                    throw; // Re-throw so UI can show error
                 }
-                
-                // Mock: Return a new VM ID
-                return Guid.NewGuid().ToString();
             }
         }
 
@@ -155,15 +194,32 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
-                // TODO: Call native VMManager_StartVM
+                Console.WriteLine($"StartVM called for {vmId}. Mock mode: {_useMockExecution}");
                 
-                // Start mock execution thread for testing
+                bool started = false;
+                
+                // Call native StartVM if available
+                if (!_useMockExecution && _nativeManager != IntPtr.Zero)
+                {
+                    try
+                    {
+                        Console.WriteLine("Calling native VMManager_StartVM...");
+                        started = VMManager_StartVM(_nativeManager, vmId);
+                        Console.WriteLine($"Native StartVM returned: {started}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"? Error calling native StartVM: {ex.Message}");
+                    }
+                }
+                
+                // Start execution thread (for both native and mock)
                 var cts = new CancellationTokenSource();
                 _vmExecutionThreads[vmId] = cts;
                 
                 Task.Run(() => VMExecutionLoop(vmId, cts.Token), cts.Token);
                 
-                return true;
+                return started || _useMockExecution; // Return true for mock mode
             }
         }
 
@@ -174,6 +230,8 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
+                Console.WriteLine($"StopVM called for {vmId}");
+                
                 // Stop execution thread
                 if (_vmExecutionThreads.TryGetValue(vmId, out var cts))
                 {
@@ -184,8 +242,21 @@ namespace guideXOS_Hypervisor_GUI.Services
                 // Clean up mock framebuffer
                 _mockFramebuffers.Remove(vmId);
                 
-                // TODO: Call native VMManager_StopVM
-                return true;
+                // Call native StopVM if available
+                if (!_useMockExecution && _nativeManager != IntPtr.Zero)
+                {
+                    try
+                    {
+                        Console.WriteLine("Calling native VMManager_StopVM...");
+                        return VMManager_StopVM(_nativeManager, vmId);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"? Error calling native StopVM: {ex.Message}");
+                    }
+                }
+                
+                return true; // Mock always succeeds
             }
         }
 
