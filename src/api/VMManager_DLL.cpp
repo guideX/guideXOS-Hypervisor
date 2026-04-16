@@ -1,4 +1,10 @@
 #include "VMManager_DLL.h"
+// Force GUIDEXOS_HYPERVISOR_EXPORTS to be defined when building DLL
+#ifndef GUIDEXOS_HYPERVISOR_EXPORTS
+#define GUIDEXOS_HYPERVISOR_EXPORTS
+#endif
+
+#include "VMManager_DLL.h"
 #include "VMManager.h"
 #include "VMConfiguration.h"
 #include <string>
@@ -46,22 +52,26 @@ GUIDEXOS_API void VMManager_Destroy(VMManagerHandle manager) {
 
 GUIDEXOS_API const char* VMManager_CreateVM(
     VMManagerHandle manager,
-    const char* name,
-    size_t memorySize,
-    int cpuCount) {
+    const char* configJson) {
     
-    if (!manager || !name) {
+    if (!manager || !configJson) {
         return nullptr;
     }
     
     try {
         VMManager* mgr = reinterpret_cast<VMManager*>(manager);
         
-        // Create VM configuration
-        VMConfiguration config = VMConfiguration::createStandard(name, memorySize / (1024 * 1024));
-        config.cpu.cpuCount = cpuCount;
+        // Parse JSON configuration
+        VMConfiguration config = VMConfiguration::fromJson(std::string(configJson));
         
-        // Create VM
+        // Validate configuration
+        std::string validationError;
+        if (!config.validate(&validationError)) {
+            // Log validation error
+            return nullptr;
+        }
+        
+        // Create VM with the parsed configuration
         std::string vmId = mgr->createVM(config);
         
         if (vmId.empty()) {
@@ -69,6 +79,9 @@ GUIDEXOS_API const char* VMManager_CreateVM(
         }
         
         return AllocateString(vmId);
+    } catch (const std::exception& e) {
+        // Log error: e.what()
+        return nullptr;
     } catch (...) {
         return nullptr;
     }
@@ -136,6 +149,27 @@ GUIDEXOS_API bool VMManager_DeleteVM(VMManagerHandle manager, const char* vmId) 
         return mgr->deleteVM(vmId);
     } catch (...) {
         return false;
+    }
+}
+
+// ============================================================================
+// VM Execution Control
+// ============================================================================
+
+GUIDEXOS_API uint64_t VMManager_RunVM(
+    VMManagerHandle manager,
+    const char* vmId,
+    uint64_t maxCycles) {
+    
+    if (!manager || !vmId) {
+        return 0;
+    }
+    
+    try {
+        VMManager* mgr = reinterpret_cast<VMManager*>(manager);
+        return mgr->runVM(vmId, maxCycles);
+    } catch (...) {
+        return 0;
     }
 }
 

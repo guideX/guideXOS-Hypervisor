@@ -1,1 +1,57 @@
-﻿  guideXOS Hypervisor Core.vcxproj -> D:\devgitlab\guideXOS.Hypervisor\x64\Debug\guideXOS Hypervisor Core.lib
+﻿  test_debugger.cpp
+D:\devgitlab\guideXOS.Hypervisor\include\Watchpoint.h(11,8): warning C4099: 'ia64::CPUState': type name first seen using 'class' now seen using 'struct'
+  (compiling source file 'tests/test_debugger.cpp')
+      D:\devgitlab\guideXOS.Hypervisor\include\cpu_state.h(71,7):
+      see declaration of 'ia64::CPUState'
+  
+D:\devgitlab\guideXOS.Hypervisor\include\decoder.h(191,7): warning C4099: 'ia64::InstructionEx': type name first seen using 'struct' now seen using 'class'
+  (compiling source file 'tests/test_debugger.cpp')
+      D:\devgitlab\guideXOS.Hypervisor\include\decoder.h(191,7):
+      see declaration of 'ia64::InstructionEx'
+  
+D:\devgitlab\guideXOS.Hypervisor\include\Profiler.h(16,8): warning C4099: 'ia64::CPUState': type name first seen using 'class' now seen using 'struct'
+  (compiling source file 'tests/test_debugger.cpp')
+      D:\devgitlab\guideXOS.Hypervisor\include\cpu_state.h(71,7):
+      see declaration of 'ia64::CPUState'
+  
+  test_elf_validation.cpp
+D:\devgitlab\guideXOS.Hypervisor\include\Watchpoint.h(11,8): warning C4099: 'ia64::CPUState': type name first seen using 'class' now seen using 'struct'
+  (compiling source file 'tests/test_elf_validation.cpp')
+      D:\devgitlab\guideXOS.Hypervisor\include\loader.h(13,7):
+      see declaration of 'ia64::CPUState'
+  
+  test_watchpoint.cpp
+D:\devgitlab\guideXOS.Hypervisor\include\cpu_state.h(71,7): warning C4099: 'ia64::CPUState': type name first seen using 'struct' now seen using 'class'
+  (compiling source file 'tests/test_watchpoint.cpp')
+      D:\devgitlab\guideXOS.Hypervisor\include\cpu_state.h(71,7):
+      see declaration of 'ia64::CPUState'
+  
+  Generating Code...
+test_vm_reset.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_vm_isolation.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_vmmanager.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_vmconfig_serialization.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_syscall_dispatcher.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_scheduler_stepping.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_profiler.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_page_fault.obj : warning LNK4006: "void __cdecl printTest(char const *,bool)" (?printTest@@YAXPEBD_N@Z) already defined in test_watchpoint.obj; second definition ignored
+test_new_instructions.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_multi_cpu.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_mov_imm.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_mmu.obj : warning LNK4006: "void __cdecl printTest(char const *,bool)" (?printTest@@YAXPEBD_N@Z) already defined in test_watchpoint.obj; second definition ignored
+test_mmu.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_main.obj : warning LNK4006: "int testsRun" (?testsRun@@3HA) already defined in test_vm_reset.obj; second definition ignored
+test_main.obj : warning LNK4006: "int testsPassed" (?testsPassed@@3HA) already defined in test_vm_reset.obj; second definition ignored
+test_main.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_libc_bridge.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_kernel_bootstrap.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_isa_plugin.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_initramfs.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_fuzzer.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_elf_validation.obj : warning LNK4006: "void __cdecl printTest(char const *,bool)" (?printTest@@YAXPEBD_N@Z) already defined in test_watchpoint.obj; second definition ignored
+test_elf_validation.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_debugger.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_cpu_execution.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_boot_state_machine.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+test_bootstrap.obj : warning LNK4006: main already defined in test_watchpoint.obj; second definition ignored
+  guideXOS Hypervisor Core.vcxproj -> D:\devgitlab\guideXOS.Hypervisor\x64\Debug\guideXOS Hypervisor Core.lib

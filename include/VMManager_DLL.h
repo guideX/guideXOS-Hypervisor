@@ -40,18 +40,14 @@ GUIDEXOS_API void VMManager_Destroy(VMManagerHandle manager);
 // ============================================================================
 
 /**
- * Create a new VM
+ * Create a new VM from JSON configuration
  * @param manager VMManager handle
- * @param name VM name
- * @param memorySize Memory size in bytes
- * @param cpuCount Number of CPUs
+ * @param configJson JSON configuration string (see VMConfiguration format)
  * @return VM ID string (caller must free with VMManager_FreeString)
  */
 GUIDEXOS_API const char* VMManager_CreateVM(
     VMManagerHandle manager,
-    const char* name,
-    size_t memorySize,
-    int cpuCount);
+    const char* configJson);
 
 /**
  * Start a VM
@@ -92,6 +88,22 @@ GUIDEXOS_API bool VMManager_ResetVM(VMManagerHandle manager, const char* vmId);
  * @return true if successful
  */
 GUIDEXOS_API bool VMManager_DeleteVM(VMManagerHandle manager, const char* vmId);
+
+// ============================================================================
+// VM Execution Control
+// ============================================================================
+
+/**
+ * Run VM for specified number of cycles
+ * @param manager VMManager handle
+ * @param vmId VM identifier
+ * @param maxCycles Maximum cycles to execute
+ * @return Number of cycles actually executed
+ */
+GUIDEXOS_API uint64_t VMManager_RunVM(
+    VMManagerHandle manager,
+    const char* vmId,
+    uint64_t maxCycles);
 
 // ============================================================================
 // Framebuffer Access

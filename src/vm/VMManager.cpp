@@ -1,5 +1,7 @@
 #include "VMManager.h"
+#include "VMManager.h"
 #include "RawDiskDevice.h"
+#include "IStorageDevice.h"
 #include "logger.h"
 #include <sstream>
 #include <iomanip>
@@ -177,6 +179,47 @@ bool VMManager::startVM(const std::string& vmId) {
             if (!instance->vm->reset()) {
                 instance->metadata.setError("Failed to reset VM");
                 return false;
+            }
+        }
+        
+        // Load bootloader from boot device if configured
+        const auto& bootConfig = instance->metadata.configuration.boot;
+        if (!bootConfig.bootDevice.empty() && !bootConfig.directBoot) {
+            // Find the boot device
+            IStorageDevice* bootDevice = nullptr;
+            for (const auto& device : instance->storageDevices) {
+                if (device->getDeviceId() == bootConfig.bootDevice) {
+                    bootDevice = device.get();
+                    break;
+                }
+            }
+            
+            if (bootDevice) {
+                LOG_INFO("Loading bootloader from device: " + bootConfig.bootDevice);
+                
+                // Read boot sector (first 512 bytes for BIOS, or more for EFI)
+                std::vector<uint8_t> bootSector(4096); // 4KB to handle EFI boot
+                if (bootDevice->read(0, bootSector.data(), bootSector.size())) {
+                    // For IA-64, load to standard entry point (EFI entry is typically at 1MB)
+                    uint64_t bootAddress = bootConfig.entryPoint != 0 ? bootConfig.entryPoint : 0x100000;
+                    
+                    LOG_INFO("Loading boot sector to address: 0x" + 
+                            std::to_string(bootAddress));
+                    
+                    // Load boot sector into VM memory
+                    if (instance->vm->loadProgram(bootSector.data(), bootSector.size(), bootAddress)) {
+                        // Set entry point to bootloader
+                        instance->vm->setEntryPoint(bootAddress);
+                        LOG_INFO("Bootloader loaded successfully, entry point: 0x" + 
+                                std::to_string(bootAddress));
+                    } else {
+                        LOG_ERROR("Failed to load bootloader into memory");
+                    }
+                } else {
+                    LOG_ERROR("Failed to read boot sector from device");
+                }
+            } else {
+                LOG_WARN("Boot device not found: " + bootConfig.bootDevice);
             }
         }
         

@@ -41,15 +41,56 @@ namespace guideXOS_Hypervisor_GUI.Services
         
         [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr VMManager_GetVMs(IntPtr manager, out int count);
+        
+        [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern ulong VMManager_RunVM(IntPtr manager, string vmId, ulong maxCycles);
+        
+        [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern bool VMManager_GetFramebuffer(IntPtr manager, string vmId, byte[] buffer, int bufferSize, out int width, out int height);
+        
+        [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern bool VMManager_GetFramebufferDimensions(IntPtr manager, string vmId, out int width, out int height);
+        
+        [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void VMManager_FreeString(IntPtr str);
 
         private static VMManagerWrapper? _instance;
         private readonly object _lock = new();
         private readonly Dictionary<string, CancellationTokenSource> _vmExecutionThreads = new();
         private readonly Dictionary<string, byte[]> _mockFramebuffers = new();
+        private IntPtr _nativeManager = IntPtr.Zero;
+        private bool _useMockExecution = true; // Set to false when DLL is available
 
         private VMManagerWrapper()
         {
-            // Initialize native VMManager
+            // Try to initialize native VMManager
+            try
+            {
+                _nativeManager = VMManager_Create();
+                if (_nativeManager != IntPtr.Zero)
+                {
+                    _useMockExecution = false; // DLL is available!
+                }
+            }
+            catch (DllNotFoundException)
+            {
+                // DLL not found - use mock execution
+                _useMockExecution = true;
+            }
+            catch (Exception)
+            {
+                // Other error - use mock execution
+                _useMockExecution = true;
+            }
+        }
+        
+        ~VMManagerWrapper()
+        {
+            if (_nativeManager != IntPtr.Zero)
+            {
+                VMManager_Destroy(_nativeManager);
+                _nativeManager = IntPtr.Zero;
+            }
         }
 
         public static VMManagerWrapper Instance
@@ -81,8 +122,28 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
-                // TODO: Call native VMManager_CreateVM
-                // Return a new VM ID
+                try
+                {
+                    if (!_useMockExecution && _nativeManager != IntPtr.Zero)
+                    {
+                        // Convert config to JSON and call native function
+                        string configJson = config.ToJson();
+                        IntPtr result = VMManager_CreateVM(_nativeManager, configJson);
+                        
+                        if (result != IntPtr.Zero)
+                        {
+                            string vmId = Marshal.PtrToStringAnsi(result) ?? string.Empty;
+                            VMManager_FreeString(result);
+                            return vmId;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fall through to mock
+                }
+                
+                // Mock: Return a new VM ID
                 return Guid.NewGuid().ToString();
             }
         }
@@ -323,8 +384,8 @@ namespace guideXOS_Hypervisor_GUI.Services
         
         #region Debugger API
         
+        // Debugger P/Invoke declarations (optional - can be added later)
         /*
-        // TODO: P/Invoke declarations for debugger functions
         [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern bool VMManager_AttachDebugger(IntPtr manager, string vmId);
         
@@ -357,12 +418,6 @@ namespace guideXOS_Hypervisor_GUI.Services
         
         [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern bool VMManager_ReadMemory(IntPtr manager, string vmId, ulong address, byte[] buffer, int size);
-        
-        [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern bool VMManager_GetFramebuffer(IntPtr manager, string vmId, byte[] buffer, int bufferSize, out int width, out int height);
-        
-        [DllImport("guideXOS_Hypervisor.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern bool VMManager_GetFramebufferDimensions(IntPtr manager, string vmId, out int width, out int height);
         */
         
         /// <summary>
@@ -553,27 +608,79 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
+                // Try real DLL first
+                if (!_useMockExecution && _nativeManager != IntPtr.Zero)
+                {
+                    try
+                    {
+                        return VMManager_GetFramebuffer(_nativeManager, vmId, buffer, buffer.Length, out width, out height);
+                    }
+                    catch
+                    {
+                        // Fall back to mock
+                    }
+                }
+                
+                // Use mock framebuffer
                 width = 640;
                 height = 480;
                 
-                // Return mock framebuffer if available
                 if (_mockFramebuffers.TryGetValue(vmId, out byte[]? framebuffer))
                 {
                     Array.Copy(framebuffer, buffer, Math.Min(buffer.Length, framebuffer.Length));
                     return true;
                 }
                 
-                // TODO: Call native VMManager_GetFramebuffer when DLL is available
                 return false;
             }
         }
         
         /// <summary>
-        /// Mock VM execution loop for testing
-        /// This simulates VM execution by updating a framebuffer
-        /// Replace with real P/Invoke call to VMManager_RunVM when DLL is built
+        /// VM execution loop - calls real VMManager_RunVM or uses mock
         /// </summary>
         private void VMExecutionLoop(string vmId, CancellationToken cancellationToken)
+        {
+            const ulong cyclesPerFrame = 10000; // ~10K cycles per frame
+            
+            if (_useMockExecution)
+            {
+                // Mock execution for testing
+                VMExecutionLoopMock(vmId, cancellationToken);
+                return;
+            }
+            
+            // Real execution using native DLL
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    if (_nativeManager != IntPtr.Zero)
+                    {
+                        // Call native VMManager_RunVM to execute VM cycles
+                        ulong cyclesExecuted = VMManager_RunVM(_nativeManager, vmId, cyclesPerFrame);
+                        
+                        if (cyclesExecuted == 0)
+                        {
+                            // VM halted or error
+                            break;
+                        }
+                    }
+                    
+                    // Sleep for ~16ms (60 FPS)
+                    Thread.Sleep(16);
+                }
+                catch (Exception)
+                {
+                    // Stop on error
+                    break;
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Mock VM execution loop for testing without DLL
+        /// </summary>
+        private void VMExecutionLoopMock(string vmId, CancellationToken cancellationToken)
         {
             // Create mock framebuffer (640x480, BGRA32 = 4 bytes per pixel)
             byte[] framebuffer = new byte[640 * 480 * 4];
@@ -589,8 +696,7 @@ namespace guideXOS_Hypervisor_GUI.Services
             {
                 try
                 {
-                    // TODO: Replace with real call to VMManager_RunVM(manager, vmId, cyclesPerFrame)
-                    // For now, simulate execution by drawing animated pattern
+                    // Simulate execution by drawing animated pattern
                     UpdateMockFramebuffer(framebuffer, frame++);
                     
                     // Sleep for ~16ms (60 FPS)
@@ -647,8 +753,20 @@ namespace guideXOS_Hypervisor_GUI.Services
         {
             lock (_lock)
             {
-                // TODO: Call native VMManager_GetFramebufferDimensions
-                // For now, return default dimensions
+                // Try real DLL first
+                if (!_useMockExecution && _nativeManager != IntPtr.Zero)
+                {
+                    try
+                    {
+                        return VMManager_GetFramebufferDimensions(_nativeManager, vmId, out width, out height);
+                    }
+                    catch
+                    {
+                        // Fall back to mock
+                    }
+                }
+                
+                // Default dimensions
                 width = 640;
                 height = 480;
                 return true;

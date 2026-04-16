@@ -222,18 +222,129 @@ namespace guideXOS_Hypervisor_GUI.Models
     }
 
     /// <summary>
-    /// VM Configuration settings
+    /// Storage device configuration matching C++ StorageConfiguration
+    /// </summary>
+    public class StorageConfiguration
+    {
+        public string DeviceId { get; set; } = "disk0";
+        public string DeviceType { get; set; } = "raw"; // "raw", "qcow2", "vhd"
+        public string ImagePath { get; set; } = string.Empty;
+        public bool ReadOnly { get; set; } = false;
+        public ulong SizeBytes { get; set; } = 0;
+        public uint BlockSize { get; set; } = 512;
+    }
+
+    /// <summary>
+    /// VM Configuration settings - enhanced with storage support
     /// </summary>
     public class VMConfiguration
     {
         public string Name { get; set; } = "New Virtual Machine";
         public int CpuCount { get; set; } = 1;
         public ulong MemoryMB { get; set; } = 512;
-        public string BootDevice { get; set; } = "disk";
+        public string BootDevice { get; set; } = "disk0";
         public string DiskPath { get; set; } = string.Empty;
         public bool EnableProfiler { get; set; } = true;
         public bool EnableDebugger { get; set; } = false;
         public string OperatingSystem { get; set; } = "IA-64 System";
         public string Architecture { get; set; } = "IA-64";
+        
+        // Storage devices collection
+        public List<StorageConfiguration> Storage { get; set; } = new List<StorageConfiguration>();
+
+        /// <summary>
+        /// Create VM configuration with ISO/IMG file attached
+        /// </summary>
+        public static VMConfiguration CreateWithISO(string name, string isoPath, ulong memoryMB = 512, int cpuCount = 1)
+        {
+            var config = new VMConfiguration
+            {
+                Name = name,
+                CpuCount = cpuCount,
+                MemoryMB = memoryMB,
+                DiskPath = isoPath,
+                EnableProfiler = true,
+                EnableDebugger = true
+            };
+
+            if (!string.IsNullOrEmpty(isoPath))
+            {
+                config.Storage.Add(new StorageConfiguration
+                {
+                    DeviceId = "disk0",
+                    DeviceType = "raw",
+                    ImagePath = isoPath,
+                    ReadOnly = true, // ISOs are read-only
+                    BlockSize = 2048 // CD-ROM standard block size
+                });
+                config.BootDevice = "disk0";
+            }
+
+            return config;
+        }
+
+        /// <summary>
+        /// Convert configuration to JSON for C++ backend
+        /// </summary>
+        public string ToJson()
+        {
+            var json = new System.Text.StringBuilder();
+            json.Append("{");
+            
+            // Basic info
+            json.Append($"\"name\":\"{Name}\",");
+            
+            // CPU configuration
+            json.Append("\"cpu\":{");
+            json.Append($"\"isaType\":\"{Architecture}\",");
+            json.Append($"\"cpuCount\":{CpuCount},");
+            json.Append($"\"clockFrequency\":0,");
+            json.Append($"\"enableProfiling\":{(EnableProfiler ? "true" : "false")}");
+            json.Append("},");
+            
+            // Memory configuration
+            json.Append("\"memory\":{");
+            json.Append($"\"sizeBytes\":{MemoryMB * 1024 * 1024},");
+            json.Append("\"enableMMU\":true,");
+            json.Append("\"pageSizeBytes\":16384"); // 16KB default
+            json.Append("},");
+            
+            // Boot configuration
+            json.Append("\"boot\":{");
+            json.Append($"\"bootDevice\":\"{BootDevice}\",");
+            json.Append("\"kernelPath\":\"\",");
+            json.Append("\"initrdPath\":\"\",");
+            json.Append("\"bootArgs\":\"\",");
+            json.Append("\"entryPoint\":0,");
+            json.Append("\"directBoot\":false");
+            json.Append("},");
+            
+            // Storage devices
+            json.Append("\"storage\":[");
+            for (int i = 0; i < Storage.Count; i++)
+            {
+                var storage = Storage[i];
+                json.Append("{");
+                json.Append($"\"deviceId\":\"{storage.DeviceId}\",");
+                json.Append($"\"deviceType\":\"{storage.DeviceType}\",");
+                // Escape backslashes for Windows paths
+                json.Append($"\"imagePath\":\"{storage.ImagePath.Replace("\\", "\\\\")}\",");
+                json.Append($"\"readOnly\":{(storage.ReadOnly ? "true" : "false")},");
+                json.Append($"\"sizeBytes\":{storage.SizeBytes},");
+                json.Append($"\"blockSize\":{storage.BlockSize}");
+                json.Append("}");
+                if (i < Storage.Count - 1) json.Append(",");
+            }
+            json.Append("],");
+            
+            // Features
+            json.Append("\"features\":{");
+            json.Append($"\"enableDebugger\":{(EnableDebugger ? "true" : "false")},");
+            json.Append("\"enableSnapshot\":true");
+            json.Append("}");
+            
+            json.Append("}");
+            return json.ToString();
+        }
     }
 }

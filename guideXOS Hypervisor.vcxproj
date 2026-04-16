@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -131,91 +131,346 @@
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
     <ClCompile Include="examples\bare_metal_example.cpp" />
-    <ClCompile Include="examples\boot_state_machine_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\boot_trace_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\config_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\initramfs_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\kernel_validation_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\virtual_devices_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\virtual_disk_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\vm_snapshot_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="examples\webui_example.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="kernels\minimal_kernel.c" />
-    <ClCompile Include="main.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="src\abi\abi.cpp" />
-    <ClCompile Include="src\api\dllmain.cpp" />
-    <ClCompile Include="src\api\RestAPIServer.cpp" />
-    <ClCompile Include="src\api\VMControlAPIHandler.cpp" />
-    <ClCompile Include="src\api\VMManager_DLL.cpp" />
-    <ClCompile Include="src\core\cpu.cpp" />
-    <ClCompile Include="src\core\cpu_core.cpp" />
-    <ClCompile Include="src\decoder\atype_decoder.cpp" />
-    <ClCompile Include="src\decoder\btype_decoder.cpp" />
-    <ClCompile Include="src\decoder\decoder.cpp" />
-    <ClCompile Include="src\decoder\itype_decoder.cpp" />
-    <ClCompile Include="src\decoder\lx_decoder.cpp" />
-    <ClCompile Include="src\decoder\mtype_decoder.cpp" />
-    <ClCompile Include="src\fuzzer\Fuzzer.cpp" />
-    <ClCompile Include="src\io\Console.cpp" />
-    <ClCompile Include="src\io\ConsoleOutputBuffer.cpp" />
-    <ClCompile Include="src\io\FramebufferDevice.cpp" />
-    <ClCompile Include="src\io\InterruptController.cpp" />
-    <ClCompile Include="src\io\Timer.cpp" />
-    <ClCompile Include="src\isa\ExampleISAPlugin.cpp" />
-    <ClCompile Include="src\isa\IA64ISAPlugin.cpp" />
-    <ClCompile Include="src\isa\ISAPluginRegistry.cpp" />
-    <ClCompile Include="src\libc\libc_bridge.cpp" />
-    <ClCompile Include="src\loader\bootstrap.cpp" />
-    <ClCompile Include="src\loader\crt0.cpp" />
-    <ClCompile Include="src\loader\dynamic_linker.cpp" />
-    <ClCompile Include="src\loader\KernelValidator.cpp" />
-    <ClCompile Include="src\loader\loader.cpp" />
-    <ClCompile Include="src\memory\memory.cpp" />
-    <ClCompile Include="src\mmu\mmu.cpp" />
-    <ClCompile Include="src\profiler\Profiler.cpp" />
-    <ClCompile Include="src\storage\FilesystemMount.cpp" />
-    <ClCompile Include="src\storage\InitramfsDevice.cpp" />
-    <ClCompile Include="src\storage\PathResolver.cpp" />
-    <ClCompile Include="src\storage\RawDiskDevice.cpp" />
-    <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp" />
-    <ClCompile Include="src\storage\VirtualBlockDevice.cpp" />
-    <ClCompile Include="src\storage\VirtualDiskManager.cpp" />
-    <ClCompile Include="src\syscall\SyscallDispatcher.cpp" />
-    <ClCompile Include="src\vm\BootTraceSystem.cpp" />
-    <ClCompile Include="src\vm\CPUContext.cpp" />
-    <ClCompile Include="src\vm\KernelPanic.cpp" />
-    <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" />
-    <ClCompile Include="src\vm\VirtualMachine.cpp" />
-    <ClCompile Include="src\vm\VMBootStateMachine.cpp" />
-    <ClCompile Include="src\vm\VMManager.cpp" />
-    <ClCompile Include="src\vm\VMSnapshotManager.cpp" />
-    <ClCompile Include="src\webui\WebUIServer.cpp" />
-    <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_boot_state_machine.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_fuzzer.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_initramfs.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_isa_plugin.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_kernel_bootstrap.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_libc_bridge.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_new_instructions.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_vmconfig_serialization.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_vmmanager.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_vm_isolation.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_vm_reset.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_io_devices.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_mmu.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_mov_imm.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_multi_cpu.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_page_fault.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_scheduler_stepping.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_syscall_dispatcher.cpp" ExcludedFromBuild="true" />
-    <ClCompile Include="tests\test_watchpoint.cpp" ExcludedFromBuild="true" />
+    <ClCompile Include="examples\boot_state_machine_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\boot_trace_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\config_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\initramfs_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\kernel_validation_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\profiler_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\virtual_devices_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\virtual_disk_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\vm_snapshot_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="examples\webui_example.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="kernels\minimal_kernel.c">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="main.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\abi\abi.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\api\dllmain.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\api\RestAPIServer.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\api\VMControlAPIHandler.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\api\VMManager_DLL.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\core\cpu.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\core\cpu_core.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\decoder\atype_decoder.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\decoder\btype_decoder.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\decoder\decoder.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\decoder\itype_decoder.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\decoder\lx_decoder.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\decoder\mtype_decoder.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\fuzzer\Fuzzer.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\io\Console.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\io\ConsoleOutputBuffer.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\io\FramebufferDevice.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\io\InterruptController.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\io\Timer.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\isa\ExampleISAPlugin.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\isa\IA64ISAPlugin.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\isa\ISAPluginRegistry.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\libc\libc_bridge.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\loader\bootstrap.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\loader\crt0.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\loader\dynamic_linker.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\loader\KernelValidator.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\loader\loader.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\memory\memory.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\mmu\mmu.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\profiler\Profiler.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\FilesystemMount.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\InitramfsDevice.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\PathResolver.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\RawDiskDevice.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\VirtualBlockDevice.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\storage\VirtualDiskManager.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\syscall\SyscallDispatcher.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\BootTraceSystem.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\CPUContext.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\KernelPanic.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\SimpleCPUScheduler.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\VirtualMachine.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\VMBootStateMachine.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\VMManager.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\vm\VMSnapshotManager.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\webui\WebUIServer.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_bootstrap.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_boot_state_machine.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_cpu_execution.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_fuzzer.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_initramfs.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_isa_plugin.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_kernel_bootstrap.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_libc_bridge.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_new_instructions.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_profiler.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_vmconfig_serialization.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_vmmanager.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_vm_isolation.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_vm_reset.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\\test_debugger.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_elf_validation.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_io_devices.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_main.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_mmu.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_mov_imm.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_multi_cpu.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_page_fault.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_scheduler_stepping.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_syscall_dispatcher.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="tests\test_watchpoint.cpp" ExcludedFromBuild="true">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
@@ -291,6 +546,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
+    <None Include="COMPLETE_STATUS.md" />
+    <None Include="DLL_LINKER_ERRORS_FIX.md" />
     <None Include="DLL_MISSING_SUMMARY.md" />
     <None Include="docs\API_DOCUMENTATION.md" />
     <None Include="docs\API_IMPLEMENTATION_SUMMARY.md" />
@@ -362,18 +619,27 @@
     <None Include="examples\configs\standard-vm.json" />
     <None Include="fix_all_decoders.ps1" />
     <None Include="fix_build.ps1" />
+    <None Include="fix_core_project.ps1" />
     <None Include="fix_decoders.py" />
+    <None Include="FIX_DLL_EXPORT_ERRORS.md" />
+    <None Include="FIX_SUMMARY.md" />
     <None Include="guideXOS Hypervisor Core.vcxproj" />
     <None Include="guideXOS Hypervisor DLL.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
+    <None Include="HOW_TO_BOOT_FROM_ISO.md" />
     <None Include="HOW_TO_MAKE_VM_BOOT.md" />
+    <None Include="ISO_BOOT_COMPLETE.md" />
     <None Include="kernels\kernel.ld" />
     <None Include="kernels\minimal_kernel.s" />
     <None Include="MANUAL_PROJECT_SETUP.md" />
     <None Include="PROJECT_SUMMARY.md" />
+    <None Include="QUICK_FIX_STEPS.md" />
+    <None Include="QUICK_START_ISO_BOOT.md" />
     <None Include="README.md" />
+    <None Include="STEPS_4_5_COMPLETION_SUMMARY.md" />
+    <None Include="VM_NOT_BOOTING_SOLUTION.md" />
     <None Include="VS_SETUP.md" />
     <None Include="web\app.js" />
     <None Include="web\index.html" />

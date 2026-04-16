@@ -161,16 +161,40 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             
             try
             {
-                // TODO: Show VM creation wizard
-                // For now, create a sample VM configuration
-                var config = new VMConfiguration
+                // Prompt user to select ISO/IMG file
+                var openDialog = new Microsoft.Win32.OpenFileDialog
                 {
-                    Name = $"Virtual Machine {VirtualMachines.Count + 1}",
-                    CpuCount = 1,
-                    MemoryMB = 512,
-                    BootDevice = "disk",
-                    EnableProfiler = true
+                    Filter = "Disk Images|*.iso;*.img;*.ima|ISO Images (*.iso)|*.iso|IMG Files (*.img;*.ima)|*.img;*.ima|All Files (*.*)|*.*",
+                    Title = "Select Bootable Disk Image (Optional)",
+                    CheckFileExists = true
                 };
+                
+                string? isoPath = openDialog.ShowDialog() == true ? openDialog.FileName : null;
+                
+                // Create VM configuration
+                VMConfiguration config;
+                if (!string.IsNullOrEmpty(isoPath))
+                {
+                    // Create VM with ISO attached
+                    config = VMConfiguration.CreateWithISO(
+                        name: $"Virtual Machine {VirtualMachines.Count + 1}",
+                        isoPath: isoPath,
+                        memoryMB: 512,
+                        cpuCount: 1
+                    );
+                }
+                else
+                {
+                    // Create VM without storage
+                    config = new VMConfiguration
+                    {
+                        Name = $"Virtual Machine {VirtualMachines.Count + 1}",
+                        CpuCount = 1,
+                        MemoryMB = 512,
+                        BootDevice = "disk0",
+                        EnableProfiler = true
+                    };
+                }
 
                 // Call VMManager.CreateVM
                 var vmId = VMManagerWrapper.Instance.CreateVM(config);
@@ -187,6 +211,19 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                     CreatedDate = DateTime.Now,
                     ConfigurationPath = $"VMs/{vmId}.json"
                 };
+                
+                // Store disk path if provided
+                if (!string.IsNullOrEmpty(isoPath))
+                {
+                    newVM.DiskImages.Add(new DiskImageInfo
+                    {
+                        Path = isoPath,
+                        Type = "ISO",
+                        ReadOnly = true,
+                        Controller = "SATA",
+                        Port = 0
+                    });
+                }
 
                 var vmViewModel = new VMListItemViewModel(newVM);
                 VirtualMachines.Add(vmViewModel);
@@ -195,7 +232,8 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                 // Save the new VM to disk
                 VMPersistenceService.Instance.SaveVM(newVM);
 
-                StatusMessage = $"Created virtual machine: {newVM.Name}";
+                StatusMessage = $"Created virtual machine: {newVM.Name}" + 
+                    (isoPath != null ? $" with disk image: {System.IO.Path.GetFileName(isoPath)}" : "");
                 UpdateStatistics();
             }
             catch (Exception ex)
