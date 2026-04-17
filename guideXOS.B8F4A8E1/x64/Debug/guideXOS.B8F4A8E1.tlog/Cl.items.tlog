@@ -31,6 +31,7 @@ D:\devgitlab\guideXOS.Hypervisor\src\storage\FilesystemMount.cpp;D:\devgitlab\gu
 D:\devgitlab\guideXOS.Hypervisor\src\storage\InitramfsDevice.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\InitramfsDevice.obj
 D:\devgitlab\guideXOS.Hypervisor\src\storage\PathResolver.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\PathResolver.obj
 D:\devgitlab\guideXOS.Hypervisor\src\storage\RawDiskDevice.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\RawDiskDevice.obj
+D:\devgitlab\guideXOS.Hypervisor\src\storage\ISO9660Parser.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\ISO9660Parser.obj
 D:\devgitlab\guideXOS.Hypervisor\src\storage\SimpleReadOnlyFS.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\SimpleReadOnlyFS.obj
 D:\devgitlab\guideXOS.Hypervisor\src\storage\VirtualBlockDevice.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\VirtualBlockDevice.obj
 D:\devgitlab\guideXOS.Hypervisor\src\storage\VirtualDiskManager.cpp;D:\devgitlab\guideXOS.Hypervisor\guideXOS.B8F4A8E1\x64\Debug\VirtualDiskManager.obj

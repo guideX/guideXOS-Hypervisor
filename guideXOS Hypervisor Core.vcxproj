@@ -143,6 +143,8 @@
     </ClCompile>
     <ClCompile Include="src\storage\RawDiskDevice.cpp">
     </ClCompile>
+    <ClCompile Include="src\storage\ISO9660Parser.cpp">
+    </ClCompile>
     <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp">
     </ClCompile>
     <ClCompile Include="src\storage\VirtualBlockDevice.cpp">

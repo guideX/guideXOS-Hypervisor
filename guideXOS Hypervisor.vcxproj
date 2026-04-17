@@ -550,6 +550,7 @@
     <None Include="BUILD_AND_TEST_ISO_PARSER.md" />
     <None Include="build_dll.ps1" />
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
+    <None Include="BUILD_ERRORS_FINAL_FIX.md" />
     <None Include="BUILD_ERRORS_FIXED.md" />
     <None Include="BUILD_FIX_QUICK.md" />
     <None Include="COMPLETE_CPP_LOGGING.md" />
