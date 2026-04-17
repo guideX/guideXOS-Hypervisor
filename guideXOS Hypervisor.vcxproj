@@ -311,6 +311,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\storage\ISO9660Parser.cpp" />
     <ClCompile Include="src\storage\PathResolver.cpp" ExcludedFromBuild="true">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
@@ -507,6 +508,7 @@
     <ClInclude Include="include\IODevice.h" />
     <ClInclude Include="include\IPCAPIServer.h" />
     <ClInclude Include="include\ISAPluginRegistry.h" />
+    <ClInclude Include="include\ISO9660Parser.h" />
     <ClInclude Include="include\IStorageDevice.h" />
     <ClInclude Include="include\IVirtualMachine.h" />
     <ClInclude Include="include\JsonUtils.h" />
@@ -545,6 +547,7 @@
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="BUILD_AND_TEST_ISO_PARSER.md" />
     <None Include="build_dll.ps1" />
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
     <None Include="BUILD_ERRORS_FIXED.md" />
@@ -641,6 +644,7 @@
     <None Include="HOW_TO_BOOT_FROM_ISO.md" />
     <None Include="HOW_TO_MAKE_VM_BOOT.md" />
     <None Include="ISO_BOOT_COMPLETE.md" />
+    <None Include="ISO_PARSER_COMPLETE.md" />
     <None Include="kernels\kernel.ld" />
     <None Include="kernels\minimal_kernel.s" />
     <None Include="MANUAL_PROJECT_SETUP.md" />

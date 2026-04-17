@@ -1,7 +1,7 @@
 #include "VMManager.h"
-#include "VMManager.h"
 #include "RawDiskDevice.h"
 #include "IStorageDevice.h"
+#include "ISO9660Parser.h"
 #include "logger.h"
 #include <sstream>
 #include <iomanip>
@@ -197,28 +197,109 @@ bool VMManager::startVM(const std::string& vmId) {
             if (bootDevice) {
                 LOG_INFO("Loading bootloader from device: " + bootConfig.bootDevice);
                 
-                // Read boot sector (first 512 bytes for BIOS, or more for EFI)
-                std::vector<uint8_t> bootSector(4096); // 4KB to handle EFI boot
-                int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                // Try to parse as ISO 9660 filesystem
+                LOG_INFO("Attempting to parse ISO 9660 filesystem...");
+                ISO9660Parser isoParser(bootDevice);
                 
-                if (bytesRead > 0) {
-                    // For IA-64, load to standard entry point (EFI entry is typically at 1MB)
-                    uint64_t bootAddress = bootConfig.entryPoint != 0 ? bootConfig.entryPoint : 0x100000;
+                if (isoParser.parse()) {
+                    LOG_INFO("? ISO filesystem parsed successfully");
                     
-                    LOG_INFO("Loading boot sector to address: 0x" + 
-                            std::to_string(bootAddress));
-                    
-                    // Load boot sector into VM memory
-                    if (instance->vm->loadProgram(bootSector.data(), static_cast<size_t>(bytesRead), bootAddress)) {
-                        // Set entry point to bootloader
-                        instance->vm->setEntryPoint(bootAddress);
-                        LOG_INFO("Bootloader loaded successfully, entry point: 0x" + 
-                                std::to_string(bootAddress));
+                    // Find El Torito boot catalog
+                    if (isoParser.findBootCatalog()) {
+                        LOG_INFO("? El Torito boot catalog found");
+                        
+                        // Get EFI boot entry
+                        const BootEntryInfo* efiEntry = isoParser.getEFIBootEntry();
+                        if (efiEntry) {
+                            LOG_INFO("? EFI boot entry found");
+                            LOG_INFO("  Loading from LBA: " + std::to_string(efiEntry->loadLBA));
+                            LOG_INFO("  Size: " + std::to_string(efiEntry->sectorCount) + " sectors");
+                            
+                            // Read EFI bootloader from ISO
+                            std::vector<uint8_t> bootloader;
+                            int64_t bytesRead = isoParser.readFile(
+                                efiEntry->loadLBA, 
+                                efiEntry->sectorCount, 
+                                bootloader
+                            );
+                            
+                            if (bytesRead > 0 && !bootloader.empty()) {
+                                LOG_INFO("? EFI bootloader read: " + std::to_string(bytesRead) + " bytes");
+                                
+                                // For IA-64 EFI, load to 1MB
+                                uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
+                                                      bootConfig.entryPoint : 0x100000;
+                                
+                                LOG_INFO("Loading EFI bootloader to address: 0x" + 
+                                        std::to_string(bootAddress));
+                                
+                                // Load into VM memory
+                                if (instance->vm->loadProgram(bootloader.data(), 
+                                                             bootloader.size(), 
+                                                             bootAddress)) {
+                                    // Set entry point
+                                    instance->vm->setEntryPoint(bootAddress);
+                                    LOG_INFO("? EFI bootloader loaded successfully");
+                                    LOG_INFO("  Entry point: 0x" + std::to_string(bootAddress));
+                                    LOG_INFO("  Size: " + std::to_string(bootloader.size()) + " bytes");
+                                } else {
+                                    LOG_ERROR("Failed to load EFI bootloader into memory");
+                                }
+                            } else {
+                                LOG_ERROR("Failed to read EFI bootloader from ISO");
+                            }
+                        } else {
+                            LOG_WARN("No EFI boot entry found in boot catalog");
+                            LOG_INFO("Falling back to raw boot sector loading...");
+                            
+                            // Fallback: Load first 4KB as before
+                            std::vector<uint8_t> bootSector(4096);
+                            int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                            
+                            if (bytesRead > 0) {
+                                uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
+                                                      bootConfig.entryPoint : 0x100000;
+                                LOG_INFO("Loading raw boot data to address: 0x" + 
+                                        std::to_string(bootAddress));
+                                
+                                if (instance->vm->loadProgram(bootSector.data(), 
+                                                             static_cast<size_t>(bytesRead), 
+                                                             bootAddress)) {
+                                    instance->vm->setEntryPoint(bootAddress);
+                                    LOG_INFO("Raw boot data loaded, entry point: 0x" + 
+                                            std::to_string(bootAddress));
+                                }
+                            }
+                        }
                     } else {
-                        LOG_ERROR("Failed to load bootloader into memory");
+                        LOG_WARN("El Torito boot catalog not found");
+                        LOG_INFO("This may not be a bootable ISO");
                     }
                 } else {
-                    LOG_ERROR("Failed to read boot sector from device");
+                    LOG_WARN("Failed to parse ISO filesystem, trying raw boot sector...");
+                    
+                    // Fallback: Load first 4KB as raw boot sector
+                    std::vector<uint8_t> bootSector(4096);
+                    int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                    
+                    if (bytesRead > 0) {
+                        uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
+                                              bootConfig.entryPoint : 0x100000;
+                        LOG_INFO("Loading raw boot data to address: 0x" + 
+                                std::to_string(bootAddress));
+                        
+                        if (instance->vm->loadProgram(bootSector.data(), 
+                                                     static_cast<size_t>(bytesRead), 
+                                                     bootAddress)) {
+                            instance->vm->setEntryPoint(bootAddress);
+                            LOG_INFO("Raw boot data loaded, entry point: 0x" + 
+                                    std::to_string(bootAddress));
+                        } else {
+                            LOG_ERROR("Failed to load boot data into memory");
+                        }
+                    } else {
+                        LOG_ERROR("Failed to read boot data from device");
+                    }
                 }
             } else {
                 LOG_WARN("Boot device not found: " + bootConfig.bootDevice);
