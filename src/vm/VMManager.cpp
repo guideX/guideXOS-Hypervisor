@@ -265,25 +265,92 @@ bool VMManager::startVM(const std::string& vmId) {
                                 LOG_ERROR("Failed to extract EFI executable from boot image");
                             }
                         } else {
-                            LOG_WARN("No EFI boot entry found in boot catalog");
-                            LOG_INFO("Falling back to raw boot sector loading...");
+                            LOG_WARN("No EFI boot entry found in El Torito boot catalog");
+                            LOG_INFO("Attempting to find EFI bootloader in ISO filesystem...");
                             
-                            // Fallback: Load first 4KB as before
-                            std::vector<uint8_t> bootSector(4096);
-                            int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                            // Fallback: Search for BOOTIA64.EFI in the ISO filesystem
+                            const char* efiPaths[] = {
+                                "/EFI/BOOT/BOOTIA64.EFI",
+                                "EFI/BOOT/BOOTIA64.EFI",
+                                "/efi/boot/bootia64.efi"
+                            };
                             
-                            if (bytesRead > 0) {
-                                uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
-                                                      bootConfig.entryPoint : 0x100000;
-                                LOG_INFO("Loading raw boot data to address: 0x" + 
-                                        std::to_string(bootAddress));
+                            std::vector<uint8_t> efiExecutable;
+                            bool foundEFI = false;
+                            
+                            for (const char* path : efiPaths) {
+                                LOG_INFO("Searching for: " + std::string(path));
+                                if (isoParser.extractFile(path, efiExecutable)) {
+                                    LOG_INFO("? Found EFI bootloader: " + std::string(path));
+                                    foundEFI = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (foundEFI) {
+                                LOG_INFO("? EFI bootloader extracted: " + 
+                                        std::to_string(efiExecutable.size()) + " bytes");
                                 
-                                if (instance->vm->loadProgram(bootSector.data(), 
-                                                             static_cast<size_t>(bytesRead), 
-                                                             bootAddress)) {
-                                    instance->vm->setEntryPoint(bootAddress);
-                                    LOG_INFO("Raw boot data loaded, entry point: 0x" + 
+                                // Parse PE/COFF format
+                                guideXOS::PEParser peParser;
+                                if (peParser.parse(efiExecutable.data(), efiExecutable.size())) {
+                                    LOG_INFO("? PE/COFF image parsed successfully");
+                                    
+                                    if (!peParser.isIA64()) {
+                                        LOG_ERROR("EFI executable is not for IA-64 architecture");
+                                    } else if (!peParser.isEFI()) {
+                                        LOG_WARN("Executable may not be an EFI application");
+                                    } else {
+                                        // Load PE image properly
+                                        std::vector<uint8_t> imageBuffer;
+                                        uint64_t loadAddress, entryPoint;
+                                        
+                                        if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
+                                            LOG_INFO("? PE image prepared for loading");
+                                            LOG_INFO("  Preferred load address: 0x" + std::to_string(loadAddress));
+                                            LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
+                                            LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
+                                            
+                                            // Load into VM memory at preferred address
+                                            if (instance->vm->loadProgram(imageBuffer.data(), 
+                                                                         imageBuffer.size(), 
+                                                                         loadAddress)) {
+                                                // Set entry point from PE header
+                                                instance->vm->setEntryPoint(entryPoint);
+                                                LOG_INFO("? EFI bootloader loaded successfully from filesystem");
+                                                LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
+                                                LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
+                                            } else {
+                                                LOG_ERROR("Failed to load EFI bootloader into memory");
+                                            }
+                                        } else {
+                                            LOG_ERROR("Failed to prepare PE image for loading");
+                                        }
+                                    }
+                                } else {
+                                    LOG_ERROR("Failed to parse EFI executable as PE/COFF");
+                                }
+                            } else {
+                                LOG_ERROR("Could not find EFI bootloader in ISO filesystem");
+                                LOG_INFO("Falling back to raw boot sector loading...");
+                                
+                                // Fallback: Load first 4KB as before
+                                std::vector<uint8_t> bootSector(4096);
+                                int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                                
+                                if (bytesRead > 0) {
+                                    uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
+                                                          bootConfig.entryPoint : 0x100000;
+                                    LOG_INFO("Loading raw boot data to address: 0x" + 
                                             std::to_string(bootAddress));
+                                    
+                                    if (instance->vm->loadProgram(bootSector.data(), 
+                                                                 static_cast<size_t>(bytesRead), 
+                                                                 bootAddress)) {
+                                        instance->vm->setEntryPoint(bootAddress);
+                                        LOG_INFO("Raw boot data loaded, entry point: 0x" + 
+                                                std::to_string(bootAddress));
+                                    }
                                 }
                             }
                         }

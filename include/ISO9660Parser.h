@@ -199,6 +199,23 @@ public:
      * @return true if successful
      */
     bool extractEFIExecutable(std::vector<uint8_t>& executableData);
+    
+    /**
+     * Find file in ISO 9660 filesystem by path
+     * @param path File path (e.g., "/EFI/BOOT/BOOTIA64.EFI" or "EFI/BOOT/BOOTIA64.EFI")
+     * @param lba Output: LBA where file is located
+     * @param fileSize Output: File size in bytes
+     * @return true if file found
+     */
+    bool findFile(const std::string& path, uint32_t& lba, uint32_t& fileSize);
+    
+    /**
+     * Extract file from ISO filesystem
+     * @param path File path
+     * @param fileData Output buffer for file data
+     * @return true if successful
+     */
+    bool extractFile(const std::string& path, std::vector<uint8_t>& fileData);
 
 private:
     IStorageDevice* device_;
@@ -220,6 +237,18 @@ private:
      * Parse El Torito boot catalog
      */
     bool parseBootCatalog(uint32_t catalogLBA);
+    
+    /**
+     * Search for file in directory
+     * @param dirLBA Directory location
+     * @param dirSize Directory size in bytes
+     * @param fileName File name to search for (case-insensitive)
+     * @param lba Output: File LBA
+     * @param fileSize Output: File size
+     * @return true if found
+     */
+    bool searchDirectory(uint32_t dirLBA, uint32_t dirSize, const std::string& fileName, 
+                         uint32_t& lba, uint32_t& fileSize);
 };
 
 } // namespace ia64
