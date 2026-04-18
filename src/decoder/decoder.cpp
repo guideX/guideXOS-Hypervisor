@@ -1059,7 +1059,7 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             
         case UnitType::F_UNIT:
             // F-unit for floating-point operations
-            result = decoder::FTypeDecoder::decode(raw_instruction);
+            result = decoder::FTypeDecoder::decode(slotBits);
             return result;
             
         case UnitType::L_UNIT:
@@ -1070,7 +1070,7 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             
         case UnitType::X_UNIT:
             // X-unit for extended instructions and MOVL X-portion
-            result = decoder::XTypeDecoder::decode(raw_instruction);
+            result = decoder::XTypeDecoder::decode(slotBits);
             return result;
             
         default:

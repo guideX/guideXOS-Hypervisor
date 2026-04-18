@@ -219,6 +219,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\decoder\ftype_decoder.cpp" />
     <ClCompile Include="src\decoder\itype_decoder.cpp" ExcludedFromBuild="true">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
@@ -231,6 +232,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\decoder\xtype_decoder.cpp" />
     <ClCompile Include="src\fuzzer\Fuzzer.cpp" ExcludedFromBuild="true">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
@@ -545,8 +547,10 @@
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
+    <Text Include="output.log" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="ALL_DECODERS_COMPLETE.md" />
     <None Include="BUILD_AND_TEST_ISO_PARSER.md" />
     <None Include="build_dll.ps1" />
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
@@ -557,6 +561,7 @@
     <None Include="COMPLETE_STATUS.md" />
     <None Include="COMPLETE_SUCCESS_SUMMARY.md" />
     <None Include="CONSOLE_NOW_ENABLED.md" />
+    <None Include="CORE_PROJECT_FIXED.md" />
     <None Include="DIAGNOSTIC_LOGGING_ADDED.md" />
     <None Include="DLL_LINKER_ERRORS_FIX.md" />
     <None Include="DLL_MISSING_SUMMARY.md" />
@@ -636,7 +641,10 @@
     <None Include="fix_decoders.py" />
     <None Include="FIX_DLL_EXPORT_ERRORS.md" />
     <None Include="FIX_SUMMARY.md" />
+    <None Include="fix_vcxproj.ps1" />
+    <None Include="fix_vcxproj2.ps1" />
     <None Include="FOUND_THE_BUG.md" />
+    <None Include="F_TYPE_DECODER_COMPLETE.md" />
     <None Include="guideXOS Hypervisor Core.vcxproj" />
     <None Include="guideXOS Hypervisor DLL.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj" />
@@ -645,6 +653,7 @@
     <None Include="HOW_TO_BOOT_FROM_ISO.md" />
     <None Include="HOW_TO_MAKE_VM_BOOT.md" />
     <None Include="ISO_BOOT_COMPLETE.md" />
+    <None Include="ISO_PARSER_ANALYSIS.md" />
     <None Include="ISO_PARSER_COMPLETE.md" />
     <None Include="kernels\kernel.ld" />
     <None Include="kernels\minimal_kernel.s" />

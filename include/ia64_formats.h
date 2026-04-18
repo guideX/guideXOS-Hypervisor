@@ -208,9 +208,15 @@ struct FFormat {
     uint8_t p1;         // destination predicate 1
     uint8_t p2;         // destination predicate 2
     uint8_t frel;       // floating-point relation
+    uint8_t ta;         // compare type/relation
+    uint8_t unc;        // uncondition flag
+    
+    // For classify operations
+    uint16_t fclass9;   // 9-bit class mask
     
     FFormat() : qp(0), f1(0), f2(0), f3(0), f4(0), opcode(0),
-                operation(FPOp::FADD), sf(0), p1(0), p2(0), frel(0) {}
+                operation(FPOp::FADD), sf(0), p1(0), p2(0), frel(0),
+                ta(0), unc(0), fclass9(0) {}
 };
 
 // ============================================================================
@@ -226,9 +232,21 @@ struct XFormat {
     
     // For break instruction
     uint32_t imm21;     // 21-bit immediate
+    uint8_t x3;         // break type
     uint8_t x6;         // extended opcode
     
-    XFormat() : qp(0), imm64(0), opcode(0), imm21(0), x6(0) {}
+    // For NOP instruction
+    uint32_t imm27;     // 27-bit immediate for hints
+    
+    // For MOVL X-portion
+    uint32_t imm20a;    // bits [63:43] of final immediate
+    uint8_t i;          // bit 21 of final immediate
+    uint8_t imm5c;      // bits [22:18] of final immediate
+    uint16_t imm9d;     // bits [17:9] of final immediate
+    uint8_t ic;         // sign bit (bit 63)
+    
+    XFormat() : qp(0), imm64(0), opcode(0), imm21(0), x3(0), x6(0), 
+                imm27(0), imm20a(0), i(0), imm5c(0), imm9d(0), ic(0) {}
 };
 
 // ============================================================================

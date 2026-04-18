@@ -98,10 +98,10 @@
     <ClCompile Include="src\decoder\lx_decoder.cpp">
     </ClCompile>
     <ClCompile Include="src\decoder\mtype_decoder.cpp">
+    </ClCompile>
     <ClCompile Include="src\decoder\ftype_decoder.cpp">
+    </ClCompile>
     <ClCompile Include="src\decoder\xtype_decoder.cpp">
-    </ClCompile>
-    </ClCompile>
     </ClCompile>
     <ClCompile Include="src\fuzzer\Fuzzer.cpp">
     </ClCompile>

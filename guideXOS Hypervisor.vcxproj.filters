@@ -276,6 +276,15 @@
     <ClCompile Include="src\api\dllmain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\storage\ISO9660Parser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\ftype_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoder\xtype_decoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">
@@ -479,9 +488,13 @@
     <ClInclude Include="include\VMManager_DLL.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\ISO9660Parser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
+    <Text Include="output.log" />
   </ItemGroup>
   <ItemGroup>
     <None Include="guideXOS Hypervisor.vcxproj.new" />
@@ -573,5 +586,45 @@
     <None Include="MANUAL_PROJECT_SETUP.md" />
     <None Include="WHY_VM_DOESNT_BOOT.md" />
     <None Include="HOW_TO_MAKE_VM_BOOT.md" />
+    <None Include="BUILD_AND_TEST_ISO_PARSER.md" />
+    <None Include="build_dll.ps1" />
+    <None Include="BUILD_ERRORS_FINAL_FIX.md" />
+    <None Include="BUILD_ERRORS_FIXED.md" />
+    <None Include="BUILD_FIX_QUICK.md" />
+    <None Include="COMPLETE_CPP_LOGGING.md" />
+    <None Include="COMPLETE_STATUS.md" />
+    <None Include="COMPLETE_SUCCESS_SUMMARY.md" />
+    <None Include="CONSOLE_NOW_ENABLED.md" />
+    <None Include="DIAGNOSTIC_LOGGING_ADDED.md" />
+    <None Include="DLL_LINKER_ERRORS_FIX.md" />
+    <None Include="ENHANCED_DIAGNOSTIC.md" />
+    <None Include="FINAL_JSON_FIX.md" />
+    <None Include="fix_core_project.ps1" />
+    <None Include="FIX_DLL_EXPORT_ERRORS.md" />
+    <None Include="FIX_SUMMARY.md" />
+    <None Include="FOUND_THE_BUG.md" />
+    <None Include="HOW_TO_BOOT_FROM_ISO.md" />
+    <None Include="ISO_BOOT_COMPLETE.md" />
+    <None Include="ISO_PARSER_COMPLETE.md" />
+    <None Include="MEMORY_JSON_FIXED.md" />
+    <None Include="MUST_USE_VISUAL_STUDIO.md" />
+    <None Include="QUICK_FIX_START_ERROR.md" />
+    <None Include="QUICK_FIX_STEPS.md" />
+    <None Include="QUICK_START_ISO_BOOT.md" />
+    <None Include="REBUILD_AND_TEST_NOW.md" />
+    <None Include="RUN_AND_CHECK_CONSOLE.md" />
+    <None Include="STEPS_4_5_COMPLETION_SUMMARY.md" />
+    <None Include="URGENT_FIX.md" />
+    <None Include="VISUAL_STUDIO_FIX.md" />
+    <None Include="VM_ID_MISMATCH_FIXED.md" />
+    <None Include="VM_NOT_BOOTING_SOLUTION.md" />
+    <None Include="VM_RUNNING_NEXT_STEPS.md" />
+    <None Include="WHY_START_FAILS.md" />
+    <None Include="ISO_PARSER_ANALYSIS.md" />
+    <None Include="F_TYPE_DECODER_COMPLETE.md" />
+    <None Include="ALL_DECODERS_COMPLETE.md" />
+    <None Include="fix_vcxproj.ps1" />
+    <None Include="fix_vcxproj2.ps1" />
+    <None Include="CORE_PROJECT_FIXED.md" />
   </ItemGroup>
 </Project>
