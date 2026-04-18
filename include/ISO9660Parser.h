@@ -245,10 +245,12 @@ private:
      * @param fileName File name to search for (case-insensitive)
      * @param lba Output: File LBA
      * @param fileSize Output: File size
+     * @param depth Current recursion depth (default 0)
+     * @param maxDepth Maximum recursion depth (default 32)
      * @return true if found
      */
     bool searchDirectory(uint32_t dirLBA, uint32_t dirSize, const std::string& fileName, 
-                         uint32_t& lba, uint32_t& fileSize);
+                         uint32_t& lba, uint32_t& fileSize, int depth = 0, int maxDepth = 32);
 };
 
 } // namespace ia64

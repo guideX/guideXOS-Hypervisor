@@ -375,11 +375,18 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
 }
 
 bool ISO9660Parser::searchDirectory(uint32_t dirLBA, uint32_t dirSize, 
-                                    const std::string& fileName, 
-                                    uint32_t& lba, uint32_t& fileSize) {
-    if (!pvdValid_ || dirSize == 0) {
-        return false;
-    }
+                                const std::string& fileName, 
+                                uint32_t& lba, uint32_t& fileSize, 
+                                int depth, int maxDepth) {
+if (!pvdValid_ || dirSize == 0) {
+    return false;
+}
+    
+// Prevent stack overflow from excessive recursion
+if (depth >= maxDepth) {
+    LOG_WARN("Maximum directory depth reached (" + std::to_string(maxDepth) + "), stopping recursion");
+    return false;
+}
     
     // Read directory data
     uint32_t sectorsNeeded = (dirSize + blockSize_ - 1) / blockSize_;
@@ -425,9 +432,12 @@ bool ISO9660Parser::searchDirectory(uint32_t dirLBA, uint32_t dirSize,
         
         // If this is a directory, recurse into it
         if ((record->fileFlags & 0x02) && recordName != "." && recordName != "..") {
-            if (searchDirectory(record->extentLBA_LE, record->dataLength_LE, 
-                              fileName, lba, fileSize)) {
-                return true;
+            // Prevent circular references by checking if we've already visited this LBA
+            if (record->extentLBA_LE != dirLBA) {
+                if (searchDirectory(record->extentLBA_LE, record->dataLength_LE, 
+                                  fileName, lba, fileSize, depth + 1, maxDepth)) {
+                    return true;
+                }
             }
         }
         
