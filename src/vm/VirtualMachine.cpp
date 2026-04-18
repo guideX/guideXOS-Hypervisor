@@ -411,12 +411,20 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
 }
 
 void VirtualMachine::setEntryPoint(uint64_t address) {
-    LOG_INFO("Setting entry point to 0x" + std::to_string(address));
+std::ostringstream oss;
+oss << "Setting entry point to 0x" << std::hex << address << std::dec;
+LOG_INFO(oss.str());
     
-    // Set entry point for active CPU (or CPU 0 if no active CPU)
-    int cpuIndex = (activeCPUIndex_ >= 0) ? activeCPUIndex_ : 0;
-    if (cpuIndex < static_cast<int>(cpus_.size()) && cpus_[cpuIndex].cpu) {
-        cpus_[cpuIndex].cpu->setIP(address);
+// Set entry point for active CPU (or CPU 0 if no active CPU)
+int cpuIndex = (activeCPUIndex_ >= 0) ? activeCPUIndex_ : 0;
+if (cpuIndex < static_cast<int>(cpus_.size()) && cpus_[cpuIndex].cpu) {
+    uint64_t oldIP = cpus_[cpuIndex].cpu->getIP();
+    cpus_[cpuIndex].cpu->setIP(address);
+    uint64_t newIP = cpus_[cpuIndex].cpu->getIP();
+        
+    std::ostringstream debugOss;
+    debugOss << "IP changed: 0x" << std::hex << oldIP << " -> 0x" << newIP << std::dec;
+    LOG_DEBUG(debugOss.str());
         
         // Transition to kernel entry if we're in KERNEL_LOAD state
         VMBootState currentBootState = bootStateMachine_.getCurrentState();

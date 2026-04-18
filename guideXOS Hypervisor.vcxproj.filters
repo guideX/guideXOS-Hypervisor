@@ -285,6 +285,9 @@
     <ClCompile Include="src\decoder\xtype_decoder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="tools\decoder_diagnostic.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">
@@ -630,5 +633,8 @@
     <None Include="DECODER_IMPROVEMENTS_SUMMARY.md" />
     <None Include="DECODER_CHANGES_QUICK_REF.md" />
     <None Include="OUTPUT_LOG_ANALYSIS_AND_NEXT_STEPS.md" />
+    <None Include="DECODER_COMPLETE_FINAL_SUMMARY.md" />
+    <None Include="CRITICAL_MEMORY_ISSUE_ANALYSIS.md" />
+    <None Include="FINAL_ANALYSIS_OUTPUT_LOG_REEXAMINATION.md" />
   </ItemGroup>
 </Project>

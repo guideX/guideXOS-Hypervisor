@@ -474,6 +474,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="tools\decoder_diagnostic.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
@@ -562,6 +563,7 @@
     <None Include="COMPLETE_SUCCESS_SUMMARY.md" />
     <None Include="CONSOLE_NOW_ENABLED.md" />
     <None Include="CORE_PROJECT_FIXED.md" />
+    <None Include="CRITICAL_MEMORY_ISSUE_ANALYSIS.md" />
     <None Include="DECODER_CHANGES_QUICK_REF.md" />
     <None Include="DECODER_COMPLETE_FINAL_SUMMARY.md" />
     <None Include="DECODER_IMPROVEMENTS_SUMMARY.md" />
@@ -638,6 +640,7 @@
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
     <None Include="examples\configs\standard-vm.json" />
+    <None Include="FINAL_ANALYSIS_OUTPUT_LOG_REEXAMINATION.md" />
     <None Include="FINAL_JSON_FIX.md" />
     <None Include="fix_all_decoders.ps1" />
     <None Include="fix_build.ps1" />

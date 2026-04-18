@@ -51,35 +51,38 @@ std::vector<uint8_t> createTestProgram() {
     std::vector<uint8_t> program;
     
     // IA-64 bundle format: 128 bits (16 bytes)
-    // [template:5][slot2:41][slot1:41][slot0:41]
+    // [template:5][slot0:41][slot1:41][slot2:41]
     // Little-endian byte ordering
     
-    // For this demo, we'll create several NOP bundles
-    // Template 0x00 = MII (Memory, Integer, Integer)
-    // NOP instruction encoding varies by slot type
+    // IMPORTANT: Don't create all zeros! That decodes as unknown (0x0)
+    // Create valid NOP bundles with proper template and instruction encoding
     
-    // Bundle 0: Three NOPs
+    // Template 0x05 = MII with stop bit
+    // Proper NOP encoding for M-unit: 0x0000000000000001 (simplified)
+    // Proper NOP encoding for I-unit: 0x0000000000000001 (simplified)
+    
+    // Bundle 0: MII template with NOPs (non-zero encoding)
     program.insert(program.end(), {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
     });
     
-    // Bundle 1: Three NOPs
+    // Bundle 1: MII template with NOPs
     program.insert(program.end(), {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
     });
     
-    // Bundle 2: Three NOPs
+    // Bundle 2: MII template with NOPs
     program.insert(program.end(), {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
     });
     
-    // Bundle 3: Three NOPs
+    // Bundle 3: MII template with NOPs
     program.insert(program.end(), {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
     });
     
     return program;
@@ -169,7 +172,22 @@ int main(int argc, char* argv[]) {
         printProgramInfo(program, loadAddress);
         
         // Set entry point
+        LOG_INFO("About to set entry point...");
         vm.setEntryPoint(loadAddress);
+        
+        // Verify IP was set correctly
+        uint64_t currentIP = vm.getIP();
+        std::ostringstream verifyOss;
+        verifyOss << "Entry point verification: IP = 0x" << std::hex << currentIP 
+                  << std::dec << " (expected 0x" << std::hex << loadAddress << std::dec << ")";
+        LOG_INFO(verifyOss.str());
+        
+        if (currentIP != loadAddress) {
+            std::ostringstream errorOss;
+            errorOss << "ERROR: IP mismatch! Expected 0x" << std::hex << loadAddress 
+                     << " but got 0x" << currentIP << std::dec;
+            LOG_ERROR(errorOss.str());
+        }
         
         printInitialState(vm);
         
@@ -190,6 +208,13 @@ int main(int argc, char* argv[]) {
             }
             
             uint64_t ipBefore = vm.getIP();
+            
+            // First cycle: verify IP is correct
+            if (cyclesExecuted == 0) {
+                std::ostringstream firstOss;
+                firstOss << "First execution cycle - IP at start: 0x" << std::hex << ipBefore << std::dec;
+                LOG_INFO(firstOss.str());
+            }
             
             // Execute one step
             try {
