@@ -1,9 +1,11 @@
 #pragma once
 
+
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <memory>
+#include <set>
 
 namespace ia64 {
 
@@ -251,6 +253,13 @@ private:
      */
     bool searchDirectory(uint32_t dirLBA, uint32_t dirSize, const std::string& fileName, 
                          uint32_t& lba, uint32_t& fileSize, int depth = 0, int maxDepth = 32);
+    
+    /**
+     * Internal helper for searchDirectory with visited tracking
+     */
+    bool searchDirectoryInternal(uint32_t dirLBA, uint32_t dirSize, const std::string& fileName,
+                                 uint32_t& lba, uint32_t& fileSize, 
+                                 std::set<uint32_t>& visited, int depth, int maxDepth);
 };
 
 } // namespace ia64

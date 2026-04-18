@@ -378,6 +378,15 @@ bool ISO9660Parser::searchDirectory(uint32_t dirLBA, uint32_t dirSize,
                                 const std::string& fileName, 
                                 uint32_t& lba, uint32_t& fileSize, 
                                 int depth, int maxDepth) {
+    std::set<uint32_t> visited;
+    return searchDirectoryInternal(dirLBA, dirSize, fileName, lba, fileSize, visited, depth, maxDepth);
+}
+
+bool ISO9660Parser::searchDirectoryInternal(uint32_t dirLBA, uint32_t dirSize, 
+                                           const std::string& fileName,
+                                           uint32_t& lba, uint32_t& fileSize,
+                                           std::set<uint32_t>& visited,
+                                           int depth, int maxDepth) {
 if (!pvdValid_ || dirSize == 0) {
     return false;
 }
@@ -387,6 +396,12 @@ if (depth >= maxDepth) {
     LOG_WARN("Maximum directory depth reached (" + std::to_string(maxDepth) + "), stopping recursion");
     return false;
 }
+
+// Check if we've already visited this directory LBA
+if (visited.find(dirLBA) != visited.end()) {
+    return false;
+}
+visited.insert(dirLBA);
     
     // Read directory data
     uint32_t sectorsNeeded = (dirSize + blockSize_ - 1) / blockSize_;
@@ -406,6 +421,18 @@ if (depth >= maxDepth) {
         // Check for end of directory
         if (record->length == 0) {
             break;
+        }
+        
+        // Validate record length to prevent buffer overruns
+        if (record->length < 33 || offset + record->length > dirData.size()) {
+            break;
+        }
+        
+        // Validate file identifier length
+        if (record->fileIdentifierLength == 0 || 
+            offset + 33 + record->fileIdentifierLength > dirData.size()) {
+            offset += record->length;
+            continue;
         }
         
         // Extract file name
@@ -432,10 +459,10 @@ if (depth >= maxDepth) {
         
         // If this is a directory, recurse into it
         if ((record->fileFlags & 0x02) && recordName != "." && recordName != "..") {
-            // Prevent circular references by checking if we've already visited this LBA
-            if (record->extentLBA_LE != dirLBA) {
-                if (searchDirectory(record->extentLBA_LE, record->dataLength_LE, 
-                                  fileName, lba, fileSize, depth + 1, maxDepth)) {
+            // Check for valid directory record before recursing
+            if (record->extentLBA_LE > 0 && record->dataLength_LE > 0) {
+                if (searchDirectoryInternal(record->extentLBA_LE, record->dataLength_LE, 
+                                           fileName, lba, fileSize, visited, depth + 1, maxDepth)) {
                     return true;
                 }
             }
