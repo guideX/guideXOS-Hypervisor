@@ -799,67 +799,13 @@ Bundle InstructionDecoder::DecodeBundle(const uint8_t* bundleData) const {
 }
 
 InstructionEx InstructionDecoder::DecodeInstruction(uint64_t rawBits, UnitType unit) const {
-    // For scaffolding, we'll just decode NOPs and simple MOV instructions
-    // Real IA-64 decoding is very complex with many opcode formats
+    // Use the comprehensive DecodeSlot function with IP=0 (not needed for non-branch instructions)
+    InstructionEx result = DecodeSlot(rawBits, unit, 0);
     
-    // Simple heuristic: if all bits are 0 or 1, it's a NOP
-    if (rawBits == 0 || rawBits == 1) {
-        return DecodeNop(rawBits);
-    }
+    // Ensure raw bits are preserved
+    result.SetRawBits(rawBits);
     
-    // Check for basic patterns (simplified encoding for testing):
-    // Bits [40:37] = major opcode (4 bits)
-    //   0x0 = BREAK/NOP
-    //   0x1 = MOV immediate
-    //   0x2 = MOV register
-    //   0x3 = ADD
-    // Bits [36:30] = destination register (7 bits)
-    // Bits [29:23] = source register (7 bits) 
-    // Bits [22:0]  = immediate value (23 bits)
-    
-    uint8_t majorOpcode = (rawBits >> 37) & 0x0F;  // Bits [40:37]
-    
-    if (majorOpcode == 0) {
-        // Could be NOP or BREAK - check immediate field
-        uint64_t immediate = rawBits & 0x1FFFFF;  // 21-bit immediate for break
-        if (immediate == 0x100000) {
-            // This is a syscall break instruction
-            InstructionEx insn(InstructionType::BREAK, unit);
-            insn.SetImmediate(immediate);
-            return insn;
-        }
-        return DecodeNop(rawBits);
-    }
-    else if (majorOpcode == 1) {
-        // MOV immediate: mov rDst = immediate
-        InstructionEx insn(InstructionType::MOV_IMM, unit);
-        uint8_t dst = (rawBits >> 30) & 0x7F;        // Bits [36:30]
-        uint64_t imm = rawBits & 0x7FFFFF;           // Bits [22:0]
-        insn.SetOperands(dst, 0, 0);
-        insn.SetImmediate(imm);
-        return insn;
-    }
-    else if (majorOpcode == 2) {
-        // MOV register: mov rDst = rSrc
-        InstructionEx insn(InstructionType::MOV_GR, unit);
-        uint8_t dst = (rawBits >> 30) & 0x7F;        // Bits [36:30]
-        uint8_t src = (rawBits >> 23) & 0x7F;        // Bits [29:23]
-        insn.SetOperands(dst, src, 0);
-        return insn;
-    }
-    else if (majorOpcode == 3) {
-        // ADD: add rDst = rSrc1, rSrc2
-        InstructionEx insn(InstructionType::ADD, unit);
-        uint8_t dst = (rawBits >> 30) & 0x7F;        // Bits [36:30]
-        uint8_t src1 = (rawBits >> 23) & 0x7F;       // Bits [29:23]
-        uint8_t src2 = (rawBits >> 16) & 0x7F;       // Bits [22:16]
-        insn.SetOperands(dst, src1, src2);
-        return insn;
-    }
-    
-    // Unknown instruction
-    InstructionEx insn(InstructionType::UNKNOWN, unit);
-    return insn;
+    return result;
 }
 
 TemplateType InstructionDecoder::ExtractTemplate(const uint8_t* bundleData) const {
@@ -1002,20 +948,24 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
     switch (unitType) {
         case UnitType::M_UNIT:
             // M-unit can execute M-type (memory) or A-type (ALU) instructions
-            if (major == 0x4 || major == 0x5 || major == 0x6 || major == 0x7) {
+            // Major opcodes for M-type: 0x4-0x7 (primary), also 0x0-0x3 for some forms
+            if (major >= 0x0 && major <= 0x7) {
                 // M-type: Load/Store operations
                 formats::MFormat mfmt;
                 if (decoder::MTypeDecoder::decode(slotBits, mfmt)) {
                     if (decoder::MTypeDecoder::toInstruction(mfmt, result)) {
+                        result.SetRawBits(slotBits);
                         return result;
                     }
                 }
             }
             // Try A-type for M-unit ALU operations
-            if (major >= 0x8 && major <= 0xD) {
+            // Major opcodes: 0x8-0xF can appear in M-unit
+            if (major >= 0x8 && major <= 0xF) {
                 formats::AFormat afmt;
                 if (decoder::ATypeDecoder::decode(slotBits, afmt)) {
                     if (decoder::ATypeDecoder::toInstruction(afmt, result)) {
+                        result.SetRawBits(slotBits);
                         return result;
                     }
                 }
@@ -1024,21 +974,25 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             
         case UnitType::I_UNIT:
             // I-unit can execute A-type (ALU) or I-type (non-ALU integer) instructions
-            if (major >= 0x8 && major <= 0xD) {
+            // Try A-type first for ALU operations (major 0x8-0xF)
+            if (major >= 0x8 && major <= 0xF) {
                 // A-type: Integer ALU operations
                 formats::AFormat afmt;
                 if (decoder::ATypeDecoder::decode(slotBits, afmt)) {
                     if (decoder::ATypeDecoder::toInstruction(afmt, result)) {
+                        result.SetRawBits(slotBits);
                         return result;
                     }
                 }
             }
             
-            if (major == 0x0 || major == 0x5 || major == 0x7) {
+            // Try I-type for non-ALU integer operations (major 0x0, 0x5, 0x7, and others)
+            if (major >= 0x0 && major <= 0x7) {
                 // I-type: Shifts, deposits, extends, ALLOC
                 formats::IFormat ifmt;
                 if (decoder::ITypeDecoder::decode(slotBits, ifmt)) {
                     if (decoder::ITypeDecoder::toInstruction(ifmt, result)) {
+                        result.SetRawBits(slotBits);
                         return result;
                     }
                 }
@@ -1047,10 +1001,12 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             
         case UnitType::B_UNIT:
             // B-unit executes branch instructions
-            if (major == 0x0 || major == 0x4) {
+            // Major opcodes: 0x0, 0x4, 0x5 for various branch types
+            if (major >= 0x0 && major <= 0x5) {
                 formats::BFormat bfmt;
                 if (decoder::BTypeDecoder::decode(slotBits, bfmt, ip)) {
                     if (decoder::BTypeDecoder::toInstruction(bfmt, result)) {
+                        result.SetRawBits(slotBits);
                         return result;
                     }
                 }
@@ -1060,25 +1016,29 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
         case UnitType::F_UNIT:
             // F-unit for floating-point operations
             result = decoder::FTypeDecoder::decode(slotBits);
+            result.SetRawBits(slotBits);
             return result;
             
         case UnitType::L_UNIT:
             // L-unit is handled specially in DecodeBundle for MOVL
             // Standalone L-unit is rare but could be NOP
             result = InstructionEx(InstructionType::NOP, UnitType::L_UNIT);
+            result.SetRawBits(slotBits);
             return result;
             
         case UnitType::X_UNIT:
             // X-unit for extended instructions and MOVL X-portion
             result = decoder::XTypeDecoder::decode(slotBits);
+            result.SetRawBits(slotBits);
             return result;
             
         default:
             break;
     }
     
-    // If no decoder matched, return NOP
-    result = InstructionEx(InstructionType::NOP, unitType);
+    // If no decoder matched, return UNKNOWN with raw bits preserved
+    result = InstructionEx(InstructionType::UNKNOWN, unitType);
+    result.SetRawBits(slotBits);
     return result;
 }
 

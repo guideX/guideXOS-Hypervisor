@@ -562,6 +562,9 @@
     <None Include="COMPLETE_SUCCESS_SUMMARY.md" />
     <None Include="CONSOLE_NOW_ENABLED.md" />
     <None Include="CORE_PROJECT_FIXED.md" />
+    <None Include="DECODER_CHANGES_QUICK_REF.md" />
+    <None Include="DECODER_COMPLETE_FINAL_SUMMARY.md" />
+    <None Include="DECODER_IMPROVEMENTS_SUMMARY.md" />
     <None Include="DIAGNOSTIC_LOGGING_ADDED.md" />
     <None Include="DLL_LINKER_ERRORS_FIX.md" />
     <None Include="DLL_MISSING_SUMMARY.md" />
@@ -631,6 +634,7 @@
     <None Include="docs\WEB_UI_IMPLEMENTATION_SUMMARY.md" />
     <None Include="docs\WEB_UI_QUICK_REFERENCE.md" />
     <None Include="ENHANCED_DIAGNOSTIC.md" />
+    <None Include="ERRORS_FIXED.md" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
     <None Include="examples\configs\standard-vm.json" />
@@ -660,6 +664,7 @@
     <None Include="MANUAL_PROJECT_SETUP.md" />
     <None Include="MEMORY_JSON_FIXED.md" />
     <None Include="MUST_USE_VISUAL_STUDIO.md" />
+    <None Include="OUTPUT_LOG_ANALYSIS_AND_NEXT_STEPS.md" />
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="QUICK_FIX_START_ERROR.md" />
     <None Include="QUICK_FIX_STEPS.md" />

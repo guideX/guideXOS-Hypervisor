@@ -1,5 +1,4 @@
-#include "VMManager_DLL.h"
-// CRITICAL: Force GUIDEXOS_HYPERVISOR_EXPORTS to be defined
+// CRITICAL: Force GUIDEXOS_HYPERVISOR_EXPORTS to be defined FIRST
 // This ensures DLL exports work correctly regardless of project settings
 #undef GUIDEXOS_HYPERVISOR_EXPORTS
 #define GUIDEXOS_HYPERVISOR_EXPORTS
