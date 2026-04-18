@@ -1,12 +1,12 @@
 #include "VMManager_DLL.h"
-// CRITICAL: Define this BEFORE any includes to ensure DLL exports work correctly
-#ifndef GUIDEXOS_HYPERVISOR_EXPORTS
+// CRITICAL: Force GUIDEXOS_HYPERVISOR_EXPORTS to be defined
+// This ensures DLL exports work correctly regardless of project settings
+#undef GUIDEXOS_HYPERVISOR_EXPORTS
 #define GUIDEXOS_HYPERVISOR_EXPORTS
-#endif
 
-// Verify the macro is defined (compile-time check)
+// Verify the macro is now defined
 #ifndef GUIDEXOS_HYPERVISOR_EXPORTS
-#error "GUIDEXOS_HYPERVISOR_EXPORTS must be defined for DLL compilation"
+#error "GUIDEXOS_HYPERVISOR_EXPORTS definition failed"
 #endif
 
 #include "VMManager_DLL.h"

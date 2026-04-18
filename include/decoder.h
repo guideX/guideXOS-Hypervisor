@@ -166,6 +166,36 @@ enum class InstructionType {
     // Register stack (I-type)
     ALLOC,      // Allocate register stack frame
     
+    // Floating-point operations (F-type)
+    FMA,        // Fused multiply-add
+    FMS,        // Fused multiply-subtract
+    FNMA,       // Fused negative multiply-add
+    XMA,        // Fixed-point multiply-add
+    FSELECT,    // Floating-point select
+    FCMP,       // Floating-point compare
+    FCLASS,     // Floating-point classify
+    FRCPA,      // Floating-point reciprocal approximation
+    FRSQRTA,    // Floating-point reciprocal square root approximation
+    FPRCPA,     // Floating-point parallel reciprocal approximation
+    FPRSQRTA,   // Floating-point parallel reciprocal square root approximation
+    FMIN,       // Floating-point minimum
+    FMAX,       // Floating-point maximum
+    FAMIN,      // Floating-point absolute minimum
+    FAMAX,      // Floating-point absolute maximum
+    FMERGE,     // Floating-point merge
+    FABS,       // Floating-point absolute value
+    FNEG,       // Floating-point negate
+    FNEGABS,    // Floating-point negate absolute
+    FPABS,      // Floating-point parallel absolute value
+    FPNEG,      // Floating-point parallel negate
+    FCVT_FX,    // Convert floating-point to fixed-point
+    FCVT_FXU,   // Convert floating-point to unsigned fixed-point
+    FCVT_XF,    // Convert fixed-point to floating-point
+    FCVT_XUF,   // Convert unsigned fixed-point to floating-point
+    FPCVT_FX,   // Parallel convert floating-point to fixed-point
+    FPCVT_FXU,  // Parallel convert floating-point to unsigned fixed-point
+    FPCVT_XF,   // Parallel convert fixed-point to floating-point
+    
     // System (special)
     BREAK,      // Break instruction (used for syscalls)
     
@@ -210,6 +240,8 @@ public:
     void SetPredicate(uint8_t pred) { predicate_ = pred; }
     void SetImmediate(uint64_t imm);
     void SetBranchTarget(uint64_t target);
+    void SetType(InstructionType type) { type_ = type; }
+    void SetRawBits(uint64_t bits) { rawBits_ = bits; }
     
     // Accessors for execution
     uint8_t GetPredicate() const { return predicate_; }

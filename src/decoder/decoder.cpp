@@ -1058,9 +1058,8 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             break;
             
         case UnitType::F_UNIT:
-            // F-unit for floating-point (not yet implemented)
-            // Return NOP for now
-            result = InstructionEx(InstructionType::NOP, UnitType::F_UNIT);
+            // F-unit for floating-point operations
+            result = decoder::FTypeDecoder::decode(raw_instruction);
             return result;
             
         case UnitType::L_UNIT:

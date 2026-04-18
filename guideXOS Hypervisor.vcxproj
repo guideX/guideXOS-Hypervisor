@@ -650,6 +650,7 @@
     <None Include="kernels\minimal_kernel.s" />
     <None Include="MANUAL_PROJECT_SETUP.md" />
     <None Include="MEMORY_JSON_FIXED.md" />
+    <None Include="MUST_USE_VISUAL_STUDIO.md" />
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="QUICK_FIX_START_ERROR.md" />
     <None Include="QUICK_FIX_STEPS.md" />
@@ -659,6 +660,7 @@
     <None Include="RUN_AND_CHECK_CONSOLE.md" />
     <None Include="STEPS_4_5_COMPLETION_SUMMARY.md" />
     <None Include="URGENT_FIX.md" />
+    <None Include="VISUAL_STUDIO_FIX.md" />
     <None Include="VM_ID_MISMATCH_FIXED.md" />
     <None Include="VM_NOT_BOOTING_SOLUTION.md" />
     <None Include="VM_RUNNING_NEXT_STEPS.md" />

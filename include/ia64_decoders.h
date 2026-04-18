@@ -47,6 +47,26 @@ public:
 };
 
 /**
+ * F-Type Instruction Decoder
+ * Handles floating-point operations
+ */
+class FTypeDecoder {
+public:
+    static InstructionEx decode(uint64_t slot);
+    static bool decodeF1(uint64_t slot, formats::FFormat& result);   // FMA/FMS/FNMA
+    static bool decodeF2(uint64_t slot, formats::FFormat& result);   // XMA
+    static bool decodeF3(uint64_t slot, formats::FFormat& result);   // FSELECT
+    static bool decodeF4(uint64_t slot, formats::FFormat& result);   // FCMP
+    static bool decodeF5(uint64_t slot, formats::FFormat& result);   // FCLASS
+    static bool decodeF6(uint64_t slot, formats::FFormat& result);   // FRCPA
+    static bool decodeF7(uint64_t slot, formats::FFormat& result);   // FRSQRTA
+    static bool decodeF8(uint64_t slot, formats::FFormat& result);   // FMIN/FMAX
+    static bool decodeF9(uint64_t slot, formats::FFormat& result);   // FMERGE/FABS/FNEG
+    static bool decodeF10(uint64_t slot, formats::FFormat& result);  // FCVT.FX
+    static bool decodeF11(uint64_t slot, formats::FFormat& result);  // FCVT.XF
+};
+
+/**
  * L+X Format Decoder (MOVL)
  */
 class LXDecoder {
