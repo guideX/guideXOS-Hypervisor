@@ -1063,10 +1063,14 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             return result;
             
         case UnitType::L_UNIT:
+            // L-unit is handled specially in DecodeBundle for MOVL
+            // Standalone L-unit is rare but could be NOP
+            result = InstructionEx(InstructionType::NOP, UnitType::L_UNIT);
+            return result;
+            
         case UnitType::X_UNIT:
-            // L and X units are handled specially in DecodeBundle for MOVL
-            // Should not reach here normally
-            result = InstructionEx(InstructionType::NOP, unitType);
+            // X-unit for extended instructions and MOVL X-portion
+            result = decoder::XTypeDecoder::decode(raw_instruction);
             return result;
             
         default:

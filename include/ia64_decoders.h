@@ -67,6 +67,19 @@ public:
 };
 
 /**
+ * X-Type Instruction Decoder
+ * Handles extended/special instructions and MOVL X-unit portion
+ */
+class XTypeDecoder {
+public:
+    static InstructionEx decode(uint64_t slot);
+    static bool decodeBreak(uint64_t slot, formats::XFormat& result);   // BREAK
+    static bool decodeNop(uint64_t slot, formats::XFormat& result);     // NOP (X-unit)
+    static bool decodeMovl(uint64_t slot, formats::XFormat& result);    // MOVL X-portion
+    static bool isValidXUnit(uint64_t slot);
+};
+
+/**
  * L+X Format Decoder (MOVL)
  */
 class LXDecoder {
