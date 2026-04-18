@@ -1,6 +1,7 @@
 #include "ISO9660Parser.h"
 #include "IStorageDevice.h"
 #include "logger.h"
+#include "FATParser.h"
 #include <cstring>
 
 namespace ia64 {
@@ -232,6 +233,87 @@ int64_t ISO9660Parser::readFile(uint32_t lba, uint32_t sectorCount,
     }
     
     return bytesRead;
+}
+
+bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
+    using namespace guideXOS;
+    
+    executableData.clear();
+    
+    if (!efiBootEntry_.isBootable) {
+        LOG_ERROR("No EFI boot entry available");
+        return false;
+    }
+    
+    LOG_INFO("Extracting EFI executable from boot image...");
+    
+    // Read the EFI boot image (FAT filesystem)
+    std::vector<uint8_t> bootImage;
+    int64_t bytesRead = readFile(efiBootEntry_.loadLBA, efiBootEntry_.sectorCount, bootImage);
+    
+    if (bytesRead <= 0 || bootImage.empty()) {
+        LOG_ERROR("Failed to read EFI boot image");
+        return false;
+    }
+    
+    LOG_INFO("Read " + std::to_string(bytesRead) + " bytes of EFI boot image");
+    
+    // Parse as FAT filesystem
+    FATParser fatParser;
+    if (!fatParser.parse(bootImage.data(), bootImage.size())) {
+        LOG_ERROR("Failed to parse EFI boot image as FAT filesystem");
+        return false;
+    }
+    
+    LOG_INFO("FAT filesystem parsed successfully");
+    
+    // Try common EFI bootloader paths for IA-64
+    const char* efiPaths[] = {
+        "EFI/BOOT/BOOTIA64.EFI",
+        "efi/boot/bootia64.efi",
+        "EFI\\BOOT\\BOOTIA64.EFI",
+        "BOOTIA64.EFI",
+        "bootia64.efi"
+    };
+    
+    FATFileInfo fileInfo;
+    bool found = false;
+    
+    for (const char* path : efiPaths) {
+        LOG_INFO("Searching for: " + std::string(path));
+        if (fatParser.findFile(path, fileInfo)) {
+            LOG_INFO("? Found EFI executable: " + fileInfo.name);
+            LOG_INFO("  Size: " + std::to_string(fileInfo.size) + " bytes");
+            found = true;
+            break;
+        }
+    }
+    
+    if (!found) {
+        LOG_ERROR("Could not find EFI bootloader in boot image");
+        
+        // List root directory to help debug
+        std::vector<FATFileInfo> rootEntries;
+        if (fatParser.listDirectory("/", rootEntries)) {
+            LOG_INFO("Root directory contents:");
+            for (const auto& entry : rootEntries) {
+                LOG_INFO("  " + entry.name + (entry.isDirectory ? " [DIR]" : ""));
+            }
+        }
+        
+        return false;
+    }
+    
+    // Read the EFI executable
+    if (!fatParser.readFile(fileInfo, executableData)) {
+        LOG_ERROR("Failed to read EFI executable from FAT filesystem");
+        return false;
+    }
+    
+    LOG_INFO("? EFI executable extracted successfully: " + 
+            std::to_string(executableData.size()) + " bytes");
+    
+    return true;
 }
 
 } // namespace ia64

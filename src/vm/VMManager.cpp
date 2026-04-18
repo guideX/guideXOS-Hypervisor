@@ -2,6 +2,7 @@
 #include "RawDiskDevice.h"
 #include "IStorageDevice.h"
 #include "ISO9660Parser.h"
+#include "PEParser.h"
 #include "logger.h"
 #include <sstream>
 #include <iomanip>
@@ -215,38 +216,53 @@ bool VMManager::startVM(const std::string& vmId) {
                             LOG_INFO("  Loading from LBA: " + std::to_string(efiEntry->loadLBA));
                             LOG_INFO("  Size: " + std::to_string(efiEntry->sectorCount) + " sectors");
                             
-                            // Read EFI bootloader from ISO
-                            std::vector<uint8_t> bootloader;
-                            int64_t bytesRead = isoParser.readFile(
-                                efiEntry->loadLBA, 
-                                efiEntry->sectorCount, 
-                                bootloader
-                            );
-                            
-                            if (bytesRead > 0 && !bootloader.empty()) {
-                                LOG_INFO("? EFI bootloader read: " + std::to_string(bytesRead) + " bytes");
+                            // Extract EFI executable from boot image (FAT filesystem)
+                            std::vector<uint8_t> efiExecutable;
+                            if (isoParser.extractEFIExecutable(efiExecutable)) {
+                                LOG_INFO("? EFI executable extracted: " + 
+                                        std::to_string(efiExecutable.size()) + " bytes");
                                 
-                                // For IA-64 EFI, load to 1MB
-                                uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
-                                                      bootConfig.entryPoint : 0x100000;
-                                
-                                LOG_INFO("Loading EFI bootloader to address: 0x" + 
-                                        std::to_string(bootAddress));
-                                
-                                // Load into VM memory
-                                if (instance->vm->loadProgram(bootloader.data(), 
-                                                             bootloader.size(), 
-                                                             bootAddress)) {
-                                    // Set entry point
-                                    instance->vm->setEntryPoint(bootAddress);
-                                    LOG_INFO("? EFI bootloader loaded successfully");
-                                    LOG_INFO("  Entry point: 0x" + std::to_string(bootAddress));
-                                    LOG_INFO("  Size: " + std::to_string(bootloader.size()) + " bytes");
+                                // Parse PE/COFF format
+                                guideXOS::PEParser peParser;
+                                if (peParser.parse(efiExecutable.data(), efiExecutable.size())) {
+                                    LOG_INFO("? PE/COFF image parsed successfully");
+                                    
+                                    if (!peParser.isIA64()) {
+                                        LOG_ERROR("EFI executable is not for IA-64 architecture");
+                                    } else if (!peParser.isEFI()) {
+                                        LOG_WARN("Executable may not be an EFI application");
+                                    } else {
+                                        // Load PE image properly
+                                        std::vector<uint8_t> imageBuffer;
+                                        uint64_t loadAddress, entryPoint;
+                                        
+                                        if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
+                                            LOG_INFO("? PE image prepared for loading");
+                                            LOG_INFO("  Preferred load address: 0x" + std::to_string(loadAddress));
+                                            LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
+                                            LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
+                                            
+                                            // Load into VM memory at preferred address
+                                            if (instance->vm->loadProgram(imageBuffer.data(), 
+                                                                         imageBuffer.size(), 
+                                                                         loadAddress)) {
+                                                // Set entry point from PE header
+                                                instance->vm->setEntryPoint(entryPoint);
+                                                LOG_INFO("? EFI bootloader loaded successfully");
+                                                LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
+                                                LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
+                                            } else {
+                                                LOG_ERROR("Failed to load EFI bootloader into memory");
+                                            }
+                                        } else {
+                                            LOG_ERROR("Failed to prepare PE image for loading");
+                                        }
+                                    }
                                 } else {
-                                    LOG_ERROR("Failed to load EFI bootloader into memory");
+                                    LOG_ERROR("Failed to parse EFI executable as PE/COFF");
                                 }
                             } else {
-                                LOG_ERROR("Failed to read EFI bootloader from ISO");
+                                LOG_ERROR("Failed to extract EFI executable from boot image");
                             }
                         } else {
                             LOG_WARN("No EFI boot entry found in boot catalog");

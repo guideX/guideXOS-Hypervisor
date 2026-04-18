@@ -192,6 +192,13 @@ public:
      * Get block size (typically 2048 for CDs)
      */
     uint32_t getBlockSize() const { return blockSize_; }
+    
+    /**
+     * Extract EFI executable from boot image
+     * @param executableData Output buffer for executable
+     * @return true if successful
+     */
+    bool extractEFIExecutable(std::vector<uint8_t>& executableData);
 
 private:
     IStorageDevice* device_;

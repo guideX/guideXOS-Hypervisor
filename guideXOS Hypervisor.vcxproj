@@ -305,6 +305,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\storage\FATParser.cpp" />
     <ClCompile Include="src\storage\FilesystemMount.cpp" ExcludedFromBuild="true">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
@@ -318,6 +319,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\storage\PEParser.cpp" />
     <ClCompile Include="src\storage\RawDiskDevice.cpp" ExcludedFromBuild="true">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
@@ -492,6 +494,7 @@
     <ClInclude Include="include\decoder.h" />
     <ClInclude Include="include\dynamic_linker.h" />
     <ClInclude Include="include\ExampleISAPlugin.h" />
+    <ClInclude Include="include\FATParser.h" />
     <ClInclude Include="include\FilesystemMount.h" />
     <ClInclude Include="include\FramebufferDevice.h" />
     <ClInclude Include="include\Fuzzer.h" />
@@ -525,6 +528,7 @@
     <ClInclude Include="include\mmu.h" />
     <ClInclude Include="include\PageFault.h" />
     <ClInclude Include="include\PathResolver.h" />
+    <ClInclude Include="include\PEParser.h" />
     <ClInclude Include="include\Profiler.h" />
     <ClInclude Include="include\RawDiskDevice.h" />
     <ClInclude Include="include\RestAPIServer.h" />

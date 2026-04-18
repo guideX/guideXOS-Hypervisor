@@ -95,6 +95,9 @@ set(STORAGE_SOURCES
     src/storage/PathResolver.cpp
     src/storage/VirtualDiskManager.cpp
     src/storage/InitramfsDevice.cpp
+    src/storage/ISO9660Parser.cpp
+    src/storage/FATParser.cpp
+    src/storage/PEParser.cpp
 )
 
 set(SYSCALL_SOURCES

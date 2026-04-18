@@ -149,6 +149,10 @@
     </ClCompile>
     <ClCompile Include="src\storage\ISO9660Parser.cpp">
     </ClCompile>
+    <ClCompile Include="src\storage\FATParser.cpp">
+    </ClCompile>
+    <ClCompile Include="src\storage\PEParser.cpp">
+    </ClCompile>
     <ClCompile Include="src\storage\SimpleReadOnlyFS.cpp">
     </ClCompile>
     <ClCompile Include="src\storage\VirtualBlockDevice.cpp">
