@@ -652,5 +652,9 @@
     <None Include="QUICK_FIX_SUMMARY.md" />
     <None Include="BOOTIMG_FALLBACK_IMPLEMENTATION.md" />
     <None Include="HEX_LOGGING_FIX.md" />
+    <None Include="ENTRY_POINT_ANALYSIS.md" />
+    <None Include="PE_LOADER_FIX.md" />
+    <None Include="EFI_INDIRECT_ENTRY_POINT_FIX.md" />
+    <None Include="CURRENT_STATUS_ANALYSIS.md" />
   </ItemGroup>
 </Project>

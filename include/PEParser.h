@@ -113,6 +113,30 @@ constexpr uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
 constexpr uint32_t IMAGE_SCN_MEM_READ = 0x40000000;
 constexpr uint32_t IMAGE_SCN_MEM_WRITE = 0x80000000;
 
+// PE Base Relocation types
+constexpr uint16_t IMAGE_REL_BASED_ABSOLUTE = 0;
+constexpr uint16_t IMAGE_REL_BASED_DIR64 = 10;
+
+// ELF Relocation types for IA-64
+constexpr uint32_t R_IA64_NONE = 0;
+constexpr uint32_t R_IA64_DIR64LSB = 0x27;
+constexpr uint32_t R_IA64_FPTR64LSB = 0x47;
+constexpr uint32_t R_IA64_PCREL64LSB = 0x4f;
+constexpr uint32_t R_IA64_SEGREL64LSB = 0x5f;
+
+// PE Base Relocation Block Header
+struct PEBaseRelocationBlock {
+    uint32_t virtualAddress;
+    uint32_t sizeOfBlock;
+};
+
+// ELF RELA Relocation Entry (IA-64)
+struct ELFRelaEntry {
+    uint64_t offset;      // Location to apply relocation
+    uint64_t info;        // Relocation type and symbol index
+    int64_t addend;       // Constant addend
+};
+
 struct PESectionInfo {
     std::string name;
     uint64_t virtualAddress;
@@ -148,6 +172,8 @@ public:
     // Load sections into memory buffer
     bool loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddress, uint64_t& entryPoint);
     
+    // Apply relocations to loaded image
+    bool applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t loadAddress);
     
     // Validate for specific architecture
     bool isIA64() const { return imageInfo_.machine == IMAGE_FILE_MACHINE_IA64; }
@@ -158,26 +184,33 @@ public:
     
     bool isValid() const { return valid_; }
     
+    
 private:
-    bool parseDOSHeader();
-    bool parsePEHeader();
-    bool parseCOFFHeader();
-    bool parseOptionalHeader();
-    bool parseSections();
+bool parseDOSHeader();
+bool parsePEHeader();
+bool parseCOFFHeader();
+bool parseOptionalHeader();
+bool parseSections();
     
-    // Helper function to dump memory at entry point for debugging
-    void dumpMemoryAtEntryPoint(const std::vector<uint8_t>& imageBuffer, uint64_t entryPointRVA) const;
+// Helper function to dump memory at entry point for debugging
+void dumpMemoryAtEntryPoint(const std::vector<uint8_t>& imageBuffer, uint64_t entryPointRVA) const;
     
-    const uint8_t* imageData_;
-    size_t imageSize_;
-    bool valid_;
+// Relocation helper functions
+bool applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_t loadAddress);
+bool applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t loadAddress);
     
-    DOSHeader dosHeader_;
-    PEHeader peHeader_;
-    COFFHeader coffHeader_;
-    PEOptionalHeader64 optionalHeader_;
+const PESectionInfo* findSectionByName(const std::string& name) const;
     
-    PEImageInfo imageInfo_;
+const uint8_t* imageData_;
+size_t imageSize_;
+bool valid_;
+    
+DOSHeader dosHeader_;
+PEHeader peHeader_;
+COFFHeader coffHeader_;
+PEOptionalHeader64 optionalHeader_;
+    
+PEImageInfo imageInfo_;
 };
 
 } // namespace guideXOS
