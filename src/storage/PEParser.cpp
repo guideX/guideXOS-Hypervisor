@@ -166,9 +166,19 @@ bool PEParser::parseOptionalHeader() {
     imageInfo_.sizeOfHeaders = optionalHeader_.sizeOfHeaders;
     
     LOG_INFO("Optional Header:");
-    LOG_INFO("  Magic: 0x" + std::to_string(optionalHeader_.magic));
-    LOG_INFO("  Entry point RVA: 0x" + std::to_string(optionalHeader_.addressOfEntryPoint));
-    LOG_INFO("  Image base: 0x" + std::to_string(optionalHeader_.imageBase));
+    
+    std::ostringstream oss;
+    oss << "  Magic: 0x" << std::hex << optionalHeader_.magic << std::dec;
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  Entry point RVA: 0x" << std::hex << optionalHeader_.addressOfEntryPoint << std::dec;
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  Image base: 0x" << std::hex << optionalHeader_.imageBase << std::dec;
+    LOG_INFO(oss.str());
+    
     LOG_INFO("  Section alignment: " + std::to_string(optionalHeader_.sectionAlignment));
     LOG_INFO("  Subsystem: " + std::to_string(optionalHeader_.subsystem));
     
