@@ -679,6 +679,7 @@
     <None Include="MUST_USE_VISUAL_STUDIO.md" />
     <None Include="OUTPUT_LOG_ANALYSIS_AND_NEXT_STEPS.md" />
     <None Include="PE_LOADER_FIX.md" />
+    <None Include="PE_RELOCATION_IMPLEMENTATION.md" />
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="QUICK_FIX_START_ERROR.md" />
     <None Include="QUICK_FIX_STEPS.md" />

@@ -656,5 +656,6 @@
     <None Include="PE_LOADER_FIX.md" />
     <None Include="EFI_INDIRECT_ENTRY_POINT_FIX.md" />
     <None Include="CURRENT_STATUS_ANALYSIS.md" />
+    <None Include="PE_RELOCATION_IMPLEMENTATION.md" />
   </ItemGroup>
 </Project>

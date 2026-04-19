@@ -610,22 +610,29 @@ bool PEParser::applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t load
     oss << "Relocation delta: 0x" << std::hex << delta << std::dec;
     LOG_INFO(oss.str());
     
+    // Note: Even if delta is 0, we still need to check ELF relocations
+    // because they use explicit addends that are independent of delta
     if (delta == 0) {
-        LOG_INFO("No relocation needed (loaded at preferred base address)");
-        return true;
+        LOG_INFO("Delta is 0 (loaded at preferred base address)");
+        LOG_INFO("PE base relocations not needed, but checking ELF relocations...");
     }
     
     bool success = true;
     
-    // Try PE-style base relocations (.reloc section)
-    LOG_INFO("");
-    LOG_INFO("Step 1: Checking for .reloc section (PE base relocations)...");
-    if (!applyPEBaseRelocations(imageBuffer, loadAddress)) {
-        LOG_WARN("PE base relocations failed or not present");
-        success = false;
+    // Try PE-style base relocations (.reloc section) - only if delta != 0
+    if (delta != 0) {
+        LOG_INFO("");
+        LOG_INFO("Step 1: Checking for .reloc section (PE base relocations)...");
+        if (!applyPEBaseRelocations(imageBuffer, loadAddress)) {
+            LOG_WARN("PE base relocations failed or not present");
+            success = false;
+        }
+    } else {
+        LOG_INFO("");
+        LOG_INFO("Step 1: Skipping .reloc (delta is 0)");
     }
     
-    // Try ELF-style relocations (.rela section)
+    // Try ELF-style relocations (.rela section) - ALWAYS check
     LOG_INFO("");
     LOG_INFO("Step 2: Checking for .rela section (ELF relocations)...");
     if (!applyELFRelocations(imageBuffer, loadAddress)) {
@@ -804,7 +811,9 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
             {
                 if (rela.offset + 8 <= imageBuffer.size()) {
                     std::memcpy(&originalValue, &imageBuffer[rela.offset], 8);
-                    newValue = originalValue + rela.addend + loadAddress;
+                    // ELF RELA formula: S + A (where S is the base/symbol address)
+                    // For position-independent code: newValue = loadAddress + addend
+                    newValue = loadAddress + rela.addend;
                     std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
                     applied = true;
                 }
@@ -815,7 +824,8 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
             {
                 if (rela.offset + 8 <= imageBuffer.size()) {
                     std::memcpy(&originalValue, &imageBuffer[rela.offset], 8);
-                    newValue = originalValue + rela.addend - rela.offset;
+                    // PC-relative: S + A - P (where P is the place)
+                    newValue = loadAddress + rela.addend - rela.offset;
                     std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
                     applied = true;
                 }
@@ -826,7 +836,14 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
             {
                 if (rela.offset + 8 <= imageBuffer.size()) {
                     std::memcpy(&originalValue, &imageBuffer[rela.offset], 8);
-                    newValue = originalValue + rela.addend;
+                    // Segment-relative: S + A - segment base
+                    // For flat memory model, this is just the addend
+                    newValue = rela.addend;
+                    std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
+                    applied = true;
+                }
+                break;
+            }
                     std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
                     applied = true;
                 }
