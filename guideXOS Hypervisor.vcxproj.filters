@@ -294,6 +294,15 @@
     <ClCompile Include="src\storage\PEParser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="test_programs\minimal_test.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="test_programs\create_test_binary.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\loader\TestKernelHandler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">
@@ -506,6 +515,9 @@
     <ClInclude Include="include\PEParser.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\TestKernelHandler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
@@ -532,5 +544,8 @@
     <None Include="fix_vcxproj.ps1" />
     <None Include="fix_vcxproj2.ps1" />
     <None Include="docs\RELOCATION_BUG_FIX.md" />
+    <None Include="test_programs\TestKernelGenerator\Program.cs" />
+    <None Include="test_programs\README.md" />
+    <None Include="test_programs\TestKernelGenerator\TestKernelGenerator.csproj" />
   </ItemGroup>
 </Project>

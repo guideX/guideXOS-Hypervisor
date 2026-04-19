@@ -390,6 +390,23 @@ public:
     void clearConsoleOutput();
     
     // ========================================================================
+    // Framebuffer Access
+    // ========================================================================
+    
+    /**
+     * Get framebuffer for VGA text mode (80x25)
+     * Returns a pointer to 2000 uint16_t values (character + attribute)
+     * 
+     * @return Pointer to framebuffer or nullptr if not available
+     */
+    uint16_t* getFramebuffer();
+    
+    /**
+     * Get framebuffer (const version)
+     */
+    const uint16_t* getFramebuffer() const;
+    
+    // ========================================================================
     // Boot State Machine
     // ========================================================================
     

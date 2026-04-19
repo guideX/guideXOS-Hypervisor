@@ -4,10 +4,12 @@
 #include "ISO9660Parser.h"
 #include "FATParser.h"
 #include "PEParser.h"
+#include "TestKernelHandler.h"
 #include "logger.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <fstream>
 
 namespace ia64 {
 
@@ -186,7 +188,80 @@ bool VMManager::startVM(const std::string& vmId) {
         
         // Load bootloader from boot device if configured
         const auto& bootConfig = instance->metadata.configuration.boot;
-        if (!bootConfig.bootDevice.empty() && !bootConfig.directBoot) {
+        
+        // Handle direct boot mode (load kernel directly)
+        if (bootConfig.directBoot && !bootConfig.kernelPath.empty()) {
+            LOG_INFO("Direct boot mode enabled");
+            LOG_INFO("  Kernel path: " + bootConfig.kernelPath);
+            LOG_INFO("  Entry point: 0x" + std::to_string(bootConfig.entryPoint));
+            
+            // Load kernel file
+            std::ifstream kernelFile(bootConfig.kernelPath, std::ios::binary | std::ios::ate);
+            if (!kernelFile) {
+                LOG_ERROR("Failed to open kernel file: " + bootConfig.kernelPath);
+                instance->metadata.setError("Kernel file not found");
+                return false;
+            }
+            
+            // Get file size
+            std::streamsize kernelSize = kernelFile.tellg();
+            kernelFile.seekg(0, std::ios::beg);
+            
+            // Read kernel into memory
+            std::vector<uint8_t> kernelData(kernelSize);
+            if (!kernelFile.read(reinterpret_cast<char*>(kernelData.data()), kernelSize)) {
+                LOG_ERROR("Failed to read kernel file");
+                instance->metadata.setError("Failed to read kernel");
+                return false;
+            }
+            
+            LOG_INFO("  Kernel size: " + std::to_string(kernelSize) + " bytes");
+            
+            // Check if this is a test kernel
+            if (TestKernelHandler::IsTestKernel(kernelData.data(), kernelData.size())) {
+                LOG_INFO("? Detected test kernel");
+                
+                // Get framebuffer from VM (80x25 VGA text mode)
+                uint16_t* framebuffer = instance->vm->getFramebuffer();
+                if (framebuffer) {
+                    if (TestKernelHandler::ExecuteTestKernel(kernelData.data(), 
+                                                             kernelData.size(), 
+                                                             framebuffer)) {
+                        LOG_INFO("? Test kernel executed successfully!");
+                        LOG_INFO("  Framebuffer updated with test pattern");
+                        
+                        // Don't set entry point for test kernels - they're already "executed"
+                        // The VM will just idle
+                        instance->vm->setEntryPoint(0xFFFFFFFF); // Invalid entry point (halt)
+                    } else {
+                        LOG_ERROR("Test kernel execution failed");
+                        instance->metadata.setError("Test kernel execution failed");
+                        return false;
+                    }
+                } else {
+                    LOG_ERROR("Framebuffer not available");
+                    instance->metadata.setError("Framebuffer not available");
+                    return false;
+                }
+            } else {
+                // Regular kernel - load into memory
+                uint64_t loadAddress = bootConfig.entryPoint != 0 ? 
+                                      bootConfig.entryPoint : 0x100000;
+                
+                LOG_INFO("  Loading kernel to address: 0x" + std::to_string(loadAddress));
+                
+                if (instance->vm->loadProgram(kernelData.data(), kernelData.size(), loadAddress)) {
+                    instance->vm->setEntryPoint(loadAddress);
+                    LOG_INFO("? Kernel loaded successfully");
+                } else {
+                    LOG_ERROR("Failed to load kernel into memory");
+                    instance->metadata.setError("Failed to load kernel");
+                    return false;
+                }
+            }
+        }
+        // Load from boot device if not direct boot
+        else if (!bootConfig.bootDevice.empty() && !bootConfig.directBoot) {
             // Find the boot device
             IStorageDevice* bootDevice = nullptr;
             for (const auto& device : instance->storageDevices) {

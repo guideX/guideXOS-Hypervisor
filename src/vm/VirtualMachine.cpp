@@ -821,6 +821,35 @@ void VirtualMachine::clearConsoleOutput() {
     }
 }
 
+// ============================================================================
+// Framebuffer Access
+// ============================================================================
+
+uint16_t* VirtualMachine::getFramebuffer() {
+    if (!framebufferDevice_) {
+        return nullptr;
+    }
+    
+    // The framebuffer device stores data as BGRA32, but we need to
+    // return it as uint16_t* for VGA text mode (80x25 characters)
+    // Each character is 2 bytes: character code + attribute
+    // VGA text mode is at 0xB8000 in real mode, but we'll use our framebuffer
+    
+    // For now, we'll reinterpret the framebuffer as uint16_t*
+    // This allows direct access to the first 80*25*2 = 4000 bytes
+    const uint8_t* fb = framebufferDevice_->GetFramebuffer();
+    return const_cast<uint16_t*>(reinterpret_cast<const uint16_t*>(fb));
+}
+
+const uint16_t* VirtualMachine::getFramebuffer() const {
+    if (!framebufferDevice_) {
+        return nullptr;
+    }
+    
+    const uint8_t* fb = framebufferDevice_->GetFramebuffer();
+    return reinterpret_cast<const uint16_t*>(fb);
+}
+
 bool VirtualMachine::setConditionalBreakpoint(uint64_t address, const DebugCondition& condition) {
     if (!setBreakpoint(address)) {
         return false;

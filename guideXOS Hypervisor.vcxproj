@@ -293,6 +293,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\loader\TestKernelHandler.cpp" />
     <ClCompile Include="src\memory\memory.cpp" ExcludedFromBuild="true">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
@@ -476,6 +477,8 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="test_programs\create_test_binary.c" />
+    <ClCompile Include="test_programs\minimal_test.c" />
     <ClCompile Include="tools\decoder_diagnostic.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -535,6 +538,7 @@
     <ClInclude Include="include\SimpleCPUScheduler.h" />
     <ClInclude Include="include\SimpleReadOnlyFS.h" />
     <ClInclude Include="include\SyscallDispatcher.h" />
+    <ClInclude Include="include\TestKernelHandler.h" />
     <ClInclude Include="include\Timer.h" />
     <ClInclude Include="include\VirtualBlockDevice.h" />
     <ClInclude Include="include\VirtualDiskManager.h" />
@@ -572,6 +576,9 @@
     <None Include="kernels\minimal_kernel.s" />
     <None Include="README.md" />
     <None Include="docs\RELOCATION_BUG_FIX.md" />
+    <None Include="test_programs\README.md" />
+    <None Include="test_programs\TestKernelGenerator\Program.cs" />
+    <None Include="test_programs\TestKernelGenerator\TestKernelGenerator.csproj" />
     <None Include="web\app.js" />
     <None Include="web\index.html" />
     <None Include="web\style.css" />
