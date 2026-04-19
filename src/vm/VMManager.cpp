@@ -2,6 +2,7 @@
 #include "RawDiskDevice.h"
 #include "IStorageDevice.h"
 #include "ISO9660Parser.h"
+#include "FATParser.h"
 #include "PEParser.h"
 #include "logger.h"
 #include <sstream>
@@ -268,11 +269,17 @@ bool VMManager::startVM(const std::string& vmId) {
                             LOG_WARN("No EFI boot entry found in El Torito boot catalog");
                             LOG_INFO("Attempting to find EFI bootloader in ISO filesystem...");
                             
+                            // First, list root directory to see what's available
+                            LOG_INFO("Listing root directory contents...");
+                            isoParser.listRootDirectory();
+                            
                             // Fallback: Search for BOOTIA64.EFI in the ISO filesystem
                             const char* efiPaths[] = {
                                 "/EFI/BOOT/BOOTIA64.EFI",
                                 "EFI/BOOT/BOOTIA64.EFI",
-                                "/efi/boot/bootia64.efi"
+                                "/efi/boot/bootia64.efi",
+                                "BOOTIA64.EFI",  // Try just the filename in case it's in root
+                                "/BOOT/BOOTIA64.EFI"
                             };
                             
                             std::vector<uint8_t> efiExecutable;
@@ -332,24 +339,210 @@ bool VMManager::startVM(const std::string& vmId) {
                                 }
                             } else {
                                 LOG_ERROR("Could not find EFI bootloader in ISO filesystem");
-                                LOG_INFO("Falling back to raw boot sector loading...");
+                                LOG_INFO("Checking for boot image with embedded EFI bootloader...");
                                 
-                                // Fallback: Load first 4KB as before
-                                std::vector<uint8_t> bootSector(4096);
-                                int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                                // Try to find BOOT.IMG and search for EFI bootloader inside it
+                                const char* bootImgPaths[] = {
+                                    "/boot/boot.img",
+                                    "/BOOT/BOOT.IMG",
+                                    "boot/boot.img",
+                                    "BOOT/BOOT.IMG",
+                                    "/boot.img",
+                                    "/BOOT.IMG"
+                                };
                                 
-                                if (bytesRead > 0) {
-                                    uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
-                                                          bootConfig.entryPoint : 0x100000;
-                                    LOG_INFO("Loading raw boot data to address: 0x" + 
-                                            std::to_string(bootAddress));
+                                std::vector<uint8_t> bootImgData;
+                                bool foundBootImg = false;
+                                std::string bootImgPath;
+                                
+                                for (const char* path : bootImgPaths) {
+                                    if (isoParser.extractFile(path, bootImgData)) {
+                                        LOG_INFO("? Found boot image: " + std::string(path));
+                                        foundBootImg = true;
+                                        bootImgPath = path;
+                                        break;
+                                    }
+                                }
+                                
+                                bool bootedFromImage = false;
+                                
+                                if (foundBootImg) {
+                                    LOG_INFO("? Boot image extracted: " + 
+                                            std::to_string(bootImgData.size()) + " bytes");
+                                    LOG_INFO("  Parsing as FAT filesystem...");
                                     
-                                    if (instance->vm->loadProgram(bootSector.data(), 
-                                                                 static_cast<size_t>(bytesRead), 
-                                                                 bootAddress)) {
-                                        instance->vm->setEntryPoint(bootAddress);
-                                        LOG_INFO("Raw boot data loaded, entry point: 0x" + 
-                                                std::to_string(bootAddress));
+                                    // Parse boot image as FAT filesystem
+                                    guideXOS::FATParser fatParser;
+                                    if (fatParser.parse(bootImgData.data(), bootImgData.size())) {
+                                        LOG_INFO("? FAT filesystem parsed successfully");
+                                        
+                                        // Search for EFI bootloader inside the FAT image
+                                        const char* efiPathsInFAT[] = {
+                                            "/EFI/BOOT/BOOTIA64.EFI",
+                                            "EFI/BOOT/BOOTIA64.EFI",
+                                            "/efi/boot/bootia64.efi",
+                                            "efi/boot/bootia64.efi"
+                                        };
+                                        
+                                        guideXOS::FATFileInfo efiFileInfo;
+                                        std::string foundEFIPath;
+                                        
+                                        for (const char* path : efiPathsInFAT) {
+                                            LOG_INFO("  Searching in boot image: " + std::string(path));
+                                            if (fatParser.findFile(path, efiFileInfo)) {
+                                                LOG_INFO("  ?? Found EFI bootloader in boot image!");
+                                                foundEFIPath = path;
+                                                break;
+                                            }
+                                        }
+                                        
+                                        if (!foundEFIPath.empty()) {
+                                            // Extract EFI bootloader from FAT image
+                                            if (fatParser.readFile(efiFileInfo, efiExecutable)) {
+                                                LOG_INFO("??? EFI bootloader extracted from boot image: " + 
+                                                        std::to_string(efiExecutable.size()) + " bytes");
+                                                
+                                                // Parse and load the EFI executable
+                                                guideXOS::PEParser peParser;
+                                                if (peParser.parse(efiExecutable.data(), efiExecutable.size())) {
+                                                    LOG_INFO("? PE/COFF image parsed successfully");
+                                                    
+                                                    if (!peParser.isIA64()) {
+                                                        LOG_ERROR("EFI executable is not for IA-64 architecture");
+                                                    } else if (!peParser.isEFI()) {
+                                                        LOG_WARN("Executable may not be an EFI application");
+                                                    } else {
+                                                        // Load PE image properly
+                                                        std::vector<uint8_t> imageBuffer;
+                                                        uint64_t loadAddress, entryPoint;
+                                                        
+                                                        if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
+                                                            LOG_INFO("? PE image prepared for loading");
+                                                            
+                                                            // Use ostringstream for proper hex formatting
+                                                            std::ostringstream oss;
+                                                            oss << "  Preferred load address: 0x" << std::hex << loadAddress << std::dec;
+                                                            LOG_INFO(oss.str());
+                                                            
+                                                            oss.str("");
+                                                            oss << "  Entry point: 0x" << std::hex << entryPoint << std::dec;
+                                                            LOG_INFO(oss.str());
+                                                            
+                                                            LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
+                                                            
+                                                            // Load into VM memory
+                                                            if (instance->vm->loadProgram(imageBuffer.data(), 
+                                                                                         imageBuffer.size(), 
+                                                                                         loadAddress)) {
+                                                                instance->vm->setEntryPoint(entryPoint);
+                                                                LOG_INFO("??? EFI bootloader loaded successfully from boot image!");
+                                                                LOG_INFO("  Source: " + bootImgPath + " -> " + foundEFIPath);
+                                                                
+                                                                oss.str("");
+                                                                oss << "  Load address: 0x" << std::hex << loadAddress << std::dec;
+                                                                LOG_INFO(oss.str());
+                                                                
+                                                                oss.str("");
+                                                                oss << "  Entry point: 0x" << std::hex << entryPoint << std::dec;
+                                                                LOG_INFO(oss.str());
+                                                                
+                                                                bootedFromImage = true;
+                                                            } else {
+                                                                LOG_ERROR("Failed to load EFI bootloader into memory");
+                                                            }
+                                                        } else {
+                                                            LOG_ERROR("Failed to prepare PE image for loading");
+                                                        }
+                                                    }
+                                                } else {
+                                                    LOG_ERROR("Failed to parse EFI executable as PE/COFF");
+                                                }
+                                            } else {
+                                                LOG_ERROR("Failed to read EFI file from boot image");
+                                            }
+                                        } else {
+                                            LOG_WARN("No EFI bootloader found in boot image");
+                                        }
+                                    } else {
+                                        LOG_WARN("Boot image is not a valid FAT filesystem");
+                                    }
+                                }
+                                
+                                // If we didn't boot from image, try other fallbacks
+                                if (!bootedFromImage) {
+                                    LOG_INFO("This ISO does not appear to have EFI boot support.");
+                                    LOG_INFO("Attempting to find IA-64 kernel for direct boot...");
+                                    
+                                    // Try to find the IA-64 kernel in common Debian installer locations
+                                    const char* kernelPaths[] = {
+                                        "/install/vmlinuz",
+                                        "/install/vmlinux",
+                                        "/boot/vmlinuz",
+                                        "/boot/vmlinux",
+                                        "install/vmlinuz",
+                                        "install/vmlinux",
+                                        "boot/vmlinuz",
+                                        "boot/vmlinux"
+                                    };
+                                    
+                                    std::vector<uint8_t> kernelData;
+                                    bool foundKernel = false;
+                                    std::string foundPath;
+                                    
+                                    for (const char* path : kernelPaths) {
+                                        LOG_INFO("Searching for kernel: " + std::string(path));
+                                        if (isoParser.extractFile(path, kernelData)) {
+                                            LOG_INFO("? Found kernel: " + std::string(path));
+                                            foundKernel = true;
+                                            foundPath = path;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (foundKernel) {
+                                        LOG_INFO("? Kernel extracted: " + 
+                                                std::to_string(kernelData.size()) + " bytes");
+                                        LOG_INFO("  Path: " + foundPath);
+                                        
+                                        // TODO: Parse ELF kernel format and load properly
+                                        // For now, attempt basic loading
+                                        uint64_t kernelAddress = 0x100000;  // Standard kernel load address
+                                        
+                                        if (instance->vm->loadProgram(kernelData.data(), 
+                                                                     kernelData.size(), 
+                                                                     kernelAddress)) {
+                                            instance->vm->setEntryPoint(kernelAddress);
+                                            LOG_INFO("? Kernel loaded at 0x" + 
+                                                    std::to_string(kernelAddress));
+                                            LOG_WARN("Direct kernel boot attempted - this is experimental");
+                                            LOG_WARN("The kernel may require additional setup (initrd, boot parameters, etc.)");
+                                        } else {
+                                            LOG_ERROR("Failed to load kernel into memory");
+                                        }
+                                    } else {
+                                        LOG_WARN("No IA-64 kernel found in standard locations");
+                                        LOG_INFO("Falling back to raw boot sector loading...");
+                                        
+                                        // Fallback: Load first 4KB as before
+                                        std::vector<uint8_t> bootSector(4096);
+                                        int64_t bytesRead = bootDevice->readBytes(0, bootSector.size(), bootSector.data());
+                                        
+                                        if (bytesRead > 0) {
+                                            uint64_t bootAddress = bootConfig.entryPoint != 0 ? 
+                                                                  bootConfig.entryPoint : 0x100000;
+                                            LOG_INFO("Loading raw boot data to address: 0x" + 
+                                                    std::to_string(bootAddress));
+                                            LOG_WARN("WARNING: Loading x86 BIOS boot code on IA-64 architecture");
+                                            LOG_WARN("This will NOT work. Please use an EFI-bootable IA-64 ISO or direct kernel boot.");
+                                            
+                                            if (instance->vm->loadProgram(bootSector.data(), 
+                                                                         static_cast<size_t>(bytesRead), 
+                                                                         bootAddress)) {
+                                                instance->vm->setEntryPoint(bootAddress);
+                                                LOG_INFO("Raw boot data loaded, entry point: 0x" + 
+                                                        std::to_string(bootAddress));
+                                            }
+                                        }
                                     }
                                 }
                             }

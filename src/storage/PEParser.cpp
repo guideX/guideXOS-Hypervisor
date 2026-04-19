@@ -1,7 +1,10 @@
 #include "PEParser.h"
+#include "PEParser.h"
 #include "logger.h"
 #include <cstring>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 
 using ia64::LOG_ERROR;
 using ia64::LOG_INFO;
@@ -54,10 +57,22 @@ bool PEParser::parse(const uint8_t* data, size_t size) {
     
     valid_ = true;
     LOG_INFO("PE/COFF image parsed successfully");
-    LOG_INFO("  Machine: 0x" + std::to_string(imageInfo_.machine));
+    
+    // Use std::ostringstream for proper hex formatting
+    std::ostringstream oss;
+    oss << "  Machine: 0x" << std::hex << imageInfo_.machine << std::dec;
+    LOG_INFO(oss.str());
+    
     LOG_INFO("  Subsystem: " + std::to_string(imageInfo_.subsystem));
-    LOG_INFO("  Image base: 0x" + std::to_string(imageInfo_.imageBase));
-    LOG_INFO("  Entry point: 0x" + std::to_string(imageInfo_.entryPoint));
+    
+    oss.str("");
+    oss << "  Image base: 0x" << std::hex << imageInfo_.imageBase << std::dec;
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  Entry point: 0x" << std::hex << imageInfo_.entryPoint << std::dec;
+    LOG_INFO(oss.str());
+    
     LOG_INFO("  Sections: " + std::to_string(imageInfo_.sections.size()));
     
     return true;
@@ -249,8 +264,16 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
     entryPoint = imageInfo_.entryPoint;
     
     LOG_INFO("PE image loaded successfully");
-    LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
-    LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
+    
+    // Use std::ostringstream for proper hex formatting
+    std::ostringstream oss;
+    oss << "  Load address: 0x" << std::hex << loadAddress << std::dec;
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  Entry point: 0x" << std::hex << entryPoint << std::dec;
+    LOG_INFO(oss.str());
+    
     LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
     
     return true;

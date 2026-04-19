@@ -218,6 +218,11 @@ public:
      * @return true if successful
      */
     bool extractFile(const std::string& path, std::vector<uint8_t>& fileData);
+    
+    /**
+     * List root directory contents for debugging
+     */
+    void listRootDirectory();
 
 private:
     IStorageDevice* device_;

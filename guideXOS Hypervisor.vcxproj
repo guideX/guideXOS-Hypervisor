@@ -556,6 +556,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="ALL_DECODERS_COMPLETE.md" />
+    <None Include="BOOTIMG_FALLBACK_IMPLEMENTATION.md" />
+    <None Include="BOOT_ANALYSIS_AND_FIXES.md" />
     <None Include="BUILD_AND_TEST_ISO_PARSER.md" />
     <None Include="build_dll.ps1" />
     <None Include="BUILD_DLL_INSTRUCTIONS.md" />
@@ -675,6 +677,7 @@
     <None Include="PROJECT_SUMMARY.md" />
     <None Include="QUICK_FIX_START_ERROR.md" />
     <None Include="QUICK_FIX_STEPS.md" />
+    <None Include="QUICK_FIX_SUMMARY.md" />
     <None Include="QUICK_START_ISO_BOOT.md" />
     <None Include="README.md" />
     <None Include="REBUILD_AND_TEST_NOW.md" />

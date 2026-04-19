@@ -192,8 +192,11 @@ LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) +
             
             return true;
         } else {
-            LOG_INFO("  Default entry is not EFI (platform 0x" + std::to_string(validation->platformID) + 
-                    "), scanning for additional entries...");
+            LOG_WARN("  ISO boot catalog is for platform 0x" + 
+                    std::to_string(validation->platformID) + 
+                    (validation->platformID == 0 ? " (x86/BIOS)" : ""));
+            LOG_WARN("  This ISO is NOT designed for EFI boot (IA-64 requires EFI)");
+            LOG_INFO("  Scanning for additional entries...");
         }
     }
     
@@ -439,8 +442,25 @@ visited.insert(dirLBA);
         std::string recordName(reinterpret_cast<char*>(dirData.data() + offset + 33), 
                                record->fileIdentifierLength);
         
+        // ISO9660 often has version suffixes like ";1" - strip them for comparison
+        std::string cleanedRecordName = recordName;
+        size_t semicolonPos = cleanedRecordName.find(';');
+        if (semicolonPos != std::string::npos) {
+            cleanedRecordName = cleanedRecordName.substr(0, semicolonPos);
+        }
+        
+        // Remove trailing dots (ISO9660 adds a dot to directories sometimes)
+        if (!cleanedRecordName.empty() && cleanedRecordName.back() == '.') {
+            cleanedRecordName.pop_back();
+        }
+        
+        // Log every filename found for debugging
+        LOG_INFO("    Found entry: '" + recordName + "' (cleaned: '" + cleanedRecordName + "') " + 
+                 ((record->fileFlags & 0x02) ? "[DIR]" : "[FILE]") +
+                 " at LBA " + std::to_string(record->extentLBA_LE));
+        
         // Convert to uppercase for comparison
-        std::string recordNameUpper = recordName;
+        std::string recordNameUpper = cleanedRecordName;
         for (char& c : recordNameUpper) {
             c = std::toupper(static_cast<unsigned char>(c));
         }
@@ -452,6 +472,7 @@ visited.insert(dirLBA);
         
         // Check if this is a match
         if (recordNameUpper == fileNameUpper) {
+            LOG_INFO("    MATCH found for: " + fileName);
             lba = record->extentLBA_LE;
             fileSize = record->dataLength_LE;
             return true;
@@ -566,4 +587,70 @@ bool ISO9660Parser::extractFile(const std::string& path, std::vector<uint8_t>& f
     return true;
 }
 
+void ISO9660Parser::listRootDirectory() {
+    if (!pvdValid_) {
+        LOG_ERROR("ISO not parsed - cannot list root directory");
+        return;
+    }
+    
+    LOG_INFO("=== Root Directory Contents ===");
+    uint32_t rootLBA = pvd_.rootDirectory.extentLBA_LE;
+    uint32_t rootSize = pvd_.rootDirectory.dataLength_LE;
+    
+    // Read root directory data
+    uint32_t sectorsNeeded = (rootSize + blockSize_ - 1) / blockSize_;
+    std::vector<uint8_t> dirData;
+    if (readFile(rootLBA, sectorsNeeded, dirData) <= 0) {
+        LOG_ERROR("Failed to read root directory");
+        return;
+    }
+    
+    // Parse directory records
+    size_t offset = 0;
+    int entryCount = 0;
+    while (offset < rootSize && offset < dirData.size()) {
+        ISO9660DirectoryRecord* record = 
+            reinterpret_cast<ISO9660DirectoryRecord*>(dirData.data() + offset);
+        
+        // Check for end of directory
+        if (record->length == 0) {
+            break;
+        }
+        
+        // Validate record
+        if (record->length < 33 || offset + record->length > dirData.size()) {
+            break;
+        }
+        
+        if (record->fileIdentifierLength > 0 && 
+            offset + 33 + record->fileIdentifierLength <= dirData.size()) {
+            
+            std::string name(reinterpret_cast<char*>(dirData.data() + offset + 33), 
+                           record->fileIdentifierLength);
+            
+            // Clean up ISO9660 version suffixes
+            std::string cleanName = name;
+            size_t semicolonPos = cleanName.find(';');
+            if (semicolonPos != std::string::npos) {
+                cleanName = cleanName.substr(0, semicolonPos);
+            }
+            if (!cleanName.empty() && cleanName.back() == '.') {
+                cleanName.pop_back();
+            }
+            
+            std::string typeStr = (record->fileFlags & 0x02) ? "[DIR]" : "[FILE]";
+            LOG_INFO("  " + cleanName + " " + typeStr + 
+                    " (LBA: " + std::to_string(record->extentLBA_LE) + 
+                    ", Size: " + std::to_string(record->dataLength_LE) + ")");
+            entryCount++;
+        }
+        
+        offset += record->length;
+    }
+    
+    LOG_INFO("=== Total entries: " + std::to_string(entryCount) + " ===");
+}
+
 } // namespace ia64
+
+

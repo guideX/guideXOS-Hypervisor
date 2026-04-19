@@ -648,5 +648,8 @@
     <None Include="DECODER_COMPLETE_FINAL_SUMMARY.md" />
     <None Include="CRITICAL_MEMORY_ISSUE_ANALYSIS.md" />
     <None Include="FINAL_ANALYSIS_OUTPUT_LOG_REEXAMINATION.md" />
+    <None Include="BOOT_ANALYSIS_AND_FIXES.md" />
+    <None Include="QUICK_FIX_SUMMARY.md" />
+    <None Include="BOOTIMG_FALLBACK_IMPLEMENTATION.md" />
   </ItemGroup>
 </Project>
