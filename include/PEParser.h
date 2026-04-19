@@ -148,6 +148,7 @@ public:
     // Load sections into memory buffer
     bool loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddress, uint64_t& entryPoint);
     
+    
     // Validate for specific architecture
     bool isIA64() const { return imageInfo_.machine == IMAGE_FILE_MACHINE_IA64; }
     bool isEFI() const { 
@@ -164,6 +165,9 @@ private:
     bool parseOptionalHeader();
     bool parseSections();
     
+    // Helper function to dump memory at entry point for debugging
+    void dumpMemoryAtEntryPoint(const std::vector<uint8_t>& imageBuffer, uint64_t entryPointRVA) const;
+    
     const uint8_t* imageData_;
     size_t imageSize_;
     bool valid_;
@@ -177,3 +181,4 @@ private:
 };
 
 } // namespace guideXOS
+

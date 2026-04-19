@@ -230,63 +230,286 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
         return false;
     }
     
-    // Allocate buffer for entire image
-    imageBuffer.clear();
-    imageBuffer.resize(imageInfo_.sizeOfImage, 0);
+    LOG_INFO("=== PE/COFF Image Loader ===");
+    LOG_INFO("Loading EFI executable (IA-64)");
     
-    // Copy headers
+    std::ostringstream oss;
+    
+    // Log image metadata
+    oss << "Image metadata:";
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  SizeOfImage: 0x" << std::hex << imageInfo_.sizeOfImage << std::dec 
+        << " (" << imageInfo_.sizeOfImage << " bytes)";
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  SizeOfHeaders: 0x" << std::hex << imageInfo_.sizeOfHeaders << std::dec 
+        << " (" << imageInfo_.sizeOfHeaders << " bytes)";
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  ImageBase: 0x" << std::hex << imageInfo_.imageBase << std::dec;
+    LOG_INFO(oss.str());
+    
+    oss.str("");
+    oss << "  AddressOfEntryPoint: 0x" << std::hex << (imageInfo_.entryPoint - imageInfo_.imageBase) << std::dec;
+    LOG_INFO(oss.str());
+    
+    LOG_INFO("  Number of sections: " + std::to_string(imageInfo_.sections.size()));
+    
+    // STEP 1: Allocate memory using SizeOfImage
+    LOG_INFO("");
+    LOG_INFO("Step 1: Allocating image buffer...");
+    imageBuffer.clear();
+    imageBuffer.resize(imageInfo_.sizeOfImage, 0);  // Zero-initialize
+    LOG_INFO("  Allocated " + std::to_string(imageInfo_.sizeOfImage) + " bytes (zero-initialized)");
+    
+    // STEP 2: Copy headers
+    LOG_INFO("");
+    LOG_INFO("Step 2: Copying PE headers...");
     if (imageInfo_.sizeOfHeaders > imageSize_) {
-        LOG_ERROR("Headers size exceeds image size");
+        LOG_ERROR("  ERROR: Headers size exceeds file size");
         return false;
     }
     
     std::memcpy(imageBuffer.data(), imageData_, imageInfo_.sizeOfHeaders);
-    LOG_INFO("Copied " + std::to_string(imageInfo_.sizeOfHeaders) + " bytes of headers");
+    oss.str("");
+    oss << "  Copied 0x" << std::hex << imageInfo_.sizeOfHeaders << std::dec 
+        << " (" << imageInfo_.sizeOfHeaders << ") bytes of headers";
+    LOG_INFO(oss.str());
     
-    // Copy each section
-    for (const auto& section : imageInfo_.sections) {
+    // STEP 3: Map each section
+    LOG_INFO("");
+    LOG_INFO("Step 3: Mapping sections into memory...");
+    
+    for (size_t i = 0; i < imageInfo_.sections.size(); ++i) {
+        const auto& section = imageInfo_.sections[i];
+        
+        LOG_INFO("");
+        LOG_INFO("  Section " + std::to_string(i) + ": " + section.name);
+        
+        oss.str("");
+        oss << "    VirtualAddress (RVA): 0x" << std::hex << section.virtualAddress << std::dec;
+        LOG_INFO(oss.str());
+        
+        oss.str("");
+        oss << "    VirtualSize: 0x" << std::hex << section.virtualSize << std::dec 
+            << " (" << section.virtualSize << " bytes)";
+        LOG_INFO(oss.str());
+        
+        oss.str("");
+        oss << "    PointerToRawData: 0x" << std::hex << section.rawDataOffset << std::dec;
+        LOG_INFO(oss.str());
+        
+        oss.str("");
+        oss << "    SizeOfRawData: 0x" << std::hex << section.rawDataSize << std::dec 
+            << " (" << section.rawDataSize << " bytes)";
+        LOG_INFO(oss.str());
+        
+        oss.str("");
+        oss << "    Characteristics: 0x" << std::hex << section.characteristics << std::dec;
+        LOG_INFO(oss.str());
+        
+        // Handle BSS sections (no raw data)
         if (section.rawDataSize == 0) {
-            LOG_INFO("Section " + section.name + " has no raw data (BSS section)");
+            LOG_INFO("    -> BSS section (no raw data, already zero-initialized)");
             continue;
         }
         
+        // Validate section is within file
         if (section.rawDataOffset + section.rawDataSize > imageSize_) {
-            LOG_ERROR("Section " + section.name + " data extends beyond image size");
+            LOG_ERROR("    ERROR: Section raw data extends beyond file size");
+            LOG_ERROR("      File size: " + std::to_string(imageSize_));
+            LOG_ERROR("      Section end: " + std::to_string(section.rawDataOffset + section.rawDataSize));
             return false;
         }
         
-        if (section.virtualAddress + section.rawDataSize > imageInfo_.sizeOfImage) {
-            LOG_ERROR("Section " + section.name + " extends beyond allocated image size");
+        // Validate section fits in image buffer
+        // Use VirtualSize for the check, not RawDataSize
+        uint32_t sectionMemorySize = std::max(section.virtualSize, section.rawDataSize);
+        if (section.virtualAddress + sectionMemorySize > imageInfo_.sizeOfImage) {
+            LOG_ERROR("    ERROR: Section extends beyond allocated image size");
+            LOG_ERROR("      Image size: " + std::to_string(imageInfo_.sizeOfImage));
+            LOG_ERROR("      Section end: " + std::to_string(section.virtualAddress + sectionMemorySize));
             return false;
         }
         
-        // Copy section data to its virtual address
-        std::memcpy(imageBuffer.data() + section.virtualAddress,
-                   imageData_ + section.rawDataOffset,
-                   section.rawDataSize);
+        // Copy raw data from file to virtual address in memory
+        uint8_t* destPtr = imageBuffer.data() + section.virtualAddress;
+        const uint8_t* srcPtr = imageData_ + section.rawDataOffset;
         
-        LOG_INFO("Loaded section " + section.name + ": " + 
-                std::to_string(section.rawDataSize) + " bytes at RVA 0x" + 
-                std::to_string(section.virtualAddress));
+        std::memcpy(destPtr, srcPtr, section.rawDataSize);
+        
+        oss.str("");
+        oss << "    -> Copied " << section.rawDataSize << " bytes from file offset 0x" 
+            << std::hex << section.rawDataOffset << " to RVA 0x" << section.virtualAddress << std::dec;
+        LOG_INFO(oss.str());
+        
+        // If VirtualSize > SizeOfRawData, the remaining bytes are already zero (BSS)
+        if (section.virtualSize > section.rawDataSize) {
+            uint32_t bssSize = section.virtualSize - section.rawDataSize;
+            oss.str("");
+            oss << "    -> BSS padding: " << bssSize << " bytes (already zero-initialized)";
+            LOG_INFO(oss.str());
+        }
     }
+    
+    // STEP 4: Set load address and entry point
+    LOG_INFO("");
+    LOG_INFO("Step 4: Setting load address and entry point...");
     
     loadAddress = imageInfo_.imageBase;
     entryPoint = imageInfo_.entryPoint;
     
-    LOG_INFO("PE image loaded successfully");
-    
-    // Use std::ostringstream for proper hex formatting
-    std::ostringstream oss;
-    oss << "  Load address: 0x" << std::hex << loadAddress << std::dec;
+    oss.str("");
+    oss << "  Load address (ImageBase): 0x" << std::hex << loadAddress << std::dec;
     LOG_INFO(oss.str());
     
     oss.str("");
     oss << "  Entry point: 0x" << std::hex << entryPoint << std::dec;
     LOG_INFO(oss.str());
     
-    LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
+    // STEP 5: Validate entry point
+    LOG_INFO("");
+    LOG_INFO("Step 5: Validating entry point...");
+    
+    uint64_t entryPointRVA = entryPoint - loadAddress;
+    bool entryPointValid = false;
+    std::string entryPointSection;
+    
+    for (const auto& section : imageInfo_.sections) {
+        if (entryPointRVA >= section.virtualAddress && 
+            entryPointRVA < section.virtualAddress + section.virtualSize) {
+            entryPointValid = true;
+            entryPointSection = section.name;
+            
+            // Check if section is executable
+            const uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
+            bool isExecutable = (section.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
+            
+            oss.str("");
+            oss << "  Entry point RVA 0x" << std::hex << entryPointRVA << std::dec 
+                << " is in section: " << section.name;
+            LOG_INFO(oss.str());
+            
+            if (isExecutable) {
+                LOG_INFO("  Section is executable: YES ?");
+            } else {
+                LOG_WARN("  Section is executable: NO - This may cause execution failure!");
+            }
+            
+            break;
+        }
+    }
+    
+    if (!entryPointValid) {
+        LOG_ERROR("  ERROR: Entry point is not within any section!");
+        return false;
+    }
+    
+    // STEP 6: Dump entry point bytes for debugging
+    LOG_INFO("");
+    LOG_INFO("Step 6: Entry point memory dump...");
+    dumpMemoryAtEntryPoint(imageBuffer, entryPointRVA);
+    
+    LOG_INFO("");
+    LOG_INFO("=== PE/COFF Image Loaded Successfully ===");
+    oss.str("");
+    oss << "Total image size: 0x" << std::hex << imageBuffer.size() << std::dec 
+        << " (" << imageBuffer.size() << " bytes)";
+    LOG_INFO(oss.str());
     
     return true;
 }
 
+void PEParser::dumpMemoryAtEntryPoint(const std::vector<uint8_t>& imageBuffer, uint64_t entryPointRVA) const {
+    std::ostringstream oss;
+    
+    oss << "  Entry point RVA: 0x" << std::hex << entryPointRVA << std::dec;
+    LOG_INFO(oss.str());
+    
+    // Check if entry point is within bounds
+    if (entryPointRVA >= imageBuffer.size()) {
+        LOG_ERROR("  ERROR: Entry point is beyond image buffer!");
+        return;
+    }
+    
+    // Dump 32 bytes (2 IA-64 bundles) at the entry point
+    size_t bytesToDump = std::min(static_cast<size_t>(32), imageBuffer.size() - static_cast<size_t>(entryPointRVA));
+    
+    LOG_INFO("  First " + std::to_string(bytesToDump) + " bytes at entry point:");
+    
+    // Dump in rows of 16 bytes
+    for (size_t offset = 0; offset < bytesToDump; offset += 16) {
+        oss.str("");
+        oss << "    [0x" << std::hex << std::setfill('0') << std::setw(6) 
+            << (entryPointRVA + offset) << "] ";
+        
+        // Hex dump
+        size_t rowSize = std::min(static_cast<size_t>(16), bytesToDump - offset);
+        for (size_t i = 0; i < rowSize; ++i) {
+            oss << std::hex << std::setw(2) << std::setfill('0') 
+                << static_cast<unsigned int>(imageBuffer[entryPointRVA + offset + i]) << " ";
+        }
+        
+        // Padding for alignment
+        for (size_t i = rowSize; i < 16; ++i) {
+            oss << "   ";
+        }
+        
+        // ASCII representation
+        oss << " |";
+        for (size_t i = 0; i < rowSize; ++i) {
+            uint8_t byte = imageBuffer[entryPointRVA + offset + i];
+            if (byte >= 32 && byte < 127) {
+                oss << static_cast<char>(byte);
+            } else {
+                oss << ".";
+            }
+        }
+        oss << "|";
+        
+        LOG_INFO(oss.str());
+    }
+    
+    // Special IA-64 bundle analysis
+    if (bytesToDump >= 16) {
+        LOG_INFO("");
+        LOG_INFO("  IA-64 Bundle Analysis (first 16 bytes):");
+        
+        // Read template field (first 5 bits)
+        uint8_t templateField = imageBuffer[entryPointRVA] & 0x1F;
+        
+        oss.str("");
+        oss << "    Template: 0x" << std::hex << static_cast<unsigned int>(templateField) << std::dec;
+        LOG_INFO(oss.str());
+        
+        // Extract each 41-bit instruction slot
+        uint64_t bundle[2];
+        std::memcpy(bundle, &imageBuffer[entryPointRVA], 16);
+        
+        // Slot 0: bits 5-45
+        uint64_t slot0 = (bundle[0] >> 5) & 0x1FFFFFFFFFFULL;
+        oss.str("");
+        oss << "    Slot 0: 0x" << std::hex << slot0 << std::dec;
+        LOG_INFO(oss.str());
+        
+        // Slot 1: bits 46-86
+        uint64_t slot1 = (bundle[0] >> 46) | ((bundle[1] & 0x7FFFFFF) << 18);
+        slot1 &= 0x1FFFFFFFFFFULL;
+        oss.str("");
+        oss << "    Slot 1: 0x" << std::hex << slot1 << std::dec;
+        LOG_INFO(oss.str());
+        
+        // Slot 2: bits 87-127
+        uint64_t slot2 = (bundle[1] >> 23) & 0x1FFFFFFFFFFULL;
+        oss.str("");
+        oss << "    Slot 2: 0x" << std::hex << slot2 << std::dec;
+        LOG_INFO(oss.str());
+    }
+}
+
 } // namespace guideXOS
+
