@@ -844,11 +844,6 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
                 }
                 break;
             }
-                    std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
-                    applied = true;
-                }
-                break;
-            }
             
             default:
                 if (relocationCount < 5) {
