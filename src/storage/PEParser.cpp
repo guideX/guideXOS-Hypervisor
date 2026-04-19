@@ -328,7 +328,7 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
         
         // Validate section fits in image buffer
         // Use VirtualSize for the check, not RawDataSize
-        uint32_t sectionMemorySize = std::max(section.virtualSize, section.rawDataSize);
+        uint64_t sectionMemorySize = std::max(section.virtualSize, static_cast<uint64_t>(section.rawDataSize));
         if (section.virtualAddress + sectionMemorySize > imageInfo_.sizeOfImage) {
             LOG_ERROR("    ERROR: Section extends beyond allocated image size");
             LOG_ERROR("      Image size: " + std::to_string(imageInfo_.sizeOfImage));
