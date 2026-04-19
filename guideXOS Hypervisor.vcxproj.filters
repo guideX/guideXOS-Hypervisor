@@ -651,5 +651,6 @@
     <None Include="BOOT_ANALYSIS_AND_FIXES.md" />
     <None Include="QUICK_FIX_SUMMARY.md" />
     <None Include="BOOTIMG_FALLBACK_IMPLEMENTATION.md" />
+    <None Include="HEX_LOGGING_FIX.md" />
   </ItemGroup>
 </Project>

@@ -663,6 +663,7 @@
     <None Include="guideXOS Hypervisor.vcxproj" />
     <None Include="guideXOS Hypervisor.vcxproj.filters.new" />
     <None Include="guideXOS Hypervisor.vcxproj.new" />
+    <None Include="HEX_LOGGING_FIX.md" />
     <None Include="HOW_TO_BOOT_FROM_ISO.md" />
     <None Include="HOW_TO_MAKE_VM_BOOT.md" />
     <None Include="ISO_BOOT_COMPLETE.md" />
