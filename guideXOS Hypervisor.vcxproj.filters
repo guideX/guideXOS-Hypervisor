@@ -547,5 +547,9 @@
     <None Include="test_programs\TestKernelGenerator\Program.cs" />
     <None Include="test_programs\README.md" />
     <None Include="test_programs\TestKernelGenerator\TestKernelGenerator.csproj" />
+    <None Include="fix_projects.py" />
+    <None Include="fix_projects.ps1" />
+    <None Include="add_project_ref.ps1" />
+    <None Include="cleanup_hypervisor.ps1" />
   </ItemGroup>
 </Project>

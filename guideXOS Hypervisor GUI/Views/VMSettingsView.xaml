@@ -257,7 +257,47 @@
                                    Style="{StaticResource HeaderTextStyle}"
                                    Margin="0,0,0,20"/>
 
-                        <GroupBox Header="HARD DISK DRIVES" Style="{StaticResource ModernGroupBox}">
+                        <GroupBox Header="BOOT CONFIGURATION" Style="{StaticResource ModernGroupBox}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="4" 
+                                           Text="Specify an ISO image to boot from on startup. This is typically used for OS installation."
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,12"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Boot ISO:" Style="{StaticResource NormalTextStyle}" VerticalAlignment="Center" Margin="0,8"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" 
+                                         Text="{Binding BootFromISODisplay, Mode=OneWay}" 
+                                         Style="{StaticResource SettingsTextBoxStyle}" 
+                                         IsReadOnly="True"
+                                         Margin="0,8,8,8"/>
+                                <Button Grid.Row="1" Grid.Column="2" 
+                                        Content="Browse..." 
+                                        Command="{Binding BrowseBootISOCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        Padding="12,6"
+                                        Margin="0,8,8,8"/>
+                                <Button Grid.Row="1" Grid.Column="3" 
+                                        Content="Clear" 
+                                        Command="{Binding ClearBootISOCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        Padding="12,6"
+                                        Margin="0,8"/>
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="HARD DISK DRIVES" Style="{StaticResource ModernGroupBox}" Margin="0,16,0,0">
                             <StackPanel>
                                 <Button Content="&#x2795; Add Hard Disk" 
                                         Command="{Binding AddDiskCommand}"

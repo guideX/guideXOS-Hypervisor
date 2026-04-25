@@ -11,6 +11,7 @@
 #include "VMManager_DLL.h"
 #include "VMManager.h"
 #include "VMConfiguration.h"
+#include "NativeOutputLogger.h"
 #include <string>
 #include <cstring>
 #include <iostream>
@@ -36,6 +37,8 @@ static char* AllocateString(const std::string& str) {
 // ============================================================================
 
 GUIDEXOS_API VMManagerHandle VMManager_Create() {
+    NativeOutputLogger::Initialize();
+
     try {
         VMManager* manager = new VMManager();
         return reinterpret_cast<VMManagerHandle>(manager);

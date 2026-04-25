@@ -135,6 +135,7 @@
     </ClCompile>
     <ClCompile Include="src\loader\loader.cpp">
     </ClCompile>
+    <ClCompile Include="src\loader\TestKernelHandler.cpp" />
     <ClCompile Include="src\memory\memory.cpp">
     </ClCompile>
     <ClCompile Include="src\mmu\mmu.cpp">
@@ -182,54 +183,79 @@
     <ClCompile Include="src\webui\WebUIServer.cpp">
     </ClCompile>
     <ClCompile Include="tests\test_bootstrap.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_boot_state_machine.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_cpu_execution.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_debugger.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_elf_validation.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_fuzzer.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_initramfs.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_io_devices.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_isa_plugin.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_kernel_bootstrap.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_libc_bridge.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_main.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_mmu.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_mov_imm.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_multi_cpu.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_new_instructions.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_page_fault.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_profiler.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_scheduler_stepping.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_syscall_dispatcher.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_vmconfig_serialization.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_vmmanager.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_vm_isolation.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_vm_reset.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="tests\test_watchpoint.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

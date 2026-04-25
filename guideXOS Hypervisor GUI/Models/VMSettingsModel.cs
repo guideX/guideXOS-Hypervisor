@@ -66,7 +66,8 @@ namespace guideXOS_Hypervisor_GUI.Models
                 CpuCount = state.CpuCount,
                 MemoryMB = state.MemoryMB,
                 MMUEnabled = state.MMUEnabled,
-                PageSizeKB = state.PageSizeKB
+                PageSizeKB = state.PageSizeKB,
+                BootFromISO = state.BootFromISO
             };
 
             // Copy disk images
@@ -99,6 +100,7 @@ namespace guideXOS_Hypervisor_GUI.Models
             state.MemoryMB = MemoryMB;
             state.MMUEnabled = MMUEnabled;
             state.PageSizeKB = PageSizeKB;
+            state.BootFromISO = BootFromISO;
 
             // Update disk images
             state.DiskImages.Clear();

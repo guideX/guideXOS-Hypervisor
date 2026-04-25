@@ -223,6 +223,9 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
                         Controller = "SATA",
                         Port = 0
                     });
+
+                    // Store the boot ISO path in the VM state
+                    newVM.BootFromISO = isoPath;
                 }
 
                 var vmViewModel = new VMListItemViewModel(newVM);

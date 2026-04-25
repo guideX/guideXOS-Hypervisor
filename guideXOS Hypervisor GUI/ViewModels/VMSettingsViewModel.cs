@@ -30,6 +30,8 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             RemoveDiskCommand = new RelayCommand<DiskImageInfo>(OnRemoveDisk, CanRemoveDisk);
             BrowseDiskCommand = new RelayCommand<DiskImageInfo>(OnBrowseDisk);
             GenerateMacCommand = new RelayCommand(OnGenerateMac);
+            BrowseBootISOCommand = new RelayCommand(OnBrowseBootISO);
+            ClearBootISOCommand = new RelayCommand(OnClearBootISO, CanClearBootISO);
         }
 
         #region Properties
@@ -153,6 +155,26 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         }
 
         public string PageSizeDisplay => $"{PageSizeKB} KB";
+
+        // Boot Settings
+        public string BootFromISO
+        {
+            get => _settings.BootFromISO;
+            set
+            {
+                if (_settings.BootFromISO != value)
+                {
+                    _settings.BootFromISO = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(BootFromISODisplay));
+                    HasChanges = true;
+                }
+            }
+        }
+
+        public string BootFromISODisplay => string.IsNullOrEmpty(BootFromISO) 
+            ? "No ISO selected" 
+            : System.IO.Path.GetFileName(BootFromISO);
 
         // Display Settings
         public int VideoMemoryMB
@@ -368,6 +390,8 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
         public ICommand RemoveDiskCommand { get; }
         public ICommand BrowseDiskCommand { get; }
         public ICommand GenerateMacCommand { get; }
+        public ICommand BrowseBootISOCommand { get; }
+        public ICommand ClearBootISOCommand { get; }
 
         public event EventHandler? SaveRequested;
         public event EventHandler? CancelRequested;
@@ -519,6 +543,29 @@ namespace guideXOS_Hypervisor_GUI.ViewModels
             var random = new Random();
             var mac = $"52:54:00:{random.Next(0, 256):X2}:{random.Next(0, 256):X2}:{random.Next(0, 256):X2}";
             MacAddress = mac;
+        }
+
+        private void OnBrowseBootISO()
+        {
+            var openDialog = new OpenFileDialog
+            {
+                Title = "Select Boot ISO Image",
+                Filter = "ISO Images (*.iso)|*.iso|All Files (*.*)|*.*",
+                CheckFileExists = true,
+                FileName = BootFromISO
+            };
+
+            if (openDialog.ShowDialog() == true)
+            {
+                BootFromISO = openDialog.FileName;
+            }
+        }
+
+        private bool CanClearBootISO() => !string.IsNullOrEmpty(BootFromISO);
+
+        private void OnClearBootISO()
+        {
+            BootFromISO = string.Empty;
         }
 
         #endregion

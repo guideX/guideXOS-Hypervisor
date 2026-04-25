@@ -36,6 +36,9 @@ namespace guideXOS_Hypervisor_GUI.Models
         public ulong MemoryMB { get; set; }
         public bool MMUEnabled { get; set; } = true;
         public ulong PageSizeKB { get; set; } = 16; // IA-64 supports 4KB-256MB pages, 16KB is common
+
+        // Boot Configuration
+        public string BootFromISO { get; set; } = string.Empty; // Path to ISO file for CD-ROM boot
         
         // CPU State
         public ulong CurrentIP { get; set; }

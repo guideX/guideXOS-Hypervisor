@@ -12,6 +12,8 @@ namespace guideXOS_Hypervisor_GUI
     {
         protected override void OnStartup(StartupEventArgs e)
         {
+            AppLoggingService.Initialize();
+
             base.OnStartup(e);
 
             // Initialize theme system
@@ -35,6 +37,8 @@ namespace guideXOS_Hypervisor_GUI
             {
                 System.Diagnostics.Debug.WriteLine($"Error saving VMs on exit: {ex.Message}");
             }
+
+            AppLoggingService.Shutdown();
         }
 
         private void InitializeTheme()
