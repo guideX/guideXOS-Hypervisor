@@ -270,11 +270,13 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         // Check for branch instructions - handle before normal execution
         bool isBranch = false;
         uint64_t branchTarget = 0;
+        const uint8_t predicate = instr.GetPredicate();
+        const bool predicateTrue = (predicate == 0) || state_.GetPR(predicate);
         
         switch (instr.GetType()) {
             case InstructionType::BR_COND:
                 // Conditional branch - target from instruction
-                if (instr.HasBranchTarget()) {
+                if (predicateTrue && instr.HasBranchTarget()) {
                     branchTarget = instr.GetBranchTarget();
                     isBranch = true;
                 }
@@ -282,7 +284,7 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                 
             case InstructionType::BR_CALL:
                 // Branch and link - target from instruction
-                if (instr.HasBranchTarget()) {
+                if (predicateTrue && instr.HasBranchTarget()) {
                     branchTarget = instr.GetBranchTarget();
                     isBranch = true;
                 }
@@ -290,8 +292,10 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                 
             case InstructionType::BR_RET:
                 // Return - target from branch register
-                branchTarget = state_.GetBR(instr.GetSrc1());
-                isBranch = true;
+                if (predicateTrue) {
+                    branchTarget = state_.GetBR(instr.GetSrc1());
+                    isBranch = true;
+                }
                 break;
                 
             default:

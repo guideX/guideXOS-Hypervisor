@@ -657,6 +657,37 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "shr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", r" << static_cast<int>(src2_);
             break;
+
+        case InstructionType::EXTR:
+            if (hasImmediate_) {
+                uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
+                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
+                oss << "extr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                    << ", " << static_cast<int>(pos) << ", " << static_cast<int>(len);
+            } else {
+                oss << "extr r" << static_cast<int>(dst_);
+            }
+            break;
+
+        case InstructionType::DEP:
+            if (hasImmediate_) {
+                uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
+                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
+                bool immediateSource = ((immediate_ >> 12) & 0x1) != 0;
+                oss << "dep r" << static_cast<int>(dst_) << " = ";
+                if (immediateSource) {
+                    oss << static_cast<int>((immediate_ >> 13) & 0x1);
+                } else {
+                    oss << "r" << static_cast<int>(src1_);
+                }
+                if (src2_ != 0) {
+                    oss << ", r" << static_cast<int>(src2_);
+                }
+                oss << ", " << static_cast<int>(pos) << ", " << static_cast<int>(len);
+            } else {
+                oss << "dep r" << static_cast<int>(dst_);
+            }
+            break;
             
         case InstructionType::CMP_EQ:
             oss << "cmp.eq p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
