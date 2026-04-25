@@ -307,6 +307,7 @@ public:
     // IDecoder interface implementation
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override;
     Bundle DecodeBundle(const uint8_t* bundleData) const override;
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override;
     InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override;
     
     // New: Decode a single slot with binary format decoders

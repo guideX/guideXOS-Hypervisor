@@ -788,11 +788,38 @@ Instruction InstructionDecoder::DecodeInstructionSimple(uint64_t rawBits) const 
 
 // Legacy decoder API
 Bundle InstructionDecoder::DecodeBundle(const uint8_t* bundleData) const {
+    return DecodeBundleAt(bundleData, 0);
+}
+
+Bundle InstructionDecoder::DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const {
     Bundle bundle;
     
     // Extract template (first 5 bits)
     bundle.templateType = ExtractTemplate(bundleData);
     bundle.hasStop = (static_cast<uint8_t>(bundle.templateType) & 0x01) != 0;
+
+    if (IsMLXTemplate(static_cast<uint8_t>(bundle.templateType))) {
+        const uint64_t slot0Bits = ExtractSlot(bundleData, 0);
+        const uint64_t slot1Bits = ExtractSlot(bundleData, 1);
+        const uint64_t slot2Bits = ExtractSlot(bundleData, 2);
+
+        bundle.instructions.push_back(DecodeInstruction(slot0Bits, UnitType::M_UNIT));
+
+        formats::LFormat lfmt;
+        formats::XFormat xfmt;
+        InstructionEx movl;
+        if (decoder::LXDecoder::decodeL(slot1Bits, lfmt) &&
+            decoder::LXDecoder::decodeX(slot2Bits, xfmt) &&
+            decoder::LXDecoder::combineMOVL(lfmt, xfmt, movl)) {
+            movl.SetRawBits(slot2Bits);
+            bundle.instructions.push_back(movl);
+        } else {
+            bundle.instructions.push_back(DecodeInstruction(slot1Bits, UnitType::L_UNIT));
+            bundle.instructions.push_back(DecodeInstruction(slot2Bits, UnitType::X_UNIT));
+        }
+
+        return bundle;
+    }
     
     // Get unit types for this template
     auto units = GetUnitsForTemplate(bundle.templateType);
@@ -800,7 +827,7 @@ Bundle InstructionDecoder::DecodeBundle(const uint8_t* bundleData) const {
     // Extract and decode each instruction slot
     for (size_t i = 0; i < units.size(); ++i) {
         uint64_t slotBits = ExtractSlot(bundleData, i);
-        InstructionEx insn = DecodeInstruction(slotBits, units[i]);
+        InstructionEx insn = DecodeSlot(slotBits, units[i], bundleIP);
         bundle.instructions.push_back(insn);
     }
     
@@ -958,6 +985,12 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
     // Route to appropriate decoder based on unit type and major opcode
     switch (unitType) {
         case UnitType::M_UNIT:
+            if (major == 0x0 && x3 == 0x0 && x6 == 0x01) {
+                result = InstructionEx(InstructionType::NOP, UnitType::M_UNIT);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             // alloc is encoded in the M-unit opcode space as major=1, x3=6.
             if (major == 0x1 && x3 == 0x6) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);

@@ -61,6 +61,14 @@ public:
     virtual Bundle DecodeBundle(const uint8_t* bundleData) const = 0;
 
     /**
+     * Legacy bundle decoding API with bundle IP context.
+     *
+     * Branch instructions need the current bundle address to compute
+     * IP-relative targets.
+     */
+    virtual Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const = 0;
+
+    /**
      * Decode a single 41-bit instruction
      * 
      * @param rawBits Raw 41-bit instruction (stored in uint64_t, upper bits ignored)

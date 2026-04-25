@@ -89,8 +89,7 @@ namespace guideXOS_Hypervisor_GUI.Services
                     Console.SetError(_originalError);
                 }
 
-                _logWriter?.Flush();
-                _logWriter?.Dispose();
+                // _logWriter is already flushed and disposed by _traceListener.Dispose() above
                 _logWriter = null;
                 _initialized = false;
             }

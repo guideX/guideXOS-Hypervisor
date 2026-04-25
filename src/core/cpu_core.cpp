@@ -340,7 +340,7 @@ void CPU::fetchBundle() {
     }
     
     // Decode the bundle
-    currentBundle_ = decoder_->DecodeBundle(bundleData);
+    currentBundle_ = decoder_->DecodeBundleAt(bundleData, ip);
     bundleValid_ = true;
 }
 

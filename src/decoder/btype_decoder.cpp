@@ -17,7 +17,7 @@ namespace decoder {
  * - While branches (BR.WTOP, BR.WEXIT)
  * - IA-32 mode branch (BR.IA)
  * 
- * Major opcodes: 0, 4
+ * Major opcodes: 0, 1, 4, 5
  */
 
 // Forward declarations of helper functions
@@ -51,9 +51,24 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         // Decode based on major opcode
         switch (major) {
             case 0x0:   // IP-relative branches
+            case 0x4:
                 return decodeIPRelative(raw_instruction, btype, x6, current_ip, result);
+
+            case 0x5:   // IP-relative br.call
+            {
+                result.indirect = false;
+                result.type = formats::BFormat::BranchType::CALL;
+
+                uint32_t imm20b = formats::extractBits(raw_instruction, 13, 20);
+                uint32_t s = formats::extractBits(raw_instruction, 36, 1);
+                int64_t displacement = formats::signExtend((s << 20) | imm20b, 21) << 4;
+
+                result.target_offset = static_cast<uint64_t>(static_cast<int64_t>(current_ip) + displacement);
+                result.has_target = true;
+                return true;
+            }
                 
-            case 0x4:   // Indirect branches
+            case 0x1:   // Indirect br.call
                 return decodeIndirect(raw_instruction, btype, x6, result);
                 
             default:
@@ -170,17 +185,15 @@ static bool decodeIPRelative(uint64_t raw, uint8_t btype, uint8_t x6,
                 break;
         }
         
-        // Extract IP-relative target offset (25-bit signed immediate)
-        // imm25 = s:imm20b:imm4
+        // Extract IP-relative target offset.
+        // IA-64 B1/B2/B3 encodings use a signed 21-bit bundle displacement:
+        // target = current_ip + sign_ext(s:imm20b) * 16.
         uint32_t imm20b = formats::extractBits(raw, 13, 20);
-        uint32_t imm4 = formats::extractBits(raw, 6, 4);
         uint32_t s = formats::extractBits(raw, 36, 1);
         
-        int64_t offset = formats::signExtend((s << 24) | (imm20b << 4) | imm4, 25);
-        
-        // IA-64 branch targets are in units of 16 bytes (bundle size)
-        // So multiply offset by 16
-        result.target_offset = current_ip + (offset << 4);
+        int64_t displacement = formats::signExtend((s << 20) | imm20b, 21) << 4;
+
+        result.target_offset = static_cast<uint64_t>(static_cast<int64_t>(current_ip) + displacement);
         result.has_target = true;
         
         return true;
