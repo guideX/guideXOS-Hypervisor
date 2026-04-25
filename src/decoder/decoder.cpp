@@ -100,6 +100,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             // mov rDst = rSrc1
             cpu.SetGR(dst_, cpu.GetGR(src1_));
             break;
+
+        case InstructionType::MOV_FROM_BR:
+            // mov rDst = bSrc1
+            cpu.SetGR(dst_, cpu.GetBR(src1_));
+            break;
             
         case InstructionType::MOV_IMM:
             // mov rDst = immediate
@@ -550,6 +555,10 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::MOV_GR:
             oss << "mov r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
             break;
+
+        case InstructionType::MOV_FROM_BR:
+            oss << "mov r" << static_cast<int>(dst_) << " = b" << static_cast<int>(src1_);
+            break;
             
         case InstructionType::MOV_IMM:
             oss << "mov r" << static_cast<int>(dst_) << " = 0x" 
@@ -943,10 +952,26 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
     
     // Extract major opcode
     uint8_t major = ExtractMajorOpcode(slotBits);
+    const uint8_t x3 = static_cast<uint8_t>((slotBits >> 33) & 0x7);
+    const uint8_t x6 = static_cast<uint8_t>((slotBits >> 27) & 0x3F);
     
     // Route to appropriate decoder based on unit type and major opcode
     switch (unitType) {
         case UnitType::M_UNIT:
+            // alloc is encoded in the M-unit opcode space as major=1, x3=6.
+            if (major == 0x1 && x3 == 0x6) {
+                const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint8_t sol = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint8_t sof = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                const uint8_t sor = static_cast<uint8_t>((slotBits >> 27) & 0x0F);
+                result = InstructionEx(InstructionType::ALLOC, UnitType::M_UNIT);
+                result.SetOperands(r1, 0, 0);
+                result.SetImmediate(sof | (static_cast<uint64_t>(sol) << 7) |
+                                    (static_cast<uint64_t>(sor) << 14));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             // M-unit can execute M-type (memory) or A-type (ALU) instructions
             // Major opcodes for M-type: 0x4-0x7 (primary), also 0x0-0x3 for some forms
             if (major >= 0x0 && major <= 0x7) {
@@ -973,6 +998,21 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             break;
             
         case UnitType::I_UNIT:
+            if (major == 0x0 && x3 == 0x0 && x6 == 0x01) {
+                result = InstructionEx(InstructionType::NOP, UnitType::I_UNIT);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && x3 == 0x0 && x6 == 0x31) {
+                const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint8_t b2 = static_cast<uint8_t>((slotBits >> 13) & 0x7);
+                result = InstructionEx(InstructionType::MOV_FROM_BR, UnitType::I_UNIT);
+                result.SetOperands(r1, b2, 0);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             // I-unit can execute A-type (ALU) or I-type (non-ALU integer) instructions
             // Try A-type first for ALU operations (major 0x8-0xF)
             if (major >= 0x8 && major <= 0xF) {

@@ -3,9 +3,11 @@
 #include "decoder.h"
 #include "memory.h"
 #include "SyscallDispatcher.h"
+#include "logger.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
+#include <sstream>
 
 namespace ia64 {
 
@@ -201,6 +203,14 @@ servicePendingInterrupt();
     
     // Get the current instruction
     const InstructionEx& instr = currentBundle_.instructions[currentSlot_];
+
+    if (instr.GetType() == InstructionType::UNKNOWN) {
+        std::ostringstream oss;
+        oss << "Unsupported IA-64 instruction at IP 0x" << std::hex << state_.GetIP()
+            << std::dec << ", slot " << currentSlot_ << ": " << instr.GetDisassembly();
+        LOG_ERROR(oss.str());
+        return false;
+    }
     
     // Profile instruction execution
     if (isProfilingEnabled()) {

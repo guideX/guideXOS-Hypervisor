@@ -13,6 +13,31 @@
 
 namespace ia64 {
 
+namespace {
+void DrawBootStatus(VMInstance* instance,
+                    const char* line1,
+                    const char* line2 = nullptr,
+                    const char* line3 = nullptr,
+                    uint32_t titleColor = 0xFF6EE7B7) {
+    if (!instance || !instance->vm || !instance->vm->getFramebufferDevice()) {
+        return;
+    }
+
+    FramebufferDevice* fb = instance->vm->getFramebufferDevice();
+    fb->Clear(0xFF05070A);
+    fb->DrawText(32, 32, "GUIDEXOS IA64", titleColor, 3);
+    if (line1) {
+        fb->DrawText(32, 92, line1, 0xFFFFFFFF, 2);
+    }
+    if (line2) {
+        fb->DrawText(32, 122, line2, 0xFFFFD166, 2);
+    }
+    if (line3) {
+        fb->DrawText(32, 152, line3, 0xFF93C5FD, 2);
+    }
+}
+}
+
 // ============================================================================
 // Constructor / Destructor
 // ============================================================================
@@ -520,10 +545,19 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 oss.str("");
                                                                 oss << "  Entry point: 0x" << std::hex << entryPoint << std::dec;
                                                                 LOG_INFO(oss.str());
+
+                                                                DrawBootStatus(instance,
+                                                                               "EFI BOOTLOADER LOADED",
+                                                                               "STARTING IA64 EXECUTION",
+                                                                               "SEE LOGS FOR DECODE TRACE");
                                                                 
                                                                 bootedFromImage = true;
                                                             } else {
                                                                 LOG_ERROR("Failed to load EFI bootloader into memory");
+                                                                DrawBootStatus(instance,
+                                                                               "BOOT FAILED",
+                                                                               "EFI LOAD INTO MEMORY FAILED",
+                                                                               "SEE NATIVE LOG");
                                                             }
                                                         } else {
                                                             LOG_ERROR("Failed to prepare PE image for loading");
@@ -830,6 +864,22 @@ uint64_t VMManager::runVM(const std::string& vmId, uint64_t maxCycles) {
     
     try {
         uint64_t cyclesExecuted = instance->vm->run(maxCycles);
+
+        if (cyclesExecuted == 0 || instance->vm->getState() == VMState::ERROR) {
+            std::ostringstream oss;
+            oss << "STOPPED AT IP 0X" << std::hex << instance->vm->getIP() << std::dec;
+            const std::string stopLine = oss.str();
+
+            DrawBootStatus(instance,
+                           "BOOT STOPPED",
+                           stopLine.c_str(),
+                           "UNSUPPORTED IA64 INSTRUCTION OR CPU ERROR",
+                           0xFFFF6B6B);
+
+            if (instance->vm->getState() == VMState::ERROR) {
+                instance->metadata.setError("VM execution stopped; see native log for unsupported instruction or CPU error");
+            }
+        }
         
         // Update resource usage
         instance->metadata.resourceUsage.cyclesExecuted += cyclesExecuted;

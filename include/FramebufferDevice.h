@@ -48,6 +48,9 @@ public:
     // Clear framebuffer
     void Clear(uint32_t color = 0xFF000000); // Black by default
 
+    // Draw diagnostic text directly into the framebuffer.
+    void DrawText(size_t x, size_t y, const char* text, uint32_t color = 0xFFFFFFFF, size_t scale = 2);
+
     // Reset device
     void Reset();
 

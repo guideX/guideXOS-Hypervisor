@@ -80,6 +80,7 @@ enum class InstructionType {
     
     // Move operations
     MOV_GR,     // Move between general registers
+    MOV_FROM_BR,// Move from branch register to general register
     MOV_IMM,    // Move immediate to register
     MOVL,       // Move 64-bit immediate (L+X slots)
     
