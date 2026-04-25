@@ -58,6 +58,7 @@ bool LXDecoder::decodeX(uint64_t x_slot, formats::XFormat& result) {
         // Contains additional immediate bits
         
         result.qp = formats::extractBits(x_slot, 0, 6);
+        result.r1 = formats::extractBits(x_slot, 6, 7);
         
         // Extract remaining immediate fragments
         uint64_t imm20b = formats::extractBits(x_slot, 6, 20);
@@ -101,7 +102,7 @@ bool LXDecoder::combineMOVL(const formats::LFormat& l_fmt,
         // Create MOVL instruction
         instr = InstructionEx(InstructionType::MOVL, UnitType::L_UNIT);
         instr.SetPredicate(x_fmt.qp);
-        instr.SetOperands(l_fmt.r1, 0, 0);
+        instr.SetOperands(x_fmt.r1, 0, 0);
         instr.SetImmediate(final_imm);
         
         return true;

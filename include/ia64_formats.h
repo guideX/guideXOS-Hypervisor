@@ -227,6 +227,7 @@ struct FFormat {
 
 struct XFormat {
     uint8_t qp;         // bits [0:5]   - qualifying predicate
+    uint8_t r1;         // bits [6:12]  - MOVL destination register
     uint64_t imm64;     // 64-bit immediate (reconstructed from L+X)
     uint8_t opcode;     // major opcode
     
@@ -245,7 +246,7 @@ struct XFormat {
     uint16_t imm9d;     // bits [17:9] of final immediate
     uint8_t ic;         // sign bit (bit 63)
     
-    XFormat() : qp(0), imm64(0), opcode(0), imm21(0), x3(0), x6(0), 
+    XFormat() : qp(0), r1(0), imm64(0), opcode(0), imm21(0), x3(0), x6(0), 
                 imm27(0), imm20a(0), i(0), imm5c(0), imm9d(0), ic(0) {}
 };
 

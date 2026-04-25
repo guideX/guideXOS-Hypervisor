@@ -661,7 +661,7 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::EXTR:
             if (hasImmediate_) {
                 uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
-                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
+                uint8_t len = static_cast<uint8_t>(((immediate_ >> 6) & 0x3F) + 1);
                 oss << "extr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
                     << ", " << static_cast<int>(pos) << ", " << static_cast<int>(len);
             } else {
@@ -672,7 +672,7 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::DEP:
             if (hasImmediate_) {
                 uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
-                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
+                uint8_t len = static_cast<uint8_t>(((immediate_ >> 6) & 0x3F) + 1);
                 bool immediateSource = ((immediate_ >> 12) & 0x1) != 0;
                 oss << "dep r" << static_cast<int>(dst_) << " = ";
                 if (immediateSource) {
@@ -691,22 +691,46 @@ std::string InstructionEx::GetDisassembly() const {
             
         case InstructionType::CMP_EQ:
             oss << "cmp.eq p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+                << " = ";
+            if (hasImmediate_) {
+                oss << immediate_;
+            } else {
+                oss << "r" << static_cast<int>(src1_);
+            }
+            oss << ", r" << static_cast<int>(src2_);
             break;
             
         case InstructionType::CMP_NE:
             oss << "cmp.ne p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+                << " = ";
+            if (hasImmediate_) {
+                oss << immediate_;
+            } else {
+                oss << "r" << static_cast<int>(src1_);
+            }
+            oss << ", r" << static_cast<int>(src2_);
             break;
             
         case InstructionType::CMP_LT:
             oss << "cmp.lt p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+                << " = ";
+            if (hasImmediate_) {
+                oss << static_cast<int64_t>(immediate_);
+            } else {
+                oss << "r" << static_cast<int>(src1_);
+            }
+            oss << ", r" << static_cast<int>(src2_);
             break;
             
         case InstructionType::CMP_GT:
             oss << "cmp.gt p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = r" << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+                << " = ";
+            if (hasImmediate_) {
+                oss << static_cast<int64_t>(immediate_);
+            } else {
+                oss << "r" << static_cast<int>(src1_);
+            }
+            oss << ", r" << static_cast<int>(src2_);
             break;
             
         case InstructionType::LD1:
@@ -1071,8 +1095,8 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             // alloc is encoded in the M-unit opcode space as major=1, x3=6.
             if (major == 0x1 && x3 == 0x6) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
-                const uint8_t sol = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
-                const uint8_t sof = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                const uint8_t sof = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint8_t sol = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
                 const uint8_t sor = static_cast<uint8_t>((slotBits >> 27) & 0x0F);
                 result = InstructionEx(InstructionType::ALLOC, UnitType::M_UNIT);
                 result.SetOperands(r1, 0, 0);

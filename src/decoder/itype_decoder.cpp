@@ -24,7 +24,7 @@ namespace decoder {
 // Forward declarations of helper functions
 static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
                          uint8_t x6, formats::IFormat& result);
-static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& result);
+static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::IFormat& result);
 static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result);
 
 // ITypeDecoder::decode implementation
@@ -53,7 +53,7 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                 return decodeMixedI(raw_instruction, x, x2, x3, x6, result);
                 
             case 0x5:   // Deposit/extract operations
-                return decodeDepositExtract(raw_instruction, x2, result);
+                return decodeDepositExtract(raw_instruction, x, x2, result);
                 
             case 0x7:   // Shift operations
                 return decodeShift(raw_instruction, x2, x6, result);
@@ -186,8 +186,8 @@ static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
         // Check for ALLOC (x3 = 0, x6 = 0x06)
         if (x3 == 0 && x6 == 0x06) {
             // ALLOC r1 = ar.pfs, sof, sol, sor
-            result.sof = formats::extractBits(raw, 20, 7);  // bits [20:26]
-            result.sol = formats::extractBits(raw, 13, 7);  // bits [13:19]
+            result.sof = formats::extractBits(raw, 13, 7);  // bits [13:19]
+            result.sol = formats::extractBits(raw, 20, 7);  // bits [20:26]
             result.sor = formats::extractBits(raw, 27, 4);  // bits [27:30]
             return true;
         }
@@ -200,7 +200,7 @@ static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
         
         return true; // Allow unknown I-type for now
     }
-static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& result) {
+static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::IFormat& result) {
         // Deposit and extract operations
         // DEP: r1[pos:pos+len-1] = r2[0:len-1]
         // EXTR: r1 = r3[pos:pos+len-1]
@@ -208,9 +208,13 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& res
         result.pos = formats::extractBits(raw, 14, 6);   // Position
         result.len = formats::extractBits(raw, 27, 6);   // Encoded length
         
-        // x2=3, x=1 is the merge-form immediate deposit:
-        // dep r1 = imm1, r3, pos6, len6.
-        if (x2 == 0x3) {
+        // OpX2X(5,3,1): dep r1 = imm1, r3, cpos6b, len6.
+        // cpos6b is a complement position, so convert it to the real bit
+        // position before execution. For example, cpos=0,len=31 means pos=32
+        // and width=32, which clears/sets the upper 32 bits.
+        if (x2 == 0x3 && x == 0x1) {
+            uint8_t cpos = result.pos;
+            result.pos = static_cast<uint8_t>(63 - cpos - result.len);
             result.has_imm = true;
             result.imm = formats::extractBits(raw, 13, 1);
             result.opcode = 0x5F;
