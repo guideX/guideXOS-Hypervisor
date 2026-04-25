@@ -59,14 +59,14 @@
                 BorderThickness="0,0,0,1"
                 Padding="8,4">
             <StackPanel Orientation="Horizontal">
-                <Button Content="? Fullscreen" 
+                <Button Content="🖥 Fullscreen" 
                         Style="{StaticResource ScreenToolbarButton}"
                         Command="{Binding FullscreenCommand}"
                         ToolTip="Toggle fullscreen mode"/>
                 
                 <Separator Width="8" Background="Transparent"/>
                 
-                <Button Content="?? 100%" 
+                <Button Content="🔍 100%" 
                         Style="{StaticResource ScreenToolbarButton}"
                         Command="{Binding ResetScaleCommand}"
                         ToolTip="Reset zoom to 100%"/>
@@ -106,7 +106,7 @@
                     <Border Background="#AA000000" 
                             Visibility="{Binding IsRunning, Converter={StaticResource InverseBoolToVisibilityConverter}}">
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                            <TextBlock Text="?" 
+                            <TextBlock Text="⏸" 
                                        FontSize="48"
                                        Foreground="White"
                                        HorizontalAlignment="Center"

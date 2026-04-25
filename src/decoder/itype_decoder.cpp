@@ -108,15 +108,24 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
         if ((op & 0xF0) == 0x50) {
             switch (op & 0x0F) {
                 case 0x0: // DEP
+                case 0xF: // DEP immediate merge form
                     instr = InstructionEx(InstructionType::DEP, UnitType::I_UNIT);
-                    instr.SetOperands(fmt.r1, fmt.r2, 0);
-                    // Encode pos and len in immediate
-                    instr.SetImmediate((fmt.len << 6) | fmt.pos);
+                    instr.SetPredicate(fmt.qp);
+                    if (fmt.has_imm) {
+                        instr.SetOperands(fmt.r1, 0, fmt.r3);
+                        // Encode pos/len plus an immediate-source marker and imm1.
+                        instr.SetImmediate((fmt.len << 6) | fmt.pos |
+                                           (1ULL << 12) | ((fmt.imm & 0x1) << 13));
+                    } else {
+                        instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+                        instr.SetImmediate((fmt.len << 6) | fmt.pos);
+                    }
                     return true;
                     
                 case 0x1: // EXTR
                     instr = InstructionEx(InstructionType::EXTR, UnitType::I_UNIT);
-                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands(fmt.r1, fmt.r3, 0);
                     instr.SetImmediate((fmt.len << 6) | fmt.pos);
                     return true;
             }
@@ -197,13 +206,14 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x2, formats::IFormat& res
         // EXTR: r1 = r3[pos:pos+len-1]
         
         result.pos = formats::extractBits(raw, 14, 6);   // Position
-        result.len = formats::extractBits(raw, 27, 6);   // Length
+        result.len = formats::extractBits(raw, 27, 6);   // Encoded length
         
-        // Check if it's immediate form
+        // x2=3, x=1 is the merge-form immediate deposit:
+        // dep r1 = imm1, r3, pos6, len6.
         if (x2 == 0x3) {
             result.has_imm = true;
-            uint8_t imm = formats::extractBits(raw, 13, 8);
-            result.imm = imm;
+            result.imm = formats::extractBits(raw, 13, 1);
+            result.opcode = 0x5F;
         }
         
         return true;

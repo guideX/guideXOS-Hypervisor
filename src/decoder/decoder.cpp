@@ -240,8 +240,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             // extr rDst = rSrc1, pos, len
             if (hasImmediate_) {
                 uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
-                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
-                uint64_t mask = (1ULL << len) - 1;
+                uint8_t len = static_cast<uint8_t>(((immediate_ >> 6) & 0x3F) + 1);
+                uint64_t mask = (len >= 64) ? ~0ULL : ((1ULL << len) - 1);
                 uint64_t extracted = (cpu.GetGR(src1_) >> pos) & mask;
                 cpu.SetGR(dst_, extracted);
             }
@@ -251,10 +251,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             // dep rDst = rSrc1, rSrc2, pos, len
             if (hasImmediate_) {
                 uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
-                uint8_t len = static_cast<uint8_t>((immediate_ >> 6) & 0x3F);
-                uint64_t mask = ((1ULL << len) - 1) << pos;
-                uint64_t dest_val = cpu.GetGR(dst_);
-                uint64_t src_val = cpu.GetGR(src1_);
+                uint8_t len = static_cast<uint8_t>(((immediate_ >> 6) & 0x3F) + 1);
+                uint64_t fieldMask = (len >= 64) ? ~0ULL : ((1ULL << len) - 1);
+                uint64_t mask = fieldMask << pos;
+                bool immediateSource = ((immediate_ >> 12) & 0x1) != 0;
+                uint64_t dest_val = (src2_ != 0) ? cpu.GetGR(src2_) : cpu.GetGR(dst_);
+                uint64_t src_val = immediateSource
+                    ? ((((immediate_ >> 13) & 0x1) != 0) ? ~0ULL : 0ULL)
+                    : cpu.GetGR(src1_);
                 uint64_t new_val = (dest_val & ~mask) | ((src_val << pos) & mask);
                 cpu.SetGR(dst_, new_val);
             }
