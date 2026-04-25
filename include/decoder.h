@@ -46,6 +46,8 @@ enum class TemplateType : uint8_t {
     // ... many more template types
     MMI = 0x08,
     MMI_STOP = 0x09,
+    M_MI = 0x0A,
+    M_MI_STOP = 0x0B,
     MFI = 0x0C,
     MFI_STOP = 0x0D,
     MMF = 0x0E,

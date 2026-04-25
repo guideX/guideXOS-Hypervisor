@@ -101,6 +101,7 @@ bool ATypeDecoder::decode(uint64_t raw_instruction, formats::AFormat& result) {
             
         case 0xC:   // Compare
         case 0xD:
+        case 0xE:
             return decodeCompare(raw_instruction, major, x2a, x2b, x4, result);
             
         default:
@@ -110,8 +111,6 @@ bool ATypeDecoder::decode(uint64_t raw_instruction, formats::AFormat& result) {
     
 // ATypeDecoder::toInstruction implementation
 bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& instr) {
-    instr.SetPredicate(fmt.qp);
-    
     // Determine instruction type based on opcode
     uint8_t op = fmt.opcode;
     
@@ -121,6 +120,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
             case 0x0: // ADD
                 instr = InstructionEx(fmt.has_imm ? InstructionType::ADD_IMM : InstructionType::ADD, 
                                      UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
                     instr.SetOperands(fmt.r1, fmt.r2, 0);
                     instr.SetImmediate(fmt.imm);
@@ -132,6 +132,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
             case 0x1: // SUB
                 instr = InstructionEx(fmt.has_imm ? InstructionType::SUB_IMM : InstructionType::SUB,
                                      UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
                     instr.SetOperands(fmt.r1, fmt.r2, 0);
                     instr.SetImmediate(fmt.imm);
@@ -143,6 +144,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
             case 0x3: // AND
                 instr = InstructionEx(fmt.has_imm ? InstructionType::AND_IMM : InstructionType::AND,
                                      UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
                     instr.SetOperands(fmt.r1, fmt.r2, 0);
                     instr.SetImmediate(fmt.imm);
@@ -154,6 +156,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
             case 0x4: // ANDCM
                 instr = InstructionEx(fmt.has_imm ? InstructionType::ANDCM_IMM : InstructionType::ANDCM,
                                      UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
                     instr.SetOperands(fmt.r1, fmt.r2, 0);
                     instr.SetImmediate(fmt.imm);
@@ -165,6 +168,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
             case 0x5: // OR
                 instr = InstructionEx(fmt.has_imm ? InstructionType::OR_IMM : InstructionType::OR,
                                      UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
                     instr.SetOperands(fmt.r1, fmt.r2, 0);
                     instr.SetImmediate(fmt.imm);
@@ -176,6 +180,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
             case 0x6: // XOR
                 instr = InstructionEx(fmt.has_imm ? InstructionType::XOR_IMM : InstructionType::XOR,
                                      UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
                     instr.SetOperands(fmt.r1, fmt.r2, 0);
                     instr.SetImmediate(fmt.imm);
@@ -187,22 +192,27 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
     }
     
     // Compare operations
-    if ((op & 0xF0) == 0xC0) {
+    if ((op & 0xF0) == 0xC0 || (op & 0xF0) == 0xD0 || (op & 0xF0) == 0xE0) {
         InstructionType cmpType;
         
-        // Determine compare type
-        bool is_unsigned = (op & 0x02) != 0;
-        bool is_lt = (op & 0x01) != 0;
-        
-        if (fmt.ta == 0) {  // Normal compare
-            if (is_unsigned) {
-                cmpType = is_lt ? InstructionType::CMP_LTU : InstructionType::CMP_EQ;
-            } else {
-                cmpType = is_lt ? InstructionType::CMP_LT : InstructionType::CMP_EQ;
-            }
+        if ((op & 0xF0) == 0xE0) {
+            const bool is_32bit = (op & 0x01) != 0;
+            cmpType = is_32bit ? InstructionType::CMP4_EQ : InstructionType::CMP_EQ;
         } else {  // Other relations (NE, GE, GT, etc.)
-            // Map based on ta and tb fields
-            cmpType = mapCompareType(fmt.ta, fmt.tb, is_unsigned);
+            // Determine compare type
+            bool is_unsigned = (op & 0x10) != 0;
+            bool is_lt = (op & 0x01) != 0;
+            
+            if (fmt.ta == 0) {  // Normal compare
+                if (is_unsigned) {
+                    cmpType = is_lt ? InstructionType::CMP_LTU : InstructionType::CMP_EQ;
+                } else {
+                    cmpType = is_lt ? InstructionType::CMP_LT : InstructionType::CMP_EQ;
+                }
+            } else {
+                // Map based on ta and tb fields
+                cmpType = mapCompareType(fmt.ta, fmt.tb, is_unsigned);
+            }
         }
         
         instr = InstructionEx(cmpType, UnitType::I_UNIT);
@@ -270,9 +280,27 @@ static bool decodeCompare(uint64_t raw, uint8_t major, uint8_t x2a,
     // Extract predicate destinations
     result.p1 = formats::extractBits(raw, 6, 6);
     result.p2 = formats::extractBits(raw, 27, 6);
+
+    // Major 0xE is the equality/inequality compare family.  The x2 field
+    // selects 64-bit register, 32-bit register, 64-bit immediate, or 32-bit
+    // immediate forms.
+    if (major == 0xE) {
+        result.opcode = static_cast<uint8_t>(0xE0 | (x2a & 0x1));
+        result.ta = formats::extractBits(raw, 33, 1);
+        result.tb = 0;
+
+        if (x2a >= 0x2) {
+            result.has_imm = true;
+            uint8_t imm7b = formats::extractBits(raw, 13, 7);
+            uint8_t s = formats::extractBits(raw, 36, 1);
+            result.imm = formats::signExtend((s << 7) | imm7b, 8);
+        }
+
+        return true;
+    }
     
     // Extract compare type and relation
-    result.ta = formats::extractBits(raw, 12, 1);  // signed/unsigned
+    result.ta = formats::extractBits(raw, 12, 1);  // compare completer/control bit
     result.tb = formats::extractBits(raw, 33, 2);  // relation type
     
     // Check for immediate form

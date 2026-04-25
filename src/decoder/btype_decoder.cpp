@@ -125,6 +125,7 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
         }
         
         instr = InstructionEx(type, UnitType::B_UNIT);
+        instr.SetPredicate(fmt.qp);
         
         // Set operands based on branch type
         if (fmt.type == formats::BFormat::BranchType::RET) {

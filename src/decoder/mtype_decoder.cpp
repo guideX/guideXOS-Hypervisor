@@ -32,6 +32,7 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         // Extract common fields
         result.qp = formats::extractBits(raw_instruction, 0, 6);
         result.r1 = formats::extractBits(raw_instruction, 6, 7);
+        result.r2 = formats::extractBits(raw_instruction, 13, 7);
         result.r3 = formats::extractBits(raw_instruction, 20, 7);  // Address/increment register
         
         // Extract major opcode (bits 37-40)
@@ -95,6 +96,7 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             }
             
             instr = InstructionEx(type, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r3, 0);  // r1 = [r3]
             
             if (fmt.has_imm) {
@@ -123,6 +125,7 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             }
             
             instr = InstructionEx(type, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r3, fmt.r1, 0);  // [r3] = r1
             
             if (fmt.has_imm) {

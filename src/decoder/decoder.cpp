@@ -287,60 +287,100 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
         // ===== COMPARE OPERATIONS (64-bit) =====
             
         case InstructionType::CMP_EQ:
-            cpu.SetPR(dst_, cpu.GetGR(src1_) == cpu.GetGR(src2_));
-            cpu.SetPR(src3_, cpu.GetGR(src1_) != cpu.GetGR(src2_));
+            {
+                uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
+                uint64_t rhs = cpu.GetGR(src2_);
+                cpu.SetPR(dst_, lhs == rhs);
+                cpu.SetPR(src3_, lhs != rhs);
+            }
             break;
             
         case InstructionType::CMP_NE:
-            cpu.SetPR(dst_, cpu.GetGR(src1_) != cpu.GetGR(src2_));
-            cpu.SetPR(src3_, cpu.GetGR(src1_) == cpu.GetGR(src2_));
+            {
+                uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
+                uint64_t rhs = cpu.GetGR(src2_);
+                cpu.SetPR(dst_, lhs != rhs);
+                cpu.SetPR(src3_, lhs == rhs);
+            }
             break;
             
         case InstructionType::CMP_LT:
-            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) < static_cast<int64_t>(cpu.GetGR(src2_)));
-            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) >= static_cast<int64_t>(cpu.GetGR(src2_)));
+            {
+                int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
+                int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, lhs < rhs);
+                cpu.SetPR(src3_, lhs >= rhs);
+            }
             break;
             
         case InstructionType::CMP_LE:
-            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) <= static_cast<int64_t>(cpu.GetGR(src2_)));
-            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) > static_cast<int64_t>(cpu.GetGR(src2_)));
+            {
+                int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
+                int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, lhs <= rhs);
+                cpu.SetPR(src3_, lhs > rhs);
+            }
             break;
             
         case InstructionType::CMP_GT:
-            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) > static_cast<int64_t>(cpu.GetGR(src2_)));
-            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) <= static_cast<int64_t>(cpu.GetGR(src2_)));
+            {
+                int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
+                int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, lhs > rhs);
+                cpu.SetPR(src3_, lhs <= rhs);
+            }
             break;
             
         case InstructionType::CMP_GE:
-            cpu.SetPR(dst_, static_cast<int64_t>(cpu.GetGR(src1_)) >= static_cast<int64_t>(cpu.GetGR(src2_)));
-            cpu.SetPR(src3_, static_cast<int64_t>(cpu.GetGR(src1_)) < static_cast<int64_t>(cpu.GetGR(src2_)));
+            {
+                int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
+                int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
+                cpu.SetPR(dst_, lhs >= rhs);
+                cpu.SetPR(src3_, lhs < rhs);
+            }
             break;
             
         case InstructionType::CMP_LTU:
-            cpu.SetPR(dst_, cpu.GetGR(src1_) < cpu.GetGR(src2_));
-            cpu.SetPR(src3_, cpu.GetGR(src1_) >= cpu.GetGR(src2_));
+            {
+                uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
+                uint64_t rhs = cpu.GetGR(src2_);
+                cpu.SetPR(dst_, lhs < rhs);
+                cpu.SetPR(src3_, lhs >= rhs);
+            }
             break;
             
         case InstructionType::CMP_LEU:
-            cpu.SetPR(dst_, cpu.GetGR(src1_) <= cpu.GetGR(src2_));
-            cpu.SetPR(src3_, cpu.GetGR(src1_) > cpu.GetGR(src2_));
+            {
+                uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
+                uint64_t rhs = cpu.GetGR(src2_);
+                cpu.SetPR(dst_, lhs <= rhs);
+                cpu.SetPR(src3_, lhs > rhs);
+            }
             break;
             
         case InstructionType::CMP_GTU:
-            cpu.SetPR(dst_, cpu.GetGR(src1_) > cpu.GetGR(src2_));
-            cpu.SetPR(src3_, cpu.GetGR(src1_) <= cpu.GetGR(src2_));
+            {
+                uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
+                uint64_t rhs = cpu.GetGR(src2_);
+                cpu.SetPR(dst_, lhs > rhs);
+                cpu.SetPR(src3_, lhs <= rhs);
+            }
             break;
             
         case InstructionType::CMP_GEU:
-            cpu.SetPR(dst_, cpu.GetGR(src1_) >= cpu.GetGR(src2_));
-            cpu.SetPR(src3_, cpu.GetGR(src1_) < cpu.GetGR(src2_));
+            {
+                uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
+                uint64_t rhs = cpu.GetGR(src2_);
+                cpu.SetPR(dst_, lhs >= rhs);
+                cpu.SetPR(src3_, lhs < rhs);
+            }
             break;
             
         // ===== COMPARE OPERATIONS (32-bit) =====
             
         case InstructionType::CMP4_EQ:
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 == val2);
                 cpu.SetPR(src3_, val1 != val2);
@@ -349,7 +389,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_NE:
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 != val2);
                 cpu.SetPR(src3_, val1 == val2);
@@ -358,7 +398,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_LT:
             {
-                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 < val2);
                 cpu.SetPR(src3_, val1 >= val2);
@@ -367,7 +407,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_LE:
             {
-                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 <= val2);
                 cpu.SetPR(src3_, val1 > val2);
@@ -376,7 +416,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_GT:
             {
-                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 > val2);
                 cpu.SetPR(src3_, val1 <= val2);
@@ -385,7 +425,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_GE:
             {
-                int32_t val1 = static_cast<int32_t>(cpu.GetGR(src1_));
+                int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 >= val2);
                 cpu.SetPR(src3_, val1 < val2);
@@ -394,7 +434,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_LTU:
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 < val2);
                 cpu.SetPR(src3_, val1 >= val2);
@@ -403,7 +443,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_LEU:
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 <= val2);
                 cpu.SetPR(src3_, val1 > val2);
@@ -412,7 +452,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_GTU:
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 > val2);
                 cpu.SetPR(src3_, val1 <= val2);
@@ -421,7 +461,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             
         case InstructionType::CMP4_GEU:
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
+                uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
                 cpu.SetPR(dst_, val1 >= val2);
                 cpu.SetPR(src3_, val1 < val2);
@@ -904,6 +944,8 @@ std::vector<UnitType> InstructionDecoder::GetUnitsForTemplate(TemplateType tmpl)
             
         case TemplateType::MMI:
         case TemplateType::MMI_STOP:
+        case TemplateType::M_MI:
+        case TemplateType::M_MI_STOP:
             return { UnitType::M_UNIT, UnitType::M_UNIT, UnitType::I_UNIT };
             
         case TemplateType::MFI:
