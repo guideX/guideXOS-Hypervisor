@@ -763,25 +763,30 @@ Storage count: {config.Storage.Count}
                 {
                     if (_nativeManager != IntPtr.Zero)
                     {
-                        // Call native VMManager_RunVM to execute VM cycles
-                        ulong cyclesExecuted = VMManager_RunVM(_nativeManager, vmId, cyclesPerFrame);
-                        
+                        // 500K cycles per call — gives ~30M cycles/sec at 60fps which is
+                        // enough to make visible boot progress. The DLL updates the framebuffer
+                        // after every call so the screen shows activity.
+                        const ulong cyclesPerBatch = 500_000;
+                        ulong cyclesExecuted = VMManager_RunVM(_nativeManager, vmId, cyclesPerBatch);
+
                         if (cyclesExecuted == 0)
                         {
-                            // VM halted or error
+                            // VM halted, faulted, or is in error state
+                            Console.WriteLine($"[VMExecLoop] VM {vmId} halted (cyclesExecuted=0). Stopping loop.");
                             break;
                         }
                     }
-                    
+
                     // Sleep for ~16ms (60 FPS)
                     Thread.Sleep(16);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // Stop on error
+                    Console.WriteLine($"[VMExecLoop] Exception for {vmId}: {ex.Message}");
                     break;
                 }
             }
+            Console.WriteLine($"[VMExecLoop] Execution loop ended for VM {vmId}");
         }
         
         /// <summary>

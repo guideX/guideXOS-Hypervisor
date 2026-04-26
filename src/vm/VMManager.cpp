@@ -24,17 +24,23 @@ void DrawBootStatus(VMInstance* instance,
     }
 
     FramebufferDevice* fb = instance->vm->getFramebufferDevice();
-    fb->Clear(0xFF05070A);
-    fb->DrawText(32, 32, "GUIDEXOS IA64", titleColor, 3);
+    // Use a clearly visible dark-blue background (not near-black)
+    fb->Clear(0xFF1A1A3E);
+    // Title: bright cyan/green
+    fb->DrawText(32, 20, "GUIDEXOS IA-64 HYPERVISOR", titleColor, 2);
+    // Separator line (draw as a row of dashes)
+    fb->DrawText(32, 46, "------------------------", 0xFF505070, 2);
     if (line1) {
-        fb->DrawText(32, 92, line1, 0xFFFFFFFF, 2);
+        fb->DrawText(32, 72, line1, 0xFFFFFFFF, 2);
     }
     if (line2) {
-        fb->DrawText(32, 122, line2, 0xFFFFD166, 2);
+        fb->DrawText(32, 100, line2, 0xFFFFD166, 2);
     }
     if (line3) {
-        fb->DrawText(32, 152, line3, 0xFF93C5FD, 2);
+        fb->DrawText(32, 128, line3, 0xFF93C5FD, 2);
     }
+    // Footer hint
+    fb->DrawText(32, 460, "CHECK LOGS FOR DETAILS", 0xFF606060, 1);
 }
 }
 
@@ -543,6 +549,35 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << peInfo.globalPointer << std::dec;
                                                                     LOG_INFO(oss.str());
                                                                 }
+
+                                                                // Set up minimal EFI firmware environment
+                                                                // BOOTIA64.EFI entry: efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
+                                                                // These are passed in r32 (in0) and r33 (in1) per IA-64 ABI.
+                                                                // Without valid pointers, early EFI code (e.g. st8 [r33]=r16)
+                                                                // corrupts address 0 (the loaded image itself).
+                                                                constexpr uint64_t EFI_STUB_ADDR = 0x200000ULL; // above the loaded EFI image
+                                                                constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
+
+                                                                // Write a zeroed-out minimal EFI System Table stub
+                                                                {
+                                                                    static const uint8_t stub[256] = {}; // all zeros
+                                                                    // Write EFI_SYSTEM_TABLE signature at offset 0
+                                                                    // "IBI SYST" = 0x5453595320494249
+                                                                    static const uint8_t sig[] = {
+                                                                        0x49,0x42,0x49,0x20,0x53,0x59,0x53,0x54
+                                                                    };
+                                                                    instance->vm->getMemory().Write(EFI_STUB_ADDR, stub, sizeof(stub));
+                                                                    instance->vm->getMemory().Write(EFI_STUB_ADDR, sig, sizeof(sig));
+                                                                    oss.str("");
+                                                                    oss << "  EFI System Table stub at: 0x" << std::hex << EFI_STUB_ADDR << std::dec;
+                                                                    LOG_INFO(oss.str());
+                                                                }
+
+                                                                // Set EFI entry arguments: r32=ImageHandle, r33=SystemTable
+                                                                instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
+                                                                instance->vm->writeGR(0, 33, EFI_STUB_ADDR);
+                                                                LOG_INFO("  Set r32=ImageHandle=0x1, r33=EFI_SystemTable=0x200000");
+
                                                                 LOG_INFO("??? EFI bootloader loaded successfully from boot image!");
                                                                 LOG_INFO("  Source: " + bootImgPath + " -> " + foundEFIPath);
                                                                 
@@ -875,18 +910,35 @@ uint64_t VMManager::runVM(const std::string& vmId, uint64_t maxCycles) {
 
         if (cyclesExecuted == 0 || instance->vm->getState() == VMState::ERROR) {
             std::ostringstream oss;
-            oss << "STOPPED AT IP 0X" << std::hex << instance->vm->getIP() << std::dec;
+            oss << "STOPPED AT IP=0x" << std::hex << instance->vm->getIP() << std::dec;
             const std::string stopLine = oss.str();
 
+            // Show a clearly red boot-failure screen
             DrawBootStatus(instance,
-                           "BOOT STOPPED",
+                           "BOOT FAILED",
                            stopLine.c_str(),
-                           "UNSUPPORTED IA64 INSTRUCTION OR CPU ERROR",
-                           0xFFFF6B6B);
+                           "CHECK NATIVE LOG FOR [SKIP] WARNINGS",
+                           0xFFFF4444);
 
             if (instance->vm->getState() == VMState::ERROR) {
-                instance->metadata.setError("VM execution stopped; see native log for unsupported instruction or CPU error");
+                instance->metadata.setError("VM execution stopped; see native log for [SKIP] warnings");
             }
+        } else {
+            // Execution ran a full batch — show a "RUNNING" heartbeat on-screen
+            // so the user can see the boot is progressing (updated each RunVM call)
+            std::ostringstream oss;
+            oss << "CYCLES: " << instance->metadata.resourceUsage.cyclesExecuted + cyclesExecuted;
+            const std::string cyclesLine = oss.str();
+
+            std::ostringstream ipOss;
+            ipOss << "IP=0x" << std::hex << instance->vm->getIP() << std::dec;
+            const std::string ipLine = ipOss.str();
+
+            DrawBootStatus(instance,
+                           "EFI BOOTING",
+                           cyclesLine.c_str(),
+                           ipLine.c_str(),
+                           0xFF6EE7B7);
         }
         
         // Update resource usage

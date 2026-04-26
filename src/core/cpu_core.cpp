@@ -208,10 +208,17 @@ servicePendingInterrupt();
 
     if (instr.GetType() == InstructionType::UNKNOWN) {
         std::ostringstream oss;
-        oss << "Unsupported IA-64 instruction at IP 0x" << std::hex << state_.GetIP()
-            << std::dec << ", slot " << currentSlot_ << ": " << instr.GetDisassembly();
-        LOG_ERROR(oss.str());
-        return false;
+        oss << "[SKIP] Unimplemented IA-64 instruction at IP=0x" << std::hex << state_.GetIP()
+            << std::dec << " Slot=" << currentSlot_ << ": " << instr.GetDisassembly();
+        LOG_WARN(oss.str());
+        // Treat as NOP and advance — do not halt the CPU
+        currentSlot_++;
+        if (currentSlot_ >= currentBundle_.instructions.size()) {
+            state_.SetIP(state_.GetIP() + 16);
+            bundleValid_ = false;
+            currentSlot_ = 0;
+        }
+        return true;
     }
     
     // Profile instruction execution
@@ -322,10 +329,11 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         }
     } catch (const std::exception& e) {
         // Handle execution errors safely - don't crash
-        std::cerr << "Error executing instruction at IP 0x" << std::hex << state_.GetIP() << std::dec
-                  << ": " << e.what() << std::endl;
-        std::cerr << "Instruction: " << instr.GetDisassembly() << std::endl;
-        std::cerr << "Treating as NOP and continuing..." << std::endl;
+        std::ostringstream oss;
+        oss << "[EXEC-ERR] Exception at IP=0x" << std::hex << state_.GetIP() << std::dec
+            << " Slot=" << currentSlot_ << " (" << instr.GetDisassembly() << "): " << e.what();
+        LOG_WARN(oss.str());
+        std::cerr << oss.str() << std::endl;
     }
 }
 
