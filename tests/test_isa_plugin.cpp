@@ -386,6 +386,21 @@ void testIA64NopIDecode() {
     std::cout << "  ? raw boot NOP slot decodes on I and B units\n";
 }
 
+void testIA64MoveFromBranchDecode() {
+    std::cout << "Testing IA-64 move from branch register decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx mov = decoder.DecodeSlot(0x198000f80ULL, UnitType::I_UNIT, 0x18e0);
+
+    assert(mov.GetType() == InstructionType::MOV_FROM_BR);
+    assert(mov.GetDst() == 62);
+    assert(mov.GetSrc1() == 0);
+    assert(mov.GetRawBits() == 0x198000f80ULL);
+    assert(mov.GetDisassembly() == "mov r62 = b0");
+
+    std::cout << "  ? raw boot branch-register move decodes as mov r62 = b0\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -462,6 +477,9 @@ int main() {
         std::cout << "\n";
 
         testIA64NopIDecode();
+        std::cout << "\n";
+
+        testIA64MoveFromBranchDecode();
         std::cout << "\n";
         
         testStateDump();
