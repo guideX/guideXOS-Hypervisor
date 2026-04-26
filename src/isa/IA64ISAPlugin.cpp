@@ -328,6 +328,23 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         std::cout << "[IP=0x" << std::hex << decodeResult.instructionAddress << std::dec 
                   << ", Slot=" << state_.currentSlot_ << "] "
                   << decodeResult.disassembly << std::endl;
+
+        if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
+            const uint64_t rawBits = cachedInstruction_.GetRawBits();
+            std::cerr << "Unsupported IA-64 instruction: "
+                      << "bundle=0x" << std::hex << decodeResult.instructionAddress
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " template=0x" << std::hex
+                      << static_cast<int>(state_.currentBundle_.templateType)
+                      << " raw=0x" << rawBits
+                      << " opcode=0x" << ((rawBits >> 37) & 0x0F)
+                      << " qp=" << std::dec << (rawBits & 0x3F)
+                      << " x3=" << ((rawBits >> 33) & 0x07)
+                      << " x6=" << ((rawBits >> 27) & 0x3F)
+                      << " disasm=\"" << decodeResult.disassembly << "\"\n";
+            hasCachedInstruction_ = false;
+            return ISAExecutionResult::EXCEPTION;
+        }
         
         // Check for syscall
         if (cachedInstruction_.GetType() == InstructionType::BREAK &&
@@ -352,25 +369,29 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         // Check for branch instructions
         bool isBranch = false;
         uint64_t branchTarget = 0;
+        const uint8_t predicate = cachedInstruction_.GetPredicate();
+        const bool predicateTrue = (predicate == 0) || checkPredicate(predicate);
         
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
-                if (cachedInstruction_.HasBranchTarget()) {
+                if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
                 }
                 break;
                 
             case InstructionType::BR_CALL:
-                if (cachedInstruction_.HasBranchTarget()) {
+                if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
                 }
                 break;
                 
             case InstructionType::BR_RET:
-                branchTarget = state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
-                isBranch = true;
+                if (predicateTrue) {
+                    branchTarget = state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                    isBranch = true;
+                }
                 break;
                 
             default:
@@ -459,7 +480,7 @@ std::string IA64ISAPlugin::disassemble(IMemory& memory, uint64_t address) {
         uint8_t bundleData[16];
         memory.Read(address, bundleData, 16);
         
-        Bundle bundle = decoder_.DecodeBundle(bundleData);
+        Bundle bundle = decoder_.DecodeBundleAt(bundleData, address);
         
         std::stringstream ss;
         ss << "Bundle at 0x" << std::hex << address << std::dec << ":\n";
@@ -607,7 +628,7 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
     
     try {
         memory.Read(ip, bundleData, 16);
-        state_.currentBundle_ = decoder_.DecodeBundle(bundleData);
+        state_.currentBundle_ = decoder_.DecodeBundleAt(bundleData, ip);
         state_.bundleValid_ = true;
     } catch (const std::exception& e) {
         std::cerr << "Bundle fetch error at IP 0x" << std::hex << ip << std::dec 

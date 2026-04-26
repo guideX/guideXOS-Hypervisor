@@ -10,6 +10,39 @@
 
 using namespace ia64;
 
+class FakeBranchDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        InstructionEx branch(InstructionType::BR_COND, UnitType::B_UNIT);
+        branch.SetPredicate(1);
+        branch.SetBranchTarget(bundleIP + 0x1000);
+        branch.SetRawBits(0x1);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(branch);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 // Test ISA state serialization/deserialization
 void testISAStateSerialization() {
     std::cout << "Testing ISA state serialization...\n";
@@ -200,6 +233,32 @@ void testExampleISAExecution() {
     std::cout << "  ? HALT executed, execution stopped\n";
 }
 
+void testIA64BranchPredicateExecution() {
+    std::cout << "Testing IA-64 predicated branch execution...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeBranchDecoder decoder;
+
+    auto notTaken = createIA64ISA(decoder);
+    auto& notTakenState = dynamic_cast<IA64ISAState&>(notTaken->getState());
+    notTakenState.getCPUState().SetIP(0x1000);
+    notTakenState.getCPUState().SetPR(1, false);
+    assert(notTaken->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(notTaken->getPC() == 0x1010);
+
+    auto taken = createIA64ISA(decoder);
+    auto& takenState = dynamic_cast<IA64ISAState&>(taken->getState());
+    takenState.getCPUState().SetIP(0x1000);
+    takenState.getCPUState().SetPR(1, true);
+    assert(taken->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(taken->getPC() == 0x2000);
+
+    std::cout << "  ? False-predicated branch falls through; true predicate branches\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -261,6 +320,9 @@ int main() {
         std::cout << "\n";
         
         testExampleISAExecution();
+        std::cout << "\n";
+
+        testIA64BranchPredicateExecution();
         std::cout << "\n";
         
         testStateDump();

@@ -5,7 +5,7 @@
   <TargetFramework>net9.0-windows</TargetFramework>
   <RootNamespace>guideXOS_Hypervisor_GUI</RootNamespace>
   <Nullable>enable</Nullable>
-  <ImplicitUsings>enable</ImplicitUsings>
+  <ImplicitUsings>:enable</ImplicitUsings>
   <UseWPF>true</UseWPF>
   <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 </PropertyGroup>
