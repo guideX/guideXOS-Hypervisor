@@ -353,6 +353,20 @@ void testIA64AddImm22Decode() {
     std::cout << "  ? add imm22 raw boot slot decodes and executes\n";
 }
 
+void testIA64ReturnBranchDecode() {
+    std::cout << "Testing IA-64 return branch decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx ret = decoder.DecodeSlot(0x108000100ULL, UnitType::B_UNIT, 0x36e80);
+
+    assert(ret.GetType() == InstructionType::BR_RET);
+    assert(ret.GetSrc1() == 0);
+    assert(!ret.HasBranchTarget());
+    assert(ret.GetDisassembly() == "br.ret b0");
+
+    std::cout << "  ? raw boot return branch decodes as br.ret b0\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -423,6 +437,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddImm22Decode();
+        std::cout << "\n";
+
+        testIA64ReturnBranchDecode();
         std::cout << "\n";
         
         testStateDump();

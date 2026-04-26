@@ -148,6 +148,16 @@ static bool decodeIPRelative(uint64_t raw, uint8_t btype, uint8_t x6,
                                   uint64_t current_ip, formats::BFormat& result) {
         // Determine branch type from btype field
         result.indirect = false;
+
+        // B4 return form: br.ret b2.  The EFI boot path reaches this as raw
+        // 0x108000100 (btype=4, x6=0x21, b2=b0); treating it as IP-relative
+        // produces a bogus jump outside the image.
+        if (btype == 0x4 && x6 == 0x21) {
+            result.indirect = true;
+            result.type = formats::BFormat::BranchType::RET;
+            result.has_target = false;
+            return true;
+        }
         
         switch (btype) {
             case 0x0:  // BR.COND (conditional branch)
