@@ -368,16 +368,22 @@ void testIA64ReturnBranchDecode() {
 }
 
 void testIA64NopIDecode() {
-    std::cout << "Testing IA-64 nop.i decode...\n";
+    std::cout << "Testing IA-64 nop decode variants...\n";
 
     InstructionDecoder decoder;
-    InstructionEx nop = decoder.DecodeSlot(0x4000000000ULL, UnitType::I_UNIT, 0x18d0);
+    InstructionEx nopI = decoder.DecodeSlot(0x4000000000ULL, UnitType::I_UNIT, 0x18d0);
 
-    assert(nop.GetType() == InstructionType::NOP);
-    assert(nop.GetRawBits() == 0x4000000000ULL);
-    assert(nop.GetDisassembly() == "nop");
+    assert(nopI.GetType() == InstructionType::NOP);
+    assert(nopI.GetRawBits() == 0x4000000000ULL);
+    assert(nopI.GetDisassembly() == "nop");
 
-    std::cout << "  ? raw boot nop.i slot decodes as NOP\n";
+    InstructionEx nopB = decoder.DecodeSlot(0x4000000000ULL, UnitType::B_UNIT, 0x18d0);
+
+    assert(nopB.GetType() == InstructionType::NOP);
+    assert(nopB.GetRawBits() == 0x4000000000ULL);
+    assert(nopB.GetDisassembly() == "nop");
+
+    std::cout << "  ? raw boot NOP slot decodes on I and B units\n";
 }
 
 // Test state dump

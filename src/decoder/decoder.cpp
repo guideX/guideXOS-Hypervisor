@@ -1191,6 +1191,13 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             break;
             
         case UnitType::B_UNIT:
+            if (major == 0x2 && x3 == 0x0 && x6 == 0x00 &&
+                ((slotBits >> 6) & 0x1FFFFF) == 0) {
+                result = InstructionEx(InstructionType::NOP, UnitType::B_UNIT);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             // B-unit executes branch instructions
             // Major opcodes: 0x0, 0x4, 0x5 for various branch types
             if (major >= 0x0 && major <= 0x5) {
