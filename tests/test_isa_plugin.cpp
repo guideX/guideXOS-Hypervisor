@@ -401,6 +401,29 @@ void testIA64MoveFromBranchDecode() {
     std::cout << "  ? raw boot branch-register move decodes as mov r62 = b0\n";
 }
 
+void testIA64AddsImm14Decode() {
+    std::cout << "Testing IA-64 adds imm14 decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx add = decoder.DecodeSlot(0x119f8ce0300ULL, UnitType::I_UNIT, 0x2eec0);
+
+    assert(add.GetType() == InstructionType::ADD_IMM);
+    assert(add.GetDst() == 12);
+    assert(add.GetSrc1() == 12);
+    assert(add.HasImmediate());
+    assert(static_cast<int64_t>(add.GetImmediate()) == -16);
+    assert(add.GetRawBits() == 0x119f8ce0300ULL);
+    assert(add.GetDisassembly() == "add r12 = r12, -16");
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetGR(12, 0x1000);
+    add.Execute(cpu, memory);
+    assert(cpu.GetGR(12) == 0x0ff0);
+
+    std::cout << "  ? raw boot stack adjustment decodes and executes\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -480,6 +503,9 @@ int main() {
         std::cout << "\n";
 
         testIA64MoveFromBranchDecode();
+        std::cout << "\n";
+
+        testIA64AddsImm14Decode();
         std::cout << "\n";
         
         testStateDump();

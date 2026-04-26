@@ -242,6 +242,17 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
 // Helper function implementations
 static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b, 
                               uint8_t x4, uint8_t ve, formats::AFormat& result) {
+    if (x2a == 0x2 && ve == 0) {
+        result.has_imm = true;
+        uint8_t imm6d = static_cast<uint8_t>(formats::extractBits(raw, 27, 6));
+        uint8_t imm7b = static_cast<uint8_t>(formats::extractBits(raw, 13, 7));
+        uint8_t s = static_cast<uint8_t>(formats::extractBits(raw, 36, 1));
+        result.imm = formats::signExtend((s << 13) | (imm6d << 7) | imm7b, 14);
+        result.r2 = result.r3;
+        result.opcode = 0x80;
+        return true;
+    }
+
     // Check if immediate form
     if (x2a == 0x2) {  // 8-bit immediate form
         result.has_imm = true;
