@@ -4,6 +4,7 @@
 #include "ISAPluginRegistry.h"
 #include "memory.h"
 #include "decoder.h"
+#include "cpu.h"
 #include <iostream>
 #include <cassert>
 #include <cstring>
@@ -424,6 +425,37 @@ void testIA64AddsImm14Decode() {
     std::cout << "  ? raw boot stack adjustment decodes and executes\n";
 }
 
+void testIA64LegacyCallOutputInputs() {
+    std::cout << "Testing IA-64 legacy call output/input register bridge...\n";
+
+    Memory memory(64 * 1024);
+    InstructionDecoder decoder;
+    CPU cpu(memory, decoder);
+
+    cpu.getState().SetIP(0x1000);
+    cpu.getState().SetCFM(6 | (static_cast<uint64_t>(4) << 7));
+    cpu.getState().SetGR(36, 0x12345678);
+    cpu.getState().SetGR(37, 0xabcdef00);
+
+    InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+    call.SetOperands(0, 0, 0);
+    call.SetBranchTarget(0x2000);
+    cpu.executeInstruction(call);
+
+    assert(cpu.getState().GetIP() == 0x2000);
+    assert(cpu.getState().GetBR(0) == 0x1010);
+
+    InstructionEx alloc(InstructionType::ALLOC, UnitType::M_UNIT);
+    alloc.SetOperands(60, 0, 0);
+    alloc.SetImmediate(36 | (static_cast<uint64_t>(31) << 7));
+    cpu.executeInstruction(alloc);
+
+    assert(cpu.getState().GetGR(32) == 0x12345678);
+    assert(cpu.getState().GetGR(33) == 0xabcdef00);
+
+    std::cout << "  ? caller outputs become callee input registers after alloc\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -506,6 +538,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddsImm14Decode();
+        std::cout << "\n";
+
+        testIA64LegacyCallOutputInputs();
         std::cout << "\n";
         
         testStateDump();

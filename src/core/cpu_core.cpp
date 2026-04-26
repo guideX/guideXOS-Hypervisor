@@ -130,6 +130,7 @@ if (isaPlugin_) {
     bundleValid_ = false;
     currentBundle_ = Bundle();
     pendingInterrupts_.clear();
+    pendingCallInputs_.clear();
     interruptVectorBase_ = 0;
     return;
 }
@@ -143,6 +144,7 @@ state_.Reset();
     bundleValid_ = false;
     currentBundle_ = Bundle();
     pendingInterrupts_.clear();
+    pendingCallInputs_.clear();
     interruptVectorBase_ = 0;
     
     // IA-64 specific initialization:
@@ -287,6 +289,7 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                 if (predicateTrue && instr.HasBranchTarget()) {
                     branchTarget = instr.GetBranchTarget();
                     isBranch = true;
+                    captureCallOutputRegisters();
                 }
                 break;
                 
@@ -306,6 +309,10 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         // InstructionEx already has Execute() method that handles execution
         // It also handles predication internally if needed
         instr.Execute(state_, memory_);
+
+        if (instr.GetType() == InstructionType::ALLOC && predicateTrue) {
+            applyPendingCallInputRegisters();
+        }
         
         // Handle branch after execution (so br.call can save return address)
         if (isBranch) {
@@ -320,6 +327,36 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         std::cerr << "Instruction: " << instr.GetDisassembly() << std::endl;
         std::cerr << "Treating as NOP and continuing..." << std::endl;
     }
+}
+
+void CPU::captureCallOutputRegisters() {
+    pendingCallInputs_.clear();
+
+    const uint8_t sof = state_.GetSOF();
+    const uint8_t sol = state_.GetSOL();
+    if (sof <= sol) {
+        return;
+    }
+
+    const size_t outputCount = static_cast<size_t>(sof - sol);
+    const size_t firstOutput = 32 + sol;
+    for (size_t i = 0; i < outputCount && firstOutput + i < NUM_GENERAL_REGISTERS; ++i) {
+        const uint64_t value = state_.GetGR(firstOutput + i);
+        pendingCallInputs_.push_back(value);
+        state_.SetGR(32 + i, value);
+    }
+}
+
+void CPU::applyPendingCallInputRegisters() {
+    if (pendingCallInputs_.empty()) {
+        return;
+    }
+
+    for (size_t i = 0; i < pendingCallInputs_.size() && 32 + i < NUM_GENERAL_REGISTERS; ++i) {
+        state_.SetGR(32 + i, pendingCallInputs_[i]);
+    }
+
+    pendingCallInputs_.clear();
 }
 
 void CPU::fetchBundle() {

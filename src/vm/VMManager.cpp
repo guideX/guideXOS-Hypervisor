@@ -535,6 +535,14 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                          imageBuffer.size(), 
                                                                                          loadAddress)) {
                                                                 instance->vm->setEntryPoint(entryPoint);
+                                                                const auto& peInfo = peParser.getImageInfo();
+                                                                if (peInfo.hasGlobalPointer) {
+                                                                    instance->vm->getCPU().getState().SetGR(1, peInfo.globalPointer);
+                                                                    oss.str("");
+                                                                    oss << "  Global pointer (r1): 0x" << std::hex
+                                                                        << peInfo.globalPointer << std::dec;
+                                                                    LOG_INFO(oss.str());
+                                                                }
                                                                 LOG_INFO("??? EFI bootloader loaded successfully from boot image!");
                                                                 LOG_INFO("  Source: " + bootImgPath + " -> " + foundEFIPath);
                                                                 

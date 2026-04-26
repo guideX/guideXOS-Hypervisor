@@ -164,6 +164,8 @@ bool PEParser::parseOptionalHeader() {
     imageInfo_.fileAlignment = optionalHeader_.fileAlignment;
     imageInfo_.sizeOfImage = optionalHeader_.sizeOfImage;
     imageInfo_.sizeOfHeaders = optionalHeader_.sizeOfHeaders;
+    imageInfo_.globalPointer = 0;
+    imageInfo_.hasGlobalPointer = false;
     
     LOG_INFO("Optional Header:");
     
@@ -417,8 +419,10 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
         LOG_INFO("");
         LOG_INFO("Step 5.5: Checking for EFI indirect entry point...");
         
-        // Read potential pointer at entry point (first 8 bytes)
+        // IA-64 EFI entry points commonly reference a function descriptor:
+        // [0] code address, [1] global pointer.
         if (entryPointRVA + 8 <= imageBuffer.size()) {
+            const uint64_t descriptorRVA = entryPointRVA;
             uint64_t potentialRVA = 0;
             std::memcpy(&potentialRVA, &imageBuffer[entryPointRVA], sizeof(uint64_t));
             
@@ -445,6 +449,18 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
                     entryPoint = loadAddress + potentialRVA;
                     entryPointRVA = potentialRVA;
                     isValidCodePointer = true;
+
+                    if (descriptorRVA + 16 <= imageBuffer.size()) {
+                        uint64_t descriptorGP = 0;
+                        std::memcpy(&descriptorGP, &imageBuffer[descriptorRVA + 8], sizeof(uint64_t));
+                        imageInfo_.globalPointer = loadAddress + descriptorGP;
+                        imageInfo_.hasGlobalPointer = true;
+
+                        oss.str("");
+                        oss << "  Descriptor global pointer: 0x" << std::hex
+                            << imageInfo_.globalPointer << std::dec;
+                        LOG_INFO(oss.str());
+                    }
                     
                     oss.str("");
                     oss << "  New entry point: 0x" << std::hex << entryPoint << std::dec;

@@ -155,6 +155,8 @@ struct PEImageInfo {
     uint32_t fileAlignment;
     uint32_t sizeOfImage;
     uint32_t sizeOfHeaders;
+    uint64_t globalPointer;
+    bool hasGlobalPointer;
     std::vector<PESectionInfo> sections;
 };
 
