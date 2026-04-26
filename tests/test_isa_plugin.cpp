@@ -332,6 +332,27 @@ void testIA64BranchPredicateGroupSnapshot() {
     std::cout << "  ? Same-group predicate write is deferred; stop makes it visible\n";
 }
 
+void testIA64AddImm22Decode() {
+    std::cout << "Testing IA-64 add imm22 decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx add = decoder.DecodeSlot(0x12000000200ULL, UnitType::M_UNIT, 0x36e80);
+
+    assert(add.GetType() == InstructionType::ADD_IMM);
+    assert(add.GetDst() == 8);
+    assert(add.GetSrc1() == 0);
+    assert(add.HasImmediate());
+    assert(add.GetImmediate() == 0);
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetGR(8, 0x1234);
+    add.Execute(cpu, memory);
+    assert(cpu.GetGR(8) == 0);
+
+    std::cout << "  ? add imm22 raw boot slot decodes and executes\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -399,6 +420,9 @@ int main() {
         std::cout << "\n";
 
         testIA64BranchPredicateGroupSnapshot();
+        std::cout << "\n";
+
+        testIA64AddImm22Decode();
         std::cout << "\n";
         
         testStateDump();

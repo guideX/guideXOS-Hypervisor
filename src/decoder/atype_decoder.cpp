@@ -190,6 +190,14 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                 return true;
         }
     }
+
+    if ((op & 0xF0) == 0x90) {
+        instr = InstructionEx(InstructionType::ADD_IMM, UnitType::I_UNIT);
+        instr.SetPredicate(fmt.qp);
+        instr.SetOperands(fmt.r1, fmt.r3, 0);
+        instr.SetImmediate(fmt.imm);
+        return true;
+    }
     
     // Compare operations
     if ((op & 0xF0) == 0xC0 || (op & 0xF0) == 0xD0 || (op & 0xF0) == 0xE0) {
