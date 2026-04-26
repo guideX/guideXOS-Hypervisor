@@ -65,6 +65,33 @@ void test_compare_instructions() {
     std::cout << "  ? Compare instructions passed" << std::endl;
 }
 
+void test_compare_ne_decoder() {
+    std::cout << "Testing compare-ne decoder mapping..." << std::endl;
+
+    InstructionDecoder decoder;
+    InstructionEx cmp_ne = decoder.DecodeSlot(0x1a801300180ULL, UnitType::I_UNIT, 0x36e70);
+
+    assert_true("CMP.NE raw slot should decode as CMP_NE",
+                cmp_ne.GetType() == InstructionType::CMP_NE);
+    assert_equal("CMP.NE destination predicate", 6, cmp_ne.GetDst());
+    assert_equal("CMP.NE lhs register", 0, cmp_ne.GetSrc1());
+    assert_equal("CMP.NE rhs register", 19, cmp_ne.GetSrc2());
+    assert_equal("CMP.NE complement predicate", 0, cmp_ne.GetSrc3());
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    cpu.SetGR(19, 3);
+    cmp_ne.Execute(cpu, memory);
+    assert_true("CMP.NE should set p6 while r19 is non-zero", cpu.GetPR(6));
+
+    cpu.SetGR(19, 0);
+    cmp_ne.Execute(cpu, memory);
+    assert_true("CMP.NE should clear p6 when r19 reaches zero", !cpu.GetPR(6));
+
+    std::cout << "  ? Compare-ne decoder mapping passed" << std::endl;
+}
+
 // Test bitwise operations
 void test_bitwise_operations() {
     std::cout << "Testing bitwise operations..." << std::endl;
@@ -338,6 +365,7 @@ int main() {
     
     try {
         test_compare_instructions();
+        test_compare_ne_decoder();
         test_bitwise_operations();
         test_shift_operations();
         test_extract_deposit();

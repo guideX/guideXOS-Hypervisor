@@ -198,6 +198,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
         if ((op & 0xF0) == 0xE0) {
             const bool is_32bit = (op & 0x01) != 0;
             cmpType = is_32bit ? InstructionType::CMP4_EQ : InstructionType::CMP_EQ;
+        } else if ((op & 0xF0) == 0xD0 && (op & 0x0F) == 0x0 && fmt.ta == 0) {
+            cmpType = InstructionType::CMP_NE;
         } else {  // Other relations (NE, GE, GT, etc.)
             // Determine compare type
             bool is_unsigned = (op & 0x10) != 0;
