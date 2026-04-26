@@ -1148,6 +1148,13 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
+            if (major == 0x2 && x3 == 0x0 && x6 == 0x00 &&
+                ((slotBits >> 6) & 0x1FFFFF) == 0) {
+                result = InstructionEx(InstructionType::NOP, UnitType::I_UNIT);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             if (major == 0x0 && x3 == 0x0 && x6 == 0x31) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
                 const uint8_t b2 = static_cast<uint8_t>((slotBits >> 13) & 0x7);
