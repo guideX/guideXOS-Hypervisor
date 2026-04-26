@@ -2,6 +2,7 @@
 #include "decoder.h"
 #include "ia64_decoders.h"
 #include "ia64_formats.h"
+#include "ia64_opcodes.h"
 #include "cpu_state.h"
 #include "memory.h"
 #include <sstream>
@@ -895,7 +896,16 @@ Bundle InstructionDecoder::DecodeBundleAt(const uint8_t* bundleData, uint64_t bu
     
     // Extract template (first 5 bits)
     bundle.templateType = ExtractTemplate(bundleData);
-    bundle.hasStop = (static_cast<uint8_t>(bundle.templateType) & 0x01) != 0;
+    const uint8_t templateId = static_cast<uint8_t>(bundle.templateType);
+    const auto* templateInfo = opcodes::getTemplateInfo(templateId);
+    if (templateInfo) {
+        bundle.stopAfterSlot[0] = templateInfo->stop_after_0;
+        bundle.stopAfterSlot[1] = templateInfo->stop_after_1;
+        bundle.stopAfterSlot[2] = templateInfo->stop_after_2;
+        bundle.hasStop = templateInfo->stop_after_0 || templateInfo->stop_after_1 || templateInfo->stop_after_2;
+    } else {
+        bundle.hasStop = false;
+    }
 
     if (IsMLXTemplate(static_cast<uint8_t>(bundle.templateType))) {
         const uint64_t slot0Bits = ExtractSlot(bundleData, 0);

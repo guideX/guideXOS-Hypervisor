@@ -7,6 +7,7 @@
 #include "IDecoder.h"
 #include <memory>
 #include <cstring>
+#include <array>
 
 namespace ia64 {
 
@@ -40,6 +41,7 @@ public:
     Bundle currentBundle_;
     size_t currentSlot_;
     bool bundleValid_;
+    std::array<bool, NUM_PREDICATE_REGISTERS> predicateGroupSnapshot_;
     
     // Interrupt state
     std::vector<uint8_t> pendingInterrupts_;
@@ -192,6 +194,7 @@ private:
      * Fetch and decode current bundle from memory
      */
     void fetchBundle(IMemory& memory);
+    void capturePredicateGroupSnapshot();
     
     /**
      * Execute a single IA-64 instruction

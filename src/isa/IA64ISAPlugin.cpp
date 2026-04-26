@@ -18,8 +18,11 @@ IA64ISAState::IA64ISAState()
     , currentBundle_()
     , currentSlot_(0)
     , bundleValid_(false)
+    , predicateGroupSnapshot_()
     , pendingInterrupts_()
     , interruptVectorBase_(0) {
+    predicateGroupSnapshot_.fill(false);
+    predicateGroupSnapshot_[0] = true;
 }
 
 IA64ISAState::IA64ISAState(const CPUState& cpuState)
@@ -27,8 +30,12 @@ IA64ISAState::IA64ISAState(const CPUState& cpuState)
     , currentBundle_()
     , currentSlot_(0)
     , bundleValid_(false)
+    , predicateGroupSnapshot_()
     , pendingInterrupts_()
     , interruptVectorBase_(0) {
+    for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
+        predicateGroupSnapshot_[i] = cpuState_.GetPR(i);
+    }
 }
 
 std::unique_ptr<ISAState> IA64ISAState::clone() const {
@@ -36,6 +43,7 @@ std::unique_ptr<ISAState> IA64ISAState::clone() const {
     cloned->currentBundle_ = currentBundle_;
     cloned->currentSlot_ = currentSlot_;
     cloned->bundleValid_ = bundleValid_;
+    cloned->predicateGroupSnapshot_ = predicateGroupSnapshot_;
     cloned->pendingInterrupts_ = pendingInterrupts_;
     cloned->interruptVectorBase_ = interruptVectorBase_;
     return cloned;
@@ -88,6 +96,10 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
     
     uint8_t valid = bundleValid_ ? 1 : 0;
     buffer[offset++] = valid;
+
+    for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
+        buffer[offset++] = predicateGroupSnapshot_[i] ? 1 : 0;
+    }
     
     std::memcpy(buffer + offset, &interruptVectorBase_, sizeof(uint64_t));
     offset += sizeof(uint64_t);
@@ -155,6 +167,10 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
     
     uint8_t valid = buffer[offset++];
     bundleValid_ = (valid != 0);
+
+    for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
+        predicateGroupSnapshot_[i] = buffer[offset++] != 0;
+    }
     
     std::memcpy(&interruptVectorBase_, buffer + offset, sizeof(uint64_t));
     offset += sizeof(uint64_t);
@@ -184,6 +200,7 @@ size_t IA64ISAState::getStateSize() const {
     // Runtime state
     size += sizeof(size_t);      // currentSlot_
     size += 1;                   // bundleValid_
+    size += NUM_PREDICATE_REGISTERS; // predicate group snapshot
     size += sizeof(uint64_t);    // interruptVectorBase_
     size += sizeof(size_t);      // pendingInterrupts_ count
     size += pendingInterrupts_.size();  // interrupt data
@@ -220,6 +237,8 @@ void IA64ISAState::reset() {
     currentBundle_ = Bundle();
     currentSlot_ = 0;
     bundleValid_ = false;
+    predicateGroupSnapshot_.fill(false);
+    predicateGroupSnapshot_[0] = true;
     pendingInterrupts_.clear();
     interruptVectorBase_ = 0;
 }
@@ -370,7 +389,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         bool isBranch = false;
         uint64_t branchTarget = 0;
         const uint8_t predicate = cachedInstruction_.GetPredicate();
-        const bool predicateTrue = (predicate == 0) || checkPredicate(predicate);
+        const bool predicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
+        const bool branchInstruction =
+            cachedInstruction_.GetType() == InstructionType::BR_COND ||
+            cachedInstruction_.GetType() == InstructionType::BR_CALL ||
+            cachedInstruction_.GetType() == InstructionType::BR_RET;
         
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
@@ -398,23 +421,34 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 break;
         }
         
-        // Execute instruction
-        executeInstruction(memory, cachedInstruction_);
-        
+        // Execute instruction. Branch predicates are checked against the
+        // instruction-group snapshot, not predicates written earlier in this
+        // group.
+        if (!branchInstruction || predicateTrue) {
+            executeInstruction(memory, cachedInstruction_);
+        }
+
         // Handle branch after execution
         if (isBranch) {
             state_.getCPUState().SetIP(branchTarget);
             state_.bundleValid_ = false;
             state_.currentSlot_ = 0;
+            capturePredicateGroupSnapshot();
             hasCachedInstruction_ = false;
             return ISAExecutionResult::CONTINUE;
         }
         
         // Advance to next instruction (non-branch)
+        const size_t executedSlot = state_.currentSlot_;
         state_.currentSlot_++;
+        if (executedSlot < state_.currentBundle_.stopAfterSlot.size() &&
+            state_.currentBundle_.stopAfterSlot[executedSlot]) {
+            capturePredicateGroupSnapshot();
+        }
         if (state_.currentSlot_ >= state_.currentBundle_.instructions.size()) {
             state_.getCPUState().SetIP(state_.getCPUState().GetIP() + 16);
             state_.bundleValid_ = false;
+            capturePredicateGroupSnapshot();
         }
         
         hasCachedInstruction_ = false;
@@ -630,10 +664,17 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
         memory.Read(ip, bundleData, 16);
         state_.currentBundle_ = decoder_.DecodeBundleAt(bundleData, ip);
         state_.bundleValid_ = true;
+        capturePredicateGroupSnapshot();
     } catch (const std::exception& e) {
         std::cerr << "Bundle fetch error at IP 0x" << std::hex << ip << std::dec 
                   << ": " << e.what() << "\n";
         state_.bundleValid_ = false;
+    }
+}
+
+void IA64ISAPlugin::capturePredicateGroupSnapshot() {
+    for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
+        state_.predicateGroupSnapshot_[i] = state_.getCPUState().GetPR(i);
     }
 }
 

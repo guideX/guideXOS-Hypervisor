@@ -43,6 +43,51 @@ public:
     }
 };
 
+class FakeCompareBranchDecoder : public IDecoder {
+public:
+    explicit FakeCompareBranchDecoder(bool stopAfterCompare)
+        : stopAfterCompare_(stopAfterCompare) {}
+
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        InstructionEx compare(InstructionType::CMP_EQ, UnitType::I_UNIT);
+        compare.SetOperands4(1, 0, 0, 2);
+        compare.SetRawBits(0x2);
+
+        InstructionEx branch(InstructionType::BR_COND, UnitType::B_UNIT);
+        branch.SetPredicate(1);
+        branch.SetBranchTarget(bundleIP + 0x1000);
+        branch.SetRawBits(0x3);
+
+        Bundle bundle;
+        bundle.templateType = stopAfterCompare_ ? TemplateType::MI_I : TemplateType::MII;
+        bundle.hasStop = stopAfterCompare_;
+        bundle.stopAfterSlot[0] = stopAfterCompare_;
+        bundle.instructions.push_back(compare);
+        bundle.instructions.push_back(branch);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+
+private:
+    bool stopAfterCompare_;
+};
+
 // Test ISA state serialization/deserialization
 void testISAStateSerialization() {
     std::cout << "Testing ISA state serialization...\n";
@@ -259,6 +304,34 @@ void testIA64BranchPredicateExecution() {
     std::cout << "  ? False-predicated branch falls through; true predicate branches\n";
 }
 
+void testIA64BranchPredicateGroupSnapshot() {
+    std::cout << "Testing IA-64 predicate visibility across instruction groups...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeCompareBranchDecoder noStopDecoder(false);
+    auto noStop = createIA64ISA(noStopDecoder);
+    auto& noStopState = dynamic_cast<IA64ISAState&>(noStop->getState());
+    noStopState.getCPUState().SetIP(0x1000);
+    noStopState.getCPUState().SetPR(1, false);
+    assert(noStop->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(noStop->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(noStop->getPC() == 0x1010);
+
+    FakeCompareBranchDecoder stopDecoder(true);
+    auto withStop = createIA64ISA(stopDecoder);
+    auto& withStopState = dynamic_cast<IA64ISAState&>(withStop->getState());
+    withStopState.getCPUState().SetIP(0x1000);
+    withStopState.getCPUState().SetPR(1, false);
+    assert(withStop->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(withStop->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(withStop->getPC() == 0x2000);
+
+    std::cout << "  ? Same-group predicate write is deferred; stop makes it visible\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -323,6 +396,9 @@ int main() {
         std::cout << "\n";
 
         testIA64BranchPredicateExecution();
+        std::cout << "\n";
+
+        testIA64BranchPredicateGroupSnapshot();
         std::cout << "\n";
         
         testStateDump();

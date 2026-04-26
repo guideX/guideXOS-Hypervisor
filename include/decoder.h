@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <array>
 #include "IDecoder.h"
 
 // Forward declare format structures and decoders
@@ -296,8 +297,9 @@ struct Bundle {
     TemplateType templateType;
     std::vector<InstructionEx> instructions;  // Typically 3 instructions
     bool hasStop;  // Stop bit in template
+    std::array<bool, 3> stopAfterSlot;  // Stop bits after slots 0, 1, and 2
     
-    Bundle() : templateType(TemplateType::INVALID), hasStop(false) {}
+    Bundle() : templateType(TemplateType::INVALID), hasStop(false), stopAfterSlot{{false, false, false}} {}
 };
 
 // Instruction decoder for IA-64 bundles
