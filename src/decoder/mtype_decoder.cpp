@@ -22,10 +22,9 @@ namespace decoder {
  */
 
 // Forward declarations of helper functions
-static bool decodeLoad(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
-                       uint8_t hint, formats::MFormat& result);
-static bool decodeStore(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
-                        uint8_t hint, formats::MFormat& result);
+static bool setAccessSize(uint8_t x6, formats::MFormat& result);
+static void decodeLoad(uint8_t x6, uint8_t m, formats::MFormat& result);
+static void decodeStore(uint8_t x6, uint8_t m, formats::MFormat& result);
 
 // MTypeDecoder::decode implementation
 bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
@@ -50,19 +49,65 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         result.x = x6;
         result.hint = hint;
         
-        // Decode based on major opcode
+        const uint8_t x6row = x6 >> 2;
+
+        // Decode based on major opcode and the M-unit table row. Major opcode 4
+        // contains normal loads and stores; major opcode 5 contains the same
+        // split for immediate-update forms.
         switch (major) {
-            case 0x4:   // Integer loads
-                return decodeLoad(raw_instruction, x, x6, m, hint, result);
-                
-            case 0x5:   // Integer stores
-                return decodeStore(raw_instruction, x, x6, m, hint, result);
-                
+            case 0x4:
+                if (x == 0 && m == 0 && x6row <= 0xA) {
+                    decodeLoad(x6, m, result);
+                    return true;
+                }
+
+                if (x == 0 && m == 0 && x6row >= 0xC && x6row <= 0xE) {
+                    decodeStore(x6, m, result);
+                    result.r1 = result.r2; // M4 store source lives in bits 13-19.
+                    return true;
+                }
+
+                if (x == 0 && m == 1 && x6row <= 0xA) {
+                    decodeLoad(x6, m, result);
+                    result.reg_update = true; // M2: base register is updated by r2.
+                    return true;
+                }
+
+                return false;
+
+            case 0x5:
+                if (x6row <= 0xA) {
+                    decodeLoad(x6, m, result);
+                    result.has_imm = true;
+
+                    const uint16_t imm7b = formats::extractBits(raw_instruction, 13, 7);
+                    const uint16_t i = formats::extractBits(raw_instruction, 27, 1);
+                    const uint16_t s = formats::extractBits(raw_instruction, 36, 1);
+                    result.imm9 = static_cast<int16_t>(formats::signExtend((s << 8) | (i << 7) | imm7b, 9));
+                    return true;
+                }
+
+                if (x6row >= 0xC && x6row <= 0xE) {
+                    decodeStore(x6, m, result);
+                    result.has_imm = true;
+                    result.r1 = result.r2; // M5 store source lives in bits 13-19.
+
+                    const uint16_t imm7a = formats::extractBits(raw_instruction, 6, 7);
+                    const uint16_t i = formats::extractBits(raw_instruction, 27, 1);
+                    const uint16_t s = formats::extractBits(raw_instruction, 36, 1);
+                    result.imm9 = static_cast<int16_t>(formats::signExtend((s << 8) | (i << 7) | imm7a, 9));
+                    return true;
+                }
+
+                return false;
+
             case 0x6:   // Floating-point loads
-                return decodeLoad(raw_instruction, x, x6, m, hint, result);
-                
+                decodeLoad(x6, m, result);
+                return true;
+
             case 0x7:   // Floating-point stores
-                return decodeStore(raw_instruction, x, x6, m, hint, result);
+                decodeStore(x6, m, result);
+                return true;
                 
             default:
                 return false;
@@ -97,7 +142,7 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             
             instr = InstructionEx(type, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
-            instr.SetOperands(fmt.r1, fmt.r3, 0);  // r1 = [r3]
+            instr.SetOperands(fmt.r1, fmt.r3, fmt.reg_update ? fmt.r2 : 0);  // r1 = [r3]
             
             if (fmt.has_imm) {
                 instr.SetImmediate(fmt.imm9);
@@ -138,12 +183,7 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         return false;
     }
 // Helper function implementations
-static bool decodeLoad(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
-                            uint8_t hint, formats::MFormat& result) {
-        result.operation = formats::MFormat::MemOp::LOAD;
-        
-        // Determine load size from x6 field
-        // Simplified mapping - actual IA-64 has more complex encoding
+static bool setAccessSize(uint8_t x6, formats::MFormat& result) {
         uint8_t size_code = x6 & 0x3;
         switch (size_code) {
             case 0x0:
@@ -158,61 +198,31 @@ static bool decodeLoad(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
             case 0x3:
                 result.size = formats::MFormat::Size::SIZE_8;
                 break;
+            default:
+                return false;
         }
-        
+
+        return true;
+    }
+
+static void decodeLoad(uint8_t x6, uint8_t m, formats::MFormat& result) {
+        result.operation = formats::MFormat::MemOp::LOAD;
+        setAccessSize(x6, result);
+
         // Check for speculative load (hint bits)
         result.speculative = ((x6 & 0x10) != 0);
         result.advanced = ((x6 & 0x20) != 0);
         
         // Check for memory ordering
         result.acquire = (m == 1);
-        
-        // Check for immediate offset form
-        if (x == 0) {
-            result.has_imm = true;
-            // Extract 9-bit signed immediate (bits 13-19, 27-28)
-            uint16_t imm7b = formats::extractBits(raw, 13, 7);
-            uint16_t imm2 = formats::extractBits(raw, 27, 2);
-            uint16_t s = formats::extractBits(raw, 36, 1);
-            result.imm9 = static_cast<int16_t>(formats::signExtend((s << 8) | (imm2 << 7) | imm7b, 9));
-        }
-        
-        return true;
     }
-static bool decodeStore(uint64_t raw, uint8_t x, uint8_t x6, uint8_t m,
-                             uint8_t hint, formats::MFormat& result) {
+
+static void decodeStore(uint8_t x6, uint8_t m, formats::MFormat& result) {
         result.operation = formats::MFormat::MemOp::STORE;
-        
-        // Determine store size from x6 field
-        uint8_t size_code = x6 & 0x3;
-        switch (size_code) {
-            case 0x0:
-                result.size = formats::MFormat::Size::SIZE_1;
-                break;
-            case 0x1:
-                result.size = formats::MFormat::Size::SIZE_2;
-                break;
-            case 0x2:
-                result.size = formats::MFormat::Size::SIZE_4;
-                break;
-            case 0x3:
-                result.size = formats::MFormat::Size::SIZE_8;
-                break;
-        }
+        setAccessSize(x6, result);
         
         // Check for memory ordering
         result.release = (m == 1);
-        
-        // Check for immediate offset form
-        if (x == 0) {
-            result.has_imm = true;
-            uint16_t imm7b = formats::extractBits(raw, 13, 7);
-            uint16_t imm2 = formats::extractBits(raw, 27, 2);
-            uint16_t s = formats::extractBits(raw, 36, 1);
-            result.imm9 = static_cast<int16_t>(formats::signExtend((s << 8) | (imm2 << 7) | imm7b, 9));
-        }
-        
-        return true;
     }
     
 } // namespace decoder

@@ -127,11 +127,12 @@ struct MFormat {
     // Immediate offset (9-bit signed)
     int16_t imm9;
     bool has_imm;
+    bool reg_update;
     
     MFormat() : qp(0), r1(0), r2(0), r3(0), opcode(0), m(0), x(0), hint(0),
                 operation(MemOp::LOAD), size(Size::SIZE_8),
                 speculative(false), advanced(false), acquire(false), release(false),
-                imm9(0), has_imm(false) {}
+                imm9(0), has_imm(false), reg_update(false) {}
 };
 
 // ============================================================================

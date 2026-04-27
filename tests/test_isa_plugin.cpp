@@ -119,6 +119,16 @@ public:
             alloc.SetImmediate(36 | (static_cast<uint64_t>(31) << 7));
             alloc.SetRawBits(0x20);
             bundle.instructions.push_back(alloc);
+
+            InstructionEx clobberLocal(InstructionType::ADD, UnitType::I_UNIT);
+            clobberLocal.SetOperands(36, 0, 0);
+            clobberLocal.SetRawBits(0x21);
+            bundle.instructions.push_back(clobberLocal);
+        } else if (bundleIP == 0x2010) {
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x30);
+            bundle.instructions.push_back(ret);
         }
 
         return bundle;
@@ -566,7 +576,16 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.getCPUState().GetGR(32) == 0x12345678);
     assert(plugin.getCPUState().GetGR(33) == 0xabcdef00);
 
-    std::cout << "  ? plugin br.call passes caller output registers to callee inputs\n";
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(36) == 0);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetCFM() == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(plugin.getCPUState().GetGR(36) == 0x12345678);
+    assert(plugin.getCPUState().GetGR(37) == 0xabcdef00);
+
+    std::cout << "  ? plugin br.call passes inputs and br.ret restores caller frame\n";
 }
 
 void testIA64MemoryPostIncrement() {
@@ -601,6 +620,68 @@ void testIA64MemoryPostIncrement() {
     assert(cpu.GetGR(14) == 0x208);
 
     std::cout << "  ? ld/st immediate forms update the base register after access\n";
+}
+
+void testIA64MUnitBootLoadStoreDecode() {
+    std::cout << "Testing IA-64 M-unit boot load/store decode...\n";
+
+    InstructionDecoder decoder;
+
+    const uint8_t bundleBytes[16] = {
+        0x09, 0x98, 0x10, 0x1e, 0x10, 0x14, 0x20, 0x21,
+        0x38, 0x20, 0x28, 0x00, 0x00, 0x00, 0x04, 0x00
+    };
+
+    Bundle bundle = decoder.DecodeBundleAt(bundleBytes, 0x34aa0);
+    assert(bundle.instructions.size() >= 2);
+
+    const InstructionEx& load0 = bundle.instructions[0];
+    assert(load0.GetType() == InstructionType::LD4);
+    assert(load0.GetDst() == 19);
+    assert(load0.GetSrc1() == 15);
+    assert(load0.HasImmediate());
+    assert(static_cast<int64_t>(load0.GetImmediate()) == 4);
+    assert(load0.GetDisassembly() == "ld4 r19 = [r15], 4");
+
+    const InstructionEx& load1 = bundle.instructions[1];
+    assert(load1.GetType() == InstructionType::LD4);
+    assert(load1.GetDst() == 18);
+    assert(load1.GetSrc1() == 14);
+    assert(load1.HasImmediate());
+    assert(static_cast<int64_t>(load1.GetImmediate()) == 4);
+    assert(load1.GetDisassembly() == "ld4 r18 = [r14], 4");
+
+    Memory memory(64 * 1024);
+    CPUState cpu;
+    const uint32_t value0 = 0x11223344U;
+    const uint32_t value1 = 0xaabbccddU;
+    memory.Write(0x100, reinterpret_cast<const uint8_t*>(&value0), sizeof(value0));
+    memory.Write(0x200, reinterpret_cast<const uint8_t*>(&value1), sizeof(value1));
+    cpu.SetGR(15, 0x100);
+    cpu.SetGR(14, 0x200);
+
+    load0.Execute(cpu, memory);
+    load1.Execute(cpu, memory);
+    assert(cpu.GetGR(19) == value0);
+    assert(cpu.GetGR(18) == value1);
+    assert(cpu.GetGR(15) == 0x104);
+    assert(cpu.GetGR(14) == 0x204);
+
+    InstructionEx store = decoder.DecodeSlot(0x8cc0942000ULL, UnitType::M_UNIT, 0x1930);
+    assert(store.GetType() == InstructionType::ST8);
+    assert(store.GetDst() == 9);
+    assert(store.GetSrc1() == 33);
+    assert(!store.HasImmediate());
+    assert(store.GetDisassembly() == "st8 [r9] = r33");
+
+    InstructionEx normalLoad = decoder.DecodeSlot(0x8080f00200ULL, UnitType::M_UNIT, 0x34ab0);
+    assert(normalLoad.GetType() == InstructionType::LD4);
+    assert(normalLoad.GetDst() == 8);
+    assert(normalLoad.GetSrc1() == 15);
+    assert(!normalLoad.HasImmediate());
+    assert(normalLoad.GetDisassembly() == "ld4 r8 = [r15]");
+
+    std::cout << "  ? boot M-unit rows distinguish normal stores, normal loads, and immediate-update loads\n";
 }
 
 // Test state dump
@@ -701,6 +782,9 @@ int main() {
         std::cout << "\n";
 
         testIA64MemoryPostIncrement();
+        std::cout << "\n";
+
+        testIA64MUnitBootLoadStoreDecode();
         std::cout << "\n";
         
         testStateDump();

@@ -254,7 +254,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , profiler_(nullptr)
     , cachedInstruction_()
     , hasCachedInstruction_(false)
-    , pendingCallInputs_() {
+    , pendingCallInputs_()
+    , callFrameStack_() {
 }
 
 IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder, 
@@ -266,13 +267,15 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , profiler_(profiler)
     , cachedInstruction_()
     , hasCachedInstruction_(false)
-    , pendingCallInputs_() {
+    , pendingCallInputs_()
+    , callFrameStack_() {
 }
 
 void IA64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    callFrameStack_.clear();
 }
 
 ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
@@ -410,6 +413,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
+                    saveCallFrame();
                     captureCallOutputRegisters();
                 }
                 break;
@@ -437,6 +441,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
 
         // Handle branch after execution
         if (isBranch) {
+            if (cachedInstruction_.GetType() == InstructionType::BR_RET && predicateTrue) {
+                restoreCallFrame();
+            }
             state_.getCPUState().SetIP(branchTarget);
             state_.bundleValid_ = false;
             state_.currentSlot_ = 0;
@@ -490,6 +497,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     state_ = *ia64State;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    callFrameStack_.clear();
 }
 
 std::vector<uint8_t> IA64ISAPlugin::serialize_state() const {
@@ -714,6 +722,29 @@ void IA64ISAPlugin::applyPendingCallInputRegisters() {
     }
 
     pendingCallInputs_.clear();
+}
+
+void IA64ISAPlugin::saveCallFrame() {
+    CallFrameSnapshot frame{};
+    frame.cfm = state_.getCPUState().GetCFM();
+    for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
+        frame.stackedRegisters[i] = state_.getCPUState().GetGR(NUM_STATIC_GR + i);
+    }
+    callFrameStack_.push_back(frame);
+}
+
+void IA64ISAPlugin::restoreCallFrame() {
+    if (callFrameStack_.empty()) {
+        return;
+    }
+
+    const CallFrameSnapshot frame = callFrameStack_.back();
+    callFrameStack_.pop_back();
+
+    for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
+        state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
+    }
+    state_.getCPUState().SetCFM(frame.cfm);
 }
 
 void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr) {

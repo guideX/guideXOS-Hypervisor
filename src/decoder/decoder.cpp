@@ -484,6 +484,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                } else if (src2_ != 0) {
+                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -497,6 +499,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                } else if (src2_ != 0) {
+                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -510,6 +514,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                } else if (src2_ != 0) {
+                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -523,6 +529,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 cpu.SetGR(dst_, value);
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                } else if (src2_ != 0) {
+                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -763,6 +771,8 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "ld1 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
+            } else if (src2_ != 0) {
+                oss << ", r" << static_cast<int>(src2_);
             }
             break;
             
@@ -771,6 +781,8 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "ld2 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
+            } else if (src2_ != 0) {
+                oss << ", r" << static_cast<int>(src2_);
             }
             break;
             
@@ -779,6 +791,8 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "ld4 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
+            } else if (src2_ != 0) {
+                oss << ", r" << static_cast<int>(src2_);
             }
             break;
             
@@ -787,6 +801,8 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "ld8 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
+            } else if (src2_ != 0) {
+                oss << ", r" << static_cast<int>(src2_);
             }
             break;
             

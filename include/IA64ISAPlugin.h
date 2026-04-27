@@ -198,6 +198,8 @@ private:
     void capturePredicateGroupSnapshot();
     void captureCallOutputRegisters();
     void applyPendingCallInputRegisters();
+    void saveCallFrame();
+    void restoreCallFrame();
     
     /**
      * Execute a single IA-64 instruction
@@ -241,6 +243,12 @@ private:
     InstructionEx cachedInstruction_;
     bool hasCachedInstruction_;
     std::vector<uint64_t> pendingCallInputs_;
+
+    struct CallFrameSnapshot {
+        std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;
+        uint64_t cfm;
+    };
+    std::vector<CallFrameSnapshot> callFrameStack_;
 };
 
 /**
