@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cassert>
 #include <iomanip>
+#include <string>
 
 using namespace ia64;
 
@@ -20,6 +21,15 @@ void assert_equal(const char* name, uint64_t expected, uint64_t actual) {
 void assert_true(const char* name, bool condition) {
     if (!condition) {
         std::cerr << "TEST FAILED: " << name << " - condition is false" << std::endl;
+        exit(1);
+    }
+}
+
+void assert_string(const char* name, const std::string& expected, const std::string& actual) {
+    if (expected != actual) {
+        std::cerr << "TEST FAILED: " << name << std::endl;
+        std::cerr << "  Expected: " << expected << std::endl;
+        std::cerr << "  Actual:   " << actual << std::endl;
         exit(1);
     }
 }
@@ -108,6 +118,75 @@ void test_compare_ne_decoder() {
     assert_true("CMP.NE should clear p6 when r19 reaches zero", !cpu.GetPR(6));
 
     std::cout << "  ? Compare-ne decoder mapping passed" << std::endl;
+}
+
+void test_latest_boot_log_blockers() {
+    std::cout << "Testing latest boot-log raw instructions..." << std::endl;
+
+    InstructionDecoder decoder;
+
+    InstructionEx cmp_ltu = decoder.DecodeSlot(0x1a031b34000ULL, UnitType::I_UNIT, 0x36ec0);
+    assert_true("Boot raw cmp.ltu should decode", cmp_ltu.GetType() == InstructionType::CMP_LTU);
+    assert_equal("Boot cmp.ltu p1 decode", 0, cmp_ltu.GetDst());
+    assert_equal("Boot cmp.ltu lhs register", 26, cmp_ltu.GetSrc1());
+    assert_equal("Boot cmp.ltu rhs register", 27, cmp_ltu.GetSrc2());
+    assert_equal("Boot cmp.ltu p2 decode", 6, cmp_ltu.GetSrc3());
+    assert_string("Boot cmp.ltu disassembly",
+                  "cmp.ltu p0, p6 = r26, r27",
+                  cmp_ltu.GetDisassembly());
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    cpu.SetGR(26, 1);
+    cpu.SetGR(27, 2);
+    cmp_ltu.Execute(cpu, memory);
+    assert_true("Boot cmp.ltu should clear complement when true", !cpu.GetPR(6));
+
+    cpu.SetGR(26, 3);
+    cpu.SetGR(27, 2);
+    cmp_ltu.Execute(cpu, memory);
+    assert_true("Boot cmp.ltu should set complement when false", cpu.GetPR(6));
+
+    InstructionEx cmp_eq = decoder.DecodeSlot(0x1d048a10280ULL, UnitType::I_UNIT, 0x36ed0);
+    assert_true("Boot raw cmp.eq should decode", cmp_eq.GetType() == InstructionType::CMP_EQ);
+    assert_equal("Boot cmp.eq p1 decode", 10, cmp_eq.GetDst());
+    assert_equal("Boot cmp.eq lhs register", 8, cmp_eq.GetSrc1());
+    assert_equal("Boot cmp.eq rhs register", 10, cmp_eq.GetSrc2());
+    assert_equal("Boot cmp.eq p2 decode", 9, cmp_eq.GetSrc3());
+    assert_string("Boot cmp.eq disassembly",
+                  "cmp.eq p10, p9 = r8, r10",
+                  cmp_eq.GetDisassembly());
+
+    cpu.SetGR(8, 0x1234);
+    cpu.SetGR(10, 0x1234);
+    cmp_eq.Execute(cpu, memory);
+    assert_true("Boot cmp.eq should set p10 when true", cpu.GetPR(10));
+    assert_true("Boot cmp.eq should clear p9 when true", !cpu.GetPR(9));
+
+    cpu.SetGR(10, 0x5678);
+    cmp_eq.Execute(cpu, memory);
+    assert_true("Boot cmp.eq should clear p10 when false", !cpu.GetPR(10));
+    assert_true("Boot cmp.eq should set p9 when false", cpu.GetPR(9));
+
+    InstructionEx getf_sig = decoder.DecodeSlot(0x8708014540ULL, UnitType::M_UNIT, 0x36ee0);
+    assert_true("Boot raw getf.sig should decode", getf_sig.GetType() == InstructionType::GETF_SIG);
+    assert_equal("Boot getf.sig destination register", 21, getf_sig.GetDst());
+    assert_equal("Boot getf.sig source FP register", 10, getf_sig.GetSrc1());
+    assert_string("Boot getf.sig disassembly",
+                  "getf.sig r21 = f10",
+                  getf_sig.GetDisassembly());
+
+    uint8_t fr10[16] = {};
+    const uint64_t significand = 0x0123456789abcdefULL;
+    for (int i = 0; i < 8; ++i) {
+        fr10[i] = static_cast<uint8_t>((significand >> (i * 8)) & 0xff);
+    }
+    cpu.SetFR(10, fr10);
+    getf_sig.Execute(cpu, memory);
+    assert_equal("Boot getf.sig should copy significand bytes", significand, cpu.GetGR(21));
+
+    std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
 
 void test_test_instructions() {
@@ -441,6 +520,7 @@ int main() {
     try {
         test_compare_instructions();
         test_compare_ne_decoder();
+        test_latest_boot_log_blockers();
         test_test_instructions();
         test_bitwise_operations();
         test_shift_operations();

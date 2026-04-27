@@ -86,6 +86,7 @@ enum class InstructionType {
     MOV_FROM_BR,// Move from branch register to general register
     MOV_IMM,    // Move immediate to register
     MOVL,       // Move 64-bit immediate (L+X slots)
+    GETF_SIG,   // Move floating-point significand to general register
     
     // Arithmetic operations (A-type)
     ADD,

@@ -56,6 +56,11 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         // split for immediate-update forms.
         switch (major) {
             case 0x4:
+                if (x == 1 && m == 0 && x6 == 0x1C) {
+                    result.operation = formats::MFormat::MemOp::GETF;
+                    return true;
+                }
+
                 if (x == 0 && m == 0 && x6row <= 0xA) {
                     decodeLoad(x6, m, result);
                     return true;
@@ -177,6 +182,12 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
                 instr.SetImmediate(fmt.imm9);
             }
             
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::GETF) {
+            instr = InstructionEx(InstructionType::GETF_SIG, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r2, 0);
             return true;
         }
         

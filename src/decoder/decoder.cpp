@@ -106,6 +106,18 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             // mov rDst = bSrc1
             cpu.SetGR(dst_, cpu.GetBR(src1_));
             break;
+
+        case InstructionType::GETF_SIG:
+            {
+                uint8_t fr[16] = {};
+                uint64_t significand = 0;
+                cpu.GetFR(src1_, fr);
+                for (int i = 0; i < 8; ++i) {
+                    significand |= static_cast<uint64_t>(fr[i]) << (i * 8);
+                }
+                cpu.SetGR(dst_, significand);
+            }
+            break;
             
         case InstructionType::MOV_IMM:
             // mov rDst = immediate
@@ -645,6 +657,60 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
 
 std::string InstructionEx::GetDisassembly() const {
     std::ostringstream oss;
+    auto compareMnemonic = [](InstructionType type) -> const char* {
+        switch (type) {
+            case InstructionType::CMP_EQ: return "cmp.eq";
+            case InstructionType::CMP_NE: return "cmp.ne";
+            case InstructionType::CMP_LT: return "cmp.lt";
+            case InstructionType::CMP_LE: return "cmp.le";
+            case InstructionType::CMP_GT: return "cmp.gt";
+            case InstructionType::CMP_GE: return "cmp.ge";
+            case InstructionType::CMP_LTU: return "cmp.ltu";
+            case InstructionType::CMP_LEU: return "cmp.leu";
+            case InstructionType::CMP_GTU: return "cmp.gtu";
+            case InstructionType::CMP_GEU: return "cmp.geu";
+            case InstructionType::CMP4_EQ: return "cmp4.eq";
+            case InstructionType::CMP4_NE: return "cmp4.ne";
+            case InstructionType::CMP4_LT: return "cmp4.lt";
+            case InstructionType::CMP4_LE: return "cmp4.le";
+            case InstructionType::CMP4_GT: return "cmp4.gt";
+            case InstructionType::CMP4_GE: return "cmp4.ge";
+            case InstructionType::CMP4_LTU: return "cmp4.ltu";
+            case InstructionType::CMP4_LEU: return "cmp4.leu";
+            case InstructionType::CMP4_GTU: return "cmp4.gtu";
+            case InstructionType::CMP4_GEU: return "cmp4.geu";
+            default: return "cmp";
+        }
+    };
+    auto compareUsesSignedImmediate = [](InstructionType type) -> bool {
+        switch (type) {
+            case InstructionType::CMP_LT:
+            case InstructionType::CMP_LE:
+            case InstructionType::CMP_GT:
+            case InstructionType::CMP_GE:
+            case InstructionType::CMP4_LT:
+            case InstructionType::CMP4_LE:
+            case InstructionType::CMP4_GT:
+            case InstructionType::CMP4_GE:
+                return true;
+            default:
+                return false;
+        }
+    };
+    auto renderCompare = [&](const char* mnemonic, bool signedImmediate) {
+        oss << mnemonic << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+            << " = ";
+        if (hasImmediate_) {
+            if (signedImmediate) {
+                oss << static_cast<int64_t>(immediate_);
+            } else {
+                oss << immediate_;
+            }
+        } else {
+            oss << "r" << static_cast<int>(src1_);
+        }
+        oss << ", r" << static_cast<int>(src2_);
+    };
     
     switch (type_) {
         case InstructionType::NOP:
@@ -657,6 +723,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::MOV_FROM_BR:
             oss << "mov r" << static_cast<int>(dst_) << " = b" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::GETF_SIG:
+            oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
             
         case InstructionType::MOV_IMM:
@@ -745,47 +815,26 @@ std::string InstructionEx::GetDisassembly() const {
             break;
             
         case InstructionType::CMP_EQ:
-            oss << "cmp.eq p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = ";
-            if (hasImmediate_) {
-                oss << immediate_;
-            } else {
-                oss << "r" << static_cast<int>(src1_);
-            }
-            oss << ", r" << static_cast<int>(src2_);
-            break;
-            
         case InstructionType::CMP_NE:
-            oss << "cmp.ne p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = ";
-            if (hasImmediate_) {
-                oss << immediate_;
-            } else {
-                oss << "r" << static_cast<int>(src1_);
-            }
-            oss << ", r" << static_cast<int>(src2_);
-            break;
-            
         case InstructionType::CMP_LT:
-            oss << "cmp.lt p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = ";
-            if (hasImmediate_) {
-                oss << static_cast<int64_t>(immediate_);
-            } else {
-                oss << "r" << static_cast<int>(src1_);
-            }
-            oss << ", r" << static_cast<int>(src2_);
-            break;
-            
+        case InstructionType::CMP_LE:
         case InstructionType::CMP_GT:
-            oss << "cmp.gt p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
-                << " = ";
-            if (hasImmediate_) {
-                oss << static_cast<int64_t>(immediate_);
-            } else {
-                oss << "r" << static_cast<int>(src1_);
-            }
-            oss << ", r" << static_cast<int>(src2_);
+        case InstructionType::CMP_GE:
+        case InstructionType::CMP_LTU:
+        case InstructionType::CMP_LEU:
+        case InstructionType::CMP_GTU:
+        case InstructionType::CMP_GEU:
+        case InstructionType::CMP4_EQ:
+        case InstructionType::CMP4_NE:
+        case InstructionType::CMP4_LT:
+        case InstructionType::CMP4_LE:
+        case InstructionType::CMP4_GT:
+        case InstructionType::CMP4_GE:
+        case InstructionType::CMP4_LTU:
+        case InstructionType::CMP4_LEU:
+        case InstructionType::CMP4_GTU:
+        case InstructionType::CMP4_GEU:
+            renderCompare(compareMnemonic(type_), compareUsesSignedImmediate(type_));
             break;
 
         case InstructionType::TBIT_Z:
