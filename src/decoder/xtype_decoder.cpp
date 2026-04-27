@@ -68,19 +68,26 @@ bool XTypeDecoder::decodeMovl(uint64_t slot, formats::XFormat& result) {
     // - bits [13:40]: lower immediate bits
     //
     // The X-unit slot contains:
-    // - bits [0:20]:  imm20a (bits [63:43] of final immediate)
-    // - bits [21]:    i (bit 21 of final immediate)
-    // - bits [22:26]: imm5c (bits [22:18] of final immediate)
-    // - bits [27:35]: imm9d (bits [17:9] of final immediate)
-    // - bits [36]:    ic (sign bit, bit 63)
+    // - bits [0:5]:   qp
+    // - bits [6:12]:  r1
+    // - bits [13:19]: imm7b
+    // - bits [20]:    vc (0 for movl)
+    // - bits [21]:    ic
+    // - bits [22:26]: imm5c
+    // - bits [27:35]: imm9d
+    // - bits [36]:    i (bit 63 of final immediate)
     // - bits [37:40]: opcode (should be 0x6 for MOVL)
     
     // Extract X-unit immediate fragments
-    result.imm20a = formats::extractBits(slot, 0, 21);
-    result.i = formats::extractBits(slot, 21, 1);
+    result.qp = formats::extractBits(slot, 0, 6);
+    result.r1 = formats::extractBits(slot, 6, 7);
+    result.imm7b = static_cast<uint8_t>(formats::extractBits(slot, 13, 7));
+    result.vc = static_cast<uint8_t>(formats::extractBits(slot, 20, 1));
+    result.ic = static_cast<uint8_t>(formats::extractBits(slot, 21, 1));
     result.imm5c = formats::extractBits(slot, 22, 5);
     result.imm9d = formats::extractBits(slot, 27, 9);
-    result.ic = formats::extractBits(slot, 36, 1);
+    result.i = formats::extractBits(slot, 36, 1);
+    result.opcode = formats::extractBits(slot, 37, 4);
     
     return true;
 }
@@ -128,11 +135,11 @@ InstructionEx XTypeDecoder::decode(uint64_t slot) {
                 inst.SetType(InstructionType::MOVL);
                 // Store the X-unit immediate fragments
                 // Will be combined with L-unit in bundle decoder
-                uint64_t x_imm = (static_cast<uint64_t>(fmt.ic) << 36) |
-                                (static_cast<uint64_t>(fmt.imm9d) << 27) |
-                                (static_cast<uint64_t>(fmt.imm5c) << 22) |
-                                (static_cast<uint64_t>(fmt.i) << 21) |
-                                fmt.imm20a;
+                uint64_t x_imm = (static_cast<uint64_t>(fmt.i) << 63) |
+                                (static_cast<uint64_t>(fmt.ic) << 21) |
+                                (static_cast<uint64_t>(fmt.imm5c) << 16) |
+                                (static_cast<uint64_t>(fmt.imm9d) << 7) |
+                                fmt.imm7b;
                 inst.SetImmediate(x_imm);
             }
             break;

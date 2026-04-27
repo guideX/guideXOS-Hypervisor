@@ -425,6 +425,32 @@ void testIA64AddsImm14Decode() {
     std::cout << "  ? raw boot stack adjustment decodes and executes\n";
 }
 
+void testIA64MovlBootBundleDecode() {
+    std::cout << "Testing IA-64 MLX movl boot bundle decode...\n";
+
+    const uint8_t bundleBytes[16] = {
+        0x05, 0x00, 0x00, 0x00, 0x01, 0xc0, 0xff, 0xff,
+        0xff, 0xff, 0x7f, 0x80, 0x04, 0x80, 0x03, 0x6c
+    };
+
+    InstructionDecoder decoder;
+    Bundle bundle = decoder.DecodeBundleAt(bundleBytes, 0x1010);
+
+    assert(bundle.templateType == TemplateType::MLX_STOP);
+    assert(bundle.instructions.size() == 2);
+    assert(bundle.instructions[1].GetType() == InstructionType::MOVL);
+    assert(bundle.instructions[1].GetDst() == 36);
+    assert(bundle.instructions[1].HasImmediate());
+    assert(bundle.instructions[1].GetImmediate() == 0xffffffffffdc8000ULL);
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    bundle.instructions[1].Execute(cpu, memory);
+    assert(cpu.GetGR(36) == 0xffffffffffdc8000ULL);
+
+    std::cout << "  ? raw boot MLX bundle decodes movl r36 = -0x238000\n";
+}
+
 void testIA64LegacyCallOutputInputs() {
     std::cout << "Testing IA-64 legacy call output/input register bridge...\n";
 
@@ -538,6 +564,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddsImm14Decode();
+        std::cout << "\n";
+
+        testIA64MovlBootBundleDecode();
         std::cout << "\n";
 
         testIA64LegacyCallOutputInputs();

@@ -245,9 +245,12 @@ struct XFormat {
     uint8_t imm5c;      // bits [22:18] of final immediate
     uint16_t imm9d;     // bits [17:9] of final immediate
     uint8_t ic;         // sign bit (bit 63)
-    
+    uint8_t imm7b;      // MOVL low 7 immediate bits
+    uint8_t vc;         // MOVL opcode extension
+
     XFormat() : qp(0), r1(0), imm64(0), opcode(0), imm21(0), x3(0), x6(0), 
-                imm27(0), imm20a(0), i(0), imm5c(0), imm9d(0), ic(0) {}
+                imm27(0), imm20a(0), i(0), imm5c(0), imm9d(0), ic(0),
+                imm7b(0), vc(0) {}
 };
 
 // ============================================================================
@@ -289,7 +292,7 @@ inline uint64_t reconstructImm64(const LFormat& l, const XFormat& x) {
     uint64_t result = 0;
     
     // Extract and combine the various immediate fields
-    // imm64 = sign_ext(ic:imm5c:imm9d:imm7b:imm20b)
+    // X2: imm64 = i << 63 | imm41 << 22 | ic << 21 | imm5c << 16 | imm9d << 7 | imm7b
     // Actual bit positions depend on specific encoding
     
     return result;
