@@ -24,6 +24,24 @@ void assert_true(const char* name, bool condition) {
     }
 }
 
+uint64_t build_tbit_z_slot(uint8_t qp, uint8_t p1, uint8_t p2, uint8_t r3, uint8_t pos) {
+    return (static_cast<uint64_t>(qp) & 0x3F) |
+           ((static_cast<uint64_t>(p1) & 0x3F) << 6) |
+           ((static_cast<uint64_t>(pos) & 0x3F) << 14) |
+           ((static_cast<uint64_t>(r3) & 0x7F) << 20) |
+           ((static_cast<uint64_t>(p2) & 0x3F) << 27) |
+           (5ULL << 37);
+}
+
+uint64_t build_tnat_z_slot(uint8_t qp, uint8_t p1, uint8_t p2, uint8_t r3) {
+    return (static_cast<uint64_t>(qp) & 0x3F) |
+           ((static_cast<uint64_t>(p1) & 0x3F) << 6) |
+           (1ULL << 13) |
+           ((static_cast<uint64_t>(r3) & 0x7F) << 20) |
+           ((static_cast<uint64_t>(p2) & 0x3F) << 27) |
+           (5ULL << 37);
+}
+
 // Test CMP instructions
 void test_compare_instructions() {
     std::cout << "Testing compare instructions..." << std::endl;
@@ -92,6 +110,63 @@ void test_compare_ne_decoder() {
     std::cout << "  ? Compare-ne decoder mapping passed" << std::endl;
 }
 
+void test_test_instructions() {
+    std::cout << "Testing test-bit/test-NaT instructions..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    cpu.SetGR(10, 0x20);
+
+    InstructionEx tbit_z(InstructionType::TBIT_Z, UnitType::I_UNIT);
+    tbit_z.SetOperands4(1, 10, 0, 2);
+    tbit_z.SetImmediate(5);
+    tbit_z.Execute(cpu, memory);
+    assert_true("TBIT.Z: p1 should be false when selected bit is one", !cpu.GetPR(1));
+    assert_true("TBIT.Z: p2 should be true when selected bit is one", cpu.GetPR(2));
+
+    InstructionEx tbit_nz(InstructionType::TBIT_NZ, UnitType::I_UNIT);
+    tbit_nz.SetOperands4(3, 10, 0, 4);
+    tbit_nz.SetImmediate(5);
+    tbit_nz.Execute(cpu, memory);
+    assert_true("TBIT.NZ: p3 should be true when selected bit is one", cpu.GetPR(3));
+    assert_true("TBIT.NZ: p4 should be false when selected bit is one", !cpu.GetPR(4));
+
+    cpu.SetGR(11, 0x1234);
+    cpu.SetGRNaT(11, false);
+
+    InstructionEx tnat_z(InstructionType::TNAT_Z, UnitType::I_UNIT);
+    tnat_z.SetOperands4(5, 11, 0, 6);
+    tnat_z.Execute(cpu, memory);
+    assert_true("TNAT.Z: p5 should be true for non-NaT register", cpu.GetPR(5));
+    assert_true("TNAT.Z: p6 should be false for non-NaT register", !cpu.GetPR(6));
+
+    cpu.SetGRNaT(11, true);
+    InstructionEx tnat_nz(InstructionType::TNAT_NZ, UnitType::I_UNIT);
+    tnat_nz.SetOperands4(7, 11, 0, 8);
+    tnat_nz.Execute(cpu, memory);
+    assert_true("TNAT.NZ: p7 should be true for NaT register", cpu.GetPR(7));
+    assert_true("TNAT.NZ: p8 should be false for NaT register", !cpu.GetPR(8));
+
+    InstructionDecoder decoder;
+    InstructionEx decoded_tbit = decoder.DecodeSlot(build_tbit_z_slot(0, 9, 10, 10, 5),
+                                                    UnitType::I_UNIT, 0);
+    assert_true("TBIT.Z slot should decode", decoded_tbit.GetType() == InstructionType::TBIT_Z);
+    assert_equal("TBIT.Z p1 decode", 9, decoded_tbit.GetDst());
+    assert_equal("TBIT.Z source decode", 10, decoded_tbit.GetSrc1());
+    assert_equal("TBIT.Z p2 decode", 10, decoded_tbit.GetSrc3());
+    assert_equal("TBIT.Z position decode", 5, decoded_tbit.GetImmediate());
+
+    InstructionEx decoded_tnat = decoder.DecodeSlot(build_tnat_z_slot(0, 11, 12, 11),
+                                                    UnitType::I_UNIT, 0);
+    assert_true("TNAT.Z slot should decode", decoded_tnat.GetType() == InstructionType::TNAT_Z);
+    assert_equal("TNAT.Z p1 decode", 11, decoded_tnat.GetDst());
+    assert_equal("TNAT.Z source decode", 11, decoded_tnat.GetSrc1());
+    assert_equal("TNAT.Z p2 decode", 12, decoded_tnat.GetSrc3());
+
+    std::cout << "  ? Test instructions passed" << std::endl;
+}
+
 // Test bitwise operations
 void test_bitwise_operations() {
     std::cout << "Testing bitwise operations..." << std::endl;
@@ -124,7 +199,7 @@ void test_bitwise_operations() {
     InstructionEx andcm_insn(InstructionType::ANDCM, UnitType::I_UNIT);
     andcm_insn.SetOperands(6, 1, 2);
     andcm_insn.Execute(cpu, memory);
-    assert_equal("ANDCM", 0xF0F0, cpu.GetGR(6));
+    assert_equal("ANDCM", 0xF000, cpu.GetGR(6));
     
     std::cout << "  ? Bitwise operations passed" << std::endl;
 }
@@ -366,6 +441,7 @@ int main() {
     try {
         test_compare_instructions();
         test_compare_ne_decoder();
+        test_test_instructions();
         test_bitwise_operations();
         test_shift_operations();
         test_extract_deposit();

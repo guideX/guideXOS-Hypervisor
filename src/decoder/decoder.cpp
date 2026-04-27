@@ -288,6 +288,28 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
         case InstructionType::SXT4:
             cpu.SetGR(dst_, static_cast<uint64_t>(SignExtend(cpu.GetGR(src1_) & 0xFFFFFFFF, 32)));
             break;
+
+        // ===== TEST OPERATIONS =====
+
+        case InstructionType::TBIT_Z:
+        case InstructionType::TBIT_NZ:
+            if (hasImmediate_) {
+                const uint8_t bit = static_cast<uint8_t>((cpu.GetGR(src1_) >> (immediate_ & 0x3F)) & 0x1);
+                const bool condition = (type_ == InstructionType::TBIT_Z) ? (bit == 0) : (bit != 0);
+                cpu.SetPR(dst_, condition);
+                cpu.SetPR(src3_, !condition);
+            }
+            break;
+
+        case InstructionType::TNAT_Z:
+        case InstructionType::TNAT_NZ:
+            {
+                const bool nat = cpu.GetGRNaT(src1_);
+                const bool condition = (type_ == InstructionType::TNAT_Z) ? !nat : nat;
+                cpu.SetPR(dst_, condition);
+                cpu.SetPR(src3_, !condition);
+            }
+            break;
             
         // ===== COMPARE OPERATIONS (64-bit) =====
             
@@ -764,6 +786,26 @@ std::string InstructionEx::GetDisassembly() const {
                 oss << "r" << static_cast<int>(src1_);
             }
             oss << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::TBIT_Z:
+            oss << "tbit.z p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_) << ", " << static_cast<int>(immediate_ & 0x3F);
+            break;
+
+        case InstructionType::TBIT_NZ:
+            oss << "tbit.nz p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_) << ", " << static_cast<int>(immediate_ & 0x3F);
+            break;
+
+        case InstructionType::TNAT_Z:
+            oss << "tnat.z p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::TNAT_NZ:
+            oss << "tnat.nz p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+                << " = r" << static_cast<int>(src1_);
             break;
             
         case InstructionType::LD1:

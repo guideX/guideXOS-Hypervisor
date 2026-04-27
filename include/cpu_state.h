@@ -76,6 +76,8 @@ public:
     // General register access (64-bit)
     uint64_t GetGR(size_t index) const;
     void SetGR(size_t index, uint64_t value);
+    bool GetGRNaT(size_t index) const;
+    void SetGRNaT(size_t index, bool value);
 
     // Floating-point register access (80-bit, stored as 16 bytes for alignment)
     void GetFR(size_t index, uint8_t* out) const;
@@ -129,6 +131,7 @@ public:
 private:
     // General registers (64-bit)
     std::array<uint64_t, NUM_GENERAL_REGISTERS> gr_;
+    std::array<bool, NUM_GENERAL_REGISTERS> gr_nat_;
 
     // Floating-point registers (80-bit extended precision, stored as 16 bytes)
     std::array<std::array<uint8_t, 16>, NUM_FLOAT_REGISTERS> fr_;

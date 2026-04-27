@@ -46,7 +46,9 @@ set(DECODER_SOURCES
     src/decoder/itype_decoder.cpp
     src/decoder/mtype_decoder.cpp
     src/decoder/btype_decoder.cpp
+    src/decoder/ftype_decoder.cpp
     src/decoder/lx_decoder.cpp
+    src/decoder/xtype_decoder.cpp
 )
 
 set(MEMORY_SOURCES
@@ -242,6 +244,22 @@ if(MSVC)
     target_compile_options(test_mov_imm PRIVATE /W4)
 else()
     target_compile_options(test_mov_imm PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Focused instruction execution regression tests
+add_executable(test_new_instructions
+    tests/test_new_instructions.cpp
+    src/core/cpu.cpp
+    ${DECODER_SOURCES}
+    src/memory/memory.cpp
+    src/mmu/mmu.cpp
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_new_instructions PRIVATE /W4)
+else()
+    target_compile_options(test_new_instructions PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Watchpoint test
@@ -479,6 +497,7 @@ add_dependencies(webui_example copy_web_files)
 # Enable testing
 enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
+add_test(NAME NewInstructionTests COMMAND test_new_instructions)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)

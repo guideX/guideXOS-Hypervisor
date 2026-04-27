@@ -24,6 +24,7 @@ namespace decoder {
 // Forward declarations of helper functions
 static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
                          uint8_t x6, formats::IFormat& result);
+static bool decodeTest(uint64_t raw, formats::IFormat& result);
 static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::IFormat& result);
 static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result);
 
@@ -53,6 +54,9 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                 return decodeMixedI(raw_instruction, x, x2, x3, x6, result);
                 
             case 0x5:   // Deposit/extract operations
+                if (decodeTest(raw_instruction, result)) {
+                    return true;
+                }
                 return decodeDepositExtract(raw_instruction, x, x2, result);
                 
             case 0x7:   // Shift operations
@@ -107,6 +111,32 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
         // Deposit/extract operations (major 0x5)
         if ((op & 0xF0) == 0x50) {
             switch (op & 0x0F) {
+                case 0x2: // TBIT.Z
+                    instr = InstructionEx(InstructionType::TBIT_Z, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
+                    instr.SetImmediate(fmt.pos);
+                    return true;
+
+                case 0x3: // TBIT.NZ
+                    instr = InstructionEx(InstructionType::TBIT_NZ, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
+                    instr.SetImmediate(fmt.pos);
+                    return true;
+
+                case 0x4: // TNAT.Z
+                    instr = InstructionEx(InstructionType::TNAT_Z, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
+                    return true;
+
+                case 0x5: // TNAT.NZ
+                    instr = InstructionEx(InstructionType::TNAT_NZ, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
+                    return true;
+
                 case 0x0: // DEP
                 case 0xF: // DEP immediate merge form
                     instr = InstructionEx(InstructionType::DEP, UnitType::I_UNIT);
@@ -173,16 +203,66 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
         return false;
     }
 // Helper function implementations
+static bool decodeTest(uint64_t raw, formats::IFormat& result) {
+        const uint8_t x2a = static_cast<uint8_t>(formats::extractBits(raw, 34, 2));
+        if (x2a != 0) {
+            return false;
+        }
+
+        const bool bit12 = formats::extractBits(raw, 12, 1) != 0;
+        const bool bit13 = formats::extractBits(raw, 13, 1) != 0;
+        const bool bit19 = formats::extractBits(raw, 19, 1) != 0;
+        const bool bit33 = formats::extractBits(raw, 33, 1) != 0;
+        const bool bit36 = formats::extractBits(raw, 36, 1) != 0;
+
+        const uint8_t tableIndex =
+            static_cast<uint8_t>((bit19 ? 0x10 : 0) |
+                                 (bit33 ? 0x08 : 0) |
+                                 (bit36 ? 0x04 : 0) |
+                                 (bit12 ? 0x02 : 0) |
+                                 (bit13 ? 0x01 : 0));
+
+        const bool plainTbitZ = tableIndex == 0x00 || tableIndex == 0x10;
+        const bool plainTnatZ = tableIndex == 0x01;
+
+        result.r1 = static_cast<uint8_t>(formats::extractBits(raw, 6, 6));
+        result.r2 = static_cast<uint8_t>(formats::extractBits(raw, 27, 6));
+        result.r3 = static_cast<uint8_t>(formats::extractBits(raw, 20, 7));
+        result.pos = static_cast<uint8_t>(formats::extractBits(raw, 14, 6));
+        result.opcode = plainTbitZ ? 0x52 : (plainTnatZ ? 0x54 : 0x5E);
+        return true;
+    }
+
 static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
                               uint8_t x6, formats::IFormat& result) {
         // Major opcode 0 has many sub-types
-        
+
+        // Check for test bit (tbit) - x3 = 0, x6 = 0x10 (I16 format)
+        // tbit.z p1, p2 = r3, pos6
+        // tbit.z.unc p1, p2 = r3, pos6 (uncond form)
+        if (x3 == 0 && x6 == 0x10) {
+            // TBIT - test bit
+            result.pos = formats::extractBits(raw, 20, 6);  // bits [20:25] - bit position
+            // r1 and r2 are actually p1 and p2 (predicate destinations)
+            result.opcode = 0x10;  // Mark as tbit
+            return true;
+        }
+
+        // Check for test NaT (tnat) - x3 = 0, x6 = 0x11 (I17 format)
+        // tnat.z p1, p2 = r3
+        // tnat.z.unc p1, p2 = r3
+        if (x3 == 0 && x6 == 0x11) {
+            // TNAT - test NaT bit
+            result.opcode = 0x11;  // Mark as tnat
+            return true;
+        }
+
         // Check for zero/sign extend (x3 = 0, x6 = 0x10-0x16)
         if (x3 == 0 && (x6 >= 0x10 && x6 <= 0x16)) {
             // ZXT/SXT operations - no additional fields needed
             return true;
         }
-        
+
         // Check for ALLOC (x3 = 0, x6 = 0x06)
         if (x3 == 0 && x6 == 0x06) {
             // ALLOC r1 = ar.pfs, sof, sol, sor
@@ -191,13 +271,13 @@ static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
             result.sor = formats::extractBits(raw, 27, 4);  // bits [27:30]
             return true;
         }
-        
+
         // Check for move to/from application registers
         if (x3 == 0 && (x6 == 0x2A || x6 == 0x32)) {
             // MOV to/from AR - simplified handling
             return true;
         }
-        
+
         return true; // Allow unknown I-type for now
     }
 static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::IFormat& result) {

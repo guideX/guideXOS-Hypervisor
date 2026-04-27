@@ -12,6 +12,7 @@ CPUState::CPUState() {
 void CPUState::Reset() {
     // Clear all general registers
     gr_.fill(0);
+    gr_nat_.fill(false);
     
     // Clear all floating-point registers
     for (auto& fr : fr_) {
@@ -49,6 +50,23 @@ void CPUState::SetGR(size_t index, uint64_t value) {
     // GR0 is read-only (always 0)
     if (index != 0) {
         gr_[index] = value;
+        gr_nat_[index] = false;
+    }
+}
+
+bool CPUState::GetGRNaT(size_t index) const {
+    if (index >= NUM_GENERAL_REGISTERS) {
+        throw std::out_of_range("General register index out of range");
+    }
+    return (index == 0) ? false : gr_nat_[index];
+}
+
+void CPUState::SetGRNaT(size_t index, bool value) {
+    if (index >= NUM_GENERAL_REGISTERS) {
+        throw std::out_of_range("General register index out of range");
+    }
+    if (index != 0) {
+        gr_nat_[index] = value;
     }
 }
 

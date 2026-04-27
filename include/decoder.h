@@ -169,6 +169,12 @@ enum class InstructionType {
     
     // Register stack (I-type)
     ALLOC,      // Allocate register stack frame
+
+    // Test operations (I-type)
+    TBIT_Z,     // Test bit, set p1 if bit is zero, p2 if one
+    TBIT_NZ,    // Test bit, set p1 if bit is one, p2 if zero (alias for tbit.z with swapped predicates)
+    TNAT_Z,     // Test NaT bit, set p1 if NaT is zero, p2 if one
+    TNAT_NZ,    // Test NaT bit, set p1 if NaT is one, p2 if zero
     
     // Floating-point operations (F-type)
     FMA,        // Fused multiply-add
