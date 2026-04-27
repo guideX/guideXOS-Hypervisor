@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-#include <cassert>
 
 namespace ia64 {
 
@@ -129,23 +128,20 @@ void Memory::RestoreSnapshot(const MemorySnapshot& snapshot) {
 }
 
 void Memory::checkBounds(uint64_t address, size_t size) const {
-    // Debug mode: use assertions for fast checks
-    assert(address < data_.size() && "Memory address out of bounds");
-    assert(address + size <= data_.size() && "Memory access exceeds bounds");
-    
-    // Release mode: throw exceptions for safety
-    if (address >= data_.size()) {
+    const uint64_t memorySize = static_cast<uint64_t>(data_.size());
+
+    if (address >= memorySize) {
         std::ostringstream oss;
         oss << "Memory address 0x" << std::hex << address 
-            << " out of bounds (size: 0x" << data_.size() << ")";
+            << " out of bounds (size: 0x" << memorySize << ")";
         throw std::out_of_range(oss.str());
     }
     
-    if (address + size > data_.size()) {
+    if (static_cast<uint64_t>(size) > memorySize - address) {
         std::ostringstream oss;
         oss << "Memory access at 0x" << std::hex << address 
             << " with size 0x" << size 
-            << " exceeds bounds (max: 0x" << data_.size() << ")";
+            << " exceeds bounds (max: 0x" << memorySize << ")";
         throw std::out_of_range(oss.str());
     }
 }

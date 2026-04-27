@@ -42,6 +42,38 @@ void DrawBootStatus(VMInstance* instance,
     // Footer hint
     fb->DrawText(32, 460, "CHECK LOGS FOR DETAILS", 0xFF606060, 1);
 }
+
+uint64_t SetupMinimalEfiStack(VMInstance* instance, std::ostringstream& oss) {
+    constexpr uint64_t EFI_STACK_SIZE = 0x40000ULL;   // 256 KiB
+    constexpr uint64_t EFI_STACK_GUARD = 0x10000ULL;  // leave the top page range unused
+
+    if (!instance || !instance->vm) {
+        return 0;
+    }
+
+    const uint64_t memorySize = static_cast<uint64_t>(instance->vm->getMemory().GetTotalSize());
+    if (memorySize <= EFI_STACK_SIZE + EFI_STACK_GUARD) {
+        LOG_WARN("  Guest memory too small for EFI stack setup");
+        return 0;
+    }
+
+    const uint64_t stackTop = (memorySize - EFI_STACK_GUARD) & ~15ULL;
+    const uint64_t stackBase = stackTop - EFI_STACK_SIZE;
+    const uint64_t zero = 0;
+
+    // Touch the bottom and top of the stack window so bounds/MMU problems are
+    // diagnosed during setup instead of as a host assertion later.
+    instance->vm->getMemory().Write(stackBase, reinterpret_cast<const uint8_t*>(&zero), sizeof(zero));
+    instance->vm->getMemory().Write(stackTop - sizeof(zero), reinterpret_cast<const uint8_t*>(&zero), sizeof(zero));
+    instance->vm->writeGR(0, 12, stackTop);
+
+    oss.str("");
+    oss << "  EFI stack: 0x" << std::hex << stackBase << "-0x" << stackTop
+        << " (r12=0x" << stackTop << ")" << std::dec;
+    LOG_INFO(oss.str());
+
+    return stackTop;
+}
 }
 
 // ============================================================================
@@ -576,6 +608,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // Set EFI entry arguments: r32=ImageHandle, r33=SystemTable
                                                                 instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
                                                                 instance->vm->writeGR(0, 33, EFI_STUB_ADDR);
+                                                                SetupMinimalEfiStack(instance, oss);
                                                                 LOG_INFO("  Set r32=ImageHandle=0x1, r33=EFI_SystemTable=0x200000");
 
                                                                 LOG_INFO("??? EFI bootloader loaded successfully from boot image!");

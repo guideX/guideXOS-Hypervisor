@@ -5,6 +5,7 @@
 #include <cassert>
 #include <iomanip>
 #include <string>
+#include <stdexcept>
 
 using namespace ia64;
 
@@ -206,6 +207,31 @@ void test_latest_boot_log_blockers() {
     assert_equal("Boot mov-to-branch should restore b0", 0x123456789abcdef0ULL, cpu.GetBR(0));
 
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
+}
+
+void test_memory_bounds_throw() {
+    std::cout << "Testing memory bounds diagnostics..." << std::endl;
+
+    Memory memory(0x1000);
+    uint64_t value = 0;
+    bool threw = false;
+
+    try {
+        memory.Read(0x1000, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+    } catch (const std::out_of_range& ex) {
+        threw = std::string(ex.what()).find("out of bounds") != std::string::npos;
+    }
+    assert_true("Out-of-range read should throw instead of asserting", threw);
+
+    threw = false;
+    try {
+        memory.Read(0xffc, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+    } catch (const std::out_of_range& ex) {
+        threw = std::string(ex.what()).find("exceeds bounds") != std::string::npos;
+    }
+    assert_true("Overlapping read should throw instead of asserting", threw);
+
+    std::cout << "  ? Memory bounds diagnostics passed" << std::endl;
 }
 
 void test_test_instructions() {
@@ -540,6 +566,7 @@ int main() {
         test_compare_instructions();
         test_compare_ne_decoder();
         test_latest_boot_log_blockers();
+        test_memory_bounds_throw();
         test_test_instructions();
         test_bitwise_operations();
         test_shift_operations();
