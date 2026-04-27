@@ -158,6 +158,13 @@ void test_latest_boot_log_blockers() {
                   "cmp.eq p10, p9 = r8, r10",
                   cmp_eq.GetDisassembly());
 
+    InstructionEx cmp_eq_m_unit = decoder.DecodeSlot(0x1d048a10280ULL, UnitType::M_UNIT, 0x36ed0);
+    assert_true("Boot raw cmp.eq should decode in M-unit slot",
+                cmp_eq_m_unit.GetType() == InstructionType::CMP_EQ);
+    assert_string("Boot M-unit cmp.eq disassembly",
+                  "cmp.eq p10, p9 = r8, r10",
+                  cmp_eq_m_unit.GetDisassembly());
+
     cpu.SetGR(8, 0x1234);
     cpu.SetGR(10, 0x1234);
     cmp_eq.Execute(cpu, memory);
@@ -185,6 +192,18 @@ void test_latest_boot_log_blockers() {
     cpu.SetFR(10, fr10);
     getf_sig.Execute(cpu, memory);
     assert_equal("Boot getf.sig should copy significand bytes", significand, cpu.GetGR(21));
+
+    InstructionEx mov_to_br = decoder.DecodeSlot(0xe0014a000ULL, UnitType::I_UNIT, 0x30700);
+    assert_true("Boot raw mov-to-branch should decode", mov_to_br.GetType() == InstructionType::MOV_TO_BR);
+    assert_equal("Boot mov-to-branch destination branch register", 0, mov_to_br.GetDst());
+    assert_equal("Boot mov-to-branch source general register", 37, mov_to_br.GetSrc1());
+    assert_string("Boot mov-to-branch disassembly",
+                  "mov b0 = r37",
+                  mov_to_br.GetDisassembly());
+
+    cpu.SetGR(37, 0x123456789abcdef0ULL);
+    mov_to_br.Execute(cpu, memory);
+    assert_equal("Boot mov-to-branch should restore b0", 0x123456789abcdef0ULL, cpu.GetBR(0));
 
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }

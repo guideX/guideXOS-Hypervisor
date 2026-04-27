@@ -107,6 +107,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             cpu.SetGR(dst_, cpu.GetBR(src1_));
             break;
 
+        case InstructionType::MOV_TO_BR:
+            // mov bDst = rSrc1
+            cpu.SetBR(dst_, cpu.GetGR(src1_));
+            break;
+
         case InstructionType::GETF_SIG:
             {
                 uint8_t fr[16] = {};
@@ -725,6 +730,10 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "mov r" << static_cast<int>(dst_) << " = b" << static_cast<int>(src1_);
             break;
 
+        case InstructionType::MOV_TO_BR:
+            oss << "mov b" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
         case InstructionType::GETF_SIG:
             oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
@@ -1315,6 +1324,15 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 const uint8_t b2 = static_cast<uint8_t>((slotBits >> 13) & 0x7);
                 result = InstructionEx(InstructionType::MOV_FROM_BR, UnitType::I_UNIT);
                 result.SetOperands(r1, b2, 0);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && x3 == 0x7 && x6 == 0x00) {
+                const uint8_t b1 = static_cast<uint8_t>((slotBits >> 6) & 0x7);
+                const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                result = InstructionEx(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+                result.SetOperands(b1, r2, 0);
                 result.SetRawBits(slotBits);
                 return result;
             }
