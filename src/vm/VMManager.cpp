@@ -590,18 +590,60 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 constexpr uint64_t EFI_STUB_ADDR = 0x200000ULL; // above the loaded EFI image
                                                                 constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
 
-                                                                // Write a zeroed-out minimal EFI System Table stub
+                                                                // Write a minimal EFI System Table plus service-table
+                                                                // headers. This is only enough for userland EFI code
+                                                                // to pass non-null service table probes; service calls
+                                                                // still trap/fail through normal unsupported paths.
                                                                 {
-                                                                    static const uint8_t stub[256] = {}; // all zeros
-                                                                    // Write EFI_SYSTEM_TABLE signature at offset 0
-                                                                    // "IBI SYST" = 0x5453595320494249
-                                                                    static const uint8_t sig[] = {
-                                                                        0x49,0x42,0x49,0x20,0x53,0x59,0x53,0x54
+                                                                    constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_STUB_ADDR + 0x400ULL;
+                                                                    constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_STUB_ADDR + 0x800ULL;
+                                                                    constexpr uint64_t EFI_FIRMWARE_VENDOR_ADDR = EFI_STUB_ADDR + 0xC00ULL;
+                                                                    constexpr uint64_t EFI_TABLE_SIGNATURE = 0x5453595320494249ULL; // "IBI SYST"
+                                                                    constexpr uint64_t EFI_BOOT_SERVICES_SIGNATURE = 0x56524553544F4F42ULL; // "BOOTSERV"
+                                                                    constexpr uint64_t EFI_RUNTIME_SERVICES_SIGNATURE = 0x56524553544E5552ULL; // "RUNTSERV"
+
+                                                                    static const uint8_t systemStub[0x1000] = {};
+                                                                    instance->vm->getMemory().Write(EFI_STUB_ADDR, systemStub, sizeof(systemStub));
+
+                                                                    auto write32 = [&](uint64_t address, uint32_t value) {
+                                                                        instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                                                                     };
-                                                                    instance->vm->getMemory().Write(EFI_STUB_ADDR, stub, sizeof(stub));
-                                                                    instance->vm->getMemory().Write(EFI_STUB_ADDR, sig, sizeof(sig));
+                                                                    auto write64 = [&](uint64_t address, uint64_t value) {
+                                                                        instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+                                                                    };
+
+                                                                    write64(EFI_STUB_ADDR + 0x00, EFI_TABLE_SIGNATURE);
+                                                                    write32(EFI_STUB_ADDR + 0x08, 0x00010010U); // EFI 1.10-style revision
+                                                                    write32(EFI_STUB_ADDR + 0x0C, 0x78U);       // 64-bit EFI_SYSTEM_TABLE size
+                                                                    write64(EFI_STUB_ADDR + 0x18, EFI_FIRMWARE_VENDOR_ADDR);
+                                                                    write32(EFI_STUB_ADDR + 0x20, 1U);
+
+                                                                    // 64-bit EFI_SYSTEM_TABLE layout: RuntimeServices at
+                                                                    // +0x58, BootServices at +0x60. The current boot trace
+                                                                    // also probes +0x68, so keep that non-null as a guarded
+                                                                    // compatibility alias until the firmware ABI layer grows.
+                                                                    write64(EFI_STUB_ADDR + 0x58, EFI_RUNTIME_SERVICES_ADDR);
+                                                                    write64(EFI_STUB_ADDR + 0x60, EFI_BOOT_SERVICES_ADDR);
+                                                                    write64(EFI_STUB_ADDR + 0x68, EFI_BOOT_SERVICES_ADDR);
+
+                                                                    write64(EFI_RUNTIME_SERVICES_ADDR + 0x00, EFI_RUNTIME_SERVICES_SIGNATURE);
+                                                                    write32(EFI_RUNTIME_SERVICES_ADDR + 0x08, 0x00010010U);
+                                                                    write32(EFI_RUNTIME_SERVICES_ADDR + 0x0C, 0x88U);
+
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x00, EFI_BOOT_SERVICES_SIGNATURE);
+                                                                    write32(EFI_BOOT_SERVICES_ADDR + 0x08, 0x00010010U);
+                                                                    write32(EFI_BOOT_SERVICES_ADDR + 0x0C, 0x180U);
+
+                                                                    static const uint16_t firmwareVendor[] = {
+                                                                        'g','u','i','d','e','X','O','S',' ','H','y','p','e','r','v','i','s','o','r',0
+                                                                    };
+                                                                    instance->vm->getMemory().Write(EFI_FIRMWARE_VENDOR_ADDR,
+                                                                        reinterpret_cast<const uint8_t*>(firmwareVendor),
+                                                                        sizeof(firmwareVendor));
                                                                     oss.str("");
-                                                                    oss << "  EFI System Table stub at: 0x" << std::hex << EFI_STUB_ADDR << std::dec;
+                                                                    oss << "  EFI System Table stub at: 0x" << std::hex << EFI_STUB_ADDR
+                                                                        << " (RuntimeServices=0x" << EFI_RUNTIME_SERVICES_ADDR
+                                                                        << ", BootServices=0x" << EFI_BOOT_SERVICES_ADDR << ")" << std::dec;
                                                                     LOG_INFO(oss.str());
                                                                 }
 

@@ -139,6 +139,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 cpu.SetGR(dst_, significand);
             }
             break;
+
+        case InstructionType::FCVT_FX:
+        case InstructionType::FCVT_FXU:
+            {
+                uint8_t fr[16] = {};
+                cpu.GetFR(src1_, fr);
+                cpu.SetFR(dst_, fr);
+            }
+            break;
             
         case InstructionType::MOV_IMM:
             // mov rDst = immediate
@@ -775,6 +784,22 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::GETF_SIG:
             oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::FCVT_FX:
+            oss << "fcvt.fx f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::FCVT_FXU:
+            oss << "fcvt.fxu f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::FCVT_XF:
+            oss << "fcvt.xf f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::FCVT_XUF:
+            oss << "fcvt.xuf f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
             
         case InstructionType::MOV_IMM:
