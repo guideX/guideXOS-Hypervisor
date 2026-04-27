@@ -112,6 +112,22 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
             cpu.SetBR(dst_, cpu.GetGR(src1_));
             break;
 
+        case InstructionType::MOV_FROM_AR:
+            // mov rDst = arSrc1.  Keep ar.pfs tied to the CFM shadow used by alloc.
+            cpu.SetGR(dst_, src1_ == 64 ? cpu.GetCFM() : cpu.GetAR(src1_));
+            break;
+
+        case InstructionType::MOV_TO_AR:
+            // mov arDst = rSrc1.  ar.pfs restores the previous frame marker.
+            {
+                const uint64_t value = cpu.GetGR(src1_);
+                cpu.SetAR(dst_, value);
+                if (dst_ == 64) {
+                    cpu.SetCFM(value);
+                }
+            }
+            break;
+
         case InstructionType::GETF_SIG:
             {
                 uint8_t fr[16] = {};
@@ -734,6 +750,29 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "mov b" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
             break;
 
+        case InstructionType::MOV_FROM_AR:
+            oss << "mov r" << static_cast<int>(dst_) << " = ar.";
+            if (src1_ == 64) {
+                oss << "pfs";
+            } else if (src1_ == 65) {
+                oss << "lc";
+            } else {
+                oss << static_cast<int>(src1_);
+            }
+            break;
+
+        case InstructionType::MOV_TO_AR:
+            oss << "mov ar.";
+            if (dst_ == 64) {
+                oss << "pfs";
+            } else if (dst_ == 65) {
+                oss << "lc";
+            } else {
+                oss << static_cast<int>(dst_);
+            }
+            oss << " = r" << static_cast<int>(src1_);
+            break;
+
         case InstructionType::GETF_SIG:
             oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
@@ -1260,8 +1299,26 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
     // Route to appropriate decoder based on unit type and major opcode
     switch (unitType) {
         case UnitType::M_UNIT:
-            if (major == 0x0 && x3 == 0x0 && x6 == 0x01) {
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x00 || x6 == 0x01)) {
                 result = InstructionEx(InstructionType::NOP, UnitType::M_UNIT);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x2A || x6 == 0x32)) {
+                const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                result = InstructionEx(x6 == 0x2A ? InstructionType::MOV_TO_AR
+                                                   : InstructionType::MOV_FROM_AR,
+                                       UnitType::M_UNIT);
+                if (x6 == 0x2A) {
+                    result.SetOperands(ar3, r2, 0);
+                } else {
+                    result.SetOperands(r1, ar3, 0);
+                }
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
                 result.SetRawBits(slotBits);
                 return result;
             }
@@ -1306,8 +1363,9 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             break;
             
         case UnitType::I_UNIT:
-            if (major == 0x0 && x3 == 0x0 && x6 == 0x01) {
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x00 || x6 == 0x01)) {
                 result = InstructionEx(InstructionType::NOP, UnitType::I_UNIT);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
                 result.SetRawBits(slotBits);
                 return result;
             }
@@ -1333,6 +1391,23 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
                 result = InstructionEx(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
                 result.SetOperands(b1, r2, 0);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x2A || x6 == 0x32)) {
+                const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                result = InstructionEx(x6 == 0x2A ? InstructionType::MOV_TO_AR
+                                                   : InstructionType::MOV_FROM_AR,
+                                       UnitType::I_UNIT);
+                if (x6 == 0x2A) {
+                    result.SetOperands(ar3, r2, 0);
+                } else {
+                    result.SetOperands(r1, ar3, 0);
+                }
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
                 result.SetRawBits(slotBits);
                 return result;
             }

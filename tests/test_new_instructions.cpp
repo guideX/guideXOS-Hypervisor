@@ -234,6 +234,44 @@ void test_memory_bounds_throw() {
     std::cout << "  ? Memory bounds diagnostics passed" << std::endl;
 }
 
+void test_application_register_moves() {
+    std::cout << "Testing application register moves..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    InstructionEx mov_to_pfs = decoder.DecodeSlot(0x15404c000ULL, UnitType::M_UNIT, 0x306e0);
+    assert_true("Boot raw mov-to-ar.pfs should decode in M-unit",
+                mov_to_pfs.GetType() == InstructionType::MOV_TO_AR);
+    assert_equal("mov-to-ar.pfs application register", 64, mov_to_pfs.GetDst());
+    assert_equal("mov-to-ar.pfs source register", 38, mov_to_pfs.GetSrc1());
+    assert_string("mov-to-ar.pfs disassembly",
+                  "mov ar.pfs = r38",
+                  mov_to_pfs.GetDisassembly());
+
+    cpu.SetGR(38, 0x12345);
+    mov_to_pfs.Execute(cpu, memory);
+    assert_equal("mov-to-ar.pfs should update CFM", 0x12345, cpu.GetCFM());
+    assert_equal("mov-to-ar.pfs should update AR storage", 0x12345, cpu.GetAR(64));
+
+    InstructionEx mov_to_pfs_i = decoder.DecodeSlot(0x15404a000ULL, UnitType::I_UNIT, 0x35400);
+    assert_true("Boot raw mov-to-ar.pfs should decode in I-unit",
+                mov_to_pfs_i.GetType() == InstructionType::MOV_TO_AR);
+    assert_equal("mov-to-ar.pfs I-unit source register", 37, mov_to_pfs_i.GetSrc1());
+
+    InstructionEx filler_m_nop = decoder.DecodeSlot(0x2b86ULL, UnitType::M_UNIT, 0x42008);
+    assert_true("Final-loop predicated M nop should decode",
+                filler_m_nop.GetType() == InstructionType::NOP);
+    assert_equal("Final-loop M nop predicate", 6, filler_m_nop.GetPredicate());
+
+    InstructionEx filler_i_nop = decoder.DecodeSlot(0x0ULL, UnitType::I_UNIT, 0x42008);
+    assert_true("Final-loop zero I nop should decode",
+                filler_i_nop.GetType() == InstructionType::NOP);
+
+    std::cout << "  ? Application register moves passed" << std::endl;
+}
+
 void test_test_instructions() {
     std::cout << "Testing test-bit/test-NaT instructions..." << std::endl;
 
@@ -567,6 +605,7 @@ int main() {
         test_compare_ne_decoder();
         test_latest_boot_log_blockers();
         test_memory_bounds_throw();
+        test_application_register_moves();
         test_test_instructions();
         test_bitwise_operations();
         test_shift_operations();
