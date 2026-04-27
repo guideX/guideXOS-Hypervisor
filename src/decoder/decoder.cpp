@@ -482,6 +482,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint8_t value = 0;
                 memory.Read(addr, &value, 1);
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
+                if (hasImmediate_) {
+                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -492,6 +495,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint16_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 2);
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
+                if (hasImmediate_) {
+                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -502,6 +508,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint32_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 4);
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
+                if (hasImmediate_) {
+                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -512,6 +521,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint64_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 8);
                 cpu.SetGR(dst_, value);
+                if (hasImmediate_) {
+                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -520,6 +532,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint64_t addr = cpu.GetGR(dst_);
                 uint8_t value = static_cast<uint8_t>(cpu.GetGR(src1_));
                 memory.Write(addr, &value, 1);
+                if (hasImmediate_) {
+                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -528,6 +543,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint64_t addr = cpu.GetGR(dst_);
                 uint16_t value = static_cast<uint16_t>(cpu.GetGR(src1_));
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 2);
+                if (hasImmediate_) {
+                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -536,6 +554,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint64_t addr = cpu.GetGR(dst_);
                 uint32_t value = static_cast<uint32_t>(cpu.GetGR(src1_));
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 4);
+                if (hasImmediate_) {
+                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -544,6 +565,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
                 uint64_t addr = cpu.GetGR(dst_);
                 uint64_t value = cpu.GetGR(src1_);
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 8);
+                if (hasImmediate_) {
+                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                }
             }
             break;
             
@@ -737,37 +761,61 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::LD1:
         case InstructionType::LD1_S:
             oss << "ld1 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::LD2:
         case InstructionType::LD2_S:
             oss << "ld2 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::LD4:
         case InstructionType::LD4_S:
             oss << "ld4 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::LD8:
         case InstructionType::LD8_S:
             oss << "ld8 r" << static_cast<int>(dst_) << " = [r" << static_cast<int>(src1_) << "]";
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::ST1:
             oss << "st1 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::ST2:
             oss << "st2 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::ST4:
             oss << "st4 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::ST8:
             oss << "st8 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
             break;
             
         case InstructionType::BR_COND:

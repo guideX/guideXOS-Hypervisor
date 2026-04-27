@@ -89,6 +89,48 @@ private:
     bool stopAfterCompare_;
 };
 
+class FakeCallBridgeDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x1000) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 0, 0);
+            call.SetBranchTarget(0x2000);
+            call.SetRawBits(0x10);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x2000) {
+            InstructionEx alloc(InstructionType::ALLOC, UnitType::M_UNIT);
+            alloc.SetOperands(60, 0, 0);
+            alloc.SetImmediate(36 | (static_cast<uint64_t>(31) << 7));
+            alloc.SetRawBits(0x20);
+            bundle.instructions.push_back(alloc);
+        }
+
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 // Test ISA state serialization/deserialization
 void testISAStateSerialization() {
     std::cout << "Testing ISA state serialization...\n";
@@ -504,6 +546,63 @@ void testIA64LegacyCallOutputInputs() {
     std::cout << "  ? caller outputs become callee input registers after alloc\n";
 }
 
+void testIA64PluginCallOutputInputs() {
+    std::cout << "Testing IA-64 plugin call output/input register bridge...\n";
+
+    Memory memory(64 * 1024);
+    FakeCallBridgeDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(4) << 7));
+    plugin.getCPUState().SetGR(36, 0x12345678);
+    plugin.getCPUState().SetGR(37, 0xabcdef00);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
+    assert(plugin.getCPUState().GetBR(0) == 0x1010);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(32) == 0x12345678);
+    assert(plugin.getCPUState().GetGR(33) == 0xabcdef00);
+
+    std::cout << "  ? plugin br.call passes caller output registers to callee inputs\n";
+}
+
+void testIA64MemoryPostIncrement() {
+    std::cout << "Testing IA-64 memory post-increment execution...\n";
+
+    Memory memory(64 * 1024);
+    CPUState cpu;
+
+    cpu.SetGR(15, 0x100);
+    cpu.SetGR(19, 0x1122334455667788ULL);
+
+    InstructionEx store(InstructionType::ST4, UnitType::M_UNIT);
+    store.SetOperands(15, 19, 0);
+    store.SetImmediate(4);
+    store.Execute(cpu, memory);
+
+    uint32_t stored = 0;
+    memory.Read(0x100, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+    assert(stored == 0x55667788U);
+    assert(cpu.GetGR(15) == 0x104);
+
+    const uint64_t loadValue = 0xaabbccddeeff0011ULL;
+    memory.Write(0x200, reinterpret_cast<const uint8_t*>(&loadValue), sizeof(loadValue));
+    cpu.SetGR(14, 0x200);
+
+    InstructionEx load(InstructionType::LD8, UnitType::M_UNIT);
+    load.SetOperands(8, 14, 0);
+    load.SetImmediate(8);
+    load.Execute(cpu, memory);
+
+    assert(cpu.GetGR(8) == loadValue);
+    assert(cpu.GetGR(14) == 0x208);
+
+    std::cout << "  ? ld/st immediate forms update the base register after access\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -549,6 +648,7 @@ void testSharedMemory() {
 }
 
 int main() {
+    std::cout.setf(std::ios::unitbuf);
     std::cout << "=== ISA Plugin Architecture Tests ===\n\n";
     
     try {
@@ -595,6 +695,12 @@ int main() {
         std::cout << "\n";
 
         testIA64LegacyCallOutputInputs();
+        std::cout << "\n";
+
+        testIA64PluginCallOutputInputs();
+        std::cout << "\n";
+
+        testIA64MemoryPostIncrement();
         std::cout << "\n";
         
         testStateDump();

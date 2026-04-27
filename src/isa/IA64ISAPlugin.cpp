@@ -253,7 +253,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , syscallDispatcher_(nullptr)
     , profiler_(nullptr)
     , cachedInstruction_()
-    , hasCachedInstruction_(false) {
+    , hasCachedInstruction_(false)
+    , pendingCallInputs_() {
 }
 
 IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder, 
@@ -264,12 +265,14 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , syscallDispatcher_(syscallDispatcher)
     , profiler_(profiler)
     , cachedInstruction_()
-    , hasCachedInstruction_(false) {
+    , hasCachedInstruction_(false)
+    , pendingCallInputs_() {
 }
 
 void IA64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
+    pendingCallInputs_.clear();
 }
 
 ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
@@ -407,6 +410,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
+                    captureCallOutputRegisters();
                 }
                 break;
                 
@@ -426,6 +430,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         // group.
         if (!branchInstruction || predicateTrue) {
             executeInstruction(memory, cachedInstruction_);
+            if (cachedInstruction_.GetType() == InstructionType::ALLOC && predicateTrue) {
+                applyPendingCallInputRegisters();
+            }
         }
 
         // Handle branch after execution
@@ -482,6 +489,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     
     state_ = *ia64State;
     hasCachedInstruction_ = false;
+    pendingCallInputs_.clear();
 }
 
 std::vector<uint8_t> IA64ISAPlugin::serialize_state() const {
@@ -676,6 +684,36 @@ void IA64ISAPlugin::capturePredicateGroupSnapshot() {
     for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
         state_.predicateGroupSnapshot_[i] = state_.getCPUState().GetPR(i);
     }
+}
+
+void IA64ISAPlugin::captureCallOutputRegisters() {
+    pendingCallInputs_.clear();
+
+    const uint8_t sof = state_.getCPUState().GetSOF();
+    const uint8_t sol = state_.getCPUState().GetSOL();
+    if (sof <= sol) {
+        return;
+    }
+
+    const size_t outputCount = static_cast<size_t>(sof - sol);
+    const size_t firstOutput = 32 + sol;
+    for (size_t i = 0; i < outputCount && firstOutput + i < NUM_GENERAL_REGISTERS; ++i) {
+        const uint64_t value = state_.getCPUState().GetGR(firstOutput + i);
+        pendingCallInputs_.push_back(value);
+        state_.getCPUState().SetGR(32 + i, value);
+    }
+}
+
+void IA64ISAPlugin::applyPendingCallInputRegisters() {
+    if (pendingCallInputs_.empty()) {
+        return;
+    }
+
+    for (size_t i = 0; i < pendingCallInputs_.size() && 32 + i < NUM_GENERAL_REGISTERS; ++i) {
+        state_.getCPUState().SetGR(32 + i, pendingCallInputs_[i]);
+    }
+
+    pendingCallInputs_.clear();
 }
 
 void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr) {

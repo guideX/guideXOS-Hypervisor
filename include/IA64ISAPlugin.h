@@ -8,6 +8,7 @@
 #include <memory>
 #include <cstring>
 #include <array>
+#include <vector>
 
 namespace ia64 {
 
@@ -195,6 +196,8 @@ private:
      */
     void fetchBundle(IMemory& memory);
     void capturePredicateGroupSnapshot();
+    void captureCallOutputRegisters();
+    void applyPendingCallInputRegisters();
     
     /**
      * Execute a single IA-64 instruction
@@ -237,6 +240,7 @@ private:
     // Cached decoded instruction for execute()
     InstructionEx cachedInstruction_;
     bool hasCachedInstruction_;
+    std::vector<uint64_t> pendingCallInputs_;
 };
 
 /**
