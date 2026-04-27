@@ -274,6 +274,7 @@ static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b,
 
 static bool decodeAddImm22(uint64_t raw, formats::AFormat& result) {
     result.has_imm = true;
+    result.r3 = static_cast<uint8_t>(formats::extractBits(raw, 20, 2));
     
     // Extract imm22: imm5c (bits 22-26), imm9d (bits 27-35), imm7b (bits 13-19), s (bit 36)
     uint32_t imm5c = formats::extractBits(raw, 22, 5);

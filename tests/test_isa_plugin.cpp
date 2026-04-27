@@ -354,6 +354,28 @@ void testIA64AddImm22Decode() {
     std::cout << "  ? add imm22 raw boot slot decodes and executes\n";
 }
 
+void testIA64AddlImm22SourceDecode() {
+    std::cout << "Testing IA-64 addl imm22 source decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx add = decoder.DecodeSlot(0x13b90520880ULL, UnitType::M_UNIT, 0x18e0);
+
+    assert(add.GetType() == InstructionType::ADD_IMM);
+    assert(add.GetDst() == 34);
+    assert(add.GetSrc1() == 1);
+    assert(add.HasImmediate());
+    assert(static_cast<int64_t>(add.GetImmediate()) == -581488);
+    assert(add.GetDisassembly() == "add r34 = r1, -581488");
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetGR(1, 0x238000);
+    add.Execute(cpu, memory);
+    assert(cpu.GetGR(34) == 0x1aa090);
+
+    std::cout << "  ? addl imm22 uses 2-bit r3 field instead of immediate bits\n";
+}
+
 void testIA64ReturnBranchDecode() {
     std::cout << "Testing IA-64 return branch decode...\n";
 
@@ -552,6 +574,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddImm22Decode();
+        std::cout << "\n";
+
+        testIA64AddlImm22SourceDecode();
         std::cout << "\n";
 
         testIA64ReturnBranchDecode();
