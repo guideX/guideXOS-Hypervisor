@@ -83,9 +83,9 @@ static int64_t SignExtend(uint64_t value, int bits) {
     return static_cast<int64_t>(value);
 }
 
-void InstructionEx::Execute(CPUState& cpu, IMemory& memory) const {
+void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate) const {
     // Check qualifying predicate
-    if (!CheckPredicate(cpu, predicate_)) {
+    if (!ignorePredicate && !CheckPredicate(cpu, predicate_)) {
         // Predicate is false, instruction is nullified
         return;
     }

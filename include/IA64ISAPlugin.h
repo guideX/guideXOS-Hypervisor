@@ -204,7 +204,7 @@ private:
     /**
      * Execute a single IA-64 instruction
      */
-    void executeInstruction(IMemory& memory, const InstructionEx& instr);
+    void executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate = false);
     
     /**
      * Apply register rotation for IA-64 stacked registers

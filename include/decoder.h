@@ -238,7 +238,7 @@ public:
     InstructionEx(InstructionType type, UnitType unit);
     
     // Execute this instruction
-    void Execute(CPUState& cpu, IMemory& memory) const;
+    void Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate = false) const;
     
     // Get disassembly string
     std::string GetDisassembly() const;

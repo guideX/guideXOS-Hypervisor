@@ -89,6 +89,51 @@ private:
     bool stopAfterCompare_;
 };
 
+class FakeCompareStoreDecoder : public IDecoder {
+public:
+    explicit FakeCompareStoreDecoder(bool stopAfterCompare)
+        : stopAfterCompare_(stopAfterCompare) {}
+
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        InstructionEx compare(InstructionType::CMP_EQ, UnitType::I_UNIT);
+        compare.SetOperands4(1, 0, 0, 2);
+        compare.SetRawBits(0x40);
+
+        InstructionEx store(InstructionType::ST8, UnitType::M_UNIT);
+        store.SetPredicate(1);
+        store.SetOperands(10, 11, 0);
+        store.SetRawBits(0x41);
+
+        Bundle bundle;
+        bundle.templateType = stopAfterCompare_ ? TemplateType::MI_I : TemplateType::MII;
+        bundle.hasStop = stopAfterCompare_;
+        bundle.stopAfterSlot[0] = stopAfterCompare_;
+        bundle.instructions.push_back(compare);
+        bundle.instructions.push_back(store);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+
+private:
+    bool stopAfterCompare_;
+};
+
 class FakeCallBridgeDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -383,6 +428,46 @@ void testIA64BranchPredicateGroupSnapshot() {
     assert(withStop->getPC() == 0x2000);
 
     std::cout << "  ? Same-group predicate write is deferred; stop makes it visible\n";
+}
+
+void testIA64NonBranchPredicateGroupSnapshot() {
+    std::cout << "Testing IA-64 non-branch predicate visibility across instruction groups...\n";
+
+    const uint64_t dataAddr = 0x3000;
+    const uint64_t dataValue = 0x123456789abcdef0ULL;
+
+    Memory noStopMemory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    noStopMemory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    noStopMemory.write<uint64_t>(dataAddr, 0);
+
+    FakeCompareStoreDecoder noStopDecoder(false);
+    auto noStop = createIA64ISA(noStopDecoder);
+    auto& noStopState = dynamic_cast<IA64ISAState&>(noStop->getState());
+    noStopState.getCPUState().SetIP(0x1000);
+    noStopState.getCPUState().SetPR(1, false);
+    noStopState.getCPUState().SetGR(10, dataAddr);
+    noStopState.getCPUState().SetGR(11, dataValue);
+    assert(noStop->step(noStopMemory) == ISAExecutionResult::CONTINUE);
+    assert(noStop->step(noStopMemory) == ISAExecutionResult::CONTINUE);
+    assert(noStopMemory.read<uint64_t>(dataAddr) == 0);
+
+    Memory stopMemory(64 * 1024);
+    stopMemory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    stopMemory.write<uint64_t>(dataAddr, 0);
+
+    FakeCompareStoreDecoder stopDecoder(true);
+    auto withStop = createIA64ISA(stopDecoder);
+    auto& withStopState = dynamic_cast<IA64ISAState&>(withStop->getState());
+    withStopState.getCPUState().SetIP(0x1000);
+    withStopState.getCPUState().SetPR(1, false);
+    withStopState.getCPUState().SetGR(10, dataAddr);
+    withStopState.getCPUState().SetGR(11, dataValue);
+    assert(withStop->step(stopMemory) == ISAExecutionResult::CONTINUE);
+    assert(withStop->step(stopMemory) == ISAExecutionResult::CONTINUE);
+    assert(stopMemory.read<uint64_t>(dataAddr) == dataValue);
+
+    std::cout << "  ? Same-group predicate write is deferred for stores; stop makes it visible\n";
 }
 
 void testIA64AddImm22Decode() {
@@ -752,6 +837,9 @@ int main() {
         std::cout << "\n";
 
         testIA64BranchPredicateGroupSnapshot();
+        std::cout << "\n";
+
+        testIA64NonBranchPredicateGroupSnapshot();
         std::cout << "\n";
 
         testIA64AddImm22Decode();

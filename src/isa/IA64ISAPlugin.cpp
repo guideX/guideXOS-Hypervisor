@@ -396,11 +396,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         uint64_t branchTarget = 0;
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool predicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
-        const bool branchInstruction =
-            cachedInstruction_.GetType() == InstructionType::BR_COND ||
-            cachedInstruction_.GetType() == InstructionType::BR_CALL ||
-            cachedInstruction_.GetType() == InstructionType::BR_RET;
-        
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
                 if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
@@ -429,11 +424,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 break;
         }
         
-        // Execute instruction. Branch predicates are checked against the
-        // instruction-group snapshot, not predicates written earlier in this
-        // group.
-        if (!branchInstruction || predicateTrue) {
-            executeInstruction(memory, cachedInstruction_);
+        // Execute instructions against the instruction-group predicate snapshot,
+        // not predicates written earlier in the same group.
+        if (predicateTrue) {
+            executeInstruction(memory, cachedInstruction_, true);
             if (cachedInstruction_.GetType() == InstructionType::ALLOC && predicateTrue) {
                 applyPendingCallInputRegisters();
             }
@@ -747,9 +741,9 @@ void IA64ISAPlugin::restoreCallFrame() {
     state_.getCPUState().SetCFM(frame.cfm);
 }
 
-void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr) {
+void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
-        instr.Execute(state_.getCPUState(), memory);
+        instr.Execute(state_.getCPUState(), memory, ignorePredicate);
     } catch (const std::exception& e) {
         std::cerr << "Error executing instruction: " << e.what() << "\n";
         std::cerr << "Treating as NOP and continuing...\n";
