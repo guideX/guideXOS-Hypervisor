@@ -296,7 +296,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::SHLADD:
             // shladd rDst = rSrc1, count, rSrc2
             if (hasImmediate_) {
-                uint64_t shifted = cpu.GetGR(src1_) << (immediate_ & 0x3);
+                uint64_t shifted = cpu.GetGR(src1_) << (immediate_ & 0x3F);
                 cpu.SetGR(dst_, shifted + cpu.GetGR(src2_));
             }
             break;
@@ -888,6 +888,12 @@ std::string InstructionEx::GetDisassembly() const {
             
         case InstructionType::SHR:
             oss << "shr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
+                << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::SHLADD:
+            oss << "shladd r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", " << static_cast<int64_t>(immediate_)
                 << ", r" << static_cast<int>(src2_);
             break;
 

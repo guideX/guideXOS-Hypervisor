@@ -54,7 +54,7 @@ enum class AOpcode {
     // Add immediate 22-bit (major opcode 9)
     ADD_A6          = 0x90,     // add r1 = imm22, r3
     
-    // Shift left and add (major opcode 10)
+    // Shift left and add
     SHLADD_A8       = 0xA0,     // shladd r1 = r2, count, r3
 };
 
@@ -113,6 +113,14 @@ bool ATypeDecoder::decode(uint64_t raw_instruction, formats::AFormat& result) {
 bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& instr) {
     // Determine instruction type based on opcode
     uint8_t op = fmt.opcode;
+
+    if (op == 0xA0) {
+        instr = InstructionEx(InstructionType::SHLADD, UnitType::I_UNIT);
+        instr.SetPredicate(fmt.qp);
+        instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+        instr.SetImmediate(fmt.imm);
+        return true;
+    }
     
     // Integer ALU operations
     if ((op & 0xF0) == 0x80) {
@@ -242,6 +250,13 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
 // Helper function implementations
 static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b, 
                               uint8_t x4, uint8_t ve, formats::AFormat& result) {
+    if (x2a == 0x0 && ve == 0 && x4 == 0x4) {
+        result.has_imm = true;
+        result.imm = static_cast<uint64_t>(x2b + 1);
+        result.opcode = 0xA0;
+        return true;
+    }
+
     if (x2a == 0x2 && ve == 0) {
         result.has_imm = true;
         uint8_t imm6d = static_cast<uint8_t>(formats::extractBits(raw, 27, 6));

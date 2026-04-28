@@ -224,6 +224,37 @@ void test_latest_boot_log_blockers() {
     mov_to_br.Execute(cpu, memory);
     assert_equal("Boot mov-to-branch should restore b0", 0x123456789abcdef0ULL, cpu.GetBR(0));
 
+    InstructionEx shladd_scale5 = decoder.DecodeSlot(0x10088e1c200ULL, UnitType::I_UNIT, 0xa100);
+    assert_true("Boot raw shladd scale-5 should decode",
+                shladd_scale5.GetType() == InstructionType::SHLADD);
+    assert_equal("Boot shladd scale-5 destination", 8, shladd_scale5.GetDst());
+    assert_equal("Boot shladd scale-5 source", 14, shladd_scale5.GetSrc1());
+    assert_equal("Boot shladd scale-5 addend", 14, shladd_scale5.GetSrc2());
+    assert_equal("Boot shladd scale-5 count", 2, shladd_scale5.GetImmediate());
+    assert_string("Boot shladd scale-5 disassembly",
+                  "shladd r8 = r14, 2, r14",
+                  shladd_scale5.GetDisassembly());
+
+    cpu.SetGR(14, 7);
+    shladd_scale5.Execute(cpu, memory);
+    assert_equal("Boot shladd scale-5 should compute index * 5", 35, cpu.GetGR(8));
+
+    InstructionEx shladd_scale40 = decoder.DecodeSlot(0x10091110400ULL, UnitType::I_UNIT, 0xa110);
+    assert_true("Boot raw shladd scale-40 should decode",
+                shladd_scale40.GetType() == InstructionType::SHLADD);
+    assert_equal("Boot shladd scale-40 destination", 16, shladd_scale40.GetDst());
+    assert_equal("Boot shladd scale-40 source", 8, shladd_scale40.GetSrc1());
+    assert_equal("Boot shladd scale-40 addend", 17, shladd_scale40.GetSrc2());
+    assert_equal("Boot shladd scale-40 count", 3, shladd_scale40.GetImmediate());
+    assert_string("Boot shladd scale-40 disassembly",
+                  "shladd r16 = r8, 3, r17",
+                  shladd_scale40.GetDisassembly());
+
+    cpu.SetGR(8, 35);
+    cpu.SetGR(17, 0x1000);
+    shladd_scale40.Execute(cpu, memory);
+    assert_equal("Boot shladd scale-40 should compute base + index * 40", 0x1118, cpu.GetGR(16));
+
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
 
