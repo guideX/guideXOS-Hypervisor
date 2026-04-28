@@ -1181,9 +1181,8 @@ bool VirtualMachine::createCPUs(size_t numCPUs, const std::string& isaName) {
                     return false;
                 }
                 
-                // Store ISA plugin in context (we'll need to extend CPUContext for this)
-                // For now, create CPU with legacy decoder interface
-                ctx.cpu = std::make_unique<CPU>(*memory_, *decoder_);
+                ctx.isaPlugin = std::move(isaPlugin);
+                ctx.cpu = std::make_unique<CPU>(*memory_, *ctx.isaPlugin);
                 
                 std::ostringstream oss;
                 oss << "Created CPU " << i << " with ISA: " << isaName << " (using plugin)";

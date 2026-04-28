@@ -575,7 +575,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 instance->vm->setEntryPoint(entryPoint);
                                                                 const auto& peInfo = peParser.getImageInfo();
                                                                 if (peInfo.hasGlobalPointer) {
-                                                                    instance->vm->getCPU().getState().SetGR(1, peInfo.globalPointer);
+                                                                    instance->vm->writeGR(0, 1, peInfo.globalPointer);
                                                                     oss.str("");
                                                                     oss << "  Global pointer (r1): 0x" << std::hex
                                                                         << peInfo.globalPointer << std::dec;

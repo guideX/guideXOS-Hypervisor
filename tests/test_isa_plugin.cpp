@@ -673,6 +673,32 @@ void testIA64PluginCallOutputInputs() {
     std::cout << "  ? plugin br.call passes inputs and br.ret restores caller frame\n";
 }
 
+void testIA64CPUWrapperDelegatesToPluginState() {
+    std::cout << "Testing IA-64 CPU wrapper delegates state to plugin...\n";
+
+    Memory memory(64 * 1024);
+    InstructionDecoder decoder;
+    auto plugin = createIA64ISA(decoder);
+    CPU cpu(memory, *plugin);
+
+    cpu.setIP(0x1234);
+    cpu.writeGR(1, 0x238000);
+    cpu.writeGR(32, 0x1);
+    cpu.writeGR(33, 0x200000);
+
+    assert(cpu.isUsingISAPlugin());
+    assert(plugin->getPC() == 0x1234);
+
+    auto& ia64State = dynamic_cast<IA64ISAState&>(plugin->getState());
+    assert(ia64State.getCPUState().GetIP() == 0x1234);
+    assert(ia64State.getCPUState().GetGR(1) == 0x238000);
+    assert(ia64State.getCPUState().GetGR(32) == 0x1);
+    assert(ia64State.getCPUState().GetGR(33) == 0x200000);
+    assert(cpu.getState().GetGR(33) == 0x200000);
+
+    std::cout << "  ? CPU wrapper register/IP access reaches plugin state\n";
+}
+
 void testIA64MemoryPostIncrement() {
     std::cout << "Testing IA-64 memory post-increment execution...\n";
 
@@ -867,6 +893,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginCallOutputInputs();
+        std::cout << "\n";
+
+        testIA64CPUWrapperDelegatesToPluginState();
         std::cout << "\n";
 
         testIA64MemoryPostIncrement();

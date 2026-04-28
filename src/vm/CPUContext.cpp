@@ -8,7 +8,8 @@ namespace ia64 {
 // ============================================================================
 
 CPUContext::CPUContext()
-    : cpu(nullptr),
+    : isaPlugin(nullptr),
+      cpu(nullptr),
       cpuId(0),
       state(CPUExecutionState::IDLE),
       cyclesExecuted(0),
@@ -19,7 +20,8 @@ CPUContext::CPUContext()
 }
 
 CPUContext::CPUContext(uint32_t id)
-    : cpu(nullptr),
+    : isaPlugin(nullptr),
+      cpu(nullptr),
       cpuId(id),
       state(CPUExecutionState::IDLE),
       cyclesExecuted(0),
@@ -35,7 +37,8 @@ CPUContext::~CPUContext() {
 }
 
 CPUContext::CPUContext(CPUContext&& other) noexcept
-    : cpu(std::move(other.cpu)),
+    : isaPlugin(std::move(other.isaPlugin)),
+      cpu(std::move(other.cpu)),
       cpuId(other.cpuId),
       state(other.state),
       cyclesExecuted(other.cyclesExecuted),
@@ -47,6 +50,7 @@ CPUContext::CPUContext(CPUContext&& other) noexcept
 
 CPUContext& CPUContext::operator=(CPUContext&& other) noexcept {
     if (this != &other) {
+        isaPlugin = std::move(other.isaPlugin);
         cpu = std::move(other.cpu);
         cpuId = other.cpuId;
         state = other.state;

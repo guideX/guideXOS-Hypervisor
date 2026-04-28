@@ -180,8 +180,8 @@ public:
     uint8_t getPRRotationBase() const override;
     
     // Access to CPU state for debugging (ICPU implementation)
-    const CPUState& getState() const override { return state_; }
-    CPUState& getState() override { return state_; }
+    const CPUState& getState() const override;
+    CPUState& getState() override;
     
     // Dump CPU state for debugging
     void dump() const override;

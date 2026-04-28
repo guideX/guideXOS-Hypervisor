@@ -9,6 +9,7 @@ namespace ia64 {
 // Forward declarations
 class CPU;
 class ICPU;
+class IISA;
 
 /**
  * CPUExecutionState - State of a CPU core
@@ -55,6 +56,7 @@ struct CPUContext {
     // Core CPU State
     // ========================================================================
     
+    std::unique_ptr<IISA> isaPlugin;        // Optional owned ISA plugin
     std::unique_ptr<CPU> cpu;               // CPU instance (isolated state)
     uint32_t cpuId;                         // Unique CPU identifier (0-N)
     CPUExecutionState state;                // Current execution state

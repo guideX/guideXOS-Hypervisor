@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "SyscallDispatcher.h"
 #include "logger.h"
+#include "IA64ISAPlugin.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -525,6 +526,12 @@ bool CPU::servicePendingInterrupt() {
 // Register access methods (delegates to CPUState)
 
 uint64_t CPU::readGR(size_t index) const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->readGR(index);
+        }
+    }
+
     // Apply rotation for stacked registers
     size_t physical = applyRegisterRotation(index, 'G');
     
@@ -537,6 +544,13 @@ uint64_t CPU::readGR(size_t index) const {
 }
 
 void CPU::writeGR(size_t index, uint64_t value) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->writeGR(index, value);
+            return;
+        }
+    }
+
     size_t physical = applyRegisterRotation(index, 'G');
     
     // Profile register write
@@ -548,6 +562,12 @@ void CPU::writeGR(size_t index, uint64_t value) {
 }
 
 bool CPU::readPR(size_t index) const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->readPR(index);
+        }
+    }
+
     size_t physical = applyRegisterRotation(index, 'P');
     
     // Profile register read
@@ -559,6 +579,13 @@ bool CPU::readPR(size_t index) const {
 }
 
 void CPU::writePR(size_t index, bool value) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->writePR(index, value);
+            return;
+        }
+    }
+
     size_t physical = applyRegisterRotation(index, 'P');
     
     // Profile register write
@@ -570,6 +597,12 @@ void CPU::writePR(size_t index, bool value) {
 }
 
 uint64_t CPU::readBR(size_t index) const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->readBR(index);
+        }
+    }
+
     // Branch registers are never rotated
     
     // Profile register read
@@ -581,6 +614,13 @@ uint64_t CPU::readBR(size_t index) const {
 }
 
 void CPU::writeBR(size_t index, uint64_t value) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->writeBR(index, value);
+            return;
+        }
+    }
+
     // Profile register write
     if (isProfilingEnabled()) {
         profiler_->recordBranchRegisterWrite(index);
@@ -590,20 +630,61 @@ void CPU::writeBR(size_t index, uint64_t value) {
 }
 
 uint64_t CPU::getIP() const {
+    if (isaPlugin_) {
+        return isaPlugin_->getPC();
+    }
+
     return state_.GetIP();
 }
 
 void CPU::setIP(uint64_t addr) {
+    if (isaPlugin_) {
+        isaPlugin_->setPC(addr);
+        bundleValid_ = false;
+        return;
+    }
+
     state_.SetIP(addr);
     bundleValid_ = false;  // Invalidate current bundle on IP change
 }
 
 uint64_t CPU::getCFM() const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->getCFM();
+        }
+    }
+
     return state_.GetCFM();
 }
 
 void CPU::setCFM(uint64_t value) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->setCFM(value);
+            return;
+        }
+    }
+
     state_.SetCFM(value);
+}
+
+const CPUState& CPU::getState() const {
+    if (isaPlugin_) {
+        if (const auto* ia64State = dynamic_cast<const IA64ISAState*>(&isaPlugin_->getState())) {
+            return ia64State->getCPUState();
+        }
+    }
+    return state_;
+}
+
+CPUState& CPU::getState() {
+    if (isaPlugin_) {
+        if (auto* ia64State = dynamic_cast<IA64ISAState*>(&isaPlugin_->getState())) {
+            return ia64State->getCPUState();
+        }
+    }
+    return state_;
 }
 
 // CFM (Current Frame Marker) layout:
