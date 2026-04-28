@@ -278,6 +278,26 @@ void test_application_register_moves() {
                 mov_to_pfs_i.GetType() == InstructionType::MOV_TO_AR);
     assert_equal("mov-to-ar.pfs I-unit source register", 37, mov_to_pfs_i.GetSrc1());
 
+    InstructionEx mov_to_pr = decoder.DecodeSlot(0x16ff04bfc0ULL, UnitType::I_UNIT, 0x2f0c0);
+    assert_true("Boot raw mov-to-predicate should decode",
+                mov_to_pr.GetType() == InstructionType::MOV_TO_PR);
+    assert_equal("mov-to-predicate source register", 37, mov_to_pr.GetSrc1());
+    assert_equal("mov-to-predicate mask", 0xfffffffffffffffeULL, mov_to_pr.GetImmediate());
+    assert_string("mov-to-predicate disassembly",
+                  "mov pr = r37, 0xfffffffffffffffe",
+                  mov_to_pr.GetDisassembly());
+
+    cpu.SetGR(37, (1ULL << 1) | (1ULL << 16) | (1ULL << 63));
+    cpu.SetPR(2, true);
+    cpu.SetPR(10, true);
+    mov_to_pr.Execute(cpu, memory);
+    assert_true("mov-to-predicate should keep PR0 true", cpu.GetPR(0));
+    assert_true("mov-to-predicate should set PR1 from source bit", cpu.GetPR(1));
+    assert_true("mov-to-predicate should clear PR2 from source bit", !cpu.GetPR(2));
+    assert_true("mov-to-predicate should clear PR10 from source bit", !cpu.GetPR(10));
+    assert_true("mov-to-predicate should set rotating PR16", cpu.GetPR(16));
+    assert_true("mov-to-predicate should set high rotating predicate", cpu.GetPR(63));
+
     InstructionEx filler_m_nop = decoder.DecodeSlot(0x2b86ULL, UnitType::M_UNIT, 0x42008);
     assert_true("Final-loop predicated M nop should decode",
                 filler_m_nop.GetType() == InstructionType::NOP);

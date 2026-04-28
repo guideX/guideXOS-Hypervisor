@@ -148,7 +148,31 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetFR(dst_, fr);
             }
             break;
-            
+
+        case InstructionType::MOV_FROM_PR:
+            {
+                uint64_t value = 1;
+                for (uint8_t i = 1; i < 64; ++i) {
+                    if (cpu.GetPR(i)) {
+                        value |= (1ULL << i);
+                    }
+                }
+                cpu.SetGR(dst_, value);
+            }
+            break;
+
+        case InstructionType::MOV_TO_PR:
+            {
+                const uint64_t value = cpu.GetGR(src1_);
+                const uint64_t mask = hasImmediate_ ? immediate_ : ~0ULL;
+                for (uint8_t i = 1; i < 64; ++i) {
+                    if ((mask >> i) & 0x1ULL) {
+                        cpu.SetPR(i, ((value >> i) & 0x1ULL) != 0);
+                    }
+                }
+            }
+            break;
+
         case InstructionType::MOV_IMM:
             // mov rDst = immediate
             if (hasImmediate_) {
@@ -782,6 +806,17 @@ std::string InstructionEx::GetDisassembly() const {
             oss << " = r" << static_cast<int>(src1_);
             break;
 
+        case InstructionType::MOV_FROM_PR:
+            oss << "mov r" << static_cast<int>(dst_) << " = pr";
+            break;
+
+        case InstructionType::MOV_TO_PR:
+            oss << "mov pr = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", 0x" << std::hex << immediate_ << std::dec;
+            }
+            break;
+
         case InstructionType::GETF_SIG:
             oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
@@ -1398,6 +1433,22 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             if (major == 0x2 && x3 == 0x0 && x6 == 0x00 &&
                 ((slotBits >> 6) & 0x1FFFFF) == 0) {
                 result = InstructionEx(InstructionType::NOP, UnitType::I_UNIT);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && x3 == 0x3 && x6 == 0x1F) {
+                const uint8_t mask7a = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint16_t mask8c = static_cast<uint16_t>((slotBits >> 24) & 0xFF);
+                const uint16_t sign = static_cast<uint16_t>((slotBits >> 36) & 0x1);
+                const uint16_t imm16 = static_cast<uint16_t>(mask7a | (mask8c << 7) | (sign << 15));
+                const uint64_t mask17 = static_cast<uint64_t>(static_cast<int64_t>(SignExtend(static_cast<uint64_t>(imm16) << 1, 17)));
+
+                result = InstructionEx(InstructionType::MOV_TO_PR, UnitType::I_UNIT);
+                result.SetOperands(0, r2, 0);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetImmediate(mask17);
                 result.SetRawBits(slotBits);
                 return result;
             }
