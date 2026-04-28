@@ -255,6 +255,18 @@ void test_latest_boot_log_blockers() {
     shladd_scale40.Execute(cpu, memory);
     assert_equal("Boot shladd scale-40 should compute base + index * 40", 0x1118, cpu.GetGR(16));
 
+    InstructionEx cloop = decoder.DecodeSlot(0xb1ffffc140ULL, UnitType::B_UNIT, 0xa120);
+    assert_true("Boot raw counted-loop branch should decode",
+                cloop.GetType() == InstructionType::BR_CLOOP);
+    assert_equal("Boot counted-loop target", 0xa100, cloop.GetBranchTarget());
+    assert_string("Boot counted-loop disassembly",
+                  "br.cloop 0xa100",
+                  cloop.GetDisassembly());
+
+    cpu.SetAR(65, 2);
+    cloop.Execute(cpu, memory);
+    assert_equal("br.cloop should decrement ar.lc when nonzero", 1, cpu.GetAR(65));
+
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
 

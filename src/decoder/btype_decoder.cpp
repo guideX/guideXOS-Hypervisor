@@ -57,7 +57,8 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
             case 0x5:   // IP-relative br.call
             {
                 result.indirect = false;
-                result.type = formats::BFormat::BranchType::CALL;
+                result.type = (btype == 0x5) ? formats::BFormat::BranchType::CLOOP
+                                             : formats::BFormat::BranchType::CALL;
 
                 uint32_t imm20b = formats::extractBits(raw_instruction, 13, 20);
                 uint32_t s = formats::extractBits(raw_instruction, 36, 1);

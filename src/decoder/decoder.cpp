@@ -679,6 +679,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             
         case InstructionType::BR_RET:
             break;
+
+        case InstructionType::BR_CLOOP:
+            if (cpu.GetAR(65) != 0) {
+                cpu.SetAR(65, cpu.GetAR(65) - 1);
+            }
+            break;
             
         // ===== REGISTER STACK OPERATIONS =====
             
@@ -1056,6 +1062,14 @@ std::string InstructionEx::GetDisassembly() const {
             
         case InstructionType::BR_RET:
             oss << "br.ret b" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::BR_CLOOP:
+            if (hasBranchTarget_) {
+                oss << "br.cloop 0x" << std::hex << branchTarget_ << std::dec;
+            } else {
+                oss << "br.cloop";
+            }
             break;
             
         case InstructionType::ALLOC:

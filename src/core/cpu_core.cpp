@@ -308,6 +308,13 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                     isBranch = true;
                 }
                 break;
+
+            case InstructionType::BR_CLOOP:
+                if (predicateTrue && instr.HasBranchTarget() && state_.GetAR(65) != 0) {
+                    branchTarget = instr.GetBranchTarget();
+                    isBranch = true;
+                }
+                break;
                 
             default:
                 break;

@@ -400,7 +400,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         const bool branchInstruction =
             cachedInstruction_.GetType() == InstructionType::BR_COND ||
             cachedInstruction_.GetType() == InstructionType::BR_CALL ||
-            cachedInstruction_.GetType() == InstructionType::BR_RET;
+            cachedInstruction_.GetType() == InstructionType::BR_RET ||
+            cachedInstruction_.GetType() == InstructionType::BR_CLOOP;
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
                 if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
@@ -421,6 +422,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             case InstructionType::BR_RET:
                 if (livePredicateTrue) {
                     branchTarget = state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                    isBranch = true;
+                }
+                break;
+
+            case InstructionType::BR_CLOOP:
+                if (livePredicateTrue && cachedInstruction_.HasBranchTarget() &&
+                    state_.getCPUState().GetAR(65) != 0) {
+                    branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
                 }
                 break;
