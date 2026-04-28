@@ -403,7 +403,7 @@ void testIA64BranchPredicateExecution() {
 }
 
 void testIA64BranchPredicateGroupSnapshot() {
-    std::cout << "Testing IA-64 predicate visibility across instruction groups...\n";
+    std::cout << "Testing IA-64 branch predicate visibility across instruction groups...\n";
 
     Memory memory(64 * 1024);
     uint8_t bundleBytes[16] = {};
@@ -416,7 +416,7 @@ void testIA64BranchPredicateGroupSnapshot() {
     noStopState.getCPUState().SetPR(1, false);
     assert(noStop->step(memory) == ISAExecutionResult::CONTINUE);
     assert(noStop->step(memory) == ISAExecutionResult::CONTINUE);
-    assert(noStop->getPC() == 0x1010);
+    assert(noStop->getPC() == 0x2000);
 
     FakeCompareBranchDecoder stopDecoder(true);
     auto withStop = createIA64ISA(stopDecoder);
@@ -427,7 +427,7 @@ void testIA64BranchPredicateGroupSnapshot() {
     assert(withStop->step(memory) == ISAExecutionResult::CONTINUE);
     assert(withStop->getPC() == 0x2000);
 
-    std::cout << "  ? Same-group predicate write is deferred; stop makes it visible\n";
+    std::cout << "  ? Same-group predicate write is visible to branches with or without a stop\n";
 }
 
 void testIA64NonBranchPredicateGroupSnapshot() {

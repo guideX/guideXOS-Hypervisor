@@ -395,17 +395,22 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         bool isBranch = false;
         uint64_t branchTarget = 0;
         const uint8_t predicate = cachedInstruction_.GetPredicate();
-        const bool predicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
+        const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
+        const bool livePredicateTrue = (predicate == 0) || state_.getCPUState().GetPR(predicate);
+        const bool branchInstruction =
+            cachedInstruction_.GetType() == InstructionType::BR_COND ||
+            cachedInstruction_.GetType() == InstructionType::BR_CALL ||
+            cachedInstruction_.GetType() == InstructionType::BR_RET;
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
-                if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
+                if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
                 }
                 break;
                 
             case InstructionType::BR_CALL:
-                if (predicateTrue && cachedInstruction_.HasBranchTarget()) {
+                if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
                     saveCallFrame();
@@ -414,7 +419,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 break;
                 
             case InstructionType::BR_RET:
-                if (predicateTrue) {
+                if (livePredicateTrue) {
                     branchTarget = state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     isBranch = true;
                 }
@@ -424,18 +429,19 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 break;
         }
         
-        // Execute instructions against the instruction-group predicate snapshot,
-        // not predicates written earlier in the same group.
-        if (predicateTrue) {
+        // Keep non-branch predicate execution on the instruction-group snapshot,
+        // while branches use the current predicate state for boot-critical flow.
+        if ((branchInstruction && livePredicateTrue) ||
+            (!branchInstruction && snapshotPredicateTrue)) {
             executeInstruction(memory, cachedInstruction_, true);
-            if (cachedInstruction_.GetType() == InstructionType::ALLOC && predicateTrue) {
+            if (cachedInstruction_.GetType() == InstructionType::ALLOC) {
                 applyPendingCallInputRegisters();
             }
         }
 
         // Handle branch after execution
         if (isBranch) {
-            if (cachedInstruction_.GetType() == InstructionType::BR_RET && predicateTrue) {
+            if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
                 restoreCallFrame();
             }
             state_.getCPUState().SetIP(branchTarget);
