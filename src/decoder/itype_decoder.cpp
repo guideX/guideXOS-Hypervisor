@@ -167,27 +167,27 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
             
             if (subop == 0x4) { // ZXT1
                 instr = InstructionEx(InstructionType::ZXT1, UnitType::I_UNIT);
-                instr.SetOperands(fmt.r1, fmt.r2, 0);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
             } else if (subop == 0x5) { // ZXT2
                 instr = InstructionEx(InstructionType::ZXT2, UnitType::I_UNIT);
-                instr.SetOperands(fmt.r1, fmt.r2, 0);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
             } else if (subop == 0x6) { // ZXT4
                 instr = InstructionEx(InstructionType::ZXT4, UnitType::I_UNIT);
-                instr.SetOperands(fmt.r1, fmt.r2, 0);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
             } else if (subop == 0x8) { // SXT1
                 instr = InstructionEx(InstructionType::SXT1, UnitType::I_UNIT);
-                instr.SetOperands(fmt.r1, fmt.r2, 0);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
             } else if (subop == 0x9) { // SXT2
                 instr = InstructionEx(InstructionType::SXT2, UnitType::I_UNIT);
-                instr.SetOperands(fmt.r1, fmt.r2, 0);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
             } else if (subop == 0xA) { // SXT4
                 instr = InstructionEx(InstructionType::SXT4, UnitType::I_UNIT);
-                instr.SetOperands(fmt.r1, fmt.r2, 0);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
             } else if (subop == 0xC) { // ALLOC
                 instr = InstructionEx(InstructionType::ALLOC, UnitType::I_UNIT);

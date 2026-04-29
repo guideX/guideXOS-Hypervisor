@@ -255,6 +255,18 @@ void test_latest_boot_log_blockers() {
     shladd_scale40.Execute(cpu, memory);
     assert_equal("Boot shladd scale-40 should compute base + index * 40", 0x1118, cpu.GetGR(16));
 
+    InstructionEx zxt4_return = decoder.DecodeSlot(0xb0800200ULL, UnitType::I_UNIT, 0x34b10);
+    assert_true("Boot raw zxt4 should decode", zxt4_return.GetType() == InstructionType::ZXT4);
+    assert_equal("Boot zxt4 destination", 8, zxt4_return.GetDst());
+    assert_equal("Boot zxt4 source", 8, zxt4_return.GetSrc1());
+    assert_string("Boot zxt4 disassembly",
+                  "zxt4 r8 = r8",
+                  zxt4_return.GetDisassembly());
+
+    cpu.SetGR(8, 0xffffffff80000001ULL);
+    zxt4_return.Execute(cpu, memory);
+    assert_equal("Boot zxt4 should clear high 32 bits", 0x80000001ULL, cpu.GetGR(8));
+
     InstructionEx cloop = decoder.DecodeSlot(0xb1ffffc140ULL, UnitType::B_UNIT, 0xa120);
     assert_true("Boot raw counted-loop branch should decode",
                 cloop.GetType() == InstructionType::BR_CLOOP);

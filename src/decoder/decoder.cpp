@@ -933,6 +933,30 @@ std::string InstructionEx::GetDisassembly() const {
                 oss << "dep r" << static_cast<int>(dst_);
             }
             break;
+
+        case InstructionType::ZXT1:
+            oss << "zxt1 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ZXT2:
+            oss << "zxt2 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ZXT4:
+            oss << "zxt4 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::SXT1:
+            oss << "sxt1 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::SXT2:
+            oss << "sxt2 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::SXT4:
+            oss << "sxt4 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
             
         case InstructionType::CMP_EQ:
         case InstructionType::CMP_NE:
