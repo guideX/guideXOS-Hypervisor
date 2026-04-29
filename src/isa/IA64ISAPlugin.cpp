@@ -397,6 +397,18 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
         const bool livePredicateTrue = (predicate == 0) || state_.getCPUState().GetPR(predicate);
+        const uint64_t currentIP = state_.getCPUState().GetIP();
+        const uint64_t branchTargetValue = cachedInstruction_.HasBranchTarget()
+            ? cachedInstruction_.GetBranchTarget()
+            : 0;
+        // Some boot code reaches a counted loop form through the conservative
+        // br.call decoder. Treat a short backward br.call b5 as ar.lc-driven.
+        const bool callLooksLikeCountedLoop =
+            cachedInstruction_.GetType() == InstructionType::BR_CALL &&
+            cachedInstruction_.GetDst() == 5 &&
+            cachedInstruction_.HasBranchTarget() &&
+            branchTargetValue < currentIP &&
+            (currentIP - branchTargetValue) <= 0x100;
         const bool branchInstruction =
             cachedInstruction_.GetType() == InstructionType::BR_COND ||
             cachedInstruction_.GetType() == InstructionType::BR_CALL ||
@@ -411,7 +423,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 break;
                 
             case InstructionType::BR_CALL:
-                if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
+                if (callLooksLikeCountedLoop) {
+                    if (livePredicateTrue && state_.getCPUState().GetAR(65) != 0) {
+                        branchTarget = cachedInstruction_.GetBranchTarget();
+                        isBranch = true;
+                    }
+                } else if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
                     branchTarget = cachedInstruction_.GetBranchTarget();
                     isBranch = true;
                     saveCallFrame();
@@ -442,7 +459,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         // while branches use the current predicate state for boot-critical flow.
         if ((branchInstruction && livePredicateTrue) ||
             (!branchInstruction && snapshotPredicateTrue)) {
-            executeInstruction(memory, cachedInstruction_, true);
+            if (callLooksLikeCountedLoop) {
+                if (state_.getCPUState().GetAR(65) != 0) {
+                    state_.getCPUState().SetAR(65, state_.getCPUState().GetAR(65) - 1);
+                }
+            } else {
+                executeInstruction(memory, cachedInstruction_, true);
+            }
             if (cachedInstruction_.GetType() == InstructionType::ALLOC) {
                 applyPendingCallInputRegisters();
             }

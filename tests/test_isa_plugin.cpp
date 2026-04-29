@@ -76,6 +76,39 @@ public:
     }
 };
 
+class FakeCallCountedLoopDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        InstructionEx branch(InstructionType::BR_CALL, UnitType::B_UNIT);
+        branch.SetOperands(5, 0, 0);
+        branch.SetBranchTarget(bundleIP - 0x20);
+        branch.SetRawBits(0x5a100ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(branch);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeCompareBranchDecoder : public IDecoder {
 public:
     explicit FakeCompareBranchDecoder(bool stopAfterCompare)
@@ -459,6 +492,37 @@ void testIA64CountedLoopBranchExecution() {
     assert(fallthroughState.getCPUState().GetAR(65) == 0);
 
     std::cout << "  ? br.cloop decrements ar.lc and falls through at zero\n";
+}
+
+void testIA64CallDecodedCountedLoopExecution() {
+    std::cout << "Testing IA-64 call-decoded counted loop execution...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeCallCountedLoopDecoder decoder;
+    auto taken = createIA64ISA(decoder);
+    auto& takenState = dynamic_cast<IA64ISAState&>(taken->getState());
+    takenState.getCPUState().SetIP(0x1000);
+    takenState.getCPUState().SetAR(65, 2);
+    takenState.getCPUState().SetBR(5, 0);
+    assert(taken->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(taken->getPC() == 0x0fe0);
+    assert(takenState.getCPUState().GetAR(65) == 1);
+    assert(takenState.getCPUState().GetBR(5) == 0);
+
+    auto fallthrough = createIA64ISA(decoder);
+    auto& fallthroughState = dynamic_cast<IA64ISAState&>(fallthrough->getState());
+    fallthroughState.getCPUState().SetIP(0x1000);
+    fallthroughState.getCPUState().SetAR(65, 0);
+    fallthroughState.getCPUState().SetBR(5, 0);
+    assert(fallthrough->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(fallthrough->getPC() == 0x1010);
+    assert(fallthroughState.getCPUState().GetAR(65) == 0);
+    assert(fallthroughState.getCPUState().GetBR(5) == 0);
+
+    std::cout << "  ? backward br.call b5 uses ar.lc and does not link\n";
 }
 
 void testIA64BranchPredicateGroupSnapshot() {
@@ -922,6 +986,9 @@ int main() {
         std::cout << "\n";
 
         testIA64CountedLoopBranchExecution();
+        std::cout << "\n";
+
+        testIA64CallDecodedCountedLoopExecution();
         std::cout << "\n";
 
         testIA64BranchPredicateGroupSnapshot();
