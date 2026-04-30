@@ -12,6 +12,30 @@
 
 namespace ia64 {
 
+namespace {
+
+struct CountedLoopTraceState {
+    bool active = false;
+    uint64_t start = 0;
+    uint64_t end = 0;
+    uint64_t suppressed = 0;
+};
+
+CountedLoopTraceState g_cpuCountedLoopTrace;
+
+void finishCpuCountedLoopTraceIfActive() {
+    if (g_cpuCountedLoopTrace.active && g_cpuCountedLoopTrace.suppressed > 0) {
+        std::cout << "[TRACE] suppressed " << g_cpuCountedLoopTrace.suppressed
+                  << " counted-loop instruction trace lines for range 0x"
+                  << std::hex << g_cpuCountedLoopTrace.start << "-0x"
+                  << g_cpuCountedLoopTrace.end << std::dec << std::endl;
+    }
+
+    g_cpuCountedLoopTrace = CountedLoopTraceState();
+}
+
+} // namespace
+
 // ============================================================================
 // RegisterFile Implementation
 // ============================================================================
@@ -227,10 +251,25 @@ servicePendingInterrupt();
         profiler_->recordInstructionExecution(state_.GetIP(), instr.GetDisassembly());
     }
     
-    // Log instruction execution
-    std::cout << "[IP=0x" << std::hex << state_.GetIP() << std::dec 
-              << ", Slot=" << currentSlot_ << "] "
-              << instr.GetDisassembly() << std::endl;
+    if (g_cpuCountedLoopTrace.active &&
+        (state_.GetIP() < g_cpuCountedLoopTrace.start ||
+         state_.GetIP() > g_cpuCountedLoopTrace.end)) {
+        finishCpuCountedLoopTraceIfActive();
+    }
+
+    const bool suppressCountedLoopTrace =
+        g_cpuCountedLoopTrace.active &&
+        state_.GetIP() >= g_cpuCountedLoopTrace.start &&
+        state_.GetIP() <= g_cpuCountedLoopTrace.end &&
+        state_.GetAR(65) > 1;
+
+    if (suppressCountedLoopTrace) {
+        ++g_cpuCountedLoopTrace.suppressed;
+    } else {
+        std::cout << "[IP=0x" << std::hex << state_.GetIP() << std::dec
+                  << ", Slot=" << currentSlot_ << "] "
+                  << instr.GetDisassembly() << std::endl;
+    }
     
     // Execute the instruction
     executeInstruction(instr);
@@ -354,9 +393,16 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         
         // Handle branch after execution (so br.call can save return address)
         if (isBranch) {
+            if (callLooksLikeCountedLoop) {
+                g_cpuCountedLoopTrace.active = true;
+                g_cpuCountedLoopTrace.start = branchTarget;
+                g_cpuCountedLoopTrace.end = currentIP;
+            }
             state_.SetIP(branchTarget);
             bundleValid_ = false;  // Invalidate current bundle
             currentSlot_ = 0;      // Reset to first slot
+        } else if (callLooksLikeCountedLoop) {
+            finishCpuCountedLoopTraceIfActive();
         }
     } catch (const std::exception& e) {
         // Handle execution errors safely - don't crash

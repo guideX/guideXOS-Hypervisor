@@ -9,6 +9,30 @@
 
 namespace ia64 {
 
+namespace {
+
+struct CountedLoopTraceState {
+    bool active = false;
+    uint64_t start = 0;
+    uint64_t end = 0;
+    uint64_t suppressed = 0;
+};
+
+CountedLoopTraceState g_countedLoopTrace;
+
+void finishCountedLoopTraceIfActive() {
+    if (g_countedLoopTrace.active && g_countedLoopTrace.suppressed > 0) {
+        std::cout << "[TRACE] suppressed " << g_countedLoopTrace.suppressed
+                  << " counted-loop instruction trace lines for range 0x"
+                  << std::hex << g_countedLoopTrace.start << "-0x"
+                  << g_countedLoopTrace.end << std::dec << std::endl;
+    }
+
+    g_countedLoopTrace = CountedLoopTraceState();
+}
+
+} // namespace
+
 // ============================================================================
 // IA64ISAState Implementation
 // ============================================================================
@@ -349,10 +373,25 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             );
         }
         
-        // Log instruction execution
-        std::cout << "[IP=0x" << std::hex << decodeResult.instructionAddress << std::dec 
-                  << ", Slot=" << state_.currentSlot_ << "] "
-                  << decodeResult.disassembly << std::endl;
+        if (g_countedLoopTrace.active &&
+            (decodeResult.instructionAddress < g_countedLoopTrace.start ||
+             decodeResult.instructionAddress > g_countedLoopTrace.end)) {
+            finishCountedLoopTraceIfActive();
+        }
+
+        const bool suppressCountedLoopTrace =
+            g_countedLoopTrace.active &&
+            decodeResult.instructionAddress >= g_countedLoopTrace.start &&
+            decodeResult.instructionAddress <= g_countedLoopTrace.end &&
+            state_.getCPUState().GetAR(65) > 1;
+
+        if (suppressCountedLoopTrace) {
+            ++g_countedLoopTrace.suppressed;
+        } else {
+            std::cout << "[IP=0x" << std::hex << decodeResult.instructionAddress << std::dec
+                      << ", Slot=" << state_.currentSlot_ << "] "
+                      << decodeResult.disassembly << std::endl;
+        }
 
         if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
             const uint64_t rawBits = cachedInstruction_.GetRawBits();
@@ -476,12 +515,21 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
                 restoreCallFrame();
             }
+            if (callLooksLikeCountedLoop) {
+                g_countedLoopTrace.active = true;
+                g_countedLoopTrace.start = branchTarget;
+                g_countedLoopTrace.end = currentIP;
+            }
             state_.getCPUState().SetIP(branchTarget);
             state_.bundleValid_ = false;
             state_.currentSlot_ = 0;
             capturePredicateGroupSnapshot();
             hasCachedInstruction_ = false;
             return ISAExecutionResult::CONTINUE;
+        }
+
+        if (callLooksLikeCountedLoop) {
+            finishCountedLoopTraceIfActive();
         }
         
         // Advance to next instruction (non-branch)
