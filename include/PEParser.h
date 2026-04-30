@@ -123,6 +123,7 @@ constexpr uint32_t R_IA64_DIR64LSB = 0x27;
 constexpr uint32_t R_IA64_FPTR64LSB = 0x47;
 constexpr uint32_t R_IA64_PCREL64LSB = 0x4f;
 constexpr uint32_t R_IA64_SEGREL64LSB = 0x5f;
+constexpr uint32_t R_IA64_REL64LSB = 0x6f;
 
 // PE Base Relocation Block Header
 struct PEBaseRelocationBlock {
@@ -135,6 +136,15 @@ struct ELFRelaEntry {
     uint64_t offset;      // Location to apply relocation
     uint64_t info;        // Relocation type and symbol index
     int64_t addend;       // Constant addend
+};
+
+struct ELFDynSymEntry {
+    uint32_t name;
+    uint8_t info;
+    uint8_t other;
+    uint16_t sectionIndex;
+    uint64_t value;
+    uint64_t size;
 };
 
 struct PESectionInfo {

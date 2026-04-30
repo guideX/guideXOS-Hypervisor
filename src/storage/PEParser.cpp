@@ -791,6 +791,18 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
     
     int relocationCount = 0;
     int skippedCount = 0;
+    uint64_t functionDescriptorRVA = 0;
+    const PESectionInfo* dynsymSection = findSectionByName(".dynsym");
+    const uint64_t dynsymCount = dynsymSection
+        ? dynsymSection->virtualSize / sizeof(ELFDynSymEntry)
+        : 0;
+
+    for (const auto& section : imageInfo_.sections) {
+        functionDescriptorRVA = std::max(
+            functionDescriptorRVA,
+            section.virtualAddress + std::max(section.virtualSize, static_cast<uint64_t>(section.rawDataSize)));
+    }
+    functionDescriptorRVA = (functionDescriptorRVA + 15) & ~0xFULL;
     
     for (size_t i = 0; i < numRelocations; ++i) {
         size_t entryOffset = relaSection->virtualAddress + (i * sizeof(ELFRelaEntry));
@@ -823,7 +835,6 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         
         switch (type) {
             case R_IA64_DIR64LSB:
-            case R_IA64_FPTR64LSB:
             {
                 if (rela.offset + 8 <= imageBuffer.size()) {
                     std::memcpy(&originalValue, &imageBuffer[rela.offset], 8);
@@ -832,6 +843,55 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
                     newValue = loadAddress + rela.addend;
                     std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
                     applied = true;
+                }
+                break;
+            }
+
+            case R_IA64_REL64LSB:
+            {
+                if (rela.offset + 8 <= imageBuffer.size()) {
+                    std::memcpy(&originalValue, &imageBuffer[rela.offset], 8);
+                    // IA-64 EFI images use REL64 entries to make existing
+                    // descriptor/data words relative to the loaded image base.
+                    newValue = originalValue + loadAddress;
+                    std::memcpy(&imageBuffer[rela.offset], &newValue, 8);
+                    applied = true;
+                }
+                break;
+            }
+
+            case R_IA64_FPTR64LSB:
+            {
+                if (rela.offset + 8 <= imageBuffer.size() &&
+                    dynsymSection &&
+                    dynsymSection->virtualAddress + dynsymSection->virtualSize <= imageBuffer.size()) {
+                    const uint32_t symbol = static_cast<uint32_t>(rela.info >> 32);
+                    if (symbol < dynsymCount) {
+                        ELFDynSymEntry sym{};
+                        const uint64_t symOffset =
+                            dynsymSection->virtualAddress + (static_cast<uint64_t>(symbol) * sizeof(ELFDynSymEntry));
+                        std::memcpy(&sym, &imageBuffer[symOffset], sizeof(sym));
+
+                        std::memcpy(&originalValue, &imageBuffer[rela.offset], 8);
+
+                        if (functionDescriptorRVA + 16 > imageBuffer.size()) {
+                            imageBuffer.resize(static_cast<size_t>(functionDescriptorRVA + 16), 0);
+                        }
+
+                        const uint64_t descriptorAddress = loadAddress + functionDescriptorRVA;
+                        const uint64_t functionAddress =
+                            loadAddress + sym.value + static_cast<int64_t>(rela.addend);
+                        const uint64_t globalPointer =
+                            imageInfo_.hasGlobalPointer ? imageInfo_.globalPointer : loadAddress;
+
+                        std::memcpy(&imageBuffer[functionDescriptorRVA], &functionAddress, 8);
+                        std::memcpy(&imageBuffer[functionDescriptorRVA + 8], &globalPointer, 8);
+                        std::memcpy(&imageBuffer[rela.offset], &descriptorAddress, 8);
+
+                        newValue = descriptorAddress;
+                        functionDescriptorRVA += 16;
+                        applied = true;
+                    }
                 }
                 break;
             }
