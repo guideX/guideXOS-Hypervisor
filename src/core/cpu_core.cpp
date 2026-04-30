@@ -234,6 +234,10 @@ servicePendingInterrupt();
     
     // Execute the instruction
     executeInstruction(instr);
+
+    if (!bundleValid_) {
+        return true;
+    }
     
     // Move to next slot
     currentSlot_++;
@@ -282,6 +286,14 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         uint64_t branchTarget = 0;
         const uint8_t predicate = instr.GetPredicate();
         const bool predicateTrue = (predicate == 0) || state_.GetPR(predicate);
+        const uint64_t currentIP = state_.GetIP();
+        const uint64_t branchTargetValue = instr.HasBranchTarget() ? instr.GetBranchTarget() : 0;
+        const bool callLooksLikeCountedLoop =
+            instr.GetType() == InstructionType::BR_CALL &&
+            instr.GetDst() == 5 &&
+            instr.HasBranchTarget() &&
+            branchTargetValue < currentIP &&
+            (currentIP - branchTargetValue) <= 0x100;
         
         switch (instr.GetType()) {
             case InstructionType::BR_COND:
@@ -293,8 +305,13 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                 break;
                 
             case InstructionType::BR_CALL:
-                // Branch and link - target from instruction
-                if (predicateTrue && instr.HasBranchTarget()) {
+                if (callLooksLikeCountedLoop) {
+                    if (predicateTrue && state_.GetAR(65) != 0) {
+                        branchTarget = instr.GetBranchTarget();
+                        isBranch = true;
+                    }
+                } else if (predicateTrue && instr.HasBranchTarget()) {
+                    // Branch and link - target from instruction
                     branchTarget = instr.GetBranchTarget();
                     isBranch = true;
                     captureCallOutputRegisters();
@@ -323,7 +340,13 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         // Normal instruction execution
         // InstructionEx already has Execute() method that handles execution
         // It also handles predication internally if needed
-        instr.Execute(state_, memory_);
+        if (callLooksLikeCountedLoop) {
+            if (predicateTrue && state_.GetAR(65) != 0) {
+                state_.SetAR(65, state_.GetAR(65) - 1);
+            }
+        } else {
+            instr.Execute(state_, memory_);
+        }
 
         if (instr.GetType() == InstructionType::ALLOC && predicateTrue) {
             applyPendingCallInputRegisters();

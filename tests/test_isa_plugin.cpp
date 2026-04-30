@@ -764,6 +764,35 @@ void testIA64LegacyCallOutputInputs() {
     std::cout << "  ? caller outputs become callee input registers after alloc\n";
 }
 
+void testIA64LegacyCallDecodedCountedLoop() {
+    std::cout << "Testing IA-64 legacy call-decoded counted loop execution...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeCallCountedLoopDecoder decoder;
+    CPU taken(memory, decoder);
+    taken.getState().SetIP(0x1000);
+    taken.getState().SetAR(65, 2);
+    taken.getState().SetBR(5, 0);
+    assert(taken.step());
+    assert(taken.getState().GetIP() == 0x0fe0);
+    assert(taken.getState().GetAR(65) == 1);
+    assert(taken.getState().GetBR(5) == 0);
+
+    CPU fallthrough(memory, decoder);
+    fallthrough.getState().SetIP(0x1000);
+    fallthrough.getState().SetAR(65, 0);
+    fallthrough.getState().SetBR(5, 0);
+    assert(fallthrough.step());
+    assert(fallthrough.getState().GetIP() == 0x1010);
+    assert(fallthrough.getState().GetAR(65) == 0);
+    assert(fallthrough.getState().GetBR(5) == 0);
+
+    std::cout << "  ? legacy backward br.call b5 uses ar.lc and does not link\n";
+}
+
 void testIA64PluginCallOutputInputs() {
     std::cout << "Testing IA-64 plugin call output/input register bridge...\n";
 
@@ -1019,6 +1048,9 @@ int main() {
         std::cout << "\n";
 
         testIA64LegacyCallOutputInputs();
+        std::cout << "\n";
+
+        testIA64LegacyCallDecodedCountedLoop();
         std::cout << "\n";
 
         testIA64PluginCallOutputInputs();
