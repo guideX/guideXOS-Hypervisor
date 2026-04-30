@@ -133,8 +133,10 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
             // br.ret uses b2 as source
             instr.SetOperands(0, fmt.b2, 0);
         } else if (fmt.type == formats::BFormat::BranchType::CALL) {
-            // br.call saves to b1
-            instr.SetOperands(fmt.b1, 0, 0);
+            // br.call saves to b1; indirect forms branch through b2.
+            instr.SetOperands(fmt.b1, fmt.indirect ? fmt.b2 : 0, 0);
+        } else if (fmt.type == formats::BFormat::BranchType::COND && fmt.indirect) {
+            instr.SetOperands(0, fmt.b2, 0);
         }
         
         // Set branch target if available

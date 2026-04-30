@@ -336,9 +336,10 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         
         switch (instr.GetType()) {
             case InstructionType::BR_COND:
-                // Conditional branch - target from instruction
-                if (predicateTrue && instr.HasBranchTarget()) {
-                    branchTarget = instr.GetBranchTarget();
+                if (predicateTrue) {
+                    branchTarget = instr.HasBranchTarget()
+                        ? instr.GetBranchTarget()
+                        : state_.GetBR(instr.GetSrc1());
                     isBranch = true;
                 }
                 break;
@@ -349,9 +350,10 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                         branchTarget = instr.GetBranchTarget();
                         isBranch = true;
                     }
-                } else if (predicateTrue && instr.HasBranchTarget()) {
-                    // Branch and link - target from instruction
-                    branchTarget = instr.GetBranchTarget();
+                } else if (predicateTrue) {
+                    branchTarget = instr.HasBranchTarget()
+                        ? instr.GetBranchTarget()
+                        : state_.GetBR(instr.GetSrc1());
                     isBranch = true;
                     captureCallOutputRegisters();
                 }

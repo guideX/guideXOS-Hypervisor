@@ -455,8 +455,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             cachedInstruction_.GetType() == InstructionType::BR_CLOOP;
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
-                if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
-                    branchTarget = cachedInstruction_.GetBranchTarget();
+                if (livePredicateTrue) {
+                    branchTarget = cachedInstruction_.HasBranchTarget()
+                        ? cachedInstruction_.GetBranchTarget()
+                        : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     isBranch = true;
                 }
                 break;
@@ -467,8 +469,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         branchTarget = cachedInstruction_.GetBranchTarget();
                         isBranch = true;
                     }
-                } else if (livePredicateTrue && cachedInstruction_.HasBranchTarget()) {
-                    branchTarget = cachedInstruction_.GetBranchTarget();
+                } else if (livePredicateTrue) {
+                    branchTarget = cachedInstruction_.HasBranchTarget()
+                        ? cachedInstruction_.GetBranchTarget()
+                        : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     isBranch = true;
                     saveCallFrame();
                     captureCallOutputRegisters();

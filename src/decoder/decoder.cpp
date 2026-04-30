@@ -672,7 +672,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::BR_COND:
         case InstructionType::BR_CALL:
             // br.call saves return address
-            if (type_ == InstructionType::BR_CALL && hasBranchTarget_) {
+            if (type_ == InstructionType::BR_CALL) {
                 cpu.SetBR(dst_, cpu.GetIP() + 16);
             }
             break;
@@ -1073,7 +1073,7 @@ std::string InstructionEx::GetDisassembly() const {
             if (hasBranchTarget_) {
                 oss << "br.cond 0x" << std::hex << branchTarget_ << std::dec;
             } else {
-                oss << "br.cond";
+                oss << "br.cond b" << static_cast<int>(src1_);
             }
             break;
             
@@ -1081,6 +1081,8 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "br.call b" << static_cast<int>(dst_);
             if (hasBranchTarget_) {
                 oss << " = 0x" << std::hex << branchTarget_ << std::dec;
+            } else {
+                oss << " = b" << static_cast<int>(src1_);
             }
             break;
             
