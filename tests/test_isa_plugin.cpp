@@ -209,6 +209,9 @@ public:
 
 class FakeCallCountedLoopDecoder : public IDecoder {
 public:
+    explicit FakeCallCountedLoopDecoder(int64_t targetDelta = -0x20)
+        : targetDelta_(targetDelta) {}
+
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
         (void)bundleData;
         return InstructionBundle();
@@ -223,7 +226,10 @@ public:
 
         InstructionEx branch(InstructionType::BR_CALL, UnitType::B_UNIT);
         branch.SetOperands(5, 0, 0);
-        branch.SetBranchTarget(bundleIP - 0x20);
+        const uint64_t target = targetDelta_ < 0
+            ? bundleIP - static_cast<uint64_t>(-targetDelta_)
+            : bundleIP + static_cast<uint64_t>(targetDelta_);
+        branch.SetBranchTarget(target);
         branch.SetRawBits(0x5a100ULL);
 
         Bundle bundle;
@@ -238,6 +244,9 @@ public:
         instr.SetRawBits(rawBits);
         return instr;
     }
+
+private:
+    int64_t targetDelta_;
 };
 
 class FakeCompareBranchDecoder : public IDecoder {
@@ -704,7 +713,20 @@ void testIA64CallDecodedCountedLoopExecution() {
     assert(fallthroughState.getCPUState().GetAR(65) == 0);
     assert(fallthroughState.getCPUState().GetBR(5) == 0);
 
-    std::cout << "  ? backward br.call b5 uses ar.lc and does not link\n";
+    FakeCallCountedLoopDecoder selfDecoder(0);
+    auto self = createIA64ISA(selfDecoder);
+    auto& selfState = dynamic_cast<IA64ISAState&>(self->getState());
+    selfState.getCPUState().SetIP(0x1000);
+    selfState.getCPUState().SetAR(65, 1);
+    selfState.getCPUState().SetBR(5, 0);
+    assert(self->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(self->getPC() == 0x1000);
+    assert(selfState.getCPUState().GetAR(65) == 0);
+    assert(selfState.getCPUState().GetBR(5) == 0);
+    assert(self->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(self->getPC() == 0x1010);
+
+    std::cout << "  ? backward/self br.call b5 uses ar.lc and does not link\n";
 }
 
 void testIA64BranchPredicateGroupSnapshot() {
@@ -1002,7 +1024,19 @@ void testIA64LegacyCallDecodedCountedLoop() {
     assert(fallthrough.getState().GetAR(65) == 0);
     assert(fallthrough.getState().GetBR(5) == 0);
 
-    std::cout << "  ? legacy backward br.call b5 uses ar.lc and does not link\n";
+    FakeCallCountedLoopDecoder selfDecoder(0);
+    CPU self(memory, selfDecoder);
+    self.getState().SetIP(0x1000);
+    self.getState().SetAR(65, 1);
+    self.getState().SetBR(5, 0);
+    assert(self.step());
+    assert(self.getState().GetIP() == 0x1000);
+    assert(self.getState().GetAR(65) == 0);
+    assert(self.getState().GetBR(5) == 0);
+    assert(self.step());
+    assert(self.getState().GetIP() == 0x1010);
+
+    std::cout << "  ? legacy backward/self br.call b5 uses ar.lc and does not link\n";
 }
 
 void testIA64LegacyIndirectBranchExecution() {

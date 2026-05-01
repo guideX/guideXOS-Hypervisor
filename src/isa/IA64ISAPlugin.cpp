@@ -446,7 +446,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             cachedInstruction_.GetType() == InstructionType::BR_CALL &&
             cachedInstruction_.GetDst() == 5 &&
             cachedInstruction_.HasBranchTarget() &&
-            branchTargetValue < currentIP &&
+            branchTargetValue <= currentIP &&
             (currentIP - branchTargetValue) <= 0x100;
         const bool branchInstruction =
             cachedInstruction_.GetType() == InstructionType::BR_COND ||

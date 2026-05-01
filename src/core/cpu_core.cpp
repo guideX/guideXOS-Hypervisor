@@ -331,7 +331,7 @@ void CPU::executeInstruction(const InstructionEx& instr) {
             instr.GetType() == InstructionType::BR_CALL &&
             instr.GetDst() == 5 &&
             instr.HasBranchTarget() &&
-            branchTargetValue < currentIP &&
+            branchTargetValue <= currentIP &&
             (currentIP - branchTargetValue) <= 0x100;
         
         switch (instr.GetType()) {
