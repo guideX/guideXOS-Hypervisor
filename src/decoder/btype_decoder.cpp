@@ -216,12 +216,16 @@ static bool decodeIndirect(uint64_t raw, uint8_t btype, uint8_t x6,
                                 formats::BFormat& result) {
         // Indirect branches use branch registers
         result.indirect = true;
+        const uint8_t operation = x6 & 0x1F;
         
-        switch (x6) {
+        switch (operation) {
             case 0x00:
                 // Boot service calls use the branch-register call form
                 // encoded as major=1/x6=0 with b1 holding the link register
-                // and b2 holding the target branch register.
+                // and b2 holding the target branch register.  The upper x6
+                // bit carries a branch hint, so x6=0x20 is the same call
+                // operation and appears in the EFI HandleProtocol path as
+                // br.call b0 = b0.
                 result.type = formats::BFormat::BranchType::CALL;
                 break;
                 

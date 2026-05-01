@@ -142,6 +142,39 @@ public:
     }
 };
 
+class FakeIndirectSelfCallDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+        call.SetOperands(0, 0, 0);
+        call.SetRawBits(0x2100001000ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeCountedLoopDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -814,6 +847,21 @@ void testIA64IndirectCallDecode() {
     std::cout << "  ? raw boot indirect service call decodes through b6 and links b0\n";
 }
 
+void testIA64IndirectSelfCallDecode() {
+    std::cout << "Testing IA-64 hinted indirect self-call decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx call = decoder.DecodeSlot(0x2100001000ULL, UnitType::B_UNIT, 0x1a50);
+
+    assert(call.GetType() == InstructionType::BR_CALL);
+    assert(call.GetDst() == 0);
+    assert(call.GetSrc1() == 0);
+    assert(!call.HasBranchTarget());
+    assert(call.GetDisassembly() == "br.call b0 = b0");
+
+    std::cout << "  ? raw boot hinted br.call b0 = b0 decodes as call, not cond\n";
+}
+
 void testIA64NopIDecode() {
     std::cout << "Testing IA-64 nop decode variants...\n";
 
@@ -1115,6 +1163,25 @@ void testIA64PluginIndirectCallExecution() {
     std::cout << "  ? plugin br.call b0 = b6 links b0 and branches through b6\n";
 }
 
+void testIA64PluginIndirectSelfCallExecution() {
+    std::cout << "Testing IA-64 plugin indirect self-call execution...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1a50, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectSelfCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1a50);
+    plugin.getCPUState().SetBR(0, 0x2400);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2400);
+    assert(plugin.getCPUState().GetBR(0) == 0x1a60);
+
+    std::cout << "  ? plugin br.call b0 = b0 branches through old b0 and links return\n";
+}
+
 void testIA64CPUWrapperDelegatesToPluginState() {
     std::cout << "Testing IA-64 CPU wrapper delegates state to plugin...\n";
 
@@ -1328,6 +1395,9 @@ int main() {
         testIA64IndirectCallDecode();
         std::cout << "\n";
 
+        testIA64IndirectSelfCallDecode();
+        std::cout << "\n";
+
         testIA64NopIDecode();
         std::cout << "\n";
 
@@ -1365,6 +1435,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginIndirectCallExecution();
+        std::cout << "\n";
+
+        testIA64PluginIndirectSelfCallExecution();
         std::cout << "\n";
 
         testIA64CPUWrapperDelegatesToPluginState();
