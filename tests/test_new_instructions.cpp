@@ -267,6 +267,21 @@ void test_latest_boot_log_blockers() {
     zxt4_return.Execute(cpu, memory);
     assert_equal("Boot zxt4 should clear high 32 bits", 0x80000001ULL, cpu.GetGR(8));
 
+    InstructionEx mov_m_from_ar = decoder.DecodeSlot(0x2112400ac0ULL, UnitType::M_UNIT, 0x32a60);
+    assert_true("Boot raw mov.m from AR should decode",
+                mov_m_from_ar.GetType() == InstructionType::MOV_FROM_AR);
+    assert_equal("Boot mov.m from AR destination", 43, mov_m_from_ar.GetDst());
+    assert_equal("Boot mov.m from AR source application register", 36, mov_m_from_ar.GetSrc1());
+    assert_string("Boot mov.m from AR disassembly",
+                  "mov r43 = ar.36",
+                  mov_m_from_ar.GetDisassembly());
+
+    cpu.SetAR(36, 0x0123456789abcdefULL);
+    cpu.SetGRNaT(43, true);
+    mov_m_from_ar.Execute(cpu, memory);
+    assert_equal("Boot mov.m from AR should copy application register", 0x0123456789abcdefULL, cpu.GetGR(43));
+    assert_true("Boot mov.m from AR should clear destination NaT", !cpu.GetGRNaT(43));
+
     InstructionEx cloop = decoder.DecodeSlot(0xb1ffffc140ULL, UnitType::B_UNIT, 0xa120);
     assert_true("Boot raw counted-loop branch should decode",
                 cloop.GetType() == InstructionType::BR_CLOOP);
