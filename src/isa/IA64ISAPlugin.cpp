@@ -485,7 +485,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         ? cachedInstruction_.GetBranchTarget()
                         : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     isBranch = true;
-                    saveCallFrame();
+                    saveCallFrame(currentIP + 16);
                     captureCallOutputRegisters();
                 }
                 break;
@@ -528,7 +528,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         // Handle branch after execution
         if (isBranch) {
             if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
-                restoreCallFrame();
+                restoreCallFrame(branchTarget);
             }
             if (callLooksLikeCountedLoop) {
                 g_countedLoopTrace.active = true;
@@ -819,21 +819,26 @@ void IA64ISAPlugin::applyPendingCallInputRegisters() {
     pendingCallInputs_.clear();
 }
 
-void IA64ISAPlugin::saveCallFrame() {
+void IA64ISAPlugin::saveCallFrame(uint64_t returnAddress) {
     CallFrameSnapshot frame{};
     frame.cfm = state_.getCPUState().GetCFM();
+    frame.returnAddress = returnAddress;
     for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
         frame.stackedRegisters[i] = state_.getCPUState().GetGR(NUM_STATIC_GR + i);
     }
     callFrameStack_.push_back(frame);
 }
 
-void IA64ISAPlugin::restoreCallFrame() {
+void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
     if (callFrameStack_.empty()) {
         return;
     }
 
     const CallFrameSnapshot frame = callFrameStack_.back();
+    if (frame.returnAddress != branchTarget) {
+        return;
+    }
+
     callFrameStack_.pop_back();
 
     for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {

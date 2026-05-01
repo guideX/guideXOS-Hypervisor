@@ -198,8 +198,8 @@ private:
     void capturePredicateGroupSnapshot();
     void captureCallOutputRegisters();
     void applyPendingCallInputRegisters();
-    void saveCallFrame();
-    void restoreCallFrame();
+    void saveCallFrame(uint64_t returnAddress);
+    void restoreCallFrame(uint64_t branchTarget);
     
     /**
      * Execute a single IA-64 instruction
@@ -247,6 +247,7 @@ private:
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;
         uint64_t cfm;
+        uint64_t returnAddress;
     };
     std::vector<CallFrameSnapshot> callFrameStack_;
 };

@@ -8,8 +8,40 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
+#include <map>
 
 using namespace ia64;
+
+class SparseMemory : public IMemory {
+public:
+    void Read(uint64_t address, uint8_t* dest, size_t size) const override {
+        for (size_t i = 0; i < size; ++i) {
+            const auto it = bytes_.find(address + i);
+            dest[i] = it == bytes_.end() ? 0 : it->second;
+        }
+    }
+
+    void Write(uint64_t address, const uint8_t* src, size_t size) override {
+        for (size_t i = 0; i < size; ++i) {
+            bytes_[address + i] = src[i];
+        }
+    }
+
+    void loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) override {
+        Write(address, buffer, size);
+    }
+
+    void loadBuffer(uint64_t address, const std::vector<uint8_t>& buffer) override {
+        Write(address, buffer.data(), buffer.size());
+    }
+
+    size_t GetTotalSize() const override { return 0; }
+    void Clear() override { bytes_.clear(); }
+    const uint8_t* GetRawData() const override { return nullptr; }
+
+private:
+    std::map<uint64_t, uint8_t> bytes_;
+};
 
 class FakeBranchDecoder : public IDecoder {
 public:
@@ -301,6 +333,57 @@ public:
             clobberLocal.SetRawBits(0x21);
             bundle.instructions.push_back(clobberLocal);
         } else if (bundleIP == 0x2010) {
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x30);
+            bundle.instructions.push_back(ret);
+        }
+
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
+class FakeEfiThunkReturnDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x1000) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 0, 0);
+            call.SetBranchTarget(0x1990);
+            call.SetRawBits(0x10);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x1990) {
+            InstructionEx saveGp(InstructionType::MOV_GR, UnitType::I_UNIT);
+            saveGp.SetOperands(61, 1, 0);
+            saveGp.SetRawBits(0x20);
+            bundle.instructions.push_back(saveGp);
+
+            InstructionEx serviceThunk(InstructionType::BR_COND, UnitType::B_UNIT);
+            serviceThunk.SetOperands(0, 6, 0);
+            serviceThunk.SetRawBits(0x200000c000ULL);
+            bundle.instructions.push_back(serviceThunk);
+        } else if (bundleIP == 0x1fe00f80ULL) {
             InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
             ret.SetOperands(0, 0, 0);
             ret.SetRawBits(0x30);
@@ -980,6 +1063,39 @@ void testIA64PluginEfiServiceThunkLinksReturn() {
     std::cout << "  ? plugin EFI br.cond b6 thunk links b0 for service return\n";
 }
 
+void testIA64PluginEfiThunkReturnDoesNotPopOuterCallFrame() {
+    std::cout << "Testing IA-64 plugin EFI thunk return preserves outer call frame...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1990, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1fe00f80ULL, bundleBytes, sizeof(bundleBytes));
+
+    FakeEfiThunkReturnDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(1, 0x238000);
+    plugin.getCPUState().SetGR(61, 0);
+    plugin.getCPUState().SetBR(6, 0x1fe00f80ULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1990);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(61) == 0x238000);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1fe00f80ULL);
+    assert(plugin.getCPUState().GetBR(0) == 0x19a0);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x19a0);
+    assert(plugin.getCPUState().GetGR(61) == 0x238000);
+
+    std::cout << "  ? EFI service br.ret does not restore an unrelated br.call frame\n";
+}
+
 void testIA64PluginIndirectCallExecution() {
     std::cout << "Testing IA-64 plugin indirect call execution...\n";
 
@@ -1243,6 +1359,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginEfiServiceThunkLinksReturn();
+        std::cout << "\n";
+
+        testIA64PluginEfiThunkReturnDoesNotPopOuterCallFrame();
         std::cout << "\n";
 
         testIA64PluginIndirectCallExecution();
