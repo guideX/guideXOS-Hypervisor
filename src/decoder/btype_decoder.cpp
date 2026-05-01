@@ -218,8 +218,11 @@ static bool decodeIndirect(uint64_t raw, uint8_t btype, uint8_t x6,
         result.indirect = true;
         
         switch (x6) {
-            case 0x00:  // BR.COND (indirect)
-                result.type = formats::BFormat::BranchType::COND;
+            case 0x00:
+                // Boot service calls use the branch-register call form
+                // encoded as major=1/x6=0 with b1 holding the link register
+                // and b2 holding the target branch register.
+                result.type = formats::BFormat::BranchType::CALL;
                 break;
                 
             case 0x01:  // BR.CALL (indirect)

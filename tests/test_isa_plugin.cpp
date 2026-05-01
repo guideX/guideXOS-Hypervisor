@@ -77,6 +77,39 @@ public:
     }
 };
 
+class FakeIndirectCallDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+        call.SetOperands(0, 6, 0);
+        call.SetRawBits(0x200000c000ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeCountedLoopDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -683,18 +716,19 @@ void testIA64ReturnBranchDecode() {
     std::cout << "  ? raw boot return branch decodes as br.ret b0\n";
 }
 
-void testIA64IndirectBranchDecode() {
-    std::cout << "Testing IA-64 indirect branch decode...\n";
+void testIA64IndirectCallDecode() {
+    std::cout << "Testing IA-64 indirect call decode...\n";
 
     InstructionDecoder decoder;
-    InstructionEx branch = decoder.DecodeSlot(0x200000c000ULL, UnitType::B_UNIT, 0x1980);
+    InstructionEx call = decoder.DecodeSlot(0x200000c000ULL, UnitType::B_UNIT, 0x1980);
 
-    assert(branch.GetType() == InstructionType::BR_COND);
-    assert(branch.GetSrc1() == 6);
-    assert(!branch.HasBranchTarget());
-    assert(branch.GetDisassembly() == "br.cond b6");
+    assert(call.GetType() == InstructionType::BR_CALL);
+    assert(call.GetDst() == 0);
+    assert(call.GetSrc1() == 6);
+    assert(!call.HasBranchTarget());
+    assert(call.GetDisassembly() == "br.call b0 = b6");
 
-    std::cout << "  ? raw boot indirect conditional branch decodes through b6\n";
+    std::cout << "  ? raw boot indirect service call decodes through b6 and links b0\n";
 }
 
 void testIA64NopIDecode() {
@@ -858,6 +892,24 @@ void testIA64LegacyIndirectBranchExecution() {
     std::cout << "  ? legacy br.cond b6 branches through the branch register\n";
 }
 
+void testIA64LegacyIndirectCallExecution() {
+    std::cout << "Testing IA-64 legacy indirect call execution...\n";
+
+    Memory memory(64 * 1024);
+    InstructionDecoder decoder;
+    CPU cpu(memory, decoder);
+    InstructionEx call = decoder.DecodeSlot(0x200000c000ULL, UnitType::B_UNIT, 0x1990);
+
+    cpu.getState().SetIP(0x1990);
+    cpu.getState().SetBR(6, 0x2400);
+
+    cpu.executeInstruction(call);
+    assert(cpu.getState().GetIP() == 0x2400);
+    assert(cpu.getState().GetBR(0) == 0x19a0);
+
+    std::cout << "  ? legacy br.call b0 = b6 links b0 and branches through b6\n";
+}
+
 void testIA64PluginCallOutputInputs() {
     std::cout << "Testing IA-64 plugin call output/input register bridge...\n";
 
@@ -906,6 +958,25 @@ void testIA64PluginIndirectBranchExecution() {
     assert(plugin.getCPUState().GetIP() == 0x2400);
 
     std::cout << "  ? plugin br.cond b6 branches through the branch register\n";
+}
+
+void testIA64PluginIndirectCallExecution() {
+    std::cout << "Testing IA-64 plugin indirect call execution...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetBR(6, 0x2400);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2400);
+    assert(plugin.getCPUState().GetBR(0) == 0x1010);
+
+    std::cout << "  ? plugin br.call b0 = b6 links b0 and branches through b6\n";
 }
 
 void testIA64CPUWrapperDelegatesToPluginState() {
@@ -1118,7 +1189,7 @@ int main() {
         testIA64ReturnBranchDecode();
         std::cout << "\n";
 
-        testIA64IndirectBranchDecode();
+        testIA64IndirectCallDecode();
         std::cout << "\n";
 
         testIA64NopIDecode();
@@ -1142,10 +1213,16 @@ int main() {
         testIA64LegacyIndirectBranchExecution();
         std::cout << "\n";
 
+        testIA64LegacyIndirectCallExecution();
+        std::cout << "\n";
+
         testIA64PluginCallOutputInputs();
         std::cout << "\n";
 
         testIA64PluginIndirectBranchExecution();
+        std::cout << "\n";
+
+        testIA64PluginIndirectCallExecution();
         std::cout << "\n";
 
         testIA64CPUWrapperDelegatesToPluginState();

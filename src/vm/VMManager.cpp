@@ -606,7 +606,11 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // These are passed in r32 (in0) and r33 (in1) per IA-64 ABI.
                                                                 // Without valid pointers, early EFI code (e.g. st8 [r33]=r16)
                                                                 // corrupts address 0 (the loaded image itself).
-                                                                constexpr uint64_t EFI_STUB_ADDR = 0x200000ULL; // above the loaded EFI image
+                                                                // Keep firmware handoff stubs away from the loaded image
+                                                                // and early bootloader scratch space. The IA-64 stack is
+                                                                // placed near the top of memory with a guard, so this page
+                                                                // remains below it while staying outside low guest RAM.
+                                                                constexpr uint64_t EFI_STUB_ADDR = 0x1FE00000ULL;
                                                                 constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
 
                                                                 // Write a minimal EFI System Table plus service-table
@@ -727,7 +731,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
                                                                 instance->vm->writeGR(0, 33, EFI_STUB_ADDR);
                                                                 SetupMinimalEfiStack(instance, oss);
-                                                                LOG_INFO("  Set r32=ImageHandle=0x1, r33=EFI_SystemTable=0x200000");
+                                                                oss.str("");
+                                                                oss << "  Set r32=ImageHandle=0x" << std::hex << EFI_IMAGE_HANDLE
+                                                                    << ", r33=EFI_SystemTable=0x" << EFI_STUB_ADDR;
+                                                                LOG_INFO(oss.str());
 
                                                                 LOG_INFO("??? EFI bootloader loaded successfully from boot image!");
                                                                 LOG_INFO("  Source: " + bootImgPath + " -> " + foundEFIPath);
