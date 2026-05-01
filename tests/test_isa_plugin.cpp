@@ -956,8 +956,28 @@ void testIA64PluginIndirectBranchExecution() {
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2400);
+    assert(plugin.getCPUState().GetBR(0) == 0);
 
     std::cout << "  ? plugin br.cond b6 branches through the branch register\n";
+}
+
+void testIA64PluginEfiServiceThunkLinksReturn() {
+    std::cout << "Testing IA-64 plugin EFI service thunk return link...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1990, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectBranchDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1990);
+    plugin.getCPUState().SetBR(6, 0x1fe00f80ULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1fe00f80ULL);
+    assert(plugin.getCPUState().GetBR(0) == 0x19a0);
+
+    std::cout << "  ? plugin EFI br.cond b6 thunk links b0 for service return\n";
 }
 
 void testIA64PluginIndirectCallExecution() {
@@ -1220,6 +1240,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginIndirectBranchExecution();
+        std::cout << "\n";
+
+        testIA64PluginEfiServiceThunkLinksReturn();
         std::cout << "\n";
 
         testIA64PluginIndirectCallExecution();

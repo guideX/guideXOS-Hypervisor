@@ -459,6 +459,17 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     branchTarget = cachedInstruction_.HasBranchTarget()
                         ? cachedInstruction_.GetBranchTarget()
                         : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                    // The IA-64 EFI bootloader uses a small low-address thunk for
+                    // Boot Services calls that decodes as br.cond b6, but it is
+                    // followed by an EFI function that returns through b0. Link
+                    // only this thunk-to-stub pattern so normal indirect branches
+                    // keep their plain branch semantics.
+                    if (!cachedInstruction_.HasBranchTarget() &&
+                        cachedInstruction_.GetSrc1() == 6 &&
+                        currentIP >= 0x1900 && currentIP < 0x1A00 &&
+                        branchTarget >= 0x1FE00000ULL && branchTarget < 0x1FE01000ULL) {
+                        state_.getCPUState().SetBR(0, currentIP + 16);
+                    }
                     isBranch = true;
                 }
                 break;
