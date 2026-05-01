@@ -662,8 +662,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write32(EFI_BOOT_SERVICES_ADDR + 0x0C, 0x180U);
 
                                                                     // IA-64 function pointers are descriptors: [code, gp].
-                                                                    // Use one tiny callable error stub for unimplemented Boot
-                                                                    // Services entries so zero pointers do not branch through
+                                                                    // Use one tiny callable error stub for unimplemented EFI
+                                                                    // service entries so zero pointers do not branch through
                                                                     // the loaded PE header.
                                                                     constexpr uint64_t ADD_R8_R0_MINUS_1 = 0x13fffcfe200ULL;
                                                                     constexpr uint64_t ADD_R8_R0_ZERO = 0x12000000200ULL;
@@ -688,6 +688,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_SUCCESS_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
 
+                                                                    for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
+                                                                        write64(EFI_RUNTIME_SERVICES_ADDR + offset,
+                                                                                EFI_UNSUPPORTED_STUB_DESC_ADDR);
+                                                                    }
                                                                     for (uint64_t offset = 0x18; offset < 0x180; offset += 8) {
                                                                         write64(EFI_BOOT_SERVICES_ADDR + offset,
                                                                                 EFI_UNSUPPORTED_STUB_DESC_ADDR);
