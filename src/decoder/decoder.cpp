@@ -876,15 +876,40 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "and r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", r" << static_cast<int>(src2_);
             break;
+
+        case InstructionType::AND_IMM:
+            oss << "and r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", " << static_cast<int64_t>(immediate_);
+            break;
             
         case InstructionType::OR:
             oss << "or r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", r" << static_cast<int>(src2_);
             break;
+
+        case InstructionType::OR_IMM:
+            oss << "or r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", " << static_cast<int64_t>(immediate_);
+            break;
             
         case InstructionType::XOR:
             oss << "xor r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::XOR_IMM:
+            oss << "xor r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", " << static_cast<int64_t>(immediate_);
+            break;
+
+        case InstructionType::ANDCM:
+            oss << "andcm r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::ANDCM_IMM:
+            oss << "andcm r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", " << static_cast<int64_t>(immediate_);
             break;
             
         case InstructionType::SHL:

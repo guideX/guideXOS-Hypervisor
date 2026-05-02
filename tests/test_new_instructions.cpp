@@ -282,6 +282,19 @@ void test_latest_boot_log_blockers() {
     assert_equal("Boot mov.m from AR should copy application register", 0x0123456789abcdefULL, cpu.GetGR(43));
     assert_true("Boot mov.m from AR should clear destination NaT", !cpu.GetGRNaT(43));
 
+    InstructionEx or_imm = decoder.DecodeSlot(0x10170e0e440ULL, UnitType::M_UNIT, 0x32590);
+    assert_true("Boot raw OR immediate should decode", or_imm.GetType() == InstructionType::OR_IMM);
+    assert_equal("Boot OR immediate destination", 17, or_imm.GetDst());
+    assert_equal("Boot OR immediate source", 14, or_imm.GetSrc1());
+    assert_equal("Boot OR immediate value", 7, or_imm.GetImmediate());
+    assert_string("Boot OR immediate disassembly",
+                  "or r17 = r14, 7",
+                  or_imm.GetDisassembly());
+
+    cpu.SetGR(14, 0x12340);
+    or_imm.Execute(cpu, memory);
+    assert_equal("Boot OR immediate should set low immediate bits", 0x12347, cpu.GetGR(17));
+
     InstructionEx cloop = decoder.DecodeSlot(0xb1ffffc140ULL, UnitType::B_UNIT, 0xa120);
     assert_true("Boot raw counted-loop branch should decode",
                 cloop.GetType() == InstructionType::BR_CLOOP);
