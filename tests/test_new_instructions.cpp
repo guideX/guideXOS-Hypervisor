@@ -295,6 +295,18 @@ void test_latest_boot_log_blockers() {
     or_imm.Execute(cpu, memory);
     assert_equal("Boot OR immediate should set low immediate bits", 0x12347, cpu.GetGR(17));
 
+    InstructionEx zxt2_value = decoder.DecodeSlot(0x88800fc0ULL, UnitType::I_UNIT, 0x31c50);
+    assert_true("Boot raw zxt2 should decode", zxt2_value.GetType() == InstructionType::ZXT2);
+    assert_equal("Boot zxt2 destination", 63, zxt2_value.GetDst());
+    assert_equal("Boot zxt2 source", 8, zxt2_value.GetSrc1());
+    assert_string("Boot zxt2 disassembly",
+                  "zxt2 r63 = r8",
+                  zxt2_value.GetDisassembly());
+
+    cpu.SetGR(8, 0xffffffffffff807fULL);
+    zxt2_value.Execute(cpu, memory);
+    assert_equal("Boot zxt2 should keep low 16 bits", 0x807fULL, cpu.GetGR(63));
+
     InstructionEx cloop = decoder.DecodeSlot(0xb1ffffc140ULL, UnitType::B_UNIT, 0xa120);
     assert_true("Boot raw counted-loop branch should decode",
                 cloop.GetType() == InstructionType::BR_CLOOP);

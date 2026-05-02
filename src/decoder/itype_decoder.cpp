@@ -162,6 +162,20 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
         }
         
         // Zero/sign extend operations
+        if (op == 0x10 || op == 0x11 || op == 0x12) {
+            InstructionType type = InstructionType::ZXT1;
+            if (op == 0x11) {
+                type = InstructionType::ZXT2;
+            } else if (op == 0x12) {
+                type = InstructionType::ZXT4;
+            }
+
+            instr = InstructionEx(type, UnitType::I_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);
+            return true;
+        }
+
         if ((op & 0xF0) == 0x00) {
             uint8_t subop = op & 0x0F;
             
