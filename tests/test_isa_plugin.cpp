@@ -442,6 +442,39 @@ public:
     }
 };
 
+class FakeTopLevelReturnDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+        ret.SetOperands(0, 0, 0);
+        ret.SetRawBits(0x108000100ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(ret);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 // Test ISA state serialization/deserialization
 void testISAStateSerialization() {
     std::cout << "Testing ISA state serialization...\n";
@@ -1218,6 +1251,23 @@ void testIA64PluginZeroFilledFirmwareCallReturnsSuccess() {
     std::cout << "  ? zero-filled high-memory br.call returns EFI_SUCCESS instead of exiting or walking NOPs\n";
 }
 
+void testIA64PluginTopLevelReturnHalts() {
+    std::cout << "Testing IA-64 plugin top-level EFI return handling...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1070, bundleBytes, sizeof(bundleBytes));
+
+    FakeTopLevelReturnDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1070);
+    plugin.getCPUState().SetBR(0, 0);
+
+    assert(plugin.step(memory) == ISAExecutionResult::HALT);
+
+    std::cout << "  ? br.ret b0 with zero return address halts cleanly\n";
+}
+
 void testIA64PluginIndirectSelfCallExecution() {
     std::cout << "Testing IA-64 plugin indirect self-call execution...\n";
 
@@ -1493,6 +1543,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginZeroFilledFirmwareCallReturnsSuccess();
+        std::cout << "\n";
+
+        testIA64PluginTopLevelReturnHalts();
         std::cout << "\n";
 
         testIA64PluginIndirectSelfCallExecution();

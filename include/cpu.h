@@ -204,6 +204,7 @@ public:
     // ISA plugin support
     bool isUsingISAPlugin() const { return isaPlugin_ != nullptr; }
     IISA* getISAPlugin() const { return isaPlugin_; }
+    bool isHalted() const { return halted_; }
 
     void queueInterrupt(uint8_t vector);
     bool hasPendingInterrupt() const;
@@ -224,6 +225,7 @@ IDecoder* decoder_;                 // Reference to instruction decoder interfac
 SyscallDispatcher* syscallDispatcher_; // Optional syscall dispatcher
 Profiler* profiler_;                // Optional profiler for performance analysis
 IISA* isaPlugin_;                   // Optional ISA plugin (new architecture)
+bool halted_;
     
 // Current bundle tracking (for multi-instruction execution)
 Bundle currentBundle_;

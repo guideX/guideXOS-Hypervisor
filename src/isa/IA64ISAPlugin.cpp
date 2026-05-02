@@ -573,6 +573,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
 
         // Handle branch after execution
         if (isBranch) {
+            if (cachedInstruction_.GetType() == InstructionType::BR_RET &&
+                livePredicateTrue && branchTarget == 0) {
+                std::cout << "[EFI-STUB] top-level br.ret b0 reached zero return address; halting EFI app"
+                          << std::endl;
+                state_.bundleValid_ = false;
+                hasCachedInstruction_ = false;
+                return ISAExecutionResult::HALT;
+            }
             if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
                 restoreCallFrame(branchTarget);
             }

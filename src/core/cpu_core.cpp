@@ -111,6 +111,7 @@ CPU::CPU(IMemory& memory, IDecoder& decoder)
       syscallDispatcher_(nullptr),
       profiler_(nullptr),
       isaPlugin_(nullptr),
+      halted_(false),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -125,6 +126,7 @@ CPU::CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatche
       syscallDispatcher_(syscallDispatcher),
       profiler_(nullptr),
       isaPlugin_(nullptr),
+      halted_(false),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -139,6 +141,7 @@ CPU::CPU(IMemory& memory, IISA& isaPlugin)
       syscallDispatcher_(nullptr),
       profiler_(nullptr),
       isaPlugin_(&isaPlugin),
+      halted_(false),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -151,6 +154,7 @@ CPU::~CPU() {
 }
 
 void CPU::reset() {
+halted_ = false;
 // If using ISA plugin, delegate reset to it
 if (isaPlugin_) {
     isaPlugin_->reset();
@@ -191,6 +195,9 @@ state_.Reset();
 bool CPU::step() {
 // If using ISA plugin, delegate execution to it
 if (isaPlugin_) {
+    if (halted_) {
+        return false;
+    }
     servicePendingInterrupt();
         
     ISAExecutionResult result = isaPlugin_->step(memory_);
@@ -199,6 +206,7 @@ if (isaPlugin_) {
         case ISAExecutionResult::CONTINUE:
             return true;
         case ISAExecutionResult::HALT:
+            halted_ = true;
             return false;
         case ISAExecutionResult::EXCEPTION:
             std::cerr << "Exception during execution\n";

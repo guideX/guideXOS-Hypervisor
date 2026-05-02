@@ -1272,6 +1272,13 @@ if (!isValidCPUIndex(cpuIndex)) {
 
         const bool success = cpu->step();
         if (!success) {
+            if (cpu->isHalted()) {
+                ctx.state = CPUExecutionState::HALTED;
+                state_ = VMState::STOPPED;
+                LOG_INFO("CPU " + std::to_string(cpuIndex) + " halted cleanly");
+                return false;
+            }
+
             // CPU step failed - this could be a kernel panic condition
             // Capture panic state
             KernelPanic panic = panicDetector_.captureExceptionPanic(
