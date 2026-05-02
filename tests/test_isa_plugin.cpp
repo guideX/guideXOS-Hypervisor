@@ -475,6 +475,40 @@ public:
     }
 };
 
+class FakeOutOfBoundsLoadDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx load(InstructionType::LD8, UnitType::M_UNIT);
+        load.SetOperands(14, 8, 0);
+        load.SetImmediate(8);
+        load.SetRawBits(0x0badf00dULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MII;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(load);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 // Test ISA state serialization/deserialization
 void testISAStateSerialization() {
     std::cout << "Testing ISA state serialization...\n";
@@ -1268,6 +1302,27 @@ void testIA64PluginTopLevelReturnHalts() {
     std::cout << "  ? br.ret b0 with zero return address halts cleanly\n";
 }
 
+void testIA64PluginOutOfBoundsLoadRecovery() {
+    std::cout << "Testing IA-64 plugin out-of-bounds load recovery...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeOutOfBoundsLoadDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(8, 0xffff00000004ULL);
+    plugin.getCPUState().SetGR(14, 0xdeadbeefcafebabeULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(14) == 0);
+    assert(plugin.getCPUState().GetGR(8) == 0xffff0000000cULL);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+
+    std::cout << "  ? failed ld8 clears the stale destination and preserves post-increment\n";
+}
+
 void testIA64PluginIndirectSelfCallExecution() {
     std::cout << "Testing IA-64 plugin indirect self-call execution...\n";
 
@@ -1546,6 +1601,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginTopLevelReturnHalts();
+        std::cout << "\n";
+
+        testIA64PluginOutOfBoundsLoadRecovery();
         std::cout << "\n";
 
         testIA64PluginIndirectSelfCallExecution();

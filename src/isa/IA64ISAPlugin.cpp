@@ -50,6 +50,22 @@ bool isZeroFilledEfiHandoffBundle(IMemory& memory, uint64_t target) {
     return true;
 }
 
+bool isLoadInstruction(InstructionType type) {
+    switch (type) {
+        case InstructionType::LD1:
+        case InstructionType::LD2:
+        case InstructionType::LD4:
+        case InstructionType::LD8:
+        case InstructionType::LD1_S:
+        case InstructionType::LD2_S:
+        case InstructionType::LD4_S:
+        case InstructionType::LD8_S:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void finishCountedLoopTraceIfActive() {
     if (g_countedLoopTrace.active && g_countedLoopTrace.suppressed > 0) {
         std::cout << "[TRACE] suppressed " << g_countedLoopTrace.suppressed
@@ -906,8 +922,30 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
     try {
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
     } catch (const std::exception& e) {
-        std::cerr << "Error executing instruction: " << e.what() << "\n";
-        std::cerr << "Treating as NOP and continuing...\n";
+        CPUState& cpu = state_.getCPUState();
+        const uint64_t ip = cpu.GetIP();
+        const uint64_t baseBefore = cpu.GetGR(instr.GetSrc1());
+
+        std::cerr << "Error executing instruction at IP=0x" << std::hex << ip
+                  << " Slot=" << std::dec << state_.currentSlot_
+                  << " raw=0x" << std::hex << instr.GetRawBits()
+                  << " disasm=\"" << instr.GetDisassembly() << "\": "
+                  << e.what() << std::dec << "\n";
+
+        if (isLoadInstruction(instr.GetType())) {
+            cpu.SetGR(instr.GetDst(), 0);
+            if (instr.HasImmediate()) {
+                cpu.SetGR(instr.GetSrc1(), baseBefore + static_cast<int64_t>(instr.GetImmediate()));
+            } else if (instr.GetSrc2() != 0) {
+                cpu.SetGR(instr.GetSrc1(), baseBefore + cpu.GetGR(instr.GetSrc2()));
+            }
+
+            std::cerr << "Recovered failed IA-64 load by zeroing r"
+                      << static_cast<int>(instr.GetDst())
+                      << " and continuing.\n";
+        } else {
+            std::cerr << "Treating as NOP and continuing...\n";
+        }
     }
 }
 
