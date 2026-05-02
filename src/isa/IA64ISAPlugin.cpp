@@ -20,7 +20,7 @@ struct CountedLoopTraceState {
 
 CountedLoopTraceState g_countedLoopTrace;
 
-constexpr uint64_t EFI_STATUS_UNSUPPORTED = ~0ULL;
+constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
 
@@ -521,10 +521,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         handledZeroFilledFirmwareCall = true;
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
                         std::cout << "[EFI-STUB] indirect br.call target 0x"
                                   << std::hex << originalBranchTarget
-                                  << " is zero-filled handoff memory; returning EFI_UNSUPPORTED"
+                                  << " is zero-filled handoff memory; returning EFI_SUCCESS"
                                   << std::dec << std::endl;
                     } else {
                         saveCallFrame(currentIP + 16);

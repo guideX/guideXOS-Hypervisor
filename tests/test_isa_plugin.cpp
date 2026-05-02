@@ -1197,7 +1197,7 @@ void testIA64PluginIndirectCallExecution() {
     std::cout << "  ? plugin br.call b0 = b6 links b0 and enters at the target bundle boundary\n";
 }
 
-void testIA64PluginZeroFilledFirmwareCallReturnsUnsupported() {
+void testIA64PluginZeroFilledFirmwareCallReturnsSuccess() {
     std::cout << "Testing IA-64 plugin zero-filled firmware call handling...\n";
 
     SparseMemory memory;
@@ -1213,9 +1213,9 @@ void testIA64PluginZeroFilledFirmwareCallReturnsUnsupported() {
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x1010);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
-    assert(plugin.getCPUState().GetGR(8) == ~0ULL);
+    assert(plugin.getCPUState().GetGR(8) == 0);
 
-    std::cout << "  ? zero-filled high-memory br.call returns EFI_UNSUPPORTED instead of walking NOPs\n";
+    std::cout << "  ? zero-filled high-memory br.call returns EFI_SUCCESS instead of exiting or walking NOPs\n";
 }
 
 void testIA64PluginIndirectSelfCallExecution() {
@@ -1492,7 +1492,7 @@ int main() {
         testIA64PluginIndirectCallExecution();
         std::cout << "\n";
 
-        testIA64PluginZeroFilledFirmwareCallReturnsUnsupported();
+        testIA64PluginZeroFilledFirmwareCallReturnsSuccess();
         std::cout << "\n";
 
         testIA64PluginIndirectSelfCallExecution();
