@@ -1049,12 +1049,12 @@ void testIA64LegacyIndirectBranchExecution() {
     FakeIndirectBranchDecoder decoder;
     CPU cpu(memory, decoder);
     cpu.getState().SetIP(0x1000);
-    cpu.getState().SetBR(6, 0x2400);
+    cpu.getState().SetBR(6, 0x2408);
 
     assert(cpu.step());
     assert(cpu.getState().GetIP() == 0x2400);
 
-    std::cout << "  ? legacy br.cond b6 branches through the branch register\n";
+    std::cout << "  ? legacy br.cond b6 enters at the target bundle boundary\n";
 }
 
 void testIA64LegacyIndirectCallExecution() {
@@ -1066,13 +1066,13 @@ void testIA64LegacyIndirectCallExecution() {
     InstructionEx call = decoder.DecodeSlot(0x200000c000ULL, UnitType::B_UNIT, 0x1990);
 
     cpu.getState().SetIP(0x1990);
-    cpu.getState().SetBR(6, 0x2400);
+    cpu.getState().SetBR(6, 0x2408);
 
     cpu.executeInstruction(call);
     assert(cpu.getState().GetIP() == 0x2400);
     assert(cpu.getState().GetBR(0) == 0x19a0);
 
-    std::cout << "  ? legacy br.call b0 = b6 links b0 and branches through b6\n";
+    std::cout << "  ? legacy br.call b0 = b6 links b0 and enters at the target bundle boundary\n";
 }
 
 void testIA64PluginCallOutputInputs() {
@@ -1117,13 +1117,13 @@ void testIA64PluginIndirectBranchExecution() {
     FakeIndirectBranchDecoder decoder;
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1000);
-    plugin.getCPUState().SetBR(6, 0x2400);
+    plugin.getCPUState().SetBR(6, 0x2408);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2400);
     assert(plugin.getCPUState().GetBR(0) == 0);
 
-    std::cout << "  ? plugin br.cond b6 branches through the branch register\n";
+    std::cout << "  ? plugin br.cond b6 enters at the target bundle boundary\n";
 }
 
 void testIA64PluginEfiServiceThunkLinksReturn() {
@@ -1188,13 +1188,13 @@ void testIA64PluginIndirectCallExecution() {
     FakeIndirectCallDecoder decoder;
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1000);
-    plugin.getCPUState().SetBR(6, 0x2400);
+    plugin.getCPUState().SetBR(6, 0x2408);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2400);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
 
-    std::cout << "  ? plugin br.call b0 = b6 links b0 and branches through b6\n";
+    std::cout << "  ? plugin br.call b0 = b6 links b0 and enters at the target bundle boundary\n";
 }
 
 void testIA64PluginIndirectSelfCallExecution() {

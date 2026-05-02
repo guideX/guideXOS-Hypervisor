@@ -23,6 +23,10 @@ struct CountedLoopTraceState {
 
 CountedLoopTraceState g_cpuCountedLoopTrace;
 
+uint64_t normalizeBranchEntryIP(uint64_t target) {
+    return target & ~0xFULL;
+}
+
 void finishCpuCountedLoopTraceIfActive() {
     if (g_cpuCountedLoopTrace.active && g_cpuCountedLoopTrace.suppressed > 0) {
         std::cout << "[TRACE] suppressed " << g_cpuCountedLoopTrace.suppressed
@@ -395,12 +399,13 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         
         // Handle branch after execution (so br.call can save return address)
         if (isBranch) {
+            const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             if (callLooksLikeCountedLoop) {
                 g_cpuCountedLoopTrace.active = true;
-                g_cpuCountedLoopTrace.start = branchTarget;
+                g_cpuCountedLoopTrace.start = branchEntryIP;
                 g_cpuCountedLoopTrace.end = currentIP;
             }
-            state_.SetIP(branchTarget);
+            state_.SetIP(branchEntryIP);
             bundleValid_ = false;  // Invalidate current bundle
             currentSlot_ = 0;      // Reset to first slot
         } else if (callLooksLikeCountedLoop) {

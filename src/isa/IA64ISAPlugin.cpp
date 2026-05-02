@@ -20,6 +20,10 @@ struct CountedLoopTraceState {
 
 CountedLoopTraceState g_countedLoopTrace;
 
+uint64_t normalizeBranchEntryIP(uint64_t target) {
+    return target & ~0xFULL;
+}
+
 void finishCountedLoopTraceIfActive() {
     if (g_countedLoopTrace.active && g_countedLoopTrace.suppressed > 0) {
         std::cout << "[TRACE] suppressed " << g_countedLoopTrace.suppressed
@@ -530,12 +534,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
                 restoreCallFrame(branchTarget);
             }
+            const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             if (callLooksLikeCountedLoop) {
                 g_countedLoopTrace.active = true;
-                g_countedLoopTrace.start = branchTarget;
+                g_countedLoopTrace.start = branchEntryIP;
                 g_countedLoopTrace.end = currentIP;
             }
-            state_.getCPUState().SetIP(branchTarget);
+            state_.getCPUState().SetIP(branchEntryIP);
             state_.bundleValid_ = false;
             state_.currentSlot_ = 0;
             capturePredicateGroupSnapshot();
