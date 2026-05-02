@@ -20,8 +20,34 @@ struct CountedLoopTraceState {
 
 CountedLoopTraceState g_countedLoopTrace;
 
+constexpr uint64_t EFI_STATUS_UNSUPPORTED = ~0ULL;
+constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
+constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
+
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
+}
+
+bool isZeroFilledEfiHandoffBundle(IMemory& memory, uint64_t target) {
+    const uint64_t entryIP = normalizeBranchEntryIP(target);
+    if (entryIP < EFI_HANDOFF_REGION_BASE || entryIP >= EFI_HANDOFF_REGION_END) {
+        return false;
+    }
+
+    uint8_t bundle[16] = {};
+    try {
+        memory.Read(entryIP, bundle, sizeof(bundle));
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    for (uint8_t byte : bundle) {
+        if (byte != 0) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void finishCountedLoopTraceIfActive() {
@@ -436,6 +462,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         
         // Check for branch instructions
         bool isBranch = false;
+        bool handledZeroFilledFirmwareCall = false;
         uint64_t branchTarget = 0;
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
@@ -488,9 +515,22 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     branchTarget = cachedInstruction_.HasBranchTarget()
                         ? cachedInstruction_.GetBranchTarget()
                         : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                    const uint64_t originalBranchTarget = branchTarget;
+                    if (!cachedInstruction_.HasBranchTarget() &&
+                        isZeroFilledEfiHandoffBundle(memory, branchTarget)) {
+                        handledZeroFilledFirmwareCall = true;
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                        std::cout << "[EFI-STUB] indirect br.call target 0x"
+                                  << std::hex << originalBranchTarget
+                                  << " is zero-filled handoff memory; returning EFI_UNSUPPORTED"
+                                  << std::dec << std::endl;
+                    } else {
+                        saveCallFrame(currentIP + 16);
+                        captureCallOutputRegisters();
+                    }
                     isBranch = true;
-                    saveCallFrame(currentIP + 16);
-                    captureCallOutputRegisters();
                 }
                 break;
                 
@@ -522,7 +562,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     state_.getCPUState().SetAR(65, state_.getCPUState().GetAR(65) - 1);
                 }
             } else {
-                executeInstruction(memory, cachedInstruction_, true);
+                if (!handledZeroFilledFirmwareCall) {
+                    executeInstruction(memory, cachedInstruction_, true);
+                }
             }
             if (cachedInstruction_.GetType() == InstructionType::ALLOC) {
                 applyPendingCallInputRegisters();
