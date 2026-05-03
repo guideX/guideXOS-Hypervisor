@@ -941,15 +941,22 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
 
         if (isLoadInstruction(instr.GetType())) {
             cpu.SetGR(instr.GetDst(), 0);
+            bool sanitizedBase = false;
             if (instr.HasImmediate()) {
-                cpu.SetGR(instr.GetSrc1(), baseBefore + static_cast<int64_t>(instr.GetImmediate()));
+                cpu.SetGR(instr.GetSrc1(), static_cast<uint64_t>(static_cast<int64_t>(instr.GetImmediate())));
+                sanitizedBase = true;
             } else if (instr.GetSrc2() != 0) {
-                cpu.SetGR(instr.GetSrc1(), baseBefore + cpu.GetGR(instr.GetSrc2()));
+                cpu.SetGR(instr.GetSrc1(), cpu.GetGR(instr.GetSrc2()));
+                sanitizedBase = true;
+            } else if (instr.GetSrc1() != instr.GetDst()) {
+                cpu.SetGR(instr.GetSrc1(), 0);
+                sanitizedBase = true;
             }
 
             std::cerr << "Recovered failed IA-64 load by zeroing r"
                       << static_cast<int>(instr.GetDst())
-                      << " and continuing.\n";
+                      << (sanitizedBase ? ", sanitizing the base register, and continuing.\n"
+                                        : " and continuing.\n");
         } else {
             std::cerr << "Treating as NOP and continuing...\n";
         }
