@@ -1285,7 +1285,7 @@ void testIA64PluginZeroFilledFirmwareCallReturnsSuccess() {
     std::cout << "  ? zero-filled high-memory br.call returns EFI_SUCCESS instead of exiting or walking NOPs\n";
 }
 
-void testIA64PluginNullFirmwareCallReturnsUnsupported() {
+void testIA64PluginNullFirmwareCallReturnsSuccess() {
     std::cout << "Testing IA-64 plugin null firmware call handling...\n";
 
     Memory memory(512 * 1024);
@@ -1301,9 +1301,9 @@ void testIA64PluginNullFirmwareCallReturnsUnsupported() {
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x30e50);
     assert(plugin.getCPUState().GetBR(0) == 0x30e50);
-    assert(plugin.getCPUState().GetGR(8) == 0x8000000000000003ULL);
+    assert(plugin.getCPUState().GetGR(8) == 0);
 
-    std::cout << "  ? null indirect br.call returns EFI_UNSUPPORTED instead of entering IP zero\n";
+    std::cout << "  ? null indirect br.call returns EFI_SUCCESS instead of entering IP zero\n";
 }
 
 void testIA64PluginTopLevelReturnHalts() {
@@ -1621,7 +1621,7 @@ int main() {
         testIA64PluginZeroFilledFirmwareCallReturnsSuccess();
         std::cout << "\n";
 
-        testIA64PluginNullFirmwareCallReturnsUnsupported();
+        testIA64PluginNullFirmwareCallReturnsSuccess();
         std::cout << "\n";
 
         testIA64PluginTopLevelReturnHalts();
