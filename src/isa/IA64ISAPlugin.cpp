@@ -24,7 +24,10 @@ constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
 constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
+constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
 constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
+constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
+constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
@@ -68,9 +71,18 @@ bool isLoadInstruction(InstructionType type) {
     }
 }
 
+bool isAdvancedLoadCheckInstruction(InstructionType type) {
+    return type == InstructionType::CHK_A_NC ||
+           type == InstructionType::CHK_A_CLR;
+}
+
 uint64_t readCallerOutputRegister(const CPUState& cpu, size_t index) {
     const size_t reg = 32 + cpu.GetSOL() + index;
     return reg < NUM_GENERAL_REGISTERS ? cpu.GetGR(reg) : 0;
+}
+
+uint64_t alignUp(uint64_t value, uint64_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
 }
 
 void finishCountedLoopTraceIfActive() {
@@ -332,6 +344,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , cachedInstruction_()
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
+    , efiPoolNext_(EFI_POOL_BASE)
     , callFrameStack_() {
 }
 
@@ -345,6 +358,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , cachedInstruction_()
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
+    , efiPoolNext_(EFI_POOL_BASE)
     , callFrameStack_() {
 }
 
@@ -352,6 +366,7 @@ void IA64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    efiPoolNext_ = EFI_POOL_BASE;
     callFrameStack_.clear();
 }
 
@@ -540,6 +555,35 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     const uint64_t originalBranchTarget = branchTarget;
                     if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_ALLOCATE_POOL_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t size = readCallerOutputRegister(state_.getCPUState(), 1);
+                        const uint64_t bufferOut = readCallerOutputRegister(state_.getCPUState(), 2);
+                        const uint64_t allocation = alignUp(efiPoolNext_, 16);
+                        const uint64_t alignedSize = alignUp(size, 16);
+                        const bool fits = allocation <= EFI_POOL_END &&
+                            alignedSize <= (EFI_POOL_END - allocation);
+                        const uint64_t next = fits ? allocation + alignedSize : EFI_POOL_END + 1;
+                        if (size != 0 && bufferOut != 0 && fits) {
+                            std::vector<uint8_t> zero(static_cast<size_t>(size), 0);
+                            memory.Write(allocation, zero.data(), zero.size());
+                            memory.Write(bufferOut,
+                                         reinterpret_cast<const uint8_t*>(&allocation),
+                                         sizeof(allocation));
+                            efiPoolNext_ = next;
+                            state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                            std::cout << "[EFI-STUB] BootServices.AllocatePool size=0x"
+                                      << std::hex << size << " -> 0x" << allocation
+                                      << " via out=0x" << bufferOut << std::dec << std::endl;
+                        } else {
+                            state_.getCPUState().SetGR(8, static_cast<uint64_t>(-1));
+                            std::cout << "[EFI-STUB] BootServices.AllocatePool failed size=0x"
+                                      << std::hex << size << " out=0x" << bufferOut
+                                      << " next=0x" << next << std::dec << std::endl;
+                        }
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         const uint64_t interfaceOut = readCallerOutputRegister(state_.getCPUState(), 2);
@@ -950,6 +994,11 @@ void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
 void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        if (isAdvancedLoadCheckInstruction(instr.GetType())) {
+            std::cout << "[ALAT-STUB] " << instr.GetDisassembly()
+                      << " treated as success; ALAT tracking is not implemented"
+                      << std::endl;
+        }
     } catch (const std::exception& e) {
         CPUState& cpu = state_.getCPUState();
         const uint64_t ip = cpu.GetIP();

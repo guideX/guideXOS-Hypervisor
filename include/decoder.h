@@ -161,6 +161,8 @@ enum class InstructionType {
     LD2_S,      // Load 2 byte speculative
     LD4_S,      // Load 4 byte speculative
     LD8_S,      // Load 8 byte speculative
+    CHK_A_NC,   // Advanced load check, no clear
+    CHK_A_CLR,  // Advanced load check, clear ALAT entry
     
     // Branch operations (B-type)
     BR_COND,    // Conditional branch

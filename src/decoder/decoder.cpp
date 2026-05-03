@@ -666,6 +666,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 }
             }
             break;
+
+        case InstructionType::CHK_A_NC:
+        case InstructionType::CHK_A_CLR:
+            // ALAT tracking is not modeled yet. Treat the advanced-load check as
+            // satisfied so userland can continue past compiler-generated checks.
+            break;
             
         // ===== BRANCH OPERATIONS =====
             
@@ -1065,6 +1071,20 @@ std::string InstructionEx::GetDisassembly() const {
                 oss << ", r" << static_cast<int>(src2_);
             }
             break;
+
+        case InstructionType::CHK_A_NC:
+            oss << "chk.a.nc r" << static_cast<int>(dst_);
+            if (hasBranchTarget_) {
+                oss << ", 0x" << std::hex << branchTarget_ << std::dec;
+            }
+            break;
+
+        case InstructionType::CHK_A_CLR:
+            oss << "chk.a.clr r" << static_cast<int>(dst_);
+            if (hasBranchTarget_) {
+                oss << ", 0x" << std::hex << branchTarget_ << std::dec;
+            }
+            break;
             
         case InstructionType::ST1:
             oss << "st1 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
@@ -1450,6 +1470,22 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                     result.SetOperands(r1, ar3, 0);
                 }
                 result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && (x3 == 0x4 || x3 == 0x5)) {
+                const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint32_t imm20b = static_cast<uint32_t>((slotBits >> 13) & 0xFFFFF);
+                const uint32_t sign = static_cast<uint32_t>((slotBits >> 36) & 0x1);
+                const uint32_t imm21 = (sign << 20) | imm20b;
+                const int64_t offset = SignExtend(imm21, 21) * 16;
+                result = InstructionEx(x3 == 0x4 ? InstructionType::CHK_A_NC
+                                                 : InstructionType::CHK_A_CLR,
+                                       UnitType::M_UNIT);
+                result.SetOperands(r1, 0, 0);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetBranchTarget(static_cast<uint64_t>(static_cast<int64_t>(ip) + offset));
                 result.SetRawBits(slotBits);
                 return result;
             }

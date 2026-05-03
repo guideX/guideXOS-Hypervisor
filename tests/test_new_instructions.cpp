@@ -319,6 +319,20 @@ void test_latest_boot_log_blockers() {
     cloop.Execute(cpu, memory);
     assert_equal("br.cloop should decrement ar.lc when nonzero", 1, cpu.GetAR(65));
 
+    InstructionEx chk_a_clr = decoder.DecodeSlot(0xa00018280ULL, UnitType::M_UNIT, 0xeb30);
+    assert_true("Boot raw chk.a.clr should decode",
+                chk_a_clr.GetType() == InstructionType::CHK_A_CLR);
+    assert_equal("Boot chk.a.clr checked register", 10, chk_a_clr.GetDst());
+    assert_equal("Boot chk.a.clr recovery target", 0xebf0, chk_a_clr.GetBranchTarget());
+    assert_string("Boot chk.a.clr disassembly",
+                  "chk.a.clr r10, 0xebf0",
+                  chk_a_clr.GetDisassembly());
+
+    cpu.SetGR(10, 0x1122334455667788ULL);
+    chk_a_clr.Execute(cpu, memory);
+    assert_equal("chk.a.clr stub should leave checked register unchanged",
+                 0x1122334455667788ULL, cpu.GetGR(10));
+
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
 

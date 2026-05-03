@@ -1366,6 +1366,37 @@ void testIA64PluginHandleProtocolReturnsLoadedImage() {
     std::cout << "  ? HandleProtocol writes a minimal LoadedImageProtocol pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginAllocatePoolReturnsScratchBuffer() {
+    std::cout << "Testing IA-64 plugin AllocatePool firmware stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0xa210, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0xa210);
+    plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+    plugin.getCPUState().SetBR(6, 0x1fe00e00ULL);
+    plugin.getCPUState().SetGR(36, 0x30);
+    plugin.getCPUState().SetGR(37, 0x5000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t buffer = 0;
+    uint64_t firstBytes = 0xffffffffffffffffULL;
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&buffer), sizeof(buffer));
+    memory.Read(buffer, reinterpret_cast<uint8_t*>(&firstBytes), sizeof(firstBytes));
+    assert(plugin.getCPUState().GetIP() == 0xa220);
+    assert(plugin.getCPUState().GetBR(0) == 0xa220);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(buffer == 0x1fe01000ULL);
+    assert(firstBytes == 0);
+
+    std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
+}
+
 void testIA64PluginTopLevelReturnHalts() {
     std::cout << "Testing IA-64 plugin top-level EFI return handling...\n";
 
@@ -1706,6 +1737,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginHandleProtocolReturnsLoadedImage();
+        std::cout << "\n";
+
+        testIA64PluginAllocatePoolReturnsScratchBuffer();
         std::cout << "\n";
 
         testIA64PluginTopLevelReturnHalts();
