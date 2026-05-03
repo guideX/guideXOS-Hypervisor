@@ -111,6 +111,13 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
         // Deposit/extract operations (major 0x5)
         if ((op & 0xF0) == 0x50) {
             switch (op & 0x0F) {
+                case 0x6: // SHRP
+                    instr = InstructionEx(InstructionType::SHRP, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+                    instr.SetImmediate(fmt.count);
+                    return true;
+
                 case 0x2: // TBIT.Z
                     instr = InstructionEx(InstructionType::TBIT_Z, UnitType::I_UNIT);
                     instr.SetPredicate(fmt.qp);
@@ -298,6 +305,12 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::I
         // Deposit and extract operations
         // DEP: r1[pos:pos+len-1] = r2[0:len-1]
         // EXTR: r1 = r3[pos:pos+len-1]
+
+        if (x2 == 0x3 && x == 0x0) {
+            result.count = formats::extractBits(raw, 27, 6);
+            result.opcode = 0x56;
+            return true;
+        }
         
         result.pos = formats::extractBits(raw, 14, 6);   // Position
         result.len = formats::extractBits(raw, 27, 6);   // Encoded length

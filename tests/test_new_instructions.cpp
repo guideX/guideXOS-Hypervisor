@@ -333,6 +333,23 @@ void test_latest_boot_log_blockers() {
     assert_equal("chk.a.clr stub should leave checked register unchanged",
                  0x1122334455667788ULL, cpu.GetGR(10));
 
+    InstructionEx shrp = decoder.DecodeSlot(0xa5f2104846ULL, UnitType::I_UNIT, 0x86b0);
+    assert_true("Boot raw shrp should decode",
+                shrp.GetType() == InstructionType::SHRP);
+    assert_equal("Boot shrp destination", 33, shrp.GetDst());
+    assert_equal("Boot shrp high source", 2, shrp.GetSrc1());
+    assert_equal("Boot shrp low source", 33, shrp.GetSrc2());
+    assert_equal("Boot shrp count", 62, shrp.GetImmediate());
+    assert_string("Boot shrp disassembly",
+                  "shrp r33 = r2, r33, 62",
+                  shrp.GetDisassembly());
+
+    cpu.SetGR(2, 0x0123456789abcdefULL);
+    cpu.SetGR(33, 0xf000000000000000ULL);
+    shrp.Execute(cpu, memory, true);
+    assert_equal("shrp should concatenate high:low and keep shifted low half",
+                 0x048d159e26af37bfULL, cpu.GetGR(33));
+
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
 

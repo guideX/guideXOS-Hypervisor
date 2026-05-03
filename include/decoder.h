@@ -114,6 +114,7 @@ enum class InstructionType {
     SHL,        // Shift left
     SHR,        // Shift right logical
     SHRA,       // Shift right arithmetic
+    SHRP,       // Shift right pair
     SHLADD,     // Shift left and add
     
     // Extract/Deposit (I-type)

@@ -292,6 +292,20 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetGR(dst_, static_cast<uint64_t>(val >> shift));
             }
             break;
+
+        case InstructionType::SHRP:
+            // shrp rDst = rSrc1, rSrc2, count: low 64 bits of (rSrc1:rSrc2) >> count.
+            if (hasImmediate_) {
+                const uint8_t count = static_cast<uint8_t>(immediate_ & 0x3F);
+                const uint64_t low = cpu.GetGR(src2_);
+                const uint64_t high = cpu.GetGR(src1_);
+                const uint64_t value = count == 0
+                    ? low
+                    : ((low >> count) | (high << (64 - count)));
+                cpu.SetGR(dst_, value);
+                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_) || cpu.GetGRNaT(src2_));
+            }
+            break;
             
         case InstructionType::SHLADD:
             // shladd rDst = rSrc1, count, rSrc2
@@ -926,6 +940,12 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::SHR:
             oss << "shr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::SHRP:
+            oss << "shrp r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", r" << static_cast<int>(src2_)
+                << ", " << static_cast<int64_t>(immediate_);
             break;
 
         case InstructionType::SHLADD:
