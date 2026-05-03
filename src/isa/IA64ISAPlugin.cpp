@@ -21,6 +21,7 @@ struct CountedLoopTraceState {
 CountedLoopTraceState g_countedLoopTrace;
 
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
+constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
 
@@ -478,7 +479,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         
         // Check for branch instructions
         bool isBranch = false;
-        bool handledZeroFilledFirmwareCall = false;
+        bool handledFirmwareCallStub = false;
         uint64_t branchTarget = 0;
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
@@ -532,9 +533,16 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         ? cachedInstruction_.GetBranchTarget()
                         : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     const uint64_t originalBranchTarget = branchTarget;
-                    if (!cachedInstruction_.HasBranchTarget() &&
+                    if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
+                        handledFirmwareCallStub = true;
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                        std::cout << "[EFI-STUB] indirect br.call target is null; returning EFI_UNSUPPORTED"
+                                  << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
                         isZeroFilledEfiHandoffBundle(memory, branchTarget)) {
-                        handledZeroFilledFirmwareCall = true;
+                        handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
@@ -578,7 +586,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     state_.getCPUState().SetAR(65, state_.getCPUState().GetAR(65) - 1);
                 }
             } else {
-                if (!handledZeroFilledFirmwareCall) {
+                if (!handledFirmwareCallStub) {
                     executeInstruction(memory, cachedInstruction_, true);
                 }
             }
