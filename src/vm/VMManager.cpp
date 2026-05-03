@@ -621,8 +621,6 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_STUB_ADDR + 0x400ULL;
                                                                     constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_STUB_ADDR + 0x800ULL;
                                                                     constexpr uint64_t EFI_FIRMWARE_VENDOR_ADDR = EFI_STUB_ADDR + 0xC00ULL;
-                                                                    constexpr uint64_t EFI_CONFIG_TABLE_ADDR = EFI_STUB_ADDR + 0xD00ULL;
-                                                                    constexpr uint64_t EFI_DUMMY_CONFIG_ADDR = EFI_STUB_ADDR + 0xE00ULL;
                                                                     constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xF00ULL;
                                                                     constexpr uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xF40ULL;
                                                                     constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xF80ULL;
@@ -650,8 +648,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     // 64-bit EFI_SYSTEM_TABLE layout.
                                                                     write64(EFI_STUB_ADDR + 0x58, EFI_RUNTIME_SERVICES_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x60, EFI_BOOT_SERVICES_ADDR);
-                                                                    write64(EFI_STUB_ADDR + 0x68, 1ULL); // NumberOfTableEntries
-                                                                    write64(EFI_STUB_ADDR + 0x70, EFI_CONFIG_TABLE_ADDR);
+                                                                    write64(EFI_STUB_ADDR + 0x68, 0ULL); // NumberOfTableEntries
+                                                                    write64(EFI_STUB_ADDR + 0x70, 0ULL);
 
                                                                     write64(EFI_RUNTIME_SERVICES_ADDR + 0x00, EFI_RUNTIME_SERVICES_SIGNATURE);
                                                                     write32(EFI_RUNTIME_SERVICES_ADDR + 0x08, 0x00010010U);
@@ -709,13 +707,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         reinterpret_cast<const uint8_t*>(firmwareVendor),
                                                                         sizeof(firmwareVendor));
 
-                                                                    // One harmless EFI_CONFIGURATION_TABLE entry. The GUID is
-                                                                    // intentionally zero, so real firmware tables such as ACPI
-                                                                    // still are not faked; callers can advance past the empty
-                                                                    // table-count check and report the specific table they need.
-                                                                    static const uint8_t nullGuid[16] = {};
-                                                                    instance->vm->getMemory().Write(EFI_CONFIG_TABLE_ADDR, nullGuid, sizeof(nullGuid));
-                                                                    write64(EFI_CONFIG_TABLE_ADDR + 0x10, EFI_DUMMY_CONFIG_ADDR);
+                                                                    // Do not advertise firmware configuration tables in the
+                                                                    // Phase 2 userland handoff. A fake all-zero table is more
+                                                                    // misleading than absence here because boot code may treat
+                                                                    // the vendor payload as a real firmware structure.
 
                                                                     uint64_t configTableCount = 0;
                                                                     instance->vm->getMemory().Read(EFI_STUB_ADDR + 0x68,
