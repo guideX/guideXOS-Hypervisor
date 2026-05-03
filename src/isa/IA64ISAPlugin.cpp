@@ -23,6 +23,8 @@ CountedLoopTraceState g_countedLoopTrace;
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
+constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
+constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
@@ -64,6 +66,11 @@ bool isLoadInstruction(InstructionType type) {
         default:
             return false;
     }
+}
+
+uint64_t readCallerOutputRegister(const CPUState& cpu, size_t index) {
+    const size_t reg = 32 + cpu.GetSOL() + index;
+    return reg < NUM_GENERAL_REGISTERS ? cpu.GetGR(reg) : 0;
 }
 
 void finishCountedLoopTraceIfActive() {
@@ -532,7 +539,22 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         ? cachedInstruction_.GetBranchTarget()
                         : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
                     const uint64_t originalBranchTarget = branchTarget;
-                    if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
+                    if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t interfaceOut = readCallerOutputRegister(state_.getCPUState(), 2);
+                        if (interfaceOut != 0) {
+                            memory.Write(interfaceOut,
+                                         reinterpret_cast<const uint8_t*>(&EFI_LOADED_IMAGE_PROTOCOL_ADDR),
+                                         sizeof(EFI_LOADED_IMAGE_PROTOCOL_ADDR));
+                        }
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                        std::cout << "[EFI-STUB] BootServices.HandleProtocol returned LoadedImageProtocol=0x"
+                                  << std::hex << EFI_LOADED_IMAGE_PROTOCOL_ADDR
+                                  << " via out=0x" << interfaceOut << std::dec << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
                         handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);

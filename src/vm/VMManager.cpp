@@ -621,6 +621,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_STUB_ADDR + 0x400ULL;
                                                                     constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_STUB_ADDR + 0x800ULL;
                                                                     constexpr uint64_t EFI_FIRMWARE_VENDOR_ADDR = EFI_STUB_ADDR + 0xC00ULL;
+                                                                    constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_STUB_ADDR + 0xD00ULL;
+                                                                    constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xE80ULL;
+                                                                    constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xEC0ULL;
                                                                     constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xF00ULL;
                                                                     constexpr uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xF40ULL;
                                                                     constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xF80ULL;
@@ -679,11 +682,20 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                    ADD_R8_R0_ZERO,
                                                                                    NOP_I,
                                                                                    BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
                                                                     write64(EFI_UNSUPPORTED_STUB_DESC_ADDR, EFI_UNSUPPORTED_STUB_CODE_ADDR);
                                                                     write64(EFI_UNSUPPORTED_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_SUCCESS_STUB_DESC_ADDR, EFI_SUCCESS_STUB_CODE_ADDR);
                                                                     write64(EFI_SUCCESS_STUB_DESC_ADDR + 8,
+                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                    write64(EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR, EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR);
+                                                                    write64(EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
 
                                                                     for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
@@ -698,6 +710,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     // Boot Services entry at offset 0x100 while connecting
                                                                     // devices. Returning EFI_SUCCESS lets it continue to the
                                                                     // next userland instruction path without modeling devices.
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x98, EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x100, EFI_SUCCESS_STUB_DESC_ADDR);
 
                                                                     static const uint16_t firmwareVendor[] = {
@@ -712,6 +725,18 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     // misleading than absence here because boot code may treat
                                                                     // the vendor payload as a real firmware structure.
 
+                                                                    // Minimal EFI_LOADED_IMAGE_PROTOCOL for HandleProtocol.
+                                                                    // This is the boot app's own image metadata, not platform
+                                                                    // firmware, and keeps early userland EFI setup on the
+                                                                    // success path without inventing ACPI/PCI devices.
+                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x00, 0x1000U);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
+                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 2U);
+                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x54, 4U);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x58, EFI_UNSUPPORTED_STUB_DESC_ADDR);
+
                                                                     uint64_t configTableCount = 0;
                                                                     instance->vm->getMemory().Read(EFI_STUB_ADDR + 0x68,
                                                                         reinterpret_cast<uint8_t*>(&configTableCount),
@@ -722,6 +747,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << ", BootServices=0x" << EFI_BOOT_SERVICES_ADDR
                                                                         << ", UnsupportedService=0x" << EFI_UNSUPPORTED_STUB_DESC_ADDR
                                                                         << ", SuccessService=0x" << EFI_SUCCESS_STUB_DESC_ADDR
+                                                                        << ", HandleProtocol=0x" << EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR
                                                                         << ", ConfigTables=" << std::dec << configTableCount << ")";
                                                                     LOG_INFO(oss.str());
                                                                 }

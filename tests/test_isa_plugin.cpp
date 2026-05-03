@@ -1339,6 +1339,33 @@ void testIA64PluginNullFirmwareCallReturnsSuccess() {
     std::cout << "  ? null indirect br.call returns EFI_SUCCESS instead of entering IP zero\n";
 }
 
+void testIA64PluginHandleProtocolReturnsLoadedImage() {
+    std::cout << "Testing IA-64 plugin HandleProtocol firmware stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1a50, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectSelfCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1a50);
+    plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+    plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+    plugin.getCPUState().SetGR(37, 0x4000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t loadedImage = 0;
+    memory.Read(0x4000, reinterpret_cast<uint8_t*>(&loadedImage), sizeof(loadedImage));
+    assert(plugin.getCPUState().GetIP() == 0x1a60);
+    assert(plugin.getCPUState().GetBR(0) == 0x1a60);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(loadedImage == 0x1fe00d00ULL);
+
+    std::cout << "  ? HandleProtocol writes a minimal LoadedImageProtocol pointer and returns EFI_SUCCESS\n";
+}
+
 void testIA64PluginTopLevelReturnHalts() {
     std::cout << "Testing IA-64 plugin top-level EFI return handling...\n";
 
@@ -1676,6 +1703,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginNullFirmwareCallReturnsSuccess();
+        std::cout << "\n";
+
+        testIA64PluginHandleProtocolReturnsLoadedImage();
         std::cout << "\n";
 
         testIA64PluginTopLevelReturnHalts();
