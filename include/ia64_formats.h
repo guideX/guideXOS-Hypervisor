@@ -41,11 +41,13 @@ struct AFormat {
     // For compare operations
     uint8_t p1;         // destination predicate 1
     uint8_t p2;         // destination predicate 2
-    uint8_t ta;         // compare type (signed/unsigned)
-    uint8_t tb;         // compare relation
+    uint8_t x2;         // compare size/form selector
+    uint8_t ta;         // compare type selector
+    uint8_t tb;         // compare relation selector for register forms
+    uint8_t c;          // compare completer/control bit
     
     AFormat() : qp(0), r1(0), r2(0), r3(0), opcode(0), imm(0), has_imm(false),
-                p1(0), p2(0), ta(0), tb(0) {}
+                p1(0), p2(0), x2(0), ta(0), tb(0), c(0) {}
 };
 
 // ============================================================================

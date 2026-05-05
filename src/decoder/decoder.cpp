@@ -25,6 +25,7 @@ InstructionEx::InstructionEx()
     , hasImmediate_(false)
     , branchTarget_(0)
     , hasBranchTarget_(false)
+    , compareCompleter_(CompareCompleter::NORMAL)
 {}
 
 InstructionEx::InstructionEx(InstructionType type, UnitType unit)
@@ -40,6 +41,7 @@ InstructionEx::InstructionEx(InstructionType type, UnitType unit)
     , hasImmediate_(false)
     , branchTarget_(0)
     , hasBranchTarget_(false)
+    , compareCompleter_(CompareCompleter::NORMAL)
 {}
 
 void InstructionEx::SetOperands(uint8_t dst, uint8_t src1, uint8_t src2) {
@@ -83,12 +85,84 @@ static int64_t SignExtend(uint64_t value, int bits) {
     return static_cast<int64_t>(value);
 }
 
+static bool IsCompareInstruction(InstructionType type) {
+    switch (type) {
+        case InstructionType::CMP_EQ:
+        case InstructionType::CMP_NE:
+        case InstructionType::CMP_LT:
+        case InstructionType::CMP_LE:
+        case InstructionType::CMP_GT:
+        case InstructionType::CMP_GE:
+        case InstructionType::CMP_LTU:
+        case InstructionType::CMP_LEU:
+        case InstructionType::CMP_GTU:
+        case InstructionType::CMP_GEU:
+        case InstructionType::CMP4_EQ:
+        case InstructionType::CMP4_NE:
+        case InstructionType::CMP4_LT:
+        case InstructionType::CMP4_LE:
+        case InstructionType::CMP4_GT:
+        case InstructionType::CMP4_GE:
+        case InstructionType::CMP4_LTU:
+        case InstructionType::CMP4_LEU:
+        case InstructionType::CMP4_GTU:
+        case InstructionType::CMP4_GEU:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static const char* CompareCompleterSuffix(CompareCompleter completer) {
+    switch (completer) {
+        case CompareCompleter::UNC: return ".unc";
+        case CompareCompleter::AND: return ".and";
+        case CompareCompleter::OR: return ".or";
+        case CompareCompleter::OR_ANDCM: return ".or.andcm";
+        case CompareCompleter::NORMAL:
+        default:
+            return "";
+    }
+}
+
 void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate) const {
     // Check qualifying predicate
     if (!ignorePredicate && !CheckPredicate(cpu, predicate_)) {
+        if (compareCompleter_ == CompareCompleter::UNC && IsCompareInstruction(type_)) {
+            cpu.SetPR(dst_, false);
+            cpu.SetPR(src3_, false);
+        }
         // Predicate is false, instruction is nullified
         return;
     }
+
+    auto writeComparePredicates = [&](bool result) {
+        switch (compareCompleter_) {
+            case CompareCompleter::NORMAL:
+            case CompareCompleter::UNC:
+                cpu.SetPR(dst_, result);
+                cpu.SetPR(src3_, !result);
+                break;
+            case CompareCompleter::AND:
+                if (!result) {
+                    cpu.SetPR(dst_, false);
+                    cpu.SetPR(src3_, false);
+                }
+                break;
+            case CompareCompleter::OR:
+                if (result) {
+                    cpu.SetPR(dst_, true);
+                    cpu.SetPR(src3_, true);
+                }
+                break;
+            case CompareCompleter::OR_ANDCM:
+                if (result) {
+                    cpu.SetPR(dst_, true);
+                    cpu.SetPR(src3_, false);
+                }
+                break;
+        }
+    };
     
     switch (type_) {
         case InstructionType::NOP:
@@ -397,8 +471,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 uint64_t rhs = cpu.GetGR(src2_);
-                cpu.SetPR(dst_, lhs == rhs);
-                cpu.SetPR(src3_, lhs != rhs);
+                writeComparePredicates(lhs == rhs);
             }
             break;
             
@@ -406,8 +479,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 uint64_t rhs = cpu.GetGR(src2_);
-                cpu.SetPR(dst_, lhs != rhs);
-                cpu.SetPR(src3_, lhs == rhs);
+                writeComparePredicates(lhs != rhs);
             }
             break;
             
@@ -415,8 +487,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
                 int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, lhs < rhs);
-                cpu.SetPR(src3_, lhs >= rhs);
+                writeComparePredicates(lhs < rhs);
             }
             break;
             
@@ -424,8 +495,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
                 int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, lhs <= rhs);
-                cpu.SetPR(src3_, lhs > rhs);
+                writeComparePredicates(lhs <= rhs);
             }
             break;
             
@@ -433,8 +503,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
                 int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, lhs > rhs);
-                cpu.SetPR(src3_, lhs <= rhs);
+                writeComparePredicates(lhs > rhs);
             }
             break;
             
@@ -442,8 +511,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int64_t lhs = hasImmediate_ ? static_cast<int64_t>(immediate_) : static_cast<int64_t>(cpu.GetGR(src1_));
                 int64_t rhs = static_cast<int64_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, lhs >= rhs);
-                cpu.SetPR(src3_, lhs < rhs);
+                writeComparePredicates(lhs >= rhs);
             }
             break;
             
@@ -451,8 +519,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 uint64_t rhs = cpu.GetGR(src2_);
-                cpu.SetPR(dst_, lhs < rhs);
-                cpu.SetPR(src3_, lhs >= rhs);
+                writeComparePredicates(lhs < rhs);
             }
             break;
             
@@ -460,8 +527,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 uint64_t rhs = cpu.GetGR(src2_);
-                cpu.SetPR(dst_, lhs <= rhs);
-                cpu.SetPR(src3_, lhs > rhs);
+                writeComparePredicates(lhs <= rhs);
             }
             break;
             
@@ -469,8 +535,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 uint64_t rhs = cpu.GetGR(src2_);
-                cpu.SetPR(dst_, lhs > rhs);
-                cpu.SetPR(src3_, lhs <= rhs);
+                writeComparePredicates(lhs > rhs);
             }
             break;
             
@@ -478,8 +543,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t lhs = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 uint64_t rhs = cpu.GetGR(src2_);
-                cpu.SetPR(dst_, lhs >= rhs);
-                cpu.SetPR(src3_, lhs < rhs);
+                writeComparePredicates(lhs >= rhs);
             }
             break;
             
@@ -489,8 +553,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 == val2);
-                cpu.SetPR(src3_, val1 != val2);
+                writeComparePredicates(val1 == val2);
             }
             break;
             
@@ -498,8 +561,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 != val2);
-                cpu.SetPR(src3_, val1 == val2);
+                writeComparePredicates(val1 != val2);
             }
             break;
             
@@ -507,8 +569,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 < val2);
-                cpu.SetPR(src3_, val1 >= val2);
+                writeComparePredicates(val1 < val2);
             }
             break;
             
@@ -516,8 +577,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 <= val2);
-                cpu.SetPR(src3_, val1 > val2);
+                writeComparePredicates(val1 <= val2);
             }
             break;
             
@@ -525,8 +585,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 > val2);
-                cpu.SetPR(src3_, val1 <= val2);
+                writeComparePredicates(val1 > val2);
             }
             break;
             
@@ -534,8 +593,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 int32_t val1 = static_cast<int32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 int32_t val2 = static_cast<int32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 >= val2);
-                cpu.SetPR(src3_, val1 < val2);
+                writeComparePredicates(val1 >= val2);
             }
             break;
             
@@ -543,8 +601,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 < val2);
-                cpu.SetPR(src3_, val1 >= val2);
+                writeComparePredicates(val1 < val2);
             }
             break;
             
@@ -552,8 +609,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 <= val2);
-                cpu.SetPR(src3_, val1 > val2);
+                writeComparePredicates(val1 <= val2);
             }
             break;
             
@@ -561,8 +617,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 > val2);
-                cpu.SetPR(src3_, val1 <= val2);
+                writeComparePredicates(val1 > val2);
             }
             break;
             
@@ -570,8 +625,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint32_t val1 = static_cast<uint32_t>(hasImmediate_ ? immediate_ : cpu.GetGR(src1_));
                 uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetPR(dst_, val1 >= val2);
-                cpu.SetPR(src3_, val1 < val2);
+                writeComparePredicates(val1 >= val2);
             }
             break;
             
@@ -778,7 +832,8 @@ std::string InstructionEx::GetDisassembly() const {
         }
     };
     auto renderCompare = [&](const char* mnemonic, bool signedImmediate) {
-        oss << mnemonic << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+        oss << mnemonic << CompareCompleterSuffix(compareCompleter_)
+            << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
             << " = ";
         if (hasImmediate_) {
             if (signedImmediate) {

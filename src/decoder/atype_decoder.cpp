@@ -66,7 +66,10 @@ static bool decodeShiftAdd(uint64_t raw, uint8_t x2a, uint8_t x4,
                         formats::AFormat& result);
 static bool decodeCompare(uint64_t raw, uint8_t major, uint8_t x2a,
                        uint8_t x2b, uint8_t x4, formats::AFormat& result);
-static InstructionType mapCompareType(uint8_t ta, uint8_t tb, bool is_unsigned);
+static InstructionType mapNormalCompareType(uint8_t major, bool is32);
+static InstructionType mapEqCompareType(bool is32, bool notEqual);
+static InstructionType mapZeroCompareType(uint8_t ta, uint8_t c, bool is32);
+static CompareCompleter mapParallelCompareCompleter(uint8_t major);
 
 // ATypeDecoder::decode implementation
 bool ATypeDecoder::decode(uint64_t raw_instruction, formats::AFormat& result) {
@@ -209,33 +212,33 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
     
     // Compare operations
     if ((op & 0xF0) == 0xC0 || (op & 0xF0) == 0xD0 || (op & 0xF0) == 0xE0) {
+        const uint8_t major = static_cast<uint8_t>((op >> 4) & 0x0F);
+        const bool is32 = (fmt.x2 & 0x1) != 0;
+        const bool immediateForm = fmt.x2 >= 2;
         InstructionType cmpType;
-        
-        if ((op & 0xF0) == 0xE0) {
-            const bool is_32bit = (op & 0x01) != 0;
-            cmpType = is_32bit ? InstructionType::CMP4_EQ : InstructionType::CMP_EQ;
-        } else if ((op & 0xF0) == 0xD0 && (op & 0x0F) == 0x0 && fmt.ta == 0) {
-            cmpType = InstructionType::CMP_NE;
-        } else {  // Other relations (NE, GE, GT, etc.)
-            // Determine compare type
-            bool is_unsigned = (op & 0x10) != 0;
-            bool is_lt = (op & 0x01) != 0;
-            
-            if (fmt.ta == 0) {  // Normal compare
-                if (is_unsigned) {
-                    cmpType = is_lt ? InstructionType::CMP_LTU : InstructionType::CMP_EQ;
-                } else {
-                    cmpType = is_lt ? InstructionType::CMP_LT : InstructionType::CMP_EQ;
-                }
-            } else {
-                // Map based on ta and tb fields
-                cmpType = mapCompareType(fmt.ta, fmt.tb, is_unsigned);
+        CompareCompleter completer = CompareCompleter::NORMAL;
+
+        if (!immediateForm && fmt.tb != 0 && fmt.r2 == 0) {
+            cmpType = mapZeroCompareType(fmt.ta, fmt.c, is32);
+            completer = mapParallelCompareCompleter(major);
+        } else if (fmt.ta != 0) {
+            cmpType = mapEqCompareType(is32, fmt.c != 0);
+            completer = mapParallelCompareCompleter(major);
+        } else {
+            cmpType = mapNormalCompareType(major, is32);
+            completer = (fmt.c != 0) ? CompareCompleter::UNC : CompareCompleter::NORMAL;
+
+            // The assembler commonly represents "r != 0" as "0 < r" unsigned.
+            // Preserve the existing semantic instruction type for that boot pattern.
+            if (fmt.has_imm && major == 0xD && fmt.imm == 0) {
+                cmpType = is32 ? InstructionType::CMP4_NE : InstructionType::CMP_NE;
             }
         }
         
         instr = InstructionEx(cmpType, UnitType::I_UNIT);
         instr.SetPredicate(fmt.qp);
         instr.SetOperands4(fmt.p1, fmt.r2, fmt.r3, fmt.p2);
+        instr.SetCompareCompleter(completer);
         
         if (fmt.has_imm) {
             instr.SetImmediate(fmt.imm);
@@ -357,30 +360,16 @@ static bool decodeCompare(uint64_t raw, uint8_t major, uint8_t x2a,
     result.p1 = formats::extractBits(raw, 6, 6);
     result.p2 = formats::extractBits(raw, 27, 6);
 
-    // Major 0xE is the equality/inequality compare family.  The x2 field
-    // selects 64-bit register, 32-bit register, 64-bit immediate, or 32-bit
-    // immediate forms.
-    if (major == 0xE) {
-        result.opcode = static_cast<uint8_t>(0xE0 | (x2a & 0x1));
-        result.ta = formats::extractBits(raw, 33, 1);
-        result.tb = 0;
+    result.opcode = static_cast<uint8_t>(major << 4);
+    result.x2 = x2a;
+    result.c = formats::extractBits(raw, 12, 1);
+    result.ta = formats::extractBits(raw, 33, 1);
+    result.tb = formats::extractBits(raw, 36, 1);
 
-        if (x2a >= 0x2) {
-            result.has_imm = true;
-            uint8_t imm7b = formats::extractBits(raw, 13, 7);
-            uint8_t s = formats::extractBits(raw, 36, 1);
-            result.imm = formats::signExtend((s << 7) | imm7b, 8);
-        }
-
-        return true;
-    }
-    
-    // Extract compare type and relation
-    result.ta = formats::extractBits(raw, 12, 1);  // compare completer/control bit
-    result.tb = formats::extractBits(raw, 33, 2);  // relation type
-    
-    // Check for immediate form
-    if (x2b == 0x3) {
+    // x2 selects 64-bit register, 32-bit register, 64-bit immediate, or
+    // 32-bit immediate compare forms.  The low bits of p2 overlap the old
+    // ALU x2b extraction and must not be used to detect immediates.
+    if (x2a >= 0x2) {
         result.has_imm = true;
         uint8_t imm7b = formats::extractBits(raw, 13, 7);
         uint8_t s = formats::extractBits(raw, 36, 1);
@@ -390,27 +379,50 @@ static bool decodeCompare(uint64_t raw, uint8_t major, uint8_t x2a,
     return true;
 }
 
-static InstructionType mapCompareType(uint8_t ta, uint8_t tb, bool is_unsigned) {
-    // Map ta/tb fields to instruction type
-    // This is a simplified version - actual mapping is more complex
-    
-    if (is_unsigned) {
-        switch (tb) {
-            case 0: return InstructionType::CMP_LTU;
-            case 1: return InstructionType::CMP_LEU;
-            case 2: return InstructionType::CMP_GTU;
-            case 3: return InstructionType::CMP_GEU;
-        }
-    } else {
-        switch (tb) {
-            case 0: return InstructionType::CMP_LT;
-            case 1: return InstructionType::CMP_LE;
-            case 2: return InstructionType::CMP_GT;
-            case 3: return InstructionType::CMP_GE;
-        }
+static InstructionType mapNormalCompareType(uint8_t major, bool is32) {
+    switch (major) {
+        case 0xC:
+            return is32 ? InstructionType::CMP4_LT : InstructionType::CMP_LT;
+        case 0xD:
+            return is32 ? InstructionType::CMP4_LTU : InstructionType::CMP_LTU;
+        case 0xE:
+            return is32 ? InstructionType::CMP4_EQ : InstructionType::CMP_EQ;
+        default:
+            return InstructionType::CMP_EQ;
     }
-    
-    return InstructionType::CMP_EQ;
+}
+
+static InstructionType mapEqCompareType(bool is32, bool notEqual) {
+    if (is32) {
+        return notEqual ? InstructionType::CMP4_NE : InstructionType::CMP4_EQ;
+    }
+    return notEqual ? InstructionType::CMP_NE : InstructionType::CMP_EQ;
+}
+
+static InstructionType mapZeroCompareType(uint8_t ta, uint8_t c, bool is32) {
+    if (ta == 0 && c == 0) {
+        return is32 ? InstructionType::CMP4_GT : InstructionType::CMP_GT;
+    }
+    if (ta == 0 && c != 0) {
+        return is32 ? InstructionType::CMP4_LE : InstructionType::CMP_LE;
+    }
+    if (ta != 0 && c == 0) {
+        return is32 ? InstructionType::CMP4_GE : InstructionType::CMP_GE;
+    }
+    return is32 ? InstructionType::CMP4_LT : InstructionType::CMP_LT;
+}
+
+static CompareCompleter mapParallelCompareCompleter(uint8_t major) {
+    switch (major) {
+        case 0xC:
+            return CompareCompleter::AND;
+        case 0xD:
+            return CompareCompleter::OR;
+        case 0xE:
+            return CompareCompleter::OR_ANDCM;
+        default:
+            return CompareCompleter::NORMAL;
+    }
 }
 
 } // namespace decoder

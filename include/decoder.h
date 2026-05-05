@@ -221,6 +221,14 @@ enum class InstructionType {
     UNKNOWN
 };
 
+enum class CompareCompleter : uint8_t {
+    NORMAL,
+    UNC,
+    AND,
+    OR,
+    OR_ANDCM
+};
+
 // Simplified instruction structure per user requirements
 // NOTE: This is a simplified representation for initial implementation.
 // Real IA-64 instructions are 41 bits with complex encoding formats.
@@ -261,6 +269,7 @@ public:
     void SetBranchTarget(uint64_t target);
     void SetType(InstructionType type) { type_ = type; }
     void SetRawBits(uint64_t bits) { rawBits_ = bits; }
+    void SetCompareCompleter(CompareCompleter completer) { compareCompleter_ = completer; }
     
     // Accessors for execution
     uint8_t GetPredicate() const { return predicate_; }
@@ -272,6 +281,7 @@ public:
     bool HasImmediate() const { return hasImmediate_; }
     uint64_t GetBranchTarget() const { return branchTarget_; }
     bool HasBranchTarget() const { return hasBranchTarget_; }
+    CompareCompleter GetCompareCompleter() const { return compareCompleter_; }
     
     
 private:
@@ -289,6 +299,7 @@ private:
     bool hasImmediate_;
     uint64_t branchTarget_;
     bool hasBranchTarget_;
+    CompareCompleter compareCompleter_;
 };
 
 // IA-64 Instruction Bundle (128-bit container)

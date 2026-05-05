@@ -90,6 +90,32 @@ void test_compare_instructions() {
     
     assert_true("CMP.LTU: p5 should be false (unsigned)", !cpu.GetPR(5));
     assert_true("CMP.LTU: p6 should be true", cpu.GetPR(6));
+
+    InstructionEx cmp_and(InstructionType::CMP_EQ, UnitType::I_UNIT);
+    cmp_and.SetOperands4(20, 1, 3, 21);
+    cmp_and.SetCompareCompleter(CompareCompleter::AND);
+    cpu.SetPR(20, true);
+    cpu.SetPR(21, true);
+    cmp_and.Execute(cpu, memory);
+    assert_true("CMP.EQ.AND should clear p20 when result is false", !cpu.GetPR(20));
+    assert_true("CMP.EQ.AND should clear p21 when result is false", !cpu.GetPR(21));
+
+    InstructionEx cmp_or(InstructionType::CMP_EQ, UnitType::I_UNIT);
+    cmp_or.SetOperands4(22, 1, 2, 23);
+    cmp_or.SetCompareCompleter(CompareCompleter::OR);
+    cmp_or.Execute(cpu, memory);
+    assert_true("CMP.EQ.OR should set p22 when result is true", cpu.GetPR(22));
+    assert_true("CMP.EQ.OR should set p23 when result is true", cpu.GetPR(23));
+
+    InstructionEx cmp_unc(InstructionType::CMP_EQ, UnitType::I_UNIT);
+    cmp_unc.SetPredicate(31);
+    cmp_unc.SetOperands4(24, 1, 2, 25);
+    cmp_unc.SetCompareCompleter(CompareCompleter::UNC);
+    cpu.SetPR(24, true);
+    cpu.SetPR(25, true);
+    cmp_unc.Execute(cpu, memory);
+    assert_true("CMP.EQ.UNC should clear p24 when qp is false", !cpu.GetPR(24));
+    assert_true("CMP.EQ.UNC should clear p25 when qp is false", !cpu.GetPR(25));
     
     std::cout << "  ? Compare instructions passed" << std::endl;
 }
@@ -349,6 +375,77 @@ void test_latest_boot_log_blockers() {
     shrp.Execute(cpu, memory, true);
     assert_equal("shrp should concatenate high:low and keep shifted low half",
                  0x048d159e26af37bfULL, cpu.GetGR(33));
+
+    InstructionEx loop_cmp = decoder.DecodeSlot(0x1a03a11e180ULL, UnitType::I_UNIT, 0x86c0);
+    assert_true("Loop cmp.ltu should decode as register compare",
+                loop_cmp.GetType() == InstructionType::CMP_LTU);
+    assert_equal("Loop cmp.ltu p1 decode", 6, loop_cmp.GetDst());
+    assert_equal("Loop cmp.ltu lhs register", 15, loop_cmp.GetSrc1());
+    assert_equal("Loop cmp.ltu rhs register", 33, loop_cmp.GetSrc2());
+    assert_equal("Loop cmp.ltu p2 decode", 7, loop_cmp.GetSrc3());
+    assert_true("Loop cmp.ltu should not be immediate", !loop_cmp.HasImmediate());
+    assert_string("Loop cmp.ltu disassembly",
+                  "cmp.ltu p6, p7 = r15, r33",
+                  loop_cmp.GetDisassembly());
+
+    cpu.SetGR(15, 3);
+    cpu.SetGR(33, 4);
+    loop_cmp.Execute(cpu, memory);
+    assert_true("Loop cmp.ltu should keep p6 true while index is below bound", cpu.GetPR(6));
+    assert_true("Loop cmp.ltu should clear p7 while index is below bound", !cpu.GetPR(7));
+
+    cpu.SetGR(15, 4);
+    cpu.SetGR(33, 4);
+    loop_cmp.Execute(cpu, memory);
+    assert_true("Loop cmp.ltu should clear p6 at loop bound", !cpu.GetPR(6));
+    assert_true("Loop cmp.ltu should set p7 at loop bound", cpu.GetPR(7));
+
+    InstructionEx next_cmp = decoder.DecodeSlot(0x1a0521202c0ULL, UnitType::I_UNIT, 0x86d0);
+    assert_true("Loop next cmp.ltu should decode",
+                next_cmp.GetType() == InstructionType::CMP_LTU);
+    assert_equal("Loop next cmp.ltu p1 decode", 11, next_cmp.GetDst());
+    assert_equal("Loop next cmp.ltu lhs register", 16, next_cmp.GetSrc1());
+    assert_equal("Loop next cmp.ltu rhs register", 33, next_cmp.GetSrc2());
+    assert_equal("Loop next cmp.ltu p2 decode", 10, next_cmp.GetSrc3());
+    assert_string("Loop next cmp.ltu disassembly",
+                  "cmp.ltu p11, p10 = r16, r33",
+                  next_cmp.GetDisassembly());
+
+    InstructionEx space_cmp = decoder.DecodeSlot(0x1ce30e411c0ULL, UnitType::I_UNIT, 0x86e0);
+    assert_true("Loop space compare should decode as cmp4.ne",
+                space_cmp.GetType() == InstructionType::CMP4_NE);
+    assert_true("Loop space compare should use or.andcm completer",
+                space_cmp.GetCompareCompleter() == CompareCompleter::OR_ANDCM);
+    assert_equal("Loop space compare p1 decode", 7, space_cmp.GetDst());
+    assert_equal("Loop space compare source register", 14, space_cmp.GetSrc2());
+    assert_equal("Loop space compare immediate", 32, space_cmp.GetImmediate());
+    assert_string("Loop space compare disassembly",
+                  "cmp4.ne.or.andcm p7, p6 = 32, r14",
+                  space_cmp.GetDisassembly());
+
+    cpu.SetPR(6, true);
+    cpu.SetPR(7, false);
+    cpu.SetGR(14, 32);
+    space_cmp.Execute(cpu, memory);
+    assert_true("cmp4.ne.or.andcm should leave p6 true for a space", cpu.GetPR(6));
+    assert_true("cmp4.ne.or.andcm should leave p7 false for a space", !cpu.GetPR(7));
+
+    cpu.SetPR(6, true);
+    cpu.SetPR(7, false);
+    cpu.SetGR(14, 'A');
+    space_cmp.Execute(cpu, memory);
+    assert_true("cmp4.ne.or.andcm should clear p6 for non-space", !cpu.GetPR(6));
+    assert_true("cmp4.ne.or.andcm should set p7 for non-space", cpu.GetPR(7));
+
+    InstructionEx nul_cmp = decoder.DecodeSlot(0x1cc40e00240ULL, UnitType::I_UNIT, 0x86e0);
+    assert_true("Loop null compare should decode as cmp4.eq",
+                nul_cmp.GetType() == InstructionType::CMP4_EQ);
+    assert_equal("Loop null compare p1 decode", 9, nul_cmp.GetDst());
+    assert_equal("Loop null compare source register", 14, nul_cmp.GetSrc2());
+    assert_equal("Loop null compare immediate", 0, nul_cmp.GetImmediate());
+    assert_string("Loop null compare disassembly",
+                  "cmp4.eq p9, p8 = 0, r14",
+                  nul_cmp.GetDisassembly());
 
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
