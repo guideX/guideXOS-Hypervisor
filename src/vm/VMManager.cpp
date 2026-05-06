@@ -612,6 +612,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // remains below it while staying outside low guest RAM.
                                                                 constexpr uint64_t EFI_STUB_ADDR = 0x1FE00000ULL;
                                                                 constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
+                                                                constexpr uint64_t EFI_IMAGE_DEVICE_HANDLE = 0x2ULL;
 
                                                                 // Write a minimal EFI System Table plus service-table
                                                                 // headers. This is only enough for userland EFI code
@@ -630,6 +631,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_STUB_ADDR + 0x1260ULL;
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1280ULL;
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x12C0ULL;
+                                                                    constexpr uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_STUB_ADDR + 0x1300ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xD80ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xDC0ULL;
                                                                     constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xE00ULL;
@@ -652,6 +654,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         sizeof(protocolStubPage));
 
                                                                     auto write32 = [&](uint64_t address, uint32_t value) {
+                                                                        instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+                                                                    };
+                                                                    auto write16 = [&](uint64_t address, uint16_t value) {
                                                                         instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                                                                     };
                                                                     auto write8 = [&](uint64_t address, uint8_t value) {
@@ -799,11 +804,35 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     // success path without inventing ACPI/PCI devices.
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x00, 0x1000U);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x18, EFI_IMAGE_DEVICE_HANDLE);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 2U);
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x54, 4U);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x58, EFI_UNSUPPORTED_STUB_DESC_ADDR);
+
+                                                                    // MEDIA_FILEPATH_DP("\\EFI\\BOOT\\BOOTIA64.EFI") + End.
+                                                                    // The loaded-image file path lets bootloader userland derive
+                                                                    // its boot directory before it starts probing SimpleFS.
+                                                                    static const uint16_t loadedImagePath[] = {
+                                                                        '\\','E','F','I','\\','B','O','O','T','\\',
+                                                                        'B','O','O','T','I','A','6','4','.','E','F','I',0
+                                                                    };
+                                                                    const uint16_t filePathNodeLength =
+                                                                        static_cast<uint16_t>(4 + sizeof(loadedImagePath));
+                                                                    write8(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x00, 0x04U);
+                                                                    write8(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x01, 0x04U);
+                                                                    write16(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x02,
+                                                                            filePathNodeLength);
+                                                                    instance->vm->getMemory().Write(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x04,
+                                                                        reinterpret_cast<const uint8_t*>(loadedImagePath),
+                                                                        sizeof(loadedImagePath));
+                                                                    const uint64_t filePathEndNode =
+                                                                        EFI_LOADED_IMAGE_FILE_PATH_ADDR + filePathNodeLength;
+                                                                    write8(filePathEndNode + 0x00, 0x7FU);
+                                                                    write8(filePathEndNode + 0x01, 0xFFU);
+                                                                    write16(filePathEndNode + 0x02, 0x04U);
 
                                                                     // Minimal Simple Text Output protocol for BOOTIA64.EFI
                                                                     // status/diagnostic writes. This avoids bootloader printf
@@ -879,6 +908,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << ", HandleProtocol=0x" << EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR
                                                                         << ", OpenVolume=0x" << EFI_OPEN_VOLUME_STUB_DESC_ADDR
                                                                         << ", TextOutput=0x" << EFI_TEXT_OUTPUT_PROTOCOL_ADDR
+                                                                        << ", LoadedImageFilePath=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
                                                                         << ", ConfigTables=" << std::dec << configTableCount << ")";
                                                                     LOG_INFO(oss.str());
                                                                 }
