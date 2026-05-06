@@ -1345,12 +1345,18 @@ void testIA64PluginHandleProtocolReturnsLoadedImage() {
     SparseMemory memory;
     uint8_t bundleBytes[16] = {};
     memory.Write(0x1a50, bundleBytes, sizeof(bundleBytes));
+    const uint8_t loadedImageGuid[16] = {
+        0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
+        0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
+    memory.Write(0x3000, loadedImageGuid, sizeof(loadedImageGuid));
 
     FakeIndirectSelfCallDecoder decoder;
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1a50);
     plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
     plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+    plugin.getCPUState().SetGR(36, 0x3000);
     plugin.getCPUState().SetGR(37, 0x4000);
     plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
 
@@ -1364,6 +1370,66 @@ void testIA64PluginHandleProtocolReturnsLoadedImage() {
     assert(loadedImage == 0x1fe00d00ULL);
 
     std::cout << "  ? HandleProtocol writes a minimal LoadedImageProtocol pointer and returns EFI_SUCCESS\n";
+}
+
+void testIA64PluginHandleProtocolReturnsSimpleFileSystem() {
+    std::cout << "Testing IA-64 plugin HandleProtocol SimpleFileSystem stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1cc0, bundleBytes, sizeof(bundleBytes));
+    const uint8_t simpleFileSystemGuid[16] = {
+        0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11,
+        0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
+    memory.Write(0x3000, simpleFileSystemGuid, sizeof(simpleFileSystemGuid));
+
+    FakeIndirectSelfCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1cc0);
+    plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+    plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+    plugin.getCPUState().SetGR(36, 0x3000);
+    plugin.getCPUState().SetGR(37, 0x4000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t simpleFileSystem = 0;
+    memory.Read(0x4000, reinterpret_cast<uint8_t*>(&simpleFileSystem), sizeof(simpleFileSystem));
+    assert(plugin.getCPUState().GetIP() == 0x1cd0);
+    assert(plugin.getCPUState().GetBR(0) == 0x1cd0);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(simpleFileSystem == 0x1fe01000ULL);
+
+    std::cout << "  ? HandleProtocol writes a minimal SimpleFileSystem pointer and returns EFI_SUCCESS\n";
+}
+
+void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
+    std::cout << "Testing IA-64 plugin SimpleFileSystem OpenVolume stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetCFM(2);
+    plugin.getCPUState().SetBR(6, 0x1fe00c80ULL);
+    plugin.getCPUState().SetGR(33, 0x5000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t rootFileProtocol = 0;
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&rootFileProtocol), sizeof(rootFileProtocol));
+    assert(plugin.getCPUState().GetIP() == 0x30e50);
+    assert(plugin.getCPUState().GetBR(0) == 0x30e50);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(rootFileProtocol == 0x1fe01040ULL);
+
+    std::cout << "  ? OpenVolume writes a root FileProtocol pointer and returns EFI_SUCCESS\n";
 }
 
 void testIA64PluginAllocatePoolReturnsScratchBuffer() {
@@ -1391,7 +1457,7 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     assert(plugin.getCPUState().GetIP() == 0xa220);
     assert(plugin.getCPUState().GetBR(0) == 0xa220);
     assert(plugin.getCPUState().GetGR(8) == 0);
-    assert(buffer == 0x1fe01000ULL);
+    assert(buffer == 0x1fe02000ULL);
     assert(firstBytes == 0);
 
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
@@ -1768,6 +1834,12 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginHandleProtocolReturnsLoadedImage();
+        std::cout << "\n";
+
+        testIA64PluginHandleProtocolReturnsSimpleFileSystem();
+        std::cout << "\n";
+
+        testIA64PluginOpenVolumeReturnsRootFileProtocol();
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();

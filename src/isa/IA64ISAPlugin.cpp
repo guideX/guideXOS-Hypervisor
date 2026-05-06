@@ -6,6 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <cstring>
+#include <array>
 
 namespace ia64 {
 
@@ -25,13 +26,25 @@ constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
+constexpr uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xC80ULL;
 constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
+constexpr uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
+constexpr uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1040ULL;
 constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xD80ULL;
 constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
 constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
 constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF00ULL;
-constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
+constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x2000ULL;
 constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
+using EfiGuid = std::array<uint8_t, 16>;
+constexpr EfiGuid EFI_LOADED_IMAGE_PROTOCOL_GUID = {{
+    0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
+    0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+}};
+constexpr EfiGuid EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID = {{
+    0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11,
+    0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+}};
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
@@ -83,6 +96,35 @@ bool isAdvancedLoadCheckInstruction(InstructionType type) {
 uint64_t readCallerOutputRegister(const CPUState& cpu, size_t index) {
     const size_t reg = 32 + cpu.GetSOL() + index;
     return reg < NUM_GENERAL_REGISTERS ? cpu.GetGR(reg) : 0;
+}
+
+bool readEfiGuid(IMemory& memory, uint64_t address, EfiGuid& guid) {
+    if (address == 0) {
+        return false;
+    }
+
+    try {
+        memory.Read(address, guid.data(), guid.size());
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+std::string formatEfiGuid(const EfiGuid& guid) {
+    std::ostringstream oss;
+    oss << std::hex;
+    for (size_t i = 0; i < guid.size(); ++i) {
+        if (i != 0) {
+            oss << ':';
+        }
+        const int value = guid[i];
+        if (value < 0x10) {
+            oss << '0';
+        }
+        oss << value;
+    }
+    return oss.str();
 }
 
 uint64_t alignUp(uint64_t value, uint64_t alignment) {
@@ -610,18 +652,71 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
+                        const uint64_t protocolGuid = readCallerOutputRegister(state_.getCPUState(), 1);
                         const uint64_t interfaceOut = readCallerOutputRegister(state_.getCPUState(), 2);
-                        if (interfaceOut != 0) {
+                        EfiGuid guid = {};
+                        const bool hasGuid = readEfiGuid(memory, protocolGuid, guid);
+                        uint64_t protocolAddress = 0;
+                        const char* protocolName = nullptr;
+                        if (hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
+                            protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
+                            protocolName = "LoadedImageProtocol";
+                        } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
+                            protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+                            protocolName = "SimpleFileSystemProtocol";
+                        }
+
+                        if (interfaceOut != 0 && protocolAddress != 0) {
                             memory.Write(interfaceOut,
-                                         reinterpret_cast<const uint8_t*>(&EFI_LOADED_IMAGE_PROTOCOL_ADDR),
-                                         sizeof(EFI_LOADED_IMAGE_PROTOCOL_ADDR));
+                                         reinterpret_cast<const uint8_t*>(&protocolAddress),
+                                         sizeof(protocolAddress));
+                        } else if (interfaceOut != 0) {
+                            const uint64_t nullInterface = 0;
+                            memory.Write(interfaceOut,
+                                         reinterpret_cast<const uint8_t*>(&nullInterface),
+                                         sizeof(nullInterface));
                         }
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
-                        std::cout << "[EFI-STUB] BootServices.HandleProtocol returned LoadedImageProtocol=0x"
-                                  << std::hex << EFI_LOADED_IMAGE_PROTOCOL_ADDR
-                                  << " via out=0x" << interfaceOut << std::dec << std::endl;
+                        state_.getCPUState().SetGR(8, protocolAddress != 0
+                            ? EFI_STATUS_SUCCESS
+                            : EFI_STATUS_NOT_FOUND);
+                        std::cout << "[EFI-STUB] BootServices.HandleProtocol guid=0x"
+                                  << std::hex << protocolGuid;
+                        if (hasGuid) {
+                            std::cout << " [" << formatEfiGuid(guid) << "]";
+                        } else {
+                            std::cout << " [unreadable]";
+                        }
+                        if (protocolAddress != 0) {
+                            std::cout << " returned " << protocolName << "=0x"
+                                      << protocolAddress << " via out=0x" << interfaceOut;
+                        } else {
+                            std::cout << " -> EFI_NOT_FOUND via out=0x" << interfaceOut;
+                        }
+                        std::cout << std::dec << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_OPEN_VOLUME_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t rootOut = readCallerOutputRegister(state_.getCPUState(), 1);
+                        if (rootOut != 0) {
+                            memory.Write(rootOut,
+                                         reinterpret_cast<const uint8_t*>(&EFI_ROOT_FILE_PROTOCOL_ADDR),
+                                         sizeof(EFI_ROOT_FILE_PROTOCOL_ADDR));
+                        }
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, rootOut != 0
+                            ? EFI_STATUS_SUCCESS
+                            : EFI_STATUS_UNSUPPORTED);
+                        std::cout << "[EFI-STUB] SimpleFileSystem.OpenVolume rootOut=0x"
+                                  << std::hex << rootOut;
+                        if (rootOut != 0) {
+                            std::cout << " -> FileProtocol=0x" << EFI_ROOT_FILE_PROTOCOL_ADDR;
+                        } else {
+                            std::cout << " -> EFI_UNSUPPORTED";
+                        }
+                        std::cout << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
                         handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
