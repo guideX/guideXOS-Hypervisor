@@ -1405,6 +1405,59 @@ void testIA64PluginHandleProtocolReturnsSimpleFileSystem() {
     std::cout << "  ? HandleProtocol writes a minimal SimpleFileSystem pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginHandleProtocolZeroGuidFallbacks() {
+    std::cout << "Testing IA-64 plugin HandleProtocol zero-GUID boot fallbacks...\n";
+
+    uint8_t bundleBytes[16] = {};
+    uint8_t zeroGuid[16] = {};
+
+    {
+        SparseMemory memory;
+        memory.Write(0x1a50, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x3000, zeroGuid, sizeof(zeroGuid));
+
+        FakeIndirectSelfCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x1a50);
+        plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+        plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+        plugin.getCPUState().SetGR(36, 0x3000);
+        plugin.getCPUState().SetGR(37, 0x4000);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+        uint64_t loadedImage = 0;
+        memory.Read(0x4000, reinterpret_cast<uint8_t*>(&loadedImage), sizeof(loadedImage));
+        assert(plugin.getCPUState().GetGR(8) == 0);
+        assert(loadedImage == 0x1fe00d00ULL);
+    }
+
+    {
+        SparseMemory memory;
+        memory.Write(0x1cc0, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x3000, zeroGuid, sizeof(zeroGuid));
+
+        FakeIndirectSelfCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x1cc0);
+        plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+        plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+        plugin.getCPUState().SetGR(36, 0x3000);
+        plugin.getCPUState().SetGR(37, 0x4000);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+        uint64_t simpleFileSystem = 0;
+        memory.Read(0x4000, reinterpret_cast<uint8_t*>(&simpleFileSystem), sizeof(simpleFileSystem));
+        assert(plugin.getCPUState().GetGR(8) == 0);
+        assert(simpleFileSystem == 0x1fe01000ULL);
+    }
+
+    std::cout << "  ? zeroed protocol GUIDs at known boot call sites map to the expected safe stubs\n";
+}
+
 void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
     std::cout << "Testing IA-64 plugin SimpleFileSystem OpenVolume stub...\n";
 
@@ -1837,6 +1890,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginHandleProtocolReturnsSimpleFileSystem();
+        std::cout << "\n";
+
+        testIA64PluginHandleProtocolZeroGuidFallbacks();
         std::cout << "\n";
 
         testIA64PluginOpenVolumeReturnsRootFileProtocol();

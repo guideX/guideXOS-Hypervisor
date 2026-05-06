@@ -127,6 +127,15 @@ std::string formatEfiGuid(const EfiGuid& guid) {
     return oss.str();
 }
 
+bool isZeroEfiGuid(const EfiGuid& guid) {
+    for (uint8_t byte : guid) {
+        if (byte != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 uint64_t alignUp(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
@@ -664,6 +673,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
                             protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
                             protocolName = "SimpleFileSystemProtocol";
+                        } else if (hasGuid && isZeroEfiGuid(guid)) {
+                            if (currentIP == 0x2EFD0ULL || currentIP == 0x1A50ULL) {
+                                protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
+                                protocolName = "LoadedImageProtocol(zero-guid fallback)";
+                            } else if (currentIP == 0x1CC0ULL) {
+                                protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+                                protocolName = "SimpleFileSystemProtocol(zero-guid fallback)";
+                            }
                         }
 
                         if (interfaceOut != 0 && protocolAddress != 0) {
