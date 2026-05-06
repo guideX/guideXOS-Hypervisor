@@ -23,6 +23,7 @@ CountedLoopTraceState g_countedLoopTrace;
 
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
+constexpr uint64_t EFI_STATUS_BUFFER_TOO_SMALL = 0x8000000000000005ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
@@ -171,6 +172,74 @@ std::string readUtf16Preview(IMemory& memory, uint64_t address) {
     }
 
     return preview;
+}
+
+std::string readUtf16AsciiString(IMemory& memory, uint64_t address) {
+    if (address == 0) {
+        return {};
+    }
+
+    std::string value;
+    for (size_t i = 0; i < 64; ++i) {
+        uint16_t ch = 0;
+        try {
+            memory.Read(address + i * sizeof(ch),
+                        reinterpret_cast<uint8_t*>(&ch),
+                        sizeof(ch));
+        } catch (const std::exception&) {
+            return {};
+        }
+
+        if (ch == 0) {
+            return value;
+        }
+        if (ch < 0x20 || ch > 0x7E) {
+            return {};
+        }
+        value.push_back(static_cast<char>(ch));
+    }
+
+    return value;
+}
+
+void appendLe16(std::vector<uint8_t>& data, uint16_t value) {
+    data.push_back(static_cast<uint8_t>(value & 0xFF));
+    data.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+}
+
+void appendLe32(std::vector<uint8_t>& data, uint32_t value) {
+    data.push_back(static_cast<uint8_t>(value & 0xFF));
+    data.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+    data.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+    data.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+}
+
+std::vector<uint8_t> makeBoot0000LoadOption() {
+    static const uint16_t description[] = {
+        'g','u','i','d','e','X','O','S',' ','I','A','-','6','4',' ','I','S','O',0
+    };
+    static const uint16_t bootPath[] = {
+        '\\','E','F','I','\\','B','O','O','T','\\',
+        'B','O','O','T','I','A','6','4','.','E','F','I',0
+    };
+
+    std::vector<uint8_t> path;
+    path.push_back(0x04); // MEDIA_DEVICE_PATH
+    path.push_back(0x04); // MEDIA_FILEPATH_DP
+    appendLe16(path, static_cast<uint16_t>(4 + sizeof(bootPath)));
+    const uint8_t* bootPathBytes = reinterpret_cast<const uint8_t*>(bootPath);
+    path.insert(path.end(), bootPathBytes, bootPathBytes + sizeof(bootPath));
+    path.push_back(0x7F); // END_DEVICE_PATH_TYPE
+    path.push_back(0xFF); // END_ENTIRE_DEVICE_PATH_SUBTYPE
+    appendLe16(path, 4);
+
+    std::vector<uint8_t> option;
+    appendLe32(option, 1U); // LOAD_OPTION_ACTIVE
+    appendLe16(option, static_cast<uint16_t>(path.size()));
+    const uint8_t* descBytes = reinterpret_cast<const uint8_t*>(description);
+    option.insert(option.end(), descBytes, descBytes + sizeof(description));
+    option.insert(option.end(), path.begin(), path.end());
+    return option;
 }
 
 uint64_t alignUp(uint64_t value, uint64_t alignment) {
@@ -680,21 +749,75 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         handledFirmwareCallStub = true;
                         const uint64_t variableName = readCallerOutputRegister(state_.getCPUState(), 0);
                         const uint64_t vendorGuid = readCallerOutputRegister(state_.getCPUState(), 1);
-                        const uint64_t dataSizeOut = readCallerOutputRegister(state_.getCPUState(), 2);
+                        const uint64_t attributesOut = readCallerOutputRegister(state_.getCPUState(), 2);
+                        const uint64_t dataSizeOut = readCallerOutputRegister(state_.getCPUState(), 3);
+                        const uint64_t dataOut = readCallerOutputRegister(state_.getCPUState(), 4);
+                        const std::string variableNameText = readUtf16AsciiString(memory, variableName);
+
+                        std::vector<uint8_t> variableData;
+                        if (variableNameText == "BootCurrent") {
+                            appendLe16(variableData, 0);
+                        } else if (variableNameText == "Boot0000") {
+                            variableData = makeBoot0000LoadOption();
+                        }
+
+                        uint64_t providedSize = 0;
                         if (dataSizeOut != 0) {
+                            try {
+                                memory.Read(dataSizeOut,
+                                            reinterpret_cast<uint8_t*>(&providedSize),
+                                            sizeof(providedSize));
+                            } catch (const std::exception&) {
+                                providedSize = 0;
+                            }
+                        }
+
+                        uint64_t status = EFI_STATUS_NOT_FOUND;
+                        if (!variableData.empty() && dataSizeOut != 0) {
+                            const uint64_t requiredSize = static_cast<uint64_t>(variableData.size());
+                            memory.Write(dataSizeOut,
+                                         reinterpret_cast<const uint8_t*>(&requiredSize),
+                                         sizeof(requiredSize));
+                            if (attributesOut != 0) {
+                                const uint32_t attributes = 0x7U; // NV | BS | RT
+                                memory.Write(attributesOut,
+                                             reinterpret_cast<const uint8_t*>(&attributes),
+                                             sizeof(attributes));
+                            }
+                            if (dataOut != 0 && providedSize >= requiredSize) {
+                                memory.Write(dataOut, variableData.data(), variableData.size());
+                                status = EFI_STATUS_SUCCESS;
+                            } else {
+                                status = EFI_STATUS_BUFFER_TOO_SMALL;
+                            }
+                        } else if (dataSizeOut != 0) {
                             const uint64_t zero = 0;
                             memory.Write(dataSizeOut,
                                          reinterpret_cast<const uint8_t*>(&zero),
                                          sizeof(zero));
                         }
+
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_NOT_FOUND);
+                        state_.getCPUState().SetGR(8, status);
                         std::cout << "[EFI-STUB] RuntimeServices.GetVariable name=0x"
                                   << std::hex << variableName
+                                  << " \"" << variableNameText << "\""
                                   << " guid=0x" << vendorGuid
+                                  << " attrOut=0x" << attributesOut
                                   << " sizeOut=0x" << dataSizeOut
-                                  << " -> EFI_NOT_FOUND" << std::dec << std::endl;
+                                  << " dataOut=0x" << dataOut;
+                        if (!variableData.empty()) {
+                            std::cout << " required=0x" << variableData.size();
+                        }
+                        if (status == EFI_STATUS_SUCCESS) {
+                            std::cout << " -> EFI_SUCCESS";
+                        } else if (status == EFI_STATUS_BUFFER_TOO_SMALL) {
+                            std::cout << " -> EFI_BUFFER_TOO_SMALL";
+                        } else {
+                            std::cout << " -> EFI_NOT_FOUND";
+                        }
+                        std::cout << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;

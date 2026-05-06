@@ -1543,35 +1543,111 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
 }
 
-void testIA64PluginGetVariableReturnsNotFound() {
+void testIA64PluginGetVariableBootVariables() {
     std::cout << "Testing IA-64 plugin GetVariable firmware stub...\n";
 
-    SparseMemory memory;
     uint8_t bundleBytes[16] = {};
-    memory.Write(0x2ee50, bundleBytes, sizeof(bundleBytes));
+    const uint8_t globalVariableGuid[16] = {
+        0x61, 0xDF, 0xE4, 0x8B, 0xCA, 0x93, 0xD2, 0x11,
+        0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C
+    };
+    const uint16_t unknownName[] = { 'N', 'o', 'S', 'u', 'c', 'h', 0 };
+    const uint16_t bootCurrentName[] = { 'B', 'o', 'o', 't', 'C', 'u', 'r', 'r', 'e', 'n', 't', 0 };
+    const uint16_t boot0000Name[] = { 'B', 'o', 'o', 't', '0', '0', '0', '0', 0 };
 
-    FakeIndirectCallDecoder decoder;
-    IA64ISAPlugin plugin(decoder);
-    plugin.getCPUState().SetIP(0x2ee50);
-    plugin.getCPUState().SetCFM(4);
-    plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
-    plugin.getCPUState().SetGR(32, 0x6000);
-    plugin.getCPUState().SetGR(33, 0x7000);
-    plugin.getCPUState().SetGR(34, 0x8000);
-    plugin.getCPUState().SetGR(8, 0);
+    {
+        SparseMemory memory;
+        memory.Write(0x2ee50, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x6000, reinterpret_cast<const uint8_t*>(unknownName), sizeof(unknownName));
+        memory.Write(0x7000, globalVariableGuid, sizeof(globalVariableGuid));
 
-    uint64_t size = 0x1234;
-    memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+        FakeIndirectCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x2ee50);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
+        plugin.getCPUState().SetGR(32, 0x6000);
+        plugin.getCPUState().SetGR(33, 0x7000);
+        plugin.getCPUState().SetGR(34, 0x9000);
+        plugin.getCPUState().SetGR(35, 0x8000);
+        plugin.getCPUState().SetGR(36, 0xA000);
+        plugin.getCPUState().SetGR(8, 0);
 
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        uint64_t size = 0x1234;
+        memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
 
-    memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
-    assert(plugin.getCPUState().GetIP() == 0x2ee60);
-    assert(plugin.getCPUState().GetBR(0) == 0x2ee60);
-    assert(plugin.getCPUState().GetGR(8) == 0x800000000000000eULL);
-    assert(size == 0);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
 
-    std::cout << "  ? GetVariable clears DataSize and returns EFI_NOT_FOUND\n";
+        memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+        assert(plugin.getCPUState().GetIP() == 0x2ee60);
+        assert(plugin.getCPUState().GetBR(0) == 0x2ee60);
+        assert(plugin.getCPUState().GetGR(8) == 0x800000000000000eULL);
+        assert(size == 0);
+    }
+
+    {
+        SparseMemory memory;
+        memory.Write(0x2ee50, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x6000, reinterpret_cast<const uint8_t*>(bootCurrentName), sizeof(bootCurrentName));
+        memory.Write(0x7000, globalVariableGuid, sizeof(globalVariableGuid));
+
+        FakeIndirectCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x2ee50);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
+        plugin.getCPUState().SetGR(32, 0x6000);
+        plugin.getCPUState().SetGR(33, 0x7000);
+        plugin.getCPUState().SetGR(34, 0x9000);
+        plugin.getCPUState().SetGR(35, 0x8000);
+        plugin.getCPUState().SetGR(36, 0xA000);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+        uint64_t size = 2;
+        memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+        uint16_t bootCurrent = 0xffff;
+        uint32_t attributes = 0;
+        memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+        memory.Read(0x9000, reinterpret_cast<uint8_t*>(&attributes), sizeof(attributes));
+        memory.Read(0xA000, reinterpret_cast<uint8_t*>(&bootCurrent), sizeof(bootCurrent));
+        assert(plugin.getCPUState().GetGR(8) == 0);
+        assert(size == 2);
+        assert(attributes == 0x7U);
+        assert(bootCurrent == 0);
+    }
+
+    {
+        SparseMemory memory;
+        memory.Write(0x2ee50, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x6000, reinterpret_cast<const uint8_t*>(boot0000Name), sizeof(boot0000Name));
+        memory.Write(0x7000, globalVariableGuid, sizeof(globalVariableGuid));
+
+        FakeIndirectCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x2ee50);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
+        plugin.getCPUState().SetGR(32, 0x6000);
+        plugin.getCPUState().SetGR(33, 0x7000);
+        plugin.getCPUState().SetGR(34, 0);
+        plugin.getCPUState().SetGR(35, 0x8000);
+        plugin.getCPUState().SetGR(36, 0);
+        plugin.getCPUState().SetGR(8, 0);
+
+        uint64_t size = 0;
+        memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+        memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+        assert(plugin.getCPUState().GetGR(8) == 0x8000000000000005ULL);
+        assert(size > 6);
+    }
+
+    std::cout << "  ? GetVariable handles unknown variables and minimal BootCurrent/Boot0000\n";
 }
 
 void testIA64PluginTopLevelReturnHalts() {
@@ -1931,7 +2007,7 @@ int main() {
         testIA64PluginAllocatePoolReturnsScratchBuffer();
         std::cout << "\n";
 
-        testIA64PluginGetVariableReturnsNotFound();
+        testIA64PluginGetVariableBootVariables();
         std::cout << "\n";
 
         testIA64PluginTopLevelReturnHalts();
