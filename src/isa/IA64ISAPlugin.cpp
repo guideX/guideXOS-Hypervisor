@@ -21,11 +21,15 @@ struct CountedLoopTraceState {
 CountedLoopTraceState g_countedLoopTrace;
 
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
+constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
+constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
 constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
+constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xD80ULL;
 constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
 constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
+constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF00ULL;
 constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
 constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
 
@@ -584,6 +588,26 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                     } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_GET_VARIABLE_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t variableName = readCallerOutputRegister(state_.getCPUState(), 0);
+                        const uint64_t vendorGuid = readCallerOutputRegister(state_.getCPUState(), 1);
+                        const uint64_t dataSizeOut = readCallerOutputRegister(state_.getCPUState(), 2);
+                        if (dataSizeOut != 0) {
+                            const uint64_t zero = 0;
+                            memory.Write(dataSizeOut,
+                                         reinterpret_cast<const uint8_t*>(&zero),
+                                         sizeof(zero));
+                        }
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_NOT_FOUND);
+                        std::cout << "[EFI-STUB] RuntimeServices.GetVariable name=0x"
+                                  << std::hex << variableName
+                                  << " guid=0x" << vendorGuid
+                                  << " sizeOut=0x" << dataSizeOut
+                                  << " -> EFI_NOT_FOUND" << std::dec << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         const uint64_t interfaceOut = readCallerOutputRegister(state_.getCPUState(), 2);
@@ -615,6 +639,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                   << std::hex << originalBranchTarget
                                   << " is zero-filled handoff memory; returning EFI_SUCCESS"
                                   << std::dec << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_UNSUPPORTED_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                        std::cout << "[EFI-STUB] unsupported firmware service target 0x"
+                                  << std::hex << originalBranchTarget
+                                  << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
                     } else {
                         saveCallFrame(currentIP + 16);
                         captureCallOutputRegisters();

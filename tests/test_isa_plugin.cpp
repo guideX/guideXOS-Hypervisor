@@ -1397,6 +1397,37 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginGetVariableReturnsNotFound() {
+    std::cout << "Testing IA-64 plugin GetVariable firmware stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x2ee50, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x2ee50);
+    plugin.getCPUState().SetCFM(4);
+    plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
+    plugin.getCPUState().SetGR(32, 0x6000);
+    plugin.getCPUState().SetGR(33, 0x7000);
+    plugin.getCPUState().SetGR(34, 0x8000);
+    plugin.getCPUState().SetGR(8, 0);
+
+    uint64_t size = 0x1234;
+    memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+    assert(plugin.getCPUState().GetIP() == 0x2ee60);
+    assert(plugin.getCPUState().GetBR(0) == 0x2ee60);
+    assert(plugin.getCPUState().GetGR(8) == 0x800000000000000eULL);
+    assert(size == 0);
+
+    std::cout << "  ? GetVariable clears DataSize and returns EFI_NOT_FOUND\n";
+}
+
 void testIA64PluginTopLevelReturnHalts() {
     std::cout << "Testing IA-64 plugin top-level EFI return handling...\n";
 
@@ -1740,6 +1771,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();
+        std::cout << "\n";
+
+        testIA64PluginGetVariableReturnsNotFound();
         std::cout << "\n";
 
         testIA64PluginTopLevelReturnHalts();
