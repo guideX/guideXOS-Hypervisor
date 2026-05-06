@@ -626,6 +626,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_STUB_ADDR + 0xD00ULL;
                                                                     constexpr uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_STUB_ADDR + 0x1000ULL;
                                                                     constexpr uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_STUB_ADDR + 0x1040ULL;
+                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = EFI_STUB_ADDR + 0x1200ULL;
+                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_STUB_ADDR + 0x1260ULL;
+                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1280ULL;
+                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x12C0ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xD80ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xDC0ULL;
                                                                     constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xE00ULL;
@@ -650,6 +654,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     auto write32 = [&](uint64_t address, uint32_t value) {
                                                                         instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                                                                     };
+                                                                    auto write8 = [&](uint64_t address, uint8_t value) {
+                                                                        instance->vm->getMemory().Write(address, &value, sizeof(value));
+                                                                    };
                                                                     auto write64 = [&](uint64_t address, uint64_t value) {
                                                                         instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                                                                     };
@@ -661,6 +668,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write32(EFI_STUB_ADDR + 0x20, 1U);
 
                                                                     // 64-bit EFI_SYSTEM_TABLE layout.
+                                                                    write64(EFI_STUB_ADDR + 0x38, EFI_IMAGE_HANDLE);
+                                                                    write64(EFI_STUB_ADDR + 0x40, EFI_TEXT_OUTPUT_PROTOCOL_ADDR);
+                                                                    write64(EFI_STUB_ADDR + 0x48, EFI_IMAGE_HANDLE);
+                                                                    write64(EFI_STUB_ADDR + 0x50, EFI_TEXT_OUTPUT_PROTOCOL_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x58, EFI_RUNTIME_SERVICES_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x60, EFI_BOOT_SERVICES_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x68, 0ULL); // NumberOfTableEntries
@@ -713,6 +724,12 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                    NOP_I,
                                                                                    BR_RET_B0);
                                                                     WriteIa64Bundle(instance,
+                                                                                   EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
                                                                                    EFI_GET_VARIABLE_STUB_CODE_ADDR,
                                                                                    0x10,
                                                                                    ADD_R8_R0_MINUS_1,
@@ -735,6 +752,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_OPEN_VOLUME_STUB_DESC_ADDR, EFI_OPEN_VOLUME_STUB_CODE_ADDR);
                                                                     write64(EFI_OPEN_VOLUME_STUB_DESC_ADDR + 8,
+                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                    write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR,
+                                                                            EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR);
+                                                                    write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
 
                                                                     for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
@@ -784,6 +805,36 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x54, 4U);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x58, EFI_UNSUPPORTED_STUB_DESC_ADDR);
 
+                                                                    // Minimal Simple Text Output protocol for BOOTIA64.EFI
+                                                                    // status/diagnostic writes. This avoids bootloader printf
+                                                                    // callbacks being built from null ConOut/StdErr pointers.
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x00,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // Reset
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x08,
+                                                                            EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR); // OutputString
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x10,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // TestString
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x18,
+                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // QueryMode
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x20,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // SetMode
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x28,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // SetAttribute
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x30,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // ClearScreen
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x38,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // SetCursorPosition
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x40,
+                                                                            EFI_SUCCESS_STUB_DESC_ADDR); // EnableCursor
+                                                                    write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x48,
+                                                                            EFI_TEXT_OUTPUT_MODE_ADDR);
+                                                                    write32(EFI_TEXT_OUTPUT_MODE_ADDR + 0x00, 1U); // MaxMode
+                                                                    write32(EFI_TEXT_OUTPUT_MODE_ADDR + 0x04, 0U); // Mode
+                                                                    write32(EFI_TEXT_OUTPUT_MODE_ADDR + 0x08, 0x0FU); // Attribute
+                                                                    write32(EFI_TEXT_OUTPUT_MODE_ADDR + 0x0C, 0U); // CursorColumn
+                                                                    write32(EFI_TEXT_OUTPUT_MODE_ADDR + 0x10, 0U); // CursorRow
+                                                                    write8(EFI_TEXT_OUTPUT_MODE_ADDR + 0x14, 1U); // CursorVisible
+
                                                                     // Minimal Simple File System/File protocol stubs for
                                                                     // bootloader userland probes. Only OpenVolume succeeds;
                                                                     // file operations remain explicit unsupported/success
@@ -827,6 +878,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << ", AllocatePool=0x" << EFI_ALLOCATE_POOL_STUB_DESC_ADDR
                                                                         << ", HandleProtocol=0x" << EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR
                                                                         << ", OpenVolume=0x" << EFI_OPEN_VOLUME_STUB_DESC_ADDR
+                                                                        << ", TextOutput=0x" << EFI_TEXT_OUTPUT_PROTOCOL_ADDR
                                                                         << ", ConfigTables=" << std::dec << configTableCount << ")";
                                                                     LOG_INFO(oss.str());
                                                                 }

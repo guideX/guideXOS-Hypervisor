@@ -1485,6 +1485,33 @@ void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
     std::cout << "  ? OpenVolume writes a root FileProtocol pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginTextOutputStringReturnsSuccess() {
+    std::cout << "Testing IA-64 plugin SimpleTextOut OutputString stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+    const uint16_t message[] = { 'B', 'o', 'o', 't', 0 };
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(message), sizeof(message));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetCFM(2);
+    plugin.getCPUState().SetBR(6, 0x1fe01280ULL);
+    plugin.getCPUState().SetGR(32, 0x1fe01200ULL);
+    plugin.getCPUState().SetGR(33, 0x6000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    assert(plugin.getCPUState().GetIP() == 0x30e50);
+    assert(plugin.getCPUState().GetBR(0) == 0x30e50);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+
+    std::cout << "  ? OutputString returns EFI_SUCCESS for safe console diagnostics\n";
+}
+
 void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "Testing IA-64 plugin AllocatePool firmware stub...\n";
 
@@ -1896,6 +1923,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginOpenVolumeReturnsRootFileProtocol();
+        std::cout << "\n";
+
+        testIA64PluginTextOutputStringReturnsSuccess();
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();

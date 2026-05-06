@@ -30,6 +30,7 @@ constexpr uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x
 constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
 constexpr uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
 constexpr uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1040ULL;
+constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1280ULL;
 constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xD80ULL;
 constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
 constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
@@ -134,6 +135,42 @@ bool isZeroEfiGuid(const EfiGuid& guid) {
         }
     }
     return true;
+}
+
+std::string readUtf16Preview(IMemory& memory, uint64_t address) {
+    if (address == 0) {
+        return {};
+    }
+
+    std::string preview;
+    for (size_t i = 0; i < 80; ++i) {
+        uint16_t ch = 0;
+        try {
+            memory.Read(address + i * sizeof(ch),
+                        reinterpret_cast<uint8_t*>(&ch),
+                        sizeof(ch));
+        } catch (const std::exception&) {
+            if (preview.empty()) {
+                preview = "<unreadable>";
+            }
+            break;
+        }
+
+        if (ch == 0) {
+            break;
+        }
+        if (ch == '\r') {
+            preview += "\\r";
+        } else if (ch == '\n') {
+            preview += "\\n";
+        } else if (ch >= 0x20 && ch <= 0x7E) {
+            preview.push_back(static_cast<char>(ch));
+        } else {
+            preview.push_back('?');
+        }
+    }
+
+    return preview;
 }
 
 uint64_t alignUp(uint64_t value, uint64_t alignment) {
@@ -734,6 +771,22 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             std::cout << " -> EFI_UNSUPPORTED";
                         }
                         std::cout << std::dec << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t thisProtocol = readCallerOutputRegister(state_.getCPUState(), 0);
+                        const uint64_t stringAddress = readCallerOutputRegister(state_.getCPUState(), 1);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                        std::cout << "[EFI-STUB] SimpleTextOut.OutputString this=0x"
+                                  << std::hex << thisProtocol
+                                  << " string=0x" << stringAddress;
+                        const std::string preview = readUtf16Preview(memory, stringAddress);
+                        if (!preview.empty()) {
+                            std::cout << " \"" << preview << "\"";
+                        }
+                        std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
                         handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
