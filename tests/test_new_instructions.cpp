@@ -359,7 +359,24 @@ void test_latest_boot_log_blockers() {
     assert_equal("chk.a.clr stub should leave checked register unchanged",
                  0x1122334455667788ULL, cpu.GetGR(10));
 
-    InstructionEx shrp = decoder.DecodeSlot(0xa5f2104846ULL, UnitType::I_UNIT, 0x86b0);
+    InstructionEx load_options_chars = decoder.DecodeSlot(0xa5f2104846ULL, UnitType::I_UNIT, 0x86b0);
+    assert_true("Boot raw load-options byte-to-char extract should decode",
+                load_options_chars.GetType() == InstructionType::EXTR);
+    assert_equal("Boot load-options extract destination", 33, load_options_chars.GetDst());
+    assert_equal("Boot load-options extract source", 33, load_options_chars.GetSrc1());
+    assert_equal("Boot load-options extract position", 1, load_options_chars.GetImmediate() & 0x3f);
+    assert_equal("Boot load-options extract encoded length", 62, load_options_chars.GetImmediate() >> 6);
+    assert_string("Boot load-options extract disassembly",
+                  "extr r33 = r33, 1, 63",
+                  load_options_chars.GetDisassembly());
+
+    cpu.SetGR(2, 1);
+    cpu.SetGR(33, 2);
+    load_options_chars.Execute(cpu, memory, true);
+    assert_equal("Boot load-options extract should ignore stale r2 and halve byte count",
+                 1, cpu.GetGR(33));
+
+    InstructionEx shrp = decoder.DecodeSlot(0xadf2104846ULL, UnitType::I_UNIT, 0x86b0);
     assert_true("Boot raw shrp should decode",
                 shrp.GetType() == InstructionType::SHRP);
     assert_equal("Boot shrp destination", 33, shrp.GetDst());

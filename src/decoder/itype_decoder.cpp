@@ -42,6 +42,10 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
         // Extract extended opcode fields
         uint8_t x = formats::extractBits(raw_instruction, 27, 1);
         uint8_t x2 = formats::extractBits(raw_instruction, 28, 2);
+        // Major opcode 5 places its I10/I11 opcode extensions above the
+        // immediate fields; using the shift fields here misdecodes extr.u as shrp.
+        uint8_t major5_x = static_cast<uint8_t>(formats::extractBits(raw_instruction, 33, 1));
+        uint8_t major5_x2 = static_cast<uint8_t>(formats::extractBits(raw_instruction, 34, 2));
         uint8_t x3 = formats::extractBits(raw_instruction, 33, 3);
         uint8_t x6 = formats::extractBits(raw_instruction, 27, 6);
         
@@ -57,7 +61,7 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                 if (decodeTest(raw_instruction, result)) {
                     return true;
                 }
-                return decodeDepositExtract(raw_instruction, x, x2, result);
+                return decodeDepositExtract(raw_instruction, major5_x, major5_x2, result);
                 
             case 0x7:   // Shift operations
                 return decodeShift(raw_instruction, x2, x6, result);
@@ -314,6 +318,11 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::I
         
         result.pos = formats::extractBits(raw, 14, 6);   // Position
         result.len = formats::extractBits(raw, 27, 6);   // Encoded length
+
+        if (x2 == 0x1) {
+            result.opcode = 0x51;
+            return true;
+        }
         
         // OpX2X(5,3,1): dep r1 = imm1, r3, cpos6b, len6.
         // cpos6b is a complement position, so convert it to the real bit
