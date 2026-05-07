@@ -632,6 +632,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1280ULL;
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x12C0ULL;
                                                                     constexpr uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_STUB_ADDR + 0x1300ULL;
+                                                                    constexpr uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = EFI_STUB_ADDR + 0x1340ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xD80ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xDC0ULL;
                                                                     constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xE00ULL;
@@ -806,6 +807,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x18, EFI_IMAGE_DEVICE_HANDLE);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
+                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30, 2U);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 2U);
@@ -833,6 +836,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write8(filePathEndNode + 0x00, 0x7FU);
                                                                     write8(filePathEndNode + 0x01, 0xFFU);
                                                                     write16(filePathEndNode + 0x02, 0x04U);
+                                                                    write16(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 0U);
 
                                                                     // Minimal Simple Text Output protocol for BOOTIA64.EFI
                                                                     // status/diagnostic writes. This avoids bootloader printf
@@ -909,6 +913,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << ", OpenVolume=0x" << EFI_OPEN_VOLUME_STUB_DESC_ADDR
                                                                         << ", TextOutput=0x" << EFI_TEXT_OUTPUT_PROTOCOL_ADDR
                                                                         << ", LoadedImageFilePath=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
+                                                                        << ", LoadOptions=0x" << EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR
                                                                         << ", ConfigTables=" << std::dec << configTableCount << ")";
                                                                     LOG_INFO(oss.str());
                                                                 }

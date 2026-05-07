@@ -1554,6 +1554,8 @@ void testIA64PluginGetVariableBootVariables() {
     const uint16_t unknownName[] = { 'N', 'o', 'S', 'u', 'c', 'h', 0 };
     const uint16_t bootCurrentName[] = { 'B', 'o', 'o', 't', 'C', 'u', 'r', 'r', 'e', 'n', 't', 0 };
     const uint16_t boot0000Name[] = { 'B', 'o', 'o', 't', '0', '0', '0', '0', 0 };
+    const uint16_t platformLangName[] = { 'P', 'l', 'a', 't', 'f', 'o', 'r', 'm', 'L', 'a', 'n', 'g', 0 };
+    const uint16_t oneCharLanguageProbeName[] = { 'P', 0 };
 
     {
         SparseMemory memory;
@@ -1647,7 +1649,69 @@ void testIA64PluginGetVariableBootVariables() {
         assert(size > 6);
     }
 
-    std::cout << "  ? GetVariable handles unknown variables and minimal BootCurrent/Boot0000\n";
+    {
+        SparseMemory memory;
+        memory.Write(0x2ee50, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x6000, reinterpret_cast<const uint8_t*>(platformLangName), sizeof(platformLangName));
+        memory.Write(0x7000, globalVariableGuid, sizeof(globalVariableGuid));
+
+        FakeIndirectCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x2ee50);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
+        plugin.getCPUState().SetGR(32, 0x6000);
+        plugin.getCPUState().SetGR(33, 0x7000);
+        plugin.getCPUState().SetGR(34, 0x9000);
+        plugin.getCPUState().SetGR(35, 0x8000);
+        plugin.getCPUState().SetGR(36, 0xA000);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+        uint64_t size = 6;
+        memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+        char lang[6] = {};
+        uint32_t attributes = 0;
+        memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+        memory.Read(0x9000, reinterpret_cast<uint8_t*>(&attributes), sizeof(attributes));
+        memory.Read(0xA000, reinterpret_cast<uint8_t*>(lang), sizeof(lang));
+        assert(plugin.getCPUState().GetGR(8) == 0);
+        assert(size == 6);
+        assert(attributes == 0x7U);
+        assert(std::strcmp(lang, "en-US") == 0);
+    }
+
+    {
+        SparseMemory memory;
+        memory.Write(0x1b00, bundleBytes, sizeof(bundleBytes));
+        memory.Write(0x6000, reinterpret_cast<const uint8_t*>(oneCharLanguageProbeName), sizeof(oneCharLanguageProbeName));
+        memory.Write(0x7000, globalVariableGuid, sizeof(globalVariableGuid));
+
+        FakeIndirectCallDecoder decoder;
+        IA64ISAPlugin plugin(decoder);
+        plugin.getCPUState().SetIP(0x1b00);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fe00d80ULL);
+        plugin.getCPUState().SetGR(32, 0x6000);
+        plugin.getCPUState().SetGR(33, 0x7000);
+        plugin.getCPUState().SetGR(34, 0);
+        plugin.getCPUState().SetGR(35, 0x8000);
+        plugin.getCPUState().SetGR(36, 0xA000);
+        plugin.getCPUState().SetGR(8, 0);
+
+        uint64_t size = 1;
+        memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+        memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+        assert(plugin.getCPUState().GetGR(8) == 0x8000000000000005ULL);
+        assert(size == 6);
+    }
+
+    std::cout << "  ? GetVariable handles unknown variables, boot variables, and language probes\n";
 }
 
 void testIA64PluginTopLevelReturnHalts() {

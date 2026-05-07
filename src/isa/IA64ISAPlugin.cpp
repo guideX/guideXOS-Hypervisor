@@ -242,6 +242,22 @@ std::vector<uint8_t> makeBoot0000LoadOption() {
     return option;
 }
 
+std::vector<uint8_t> makeAsciiVariableData(const char* value) {
+    const size_t size = std::strlen(value) + 1;
+    std::vector<uint8_t> data;
+    data.reserve(size);
+    for (size_t i = 0; i < size; ++i) {
+        data.push_back(static_cast<uint8_t>(value[i]));
+    }
+    return data;
+}
+
+bool isLanguageVariableProbe(const std::string& variableNameText, uint64_t currentIP) {
+    return variableNameText == "PlatformLang" ||
+           variableNameText == "PlatformLangCodes" ||
+           (variableNameText == "P" && currentIP == 0x1b00ULL);
+}
+
 uint64_t alignUp(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
@@ -759,6 +775,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             appendLe16(variableData, 0);
                         } else if (variableNameText == "Boot0000") {
                             variableData = makeBoot0000LoadOption();
+                        } else if (isLanguageVariableProbe(variableNameText, currentIP)) {
+                            variableData = makeAsciiVariableData("en-US");
                         }
 
                         uint64_t providedSize = 0;
