@@ -807,7 +807,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x18, EFI_IMAGE_DEVICE_HANDLE);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
-                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30, 2U);
+                                                                    // No command-line load options. Advertising a two-byte
+                                                                    // UTF-16 NUL makes this bootloader build one empty argv
+                                                                    // entry and later dereference copied text as a pointer.
+                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30, 0U);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
