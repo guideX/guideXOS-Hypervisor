@@ -28,11 +28,22 @@ constexpr uint64_t EFI_STATUS_BUFFER_TOO_SMALL = 0x8000000000000005ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
+constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + 0x400ULL;
+constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + 0x800ULL;
 constexpr uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xC80ULL;
+constexpr uint64_t EFI_OPEN_VOLUME_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xCC0ULL;
 constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
+constexpr uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xDC0ULL;
+constexpr uint64_t EFI_ALLOCATE_POOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xE40ULL;
+constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xEC0ULL;
+constexpr uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xF40ULL;
+constexpr uint64_t EFI_SUCCESS_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xFC0ULL;
 constexpr uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
 constexpr uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1040ULL;
+constexpr uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1200ULL;
+constexpr uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1260ULL;
 constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1280ULL;
+constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x12C0ULL;
 constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xD80ULL;
 constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
 constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
@@ -41,6 +52,11 @@ constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF80U
 constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x2000ULL;
 constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
 using EfiGuid = std::array<uint8_t, 16>;
+struct EfiSlotName {
+    uint64_t offset;
+    const char* name;
+};
+
 constexpr EfiGuid EFI_LOADED_IMAGE_PROTOCOL_GUID = {{
     0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
     0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
@@ -74,6 +90,144 @@ bool isZeroFilledEfiHandoffBundle(IMemory& memory, uint64_t target) {
     }
 
     return true;
+}
+
+template <size_t N>
+const char* lookupEfiSlotName(uint64_t offset, const EfiSlotName (&slots)[N]) {
+    for (const EfiSlotName& slot : slots) {
+        if (slot.offset == offset) {
+            return slot.name;
+        }
+    }
+    return nullptr;
+}
+
+std::string describeEfiTableSlot(uint64_t address) {
+    static constexpr EfiSlotName runtimeServices[] = {
+        {0x18, "GetTime"}, {0x20, "SetTime"}, {0x28, "GetWakeupTime"},
+        {0x30, "SetWakeupTime"}, {0x38, "SetVirtualAddressMap"},
+        {0x40, "ConvertPointer"}, {0x48, "GetVariable"},
+        {0x50, "GetNextVariableName"}, {0x58, "SetVariable"},
+        {0x60, "GetNextHighMonotonicCount"}, {0x68, "ResetSystem"},
+        {0x70, "UpdateCapsule"}, {0x78, "QueryCapsuleCapabilities"},
+        {0x80, "QueryVariableInfo"}
+    };
+    static constexpr EfiSlotName bootServices[] = {
+        {0x18, "RaiseTPL"}, {0x20, "RestoreTPL"}, {0x28, "AllocatePages"},
+        {0x30, "FreePages"}, {0x38, "GetMemoryMap"}, {0x40, "AllocatePool"},
+        {0x48, "FreePool"}, {0x50, "CreateEvent"}, {0x58, "SetTimer"},
+        {0x60, "WaitForEvent"}, {0x68, "SignalEvent"}, {0x70, "CloseEvent"},
+        {0x78, "CheckEvent"}, {0x80, "InstallProtocolInterface"},
+        {0x88, "ReinstallProtocolInterface"}, {0x90, "UninstallProtocolInterface"},
+        {0x98, "HandleProtocol"}, {0xA0, "Reserved"}, {0xA8, "RegisterProtocolNotify"},
+        {0xB0, "LocateHandle"}, {0xB8, "LocateDevicePath"},
+        {0xC0, "InstallConfigurationTable"}, {0xC8, "LoadImage"},
+        {0xD0, "StartImage"}, {0xD8, "Exit"}, {0xE0, "UnloadImage"},
+        {0xE8, "ExitBootServices"}, {0xF0, "GetNextMonotonicCount"},
+        {0xF8, "Stall"}, {0x100, "SetWatchdogTimer"},
+        {0x108, "ConnectController"}, {0x110, "DisconnectController"},
+        {0x118, "OpenProtocol"}, {0x120, "CloseProtocol"},
+        {0x128, "OpenProtocolInformation"}, {0x130, "ProtocolsPerHandle"},
+        {0x138, "LocateHandleBuffer"}, {0x140, "LocateProtocol"},
+        {0x148, "InstallMultipleProtocolInterfaces"},
+        {0x150, "UninstallMultipleProtocolInterfaces"}, {0x158, "CalculateCrc32"},
+        {0x160, "CopyMem"}, {0x168, "SetMem"}, {0x170, "CreateEventEx"}
+    };
+    static constexpr EfiSlotName simpleTextOut[] = {
+        {0x00, "Reset"}, {0x08, "OutputString"}, {0x10, "TestString"},
+        {0x18, "QueryMode"}, {0x20, "SetMode"}, {0x28, "SetAttribute"},
+        {0x30, "ClearScreen"}, {0x38, "SetCursorPosition"},
+        {0x40, "EnableCursor"}, {0x48, "Mode"}
+    };
+    static constexpr EfiSlotName simpleFs[] = {
+        {0x00, "Revision"}, {0x08, "OpenVolume"}
+    };
+    static constexpr EfiSlotName fileProtocol[] = {
+        {0x00, "Revision"}, {0x08, "Open"}, {0x10, "Close"},
+        {0x18, "Delete"}, {0x20, "Read"}, {0x28, "Write"},
+        {0x30, "GetPosition"}, {0x38, "SetPosition"}, {0x40, "GetInfo"},
+        {0x48, "SetInfo"}, {0x50, "Flush"}
+    };
+    static constexpr EfiSlotName loadedImage[] = {
+        {0x00, "Revision"}, {0x10, "ParentHandle"}, {0x18, "SystemTable"},
+        {0x20, "DeviceHandle"}, {0x28, "FilePath"}, {0x30, "LoadOptionsSize"},
+        {0x38, "LoadOptions"}, {0x40, "ImageBase"}, {0x48, "ImageSize"},
+        {0x50, "ImageCodeType/ImageDataType"}, {0x58, "Unload"}
+    };
+
+    auto describeRange = [](uint64_t value,
+                            uint64_t base,
+                            uint64_t size,
+                            const char* tableName,
+                            const auto& slots) -> std::string {
+        if (value < base || value >= base + size) {
+            return {};
+        }
+        const uint64_t offset = value - base;
+        std::ostringstream oss;
+        oss << tableName << "+0x" << std::hex << offset;
+        const char* name = lookupEfiSlotName(offset, slots);
+        if (name != nullptr) {
+            oss << " (" << name << ")";
+        }
+        return oss.str();
+    };
+
+    std::string description = describeRange(address, EFI_RUNTIME_SERVICES_ADDR, 0x88, "RuntimeServices", runtimeServices);
+    if (!description.empty()) {
+        return description;
+    }
+    description = describeRange(address, EFI_BOOT_SERVICES_ADDR, 0x180, "BootServices", bootServices);
+    if (!description.empty()) {
+        return description;
+    }
+    description = describeRange(address, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x60, "LoadedImage", loadedImage);
+    if (!description.empty()) {
+        return description;
+    }
+    description = describeRange(address, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10, "SimpleFileSystem", simpleFs);
+    if (!description.empty()) {
+        return description;
+    }
+    description = describeRange(address, EFI_ROOT_FILE_PROTOCOL_ADDR, 0x58, "FileProtocol", fileProtocol);
+    if (!description.empty()) {
+        return description;
+    }
+    description = describeRange(address, EFI_TEXT_OUTPUT_PROTOCOL_ADDR, 0x50, "SimpleTextOut", simpleTextOut);
+    if (!description.empty()) {
+        return description;
+    }
+    if (address >= EFI_TEXT_OUTPUT_MODE_ADDR && address < EFI_TEXT_OUTPUT_MODE_ADDR + 0x18) {
+        std::ostringstream oss;
+        oss << "SimpleTextOut.Mode+0x" << std::hex << (address - EFI_TEXT_OUTPUT_MODE_ADDR);
+        return oss.str();
+    }
+    return {};
+}
+
+std::string describeEfiDescriptor(uint64_t address) {
+    if (address == EFI_GET_VARIABLE_STUB_DESC_ADDR) {
+        return "GetVariable descriptor";
+    }
+    if (address == EFI_ALLOCATE_POOL_STUB_DESC_ADDR) {
+        return "AllocatePool descriptor";
+    }
+    if (address == EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR) {
+        return "HandleProtocol descriptor";
+    }
+    if (address == EFI_OPEN_VOLUME_STUB_DESC_ADDR) {
+        return "OpenVolume descriptor";
+    }
+    if (address == EFI_UNSUPPORTED_STUB_DESC_ADDR) {
+        return "Unsupported descriptor";
+    }
+    if (address == EFI_SUCCESS_STUB_DESC_ADDR) {
+        return "Success descriptor";
+    }
+    if (address == EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR) {
+        return "SimpleTextOut.OutputString descriptor";
+    }
+    return {};
 }
 
 bool isLoadInstruction(InstructionType type) {
@@ -1102,13 +1256,39 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         branchTarget == EFI_SUCCESS_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         ++efiGenericSuccessCalls_;
+                        const CPUState& cpu = state_.getCPUState();
+                        const uint64_t descriptorCandidate =
+                            cpu.GetGR(8) >= 8 ? cpu.GetGR(8) - 8 : 0;
+                        const uint64_t slotCandidate = cpu.GetGR(9);
+                        const uint64_t receiverCandidate = readCallerOutputRegister(cpu, 0);
+                        const uint64_t r14Candidate = cpu.GetGR(14);
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
                         std::cout << "[EFI-STUB] generic success service callsite=0x"
                                   << std::hex << currentIP
                                   << " target=0x" << originalBranchTarget
-                                  << " -> EFI_SUCCESS" << std::dec << std::endl;
+                                  << " descriptorCandidate=0x" << descriptorCandidate;
+                        std::string description = describeEfiDescriptor(descriptorCandidate);
+                        if (!description.empty()) {
+                            std::cout << " [" << description << "]";
+                        }
+                        std::cout << " slotCandidate[r9]=0x" << slotCandidate;
+                        description = describeEfiTableSlot(slotCandidate);
+                        if (!description.empty()) {
+                            std::cout << " [" << description << "]";
+                        }
+                        std::cout << " receiver[r32]=0x" << receiverCandidate;
+                        description = describeEfiTableSlot(receiverCandidate);
+                        if (!description.empty()) {
+                            std::cout << " [" << description << "]";
+                        }
+                        std::cout << " r14=0x" << r14Candidate;
+                        description = describeEfiTableSlot(r14Candidate);
+                        if (!description.empty()) {
+                            std::cout << " [" << description << "]";
+                        }
+                        std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
                         handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
