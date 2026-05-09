@@ -591,8 +591,25 @@ bool VMManager::startVM(const std::string& vmId) {
                                                             if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                                          imageBuffer.size(), 
                                                                                          loadAddress)) {
-                                                                instance->vm->setEntryPoint(entryPoint);
                                                                 const auto& peInfo = peParser.getImageInfo();
+                                                                if (peInfo.hasGlobalPointer && loadAddress == 0 &&
+                                                                    peInfo.globalPointer >= imageBuffer.size()) {
+                                                                    constexpr uint64_t IA64_EFI_IMAGE_ALIAS_BASE = 0x100000ULL;
+                                                                    instance->vm->getMemory().Write(IA64_EFI_IMAGE_ALIAS_BASE,
+                                                                        imageBuffer.data(),
+                                                                        imageBuffer.size());
+                                                                    oss.str("");
+                                                                    oss << "[EFI-MILESTONE] Mirrored IA-64 EFI image at 0x"
+                                                                        << std::hex << IA64_EFI_IMAGE_ALIAS_BASE
+                                                                        << "-0x" << (IA64_EFI_IMAGE_ALIAS_BASE + imageBuffer.size())
+                                                                        << " while keeping entry=0x" << entryPoint
+                                                                        << "; GP=0x" << peInfo.globalPointer
+                                                                        << " maps GP-relative data into the mirror for load-base diagnosis."
+                                                                        << std::dec;
+                                                                    LOG_WARN(oss.str());
+                                                                }
+
+                                                                instance->vm->setEntryPoint(entryPoint);
                                                                 if (peInfo.hasGlobalPointer) {
                                                                     instance->vm->writeGR(0, 1, peInfo.globalPointer);
                                                                     oss.str("");
