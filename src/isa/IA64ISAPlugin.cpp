@@ -1738,8 +1738,18 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
         state_.bundleValid_ = true;
         capturePredicateGroupSnapshot();
     } catch (const std::exception& e) {
-        std::cerr << "Bundle fetch error at IP 0x" << std::hex << ip << std::dec 
-                  << ": " << e.what() << "\n";
+        const auto& cpu = state_.getCPUState();
+        std::cerr << "[EFI-MILESTONE] Fatal IA-64 bundle fetch outside guest memory"
+                  << " ip=0x" << std::hex << ip
+                  << " br0=0x" << cpu.GetBR(0)
+                  << " gp(r1)=0x" << cpu.GetGR(1)
+                  << " r2=0x" << cpu.GetGR(2)
+                  << " r8=0x" << cpu.GetGR(8)
+                  << " slot=" << std::dec << state_.currentSlot_
+                  << " reason=\"" << e.what() << "\". "
+                  << "Halting instead of reusing the previous decoded bundle; "
+                  << "suspect corrupted IA-64 control-flow data/function descriptor before kernel handoff.\n";
+        state_.currentBundle_ = Bundle();
         state_.bundleValid_ = false;
     }
 }
