@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <array>
+#include <cctype>
 
 namespace ia64 {
 
@@ -172,6 +173,140 @@ std::string readUtf16Preview(IMemory& memory, uint64_t address) {
     }
 
     return preview;
+}
+
+bool mirrorTextToVmConsole(IMemory& memory, const std::string& text, uint64_t& consoleAddress) {
+    consoleAddress = 0;
+    if (text.empty()) {
+        return false;
+    }
+
+    const size_t memorySize = memory.GetTotalSize();
+    if (memorySize <= 0x200) {
+        return false;
+    }
+
+    consoleAddress = static_cast<uint64_t>(memorySize - 0x200);
+    try {
+        for (char ch : text) {
+            const char out = ch == '\0' ? '?' : ch;
+            memory.Write(consoleAddress, reinterpret_cast<const uint8_t*>(&out), sizeof(out));
+        }
+        if (text.back() != '\n') {
+            const char newline = '\n';
+            memory.Write(consoleAddress, reinterpret_cast<const uint8_t*>(&newline), sizeof(newline));
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+const char* efiGlyphRows(char c) {
+    switch (std::toupper(static_cast<unsigned char>(c))) {
+        case 'A': return "01110" "10001" "10001" "11111" "10001" "10001" "10001";
+        case 'B': return "11110" "10001" "10001" "11110" "10001" "10001" "11110";
+        case 'C': return "01111" "10000" "10000" "10000" "10000" "10000" "01111";
+        case 'D': return "11110" "10001" "10001" "10001" "10001" "10001" "11110";
+        case 'E': return "11111" "10000" "10000" "11110" "10000" "10000" "11111";
+        case 'F': return "11111" "10000" "10000" "11110" "10000" "10000" "10000";
+        case 'G': return "01111" "10000" "10000" "10011" "10001" "10001" "01111";
+        case 'H': return "10001" "10001" "10001" "11111" "10001" "10001" "10001";
+        case 'I': return "11111" "00100" "00100" "00100" "00100" "00100" "11111";
+        case 'J': return "00111" "00010" "00010" "00010" "10010" "10010" "01100";
+        case 'K': return "10001" "10010" "10100" "11000" "10100" "10010" "10001";
+        case 'L': return "10000" "10000" "10000" "10000" "10000" "10000" "11111";
+        case 'M': return "10001" "11011" "10101" "10101" "10001" "10001" "10001";
+        case 'N': return "10001" "11001" "10101" "10011" "10001" "10001" "10001";
+        case 'O': return "01110" "10001" "10001" "10001" "10001" "10001" "01110";
+        case 'P': return "11110" "10001" "10001" "11110" "10000" "10000" "10000";
+        case 'Q': return "01110" "10001" "10001" "10001" "10101" "10010" "01101";
+        case 'R': return "11110" "10001" "10001" "11110" "10100" "10010" "10001";
+        case 'S': return "01111" "10000" "10000" "01110" "00001" "00001" "11110";
+        case 'T': return "11111" "00100" "00100" "00100" "00100" "00100" "00100";
+        case 'U': return "10001" "10001" "10001" "10001" "10001" "10001" "01110";
+        case 'V': return "10001" "10001" "10001" "10001" "01010" "01010" "00100";
+        case 'W': return "10001" "10001" "10001" "10101" "10101" "10101" "01010";
+        case 'X': return "10001" "01010" "00100" "00100" "00100" "01010" "10001";
+        case 'Y': return "10001" "01010" "00100" "00100" "00100" "00100" "00100";
+        case 'Z': return "11111" "00001" "00010" "00100" "01000" "10000" "11111";
+        case '0': return "01110" "10001" "10011" "10101" "11001" "10001" "01110";
+        case '1': return "00100" "01100" "00100" "00100" "00100" "00100" "01110";
+        case '2': return "01110" "10001" "00001" "00010" "00100" "01000" "11111";
+        case '3': return "11110" "00001" "00001" "01110" "00001" "00001" "11110";
+        case '4': return "00010" "00110" "01010" "10010" "11111" "00010" "00010";
+        case '5': return "11111" "10000" "10000" "11110" "00001" "00001" "11110";
+        case '6': return "01111" "10000" "10000" "11110" "10001" "10001" "01110";
+        case '7': return "11111" "00001" "00010" "00100" "01000" "01000" "01000";
+        case '8': return "01110" "10001" "10001" "01110" "10001" "10001" "01110";
+        case '9': return "01110" "10001" "10001" "01111" "00001" "00001" "11110";
+        case ':': return "00000" "00100" "00100" "00000" "00100" "00100" "00000";
+        case '.': return "00000" "00000" "00000" "00000" "00000" "01100" "01100";
+        case '-': return "00000" "00000" "00000" "11111" "00000" "00000" "00000";
+        case '/': return "00001" "00010" "00010" "00100" "01000" "01000" "10000";
+        case ' ': return "00000" "00000" "00000" "00000" "00000" "00000" "00000";
+        default:  return "11111" "00001" "00010" "00100" "00100" "00000" "00100";
+    }
+}
+
+bool mirrorTextToFramebuffer(IMemory& memory,
+                             const std::string& text,
+                             size_t lineIndex,
+                             uint64_t& framebufferAddress) {
+    framebufferAddress = 0xB8000000ULL;
+    if (text.empty()) {
+        return false;
+    }
+
+    constexpr size_t width = 640;
+    constexpr size_t height = 480;
+    constexpr size_t scale = 2;
+    constexpr uint32_t bg = 0xFF101820U;
+    constexpr uint32_t fg = 0xFF6EE7B7U;
+    const size_t y = 168 + (lineIndex % 10) * 22;
+    const std::string line = "EFI: " + text.substr(0, 70);
+
+    auto writePixel = [&](size_t x, size_t py, uint32_t color) {
+        if (x >= width || py >= height) {
+            return;
+        }
+        const uint64_t address = framebufferAddress + ((py * width + x) * sizeof(color));
+        memory.Write(address, reinterpret_cast<const uint8_t*>(&color), sizeof(color));
+    };
+
+    try {
+        for (size_t py = y > 4 ? y - 4 : 0; py < y + 18 && py < height; ++py) {
+            for (size_t x = 24; x < 616; ++x) {
+                writePixel(x, py, bg);
+            }
+        }
+
+        size_t cursorX = 32;
+        for (char c : line) {
+            const char* glyph = efiGlyphRows(c);
+            for (size_t row = 0; row < 7; ++row) {
+                for (size_t col = 0; col < 5; ++col) {
+                    if (glyph[row * 5 + col] != '1') {
+                        continue;
+                    }
+                    for (size_t sy = 0; sy < scale; ++sy) {
+                        for (size_t sx = 0; sx < scale; ++sx) {
+                            writePixel(cursorX + col * scale + sx,
+                                       y + row * scale + sy,
+                                       fg);
+                        }
+                    }
+                }
+            }
+            cursorX += 6 * scale;
+            if (cursorX >= 616) {
+                break;
+            }
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 std::string readUtf16AsciiString(IMemory& memory, uint64_t address) {
@@ -522,6 +657,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
     , efiPoolNext_(EFI_POOL_BASE)
+    , efiTextOutputCalls_(0)
+    , efiTextOutputMirrored_(0)
+    , efiTextOutputFramebuffer_(0)
     , callFrameStack_() {
 }
 
@@ -536,6 +674,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
     , efiPoolNext_(EFI_POOL_BASE)
+    , efiTextOutputCalls_(0)
+    , efiTextOutputMirrored_(0)
+    , efiTextOutputFramebuffer_(0)
     , callFrameStack_() {
 }
 
@@ -544,6 +685,9 @@ void IA64ISAPlugin::reset() {
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
     efiPoolNext_ = EFI_POOL_BASE;
+    efiTextOutputCalls_ = 0;
+    efiTextOutputMirrored_ = 0;
+    efiTextOutputFramebuffer_ = 0;
     callFrameStack_.clear();
 }
 
@@ -920,12 +1064,27 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                        ++efiTextOutputCalls_;
                         std::cout << "[EFI-STUB] SimpleTextOut.OutputString this=0x"
                                   << std::hex << thisProtocol
                                   << " string=0x" << stringAddress;
                         const std::string preview = readUtf16Preview(memory, stringAddress);
                         if (!preview.empty()) {
                             std::cout << " \"" << preview << "\"";
+                        }
+                        uint64_t consoleAddress = 0;
+                        if (mirrorTextToVmConsole(memory, preview, consoleAddress)) {
+                            ++efiTextOutputMirrored_;
+                            std::cout << " mirroredToConsole=0x" << consoleAddress;
+                        } else {
+                            std::cout << " consoleMirror=unavailable";
+                        }
+                        uint64_t framebufferAddress = 0;
+                        if (mirrorTextToFramebuffer(memory, preview, efiTextOutputCalls_, framebufferAddress)) {
+                            ++efiTextOutputFramebuffer_;
+                            std::cout << " mirroredToFramebuffer=0x" << framebufferAddress;
+                        } else {
+                            std::cout << " framebufferMirror=unavailable";
                         }
                         std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
@@ -1005,6 +1164,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 livePredicateTrue && branchTarget == 0) {
                 std::cout << "[EFI-STUB] top-level br.ret b0 reached zero return address; halting EFI app"
                           << std::endl;
+                std::cout << "[EFI-MILESTONE] EFI app returned before kernel handoff; "
+                          << "ConsoleOut.OutputString calls=" << efiTextOutputCalls_
+                          << ", mirroredToVmConsole=" << efiTextOutputMirrored_
+                          << ", mirroredToFramebuffer=" << efiTextOutputFramebuffer_
+                          << ". Next missing subsystem is VM-visible console/GOP output "
+                          << "or later loader-to-kernel handoff if console text is visible."
+                          << std::endl;
                 state_.bundleValid_ = false;
                 hasCachedInstruction_ = false;
                 return ISAExecutionResult::HALT;
@@ -1075,6 +1241,9 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     state_ = *ia64State;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    efiTextOutputCalls_ = 0;
+    efiTextOutputMirrored_ = 0;
+    efiTextOutputFramebuffer_ = 0;
     callFrameStack_.clear();
 }
 

@@ -244,6 +244,9 @@ private:
     bool hasCachedInstruction_;
     std::vector<uint64_t> pendingCallInputs_;
     uint64_t efiPoolNext_;
+    size_t efiTextOutputCalls_;
+    size_t efiTextOutputMirrored_;
+    size_t efiTextOutputFramebuffer_;
 
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;
