@@ -250,6 +250,7 @@ private:
     size_t efiOpenVolumeCalls_;
     size_t efiGenericSuccessCalls_;
     size_t efiGenericUnsupportedCalls_;
+    size_t efiZeroGuidProtocolCalls_;
 
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;

@@ -294,6 +294,76 @@ bool isZeroEfiGuid(const EfiGuid& guid) {
     return true;
 }
 
+std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count) {
+    if (address == 0 || count == 0) {
+        return {};
+    }
+
+    std::ostringstream oss;
+    oss << std::hex;
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t byte = 0;
+        try {
+            memory.Read(address + i, &byte, sizeof(byte));
+        } catch (const std::exception&) {
+            if (i == 0) {
+                return "<unreadable>";
+            }
+            oss << " ...";
+            break;
+        }
+        if (i != 0) {
+            oss << ' ';
+        }
+        const int value = byte;
+        if (value < 0x10) {
+            oss << '0';
+        }
+        oss << value;
+    }
+    return oss.str();
+}
+
+std::string readUtf16CodeUnitPreview(IMemory& memory, uint64_t address, size_t count) {
+    if (address == 0 || count == 0) {
+        return {};
+    }
+
+    std::ostringstream oss;
+    oss << std::hex;
+    for (size_t i = 0; i < count; ++i) {
+        uint16_t ch = 0;
+        try {
+            memory.Read(address + i * sizeof(ch),
+                        reinterpret_cast<uint8_t*>(&ch),
+                        sizeof(ch));
+        } catch (const std::exception&) {
+            if (i == 0) {
+                return "<unreadable>";
+            }
+            oss << " ...";
+            break;
+        }
+        if (i != 0) {
+            oss << ' ';
+        }
+        if (ch < 0x1000) {
+            oss << '0';
+        }
+        if (ch < 0x100) {
+            oss << '0';
+        }
+        if (ch < 0x10) {
+            oss << '0';
+        }
+        oss << ch;
+        if (ch == 0) {
+            break;
+        }
+    }
+    return oss.str();
+}
+
 std::string readUtf16Preview(IMemory& memory, uint64_t address) {
     if (address == 0) {
         return {};
@@ -343,13 +413,15 @@ bool mirrorTextToVmConsole(IMemory& memory, const std::string& text, uint64_t& c
 
     consoleAddress = static_cast<uint64_t>(memorySize - 0x200);
     try {
+        uint64_t cursor = consoleAddress;
         for (char ch : text) {
             const char out = ch == '\0' ? '?' : ch;
-            memory.Write(consoleAddress, reinterpret_cast<const uint8_t*>(&out), sizeof(out));
+            memory.Write(cursor, reinterpret_cast<const uint8_t*>(&out), sizeof(out));
+            ++cursor;
         }
         if (text.back() != '\n') {
             const char newline = '\n';
-            memory.Write(consoleAddress, reinterpret_cast<const uint8_t*>(&newline), sizeof(newline));
+            memory.Write(cursor, reinterpret_cast<const uint8_t*>(&newline), sizeof(newline));
         }
         return true;
     } catch (const std::exception&) {
@@ -818,6 +890,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiOpenVolumeCalls_(0)
     , efiGenericSuccessCalls_(0)
     , efiGenericUnsupportedCalls_(0)
+    , efiZeroGuidProtocolCalls_(0)
     , callFrameStack_() {
 }
 
@@ -838,6 +911,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiOpenVolumeCalls_(0)
     , efiGenericSuccessCalls_(0)
     , efiGenericUnsupportedCalls_(0)
+    , efiZeroGuidProtocolCalls_(0)
     , callFrameStack_() {
 }
 
@@ -852,6 +926,7 @@ void IA64ISAPlugin::reset() {
     efiOpenVolumeCalls_ = 0;
     efiGenericSuccessCalls_ = 0;
     efiGenericUnsupportedCalls_ = 0;
+    efiZeroGuidProtocolCalls_ = 0;
     callFrameStack_.clear();
 }
 
@@ -1147,10 +1222,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
+                        const uint64_t handle = readCallerOutputRegister(state_.getCPUState(), 0);
                         const uint64_t protocolGuid = readCallerOutputRegister(state_.getCPUState(), 1);
                         const uint64_t interfaceOut = readCallerOutputRegister(state_.getCPUState(), 2);
                         EfiGuid guid = {};
                         const bool hasGuid = readEfiGuid(memory, protocolGuid, guid);
+                        const bool zeroGuid = hasGuid && isZeroEfiGuid(guid);
+                        if (zeroGuid) {
+                            ++efiZeroGuidProtocolCalls_;
+                        }
                         uint64_t protocolAddress = 0;
                         const char* protocolName = nullptr;
                         if (hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
@@ -1159,7 +1239,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
                             protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
                             protocolName = "SimpleFileSystemProtocol";
-                        } else if (hasGuid && isZeroEfiGuid(guid)) {
+                        } else if (zeroGuid) {
                             if (currentIP == 0x2EFD0ULL || currentIP == 0x1A50ULL) {
                                 protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
                                 protocolName = "LoadedImageProtocol(zero-guid fallback)";
@@ -1196,6 +1276,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << protocolAddress << " via out=0x" << interfaceOut;
                         } else {
                             std::cout << " -> EFI_NOT_FOUND via out=0x" << interfaceOut;
+                        }
+                        std::cout << " handle=0x" << handle
+                                  << " callsite=0x" << currentIP;
+                        if (zeroGuid) {
+                            std::cout << " ZERO_PROTOCOL_GUID"
+                                      << " guidBytes="
+                                      << readHexBytesPreview(memory, protocolGuid, guid.size())
+                                      << " nextBytes="
+                                      << readHexBytesPreview(memory, protocolGuid + guid.size(), guid.size());
                         }
                         std::cout << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() &&
@@ -1237,6 +1326,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         if (!preview.empty()) {
                             std::cout << " \"" << preview << "\"";
                         }
+                        std::cout << " utf16="
+                                  << readUtf16CodeUnitPreview(memory, stringAddress, 16);
                         uint64_t consoleAddress = 0;
                         if (mirrorTextToVmConsole(memory, preview, consoleAddress)) {
                             ++efiTextOutputMirrored_;
@@ -1374,8 +1465,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << ", SimpleFS.OpenVolume calls=" << efiOpenVolumeCalls_
                           << ", genericSuccessServices=" << efiGenericSuccessCalls_
                           << ", genericUnsupportedServices=" << efiGenericUnsupportedCalls_
+                          << ", zeroGuidHandleProtocolCalls=" << efiZeroGuidProtocolCalls_
                           << ". Missing next milestone: kernel handoff; if OpenVolume remains 0, "
-                          << "the loader is returning before firmware file/block I/O begins."
+                          << "the loader is returning before firmware file/block I/O begins; "
+                          << "if zeroGuidHandleProtocolCalls is nonzero, protocol GUID data/addressing "
+                          << "is suspect before device-path/file I/O."
                           << std::endl;
                 state_.bundleValid_ = false;
                 hasCachedInstruction_ = false;
@@ -1453,6 +1547,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiOpenVolumeCalls_ = 0;
     efiGenericSuccessCalls_ = 0;
     efiGenericUnsupportedCalls_ = 0;
+    efiZeroGuidProtocolCalls_ = 0;
     callFrameStack_.clear();
 }
 

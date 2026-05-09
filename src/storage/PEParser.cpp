@@ -456,11 +456,21 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
                         imageInfo_.globalPointer = loadAddress + descriptorGP;
                         imageInfo_.hasGlobalPointer = true;
 
-                        oss.str("");
-                        oss << "  Descriptor global pointer: 0x" << std::hex
-                            << imageInfo_.globalPointer << std::dec;
-                        LOG_INFO(oss.str());
-                    }
+                oss.str("");
+                oss << "  Descriptor global pointer: 0x" << std::hex
+                    << imageInfo_.globalPointer << std::dec;
+                LOG_INFO(oss.str());
+                if (imageInfo_.globalPointer >= imageInfo_.sizeOfImage) {
+                    oss.str("");
+                    oss << "[EFI-MILESTONE] IA-64 entry descriptor GP=0x"
+                        << std::hex << imageInfo_.globalPointer
+                        << " is outside SizeOfImage=0x" << imageInfo_.sizeOfImage
+                        << "; GP-relative loader data may resolve to unmapped zero memory. "
+                        << "If EFI protocol GUID pointers are zero/out-of-image next, "
+                        << "suspect relocation/GP data addressing before EFI file I/O.";
+                    LOG_WARN(oss.str());
+                }
+            }
                     
                     oss.str("");
                     oss << "  New entry point: 0x" << std::hex << entryPoint << std::dec;
