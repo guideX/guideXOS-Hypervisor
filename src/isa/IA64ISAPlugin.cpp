@@ -1489,6 +1489,39 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 g_countedLoopTrace.start = branchEntryIP;
                 g_countedLoopTrace.end = currentIP;
             }
+            const size_t memorySize = memory.GetTotalSize();
+            if (branchEntryIP >= memorySize || branchEntryIP + 16 > memorySize) {
+                const char* branchKind = "branch";
+                if (cachedInstruction_.GetType() == InstructionType::BR_CALL) {
+                    branchKind = "br.call";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_RET) {
+                    branchKind = "br.ret";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_COND) {
+                    branchKind = "br.cond";
+                }
+                const CPUState& cpu = state_.getCPUState();
+                std::cerr << "[EFI-MILESTONE] IA-64 control-flow target outside guest memory before kernel handoff"
+                          << " ip=0x" << std::hex << currentIP
+                          << " slot=" << std::dec << state_.currentSlot_
+                          << " kind=" << branchKind
+                          << " branchTarget=0x" << std::hex << branchTarget
+                          << " normalized=0x" << branchEntryIP
+                          << " guestSize=0x" << memorySize
+                          << " gp(r1)=0x" << cpu.GetGR(1)
+                          << " r2=0x" << cpu.GetGR(2)
+                          << " r8=0x" << cpu.GetGR(8)
+                          << " r14=0x" << cpu.GetGR(14)
+                          << " r33=0x" << cpu.GetGR(33)
+                          << " br0=0x" << cpu.GetBR(0)
+                          << " br6=0x" << cpu.GetBR(6)
+                          << ". Missing next milestone: kernel handoff; suspect corrupt IA-64"
+                          << " function-descriptor/control-flow data from PE/COFF loading, relocations,"
+                          << " or GP-relative addressing rather than ConsoleOut/GOP."
+                          << std::dec << "\n";
+                state_.bundleValid_ = false;
+                hasCachedInstruction_ = false;
+                return ISAExecutionResult::EXCEPTION;
+            }
             state_.getCPUState().SetIP(branchEntryIP);
             state_.bundleValid_ = false;
             state_.currentSlot_ = 0;
@@ -1846,6 +1879,26 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                   << e.what() << std::dec << "\n";
 
         if (isLoadInstruction(instr.GetType())) {
+            if (ip >= 0x6700 && ip < 0x6840) {
+                std::cerr << "[EFI-MILESTONE] IA-64 function-descriptor data load failed before"
+                          << " SimpleFS.OpenVolume/kernel handoff"
+                          << " ip=0x" << std::hex << ip
+                          << " slot=" << std::dec << state_.currentSlot_
+                          << " dst=r" << static_cast<int>(instr.GetDst())
+                          << " srcBase=r" << static_cast<int>(instr.GetSrc1())
+                          << " baseBefore=0x" << std::hex << baseBefore
+                          << " gp(r1)=0x" << cpu.GetGR(1)
+                          << " r2=0x" << cpu.GetGR(2)
+                          << " r8=0x" << cpu.GetGR(8)
+                          << " r14=0x" << cpu.GetGR(14)
+                          << " r33=0x" << cpu.GetGR(33)
+                          << " r35=0x" << cpu.GetGR(35)
+                          << " br0=0x" << cpu.GetBR(0)
+                          << " br6=0x" << cpu.GetBR(6)
+                          << ". This is a loader data/control-flow input to an indirect call;"
+                          << " suspect PE/COFF relocation or GP-relative data placement."
+                          << std::dec << "\n";
+            }
             cpu.SetGR(instr.GetDst(), 0);
             bool sanitizedBase = false;
             if (instr.HasImmediate()) {
