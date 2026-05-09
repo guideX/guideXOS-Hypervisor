@@ -37,6 +37,7 @@ constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0
 constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
 constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
 constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF00ULL;
+constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF80ULL;
 constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x2000ULL;
 constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
 using EfiGuid = std::array<uint8_t, 16>;
@@ -660,6 +661,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiTextOutputCalls_(0)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
+    , efiOpenVolumeCalls_(0)
+    , efiGenericSuccessCalls_(0)
+    , efiGenericUnsupportedCalls_(0)
     , callFrameStack_() {
 }
 
@@ -677,6 +681,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiTextOutputCalls_(0)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
+    , efiOpenVolumeCalls_(0)
+    , efiGenericSuccessCalls_(0)
+    , efiGenericUnsupportedCalls_(0)
     , callFrameStack_() {
 }
 
@@ -688,6 +695,9 @@ void IA64ISAPlugin::reset() {
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
+    efiOpenVolumeCalls_ = 0;
+    efiGenericSuccessCalls_ = 0;
+    efiGenericUnsupportedCalls_ = 0;
     callFrameStack_.clear();
 }
 
@@ -1037,6 +1047,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_OPEN_VOLUME_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
+                        ++efiOpenVolumeCalls_;
                         const uint64_t rootOut = readCallerOutputRegister(state_.getCPUState(), 1);
                         if (rootOut != 0) {
                             memory.Write(rootOut,
@@ -1087,6 +1098,17 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             std::cout << " framebufferMirror=unavailable";
                         }
                         std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_SUCCESS_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        ++efiGenericSuccessCalls_;
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                        std::cout << "[EFI-STUB] generic success service callsite=0x"
+                                  << std::hex << currentIP
+                                  << " target=0x" << originalBranchTarget
+                                  << " -> EFI_SUCCESS" << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
                         handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
@@ -1107,6 +1129,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_UNSUPPORTED_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
+                        ++efiGenericUnsupportedCalls_;
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
@@ -1168,8 +1191,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << "ConsoleOut.OutputString calls=" << efiTextOutputCalls_
                           << ", mirroredToVmConsole=" << efiTextOutputMirrored_
                           << ", mirroredToFramebuffer=" << efiTextOutputFramebuffer_
-                          << ". Next missing subsystem is VM-visible console/GOP output "
-                          << "or later loader-to-kernel handoff if console text is visible."
+                          << ", SimpleFS.OpenVolume calls=" << efiOpenVolumeCalls_
+                          << ", genericSuccessServices=" << efiGenericSuccessCalls_
+                          << ", genericUnsupportedServices=" << efiGenericUnsupportedCalls_
+                          << ". Missing next milestone: kernel handoff; if OpenVolume remains 0, "
+                          << "the loader is returning before firmware file/block I/O begins."
                           << std::endl;
                 state_.bundleValid_ = false;
                 hasCachedInstruction_ = false;
@@ -1244,6 +1270,9 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
+    efiOpenVolumeCalls_ = 0;
+    efiGenericSuccessCalls_ = 0;
+    efiGenericUnsupportedCalls_ = 0;
     callFrameStack_.clear();
 }
 

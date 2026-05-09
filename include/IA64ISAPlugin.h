@@ -247,6 +247,9 @@ private:
     size_t efiTextOutputCalls_;
     size_t efiTextOutputMirrored_;
     size_t efiTextOutputFramebuffer_;
+    size_t efiOpenVolumeCalls_;
+    size_t efiGenericSuccessCalls_;
+    size_t efiGenericUnsupportedCalls_;
 
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;
