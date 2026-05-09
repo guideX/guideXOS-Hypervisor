@@ -1317,12 +1317,20 @@ void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
         return;
     }
 
-    const CallFrameSnapshot frame = callFrameStack_.back();
-    if (frame.returnAddress != branchTarget) {
+    size_t matchIndex = callFrameStack_.size();
+    while (matchIndex > 0) {
+        --matchIndex;
+        if (callFrameStack_[matchIndex].returnAddress == branchTarget) {
+            break;
+        }
+    }
+    if (matchIndex >= callFrameStack_.size() ||
+        callFrameStack_[matchIndex].returnAddress != branchTarget) {
         return;
     }
 
-    callFrameStack_.pop_back();
+    const CallFrameSnapshot frame = callFrameStack_[matchIndex];
+    callFrameStack_.erase(callFrameStack_.begin() + matchIndex, callFrameStack_.end());
 
     for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
         state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);

@@ -807,11 +807,11 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x18, EFI_IMAGE_DEVICE_HANDLE);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
-                                                                    // No command-line load options. Advertising a two-byte
-                                                                    // UTF-16 NUL makes this bootloader build one empty argv
-                                                                    // entry and later dereference copied text as a pointer.
+                                                                    // No command-line load options. Advertising a non-null
+                                                                    // empty UTF-16 buffer makes this bootloader build one empty
+                                                                    // argv entry and later dereference copied text as a pointer.
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30, 0U);
-                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, 0ULL);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 2U);
@@ -916,7 +916,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << ", OpenVolume=0x" << EFI_OPEN_VOLUME_STUB_DESC_ADDR
                                                                         << ", TextOutput=0x" << EFI_TEXT_OUTPUT_PROTOCOL_ADDR
                                                                         << ", LoadedImageFilePath=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
-                                                                        << ", LoadOptions=0x" << EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR
+                                                                        << ", LoadOptionsPtr=0x0"
+                                                                        << ", LoadOptionsBuffer=0x" << EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR
                                                                         << ", ConfigTables=" << std::dec << configTableCount << ")";
                                                                     LOG_INFO(oss.str());
                                                                 }
