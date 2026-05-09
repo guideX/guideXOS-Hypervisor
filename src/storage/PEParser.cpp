@@ -801,6 +801,16 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
     
     int relocationCount = 0;
     int skippedCount = 0;
+    int dir64Count = 0;
+    int rel64Count = 0;
+    int fptr64Count = 0;
+    int pcrel64Count = 0;
+    int segrel64Count = 0;
+    int otherTypeCount = 0;
+    int outOfImageOffsetCount = 0;
+    int dir64NonZeroSymbolCount = 0;
+    uint64_t maxRelocationOffset = 0;
+    uint64_t maxRelocationWriteEnd = 0;
     uint64_t functionDescriptorRVA = 0;
     const PESectionInfo* dynsymSection = findSectionByName(".dynsym");
     const uint64_t dynsymCount = dynsymSection
@@ -833,8 +843,34 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
             skippedCount++;
             continue;
         }
+
+        maxRelocationOffset = std::max(maxRelocationOffset, rela.offset);
+        switch (type) {
+            case R_IA64_DIR64LSB:
+                ++dir64Count;
+                if (symbol != 0) {
+                    ++dir64NonZeroSymbolCount;
+                }
+                break;
+            case R_IA64_REL64LSB:
+                ++rel64Count;
+                break;
+            case R_IA64_FPTR64LSB:
+                ++fptr64Count;
+                break;
+            case R_IA64_PCREL64LSB:
+                ++pcrel64Count;
+                break;
+            case R_IA64_SEGREL64LSB:
+                ++segrel64Count;
+                break;
+            default:
+                ++otherTypeCount;
+                break;
+        }
         
         if (rela.offset >= imageBuffer.size()) {
+            ++outOfImageOffsetCount;
             LOG_ERROR("  Relocation offset out of bounds!");
             continue;
         }
@@ -943,6 +979,7 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         
         if (applied) {
             relocationCount++;
+            maxRelocationWriteEnd = std::max(maxRelocationWriteEnd, rela.offset + 8);
             
             if (relocationCount <= 10) { // Log first 10 for debugging
                 oss.str("");
@@ -957,6 +994,23 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
     
     oss.str("");
     oss << "  Applied " << relocationCount << " ELF relocations";
+    LOG_INFO(oss.str());
+
+    oss.str("");
+    oss << "[EFI-MILESTONE] ELF relocation coverage: imageSize=0x" << std::hex
+        << imageInfo_.sizeOfImage
+        << " maxTargetRva=0x" << maxRelocationOffset
+        << " maxWriteEndRva=0x" << maxRelocationWriteEnd
+        << " appendedFptrEndRva=0x" << functionDescriptorRVA
+        << std::dec
+        << " outOfImageTargets=" << outOfImageOffsetCount
+        << " typeCounts{DIR64=" << dir64Count
+        << ",REL64=" << rel64Count
+        << ",FPTR64=" << fptr64Count
+        << ",PCREL64=" << pcrel64Count
+        << ",SEGREL64=" << segrel64Count
+        << ",OTHER=" << otherTypeCount
+        << "} DIR64_nonzero_symbol=" << dir64NonZeroSymbolCount;
     LOG_INFO(oss.str());
     
     if (skippedCount > 0) {

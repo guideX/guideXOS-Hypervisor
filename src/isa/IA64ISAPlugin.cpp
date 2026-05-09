@@ -1280,7 +1280,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         std::cout << " handle=0x" << handle
                                   << " callsite=0x" << currentIP;
                         if (zeroGuid) {
+                            const uint64_t currentGp = state_.getCPUState().GetGR(1);
+                            const int64_t guidMinusGp =
+                                static_cast<int64_t>(protocolGuid) - static_cast<int64_t>(currentGp);
                             std::cout << " ZERO_PROTOCOL_GUID"
+                                      << " gp=0x" << currentGp
+                                      << " guidMinusGp=" << std::dec << guidMinusGp << std::hex
                                       << " guidBytes="
                                       << readHexBytesPreview(memory, protocolGuid, guid.size())
                                       << " nextBytes="
