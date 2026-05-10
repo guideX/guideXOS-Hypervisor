@@ -1880,6 +1880,10 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
 
         if (isLoadInstruction(instr.GetType())) {
             if (ip >= 0x6700 && ip < 0x6840) {
+                const uint64_t gp = cpu.GetGR(1);
+                const uint64_t r33 = cpu.GetGR(33);
+                const int64_t r33MinusGp =
+                    static_cast<int64_t>(r33) - static_cast<int64_t>(gp);
                 std::cerr << "[EFI-MILESTONE] IA-64 function-descriptor data load failed before"
                           << " SimpleFS.OpenVolume/kernel handoff"
                           << " ip=0x" << std::hex << ip
@@ -1887,17 +1891,22 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                           << " dst=r" << static_cast<int>(instr.GetDst())
                           << " srcBase=r" << static_cast<int>(instr.GetSrc1())
                           << " baseBefore=0x" << std::hex << baseBefore
-                          << " gp(r1)=0x" << cpu.GetGR(1)
+                          << " gp(r1)=0x" << gp
                           << " r2=0x" << cpu.GetGR(2)
                           << " r8=0x" << cpu.GetGR(8)
                           << " r14=0x" << cpu.GetGR(14)
-                          << " r33=0x" << cpu.GetGR(33)
+                          << " r33=0x" << r33
+                          << " r33MinusGp=" << std::dec << r33MinusGp << std::hex
                           << " r35=0x" << cpu.GetGR(35)
                           << " br0=0x" << cpu.GetBR(0)
-                          << " br6=0x" << cpu.GetBR(6)
-                          << ". This is a loader data/control-flow input to an indirect call;"
+                          << " br6=0x" << cpu.GetBR(6);
+                if (r33 >= 0x100000ULL && r33 < 0x200000ULL) {
+                    std::cerr << " r33MirrorRva=0x" << (r33 - 0x100000ULL);
+                }
+                std::cerr << ". r14 was loaded from r33 and is now the corrupt descriptor pointer;"
                           << " suspect PE/COFF relocation or GP-relative data placement."
                           << std::dec << "\n";
+                throw;
             }
             cpu.SetGR(instr.GetDst(), 0);
             bool sanitizedBase = false;
