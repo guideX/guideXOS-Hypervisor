@@ -1884,6 +1884,8 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 const uint64_t r33 = cpu.GetGR(33);
                 const int64_t r33MinusGp =
                     static_cast<int64_t>(r33) - static_cast<int64_t>(gp);
+                const bool r33InDiagnosticMirror = r33 >= 0x100000ULL && r33 < 0x200000ULL;
+                const uint64_t r33MirrorRva = r33InDiagnosticMirror ? r33 - 0x100000ULL : 0;
                 std::cerr << "[EFI-MILESTONE] IA-64 function-descriptor data load failed before"
                           << " SimpleFS.OpenVolume/kernel handoff"
                           << " ip=0x" << std::hex << ip
@@ -1900,9 +1902,17 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                           << " r35=0x" << cpu.GetGR(35)
                           << " br0=0x" << cpu.GetBR(0)
                           << " br6=0x" << cpu.GetBR(6);
-                if (r33 >= 0x100000ULL && r33 < 0x200000ULL) {
-                    std::cerr << " r33MirrorRva=0x" << (r33 - 0x100000ULL);
+                if (r33InDiagnosticMirror) {
+                    std::cerr << " r33MirrorRva=0x" << r33MirrorRva;
+                    if (r33MirrorRva >= 0x1000ULL && r33MirrorRva < 0x37110ULL) {
+                        std::cerr << " r33MirrorSectionHint=.text";
+                    } else if (r33MirrorRva >= 0x38000ULL && r33MirrorRva < 0x38540ULL) {
+                        std::cerr << " r33MirrorSectionHint=.sdata";
+                    } else if (r33MirrorRva >= 0x39000ULL && r33MirrorRva < 0x56390ULL) {
+                        std::cerr << " r33MirrorSectionHint=.data";
+                    }
                 }
+                std::cerr << " r33Bytes=" << readHexBytesPreview(memory, r33, 16);
                 std::cerr << ". r14 was loaded from r33 and is now the corrupt descriptor pointer;"
                           << " suspect PE/COFF relocation or GP-relative data placement."
                           << std::dec << "\n";
