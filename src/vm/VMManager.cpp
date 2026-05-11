@@ -595,16 +595,40 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 if (peInfo.hasGlobalPointer && loadAddress == 0 &&
                                                                     peInfo.globalPointer >= imageBuffer.size()) {
                                                                     constexpr uint64_t IA64_EFI_IMAGE_ALIAS_BASE = 0x100000ULL;
-                                                                    instance->vm->getMemory().Write(IA64_EFI_IMAGE_ALIAS_BASE,
-                                                                        imageBuffer.data(),
-                                                                        imageBuffer.size());
+                                                                    size_t mirroredSections = 0;
+                                                                    size_t mirroredBytes = 0;
+                                                                    for (const auto& section : peInfo.sections) {
+                                                                        if ((section.characteristics & guideXOS::IMAGE_SCN_MEM_EXECUTE) != 0) {
+                                                                            continue;
+                                                                        }
+                                                                        const uint64_t sectionSize = std::max(
+                                                                            section.virtualSize,
+                                                                            static_cast<uint64_t>(section.rawDataSize));
+                                                                        if (sectionSize == 0 ||
+                                                                            section.virtualAddress >= imageBuffer.size()) {
+                                                                            continue;
+                                                                        }
+                                                                        const uint64_t copySize = std::min<uint64_t>(
+                                                                            sectionSize,
+                                                                            imageBuffer.size() - section.virtualAddress);
+                                                                        instance->vm->getMemory().Write(
+                                                                            IA64_EFI_IMAGE_ALIAS_BASE + section.virtualAddress,
+                                                                            imageBuffer.data() + section.virtualAddress,
+                                                                            static_cast<size_t>(copySize));
+                                                                        ++mirroredSections;
+                                                                        mirroredBytes += static_cast<size_t>(copySize);
+                                                                    }
                                                                     oss.str("");
-                                                                    oss << "[EFI-MILESTONE] Mirrored IA-64 EFI image at 0x"
+                                                                    oss << "[EFI-MILESTONE] Mirrored IA-64 EFI non-executable sections at 0x"
                                                                         << std::hex << IA64_EFI_IMAGE_ALIAS_BASE
                                                                         << "-0x" << (IA64_EFI_IMAGE_ALIAS_BASE + imageBuffer.size())
                                                                         << " while keeping entry=0x" << entryPoint
                                                                         << "; GP=0x" << peInfo.globalPointer
-                                                                        << " maps GP-relative data into the mirror for load-base diagnosis."
+                                                                        << " maps GP-relative data into the mirror for load-base diagnosis; "
+                                                                        << "excluded executable .text so bad GP-relative text probes stay zero"
+                                                                        << std::dec
+                                                                        << " mirroredSections=" << mirroredSections
+                                                                        << " mirroredBytes=" << mirroredBytes
                                                                         << std::dec;
                                                                     LOG_WARN(oss.str());
                                                                 }
