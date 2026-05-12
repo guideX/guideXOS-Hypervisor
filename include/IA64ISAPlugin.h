@@ -248,6 +248,7 @@ private:
     size_t efiTextOutputMirrored_;
     size_t efiTextOutputFramebuffer_;
     size_t efiOpenVolumeCalls_;
+    size_t efiSimpleFsProtocolReturns_;
     size_t efiGenericSuccessCalls_;
     size_t efiGenericUnsupportedCalls_;
     size_t efiZeroGuidProtocolCalls_;

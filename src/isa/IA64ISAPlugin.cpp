@@ -8,6 +8,7 @@
 #include <cstring>
 #include <array>
 #include <cctype>
+#include <algorithm>
 
 namespace ia64 {
 
@@ -149,8 +150,8 @@ std::string describeEfiTableSlot(uint64_t address) {
         {0x48, "SetInfo"}, {0x50, "Flush"}
     };
     static constexpr EfiSlotName loadedImage[] = {
-        {0x00, "Revision"}, {0x10, "ParentHandle"}, {0x18, "SystemTable"},
-        {0x20, "DeviceHandle"}, {0x28, "FilePath"}, {0x30, "LoadOptionsSize"},
+        {0x00, "Revision"}, {0x08, "ParentHandle"}, {0x10, "SystemTable"},
+        {0x18, "DeviceHandle"}, {0x20, "FilePath"}, {0x30, "LoadOptionsSize"},
         {0x38, "LoadOptions"}, {0x40, "ImageBase"}, {0x48, "ImageSize"},
         {0x50, "ImageCodeType/ImageDataType"}, {0x58, "Unload"}
     };
@@ -263,6 +264,42 @@ bool readEfiGuid(IMemory& memory, uint64_t address, EfiGuid& guid) {
 
     try {
         memory.Read(address, guid.data(), guid.size());
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool readGuestU8(IMemory& memory, uint64_t address, uint8_t& value) {
+    try {
+        memory.Read(address, &value, sizeof(value));
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool readGuestU16(IMemory& memory, uint64_t address, uint16_t& value) {
+    try {
+        memory.Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool readGuestU32(IMemory& memory, uint64_t address, uint32_t& value) {
+    try {
+        memory.Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool readGuestU64(IMemory& memory, uint64_t address, uint64_t& value) {
+    try {
+        memory.Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
         return true;
     } catch (const std::exception&) {
         return false;
@@ -398,6 +435,139 @@ std::string readUtf16Preview(IMemory& memory, uint64_t address) {
     }
 
     return preview;
+}
+
+std::string describeEfiDevicePath(IMemory& memory, uint64_t address) {
+    if (address == 0) {
+        return "null";
+    }
+
+    std::ostringstream oss;
+    oss << "0x" << std::hex << address << " nodes=[";
+    uint64_t nodeAddress = address;
+    for (size_t nodeIndex = 0; nodeIndex < 8; ++nodeIndex) {
+        uint8_t type = 0;
+        uint8_t subtype = 0;
+        uint16_t length = 0;
+        if (!readGuestU8(memory, nodeAddress, type) ||
+            !readGuestU8(memory, nodeAddress + 1, subtype) ||
+            !readGuestU16(memory, nodeAddress + 2, length)) {
+            if (nodeIndex != 0) {
+                oss << " ";
+            }
+            oss << "<unreadable@0x" << nodeAddress << ">";
+            break;
+        }
+
+        if (nodeIndex != 0) {
+            oss << " ";
+        }
+        oss << "{type=0x" << static_cast<unsigned>(type)
+            << ",sub=0x" << static_cast<unsigned>(subtype)
+            << ",len=0x" << length;
+        if (type == 0x04 && subtype == 0x04 && length >= 4) {
+            const std::string filePath = readUtf16Preview(memory, nodeAddress + 4);
+            if (!filePath.empty()) {
+                oss << ",path=\"" << filePath << "\"";
+            }
+        }
+        oss << "}";
+
+        if (type == 0x7F && subtype == 0xFF) {
+            break;
+        }
+        if (length < 4) {
+            oss << " <bad-length>";
+            break;
+        }
+        nodeAddress += length;
+    }
+    oss << "]";
+    return oss.str();
+}
+
+std::string describeLoadedImageProtocol(IMemory& memory, uint64_t address) {
+    uint32_t revision = 0;
+    uint64_t parentHandle = 0;
+    uint64_t systemTable = 0;
+    uint64_t deviceHandle = 0;
+    uint64_t filePath = 0;
+    uint32_t loadOptionsSize = 0;
+    uint64_t loadOptions = 0;
+    uint64_t imageBase = 0;
+    uint64_t imageSize = 0;
+    uint32_t imageCodeType = 0;
+    uint32_t imageDataType = 0;
+    uint64_t unload = 0;
+    uint64_t ext60 = 0;
+    uint64_t ext68 = 0;
+
+    const bool readable =
+        readGuestU32(memory, address + 0x00, revision) &&
+        readGuestU64(memory, address + 0x08, parentHandle) &&
+        readGuestU64(memory, address + 0x10, systemTable) &&
+        readGuestU64(memory, address + 0x18, deviceHandle) &&
+        readGuestU64(memory, address + 0x20, filePath) &&
+        readGuestU32(memory, address + 0x30, loadOptionsSize) &&
+        readGuestU64(memory, address + 0x38, loadOptions) &&
+        readGuestU64(memory, address + 0x40, imageBase) &&
+        readGuestU64(memory, address + 0x48, imageSize) &&
+        readGuestU32(memory, address + 0x50, imageCodeType) &&
+        readGuestU32(memory, address + 0x54, imageDataType) &&
+        readGuestU64(memory, address + 0x58, unload);
+
+    if (!readable) {
+        std::ostringstream oss;
+        oss << "LoadedImage{addr=0x" << std::hex << address
+            << " unreadable}";
+        return oss.str();
+    }
+
+    readGuestU64(memory, address + 0x60, ext60);
+    readGuestU64(memory, address + 0x68, ext68);
+
+    std::ostringstream oss;
+    oss << "LoadedImage{addr=0x" << std::hex << address
+        << " Revision=0x" << revision
+        << " ParentHandle=0x" << parentHandle
+        << " SystemTable=0x" << systemTable
+        << " DeviceHandle=0x" << deviceHandle
+        << " FilePath=0x" << filePath
+        << " LoadOptionsSize=0x" << loadOptionsSize
+        << " LoadOptions=0x" << loadOptions
+        << " ImageBase=0x" << imageBase
+        << " ImageSize=0x" << imageSize
+        << " CodeType=0x" << imageCodeType
+        << " DataType=0x" << imageDataType
+        << " Unload=0x" << unload
+        << " Ext60=0x" << ext60
+        << " Ext68=0x" << ext68
+        << " FilePathNodes=" << describeEfiDevicePath(memory, filePath);
+    if (loadOptions != 0 && loadOptionsSize != 0) {
+        oss << " LoadOptionsUtf16=\"" << readUtf16Preview(memory, loadOptions) << "\""
+            << " LoadOptionsRaw=" << readHexBytesPreview(memory, loadOptions,
+                                                         std::min<size_t>(loadOptionsSize, 32));
+    } else {
+        oss << " LoadOptions=empty";
+    }
+    oss << "}";
+    return oss.str();
+}
+
+std::string describeSimpleFileSystemProtocol(IMemory& memory, uint64_t address) {
+    uint64_t revision = 0;
+    uint64_t openVolume = 0;
+    std::ostringstream oss;
+    oss << "SimpleFS{addr=0x" << std::hex << address;
+    if (readGuestU64(memory, address + 0x00, revision) &&
+        readGuestU64(memory, address + 0x08, openVolume)) {
+        oss << " Revision=0x" << revision
+            << " OpenVolume=0x" << openVolume;
+    } else {
+        oss << " unreadable";
+    }
+    oss << "}";
+    return oss.str();
 }
 
 bool mirrorTextToVmConsole(IMemory& memory, const std::string& text, uint64_t& consoleAddress) {
@@ -888,6 +1058,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
     , efiOpenVolumeCalls_(0)
+    , efiSimpleFsProtocolReturns_(0)
     , efiGenericSuccessCalls_(0)
     , efiGenericUnsupportedCalls_(0)
     , efiZeroGuidProtocolCalls_(0)
@@ -909,6 +1080,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
     , efiOpenVolumeCalls_(0)
+    , efiSimpleFsProtocolReturns_(0)
     , efiGenericSuccessCalls_(0)
     , efiGenericUnsupportedCalls_(0)
     , efiZeroGuidProtocolCalls_(0)
@@ -924,6 +1096,7 @@ void IA64ISAPlugin::reset() {
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
     efiOpenVolumeCalls_ = 0;
+    efiSimpleFsProtocolReturns_ = 0;
     efiGenericSuccessCalls_ = 0;
     efiGenericUnsupportedCalls_ = 0;
     efiZeroGuidProtocolCalls_ = 0;
@@ -1248,6 +1421,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 protocolName = "SimpleFileSystemProtocol(zero-guid fallback)";
                             }
                         }
+                        if (protocolAddress == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR) {
+                            ++efiSimpleFsProtocolReturns_;
+                        }
 
                         if (interfaceOut != 0 && protocolAddress != 0) {
                             memory.Write(interfaceOut,
@@ -1290,6 +1466,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << readHexBytesPreview(memory, protocolGuid, guid.size())
                                       << " nextBytes="
                                       << readHexBytesPreview(memory, protocolGuid + guid.size(), guid.size());
+                        }
+                        if (protocolAddress == EFI_LOADED_IMAGE_PROTOCOL_ADDR) {
+                            std::cout << " " << describeLoadedImageProtocol(memory, protocolAddress);
+                        } else if (protocolAddress == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR) {
+                            std::cout << " " << describeSimpleFileSystemProtocol(memory, protocolAddress)
+                                      << " latestLoadedImage="
+                                      << describeLoadedImageProtocol(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR);
                         }
                         std::cout << std::dec << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() &&
@@ -1468,11 +1651,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << ", mirroredToVmConsole=" << efiTextOutputMirrored_
                           << ", mirroredToFramebuffer=" << efiTextOutputFramebuffer_
                           << ", SimpleFS.OpenVolume calls=" << efiOpenVolumeCalls_
+                          << ", SimpleFS.HandleProtocol returns=" << efiSimpleFsProtocolReturns_
                           << ", genericSuccessServices=" << efiGenericSuccessCalls_
                           << ", genericUnsupportedServices=" << efiGenericUnsupportedCalls_
                           << ", zeroGuidHandleProtocolCalls=" << efiZeroGuidProtocolCalls_
                           << ". Missing next milestone: kernel handoff; if OpenVolume remains 0, "
                           << "the loader is returning before firmware file/block I/O begins; "
+                          << "if SimpleFS.HandleProtocol is nonzero while OpenVolume is zero, "
+                          << "the fork is after protocol lookup and before volume open, usually "
+                          << "LoadedImage FilePath/LoadOptions or device-path parsing; "
                           << "if zeroGuidHandleProtocolCalls is nonzero, protocol GUID data/addressing "
                           << "is suspect before device-path/file I/O."
                           << std::endl;
@@ -1583,6 +1770,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
     efiOpenVolumeCalls_ = 0;
+    efiSimpleFsProtocolReturns_ = 0;
     efiGenericSuccessCalls_ = 0;
     efiGenericUnsupportedCalls_ = 0;
     efiZeroGuidProtocolCalls_ = 0;
