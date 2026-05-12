@@ -1442,6 +1442,40 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << ", Slot=" << state_.currentSlot_ << "] "
                       << decodeResult.disassembly << std::endl;
         }
+        const bool tracePostSimpleFsPath =
+            (decodeResult.instructionAddress >= 0x1CD0ULL &&
+             decodeResult.instructionAddress <= 0x1D70ULL) ||
+            (decodeResult.instructionAddress >= 0x33C80ULL &&
+             decodeResult.instructionAddress <= 0x33CC0ULL);
+        if (tracePostSimpleFsPath) {
+            const CPUState& cpu = state_.getCPUState();
+            const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
+            const bool traceLivePredicate =
+                (tracePredicate == 0) || cpu.GetPR(tracePredicate);
+            std::cout << "[EFI-POST-SIMPLEFS] pre ip=0x" << std::hex
+                      << decodeResult.instructionAddress
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " pred=p" << static_cast<int>(tracePredicate)
+                      << " livePred=" << (traceLivePredicate ? "true" : "false")
+                      << " p6=" << cpu.GetPR(6)
+                      << " p7=" << cpu.GetPR(7)
+                      << std::hex
+                      << " r1=0x" << cpu.GetGR(1)
+                      << " r8=0x" << cpu.GetGR(8)
+                      << " r16=0x" << cpu.GetGR(16)
+                      << " r17=0x" << cpu.GetGR(17)
+                      << " r18=0x" << cpu.GetGR(18)
+                      << " r20=0x" << cpu.GetGR(20)
+                      << " r36=0x" << cpu.GetGR(36)
+                      << " r38=0x" << cpu.GetGR(38)
+                      << " r61=0x" << cpu.GetGR(61)
+                      << " b0=0x" << cpu.GetBR(0)
+                      << " mem[r16]=" << readHexBytesPreview(memory, cpu.GetGR(16), 8)
+                      << " mem[r38]=" << readHexBytesPreview(memory, cpu.GetGR(38), 8)
+                      << " lastEfiCall=\"" << lastEfiCallName_ << "\""
+                      << " lastEfiIP=0x" << lastEfiCallIP_
+                      << std::dec << std::endl;
+        }
 
         if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
             const uint64_t rawBits = cachedInstruction_.GetRawBits();
