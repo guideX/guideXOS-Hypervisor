@@ -1466,11 +1466,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " r17=0x" << cpu.GetGR(17)
                       << " r18=0x" << cpu.GetGR(18)
                       << " r20=0x" << cpu.GetGR(20)
+                      << " r32=0x" << cpu.GetGR(32)
                       << " r36=0x" << cpu.GetGR(36)
                       << " r38=0x" << cpu.GetGR(38)
                       << " r61=0x" << cpu.GetGR(61)
                       << " b0=0x" << cpu.GetBR(0)
                       << " mem[r16]=" << readHexBytesPreview(memory, cpu.GetGR(16), 8)
+                      << " mem[r32]=" << readHexBytesPreview(memory, cpu.GetGR(32), 16)
+                      << " mem[r36]=" << readHexBytesPreview(memory, cpu.GetGR(36), 16)
                       << " mem[r38]=" << readHexBytesPreview(memory, cpu.GetGR(38), 8)
                       << " lastEfiCall=\"" << lastEfiCallName_ << "\""
                       << " lastEfiIP=0x" << lastEfiCallIP_
@@ -1825,6 +1828,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                          reinterpret_cast<const uint8_t*>(&nullInterface),
                                          sizeof(nullInterface));
                         }
+                        uint64_t interfaceOutValue = 0;
+                        const bool hasInterfaceOutValue =
+                            interfaceOut != 0 && readGuestU64(memory, interfaceOut, interfaceOutValue);
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, protocolAddress != 0
@@ -1842,6 +1848,16 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << protocolAddress << " via out=0x" << interfaceOut;
                         } else {
                             std::cout << " -> EFI_NOT_FOUND via out=0x" << interfaceOut;
+                        }
+                        if (interfaceOut != 0) {
+                            std::cout << " outValue=";
+                            if (hasInterfaceOutValue) {
+                                std::cout << "0x" << interfaceOutValue;
+                            } else {
+                                std::cout << "unreadable";
+                            }
+                            std::cout << " outBytes="
+                                      << readHexBytesPreview(memory, interfaceOut, 16);
                         }
                         std::cout << " handle=0x" << handle
                                   << " callsite=0x" << currentIP;
