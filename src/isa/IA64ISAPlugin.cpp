@@ -283,6 +283,29 @@ std::string describeEfiDescriptor(uint64_t address) {
     return {};
 }
 
+uint64_t efiDescriptorForCodePointer(uint64_t codePointer) {
+    if (codePointer == EFI_OPEN_VOLUME_STUB_CODE_ADDR) return EFI_OPEN_VOLUME_STUB_DESC_ADDR;
+    if (codePointer == EFI_GET_VARIABLE_STUB_CODE_ADDR) return EFI_GET_VARIABLE_STUB_DESC_ADDR;
+    if (codePointer == EFI_ALLOCATE_POOL_STUB_CODE_ADDR) return EFI_ALLOCATE_POOL_STUB_DESC_ADDR;
+    if (codePointer == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR) return EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR;
+    if (codePointer == EFI_UNSUPPORTED_STUB_CODE_ADDR) return EFI_UNSUPPORTED_STUB_DESC_ADDR;
+    if (codePointer == EFI_SUCCESS_STUB_CODE_ADDR) return EFI_SUCCESS_STUB_DESC_ADDR;
+    if (codePointer == EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR) return EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR;
+    if (codePointer == EFI_FILE_OPEN_STUB_CODE_ADDR) return EFI_FILE_OPEN_STUB_DESC_ADDR;
+    if (codePointer == EFI_FILE_CLOSE_STUB_CODE_ADDR) return EFI_FILE_CLOSE_STUB_DESC_ADDR;
+    if (codePointer == EFI_FILE_READ_STUB_CODE_ADDR) return EFI_FILE_READ_STUB_DESC_ADDR;
+    if (codePointer == EFI_FILE_GET_POSITION_STUB_CODE_ADDR) return EFI_FILE_GET_POSITION_STUB_DESC_ADDR;
+    if (codePointer == EFI_FILE_SET_POSITION_STUB_CODE_ADDR) return EFI_FILE_SET_POSITION_STUB_DESC_ADDR;
+    if (codePointer == EFI_FILE_GET_INFO_STUB_CODE_ADDR) return EFI_FILE_GET_INFO_STUB_DESC_ADDR;
+    if (codePointer == EFI_LOCATE_HANDLE_STUB_CODE_ADDR) return EFI_LOCATE_HANDLE_STUB_DESC_ADDR;
+    if (codePointer == EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR) return EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR;
+    if (codePointer == EFI_GET_MEMORY_MAP_STUB_CODE_ADDR) return EFI_GET_MEMORY_MAP_STUB_DESC_ADDR;
+    if (codePointer == EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR) return EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR;
+    if (codePointer == EFI_LOAD_IMAGE_STUB_CODE_ADDR) return EFI_LOAD_IMAGE_STUB_DESC_ADDR;
+    if (codePointer == EFI_START_IMAGE_STUB_CODE_ADDR) return EFI_START_IMAGE_STUB_DESC_ADDR;
+    return 0;
+}
+
 const char* efiStatusName(uint64_t status) {
     switch (status) {
         case EFI_STATUS_SUCCESS: return "EFI_SUCCESS";
@@ -1518,6 +1541,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         const CPUState& cpu = state_.getCPUState();
                         const uint64_t descriptorCandidate = cpu.GetGR(8) >= 8 ? cpu.GetGR(8) - 8 : 0;
                         const uint64_t oldGp = cpu.GetGR(1);
+                        uint64_t rejectedDescriptorCode = 0;
+                        uint64_t rejectedDescriptorGp = 0;
+                        bool rejectedDescriptorReadable = false;
                         uint64_t descriptorCode = 0;
                         uint64_t descriptorGp = 0;
                         bool descriptorReadable = false;
@@ -1527,6 +1553,31 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 memory.Read(descriptorCandidate + 8, reinterpret_cast<uint8_t*>(&descriptorGp), sizeof(descriptorGp));
                                 descriptorReadable = true;
                             } catch (const std::exception&) {
+                            }
+                        }
+                        uint64_t descriptorAddress = descriptorCandidate;
+                        if (descriptorReadable && descriptorCode != branchTarget) {
+                            rejectedDescriptorCode = descriptorCode;
+                            rejectedDescriptorGp = descriptorGp;
+                            rejectedDescriptorReadable = true;
+                            descriptorAddress = 0;
+                            descriptorCode = 0;
+                            descriptorGp = 0;
+                            descriptorReadable = false;
+                        }
+                        if (!descriptorReadable) {
+                            const uint64_t knownDescriptor = efiDescriptorForCodePointer(branchTarget);
+                            if (knownDescriptor != 0) {
+                                try {
+                                    memory.Read(knownDescriptor, reinterpret_cast<uint8_t*>(&descriptorCode), sizeof(descriptorCode));
+                                    memory.Read(knownDescriptor + 8, reinterpret_cast<uint8_t*>(&descriptorGp), sizeof(descriptorGp));
+                                    descriptorAddress = knownDescriptor;
+                                    descriptorReadable = true;
+                                } catch (const std::exception&) {
+                                    descriptorAddress = knownDescriptor;
+                                    descriptorCode = 0;
+                                    descriptorGp = 0;
+                                }
                             }
                         }
                         if (descriptorGp != 0 && descriptorGp != oldGp) {
@@ -1540,11 +1591,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         if (!knownFirmwareTarget && branchTarget >= memory.GetTotalSize()) {
                             ++unknownRegionCallCount_;
                         }
-                        lastDescriptorAddress_ = descriptorCandidate;
+                        lastDescriptorAddress_ = descriptorAddress;
                         lastDescriptorCode_ = descriptorReadable ? descriptorCode : branchTarget;
                         lastDescriptorGp_ = descriptorGp;
                         std::cout << "[IA64-DESC] indirect br.call callerIP=0x" << std::hex << currentIP
-                                  << " descriptor=0x" << descriptorCandidate
+                                  << " descriptor=0x" << descriptorAddress
                                   << " readable=" << (descriptorReadable ? "yes" : "no")
                                   << " descriptorCode=0x" << (descriptorReadable ? descriptorCode : 0)
                                   << " resolvedCode=0x" << branchTarget
@@ -1553,16 +1604,21 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                   << " newR1=0x" << state_.getCPUState().GetGR(1)
                                   << " returnBR=b" << std::dec << static_cast<int>(cachedInstruction_.GetDst())
                                   << " region=";
-                        if (descriptorCandidate >= EFI_HANDOFF_REGION_BASE && descriptorCandidate < EFI_HANDOFF_REGION_END) {
+                        if (descriptorAddress >= EFI_HANDOFF_REGION_BASE && descriptorAddress < EFI_HANDOFF_REGION_END) {
                             std::cout << "efi-table";
-                        } else if (descriptorCandidate >= EFI_POOL_BASE && descriptorCandidate < EFI_POOL_END) {
+                        } else if (descriptorAddress >= EFI_POOL_BASE && descriptorAddress < EFI_POOL_END) {
                             std::cout << "pool";
-                        } else if (descriptorCandidate >= 0x100000ULL && descriptorCandidate < 0x200000ULL) {
+                        } else if (descriptorAddress >= 0x100000ULL && descriptorAddress < 0x200000ULL) {
                             std::cout << "mirrored-section";
-                        } else if (descriptorCandidate < memory.GetTotalSize()) {
+                        } else if (descriptorAddress < memory.GetTotalSize()) {
                             std::cout << "image-or-guest";
                         } else {
                             std::cout << "unknown";
+                        }
+                        if (rejectedDescriptorReadable) {
+                            std::cout << " rejectedDescriptorCandidate=0x" << std::hex << descriptorCandidate
+                                      << " rejectedCode=0x" << rejectedDescriptorCode
+                                      << " rejectedGp=0x" << rejectedDescriptorGp;
                         }
                         std::cout << std::dec << std::endl;
                     }
@@ -1774,7 +1830,16 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         } else if (protocolAddress == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR) {
                             std::cout << " " << describeSimpleFileSystemProtocol(memory, protocolAddress)
                                       << " latestLoadedImage="
-                                      << describeLoadedImageProtocol(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR);
+                                      << describeLoadedImageProtocol(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR)
+                                      << " expectedSimpleFsTable=0x" << EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR
+                                      << " simpleFsTableBytes32="
+                                      << readHexBytesPreview(memory, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 32)
+                                      << " expectedOpenVolumeDescriptor=0x" << EFI_OPEN_VOLUME_STUB_DESC_ADDR
+                                      << " openVolumeDescriptorBytes32="
+                                      << readHexBytesPreview(memory, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 32)
+                                      << " lastIndirectDescriptor=0x" << lastDescriptorAddress_
+                                      << " lastIndirectDescriptorBytes32="
+                                      << readHexBytesPreview(memory, lastDescriptorAddress_, 32);
                         }
                         std::cout << std::dec << std::endl;
                         logEfiServiceCall(memory, "BootServices.HandleProtocol", currentIP,
