@@ -653,7 +653,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // remains below it while staying outside low guest RAM.
                                                                 constexpr uint64_t EFI_STUB_ADDR = 0x1FE00000ULL;
                                                                 constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
-                                                                constexpr uint64_t EFI_IMAGE_DEVICE_HANDLE = 0x2ULL;
+                                                                constexpr uint64_t EFI_IMAGE_DEVICE_HANDLE = 0x40ULL; // boot media handle advertised by LocateHandle/SimpleFS
 
                                                                 // Write a minimal EFI System Table plus service-table
                                                                 // headers. This is only enough for userland EFI code
