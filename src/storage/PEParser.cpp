@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <map>
 
 using ia64::LOG_ERROR;
 using ia64::LOG_INFO;
@@ -705,6 +706,12 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
     size_t offset = relocSection->virtualAddress;
     size_t endOffset = offset + relocSection->virtualSize;
     int relocationCount = 0;
+    int skippedCount = 0;
+    int unsupportedCount = 0;
+    std::map<uint32_t, int> typeFoundCounts;
+    std::map<uint32_t, int> typeAppliedCounts;
+    std::map<uint32_t, int> typeSkippedCounts;
+    std::map<uint32_t, int> typeUnsupportedCounts;
     
     while (offset < endOffset && offset + sizeof(PEBaseRelocationBlock) <= imageBuffer.size()) {
         PEBaseRelocationBlock block;
@@ -730,8 +737,11 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
             
             uint16_t type = entry >> 12;
             uint16_t offsetInPage = entry & 0x0FFF;
+            ++typeFoundCounts[type];
             
             if (type == IMAGE_REL_BASED_ABSOLUTE) {
+                ++skippedCount;
+                ++typeSkippedCounts[type];
                 continue; // Skip padding entries
             }
             
@@ -750,6 +760,7 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
                 std::memcpy(&imageBuffer[targetRVA], &newValue, 8);
                 
                 relocationCount++;
+                ++typeAppliedCounts[type];
                 
                 if (relocationCount <= 10) { // Log first 10 for debugging
                     oss.str("");
@@ -757,6 +768,19 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
                         << ": 0x" << originalValue << " -> 0x" << newValue << std::dec;
                     LOG_INFO(oss.str());
                 }
+            } else {
+                ++unsupportedCount;
+                ++skippedCount;
+                ++typeUnsupportedCounts[type];
+                ++typeSkippedCounts[type];
+                oss.str("");
+                oss << "[EFI-RELOC-AUDIT] unsupported PE base relocation"
+                    << " section=.reloc"
+                    << " blockPage=0x" << std::hex << block.virtualAddress
+                    << " rva=0x" << targetRVA
+                    << " type=0x" << type
+                    << std::dec;
+                LOG_WARN(oss.str());
             }
         }
         
@@ -766,6 +790,31 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
     oss.str("");
     oss << "  Applied " << relocationCount << " PE base relocations";
     LOG_INFO(oss.str());
+
+    auto logTypeMap = [&](const char* label, const std::map<uint32_t, int>& counts) {
+        oss.str("");
+        oss << "[EFI-RELOC-AUDIT] PE " << label << " relocation types";
+        if (counts.empty()) {
+            oss << " none";
+        } else {
+            for (auto it = counts.begin(); it != counts.end(); ++it) {
+                oss << " type=0x" << std::hex << it->first
+                    << std::dec << " count=" << it->second;
+            }
+        }
+        LOG_INFO(oss.str());
+    };
+    logTypeMap("found", typeFoundCounts);
+    logTypeMap("applied", typeAppliedCounts);
+    logTypeMap("skipped", typeSkippedCounts);
+    logTypeMap("unsupported", typeUnsupportedCounts);
+    if (skippedCount > 0 || unsupportedCount > 0) {
+        oss.str("");
+        oss << "[EFI-RELOC-AUDIT] PE relocation summary applied=" << relocationCount
+            << " skipped=" << skippedCount
+            << " unsupported=" << unsupportedCount;
+        LOG_INFO(oss.str());
+    }
     
     return relocationCount > 0;
 }
@@ -809,6 +858,10 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
     int otherTypeCount = 0;
     int outOfImageOffsetCount = 0;
     int dir64NonZeroSymbolCount = 0;
+    std::map<uint32_t, int> typeFoundCounts;
+    std::map<uint32_t, int> typeAppliedCounts;
+    std::map<uint32_t, int> typeSkippedCounts;
+    std::map<uint32_t, int> typeUnsupportedCounts;
     uint64_t maxRelocationOffset = 0;
     uint64_t maxRelocationWriteEnd = 0;
     uint64_t functionDescriptorRVA = 0;
@@ -837,10 +890,12 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         
         uint32_t type = rela.info & 0xFFFFFFFF;
         uint32_t symbol = rela.info >> 32;
+        ++typeFoundCounts[type];
         
         // Skip NONE relocations
         if (type == R_IA64_NONE) {
             skippedCount++;
+            ++typeSkippedCounts[type];
             continue;
         }
 
@@ -866,6 +921,7 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
                 break;
             default:
                 ++otherTypeCount;
+                ++typeUnsupportedCounts[type];
                 break;
         }
         
@@ -968,17 +1024,24 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
             }
             
             default:
-                if (relocationCount < 5) {
-                    oss.str("");
-                    oss << "  Unknown relocation type: 0x" << std::hex << type << std::dec;
-                    LOG_WARN(oss.str());
-                }
+                oss.str("");
+                oss << "[EFI-RELOC-AUDIT] unsupported relocation"
+                    << " section=.rela"
+                    << " entry=" << std::dec << i
+                    << " rva=0x" << std::hex << rela.offset
+                    << " type=0x" << type
+                    << " symbol=0x" << symbol
+                    << " addend=0x" << rela.addend
+                    << std::dec;
+                LOG_WARN(oss.str());
                 skippedCount++;
+                ++typeSkippedCounts[type];
                 break;
         }
         
         if (applied) {
             relocationCount++;
+            ++typeAppliedCounts[type];
             maxRelocationWriteEnd = std::max(maxRelocationWriteEnd, rela.offset + 8);
             
             if (relocationCount <= 10) { // Log first 10 for debugging
@@ -1018,7 +1081,25 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         oss << "  Skipped " << skippedCount << " relocations (NONE or unsupported)";
         LOG_INFO(oss.str());
     }
-    
+
+    auto logTypeMap = [&](const char* label, const std::map<uint32_t, int>& counts) {
+        oss.str("");
+        oss << "[EFI-RELOC-AUDIT] " << label << " relocation types";
+        if (counts.empty()) {
+            oss << " none";
+        } else {
+            for (auto it = counts.begin(); it != counts.end(); ++it) {
+                oss << " type=0x" << std::hex << it->first
+                    << std::dec << " count=" << it->second;
+            }
+        }
+        LOG_INFO(oss.str());
+    };
+    logTypeMap("found", typeFoundCounts);
+    logTypeMap("applied", typeAppliedCounts);
+    logTypeMap("skipped", typeSkippedCounts);
+    logTypeMap("unsupported", typeUnsupportedCounts);
+     
     return relocationCount > 0;
 }
 

@@ -663,6 +663,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_STUB_ADDR + 0x400ULL;
                                                                     constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_STUB_ADDR + 0x800ULL;
                                                                     constexpr uint64_t EFI_FIRMWARE_VENDOR_ADDR = EFI_STUB_ADDR + 0xC00ULL;
+                                                                    constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_STUB_ADDR + 0x1D00ULL;
+                                                                    constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIGNATURE = 0x42465441494D4645ULL;
+                                                                    constexpr uint64_t EFI_BOOT_IMAGE_GUEST_BASE = 0x18000000ULL;
                                                                     constexpr uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xC80ULL;
                                                                     constexpr uint64_t EFI_OPEN_VOLUME_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xCC0ULL;
                                                                     constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_STUB_ADDR + 0xD00ULL;
@@ -672,6 +675,30 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_STUB_ADDR + 0x1260ULL;
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1280ULL;
                                                                     constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x12C0ULL;
+                                                                    constexpr uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1400ULL;
+                                                                    constexpr uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1440ULL;
+                                                                    constexpr uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1480ULL;
+                                                                    constexpr uint64_t EFI_FILE_CLOSE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x14C0ULL;
+                                                                    constexpr uint64_t EFI_FILE_READ_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1500ULL;
+                                                                    constexpr uint64_t EFI_FILE_READ_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1540ULL;
+                                                                    constexpr uint64_t EFI_FILE_GET_POSITION_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1580ULL;
+                                                                    constexpr uint64_t EFI_FILE_GET_POSITION_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x15C0ULL;
+                                                                    constexpr uint64_t EFI_FILE_SET_POSITION_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1600ULL;
+                                                                    constexpr uint64_t EFI_FILE_SET_POSITION_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1640ULL;
+                                                                    constexpr uint64_t EFI_FILE_GET_INFO_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1680ULL;
+                                                                    constexpr uint64_t EFI_FILE_GET_INFO_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x16C0ULL;
+                                                                    constexpr uint64_t EFI_LOCATE_HANDLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1700ULL;
+                                                                    constexpr uint64_t EFI_LOCATE_HANDLE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1740ULL;
+                                                                    constexpr uint64_t EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1780ULL;
+                                                                    constexpr uint64_t EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x17C0ULL;
+                                                                    constexpr uint64_t EFI_GET_MEMORY_MAP_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1800ULL;
+                                                                    constexpr uint64_t EFI_GET_MEMORY_MAP_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1840ULL;
+                                                                    constexpr uint64_t EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1880ULL;
+                                                                    constexpr uint64_t EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x18C0ULL;
+                                                                    constexpr uint64_t EFI_LOAD_IMAGE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1900ULL;
+                                                                    constexpr uint64_t EFI_LOAD_IMAGE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1940ULL;
+                                                                    constexpr uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1980ULL;
+                                                                    constexpr uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x19C0ULL;
                                                                     constexpr uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_STUB_ADDR + 0x1300ULL;
                                                                     constexpr uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = EFI_STUB_ADDR + 0x1340ULL;
                                                                     constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xD80ULL;
@@ -776,12 +803,34 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                    ADD_R8_R0_ZERO,
                                                                                    NOP_I,
                                                                                    BR_RET_B0);
-                                                                    WriteIa64Bundle(instance,
-                                                                                   EFI_GET_VARIABLE_STUB_CODE_ADDR,
-                                                                                   0x10,
-                                                                                   ADD_R8_R0_MINUS_1,
-                                                                                   NOP_I,
-                                                                                   BR_RET_B0);
+                                                                     WriteIa64Bundle(instance,
+                                                                                    EFI_GET_VARIABLE_STUB_CODE_ADDR,
+                                                                                    0x10,
+                                                                                    ADD_R8_R0_MINUS_1,
+                                                                                    NOP_I,
+                                                                                    BR_RET_B0);
+                                                                    const uint64_t efiCallableStubs[] = {
+                                                                        EFI_FILE_OPEN_STUB_CODE_ADDR,
+                                                                        EFI_FILE_CLOSE_STUB_CODE_ADDR,
+                                                                        EFI_FILE_READ_STUB_CODE_ADDR,
+                                                                        EFI_FILE_GET_POSITION_STUB_CODE_ADDR,
+                                                                        EFI_FILE_SET_POSITION_STUB_CODE_ADDR,
+                                                                        EFI_FILE_GET_INFO_STUB_CODE_ADDR,
+                                                                        EFI_LOCATE_HANDLE_STUB_CODE_ADDR,
+                                                                        EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR,
+                                                                        EFI_GET_MEMORY_MAP_STUB_CODE_ADDR,
+                                                                        EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR,
+                                                                        EFI_LOAD_IMAGE_STUB_CODE_ADDR,
+                                                                        EFI_START_IMAGE_STUB_CODE_ADDR
+                                                                    };
+                                                                    for (uint64_t stubCode : efiCallableStubs) {
+                                                                        WriteIa64Bundle(instance,
+                                                                                       stubCode,
+                                                                                       0x10,
+                                                                                       ADD_R8_R0_ZERO,
+                                                                                       NOP_I,
+                                                                                       BR_RET_B0);
+                                                                    }
                                                                     write64(EFI_UNSUPPORTED_STUB_DESC_ADDR, EFI_UNSUPPORTED_STUB_CODE_ADDR);
                                                                     write64(EFI_UNSUPPORTED_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
@@ -804,6 +853,23 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR);
                                                                     write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                    auto writeDescriptor = [&](uint64_t descriptorAddress, uint64_t codeAddress) {
+                                                                        write64(descriptorAddress, codeAddress);
+                                                                        write64(descriptorAddress + 8,
+                                                                                peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                    };
+                                                                    writeDescriptor(EFI_FILE_OPEN_STUB_DESC_ADDR, EFI_FILE_OPEN_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_FILE_CLOSE_STUB_DESC_ADDR, EFI_FILE_CLOSE_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_FILE_READ_STUB_DESC_ADDR, EFI_FILE_READ_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_FILE_GET_POSITION_STUB_DESC_ADDR, EFI_FILE_GET_POSITION_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_FILE_SET_POSITION_STUB_DESC_ADDR, EFI_FILE_SET_POSITION_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_FILE_GET_INFO_STUB_DESC_ADDR, EFI_FILE_GET_INFO_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_LOCATE_HANDLE_STUB_DESC_ADDR, EFI_LOCATE_HANDLE_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR, EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_GET_MEMORY_MAP_STUB_DESC_ADDR, EFI_GET_MEMORY_MAP_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR, EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_LOAD_IMAGE_STUB_DESC_ADDR, EFI_LOAD_IMAGE_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_START_IMAGE_STUB_DESC_ADDR, EFI_START_IMAGE_STUB_CODE_ADDR);
 
                                                                     for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
                                                                         write64(EFI_RUNTIME_SERVICES_ADDR + offset,
@@ -823,10 +889,40 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     // Boot Services entry at offset 0x100 while connecting
                                                                     // devices. Returning EFI_SUCCESS lets it continue to the
                                                                     // next userland instruction path without modeling devices.
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x38, EFI_GET_MEMORY_MAP_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x40, EFI_ALLOCATE_POOL_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x48, EFI_SUCCESS_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x98, EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0xB0, EFI_LOCATE_HANDLE_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0xC8, EFI_LOAD_IMAGE_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0xD0, EFI_START_IMAGE_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0xE8, EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x100, EFI_SUCCESS_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x140, EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR);
+
+                                                                    const uint64_t memorySizeForBootImage =
+                                                                        static_cast<uint64_t>(instance->vm->getMemory().GetTotalSize());
+                                                                    if (!bootImgData.empty() &&
+                                                                        EFI_BOOT_IMAGE_GUEST_BASE + bootImgData.size() < memorySizeForBootImage &&
+                                                                        EFI_BOOT_IMAGE_GUEST_BASE + bootImgData.size() < EFI_STUB_ADDR) {
+                                                                        instance->vm->getMemory().Write(
+                                                                            EFI_BOOT_IMAGE_GUEST_BASE,
+                                                                            bootImgData.data(),
+                                                                            bootImgData.size());
+                                                                        write64(EFI_BOOT_IMAGE_METADATA_ADDR, EFI_BOOT_IMAGE_METADATA_SIGNATURE);
+                                                                        write64(EFI_BOOT_IMAGE_METADATA_ADDR + 8, EFI_BOOT_IMAGE_GUEST_BASE);
+                                                                        write64(EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                                static_cast<uint64_t>(bootImgData.size()));
+                                                                        oss.str("");
+                                                                        oss << "[EFI-MILESTONE] Published read-only EFI boot image backing store"
+                                                                            << " base=0x" << std::hex << EFI_BOOT_IMAGE_GUEST_BASE
+                                                                            << " size=0x" << bootImgData.size()
+                                                                            << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
+                                                                            << std::dec;
+                                                                        LOG_INFO(oss.str());
+                                                                    } else {
+                                                                        LOG_WARN("[EFI-MILESTONE] EFI boot image backing store not published; FileProtocol will report EFI_NO_MEDIA");
+                                                                    }
 
                                                                     static const uint16_t firmwareVendor[] = {
                                                                         'g','u','i','d','e','X','O','S',' ','H','y','p','e','r','v','i','s','o','r',0
@@ -912,30 +1008,29 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write32(EFI_TEXT_OUTPUT_MODE_ADDR + 0x10, 0U); // CursorRow
                                                                     write8(EFI_TEXT_OUTPUT_MODE_ADDR + 0x14, 1U); // CursorVisible
 
-                                                                    // Minimal Simple File System/File protocol stubs for
-                                                                    // bootloader userland probes. Only OpenVolume succeeds;
-                                                                    // file operations remain explicit unsupported/success
-                                                                    // stubs until a log shows a narrower need.
+                                                                    // Minimal read-only Simple File System/File protocol.
+                                                                    // File methods are intercepted in IA64ISAPlugin and backed
+                                                                    // by the already extracted FAT boot image.
                                                                     write64(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR + 0x00, 0x00010000ULL);
                                                                     write64(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR + 0x08,
                                                                             EFI_OPEN_VOLUME_STUB_DESC_ADDR);
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x00, 0x00010000ULL);
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x08,
-                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // Open
+                                                                            EFI_FILE_OPEN_STUB_DESC_ADDR);   // Open
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x10,
-                                                                            EFI_SUCCESS_STUB_DESC_ADDR);     // Close
+                                                                            EFI_FILE_CLOSE_STUB_DESC_ADDR);  // Close
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x18,
                                                                             EFI_UNSUPPORTED_STUB_DESC_ADDR); // Delete
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x20,
-                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // Read
+                                                                            EFI_FILE_READ_STUB_DESC_ADDR);   // Read
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x28,
                                                                             EFI_UNSUPPORTED_STUB_DESC_ADDR); // Write
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x30,
-                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // GetPosition
+                                                                            EFI_FILE_GET_POSITION_STUB_DESC_ADDR); // GetPosition
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x38,
-                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // SetPosition
+                                                                            EFI_FILE_SET_POSITION_STUB_DESC_ADDR); // SetPosition
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x40,
-                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // GetInfo
+                                                                            EFI_FILE_GET_INFO_STUB_DESC_ADDR); // GetInfo
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x48,
                                                                             EFI_UNSUPPORTED_STUB_DESC_ADDR); // SetInfo
                                                                     write64(EFI_ROOT_FILE_PROTOCOL_ADDR + 0x50,

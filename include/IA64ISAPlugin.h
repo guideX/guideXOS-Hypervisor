@@ -5,9 +5,12 @@
 #include "decoder.h"
 #include "IMemory.h"
 #include "IDecoder.h"
+#include "FATParser.h"
 #include <memory>
 #include <cstring>
 #include <array>
+#include <map>
+#include <string>
 #include <vector>
 
 namespace ia64 {
@@ -200,6 +203,25 @@ private:
     void applyPendingCallInputRegisters();
     void saveCallFrame(uint64_t returnAddress);
     void restoreCallFrame(uint64_t branchTarget);
+    void rememberBranchTarget(uint64_t target);
+    void logEfiServiceCall(IMemory& memory,
+                           const char* serviceName,
+                           uint64_t callerIP,
+                           uint64_t descriptorAddress,
+                           uint64_t codePointer,
+                           uint64_t status);
+    bool ensureEfiBootFat(IMemory& memory);
+    void installFileProtocolTable(IMemory& memory, uint64_t protocolAddress);
+    uint64_t allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment = 16);
+    uint64_t handleEfiFileOpen(IMemory& memory);
+    uint64_t handleEfiFileRead(IMemory& memory);
+    uint64_t handleEfiFileGetInfo(IMemory& memory);
+    uint64_t handleEfiFileClose(IMemory& memory);
+    uint64_t handleEfiFileGetPosition(IMemory& memory);
+    uint64_t handleEfiFileSetPosition(IMemory& memory);
+    uint64_t handleEfiLocateHandle(IMemory& memory);
+    uint64_t handleEfiLocateProtocol(IMemory& memory);
+    uint64_t handleEfiGetMemoryMap(IMemory& memory);
     
     /**
      * Execute a single IA-64 instruction
@@ -252,6 +274,47 @@ private:
     size_t efiGenericSuccessCalls_;
     size_t efiGenericUnsupportedCalls_;
     size_t efiZeroGuidProtocolCalls_;
+    size_t efiHandleProtocolCalls_;
+    size_t efiLocateHandleCalls_;
+    size_t efiLocateProtocolCalls_;
+    size_t efiGetMemoryMapCalls_;
+    size_t efiExitBootServicesCalls_;
+    size_t efiAllocatePoolCalls_;
+    size_t efiFreePoolCalls_;
+    size_t efiLoadImageCalls_;
+    size_t efiStartImageCalls_;
+    size_t efiFileOpenCalls_;
+    size_t efiFileReadCalls_;
+    size_t efiFileGetInfoCalls_;
+    size_t efiFileCloseCalls_;
+    size_t efiFileSetPositionCalls_;
+    size_t efiFileGetPositionCalls_;
+    size_t efiFirstSuccessfulFileOpen_;
+    uint64_t efiTotalFileBytesRead_;
+    size_t descriptorCallCount_;
+    size_t gpSwitchCount_;
+    size_t suspiciousGpCount_;
+    size_t unknownRegionCallCount_;
+    size_t recoveredLoadStoreCount_;
+    std::string lastEfiCallName_;
+    uint64_t lastEfiCallIP_;
+    uint64_t lastDescriptorAddress_;
+    uint64_t lastDescriptorCode_;
+    uint64_t lastDescriptorGp_;
+    std::vector<uint64_t> lastBranchTargets_;
+
+    struct EfiFileHandle {
+        uint64_t protocolAddress = 0;
+        std::string path;
+        bool isDirectory = false;
+        std::vector<uint8_t> data;
+        std::vector<guideXOS::FATFileInfo> directoryEntries;
+        size_t directoryIndex = 0;
+        uint64_t position = 0;
+    };
+    std::map<uint64_t, EfiFileHandle> efiFileHandles_;
+    std::vector<uint8_t> efiBootImage_;
+    std::unique_ptr<guideXOS::FATParser> efiBootFat_;
 
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;
