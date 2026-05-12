@@ -1678,7 +1678,28 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         const uint64_t protocolGuid = readCallerOutputRegister(state_.getCPUState(), 1);
                         const uint64_t interfaceOut = readCallerOutputRegister(state_.getCPUState(), 2);
                         EfiGuid guid = {};
-                        const bool hasGuid = readEfiGuid(memory, protocolGuid, guid);
+                        bool hasGuid = readEfiGuid(memory, protocolGuid, guid);
+                        bool repairedZeroGuid = false;
+                        const char* repairedGuidName = nullptr;
+                        if (hasGuid && isZeroEfiGuid(guid) && protocolGuid != 0) {
+                            const EfiGuid* expectedGuid = nullptr;
+                            if (currentIP == 0x2EFD0ULL || currentIP == 0x1A50ULL) {
+                                expectedGuid = &EFI_LOADED_IMAGE_PROTOCOL_GUID;
+                                repairedGuidName = "LoadedImageProtocol";
+                            } else if (currentIP == 0x1CC0ULL) {
+                                expectedGuid = &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
+                                repairedGuidName = "SimpleFileSystemProtocol";
+                            }
+                            if (expectedGuid != nullptr) {
+                                try {
+                                    memory.Write(protocolGuid, expectedGuid->data(), expectedGuid->size());
+                                    guid = *expectedGuid;
+                                    repairedZeroGuid = true;
+                                } catch (const std::exception&) {
+                                    hasGuid = readEfiGuid(memory, protocolGuid, guid);
+                                }
+                            }
+                        }
                         const bool zeroGuid = hasGuid && isZeroEfiGuid(guid);
                         if (zeroGuid) {
                             ++efiZeroGuidProtocolCalls_;
@@ -1745,6 +1766,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << readHexBytesPreview(memory, protocolGuid, guid.size())
                                       << " nextBytes="
                                       << readHexBytesPreview(memory, protocolGuid + guid.size(), guid.size());
+                        } else if (repairedZeroGuid) {
+                            std::cout << " repairedZeroGuidAs=" << repairedGuidName;
                         }
                         if (protocolAddress == EFI_LOADED_IMAGE_PROTOCOL_ADDR) {
                             std::cout << " " << describeLoadedImageProtocol(memory, protocolAddress);

@@ -1510,6 +1510,14 @@ void testIA64PluginHandleProtocolZeroGuidFallbacks() {
 
     uint8_t bundleBytes[16] = {};
     uint8_t zeroGuid[16] = {};
+    const uint8_t loadedImageGuid[16] = {
+        0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
+        0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
+    const uint8_t simpleFileSystemGuid[16] = {
+        0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11,
+        0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
 
     {
         SparseMemory memory;
@@ -1528,9 +1536,12 @@ void testIA64PluginHandleProtocolZeroGuidFallbacks() {
         assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
 
         uint64_t loadedImage = 0;
+        uint8_t repairedGuid[16] = {};
         memory.Read(0x4000, reinterpret_cast<uint8_t*>(&loadedImage), sizeof(loadedImage));
+        memory.Read(0x3000, repairedGuid, sizeof(repairedGuid));
         assert(plugin.getCPUState().GetGR(8) == 0);
         assert(loadedImage == 0x1fe00d00ULL);
+        assert(std::memcmp(repairedGuid, loadedImageGuid, sizeof(repairedGuid)) == 0);
     }
 
     {
@@ -1550,12 +1561,15 @@ void testIA64PluginHandleProtocolZeroGuidFallbacks() {
         assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
 
         uint64_t simpleFileSystem = 0;
+        uint8_t repairedGuid[16] = {};
         memory.Read(0x4000, reinterpret_cast<uint8_t*>(&simpleFileSystem), sizeof(simpleFileSystem));
+        memory.Read(0x3000, repairedGuid, sizeof(repairedGuid));
         assert(plugin.getCPUState().GetGR(8) == 0);
         assert(simpleFileSystem == 0x1fe01000ULL);
+        assert(std::memcmp(repairedGuid, simpleFileSystemGuid, sizeof(repairedGuid)) == 0);
     }
 
-    std::cout << "  ? zeroed protocol GUIDs at known boot call sites map to the expected safe stubs\n";
+    std::cout << "  ? zeroed protocol GUIDs at known boot call sites are repaired and map to the expected safe stubs\n";
 }
 
 void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
