@@ -403,6 +403,46 @@ bool isLoadInstruction(InstructionType type) {
     }
 }
 
+bool isStoreInstruction(InstructionType type) {
+    switch (type) {
+        case InstructionType::ST1:
+        case InstructionType::ST2:
+        case InstructionType::ST4:
+        case InstructionType::ST8:
+            return true;
+        default:
+            return false;
+    }
+}
+
+size_t storeSizeForInstruction(InstructionType type) {
+    switch (type) {
+        case InstructionType::ST1:
+            return 1;
+        case InstructionType::ST2:
+            return 2;
+        case InstructionType::ST4:
+            return 4;
+        case InstructionType::ST8:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
+bool rangesOverlap(uint64_t leftStart, size_t leftSize, uint64_t rightStart, size_t rightSize) {
+    if (leftSize == 0 || rightSize == 0) {
+        return false;
+    }
+    const uint64_t leftEnd = leftStart > UINT64_MAX - static_cast<uint64_t>(leftSize)
+        ? UINT64_MAX
+        : leftStart + static_cast<uint64_t>(leftSize);
+    const uint64_t rightEnd = rightStart > UINT64_MAX - static_cast<uint64_t>(rightSize)
+        ? UINT64_MAX
+        : rightStart + static_cast<uint64_t>(rightSize);
+    return leftStart < rightEnd && rightStart < leftEnd;
+}
+
 bool isAdvancedLoadCheckInstruction(InstructionType type) {
     return type == InstructionType::CHK_A_NC ||
            type == InstructionType::CHK_A_CLR;
@@ -3069,7 +3109,53 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
 
 void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
+        CPUState& cpu = state_.getCPUState();
+        static constexpr uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = 0x1FF93010ULL;
+        static constexpr size_t EFI_POST_SIMPLEFS_OUT_WATCH_SIZE = 0x10;
+        const size_t storeSize = storeSizeForInstruction(instr.GetType());
+        const uint64_t storeAddress = isStoreInstruction(instr.GetType())
+            ? cpu.GetGR(instr.GetSrc1())
+            : 0;
+        const bool watchPostSimpleFsOutStore =
+            storeSize != 0 &&
+            rangesOverlap(storeAddress, storeSize,
+                          EFI_POST_SIMPLEFS_OUT_WATCH_ADDR,
+                          EFI_POST_SIMPLEFS_OUT_WATCH_SIZE);
+        if (watchPostSimpleFsOutStore) {
+            std::cout << "[EFI-OUT-WATCH] pre store ip=0x" << std::hex << cpu.GetIP()
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " type=\"" << instr.GetDisassembly() << "\""
+                      << " target=0x" << std::hex << storeAddress
+                      << " size=0x" << storeSize
+                      << " baseReg=r" << std::dec << static_cast<int>(instr.GetSrc1())
+                      << " dstReg=r" << static_cast<int>(instr.GetDst())
+                      << " src2Reg=r" << static_cast<int>(instr.GetSrc2())
+                      << std::hex
+                      << " r1=0x" << cpu.GetGR(1)
+                      << " r12=0x" << cpu.GetGR(12)
+                      << " r32=0x" << cpu.GetGR(32)
+                      << " r36=0x" << cpu.GetGR(36)
+                      << " r37=0x" << cpu.GetGR(37)
+                      << " r65=0x" << cpu.GetGR(65)
+                      << " r66=0x" << cpu.GetGR(66)
+                      << " watchBytes="
+                      << readHexBytesPreview(memory, EFI_POST_SIMPLEFS_OUT_WATCH_ADDR,
+                                             EFI_POST_SIMPLEFS_OUT_WATCH_SIZE)
+                      << " lastEfiCall=\"" << lastEfiCallName_ << "\""
+                      << " lastEfiIP=0x" << lastEfiCallIP_
+                      << std::dec << std::endl;
+        }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        if (watchPostSimpleFsOutStore) {
+            std::cout << "[EFI-OUT-WATCH] post store ip=0x" << std::hex << cpu.GetIP()
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " type=\"" << instr.GetDisassembly() << "\""
+                      << " target=0x" << std::hex << storeAddress
+                      << " watchBytes="
+                      << readHexBytesPreview(memory, EFI_POST_SIMPLEFS_OUT_WATCH_ADDR,
+                                             EFI_POST_SIMPLEFS_OUT_WATCH_SIZE)
+                      << std::dec << std::endl;
+        }
         if (isAdvancedLoadCheckInstruction(instr.GetType())) {
             std::cout << "[ALAT-STUB] " << instr.GetDisassembly()
                       << " treated as success; ALAT tracking is not implemented"
