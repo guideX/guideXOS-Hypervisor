@@ -15,6 +15,7 @@ namespace guideXOS_Hypervisor_GUI.Services
 
         public static string? LogDirectory { get; private set; }
         public static string? CurrentLogPath { get; private set; }
+        public static string? BootTracePath { get; private set; }
 
         public static void Initialize()
         {
@@ -30,6 +31,7 @@ namespace guideXOS_Hypervisor_GUI.Services
 
                 string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
                 CurrentLogPath = Path.Combine(LogDirectory, $"app-{timestamp}.log");
+                BootTracePath = Path.Combine(LogDirectory, $"boot-trace-gui-{timestamp}.log");
 
                 _originalOut = Console.Out;
                 _originalError = Console.Error;
@@ -49,11 +51,35 @@ namespace guideXOS_Hypervisor_GUI.Services
 
                 Console.WriteLine($"[{DateTime.Now:O}] guideXOS Hypervisor GUI logging started");
                 Console.WriteLine($"Log file: {CurrentLogPath}");
+                WriteBootStage("BOOT_TRACE_BEGIN", $"path=\"{BootTracePath}\"");
 
                 AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
                 TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
                 _initialized = true;
+            }
+        }
+
+        public static void WriteBootStage(string tag, string context)
+        {
+            lock (SyncRoot)
+            {
+                if (LogDirectory == null)
+                {
+                    LogDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+                    Directory.CreateDirectory(LogDirectory);
+                }
+
+                if (BootTracePath == null)
+                {
+                    string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                    BootTracePath = Path.Combine(LogDirectory, $"boot-trace-gui-{timestamp}.log");
+                }
+
+                File.AppendAllText(
+                    BootTracePath,
+                    $"{DateTime.Now:O} {tag} {context}{Environment.NewLine}",
+                    new UTF8Encoding(false));
             }
         }
 

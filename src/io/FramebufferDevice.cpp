@@ -1,7 +1,9 @@
 #include "FramebufferDevice.h"
+#include "BootStageTrace.h"
 #include <cstring>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
 namespace ia64 {
 
@@ -46,6 +48,18 @@ bool FramebufferDevice::Write(uint64_t address, const uint8_t* data, size_t size
     }
 
     std::memcpy(framebuffer_.data() + offset, data, size);
+    {
+        std::ostringstream ctx;
+        ctx << "path=raw_framebuffer_write"
+            << " address=" << BootStageTrace::Hex(address)
+            << " offset=" << BootStageTrace::Hex(offset)
+            << " size=" << BootStageTrace::Hex(size)
+            << " width=" << width_
+            << " height=" << height_
+            << " pitch=" << pitch_;
+        BootStageTrace::Stage(140, "First console/GOP/serial output observed", ctx.str());
+        BootStageTrace::EventOnce("FIRST_RAW_FRAMEBUFFER_WRITE", ctx.str());
+    }
     return true;
 }
 
@@ -69,6 +83,14 @@ void FramebufferDevice::Clear(uint32_t color) {
     const size_t pixelCount = width_ * height_;
     
     std::fill(pixels, pixels + pixelCount, color);
+    {
+        std::ostringstream ctx;
+        ctx << "path=framebuffer_clear"
+            << " base=" << BootStageTrace::Hex(baseAddress_)
+            << " color=" << BootStageTrace::Hex(color)
+            << " pixels=" << pixelCount;
+        BootStageTrace::EventOnce("FIRST_FRAMEBUFFER_CLEAR", ctx.str());
+    }
 }
 
 namespace {
@@ -123,6 +145,17 @@ const char* GlyphRows(char c) {
 void FramebufferDevice::DrawText(size_t x, size_t y, const char* text, uint32_t color, size_t scale) {
     if (text == nullptr || scale == 0) {
         return;
+    }
+
+    {
+        std::ostringstream ctx;
+        ctx << "path=framebuffer_draw_text"
+            << " x=" << x
+            << " y=" << y
+            << " color=" << BootStageTrace::Hex(color)
+            << " scale=" << scale
+            << " text=\"" << text << "\"";
+        BootStageTrace::EventOnce("FIRST_FRAMEBUFFER_DRAW_TEXT", ctx.str());
     }
 
     std::lock_guard<std::mutex> lock(mutex_);

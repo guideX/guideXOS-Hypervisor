@@ -1,6 +1,7 @@
 #include "PEParser.h"
 #include "PEParser.h"
 #include "logger.h"
+#include "BootStageTrace.h"
 #include <cstring>
 #include <algorithm>
 #include <sstream>
@@ -10,6 +11,7 @@
 using ia64::LOG_ERROR;
 using ia64::LOG_INFO;
 using ia64::LOG_WARN;
+using ia64::BootStageTrace;
 
 namespace guideXOS {
 
@@ -75,6 +77,17 @@ bool PEParser::parse(const uint8_t* data, size_t size) {
     LOG_INFO(oss.str());
     
     LOG_INFO("  Sections: " + std::to_string(imageInfo_.sections.size()));
+
+    std::ostringstream stage;
+    stage << "machine=" << BootStageTrace::Hex(imageInfo_.machine)
+          << " subsystem=" << imageInfo_.subsystem
+          << " imageBase=" << BootStageTrace::Hex(imageInfo_.imageBase)
+          << " entryPoint=" << BootStageTrace::Hex(imageInfo_.entryPoint)
+          << " sizeOfImage=" << BootStageTrace::Hex(imageInfo_.sizeOfImage)
+          << " sections=" << imageInfo_.sections.size()
+          << " isIA64=" << (isIA64() ? "true" : "false")
+          << " isEFI=" << (isEFI() ? "true" : "false");
+    BootStageTrace::Stage(60, "PE/COFF headers parsed", stage.str());
     
     return true;
 }
@@ -358,6 +371,26 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
             LOG_INFO(oss.str());
         }
     }
+
+    {
+        std::ostringstream ctx;
+        ctx << "imageBase=" << BootStageTrace::Hex(imageInfo_.imageBase)
+            << " sizeOfImage=" << BootStageTrace::Hex(imageInfo_.sizeOfImage)
+            << " mappedSections=" << imageInfo_.sections.size()
+            << " sections=\"";
+        for (size_t i = 0; i < imageInfo_.sections.size(); ++i) {
+            const auto& section = imageInfo_.sections[i];
+            if (i != 0) {
+                ctx << ",";
+            }
+            ctx << section.name
+                << "@RVA=" << BootStageTrace::Hex(section.virtualAddress)
+                << "/raw=" << BootStageTrace::Hex(section.rawDataSize)
+                << "/virt=" << BootStageTrace::Hex(section.virtualSize);
+        }
+        ctx << "\"";
+        BootStageTrace::Stage(70, "IA-64 image sections mapped", ctx.str());
+    }
     
     // STEP 4: Set load address and entry point
     LOG_INFO("");
@@ -513,6 +546,19 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
     oss.str("");
     oss << "Final entry point: 0x" << std::hex << entryPoint << std::dec;
     LOG_INFO(oss.str());
+
+    {
+        std::ostringstream ctx;
+        ctx << "loadAddress=" << BootStageTrace::Hex(loadAddress)
+            << " entryPoint=" << BootStageTrace::Hex(entryPoint)
+            << " entryPointRVA=" << BootStageTrace::Hex(entryPointRVA)
+            << " imageSize=" << BootStageTrace::Hex(imageBuffer.size())
+            << " hasGlobalPointer=" << (imageInfo_.hasGlobalPointer ? "true" : "false");
+        if (imageInfo_.hasGlobalPointer) {
+            ctx << " globalPointer=" << BootStageTrace::Hex(imageInfo_.globalPointer);
+        }
+        BootStageTrace::Stage(80, "Entry point calculated", ctx.str());
+    }
     
     return true;
 }

@@ -6,6 +6,7 @@
 #include "PEParser.h"
 #include "TestKernelHandler.h"
 #include "logger.h"
+#include "BootStageTrace.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -526,12 +527,21 @@ bool VMManager::startVM(const std::string& vmId) {
                                 if (foundBootImg) {
                                     LOG_INFO("? Boot image extracted: " + 
                                             std::to_string(bootImgData.size()) + " bytes");
+                                    {
+                                        std::ostringstream ctx;
+                                        ctx << "sourcePath=\"" << bootImgPath << "\""
+                                            << " bytes=" << bootImgData.size();
+                                        BootStageTrace::Stage(30, "EFI boot image extracted", ctx.str());
+                                    }
                                     LOG_INFO("  Parsing as FAT filesystem...");
                                     
                                     // Parse boot image as FAT filesystem
                                     guideXOS::FATParser fatParser;
                                     if (fatParser.parse(bootImgData.data(), bootImgData.size())) {
                                         LOG_INFO("? FAT filesystem parsed successfully");
+                                        BootStageTrace::Stage(40, "FAT image mounted",
+                                                              "sourcePath=\"" + bootImgPath + "\" bytes=" +
+                                                              std::to_string(bootImgData.size()));
                                         
                                         // Search for EFI bootloader inside the FAT image
                                         const char* efiPathsInFAT[] = {
@@ -549,6 +559,12 @@ bool VMManager::startVM(const std::string& vmId) {
                                             if (fatParser.findFile(path, efiFileInfo)) {
                                                 LOG_INFO("  ?? Found EFI bootloader in boot image!");
                                                 foundEFIPath = path;
+                                                std::ostringstream ctx;
+                                                ctx << "path=\"" << foundEFIPath << "\""
+                                                    << " size=" << efiFileInfo.size
+                                                    << " firstCluster=" << efiFileInfo.firstCluster
+                                                    << " sourceImage=\"" << bootImgPath << "\"";
+                                                BootStageTrace::Stage(50, "BOOTIA64.EFI found", ctx.str());
                                                 break;
                                             }
                                         }
@@ -1061,11 +1077,25 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // Set EFI entry arguments: r32=ImageHandle, r33=SystemTable
                                                                 instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
                                                                 instance->vm->writeGR(0, 33, EFI_STUB_ADDR);
-                                                                SetupMinimalEfiStack(instance, oss);
+                                                                const uint64_t efiStackTop = SetupMinimalEfiStack(instance, oss);
                                                                 oss.str("");
                                                                 oss << "  Set r32=ImageHandle=0x" << std::hex << EFI_IMAGE_HANDLE
                                                                     << ", r33=EFI_SystemTable=0x" << EFI_STUB_ADDR;
                                                                 LOG_INFO(oss.str());
+                                                                {
+                                                                    std::ostringstream ctx;
+                                                                    ctx << "entryPoint=" << BootStageTrace::Hex(entryPoint)
+                                                                        << " loadAddress=" << BootStageTrace::Hex(loadAddress)
+                                                                        << " imageBase=" << BootStageTrace::Hex(peInfo.imageBase)
+                                                                        << " imageSize=" << BootStageTrace::Hex(imageBuffer.size())
+                                                                        << " r1_gp=" << BootStageTrace::Hex(peInfo.hasGlobalPointer ? peInfo.globalPointer : 0)
+                                                                        << " r12_sp=" << BootStageTrace::Hex(efiStackTop)
+                                                                        << " r32_ImageHandle=" << BootStageTrace::Hex(EFI_IMAGE_HANDLE)
+                                                                        << " r33_SystemTable=" << BootStageTrace::Hex(EFI_STUB_ADDR)
+                                                                        << " bootImage=\"" << bootImgPath << "\""
+                                                                        << " efiPath=\"" << foundEFIPath << "\"";
+                                                                    BootStageTrace::Stage(90, "Initial CPU state prepared", ctx.str());
+                                                                }
 
                                                                 LOG_INFO("??? EFI bootloader loaded successfully from boot image!");
                                                                 LOG_INFO("  Source: " + bootImgPath + " -> " + foundEFIPath);

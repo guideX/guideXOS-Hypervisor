@@ -1,4 +1,5 @@
 #include "VirtualBlockDevice.h"
+#include "BootStageTrace.h"
 #include <cstring>
 #include <stdexcept>
 #include <sstream>
@@ -181,6 +182,16 @@ std::string VirtualBlockDevice::getStatistics() const {
 int64_t VirtualBlockDevice::readSectors(uint64_t sectorNumber,
                                        uint64_t sectorCount,
                                        uint8_t* buffer) {
+    {
+        std::ostringstream ctx;
+        ctx << "device=\"" << deviceId_ << "\""
+            << " backingPath=\"" << backingPath_ << "\""
+            << " lba=" << sectorNumber
+            << " sectors=" << sectorCount
+            << " sectorSize=" << sectorSize_
+            << " connected=" << (connected_ ? "true" : "false");
+        BootStageTrace::EventOnce("FIRST_BLOCK_READ", ctx.str());
+    }
     if (!connected_ || !buffer || sectorCount == 0) {
         return -1;
     }

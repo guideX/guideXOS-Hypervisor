@@ -2,6 +2,7 @@
 #include "SyscallDispatcher.h"
 #include "Profiler.h"
 #include "memory.h"
+#include "BootStageTrace.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -89,6 +90,21 @@ struct EfiSlotName {
     uint64_t offset;
     const char* name;
 };
+
+std::string cpuSummary(const CPUState& cpu) {
+    std::ostringstream oss;
+    oss << "ip=" << BootStageTrace::Hex(cpu.GetIP())
+        << " r1_gp=" << BootStageTrace::Hex(cpu.GetGR(1))
+        << " r8_ret=" << BootStageTrace::Hex(cpu.GetGR(8))
+        << " r12_sp=" << BootStageTrace::Hex(cpu.GetGR(12))
+        << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+        << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+        << " br0=" << BootStageTrace::Hex(cpu.GetBR(0))
+        << " br6=" << BootStageTrace::Hex(cpu.GetBR(6))
+        << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+        << " psr=" << BootStageTrace::Hex(cpu.GetPSR());
+    return oss.str();
+}
 
 constexpr EfiGuid EFI_LOADED_IMAGE_PROTOCOL_GUID = {{
     0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
@@ -1425,6 +1441,16 @@ ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
         result.instructionLength = 16;  // IA-64 bundles are 16 bytes (we advance by bundle)
         result.disassembly = instr.GetDisassembly();
         result.internalData = &cachedInstruction_;
+        {
+            std::ostringstream ctx;
+            ctx << "ip=" << BootStageTrace::Hex(result.instructionAddress)
+                << " slot=" << state_.currentSlot_
+                << " type=" << static_cast<int>(instr.GetType())
+                << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                << " disasm=\"" << result.disassembly << "\" "
+                << cpuSummary(state_.getCPUState());
+            BootStageTrace::Stage(110, "First instruction decoded", ctx.str());
+        }
         
     } catch (const std::exception& e) {
         result.valid = false;
@@ -1432,6 +1458,10 @@ ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
         result.instructionLength = 0;
         result.disassembly = std::string("<decode error: ") + e.what() + ">";
         result.internalData = nullptr;
+        BootStageTrace::EventOnce(
+            "FIRST_FAULT_TRAP",
+            "kind=decode ip=" + BootStageTrace::Hex(result.instructionAddress) +
+            " reason=\"" + std::string(e.what()) + "\" " + cpuSummary(state_.getCPUState()));
     }
     
     return result;
@@ -1522,6 +1552,18 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
 
         if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
             const uint64_t rawBits = cachedInstruction_.GetRawBits();
+            {
+                std::ostringstream ctx;
+                ctx << "ip=" << BootStageTrace::Hex(decodeResult.instructionAddress)
+                    << " slot=" << state_.currentSlot_
+                    << " template=" << BootStageTrace::Hex(static_cast<uint64_t>(state_.currentBundle_.templateType))
+                    << " raw=" << BootStageTrace::Hex(rawBits)
+                    << " opcode=" << BootStageTrace::Hex((rawBits >> 37) & 0x0F)
+                    << " qp=" << (rawBits & 0x3F)
+                    << " disasm=\"" << decodeResult.disassembly << "\" "
+                    << cpuSummary(state_.getCPUState());
+                BootStageTrace::EventOnce("FIRST_UNIMPLEMENTED_INSTRUCTION", ctx.str());
+            }
             std::cerr << "Unsupported IA-64 instruction: "
                       << "bundle=0x" << std::hex << decodeResult.instructionAddress
                       << " slot=" << std::dec << state_.currentSlot_
@@ -2117,6 +2159,18 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         } else {
                             std::cout << " framebufferMirror=unavailable";
                         }
+                        {
+                            std::ostringstream ctx;
+                            ctx << "path=SimpleTextOut.OutputString"
+                                << " this=" << BootStageTrace::Hex(thisProtocol)
+                                << " stringAddress=" << BootStageTrace::Hex(stringAddress)
+                                << " text=\"" << preview << "\""
+                                << " consoleMirror=" << BootStageTrace::Hex(consoleAddress)
+                                << " framebufferMirror=" << BootStageTrace::Hex(framebufferAddress)
+                                << " calls=" << efiTextOutputCalls_;
+                            BootStageTrace::Stage(140, "First console/GOP/serial output observed", ctx.str());
+                            BootStageTrace::Event("VISIBLE_OUTPUT", ctx.str());
+                        }
                         std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
                         logEfiServiceCall(memory, "SimpleTextOut.OutputString", currentIP,
                                           EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR, originalBranchTarget,
@@ -2241,6 +2295,32 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
 
         // Handle branch after execution
         if (isBranch) {
+            {
+                const char* branchKind = "branch";
+                if (cachedInstruction_.GetType() == InstructionType::BR_CALL) {
+                    branchKind = "call";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_RET) {
+                    branchKind = "return";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_COND) {
+                    branchKind = "conditional";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_CLOOP) {
+                    branchKind = "counted-loop";
+                }
+                std::ostringstream ctx;
+                ctx << "kind=" << branchKind
+                    << " callerIP=" << BootStageTrace::Hex(currentIP)
+                    << " slot=" << state_.currentSlot_
+                    << " target=" << BootStageTrace::Hex(branchTarget)
+                    << " normalized=" << BootStageTrace::Hex(normalizeBranchEntryIP(branchTarget))
+                    << " predicate=p" << static_cast<int>(predicate)
+                    << " livePredicate=" << (livePredicateTrue ? "true" : "false")
+                    << " disasm=\"" << decodeResult.disassembly << "\" "
+                    << cpuSummary(state_.getCPUState());
+                BootStageTrace::Stage(120, "First branch/call observed", ctx.str());
+                if (cachedInstruction_.GetType() == InstructionType::BR_CALL) {
+                    BootStageTrace::EventOnce("FIRST_CALL_OBSERVED", ctx.str());
+                }
+            }
             if (cachedInstruction_.GetType() == InstructionType::BR_RET &&
                 livePredicateTrue && branchTarget == 0) {
                 std::cout << "[EFI-STUB] top-level br.ret b0 reached zero return address; halting EFI app"
@@ -2296,6 +2376,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 branchEntryIP < memory.GetTotalSize() &&
                 (branchEntryIP < EFI_HANDOFF_REGION_BASE || branchEntryIP >= EFI_HANDOFF_REGION_END) &&
                 branchEntryIP >= 0x100000ULL) {
+                {
+                    std::ostringstream ctx;
+                    ctx << "callerIP=" << BootStageTrace::Hex(currentIP)
+                        << " target=" << BootStageTrace::Hex(branchEntryIP)
+                        << " rawTarget=" << BootStageTrace::Hex(branchTarget)
+                        << " lastEfiCall=\"" << lastEfiCallName_ << "\" "
+                        << cpuSummary(state_.getCPUState());
+                    BootStageTrace::Stage(180, "Kernel handoff attempted", ctx.str());
+                }
                 std::cout << "[EFI-MILESTONE] branch/call to non-firmware kernel entry candidate ip=0x"
                           << std::hex << currentIP << " target=0x" << branchEntryIP
                           << " lastEfiCall=" << lastEfiCallName_ << std::dec << std::endl;
@@ -2372,6 +2461,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         
     } catch (const std::exception& e) {
         std::cerr << "Execution error: " << e.what() << "\n";
+        BootStageTrace::EventOnce(
+            "FIRST_FAULT_TRAP",
+            "kind=execute ip=" + BootStageTrace::Hex(state_.getCPUState().GetIP()) +
+            " reason=\"" + std::string(e.what()) + "\" " + cpuSummary(state_.getCPUState()));
         hasCachedInstruction_ = false;
         return ISAExecutionResult::EXCEPTION;
     }
@@ -2622,8 +2715,19 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
         state_.currentBundle_ = decoder_.DecodeBundleAt(bundleData, ip);
         state_.bundleValid_ = true;
         capturePredicateGroupSnapshot();
+        std::ostringstream ctx;
+        ctx << "bundleIP=" << BootStageTrace::Hex(ip)
+            << " template=" << BootStageTrace::Hex(static_cast<uint64_t>(state_.currentBundle_.templateType))
+            << " instructionCount=" << state_.currentBundle_.instructions.size()
+            << " bytes=" << readHexBytesPreview(memory, ip, 16)
+            << " " << cpuSummary(state_.getCPUState());
+        BootStageTrace::Stage(100, "First bundle fetched", ctx.str());
     } catch (const std::exception& e) {
         const auto& cpu = state_.getCPUState();
+        BootStageTrace::EventOnce(
+            "FIRST_FAULT_TRAP",
+            "kind=bundle_fetch ip=" + BootStageTrace::Hex(ip) +
+            " reason=\"" + std::string(e.what()) + "\" " + cpuSummary(cpu));
         std::cerr << "[EFI-MILESTONE] Fatal IA-64 bundle fetch outside guest memory"
                   << " ip=0x" << std::hex << ip
                   << " br0=0x" << cpu.GetBR(0)
@@ -2742,6 +2846,36 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
     lastDescriptorAddress_ = descriptorAddress;
     lastDescriptorCode_ = codePointer;
     lastDescriptorGp_ = cpu.GetGR(1);
+    std::string descriptor = describeEfiDescriptor(descriptorAddress);
+    if (descriptor.empty()) {
+        descriptor = describeEfiTableSlot(descriptorAddress);
+    }
+    {
+        std::ostringstream ctx;
+        ctx << "service=\"" << lastEfiCallName_ << "\""
+            << " callerIP=" << BootStageTrace::Hex(callerIP)
+            << " descriptor=" << BootStageTrace::Hex(descriptorAddress)
+            << " code=" << BootStageTrace::Hex(codePointer)
+            << " gp=" << BootStageTrace::Hex(cpu.GetGR(1))
+            << " args=[" << BootStageTrace::Hex(readCallerOutputRegister(cpu, 0))
+            << "," << BootStageTrace::Hex(readCallerOutputRegister(cpu, 1))
+            << "," << BootStageTrace::Hex(readCallerOutputRegister(cpu, 2))
+            << "," << BootStageTrace::Hex(readCallerOutputRegister(cpu, 3))
+            << "," << BootStageTrace::Hex(readCallerOutputRegister(cpu, 4))
+            << "," << BootStageTrace::Hex(readCallerOutputRegister(cpu, 5))
+            << "] status=" << BootStageTrace::Hex(status)
+            << " statusName=\"" << efiStatusName(status) << "\"";
+        if (!descriptor.empty()) {
+            ctx << " descriptorName=\"" << descriptor << "\"";
+        }
+        BootStageTrace::Stage(130, "First EFI service call observed", ctx.str());
+        BootStageTrace::Event("EFI_CALL", ctx.str());
+        if (lastEfiCallName_ == "BootServices.GetMemoryMap") {
+            BootStageTrace::Stage(160, "GetMemoryMap observed", ctx.str());
+        } else if (lastEfiCallName_ == "BootServices.ExitBootServices") {
+            BootStageTrace::Stage(170, "ExitBootServices attempted", ctx.str());
+        }
+    }
     std::cout << "[EFI-CALL] service=" << lastEfiCallName_
               << " callerIP=0x" << std::hex << callerIP
               << " descriptor=0x" << descriptorAddress
@@ -2754,7 +2888,6 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
               << ",0x" << readCallerOutputRegister(cpu, 4)
               << ",0x" << readCallerOutputRegister(cpu, 5)
               << "] status=0x" << status << " (" << efiStatusName(status) << ")";
-    std::string descriptor = describeEfiDescriptor(descriptorAddress);
     if (!descriptor.empty()) {
         std::cout << " descriptorName=\"" << descriptor << "\"";
     }
@@ -2941,6 +3074,19 @@ uint64_t IA64ISAPlugin::handleEfiFileRead(IMemory& memory) {
         std::cout << "[EFI-MILESTONE] first Read over 0 bytes path=\"" << handle.path
                   << "\" bytes=0x" << std::hex << actual
                   << " totalFileBytes=0x" << efiTotalFileBytesRead_ << std::dec << std::endl;
+        {
+            std::ostringstream ctx;
+            ctx << "service=FileProtocol.Read"
+                << " handle=" << BootStageTrace::Hex(thisProtocol)
+                << " path=\"" << handle.path << "\""
+                << " buffer=" << BootStageTrace::Hex(bufferAddress)
+                << " requested=" << BootStageTrace::Hex(requested)
+                << " actual=" << BootStageTrace::Hex(actual)
+                << " newPosition=" << BootStageTrace::Hex(handle.position)
+                << " totalFileBytes=" << BootStageTrace::Hex(efiTotalFileBytesRead_);
+            BootStageTrace::Stage(150, "First disk read after EFI entry observed", ctx.str());
+            BootStageTrace::Event("EFI_FILE_READ", ctx.str());
+        }
     }
     memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&actual), sizeof(actual));
     std::cout << "[EFI-FILE] Read handle=0x" << std::hex << thisProtocol
@@ -3165,6 +3311,18 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         CPUState& cpu = state_.getCPUState();
         const uint64_t ip = cpu.GetIP();
         const uint64_t baseBefore = cpu.GetGR(instr.GetSrc1());
+        {
+            std::ostringstream ctx;
+            ctx << "kind=instruction_execute"
+                << " ip=" << BootStageTrace::Hex(ip)
+                << " slot=" << state_.currentSlot_
+                << " targetAddress=" << BootStageTrace::Hex(baseBefore)
+                << " disasm=\"" << instr.GetDisassembly() << "\""
+                << " reason=\"" << e.what() << "\" "
+                << cpuSummary(cpu);
+            BootStageTrace::EventOnce("FIRST_FAULT_TRAP", ctx.str());
+            BootStageTrace::EventOnce("FIRST_MEMORY_ACCESS_OUTSIDE_NORMAL_RANGE", ctx.str());
+        }
 
         std::cerr << "Error executing instruction at IP=0x" << std::hex << ip
                   << " Slot=" << std::dec << state_.currentSlot_

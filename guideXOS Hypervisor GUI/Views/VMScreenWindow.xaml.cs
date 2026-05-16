@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Input;
+using guideXOS_Hypervisor_GUI.Services;
 using guideXOS_Hypervisor_GUI.ViewModels;
 
 namespace guideXOS_Hypervisor_GUI.Views
@@ -24,6 +25,10 @@ namespace guideXOS_Hypervisor_GUI.Views
 
         public VMScreenWindow(string vmId, string vmName, bool isRunning = false) : this()
         {
+            AppLoggingService.WriteBootStage(
+                "BOOT_STAGE_001 Host VM window created",
+                $"vmId=\"{vmId}\" vmName=\"{vmName}\" isRunning={(isRunning ? "true" : "false")}");
+
             _viewModel = new VMScreenViewModel(vmId, vmName)
             {
                 IsRunning = isRunning

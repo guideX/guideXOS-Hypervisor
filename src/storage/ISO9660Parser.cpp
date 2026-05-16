@@ -2,7 +2,9 @@
 #include "IStorageDevice.h"
 #include "logger.h"
 #include "FATParser.h"
+#include "BootStageTrace.h"
 #include <cstring>
+#include <sstream>
 
 namespace ia64 {
 
@@ -36,6 +38,15 @@ bool ISO9660Parser::parse() {
         LOG_ERROR("No storage device provided");
         return false;
     }
+
+    const StorageDeviceInfo info = device_->getInfo();
+    std::ostringstream stage;
+    stage << "device=\"" << info.deviceId << "\""
+          << " imagePath=\"" << info.imagePath << "\""
+          << " sizeBytes=" << info.sizeBytes
+          << " blockSize=" << info.blockSize
+          << " connected=" << (info.connected ? "true" : "false");
+    BootStageTrace::Stage(10, "ISO opened", stage.str());
     
     // Read volume descriptors starting at sector 16
     uint8_t sectorBuffer[2048];
@@ -84,6 +95,8 @@ bool ISO9660Parser::parse() {
                 
                 LOG_INFO("El Torito Boot Record found:");
                 LOG_INFO("  Boot catalog at LBA: " + std::to_string(bootCatalogLBA_));
+                BootStageTrace::Stage(20, "El Torito catalog found",
+                                      "catalogLBA=" + std::to_string(bootCatalogLBA_));
             }
         }
         else if (type == static_cast<uint8_t>(VolumeDescriptorType::TERMINATOR)) {
@@ -119,6 +132,8 @@ if (!readSector(catalogLBA, catalogBuffer, sizeof(catalogBuffer))) {
     LOG_ERROR("Failed to read boot catalog");
     return false;
 }
+BootStageTrace::Stage(20, "El Torito catalog found",
+                      "catalogLBA=" + std::to_string(catalogLBA));
     
 // Debug: Dump first 256 bytes of boot catalog
 LOG_INFO("Boot catalog hex dump (first 256 bytes):");
@@ -263,6 +278,12 @@ LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) +
         LOG_INFO("  Platform: 0x" + std::to_string(efiBootEntry_.platformID));
         LOG_INFO("  LBA: " + std::to_string(efiBootEntry_.loadLBA));
         LOG_INFO("  Size: " + std::to_string(efiBootEntry_.sectorCount) + " sectors");
+        std::ostringstream ctx;
+        ctx << "platform=" << BootStageTrace::Hex(efiBootEntry_.platformID)
+            << " loadLBA=" << efiBootEntry_.loadLBA
+            << " sectorCount=" << efiBootEntry_.sectorCount
+            << " mediaType=" << BootStageTrace::Hex(efiBootEntry_.mediaType);
+        BootStageTrace::Event("EL_TORITO_EFI_ENTRY", ctx.str());
         return true;
     }
     
@@ -318,6 +339,13 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
     }
     
     LOG_INFO("Read " + std::to_string(bytesRead) + " bytes of EFI boot image");
+    {
+        std::ostringstream ctx;
+        ctx << "loadLBA=" << efiBootEntry_.loadLBA
+            << " sectorCount=" << efiBootEntry_.sectorCount
+            << " bytesRead=" << bytesRead;
+        BootStageTrace::Stage(30, "EFI boot image extracted", ctx.str());
+    }
     
     // Parse as FAT filesystem
     FATParser fatParser;
@@ -327,6 +355,8 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
     }
     
     LOG_INFO("FAT filesystem parsed successfully");
+    BootStageTrace::Stage(40, "FAT image mounted",
+                          "source=ElToritoBootImage bytes=" + std::to_string(bootImage.size()));
     
     // Try common EFI bootloader paths for IA-64
     const char* efiPaths[] = {
@@ -345,6 +375,12 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
         if (fatParser.findFile(path, fileInfo)) {
             LOG_INFO("? Found EFI executable: " + fileInfo.name);
             LOG_INFO("  Size: " + std::to_string(fileInfo.size) + " bytes");
+            std::ostringstream ctx;
+            ctx << "path=\"" << path << "\""
+                << " fatName=\"" << fileInfo.name << "\""
+                << " size=" << fileInfo.size
+                << " firstCluster=" << fileInfo.firstCluster;
+            BootStageTrace::Stage(50, "BOOTIA64.EFI found", ctx.str());
             found = true;
             break;
         }

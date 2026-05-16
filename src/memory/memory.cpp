@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "BootStageTrace.h"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -50,6 +51,16 @@ void Memory::Read(uint64_t address, uint8_t* dest, size_t size) const {
     if (tryDeviceRead(address, dest, size)) {
         return;
     }
+
+    const uint64_t memorySize = static_cast<uint64_t>(data_.size());
+    if (address >= memorySize || static_cast<uint64_t>(size) > memorySize - address) {
+        std::ostringstream ctx;
+        ctx << "access=read"
+            << " address=" << BootStageTrace::Hex(address)
+            << " size=" << BootStageTrace::Hex(size)
+            << " guestMemorySize=" << BootStageTrace::Hex(memorySize);
+        BootStageTrace::EventOnce("FIRST_MEMORY_ACCESS_OUTSIDE_NORMAL_RANGE", ctx.str());
+    }
     
     // Use MMU-aware read
     mmuRead(address, dest, size);
@@ -66,6 +77,16 @@ void Memory::Write(uint64_t address, const uint8_t* src, size_t size) {
 
     if (tryDeviceWrite(address, src, size)) {
         return;
+    }
+
+    const uint64_t memorySize = static_cast<uint64_t>(data_.size());
+    if (address >= memorySize || static_cast<uint64_t>(size) > memorySize - address) {
+        std::ostringstream ctx;
+        ctx << "access=write"
+            << " address=" << BootStageTrace::Hex(address)
+            << " size=" << BootStageTrace::Hex(size)
+            << " guestMemorySize=" << BootStageTrace::Hex(memorySize);
+        BootStageTrace::EventOnce("FIRST_MEMORY_ACCESS_OUTSIDE_NORMAL_RANGE", ctx.str());
     }
     
     // Use MMU-aware write

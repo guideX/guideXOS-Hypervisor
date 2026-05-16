@@ -1,4 +1,5 @@
 #include "RawDiskDevice.h"
+#include "BootStageTrace.h"
 #include <iostream>
 #include <sstream>
 #include <cstring>
@@ -46,6 +47,16 @@ StorageDeviceInfo RawDiskDevice::getInfo() const {
 int64_t RawDiskDevice::readBlocks(uint64_t blockNumber,
                                   uint64_t blockCount,
                                   uint8_t* buffer) {
+    {
+        std::ostringstream ctx;
+        ctx << "device=\"" << deviceId_ << "\""
+            << " imagePath=\"" << imagePath_ << "\""
+            << " lba=" << blockNumber
+            << " blocks=" << blockCount
+            << " blockSize=" << blockSize_
+            << " connected=" << (connected_ ? "true" : "false");
+        BootStageTrace::EventOnce("FIRST_BLOCK_READ", ctx.str());
+    }
     if (!connected_ || !buffer) {
         return -1;
     }
