@@ -1,6 +1,14 @@
 #pragma once
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#define NODRAWTEXT
+#define NOSERVICE
+#define NOMCX
+#define NOIME
 #include <Windows.h>
+#undef ERROR
+#undef IMAGE_SCN_MEM_EXECUTE
 
 #include <chrono>
 #include <ctime>

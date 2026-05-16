@@ -423,7 +423,6 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
             entryPointSection = section.name;
             
             // Check if section is executable
-            const uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
             bool isExecutable = (section.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
             
             oss.str("");
@@ -467,7 +466,6 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
             // Check if this points to .text section
             bool isValidCodePointer = false;
             for (const auto& section : imageInfo_.sections) {
-                const uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
                 bool isExecutable = (section.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
                 
                 if (isExecutable && 
