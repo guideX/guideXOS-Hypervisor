@@ -1904,6 +1904,29 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             memory.Write(interfaceOut,
                                          reinterpret_cast<const uint8_t*>(&protocolAddress),
                                          sizeof(protocolAddress));
+                            if (protocolAddress == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR) {
+                                uint64_t adjacentLoadedImage = 0;
+                                const uint64_t adjacentLoadedImageSlot = interfaceOut + sizeof(uint64_t);
+                                const bool haveAdjacentLoadedImage =
+                                    readGuestU64(memory, adjacentLoadedImageSlot, adjacentLoadedImage);
+                                if (!haveAdjacentLoadedImage ||
+                                    adjacentLoadedImage == 0 ||
+                                    adjacentLoadedImage == EFI_LOADED_IMAGE_PROTOCOL_ADDR) {
+                                    adjacentLoadedImage = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
+                                    memory.Write(adjacentLoadedImageSlot,
+                                                 reinterpret_cast<const uint8_t*>(&adjacentLoadedImage),
+                                                 sizeof(adjacentLoadedImage));
+                                    std::cout << "[EFI-STUB] SimpleFS.HandleProtocol restored adjacent LoadedImage context"
+                                              << " slot=0x" << std::hex << adjacentLoadedImageSlot
+                                              << " value=0x" << adjacentLoadedImage
+                                              << " interfaceOut=0x" << interfaceOut
+                                              << std::dec << std::endl;
+                                    BootStageTrace::Event("EFI_SIMPLEFS_CONTEXT_RESTORED",
+                                        "slot=" + BootStageTrace::Hex(adjacentLoadedImageSlot) +
+                                        " value=" + BootStageTrace::Hex(adjacentLoadedImage) +
+                                        " interfaceOut=" + BootStageTrace::Hex(interfaceOut));
+                                }
+                            }
                         } else if (interfaceOut != 0) {
                             const uint64_t nullInterface = 0;
                             memory.Write(interfaceOut,
