@@ -1094,6 +1094,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << " r33_SystemTable=" << BootStageTrace::Hex(EFI_STUB_ADDR)
                                                                         << " bootImage=\"" << bootImgPath << "\""
                                                                         << " efiPath=\"" << foundEFIPath << "\"";
+                                                                    BootStageTrace::EventOnce("NATIVE_BUILD_STAMP",
+                                                                        std::string("source=\"VMManager.cpp\" buildDate=\"") +
+                                                                        __DATE__ + "\" buildTime=\"" + __TIME__ + "\"");
                                                                     BootStageTrace::Stage(90, "Initial CPU state prepared", ctx.str());
                                                                 }
 

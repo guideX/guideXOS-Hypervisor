@@ -3314,6 +3314,38 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                       << " lastEfiIP=0x" << lastEfiCallIP_
                       << std::dec << std::endl;
         }
+        const uint64_t loadedImageSlotCandidate = cpu.GetGR(36);
+        uint64_t loadedImageSlotValue = 0;
+        const bool postSimpleFsLoadedImageLoad =
+            cpu.GetIP() == 0x1D70ULL &&
+            state_.currentSlot_ == 0 &&
+            instr.GetType() == InstructionType::LD8 &&
+            instr.GetDst() == 20 &&
+            instr.GetSrc1() == 36 &&
+            lastEfiCallName_ == "BootServices.HandleProtocol" &&
+            loadedImageSlotCandidate == EFI_POST_SIMPLEFS_OUT_WATCH_ADDR + sizeof(uint64_t) &&
+            readGuestU64(memory, loadedImageSlotCandidate, loadedImageSlotValue) &&
+            loadedImageSlotValue == 0;
+        if (postSimpleFsLoadedImageLoad) {
+            loadedImageSlotValue = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
+            memory.Write(loadedImageSlotCandidate,
+                         reinterpret_cast<const uint8_t*>(&loadedImageSlotValue),
+                         sizeof(loadedImageSlotValue));
+            std::cout << "[EFI-STUB] restored LoadedImage before post-SimpleFS dereference"
+                      << " ip=0x" << std::hex << cpu.GetIP()
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " address=0x" << std::hex << loadedImageSlotCandidate
+                      << " value=0x" << loadedImageSlotValue
+                      << " lastEfiIP=0x" << lastEfiCallIP_
+                      << std::dec << std::endl;
+            BootStageTrace::Event("EFI_POST_SIMPLEFS_LOADED_IMAGE_RESTORED",
+                "ip=" + BootStageTrace::Hex(cpu.GetIP()) +
+                " slot=" + std::to_string(state_.currentSlot_) +
+                " address=" + BootStageTrace::Hex(loadedImageSlotCandidate) +
+                " value=" + BootStageTrace::Hex(loadedImageSlotValue) +
+                " lastEfiCall=\"" + lastEfiCallName_ + "\"" +
+                " lastEfiIP=" + BootStageTrace::Hex(lastEfiCallIP_));
+        }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
         if (watchPostSimpleFsOutStore) {
             std::cout << "[EFI-OUT-WATCH] post store ip=0x" << std::hex << cpu.GetIP()
