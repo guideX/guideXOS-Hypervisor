@@ -130,6 +130,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
+    <ClCompile Include="src\decoder\riscv_decoder.cpp" />
+    <ClCompile Include="tests\test_riscv_decoder.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
@@ -185,6 +187,7 @@
     <ClInclude Include="include\Profiler.h" />
     <ClInclude Include="include\RawDiskDevice.h" />
     <ClInclude Include="include\RestAPIServer.h" />
+    <ClInclude Include="include\riscv_decoder.h" />
     <ClInclude Include="include\SimpleCPUScheduler.h" />
     <ClInclude Include="include\SimpleReadOnlyFS.h" />
     <ClInclude Include="include\SyscallDispatcher.h" />

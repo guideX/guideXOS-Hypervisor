@@ -17,7 +17,7 @@ if(MSVC)
     add_compile_definitions(_CRT_DECLARE_NONSTDC_NAMES=1)
     add_compile_definitions(_CRT_NONSTDC_NO_WARNINGS=1)
     # Force include errno.h before any other headers
-    add_compile_options(/FI"errno.h")
+    add_compile_options(/FIerrno.h)
 endif()
 
 # Set output directories
@@ -49,6 +49,7 @@ set(DECODER_SOURCES
     src/decoder/ftype_decoder.cpp
     src/decoder/lx_decoder.cpp
     src/decoder/xtype_decoder.cpp
+    src/decoder/riscv_decoder.cpp
 )
 
 set(MEMORY_SOURCES
@@ -161,6 +162,7 @@ set(HEADERS
     include/IA64ISAPlugin.h
     include/ISAPluginRegistry.h
     include/ExampleISAPlugin.h
+    include/riscv_decoder.h
     include/SyscallDispatcher.h
     include/CPUContext.h
     include/IVirtualMachine.h
@@ -260,6 +262,18 @@ if(MSVC)
     target_compile_options(test_new_instructions PRIVATE /W4)
 else()
     target_compile_options(test_new_instructions PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# RISC-V RV64I decoder smoke tests
+add_executable(test_riscv_decoder
+    tests/test_riscv_decoder.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_riscv_decoder PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_decoder PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Watchpoint test
@@ -503,6 +517,7 @@ add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)
 add_test(NAME FuzzerTests COMMAND test_fuzzer)
 add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
+add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
