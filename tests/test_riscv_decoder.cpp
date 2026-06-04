@@ -83,17 +83,17 @@ uint32_t EncodeJ(uint8_t opcode, uint8_t rd, int32_t imm21) {
 }
 
 void ExpectDecoded(const DecodedInstruction& insn,
-					  const char* caseName,
-				   Mnemonic mnemonic,
-				   InstructionFormat format,
-				   uint8_t rd,
-				   uint8_t rs1,
-				   uint8_t rs2,
-				   uint8_t funct3,
-				   uint8_t funct7,
-				   int64_t imm,
-				   const std::string& expectedExtension,
-				   const std::string& disassembly) {
+						  const char* caseName,
+					   Mnemonic mnemonic,
+					   InstructionFormat format,
+					   uint8_t rd,
+					   uint8_t rs1,
+					   uint8_t rs2,
+					   uint8_t funct3,
+					   uint8_t funct7,
+					   int64_t imm,
+					   const std::string& expectedExtension,
+					   const std::string& disassembly) {
 	ExpectEnum(caseName, static_cast<int>(mnemonic), static_cast<int>(insn.mnemonic));
 	ExpectEnum("format", static_cast<int>(format), static_cast<int>(insn.format));
 	if (format == InstructionFormat::R || format == InstructionFormat::I || format == InstructionFormat::U || format == InstructionFormat::J) {
@@ -120,6 +120,29 @@ void ExpectDecoded(const DecodedInstruction& insn,
 	ExpectField("imm", imm, insn.immediate);
 	ExpectField("len", 4, insn.instructionLength);
 	Expect(insn.extension == expectedExtension, "extension should match expected group");
+	Expect(!insn.illegal, "instruction should be legal");
+	Expect(insn.recognized, "instruction should be recognized");
+
+	Decoder decoder;
+	Expect(decoder.Disassemble(insn) == disassembly, "disassembly mismatch");
+}
+
+void ExpectCompressedDecoded(const DecodedInstruction& insn,
+							 const char* caseName,
+							 Mnemonic mnemonic,
+							 uint8_t rd,
+							 uint8_t rs1,
+							 uint8_t rs2,
+							 int64_t imm,
+							 const std::string& disassembly) {
+	ExpectEnum(caseName, static_cast<int>(mnemonic), static_cast<int>(insn.mnemonic));
+	ExpectEnum("format", static_cast<int>(InstructionFormat::Compressed), static_cast<int>(insn.format));
+	ExpectField("rd", rd, insn.rd);
+	ExpectField("rs1", rs1, insn.rs1);
+	ExpectField("rs2", rs2, insn.rs2);
+	ExpectField("imm", imm, insn.immediate);
+	ExpectField("len", 2, insn.instructionLength);
+	Expect(insn.extension == "RV64C", "extension should match compressed group");
 	Expect(!insn.illegal, "instruction should be legal");
 	Expect(insn.recognized, "instruction should be recognized");
 
@@ -397,7 +420,7 @@ void TestAtomicFormat() {
 	ExpectDecoded(amomaxw, "amomax.w", Mnemonic::AMOMAX_W, InstructionFormat::R, 5, 6, 7, 2, 0x14, 0, "RV64A", "amomax.w x5, x6, x7");
 
 	auto amominuw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x18, false, false));
-	ExpectDecoded(amominuw, "amominu.w", Mnemonic::AMOMINU_W, InstructionFormat::R, 5, 6, 7, 2, 0x18, 0, "RV64A", "amominu.w x5, x6, x7");
+	ExpectDecoded(amominuw, "amominu.w", Mnemonic::AMOMINU_W, InstructionFormat::R, 5, 6, 7, 2, 0x18, 0, "RV64A", "amominuw x5, x6, x7");
 
 	auto amomaxuw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x1C, false, false));
 	ExpectDecoded(amomaxuw, "amomaxu.w", Mnemonic::AMOMAXU_W, InstructionFormat::R, 5, 6, 7, 2, 0x1C, 0, "RV64A", "amomaxu.w x5, x6, x7");

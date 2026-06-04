@@ -82,3 +82,8 @@
 1628	1996	8022266956439011	bin/test_riscv_decoder.exe	2ba713158708d9e7
 24	1008	8022267060391332	CMakeFiles/test_riscv_decoder.dir/tests/test_riscv_decoder.cpp.obj	8597f554098dbd7f
 1008	1182	8022267070239759	bin/test_riscv_decoder.exe	2ba713158708d9e7
+97	2245	8023030481913064	CMakeFiles/test_riscv_decoder.dir/src/decoder/riscv_decoder.cpp.obj	40854c6718473b75
+38	1496	8023031954750707	CMakeFiles/test_riscv_decoder.dir/src/decoder/riscv_decoder.cpp.obj	40854c6718473b75
+27	1578	8023031954646805	CMakeFiles/test_riscv_decoder.dir/tests/test_riscv_decoder.cpp.obj	8597f554098dbd7f
+24	2063	8023096541149365	CMakeFiles/test_riscv_decoder.dir/src/decoder/riscv_decoder.cpp.obj	40854c6718473b75
+2063	2345	8023096561536454	bin/test_riscv_decoder.exe	2ba713158708d9e7

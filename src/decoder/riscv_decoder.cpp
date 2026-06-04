@@ -255,7 +255,6 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 	const uint8_t rs2 = static_cast<uint8_t>((rawHalfword >> 2) & 0x1FU);
 	const uint8_t rdPrime = static_cast<uint8_t>(8U + ((rawHalfword >> 2) & 0x7U));
 	const uint8_t rs1Prime = static_cast<uint8_t>(8U + ((rawHalfword >> 7) & 0x7U));
-	const uint8_t rs2Prime = static_cast<uint8_t>(8U + ((rawHalfword >> 2) & 0x7U));
 
 	if (quadrant == kCompressedOpcodeQuadrant1) {
 		switch (funct3) {

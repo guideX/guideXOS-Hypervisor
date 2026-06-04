@@ -175,6 +175,7 @@ public:
 	Decoder() = default;
 
 	DecodedInstruction Decode(uint32_t rawWord) const;
+	DecodedInstruction DecodeCompressed(uint16_t rawHalfword) const;
 	std::string Disassemble(const DecodedInstruction& instruction) const;
 	std::vector<DecodedStreamEntry> DecodeStream(const std::vector<uint32_t>& words, uint64_t startingPc) const;
 	std::vector<DecodedStreamEntry> DecodeByteStream(const std::vector<uint8_t>& bytes, uint64_t startingPc) const;
@@ -185,7 +186,6 @@ private:
 	static int64_t DecodeJImmediate(uint32_t rawWord);
 	static int64_t DecodeBImmediate(uint32_t rawWord);
 	static int64_t DecodeSImmediate(uint32_t rawWord);
-	DecodedInstruction DecodeCompressed(uint16_t rawHalfword) const;
 	static std::string MnemonicToString(Mnemonic mnemonic);
 	static std::string RegisterName(uint8_t reg);
 };
