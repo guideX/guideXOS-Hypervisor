@@ -17,7 +17,9 @@ constexpr uint8_t kOpcodeOpImm = 0x13;
 constexpr uint8_t kOpcodeOp = 0x33;
 constexpr uint8_t kOpcodeOpImm32 = 0x1B;
 constexpr uint8_t kOpcodeOp32 = 0x3B;
+constexpr uint8_t kOpcodeAtomic = 0x2F;
 constexpr uint8_t kOpcodeFence = 0x0F;
+constexpr uint8_t kOpcodeSystem = 0x73;
 constexpr uint8_t kFunct7M = 0x01;
 
 bool IsShiftImmLegal(uint8_t funct7, uint8_t funct3) {
@@ -53,6 +55,8 @@ DecodedInstruction::DecodedInstruction()
 	, funct3(0)
 	, funct7(0)
 	, immediate(0)
+	, aq(false)
+	, rl(false)
 	, instructionLength(4)
 	, extension("RV64I")
 	, recognized(false)
@@ -160,6 +164,40 @@ std::string Decoder::MnemonicToString(Mnemonic mnemonic) {
 	case Mnemonic::DIVUW: return "divuw";
 	case Mnemonic::REMW: return "remw";
 	case Mnemonic::REMUW: return "remuw";
+	case Mnemonic::LR_W: return "lr.w";
+	case Mnemonic::SC_W: return "sc.w";
+	case Mnemonic::AMOSWAP_W: return "amoswap.w";
+	case Mnemonic::AMOADD_W: return "amoadd.w";
+	case Mnemonic::AMOXOR_W: return "amoxor.w";
+	case Mnemonic::AMOAND_W: return "amoand.w";
+	case Mnemonic::AMOOR_W: return "amoor.w";
+	case Mnemonic::AMOMIN_W: return "amomin.w";
+	case Mnemonic::AMOMAX_W: return "amomax.w";
+	case Mnemonic::AMOMINU_W: return "amominu.w";
+	case Mnemonic::AMOMAXU_W: return "amomaxu.w";
+	case Mnemonic::LR_D: return "lr.d";
+	case Mnemonic::SC_D: return "sc.d";
+	case Mnemonic::AMOSWAP_D: return "amoswap.d";
+	case Mnemonic::AMOADD_D: return "amoadd.d";
+	case Mnemonic::AMOXOR_D: return "amoxor.d";
+	case Mnemonic::AMOAND_D: return "amoand.d";
+	case Mnemonic::AMOOR_D: return "amoor.d";
+	case Mnemonic::AMOMIN_D: return "amomin.d";
+	case Mnemonic::AMOMAX_D: return "amomax.d";
+	case Mnemonic::AMOMINU_D: return "amominu.d";
+	case Mnemonic::AMOMAXU_D: return "amomaxu.d";
+	case Mnemonic::CSRRW: return "csrrw";
+	case Mnemonic::CSRRS: return "csrrs";
+	case Mnemonic::CSRRC: return "csrrc";
+	case Mnemonic::CSRRWI: return "csrrwi";
+	case Mnemonic::CSRRSI: return "csrrsi";
+	case Mnemonic::CSRRCI: return "csrrci";
+	case Mnemonic::ECALL: return "ecall";
+	case Mnemonic::EBREAK: return "ebreak";
+	case Mnemonic::MRET: return "mret";
+	case Mnemonic::SRET: return "sret";
+	case Mnemonic::WFI: return "wfi";
+	case Mnemonic::SFENCE_VMA: return "sfence.vma";
 	case Mnemonic::FENCE: return "fence";
 	case Mnemonic::FENCE_I: return "fence.i";
 	case Mnemonic::Illegal:
@@ -193,6 +231,84 @@ DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
 		insn.extension = "RV64M";
 	};
 
+	auto markSystemExtension = [&insn]() {
+		insn.extension = "SYSTEM";
+	};
+
+	auto markZicsrExtension = [&insn]() {
+		insn.extension = "Zicsr";
+	};
+
+	auto markAExtension = [&insn]() {
+		insn.extension = "RV64A";
+	};
+
+	auto decodeAtomic = [&](bool isDoubleword) {
+		const uint8_t funct5 = static_cast<uint8_t>((rawWord >> 27) & 0x1FU);
+		const uint8_t aq = static_cast<uint8_t>((rawWord >> 26) & 0x1U);
+		const uint8_t rl = static_cast<uint8_t>((rawWord >> 25) & 0x1U);
+		const bool widthOk = isDoubleword ? (insn.funct3 == 0x3U) : (insn.funct3 == 0x2U);
+		const bool rs2Ok = (funct5 == 0x02U) ? (insn.rs2 == 0U) : true;
+
+		insn.format = InstructionFormat::R;
+		insn.aq = aq != 0U;
+		insn.rl = rl != 0U;
+
+		if (!widthOk || !rs2Ok) {
+			return;
+		}
+
+		markAExtension();
+		switch (funct5) {
+		case 0x02U:
+			insn.mnemonic = isDoubleword ? Mnemonic::LR_D : Mnemonic::LR_W;
+			markLegal();
+			break;
+		case 0x03U:
+			insn.mnemonic = isDoubleword ? Mnemonic::SC_D : Mnemonic::SC_W;
+			markLegal();
+			break;
+		case 0x01U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOSWAP_D : Mnemonic::AMOSWAP_W;
+			markLegal();
+			break;
+		case 0x00U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOADD_D : Mnemonic::AMOADD_W;
+			markLegal();
+			break;
+		case 0x04U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOXOR_D : Mnemonic::AMOXOR_W;
+			markLegal();
+			break;
+		case 0x0CU:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOAND_D : Mnemonic::AMOAND_W;
+			markLegal();
+			break;
+		case 0x08U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOOR_D : Mnemonic::AMOOR_W;
+			markLegal();
+			break;
+		case 0x10U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOMIN_D : Mnemonic::AMOMIN_W;
+			markLegal();
+			break;
+		case 0x14U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOMAX_D : Mnemonic::AMOMAX_W;
+			markLegal();
+			break;
+		case 0x18U:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOMINU_D : Mnemonic::AMOMINU_W;
+			markLegal();
+			break;
+		case 0x1CU:
+			insn.mnemonic = isDoubleword ? Mnemonic::AMOMAXU_D : Mnemonic::AMOMAXU_W;
+			markLegal();
+			break;
+		default:
+			break;
+		}
+	};
+
 	switch (insn.opcode) {
 	case kOpcodeLui:
 		insn.mnemonic = Mnemonic::LUI;
@@ -223,6 +339,87 @@ DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
 			markLegal();
 		}
 		break;
+
+	case kOpcodeSystem: {
+		insn.immediate = static_cast<int64_t>((rawWord >> 20) & 0xFFFU);
+		const uint32_t csr = static_cast<uint32_t>((rawWord >> 20) & 0xFFFU);
+		const uint32_t zimm = static_cast<uint32_t>((rawWord >> 15) & 0x1FU);
+
+		switch (insn.funct3) {
+		case 0x0:
+			insn.format = InstructionFormat::System;
+			if (csr == 0x000U) {
+				insn.mnemonic = Mnemonic::ECALL;
+				markSystemExtension();
+				markLegal();
+			} else if (csr == 0x001U) {
+				insn.mnemonic = Mnemonic::EBREAK;
+				markSystemExtension();
+				markLegal();
+			} else if (csr == 0x302U) {
+				insn.mnemonic = Mnemonic::MRET;
+				markSystemExtension();
+				markLegal();
+			} else if (csr == 0x102U) {
+				insn.mnemonic = Mnemonic::SRET;
+				markSystemExtension();
+				markLegal();
+			} else if (csr == 0x105U) {
+				insn.mnemonic = Mnemonic::WFI;
+				markSystemExtension();
+				markLegal();
+			}
+			break;
+		case 0x1:
+		case 0x2:
+		case 0x3:
+		case 0x5:
+		case 0x6:
+		case 0x7:
+			insn.format = InstructionFormat::I;
+			insn.immediate = static_cast<int64_t>(csr);
+			markZicsrExtension();
+			switch (insn.funct3) {
+			case 0x1: insn.mnemonic = Mnemonic::CSRRW; markLegal(); break;
+			case 0x2:
+				if (zimm != 0U) {
+					insn.mnemonic = Mnemonic::CSRRS;
+					markLegal();
+				}
+				break;
+			case 0x3:
+				if (zimm != 0U) {
+					insn.mnemonic = Mnemonic::CSRRC;
+					markLegal();
+				}
+				break;
+			case 0x5:
+				insn.mnemonic = Mnemonic::CSRRWI;
+				insn.rs1 = static_cast<uint8_t>(zimm);
+				insn.immediate = static_cast<int64_t>(csr);
+				markLegal();
+				break;
+			case 0x6:
+				insn.mnemonic = Mnemonic::CSRRSI;
+				insn.rs1 = static_cast<uint8_t>(zimm);
+				insn.immediate = static_cast<int64_t>(csr);
+				markLegal();
+				break;
+			case 0x7:
+				insn.mnemonic = Mnemonic::CSRRCI;
+				insn.rs1 = static_cast<uint8_t>(zimm);
+				insn.immediate = static_cast<int64_t>(csr);
+				markLegal();
+				break;
+			default:
+				break;
+			}
+			break;
+		default:
+			break;
+		}
+		break;
+	}
 
 	case kOpcodeBranch:
 		insn.format = InstructionFormat::B;
@@ -393,6 +590,14 @@ DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
 		}
 		break;
 
+	case kOpcodeAtomic:
+		if (insn.funct3 == 0x2U) {
+			decodeAtomic(false);
+		} else if (insn.funct3 == 0x3U) {
+			decodeAtomic(true);
+		}
+		break;
+
 	case kOpcodeFence:
 		insn.format = InstructionFormat::System;
 		if (insn.funct3 == 0x0U) {
@@ -433,6 +638,9 @@ std::string Decoder::Disassemble(const DecodedInstruction& instruction) const {
 		oss << mnemonic << ' ' << RegisterName(instruction.rd)
 			<< ", " << RegisterName(instruction.rs1)
 			<< ", " << RegisterName(instruction.rs2);
+		if (instruction.mnemonic == Mnemonic::LR_W || instruction.mnemonic == Mnemonic::LR_D) {
+			oss << " [" << (instruction.aq ? 'a' : '-') << (instruction.rl ? 'r' : '-') << "]";
+		}
 		break;
 
 	case InstructionFormat::I:
@@ -440,6 +648,16 @@ std::string Decoder::Disassemble(const DecodedInstruction& instruction) const {
 			oss << mnemonic << ' ' << RegisterName(instruction.rd)
 				<< ", " << instruction.immediate
 				<< "(" << RegisterName(instruction.rs1) << ")";
+		} else if (instruction.mnemonic == Mnemonic::CSRRW || instruction.mnemonic == Mnemonic::CSRRS ||
+				   instruction.mnemonic == Mnemonic::CSRRC) {
+			oss << mnemonic << ' ' << RegisterName(instruction.rd)
+				<< ", " << RegisterName(instruction.rs1)
+				<< ", " << instruction.immediate;
+		} else if (instruction.mnemonic == Mnemonic::CSRRWI || instruction.mnemonic == Mnemonic::CSRRSI ||
+				   instruction.mnemonic == Mnemonic::CSRRCI) {
+			oss << mnemonic << ' ' << RegisterName(instruction.rd)
+				<< ", " << static_cast<unsigned>(instruction.rs1)
+				<< ", " << instruction.immediate;
 		} else if (instruction.mnemonic == Mnemonic::LB || instruction.mnemonic == Mnemonic::LH ||
 				   instruction.mnemonic == Mnemonic::LW || instruction.mnemonic == Mnemonic::LD ||
 				   instruction.mnemonic == Mnemonic::LBU || instruction.mnemonic == Mnemonic::LHU ||

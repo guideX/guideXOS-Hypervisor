@@ -135,6 +135,17 @@ uint32_t EncodeR(uint8_t opcode, uint8_t rd, uint8_t funct3, uint8_t rs1, uint8_
 		   opcode;
 }
 
+uint32_t EncodeAtomic(uint8_t rd, uint8_t funct3, uint8_t rs1, uint8_t rs2, uint8_t funct5, bool aq, bool rl) {
+	return (static_cast<uint32_t>(funct5) << 27) |
+		   (static_cast<uint32_t>(aq ? 1U : 0U) << 26) |
+		   (static_cast<uint32_t>(rl ? 1U : 0U) << 25) |
+		   (static_cast<uint32_t>(rs2) << 20) |
+		   (static_cast<uint32_t>(rs1) << 15) |
+		   (static_cast<uint32_t>(funct3) << 12) |
+		   (static_cast<uint32_t>(rd) << 7) |
+		   0x2FU;
+}
+
 } // namespace
 
 void TestUFormat() {
@@ -208,6 +219,33 @@ void TestIFormat() {
 
 	auto fenceI = decoder.Decode(0x0000100FU);
 	ExpectDecoded(fenceI, "fence.i", Mnemonic::FENCE_I, InstructionFormat::System, 0, 0, 0, 1, 0, 0, "RV64I", "fence.i");
+
+	auto csrrw = decoder.Decode(EncodeI(0x73, 1, 0x1, 2, 0xC00));
+	ExpectDecoded(csrrw, "csrrw", Mnemonic::CSRRW, InstructionFormat::I, 1, 2, 0, 1, 0, 0xC00, "Zicsr", "csrrw x1, x2, 3072");
+
+	auto csrrs = decoder.Decode(EncodeI(0x73, 3, 0x2, 4, 0xC01));
+	ExpectDecoded(csrrs, "csrrs", Mnemonic::CSRRS, InstructionFormat::I, 3, 4, 0, 2, 0, 0xC01, "Zicsr", "csrrs x3, x4, 3073");
+
+	auto csrrc = decoder.Decode(EncodeI(0x73, 5, 0x3, 6, 0xC02));
+	ExpectDecoded(csrrc, "csrrc", Mnemonic::CSRRC, InstructionFormat::I, 5, 6, 0, 3, 0, 0xC02, "Zicsr", "csrrc x5, x6, 3074");
+
+	auto csrrwi = decoder.Decode(EncodeI(0x73, 7, 0x5, 0x8, 0xC03));
+	ExpectDecoded(csrrwi, "csrrwi", Mnemonic::CSRRWI, InstructionFormat::I, 7, 8, 0, 5, 0, 3075, "Zicsr", "csrrwi x7, 8, 3075");
+
+	auto csrrsi = decoder.Decode(EncodeI(0x73, 9, 0x6, 0xA, 0xC04));
+	ExpectDecoded(csrrsi, "csrrsi", Mnemonic::CSRRSI, InstructionFormat::I, 9, 10, 0, 6, 0, 3076, "Zicsr", "csrrsi x9, 10, 3076");
+
+	auto csrrci = decoder.Decode(EncodeI(0x73, 11, 0x7, 0xB, 0xC05));
+	ExpectDecoded(csrrci, "csrrci", Mnemonic::CSRRCI, InstructionFormat::I, 11, 11, 0, 7, 0, 3077, "Zicsr", "csrrci x11, 11, 3077");
+
+	auto ecall = decoder.Decode(0x00000073U);
+	ExpectDecoded(ecall, "ecall", Mnemonic::ECALL, InstructionFormat::System, 0, 0, 0, 0, 0, 0, "SYSTEM", "ecall");
+
+	auto ebreak = decoder.Decode(0x00100073U);
+	ExpectDecoded(ebreak, "ebreak", Mnemonic::EBREAK, InstructionFormat::System, 0, 0, 0, 0, 0, 1, "SYSTEM", "ebreak");
+
+	auto illegalSystem = decoder.Decode(0x00200073U);
+	Expect(illegalSystem.illegal, "reserved system encoding should remain illegal");
 }
 
 void TestRFormat() {
@@ -298,6 +336,86 @@ void TestRFormat() {
 	ExpectDecoded(remuw, "remuw", Mnemonic::REMUW, InstructionFormat::R, 5, 6, 7, 7, 0x01, 0, "RV64M", "remuw x5, x6, x7");
 }
 
+void TestAtomicFormat() {
+	Decoder decoder;
+
+	auto lrw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 0, 0x02, true, false));
+	ExpectDecoded(lrw, "lr.w", Mnemonic::LR_W, InstructionFormat::R, 5, 6, 0, 2, 0x02, 0, "RV64A", "lr.w x5, x6, x0 [a-]");
+	Expect(lrw.aq, "lr.w aq bit should be decoded");
+	Expect(!lrw.rl, "lr.w rl bit should be decoded");
+
+	auto scw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x03, false, true));
+	ExpectDecoded(scw, "sc.w", Mnemonic::SC_W, InstructionFormat::R, 5, 6, 7, 2, 0x03, 0, "RV64A", "sc.w x5, x6, x7");
+	Expect(!scw.aq, "sc.w aq bit should be decoded");
+	Expect(scw.rl, "sc.w rl bit should be decoded");
+
+	auto amoswapw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x01, false, false));
+	ExpectDecoded(amoswapw, "amoswap.w", Mnemonic::AMOSWAP_W, InstructionFormat::R, 5, 6, 7, 2, 0x01, 0, "RV64A", "amoswap.w x5, x6, x7");
+
+	auto amoaddw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x00, false, false));
+	ExpectDecoded(amoaddw, "amoadd.w", Mnemonic::AMOADD_W, InstructionFormat::R, 5, 6, 7, 2, 0x00, 0, "RV64A", "amoadd.w x5, x6, x7");
+
+	auto amoxorw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x04, false, false));
+	ExpectDecoded(amoxorw, "amoxor.w", Mnemonic::AMOXOR_W, InstructionFormat::R, 5, 6, 7, 2, 0x04, 0, "RV64A", "amoxor.w x5, x6, x7");
+
+	auto amoandw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x0C, false, false));
+	ExpectDecoded(amoandw, "amoand.w", Mnemonic::AMOAND_W, InstructionFormat::R, 5, 6, 7, 2, 0x0C, 0, "RV64A", "amoand.w x5, x6, x7");
+
+	auto amoorw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x08, false, false));
+	ExpectDecoded(amoorw, "amoor.w", Mnemonic::AMOOR_W, InstructionFormat::R, 5, 6, 7, 2, 0x08, 0, "RV64A", "amoor.w x5, x6, x7");
+
+	auto amominw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x10, false, false));
+	ExpectDecoded(amominw, "amomin.w", Mnemonic::AMOMIN_W, InstructionFormat::R, 5, 6, 7, 2, 0x10, 0, "RV64A", "amomin.w x5, x6, x7");
+
+	auto amomaxw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x14, false, false));
+	ExpectDecoded(amomaxw, "amomax.w", Mnemonic::AMOMAX_W, InstructionFormat::R, 5, 6, 7, 2, 0x14, 0, "RV64A", "amomax.w x5, x6, x7");
+
+	auto amominuw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x18, false, false));
+	ExpectDecoded(amominuw, "amominu.w", Mnemonic::AMOMINU_W, InstructionFormat::R, 5, 6, 7, 2, 0x18, 0, "RV64A", "amominu.w x5, x6, x7");
+
+	auto amomaxuw = decoder.Decode(EncodeAtomic(5, 0x2, 6, 7, 0x1C, false, false));
+	ExpectDecoded(amomaxuw, "amomaxu.w", Mnemonic::AMOMAXU_W, InstructionFormat::R, 5, 6, 7, 2, 0x1C, 0, "RV64A", "amomaxu.w x5, x6, x7");
+
+	auto lrd = decoder.Decode(EncodeAtomic(5, 0x3, 6, 0, 0x02, false, false));
+	ExpectDecoded(lrd, "lr.d", Mnemonic::LR_D, InstructionFormat::R, 5, 6, 0, 3, 0x02, 0, "RV64A", "lr.d x5, x6, x0 [--]");
+
+	auto scd = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x03, true, true));
+	ExpectDecoded(scd, "sc.d", Mnemonic::SC_D, InstructionFormat::R, 5, 6, 7, 3, 0x03, 0, "RV64A", "sc.d x5, x6, x7");
+
+	auto amoswapd = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x01, false, false));
+	ExpectDecoded(amoswapd, "amoswap.d", Mnemonic::AMOSWAP_D, InstructionFormat::R, 5, 6, 7, 3, 0x01, 0, "RV64A", "amoswap.d x5, x6, x7");
+
+	auto amoaddd = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x00, false, false));
+	ExpectDecoded(amoaddd, "amoadd.d", Mnemonic::AMOADD_D, InstructionFormat::R, 5, 6, 7, 3, 0x00, 0, "RV64A", "amoadd.d x5, x6, x7");
+
+	auto amoxord = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x04, false, false));
+	ExpectDecoded(amoxord, "amoxor.d", Mnemonic::AMOXOR_D, InstructionFormat::R, 5, 6, 7, 3, 0x04, 0, "RV64A", "amoxor.d x5, x6, x7");
+
+	auto amoandd = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x0C, false, false));
+	ExpectDecoded(amoandd, "amoand.d", Mnemonic::AMOAND_D, InstructionFormat::R, 5, 6, 7, 3, 0x0C, 0, "RV64A", "amoand.d x5, x6, x7");
+
+	auto amoord = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x08, false, false));
+	ExpectDecoded(amoord, "amoor.d", Mnemonic::AMOOR_D, InstructionFormat::R, 5, 6, 7, 3, 0x08, 0, "RV64A", "amoor.d x5, x6, x7");
+
+	auto amomind = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x10, false, false));
+	ExpectDecoded(amomind, "amomin.d", Mnemonic::AMOMIN_D, InstructionFormat::R, 5, 6, 7, 3, 0x10, 0, "RV64A", "amomin.d x5, x6, x7");
+
+	auto amomaxd = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x14, false, false));
+	ExpectDecoded(amomaxd, "amomax.d", Mnemonic::AMOMAX_D, InstructionFormat::R, 5, 6, 7, 3, 0x14, 0, "RV64A", "amomax.d x5, x6, x7");
+
+	auto amominud = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x18, false, false));
+	ExpectDecoded(amominud, "amominu.d", Mnemonic::AMOMINU_D, InstructionFormat::R, 5, 6, 7, 3, 0x18, 0, "RV64A", "amominu.d x5, x6, x7");
+
+	auto amomaxud = decoder.Decode(EncodeAtomic(5, 0x3, 6, 7, 0x1C, false, false));
+	ExpectDecoded(amomaxud, "amomaxu.d", Mnemonic::AMOMAXU_D, InstructionFormat::R, 5, 6, 7, 3, 0x1C, 0, "RV64A", "amomaxu.d x5, x6, x7");
+
+	auto illegalWidth = decoder.Decode(EncodeAtomic(5, 0x1, 6, 7, 0x00, false, false));
+	Expect(illegalWidth.illegal, "unsupported atomic funct3 should stay illegal");
+
+	auto illegalReserved = decoder.Decode(EncodeAtomic(5, 0x2, 6, 1, 0x02, false, false));
+	Expect(illegalReserved.illegal, "LR must keep rs2 zero");
+}
+
 void TestIllegalAndUnknown() {
 	Decoder decoder;
 
@@ -308,14 +426,15 @@ void TestIllegalAndUnknown() {
 }
 
 int main() {
-	std::cout << "RISC-V RV64I/RV64M decoder smoke tests\n";
+	std::cout << "RISC-V RV64I/RV64M/Zicsr decoder smoke tests\n";
 	TestUFormat();
 	TestJFormat();
 	TestBFormat();
 	TestSFormat();
 	TestIFormat();
 	TestRFormat();
+	TestAtomicFormat();
 	TestIllegalAndUnknown();
-	std::cout << "RISC-V RV64I/RV64M decoder smoke tests passed\n";
+	std::cout << "RISC-V RV64I/RV64M/Zicsr decoder smoke tests passed\n";
 	return 0;
 }
