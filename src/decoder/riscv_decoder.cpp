@@ -715,4 +715,56 @@ std::string Decoder::Disassemble(const DecodedInstruction& instruction) const {
 	return oss.str();
 }
 
+std::vector<DecodedStreamEntry> Decoder::DecodeStream(const std::vector<uint32_t>& words, uint64_t startingPc) const {
+	std::vector<DecodedStreamEntry> entries;
+	entries.reserve(words.size());
+
+	uint64_t pc = startingPc;
+	for (uint32_t rawWord : words) {
+		DecodedInstruction instruction = Decode(rawWord);
+		entries.push_back(DecodedStreamEntry{pc, instruction, Disassemble(instruction), false});
+		pc += 4ULL;
+	}
+
+	return entries;
+}
+
+std::vector<DecodedStreamEntry> Decoder::DecodeByteStream(const std::vector<uint8_t>& bytes, uint64_t startingPc) const {
+	std::vector<uint32_t> words;
+	words.reserve(bytes.size() / 4);
+
+	for (size_t index = 0; index + 3 < bytes.size(); index += 4) {
+		const uint32_t rawWord = static_cast<uint32_t>(bytes[index]) |
+			(static_cast<uint32_t>(bytes[index + 1]) << 8) |
+			(static_cast<uint32_t>(bytes[index + 2]) << 16) |
+			(static_cast<uint32_t>(bytes[index + 3]) << 24);
+		words.push_back(rawWord);
+	}
+
+	std::vector<DecodedStreamEntry> entries = DecodeStream(words, startingPc);
+
+	const size_t consumedBytes = words.size() * 4U;
+	const size_t remainingBytes = bytes.size() - consumedBytes;
+	if (remainingBytes != 0U) {
+		const uint32_t truncatedWord = static_cast<uint32_t>(bytes[consumedBytes]) |
+			((remainingBytes > 1U ? static_cast<uint32_t>(bytes[consumedBytes + 1]) : 0U) << 8) |
+			((remainingBytes > 2U ? static_cast<uint32_t>(bytes[consumedBytes + 2]) : 0U) << 16);
+
+		DecodedInstruction instruction;
+		instruction.rawWord = truncatedWord;
+		instruction.mnemonic = Mnemonic::Illegal;
+		instruction.format = InstructionFormat::Unknown;
+		instruction.instructionLength = 4;
+		instruction.recognized = false;
+		instruction.illegal = true;
+
+		std::ostringstream oss;
+		oss << "illegal 0x" << std::hex << truncatedWord;
+
+		entries.push_back(DecodedStreamEntry{startingPc + static_cast<uint64_t>(consumedBytes), instruction, oss.str(), true});
+	}
+
+	return entries;
+}
+
 } // namespace riscv

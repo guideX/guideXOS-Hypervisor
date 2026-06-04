@@ -1,0 +1,36 @@
+RISC-V Decoder Status
+
+Current decoded instruction families:
+- RV64I
+- RV64M
+- Zicsr/SYSTEM
+- RV64A/A
+
+Stream/disassembly helper coverage:
+- Deterministic DecodeStream helper for 32-bit instruction words with PC progression and disassembly output
+
+Byte-stream helper coverage:
+- Deterministic DecodeByteStream helper for little-endian in-memory byte sequences with trailing-byte reporting
+
+Deferred instruction families / behaviors:
+- C compressed extension
+- F/D floating-point
+- V vector extension
+- full privileged behavior
+- MMU/page tables
+- SBI
+- execution semantics
+- runtime/plugin registration
+
+Test command used:
+- build-riscv/bin/test_riscv_decoder.exe (direct binary on the local Windows build)
+
+Latest test result:
+- Passed
+
+Execution semantics: deferred
+Runtime/plugin registration: deferred
+
+Audit notes:
+- IA-64 / Itanium modified: no
+- Windows-specific dependencies added to C++ core: no

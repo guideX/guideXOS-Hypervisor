@@ -425,8 +425,105 @@ void TestIllegalAndUnknown() {
 	Expect(decoder.Disassemble(illegal) == "illegal 0xffffffff", "illegal disassembly expected");
 }
 
+void TestDecodeStream() {
+	Decoder decoder;
+	const std::vector<uint32_t> words = {
+		0x00000013U,
+		0x123450B7U,
+		0x0000006FU,
+		EncodeR(0x33, 3, 0x0, 1, 2, 0x01),
+		EncodeI(0x73, 1, 0x1, 2, 0xC00),
+		EncodeAtomic(5, 0x2, 6, 0, 0x02, true, false),
+		0xFFFFFFFFU
+	};
+
+	const auto entries = decoder.DecodeStream(words, 0x1000ULL);
+	Expect(entries.size() == words.size(), "stream entry count should match input count");
+
+	Expect(entries[0].pc == 0x1000ULL, "stream pc[0] should start at base address");
+	Expect(entries[0].instruction.rawWord == words[0], "stream raw word[0] should match input");
+	Expect(entries[0].instruction.mnemonic == Mnemonic::ADDI, "stream mnemonic[0] should decode as addi");
+	Expect(entries[0].disassembly == "addi x0, x0, 0", "stream disassembly[0] should be deterministic");
+	Expect(!entries[0].instruction.illegal, "stream entry[0] should be legal");
+	Expect(entries[0].instruction.extension == "RV64I", "stream extension[0] should be RV64I");
+
+	Expect(entries[1].pc == 0x1004ULL, "stream pc[1] should increment by 4");
+	Expect(entries[1].instruction.mnemonic == Mnemonic::LUI, "stream mnemonic[1] should decode as lui");
+	Expect(entries[1].disassembly == "lui x1, 0x12345000", "stream disassembly[1] should be deterministic");
+
+	Expect(entries[2].pc == 0x1008ULL, "stream pc[2] should increment by 4");
+	Expect(entries[2].instruction.mnemonic == Mnemonic::JAL, "stream mnemonic[2] should decode as jal");
+	Expect(entries[2].disassembly == "jal x0, 0", "stream disassembly[2] should be deterministic");
+
+	Expect(entries[3].pc == 0x100CULL, "stream pc[3] should increment by 4");
+	Expect(entries[3].instruction.mnemonic == Mnemonic::MUL, "stream mnemonic[3] should decode as mul");
+	Expect(entries[3].disassembly == "mul x3, x1, x2", "stream disassembly[3] should be deterministic");
+	Expect(entries[3].instruction.extension == "RV64M", "stream extension[3] should be RV64M");
+
+	Expect(entries[4].pc == 0x1010ULL, "stream pc[4] should increment by 4");
+	Expect(entries[4].instruction.mnemonic == Mnemonic::CSRRW, "stream mnemonic[4] should decode as csrrw");
+	Expect(entries[4].disassembly == "csrrw x1, x2, 3072", "stream disassembly[4] should be deterministic");
+	Expect(entries[4].instruction.extension == "Zicsr", "stream extension[4] should be Zicsr");
+
+	Expect(entries[5].pc == 0x1014ULL, "stream pc[5] should increment by 4");
+	Expect(entries[5].instruction.mnemonic == Mnemonic::LR_W, "stream mnemonic[5] should decode as lr.w");
+	Expect(entries[5].disassembly == "lr.w x5, x6, x0 [a-]", "stream disassembly[5] should be deterministic");
+	Expect(entries[5].instruction.extension == "RV64A", "stream extension[5] should be RV64A");
+
+	Expect(entries[6].pc == 0x1018ULL, "stream pc[6] should increment by 4");
+	Expect(entries[6].instruction.illegal, "stream illegal entry should remain illegal");
+	Expect(entries[6].disassembly == "illegal 0xffffffff", "stream illegal disassembly should be deterministic");
+}
+
+void TestDecodeByteStream() {
+	Decoder decoder;
+	const std::vector<uint8_t> bytes = {
+		0x13, 0x00, 0x00, 0x00,
+		0xB7, 0x50, 0x34, 0x12,
+		0x33, 0x81, 0x20, 0x02,
+		0x73, 0x10, 0x00, 0x00,
+		0xAF, 0x02, 0x60, 0x10,
+		0xFF, 0xFF, 0xFF, 0xFF,
+		0x13, 0x00
+	};
+
+	const auto entries = decoder.DecodeByteStream(bytes, 0x2000ULL);
+	Expect(entries.size() == 7, "byte stream should produce six full entries plus one truncated entry");
+
+	Expect(entries[0].pc == 0x2000ULL, "byte stream pc[0] should start at base address");
+	Expect(entries[0].instruction.rawWord == 0x00000013U, "byte stream little-endian assembly[0] should match addi");
+	Expect(entries[0].disassembly == "addi x0, x0, 0", "byte stream disassembly[0] should be deterministic");
+	Expect(!entries[0].truncated, "byte stream entry[0] should not be truncated");
+
+	Expect(entries[1].pc == 0x2004ULL, "byte stream pc[1] should increment by 4");
+	Expect(entries[1].instruction.rawWord == 0x123450B7U, "byte stream little-endian assembly[1] should match lui");
+	Expect(entries[1].instruction.mnemonic == Mnemonic::LUI, "byte stream mnemonic[1] should decode as lui");
+
+	Expect(entries[2].pc == 0x2008ULL, "byte stream pc[2] should increment by 4");
+	Expect(entries[2].instruction.mnemonic == Mnemonic::MUL, "byte stream mnemonic[2] should decode as mul");
+	Expect(entries[2].instruction.extension == "RV64M", "byte stream extension[2] should be RV64M");
+
+	Expect(entries[3].pc == 0x200CULL, "byte stream pc[3] should increment by 4");
+	Expect(entries[3].instruction.mnemonic == Mnemonic::CSRRW, "byte stream mnemonic[3] should decode as csrrw");
+	Expect(entries[3].instruction.extension == "Zicsr", "byte stream extension[3] should be Zicsr");
+
+	Expect(entries[4].pc == 0x2010ULL, "byte stream pc[4] should increment by 4");
+	Expect(entries[4].instruction.mnemonic == Mnemonic::LR_W, "byte stream mnemonic[4] should decode as lr.w");
+	Expect(entries[4].instruction.extension == "RV64A", "byte stream extension[4] should be RV64A");
+
+	Expect(entries[5].pc == 0x2014ULL, "byte stream pc[5] should increment by 4");
+	Expect(entries[5].instruction.illegal, "byte stream illegal word should remain illegal in-stream");
+	Expect(entries[5].disassembly == "illegal 0xffffffff", "byte stream illegal disassembly should be deterministic");
+	Expect(!entries[5].truncated, "byte stream illegal full word should not be marked truncated");
+
+	Expect(entries[6].pc == 0x2018ULL, "byte stream truncated pc should continue by 4-byte slots");
+	Expect(entries[6].instruction.illegal, "byte stream trailing bytes should produce an illegal entry");
+	Expect(entries[6].truncated, "byte stream trailing bytes should be marked truncated");
+	Expect(entries[6].disassembly == "illegal 0x13", "byte stream trailing-byte disassembly should reflect the partial little-endian word");
+}
+
 int main() {
-	std::cout << "RISC-V RV64I/RV64M/Zicsr decoder smoke tests\n";
+	std::cout << "RISC-V RV64I/RV64M/Zicsr/RV64A decoder smoke tests\n";
 	TestUFormat();
 	TestJFormat();
 	TestBFormat();
@@ -435,6 +532,8 @@ int main() {
 	TestRFormat();
 	TestAtomicFormat();
 	TestIllegalAndUnknown();
-	std::cout << "RISC-V RV64I/RV64M/Zicsr decoder smoke tests passed\n";
+	TestDecodeStream();
+	TestDecodeByteStream();
+	std::cout << "RISC-V RV64I/RV64M/Zicsr/RV64A decoder smoke tests passed\n";
 	return 0;
 }

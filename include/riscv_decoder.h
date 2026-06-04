@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace riscv {
 
@@ -80,28 +81,40 @@ enum class Mnemonic {
 	DIVUW,
 	REMW,
 	REMUW,
-		LR_W,
-		SC_W,
-		AMOSWAP_W,
-		AMOADD_W,
-		AMOXOR_W,
-		AMOAND_W,
-		AMOOR_W,
-		AMOMIN_W,
-		AMOMAX_W,
-		AMOMINU_W,
-		AMOMAXU_W,
-		LR_D,
-		SC_D,
-		AMOSWAP_D,
-		AMOADD_D,
-		AMOXOR_D,
-		AMOAND_D,
-		AMOOR_D,
-		AMOMIN_D,
-		AMOMAX_D,
-		AMOMINU_D,
-		AMOMAXU_D,
+	LR_W,
+	SC_W,
+	AMOSWAP_W,
+	AMOADD_W,
+	AMOXOR_W,
+	AMOAND_W,
+	AMOOR_W,
+	AMOMIN_W,
+	AMOMAX_W,
+	AMOMINU_W,
+	AMOMAXU_W,
+	LR_D,
+	SC_D,
+	AMOSWAP_D,
+	AMOADD_D,
+	AMOXOR_D,
+	AMOAND_D,
+	AMOOR_D,
+	AMOMIN_D,
+	AMOMAX_D,
+	AMOMINU_D,
+	AMOMAXU_D,
+	CSRRW,
+	CSRRS,
+	CSRRC,
+	CSRRWI,
+	CSRRSI,
+	CSRRCI,
+	ECALL,
+	EBREAK,
+	MRET,
+	SRET,
+	WFI,
+	SFENCE_VMA,
 	FENCE,
 	FENCE_I
 };
@@ -127,12 +140,21 @@ struct DecodedInstruction {
 	DecodedInstruction();
 };
 
+struct DecodedStreamEntry {
+	uint64_t pc;
+	DecodedInstruction instruction;
+	std::string disassembly;
+	bool truncated;
+};
+
 class Decoder {
 public:
 	Decoder() = default;
 
 	DecodedInstruction Decode(uint32_t rawWord) const;
 	std::string Disassemble(const DecodedInstruction& instruction) const;
+	std::vector<DecodedStreamEntry> DecodeStream(const std::vector<uint32_t>& words, uint64_t startingPc) const;
+	std::vector<DecodedStreamEntry> DecodeByteStream(const std::vector<uint8_t>& bytes, uint64_t startingPc) const;
 
 private:
 	static int64_t SignExtend(uint64_t value, unsigned bits);
