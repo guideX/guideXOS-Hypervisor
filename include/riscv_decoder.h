@@ -14,7 +14,8 @@ enum class InstructionFormat {
 	B,
 	U,
 	J,
-	System
+	System,
+	Compressed
 };
 
 enum class Mnemonic {
@@ -116,7 +117,29 @@ enum class Mnemonic {
 	WFI,
 	SFENCE_VMA,
 	FENCE,
-	FENCE_I
+	FENCE_I,
+	C_NOP,
+	C_ADDI,
+	C_LI,
+	C_LUI,
+	C_ADDI16SP,
+	C_ADDI4SPN,
+	C_LW,
+	C_LD,
+	C_SW,
+	C_SD,
+	C_J,
+	C_JR,
+	C_JALR,
+	C_BEQZ,
+	C_BNEZ,
+	C_SLLI,
+	C_SRLI,
+	C_SRAI,
+	C_ANDI,
+	C_MV,
+	C_ADD,
+	C_EBREAK
 };
 
 struct DecodedInstruction {
@@ -162,6 +185,7 @@ private:
 	static int64_t DecodeJImmediate(uint32_t rawWord);
 	static int64_t DecodeBImmediate(uint32_t rawWord);
 	static int64_t DecodeSImmediate(uint32_t rawWord);
+	DecodedInstruction DecodeCompressed(uint16_t rawHalfword) const;
 	static std::string MnemonicToString(Mnemonic mnemonic);
 	static std::string RegisterName(uint8_t reg);
 };

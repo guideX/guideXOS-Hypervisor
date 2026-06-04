@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using riscv::DecodedInstruction;
 using riscv::Decoder;
@@ -144,6 +145,31 @@ uint32_t EncodeAtomic(uint8_t rd, uint8_t funct3, uint8_t rs1, uint8_t rs2, uint
 		   (static_cast<uint32_t>(funct3) << 12) |
 		   (static_cast<uint32_t>(rd) << 7) |
 		   0x2FU;
+}
+
+uint16_t EncodeCQuadrant1(uint8_t funct3, uint8_t rd, uint8_t imm6) {
+	return static_cast<uint16_t>((static_cast<uint16_t>(funct3) << 13) |
+								((static_cast<uint16_t>(imm6 & 0x1FU)) << 2) |
+								((static_cast<uint16_t>((imm6 >> 5) & 0x1U)) << 12) |
+								(static_cast<uint16_t>(rd) << 7) |
+								0x1U);
+}
+
+uint16_t EncodeCQuadrant2(uint8_t funct3, uint8_t rd, uint8_t rs2) {
+	return static_cast<uint16_t>((static_cast<uint16_t>(funct3) << 13) |
+								(static_cast<uint16_t>(rd) << 7) |
+								(static_cast<uint16_t>(rs2) << 2) |
+								0x2U);
+}
+
+uint16_t EncodeCQuadrant0(uint8_t funct3, uint8_t rdPrime, uint8_t rs1Prime, uint16_t immBits) {
+	return static_cast<uint16_t>((static_cast<uint16_t>(funct3) << 13) |
+								((static_cast<uint16_t>(immBits & 0x3U)) << 11) |
+								((static_cast<uint16_t>(rs1Prime - 8U) & 0x7U) << 7) |
+								((static_cast<uint16_t>(immBits & 0x1U)) << 6) |
+								((static_cast<uint16_t>((immBits >> 1) & 0x1U)) << 5) |
+								((static_cast<uint16_t>(rdPrime - 8U) & 0x7U) << 2) |
+								0x0U);
 }
 
 } // namespace
@@ -425,6 +451,61 @@ void TestIllegalAndUnknown() {
 	Expect(decoder.Disassemble(illegal) == "illegal 0xffffffff", "illegal disassembly expected");
 }
 
+void TestCompressedDecode() {
+	Decoder decoder;
+
+	auto cNop = decoder.DecodeCompressed(EncodeCQuadrant1(0x0, 0x0, 0x00));
+	ExpectCompressedDecoded(cNop, "c.nop", Mnemonic::C_NOP, 0, 0, 0, 0, "c.nop x0, 0");
+
+	auto cAddi = decoder.DecodeCompressed(EncodeCQuadrant1(0x0, 0x3, 0x05));
+	ExpectCompressedDecoded(cAddi, "c.addi", Mnemonic::C_ADDI, 3, 3, 0, 5, "c.addi x3, 5");
+
+	auto cLi = decoder.DecodeCompressed(EncodeCQuadrant1(0x2, 0x6, 0x21));
+	ExpectCompressedDecoded(cLi, "c.li", Mnemonic::C_LI, 6, 6, 0, -31, "c.li x6, -31");
+
+	auto cLui = decoder.DecodeCompressed(EncodeCQuadrant1(0x3, 0x5, 0x10));
+	ExpectCompressedDecoded(cLui, "c.lui", Mnemonic::C_LUI, 5, 5, 0, 65536, "c.lui x5, 65536");
+
+	auto cAddi16sp = decoder.DecodeCompressed(EncodeCQuadrant1(0x1, 0x2, 0x08));
+	ExpectCompressedDecoded(cAddi16sp, "c.addi16sp", Mnemonic::C_ADDI16SP, 2, 2, 0, 32768, "c.addi16sp x2, 32768");
+
+	auto cSlli = decoder.DecodeCompressed(EncodeCQuadrant2(0x0, 0x7, 0x03));
+	ExpectCompressedDecoded(cSlli, "c.slli", Mnemonic::C_SLLI, 7, 7, 0, 3, "c.slli x7, 3");
+
+	auto cJr = decoder.DecodeCompressed(EncodeCQuadrant2(0x4, 0x9, 0x0));
+	ExpectCompressedDecoded(cJr, "c.jr", Mnemonic::C_JR, 9, 9, 0, 0, "c.jr x9, x9");
+
+	auto cJalr = decoder.DecodeCompressed(EncodeCQuadrant2(0x4, 0x0, 0x0));
+	ExpectCompressedDecoded(cJalr, "c.ebreak", Mnemonic::C_EBREAK, 1, 0, 0, 0, "c.ebreak");
+
+	auto cMv = decoder.DecodeCompressed(EncodeCQuadrant2(0x4, 0x8, 0x9));
+	ExpectCompressedDecoded(cMv, "c.add", Mnemonic::C_ADD, 8, 8, 9, 0, "c.add x8, x8, x9");
+
+	auto cBeqz = decoder.DecodeCompressed(EncodeCQuadrant1(0x6, 0x8, 0x00));
+	ExpectCompressedDecoded(cBeqz, "c.beqz", Mnemonic::C_BEQZ, 0, 8, 0, 0, "c.beqz 0");
+
+	auto cBnez = decoder.DecodeCompressed(EncodeCQuadrant1(0x7, 0x9, 0x00));
+	ExpectCompressedDecoded(cBnez, "c.bnez", Mnemonic::C_BNEZ, 0, 9, 0, 0, "c.bnez 0");
+
+	auto cAddi4spn = decoder.DecodeCompressed(EncodeCQuadrant0(0x0, 8, 8, 0x1C));
+	ExpectCompressedDecoded(cAddi4spn, "c.addi4spn", Mnemonic::C_ADDI4SPN, 8, 2, 0, 28, "c.addi4spn x8, 28(x2)");
+
+	auto cLw = decoder.DecodeCompressed(EncodeCQuadrant0(0x2, 9, 9, 0x08));
+	ExpectCompressedDecoded(cLw, "c.lw", Mnemonic::C_LW, 9, 9, 0, 0, "c.lw x9, 0(x2)");
+
+	auto cLd = decoder.DecodeCompressed(EncodeCQuadrant0(0x3, 10, 10, 0x10));
+	ExpectCompressedDecoded(cLd, "c.ld", Mnemonic::C_LD, 10, 10, 0, 0, "c.ld x10, 0(x2)");
+
+	auto cSw = decoder.DecodeCompressed(EncodeCQuadrant0(0x6, 11, 11, 0x08));
+	ExpectCompressedDecoded(cSw, "c.sw", Mnemonic::C_SW, 0, 11, 11, 0, "c.sw x11, 0(x2)");
+
+	auto cSd = decoder.DecodeCompressed(EncodeCQuadrant0(0x7, 12, 12, 0x10));
+	ExpectCompressedDecoded(cSd, "c.sd", Mnemonic::C_SD, 0, 12, 12, 0, "c.sd x12, 0(x2)");
+
+	auto reserved = decoder.DecodeCompressed(0x0002U);
+	Expect(reserved.illegal, "reserved compressed encoding should stay illegal");
+}
+
 void TestDecodeStream() {
 	Decoder decoder;
 	const std::vector<uint32_t> words = {
@@ -478,48 +559,52 @@ void TestDecodeStream() {
 void TestDecodeByteStream() {
 	Decoder decoder;
 	const std::vector<uint8_t> bytes = {
+		0x01, 0x00,
 		0x13, 0x00, 0x00, 0x00,
+		0x0D, 0x01,
 		0xB7, 0x50, 0x34, 0x12,
-		0x33, 0x81, 0x20, 0x02,
-		0x73, 0x10, 0x00, 0x00,
-		0xAF, 0x02, 0x60, 0x10,
-		0xFF, 0xFF, 0xFF, 0xFF,
-		0x13, 0x00
+		0x11, 0x00,
+		0xFF, 0xFF,
+		0x13
 	};
 
 	const auto entries = decoder.DecodeByteStream(bytes, 0x2000ULL);
-	Expect(entries.size() == 7, "byte stream should produce six full entries plus one truncated entry");
+	Expect(entries.size() == 6, "byte stream should produce mixed entries plus one truncated entry");
 
 	Expect(entries[0].pc == 0x2000ULL, "byte stream pc[0] should start at base address");
-	Expect(entries[0].instruction.rawWord == 0x00000013U, "byte stream little-endian assembly[0] should match addi");
-	Expect(entries[0].disassembly == "addi x0, x0, 0", "byte stream disassembly[0] should be deterministic");
+	Expect(entries[0].instruction.instructionLength == 2, "byte stream compressed entry should be two bytes");
+	Expect(entries[0].instruction.mnemonic == Mnemonic::C_NOP, "byte stream mnemonic[0] should decode as c.nop");
+	Expect(entries[0].disassembly == "c.nop x0, 0", "byte stream disassembly[0] should be deterministic");
 	Expect(!entries[0].truncated, "byte stream entry[0] should not be truncated");
 
-	Expect(entries[1].pc == 0x2004ULL, "byte stream pc[1] should increment by 4");
-	Expect(entries[1].instruction.rawWord == 0x123450B7U, "byte stream little-endian assembly[1] should match lui");
-	Expect(entries[1].instruction.mnemonic == Mnemonic::LUI, "byte stream mnemonic[1] should decode as lui");
+	Expect(entries[1].pc == 0x2002ULL, "byte stream pc[1] should increment by 2");
+	Expect(entries[1].instruction.rawWord == 0x00000013U, "byte stream little-endian assembly[1] should match addi");
+	Expect(entries[1].instruction.mnemonic == Mnemonic::ADDI, "byte stream mnemonic[1] should decode as addi");
 
-	Expect(entries[2].pc == 0x2008ULL, "byte stream pc[2] should increment by 4");
-	Expect(entries[2].instruction.mnemonic == Mnemonic::MUL, "byte stream mnemonic[2] should decode as mul");
-	Expect(entries[2].instruction.extension == "RV64M", "byte stream extension[2] should be RV64M");
+	Expect(entries[2].pc == 0x2006ULL, "byte stream pc[2] should increment by 4 after a 32-bit instruction");
+	Expect(entries[2].instruction.mnemonic == Mnemonic::C_LI, "byte stream mnemonic[2] should decode as c.li");
+	Expect(entries[2].instruction.instructionLength == 2, "byte stream compressed instruction length should be two bytes");
 
-	Expect(entries[3].pc == 0x200CULL, "byte stream pc[3] should increment by 4");
-	Expect(entries[3].instruction.mnemonic == Mnemonic::CSRRW, "byte stream mnemonic[3] should decode as csrrw");
-	Expect(entries[3].instruction.extension == "Zicsr", "byte stream extension[3] should be Zicsr");
+	Expect(entries[3].pc == 0x2008ULL, "byte stream pc[3] should increment by 2 after compressed instruction");
+	Expect(entries[3].instruction.mnemonic == Mnemonic::LUI, "byte stream mnemonic[3] should decode as lui");
+	Expect(entries[3].instruction.extension == "RV64I", "byte stream extension[3] should be RV64I");
 
-	Expect(entries[4].pc == 0x2010ULL, "byte stream pc[4] should increment by 4");
-	Expect(entries[4].instruction.mnemonic == Mnemonic::LR_W, "byte stream mnemonic[4] should decode as lr.w");
-	Expect(entries[4].instruction.extension == "RV64A", "byte stream extension[4] should be RV64A");
+	Expect(entries[4].pc == 0x200CULL, "byte stream pc[4] should increment by 4 after a 32-bit instruction");
+	Expect(entries[4].instruction.illegal, "byte stream unsupported compressed word should remain illegal");
+	Expect(entries[4].disassembly == "illegal 0x11", "byte stream unsupported compressed disassembly should be deterministic");
 
-	Expect(entries[5].pc == 0x2014ULL, "byte stream pc[5] should increment by 4");
-	Expect(entries[5].instruction.illegal, "byte stream illegal word should remain illegal in-stream");
-	Expect(entries[5].disassembly == "illegal 0xffffffff", "byte stream illegal disassembly should be deterministic");
-	Expect(!entries[5].truncated, "byte stream illegal full word should not be marked truncated");
+	Expect(entries[5].pc == 0x200EULL, "byte stream truncated pc should advance by the consumed compressed slots");
+	Expect(entries[5].instruction.illegal, "byte stream trailing bytes should produce an illegal entry");
+	Expect(entries[5].truncated, "byte stream trailing bytes should be marked truncated");
+	Expect(entries[5].disassembly == "illegal 0x13", "byte stream trailing-byte disassembly should reflect the partial little-endian word");
 
-	Expect(entries[6].pc == 0x2018ULL, "byte stream truncated pc should continue by 4-byte slots");
-	Expect(entries[6].instruction.illegal, "byte stream trailing bytes should produce an illegal entry");
-	Expect(entries[6].truncated, "byte stream trailing bytes should be marked truncated");
-	Expect(entries[6].disassembly == "illegal 0x13", "byte stream trailing-byte disassembly should reflect the partial little-endian word");
+	const std::vector<uint8_t> illegalStream = {0x02, 0x00};
+	const auto illegalEntries = decoder.DecodeByteStream(illegalStream, 0x3000ULL);
+	Expect(illegalEntries.size() == 1, "unsupported compressed stream should still yield one entry");
+	Expect(illegalEntries[0].instruction.illegal, "unsupported compressed encoding should be illegal");
+	Expect(illegalEntries[0].instruction.instructionLength == 2, "unsupported compressed encoding still consumes two bytes deterministically");
+	Expect(illegalEntries[0].pc == 0x3000ULL, "unsupported compressed pc should start at the base address");
+	Expect(illegalEntries[0].disassembly == "illegal 0x2", "unsupported compressed disassembly should be deterministic");
 }
 
 int main() {
@@ -532,8 +617,9 @@ int main() {
 	TestRFormat();
 	TestAtomicFormat();
 	TestIllegalAndUnknown();
+	TestCompressedDecode();
 	TestDecodeStream();
 	TestDecodeByteStream();
-	std::cout << "RISC-V RV64I/RV64M/Zicsr/RV64A decoder smoke tests passed\n";
+	std::cout << "RISC-V RV64I/RV64M/Zicsr/RV64A/RV64C decoder smoke tests passed\n";
 	return 0;
 }

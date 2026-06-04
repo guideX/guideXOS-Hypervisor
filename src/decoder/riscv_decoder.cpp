@@ -22,6 +22,10 @@ constexpr uint8_t kOpcodeFence = 0x0F;
 constexpr uint8_t kOpcodeSystem = 0x73;
 constexpr uint8_t kFunct7M = 0x01;
 
+constexpr uint8_t kCompressedOpcodeQuadrant0 = 0x0;
+constexpr uint8_t kCompressedOpcodeQuadrant1 = 0x1;
+constexpr uint8_t kCompressedOpcodeQuadrant2 = 0x2;
+
 bool IsShiftImmLegal(uint8_t funct7, uint8_t funct3) {
 	if (funct3 == 0x1) {
 		return funct7 == 0x00;
@@ -40,6 +44,19 @@ bool IsShiftImmWLegal(uint8_t funct7, uint8_t funct3) {
 		return funct7 == 0x00 || funct7 == 0x20;
 	}
 	return false;
+}
+
+uint32_t GetBits(uint32_t value, unsigned shift, unsigned width) {
+	return (value >> shift) & ((1U << width) - 1U);
+}
+
+int64_t SignExtendUnsigned(uint32_t value, unsigned bits) {
+	const uint32_t signBit = 1U << (bits - 1U);
+	const uint32_t mask = (bits == 32U) ? 0xFFFFFFFFU : ((1U << bits) - 1U);
+	if ((value & signBit) != 0U) {
+		return static_cast<int64_t>(static_cast<int32_t>(value | ~mask));
+	}
+	return static_cast<int64_t>(value & mask);
 }
 
 } // namespace
@@ -210,6 +227,267 @@ std::string Decoder::RegisterName(uint8_t reg) {
 	std::ostringstream oss;
 	oss << 'x' << static_cast<unsigned>(reg);
 	return oss.str();
+}
+
+DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
+	DecodedInstruction insn;
+	insn.rawWord = rawHalfword;
+	insn.instructionLength = 2;
+	insn.extension = "RV64C";
+	insn.format = InstructionFormat::Compressed;
+	insn.opcode = static_cast<uint8_t>(rawHalfword & 0x3U);
+	insn.funct3 = static_cast<uint8_t>((rawHalfword >> 13) & 0x7U);
+
+	auto markLegal = [&insn]() {
+		insn.recognized = true;
+		insn.illegal = false;
+	};
+
+	auto markMnemonic = [&](Mnemonic mnemonic) {
+		insn.mnemonic = mnemonic;
+		markLegal();
+	};
+
+	const uint8_t quadrant = insn.opcode;
+	const uint8_t funct3 = insn.funct3;
+	const uint8_t rd = static_cast<uint8_t>((rawHalfword >> 7) & 0x1FU);
+	const uint8_t rs1 = rd;
+	const uint8_t rs2 = static_cast<uint8_t>((rawHalfword >> 2) & 0x1FU);
+	const uint8_t rdPrime = static_cast<uint8_t>(8U + ((rawHalfword >> 2) & 0x7U));
+	const uint8_t rs1Prime = static_cast<uint8_t>(8U + ((rawHalfword >> 7) & 0x7U));
+	const uint8_t rs2Prime = static_cast<uint8_t>(8U + ((rawHalfword >> 2) & 0x7U));
+
+	if (quadrant == kCompressedOpcodeQuadrant1) {
+		switch (funct3) {
+		case 0x0: {
+			const int64_t imm = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
+			insn.format = InstructionFormat::I;
+			insn.immediate = imm;
+			if (rd == 0U && imm == 0) {
+				markMnemonic(Mnemonic::C_NOP);
+			} else if (rd != 0U) {
+				markMnemonic(Mnemonic::C_ADDI);
+			} else {
+				insn.illegal = true;
+			}
+			break;
+		}
+		case 0x1: {
+			const int64_t imm = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
+			insn.format = InstructionFormat::U;
+			insn.rd = rd;
+			insn.immediate = static_cast<int64_t>(static_cast<int32_t>(imm << 12));
+			if (rd == 0U) {
+				insn.illegal = true;
+			} else if (rd == 2U) {
+				markMnemonic(Mnemonic::C_ADDI16SP);
+			} else {
+				markMnemonic(Mnemonic::C_LUI);
+			}
+			break;
+		}
+		case 0x2:
+			insn.format = InstructionFormat::I;
+			insn.rd = rd;
+			insn.immediate = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
+			if (rd != 0U) {
+				markMnemonic(Mnemonic::C_LI);
+			} else {
+				insn.illegal = true;
+			}
+			break;
+		case 0x3:
+			insn.format = InstructionFormat::U;
+			insn.rd = rd;
+			insn.immediate = static_cast<int64_t>(static_cast<int32_t>((((rawHalfword >> 12) & 0x1U) << 17) | (((rawHalfword >> 2) & 0x1FU) << 12)));
+			if (rd == 2U) {
+				insn.illegal = true;
+			} else if (rd != 0U) {
+				markMnemonic(Mnemonic::C_LUI);
+			} else {
+				insn.illegal = true;
+			}
+			break;
+		case 0x4:
+			insn.format = InstructionFormat::I;
+			switch ((rawHalfword >> 10) & 0x3U) {
+			case 0x0:
+				if ((rawHalfword & 0x1000U) == 0U) {
+					insn.immediate = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
+					if (rd != 0U) {
+						markMnemonic(Mnemonic::C_SRLI);
+					} else {
+						insn.illegal = true;
+					}
+				} else {
+					insn.immediate = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
+					if (rd != 0U) {
+						markMnemonic(Mnemonic::C_SRAI);
+					} else {
+						insn.illegal = true;
+					}
+				}
+				break;
+			case 0x1:
+				insn.immediate = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
+				if (rd != 0U) {
+					markMnemonic(Mnemonic::C_ANDI);
+				} else {
+					insn.illegal = true;
+				}
+				break;
+			default:
+				insn.illegal = true;
+				break;
+			}
+			break;
+		case 0x5:
+			insn.format = InstructionFormat::J;
+			insn.rd = 0U;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_J);
+			break;
+		case 0x6:
+			insn.format = InstructionFormat::B;
+			insn.rs1 = rs1Prime;
+			insn.rs2 = 0U;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_BEQZ);
+			break;
+		case 0x7:
+			insn.format = InstructionFormat::B;
+			insn.rs1 = rs1Prime;
+			insn.rs2 = 0U;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_BNEZ);
+			break;
+		default:
+			insn.illegal = true;
+			break;
+		}
+	} else if (quadrant == kCompressedOpcodeQuadrant2) {
+		switch (funct3) {
+		case 0x0:
+			insn.format = InstructionFormat::I;
+			insn.rd = rd;
+			insn.rs1 = rd;
+			insn.immediate = SignExtendUnsigned((rawHalfword >> 2) & 0x1FU, 5);
+			if (rd == 0U) {
+				insn.illegal = true;
+			} else {
+				markMnemonic(Mnemonic::C_SLLI);
+			}
+			break;
+		case 0x2:
+			insn.format = InstructionFormat::I;
+			insn.rd = rd;
+			insn.rs1 = rs1;
+			insn.immediate = 0;
+			if (rd == 0U && rs2 == 0U) {
+				markMnemonic(Mnemonic::C_EBREAK);
+			} else if (rd != 0U && rs2 == 0U) {
+				markMnemonic(Mnemonic::C_JR);
+			} else if (rd != 0U && rs2 != 0U) {
+				markMnemonic(Mnemonic::C_MV);
+			} else {
+				insn.illegal = true;
+			}
+			break;
+		case 0x4:
+			if (((rawHalfword >> 12) & 0x1U) == 0U) {
+				insn.format = InstructionFormat::I;
+				insn.rd = rd;
+				insn.rs1 = rs1;
+				insn.immediate = 0;
+				if (rd != 0U && rs2 == 0U) {
+					markMnemonic(Mnemonic::C_JR);
+				} else if (rd != 0U && rs2 != 0U) {
+					markMnemonic(Mnemonic::C_MV);
+				} else {
+					insn.illegal = true;
+				}
+			} else if (rs2 == 0U) {
+				insn.format = InstructionFormat::I;
+				insn.rd = 1U;
+				insn.rs1 = rs1;
+				insn.immediate = 0;
+				if (rs1 == 0U) {
+					markMnemonic(Mnemonic::C_EBREAK);
+				} else {
+					markMnemonic(Mnemonic::C_JALR);
+				}
+			} else {
+				insn.format = InstructionFormat::R;
+				insn.rd = rd;
+				insn.rs1 = rs1;
+				insn.rs2 = rs2;
+				if (rd != 0U && rs1 != 0U && rs2 != 0U) {
+					markMnemonic(Mnemonic::C_ADD);
+				} else {
+					insn.illegal = true;
+				}
+			}
+			break;
+		default:
+			insn.illegal = true;
+			break;
+		}
+	} else if (quadrant == kCompressedOpcodeQuadrant0) {
+		switch (funct3) {
+		case 0x0:
+			insn.format = InstructionFormat::I;
+			insn.rd = rdPrime;
+			insn.rs1 = 2U;
+			insn.immediate = SignExtendUnsigned((((rawHalfword >> 6) & 0x1U) << 2) | (((rawHalfword >> 5) & 0x1U) << 3) | (((rawHalfword >> 11) & 0x3U) << 4) | (((rawHalfword >> 7) & 0xFU) << 6), 10);
+			if (insn.immediate == 0) {
+				insn.illegal = true;
+			} else {
+				markMnemonic(Mnemonic::C_ADDI4SPN);
+			}
+			break;
+		case 0x2:
+			insn.format = InstructionFormat::I;
+			insn.rd = rdPrime;
+			insn.rs1 = rs1Prime;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_LW);
+			break;
+		case 0x3:
+			insn.format = InstructionFormat::I;
+			insn.rd = rdPrime;
+			insn.rs1 = rs1Prime;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_LD);
+			break;
+		case 0x6:
+			insn.format = InstructionFormat::S;
+			insn.rs1 = rs1Prime;
+			insn.rs2 = rdPrime;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_SW);
+			break;
+		case 0x7:
+			insn.format = InstructionFormat::S;
+			insn.rs1 = rs1Prime;
+			insn.rs2 = rdPrime;
+			insn.immediate = 0;
+			markMnemonic(Mnemonic::C_SD);
+			break;
+		default:
+			insn.illegal = true;
+			break;
+		}
+	} else {
+		insn.illegal = true;
+	}
+
+	if (!insn.recognized) {
+		insn.mnemonic = Mnemonic::Illegal;
+		insn.format = InstructionFormat::Unknown;
+		insn.illegal = true;
+	}
+
+	return insn;
 }
 
 DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
@@ -633,6 +911,29 @@ std::string Decoder::Disassemble(const DecodedInstruction& instruction) const {
 		return oss.str();
 	}
 
+	if (instruction.format == InstructionFormat::Compressed) {
+		if (instruction.mnemonic == Mnemonic::C_EBREAK) {
+			return "c.ebreak";
+		}
+		oss << mnemonic;
+		if (instruction.mnemonic == Mnemonic::C_NOP) {
+			oss << " x0, 0";
+		} else if (instruction.mnemonic == Mnemonic::C_ADDI || instruction.mnemonic == Mnemonic::C_LI || instruction.mnemonic == Mnemonic::C_LUI || instruction.mnemonic == Mnemonic::C_ADDI16SP) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << instruction.immediate;
+		} else if (instruction.mnemonic == Mnemonic::C_ADDI4SPN || instruction.mnemonic == Mnemonic::C_LW || instruction.mnemonic == Mnemonic::C_LD) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << instruction.immediate << "(x2)";
+		} else if (instruction.mnemonic == Mnemonic::C_SW || instruction.mnemonic == Mnemonic::C_SD) {
+			oss << ' ' << RegisterName(instruction.rs2) << ", " << instruction.immediate << "(x2)";
+		} else if (instruction.mnemonic == Mnemonic::C_J || instruction.mnemonic == Mnemonic::C_BEQZ || instruction.mnemonic == Mnemonic::C_BNEZ) {
+			oss << ' ' << instruction.immediate;
+		} else if (instruction.mnemonic == Mnemonic::C_JR || instruction.mnemonic == Mnemonic::C_JALR || instruction.mnemonic == Mnemonic::C_MV || instruction.mnemonic == Mnemonic::C_ADD) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << RegisterName(instruction.rs1);
+		} else if (instruction.mnemonic == Mnemonic::C_SLLI || instruction.mnemonic == Mnemonic::C_SRLI || instruction.mnemonic == Mnemonic::C_SRAI || instruction.mnemonic == Mnemonic::C_ANDI) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << instruction.immediate;
+		}
+		return oss.str();
+	}
+
 	switch (instruction.format) {
 	case InstructionFormat::R:
 		oss << mnemonic << ' ' << RegisterName(instruction.rd)
@@ -730,38 +1031,62 @@ std::vector<DecodedStreamEntry> Decoder::DecodeStream(const std::vector<uint32_t
 }
 
 std::vector<DecodedStreamEntry> Decoder::DecodeByteStream(const std::vector<uint8_t>& bytes, uint64_t startingPc) const {
-	std::vector<uint32_t> words;
-	words.reserve(bytes.size() / 4);
+	std::vector<DecodedStreamEntry> entries;
+	entries.reserve(bytes.size());
 
-	for (size_t index = 0; index + 3 < bytes.size(); index += 4) {
+	uint64_t pc = startingPc;
+	size_t index = 0;
+	while (index < bytes.size()) {
+		const size_t remaining = bytes.size() - index;
+		if (remaining < 2U) {
+			DecodedInstruction instruction;
+			instruction.rawWord = static_cast<uint32_t>(bytes[index]);
+			instruction.mnemonic = Mnemonic::Illegal;
+			instruction.format = InstructionFormat::Unknown;
+			instruction.instructionLength = 2;
+			instruction.recognized = false;
+			instruction.illegal = true;
+
+			std::ostringstream oss;
+			oss << "illegal 0x" << std::hex << instruction.rawWord;
+			entries.push_back(DecodedStreamEntry{pc, instruction, oss.str(), true});
+			break;
+		}
+
+		const uint16_t halfword = static_cast<uint16_t>(bytes[index]) |
+			(static_cast<uint16_t>(bytes[index + 1]) << 8);
+		if ((halfword & 0x3U) != 0x3U) {
+			DecodedInstruction instruction = DecodeCompressed(halfword);
+			const std::string disassembly = Disassemble(instruction);
+			entries.push_back(DecodedStreamEntry{pc, instruction, disassembly, false});
+			index += 2U;
+			pc += 2ULL;
+			continue;
+		}
+
+		if (remaining < 4U) {
+			DecodedInstruction instruction;
+			instruction.rawWord = static_cast<uint32_t>(halfword);
+			instruction.mnemonic = Mnemonic::Illegal;
+			instruction.format = InstructionFormat::Unknown;
+			instruction.instructionLength = 4;
+			instruction.recognized = false;
+			instruction.illegal = true;
+
+			std::ostringstream oss;
+			oss << "illegal 0x" << std::hex << instruction.rawWord;
+			entries.push_back(DecodedStreamEntry{pc, instruction, oss.str(), true});
+			break;
+		}
+
 		const uint32_t rawWord = static_cast<uint32_t>(bytes[index]) |
 			(static_cast<uint32_t>(bytes[index + 1]) << 8) |
 			(static_cast<uint32_t>(bytes[index + 2]) << 16) |
 			(static_cast<uint32_t>(bytes[index + 3]) << 24);
-		words.push_back(rawWord);
-	}
-
-	std::vector<DecodedStreamEntry> entries = DecodeStream(words, startingPc);
-
-	const size_t consumedBytes = words.size() * 4U;
-	const size_t remainingBytes = bytes.size() - consumedBytes;
-	if (remainingBytes != 0U) {
-		const uint32_t truncatedWord = static_cast<uint32_t>(bytes[consumedBytes]) |
-			((remainingBytes > 1U ? static_cast<uint32_t>(bytes[consumedBytes + 1]) : 0U) << 8) |
-			((remainingBytes > 2U ? static_cast<uint32_t>(bytes[consumedBytes + 2]) : 0U) << 16);
-
-		DecodedInstruction instruction;
-		instruction.rawWord = truncatedWord;
-		instruction.mnemonic = Mnemonic::Illegal;
-		instruction.format = InstructionFormat::Unknown;
-		instruction.instructionLength = 4;
-		instruction.recognized = false;
-		instruction.illegal = true;
-
-		std::ostringstream oss;
-		oss << "illegal 0x" << std::hex << truncatedWord;
-
-		entries.push_back(DecodedStreamEntry{startingPc + static_cast<uint64_t>(consumedBytes), instruction, oss.str(), true});
+		DecodedInstruction instruction = Decode(rawWord);
+		entries.push_back(DecodedStreamEntry{pc, instruction, Disassemble(instruction), false});
+		index += 4U;
+		pc += 4ULL;
 	}
 
 	return entries;

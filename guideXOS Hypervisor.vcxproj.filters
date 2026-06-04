@@ -246,6 +246,7 @@
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
     <Text Include="output.log" />
+    <Text Include="docs\riscv\rv64-decoder-status.txt" />
   </ItemGroup>
   <ItemGroup>
     <None Include="examples\configs\minimal-vm.json" />

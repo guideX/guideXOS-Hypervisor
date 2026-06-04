@@ -209,6 +209,7 @@
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
+    <Text Include="docs\riscv\rv64-decoder-status.txt" />
     <Text Include="output.log" />
   </ItemGroup>
   <ItemGroup>
