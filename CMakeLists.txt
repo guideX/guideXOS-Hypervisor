@@ -276,6 +276,18 @@ else()
     target_compile_options(test_riscv_decoder PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISC-V guest-memory fetch/decode smoke harness
+add_executable(test_riscv_fetch_decode
+    tests/test_riscv_fetch_decode.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_riscv_fetch_decode PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_fetch_decode PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # Watchpoint test
 add_executable(test_watchpoint
     tests/test_watchpoint.cpp

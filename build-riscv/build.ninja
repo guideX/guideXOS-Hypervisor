@@ -2592,6 +2592,59 @@ build bin\test_riscv_decoder.exe: CXX_EXECUTABLE_LINKER__test_riscv_decoder_Debu
   TARGET_SUPPORT_DIR = CMakeFiles\test_riscv_decoder.dir
 
 # =============================================================================
+# Object build statements for EXECUTABLE target test_riscv_fetch_decode
+
+
+#############################################
+# Order-only phony target for test_riscv_fetch_decode
+
+build cmake_object_order_depends_target_test_riscv_fetch_decode: phony || .
+
+build CMakeFiles\test_riscv_fetch_decode.dir\tests\test_riscv_fetch_decode.cpp.obj: CXX_COMPILER__test_riscv_fetch_decode_unscanned_Debug D$:\dev\guideXOS_Emulator\tests\test_riscv_fetch_decode.cpp || cmake_object_order_depends_target_test_riscv_fetch_decode
+  CONFIG = Debug
+  DEFINES = -D_CRT_DECLARE_NONSTDC_NAMES=1 -D_CRT_NONSTDC_NO_WARNINGS=1
+  FLAGS = /DWIN32 /D_WINDOWS /GR /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /FIerrno.h /W4
+  INCLUDES = -ID:\dev\guideXOS_Emulator\include
+  OBJECT_DIR = CMakeFiles\test_riscv_fetch_decode.dir
+  OBJECT_FILE_DIR = CMakeFiles\test_riscv_fetch_decode.dir\tests
+  TARGET_COMPILE_PDB = CMakeFiles\test_riscv_fetch_decode.dir\
+  TARGET_PDB = bin\test_riscv_fetch_decode.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\test_riscv_fetch_decode.dir
+
+build CMakeFiles\test_riscv_fetch_decode.dir\src\decoder\riscv_decoder.cpp.obj: CXX_COMPILER__test_riscv_fetch_decode_unscanned_Debug D$:\dev\guideXOS_Emulator\src\decoder\riscv_decoder.cpp || cmake_object_order_depends_target_test_riscv_fetch_decode
+  CONFIG = Debug
+  DEFINES = -D_CRT_DECLARE_NONSTDC_NAMES=1 -D_CRT_NONSTDC_NO_WARNINGS=1
+  FLAGS = /DWIN32 /D_WINDOWS /GR /EHsc /Zi /Ob0 /Od /RTC1 -std:c++20 -MDd /FIerrno.h /W4
+  INCLUDES = -ID:\dev\guideXOS_Emulator\include
+  OBJECT_DIR = CMakeFiles\test_riscv_fetch_decode.dir
+  OBJECT_FILE_DIR = CMakeFiles\test_riscv_fetch_decode.dir\src\decoder
+  TARGET_COMPILE_PDB = CMakeFiles\test_riscv_fetch_decode.dir\
+  TARGET_PDB = bin\test_riscv_fetch_decode.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\test_riscv_fetch_decode.dir
+
+
+# =============================================================================
+# Link build statements for EXECUTABLE target test_riscv_fetch_decode
+
+
+#############################################
+# Link the executable bin\test_riscv_fetch_decode.exe
+
+build bin\test_riscv_fetch_decode.exe: CXX_EXECUTABLE_LINKER__test_riscv_fetch_decode_Debug CMakeFiles\test_riscv_fetch_decode.dir\tests\test_riscv_fetch_decode.cpp.obj CMakeFiles\test_riscv_fetch_decode.dir\src\decoder\riscv_decoder.cpp.obj
+  CONFIG = Debug
+  FLAGS = /DWIN32 /D_WINDOWS /GR /EHsc /Zi /Ob0 /Od /RTC1 -MDd
+  LINK_FLAGS = /machine:X86 /debug /INCREMENTAL /subsystem:console
+  LINK_LIBRARIES = kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
+  OBJECT_DIR = CMakeFiles\test_riscv_fetch_decode.dir
+  POST_BUILD = cd .
+  PRE_LINK = cd .
+  TARGET_COMPILE_PDB = CMakeFiles\test_riscv_fetch_decode.dir\
+  TARGET_FILE = bin\test_riscv_fetch_decode.exe
+  TARGET_IMPLIB = lib\test_riscv_fetch_decode.lib
+  TARGET_PDB = bin\test_riscv_fetch_decode.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\test_riscv_fetch_decode.dir
+
+# =============================================================================
 # Object build statements for EXECUTABLE target test_watchpoint
 
 
@@ -11699,6 +11752,10 @@ build test_riscv_decoder: phony bin\test_riscv_decoder.exe
 
 build test_riscv_decoder.exe: phony bin\test_riscv_decoder.exe
 
+build test_riscv_fetch_decode: phony bin\test_riscv_fetch_decode.exe
+
+build test_riscv_fetch_decode.exe: phony bin\test_riscv_fetch_decode.exe
+
 build test_syscall_dispatcher: phony bin\test_syscall_dispatcher.exe
 
 build test_syscall_dispatcher.exe: phony bin\test_syscall_dispatcher.exe
@@ -11735,7 +11792,7 @@ build webui_example.exe: phony bin\webui_example.exe
 #############################################
 # Folder: D:/dev/guideXOS_Emulator/build-riscv
 
-build all: phony bin\ia64emu.exe bin\ia64emu_tests.exe bin\test_cpu_execution.exe bin\test_mov_imm.exe bin\test_new_instructions.exe bin\test_riscv_decoder.exe bin\test_watchpoint.exe bin\debug_harness.exe bin\test_bootstrap.exe bin\test_syscall_dispatcher.exe bin\test_io_devices.exe bin\test_debugger.exe bin\test_isa_plugin.exe bin\test_vmmanager.exe bin\test_profiler.exe bin\test_fuzzer.exe bin\test_vm_isolation.exe bin\webui_example.exe bin\virtual_disk_example.exe bin\virtual_devices_example.exe bin\boot_trace_example.exe bin\kernel_validation_example.exe copy_web_files
+build all: phony bin\ia64emu.exe bin\ia64emu_tests.exe bin\test_cpu_execution.exe bin\test_mov_imm.exe bin\test_new_instructions.exe bin\test_riscv_decoder.exe bin\test_riscv_fetch_decode.exe bin\test_watchpoint.exe bin\debug_harness.exe bin\test_bootstrap.exe bin\test_syscall_dispatcher.exe bin\test_io_devices.exe bin\test_debugger.exe bin\test_isa_plugin.exe bin\test_vmmanager.exe bin\test_profiler.exe bin\test_fuzzer.exe bin\test_vm_isolation.exe bin\webui_example.exe bin\virtual_disk_example.exe bin\virtual_devices_example.exe bin\boot_trace_example.exe bin\kernel_validation_example.exe copy_web_files
 
 # =============================================================================
 # Built-in targets

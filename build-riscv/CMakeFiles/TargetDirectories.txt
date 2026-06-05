@@ -4,6 +4,7 @@ D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_cpu_execution.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_mov_imm.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_new_instructions.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_riscv_decoder.dir
+D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_riscv_fetch_decode.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_watchpoint.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/debug_harness.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_bootstrap.dir

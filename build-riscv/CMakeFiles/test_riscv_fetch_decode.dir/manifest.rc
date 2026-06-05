@@ -1,0 +1,2 @@
+#pragma code_page(65001)
+1 /* CREATEPROCESS_MANIFEST_RESOURCE_ID */ 24 /* RT_MANIFEST */ "D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_riscv_fetch_decode.dir/embed.manifest"

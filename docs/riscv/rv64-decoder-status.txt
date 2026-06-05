@@ -11,6 +11,11 @@ Stream/disassembly helper coverage:
 - Deterministic DecodeStream helper for 32-bit instruction words with PC progression and disassembly output
 - Mixed-byte DecodeByteStream helper for little-endian 16-bit/32-bit selection, PC progression, and trailing-byte reporting
 
+Fetch/decode smoke harness:
+- RISC-V guest-memory fetch/decode smoke harness validates guest PC progression, raw instruction capture, length selection, disassembly, and stop reasons
+- Supported trace fields: step index, guest PC, raw instruction value, instruction length, mnemonic/disassembly, decode status, next PC
+- Stop conditions: max steps, guest-memory end, truncated fetch, illegal decode, and c.ebreak halt marker (test harness convention only)
+
 Byte-stream helper coverage:
 - Deterministic DecodeByteStream helper for little-endian in-memory byte sequences with 16-bit/32-bit selection and trailing-byte reporting
 
@@ -31,14 +36,11 @@ Test command used:
 
 Latest test result:
 - PASS: RISC-V RV64I/RV64M/Zicsr/RV64A/RV64C decoder smoke tests passed
+- PASS: RISC-V guest-memory fetch/decode smoke harness passed
 
 Next milestone runway:
-- RISC-V guest-memory fetch/decode smoke harness
-- Load a tiny byte buffer or flat binary into guest memory
-- Set an initial PC and fetch bytes from guest memory
-- Determine 16-bit vs 32-bit instruction length
-- Decode using the existing decoder path and advance PC correctly
-- Emit structured trace output and stop after a fixed count or explicit halt marker
+- Minimal RV64 CPU state plus tiny execution harness
+- Keep execution semantics deferred unless a tiny bookkeeping helper is required
 - No ISO boot attempt yet
 
 Execution semantics: deferred
