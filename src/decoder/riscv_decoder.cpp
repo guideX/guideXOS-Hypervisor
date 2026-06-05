@@ -217,6 +217,28 @@ std::string Decoder::MnemonicToString(Mnemonic mnemonic) {
 	case Mnemonic::SFENCE_VMA: return "sfence.vma";
 	case Mnemonic::FENCE: return "fence";
 	case Mnemonic::FENCE_I: return "fence.i";
+	case Mnemonic::C_NOP: return "c.nop";
+	case Mnemonic::C_ADDI: return "c.addi";
+	case Mnemonic::C_LI: return "c.li";
+	case Mnemonic::C_LUI: return "c.lui";
+	case Mnemonic::C_ADDI16SP: return "c.addi16sp";
+	case Mnemonic::C_ADDI4SPN: return "c.addi4spn";
+	case Mnemonic::C_LW: return "c.lw";
+	case Mnemonic::C_LD: return "c.ld";
+	case Mnemonic::C_SW: return "c.sw";
+	case Mnemonic::C_SD: return "c.sd";
+	case Mnemonic::C_J: return "c.j";
+	case Mnemonic::C_JR: return "c.jr";
+	case Mnemonic::C_JALR: return "c.jalr";
+	case Mnemonic::C_BEQZ: return "c.beqz";
+	case Mnemonic::C_BNEZ: return "c.bnez";
+	case Mnemonic::C_SLLI: return "c.slli";
+	case Mnemonic::C_SRLI: return "c.srli";
+	case Mnemonic::C_SRAI: return "c.srai";
+	case Mnemonic::C_ANDI: return "c.andi";
+	case Mnemonic::C_MV: return "c.mv";
+	case Mnemonic::C_ADD: return "c.add";
+	case Mnemonic::C_EBREAK: return "c.ebreak";
 	case Mnemonic::Illegal:
 	default:
 		return "illegal";
@@ -260,7 +282,9 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 		switch (funct3) {
 		case 0x0: {
 			const int64_t imm = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
+			insn.rd = rd;
+			insn.rs1 = rd;
 			insn.immediate = imm;
 			if (rd == 0U && imm == 0) {
 				markMnemonic(Mnemonic::C_NOP);
@@ -273,8 +297,9 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 		}
 		case 0x1: {
 			const int64_t imm = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
-			insn.format = InstructionFormat::U;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rd;
+			insn.rs1 = rd;
 			insn.immediate = static_cast<int64_t>(static_cast<int32_t>(imm << 12));
 			if (rd == 0U) {
 				insn.illegal = true;
@@ -286,8 +311,9 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			break;
 		}
 		case 0x2:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rd;
+			insn.rs1 = rd;
 			insn.immediate = SignExtendUnsigned(((rawHalfword >> 2) & 0x1FU) | (((rawHalfword >> 12) & 0x1U) << 5), 6);
 			if (rd != 0U) {
 				markMnemonic(Mnemonic::C_LI);
@@ -296,8 +322,9 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			}
 			break;
 		case 0x3:
-			insn.format = InstructionFormat::U;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rd;
+			insn.rs1 = rd;
 			insn.immediate = static_cast<int64_t>(static_cast<int32_t>((((rawHalfword >> 12) & 0x1U) << 17) | (((rawHalfword >> 2) & 0x1FU) << 12)));
 			if (rd == 2U) {
 				insn.illegal = true;
@@ -308,7 +335,7 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			}
 			break;
 		case 0x4:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			switch ((rawHalfword >> 10) & 0x3U) {
 			case 0x0:
 				if ((rawHalfword & 0x1000U) == 0U) {
@@ -341,20 +368,20 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			}
 			break;
 		case 0x5:
-			insn.format = InstructionFormat::J;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = 0U;
 			insn.immediate = 0;
 			markMnemonic(Mnemonic::C_J);
 			break;
 		case 0x6:
-			insn.format = InstructionFormat::B;
+			insn.format = InstructionFormat::Compressed;
 			insn.rs1 = rs1Prime;
 			insn.rs2 = 0U;
 			insn.immediate = 0;
 			markMnemonic(Mnemonic::C_BEQZ);
 			break;
 		case 0x7:
-			insn.format = InstructionFormat::B;
+			insn.format = InstructionFormat::Compressed;
 			insn.rs1 = rs1Prime;
 			insn.rs2 = 0U;
 			insn.immediate = 0;
@@ -367,7 +394,7 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 	} else if (quadrant == kCompressedOpcodeQuadrant2) {
 		switch (funct3) {
 		case 0x0:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rd;
 			insn.rs1 = rd;
 			insn.immediate = SignExtendUnsigned((rawHalfword >> 2) & 0x1FU, 5);
@@ -378,9 +405,10 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			}
 			break;
 		case 0x2:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rd;
 			insn.rs1 = rs1;
+			insn.rs2 = rs2;
 			insn.immediate = 0;
 			if (rd == 0U && rs2 == 0U) {
 				markMnemonic(Mnemonic::C_EBREAK);
@@ -394,9 +422,10 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			break;
 		case 0x4:
 			if (((rawHalfword >> 12) & 0x1U) == 0U) {
-				insn.format = InstructionFormat::I;
+				insn.format = InstructionFormat::Compressed;
 				insn.rd = rd;
 				insn.rs1 = rs1;
+				insn.rs2 = rs2;
 				insn.immediate = 0;
 				if (rd != 0U && rs2 == 0U) {
 					markMnemonic(Mnemonic::C_JR);
@@ -406,7 +435,7 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 					insn.illegal = true;
 				}
 			} else if (rs2 == 0U) {
-				insn.format = InstructionFormat::I;
+				insn.format = InstructionFormat::Compressed;
 				insn.rd = 1U;
 				insn.rs1 = rs1;
 				insn.immediate = 0;
@@ -416,7 +445,7 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 					markMnemonic(Mnemonic::C_JALR);
 				}
 			} else {
-				insn.format = InstructionFormat::R;
+				insn.format = InstructionFormat::Compressed;
 				insn.rd = rd;
 				insn.rs1 = rs1;
 				insn.rs2 = rs2;
@@ -434,7 +463,7 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 	} else if (quadrant == kCompressedOpcodeQuadrant0) {
 		switch (funct3) {
 		case 0x0:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rdPrime;
 			insn.rs1 = 2U;
 			insn.immediate = SignExtendUnsigned((((rawHalfword >> 6) & 0x1U) << 2) | (((rawHalfword >> 5) & 0x1U) << 3) | (((rawHalfword >> 11) & 0x3U) << 4) | (((rawHalfword >> 7) & 0xFU) << 6), 10);
@@ -445,28 +474,28 @@ DecodedInstruction Decoder::DecodeCompressed(uint16_t rawHalfword) const {
 			}
 			break;
 		case 0x2:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rdPrime;
 			insn.rs1 = rs1Prime;
 			insn.immediate = 0;
 			markMnemonic(Mnemonic::C_LW);
 			break;
 		case 0x3:
-			insn.format = InstructionFormat::I;
+			insn.format = InstructionFormat::Compressed;
 			insn.rd = rdPrime;
 			insn.rs1 = rs1Prime;
 			insn.immediate = 0;
 			markMnemonic(Mnemonic::C_LD);
 			break;
 		case 0x6:
-			insn.format = InstructionFormat::S;
+			insn.format = InstructionFormat::Compressed;
 			insn.rs1 = rs1Prime;
 			insn.rs2 = rdPrime;
 			insn.immediate = 0;
 			markMnemonic(Mnemonic::C_SW);
 			break;
 		case 0x7:
-			insn.format = InstructionFormat::S;
+			insn.format = InstructionFormat::Compressed;
 			insn.rs1 = rs1Prime;
 			insn.rs2 = rdPrime;
 			insn.immediate = 0;
@@ -925,8 +954,14 @@ std::string Decoder::Disassemble(const DecodedInstruction& instruction) const {
 			oss << ' ' << RegisterName(instruction.rs2) << ", " << instruction.immediate << "(x2)";
 		} else if (instruction.mnemonic == Mnemonic::C_J || instruction.mnemonic == Mnemonic::C_BEQZ || instruction.mnemonic == Mnemonic::C_BNEZ) {
 			oss << ' ' << instruction.immediate;
-		} else if (instruction.mnemonic == Mnemonic::C_JR || instruction.mnemonic == Mnemonic::C_JALR || instruction.mnemonic == Mnemonic::C_MV || instruction.mnemonic == Mnemonic::C_ADD) {
+		} else if (instruction.mnemonic == Mnemonic::C_JR) {
 			oss << ' ' << RegisterName(instruction.rd) << ", " << RegisterName(instruction.rs1);
+		} else if (instruction.mnemonic == Mnemonic::C_JALR) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << RegisterName(instruction.rs1);
+		} else if (instruction.mnemonic == Mnemonic::C_MV) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << RegisterName(instruction.rs2);
+		} else if (instruction.mnemonic == Mnemonic::C_ADD) {
+			oss << ' ' << RegisterName(instruction.rd) << ", " << RegisterName(instruction.rs1) << ", " << RegisterName(instruction.rs2);
 		} else if (instruction.mnemonic == Mnemonic::C_SLLI || instruction.mnemonic == Mnemonic::C_SRLI || instruction.mnemonic == Mnemonic::C_SRAI || instruction.mnemonic == Mnemonic::C_ANDI) {
 			oss << ' ' << RegisterName(instruction.rd) << ", " << instruction.immediate;
 		}
