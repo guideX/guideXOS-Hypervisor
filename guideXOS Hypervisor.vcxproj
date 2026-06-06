@@ -132,6 +132,7 @@
     <ClCompile Include="debug_harness.cpp" />
     <ClCompile Include="src\decoder\riscv_decoder.cpp" />
     <ClCompile Include="tests\test_riscv_decoder.cpp" />
+    <ClCompile Include="tests\test_riscv_fetch_decode.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
