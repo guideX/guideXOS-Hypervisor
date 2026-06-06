@@ -25,6 +25,7 @@ namespace decoder {
 static bool setAccessSize(uint8_t x6, formats::MFormat& result);
 static void decodeLoad(uint8_t x6, uint8_t m, formats::MFormat& result);
 static void decodeStore(uint8_t x6, uint8_t m, formats::MFormat& result);
+static bool decodeAlloc(uint64_t raw_instruction, formats::MFormat& result);
 
 // MTypeDecoder::decode implementation
 bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
@@ -36,6 +37,7 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         
         // Extract major opcode (bits 37-40)
         uint8_t major = formats::extractBits(raw_instruction, 37, 4);
+        uint8_t x3 = formats::extractBits(raw_instruction, 33, 3);
         
         // Extract extended opcode fields
         uint8_t m = formats::extractBits(raw_instruction, 36, 1);   // Memory ordering
@@ -55,6 +57,12 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         // contains normal loads and stores; major opcode 5 contains the same
         // split for immediate-update forms.
         switch (major) {
+            case 0x1:
+                if (decodeAlloc(raw_instruction, result)) {
+                    return true;
+                }
+                return false;
+
             case 0x4:
                 if (x == 1 && m == 0 && x6 == 0x1C) {
                     result.operation = formats::MFormat::MemOp::GETF;
@@ -234,6 +242,22 @@ static void decodeStore(uint8_t x6, uint8_t m, formats::MFormat& result) {
         
         // Check for memory ordering
         result.release = (m == 1);
+    }
+
+static bool decodeAlloc(uint64_t raw_instruction, formats::MFormat& result) {
+        const uint8_t x3 = static_cast<uint8_t>(formats::extractBits(raw_instruction, 33, 3));
+        if (x3 != 0x6) {
+            return false;
+        }
+
+        result.operation = formats::MFormat::MemOp::ALLOC;
+        result.r1 = static_cast<uint8_t>(formats::extractBits(raw_instruction, 6, 7));
+        const uint8_t sof = static_cast<uint8_t>(formats::extractBits(raw_instruction, 13, 7));
+        const uint8_t sol = static_cast<uint8_t>(formats::extractBits(raw_instruction, 20, 7));
+        const uint8_t sor = static_cast<uint8_t>(formats::extractBits(raw_instruction, 27, 4));
+        result.has_imm = true;
+        result.imm9 = static_cast<int16_t>(sof | (static_cast<uint16_t>(sol) << 7) | (static_cast<uint16_t>(sor) << 14));
+        return true;
     }
     
 } // namespace decoder

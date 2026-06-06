@@ -104,6 +104,7 @@ struct MFormat {
     enum class MemOp {
         LOAD,
         STORE,
+        ALLOC,
         EXCHANGE,
         FETCHADD,
         SETF,
