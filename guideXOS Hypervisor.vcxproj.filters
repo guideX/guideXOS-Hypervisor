@@ -24,6 +24,9 @@
     <ClCompile Include="tests\test_riscv_decoder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="tests\test_riscv_fetch_decode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">

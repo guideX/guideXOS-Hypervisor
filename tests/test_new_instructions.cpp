@@ -53,6 +53,18 @@ uint64_t build_tnat_z_slot(uint8_t qp, uint8_t p1, uint8_t p2, uint8_t r3) {
            (5ULL << 37);
 }
 
+uint64_t build_mov_from_ip_slot(uint8_t qp, uint8_t r1) {
+    return (static_cast<uint64_t>(qp) & 0x3F) |
+           ((static_cast<uint64_t>(r1) & 0x7F) << 6) |
+           (0x30ULL << 27);
+}
+
+uint64_t build_mov_from_pr_slot(uint8_t qp, uint8_t r1) {
+    return (static_cast<uint64_t>(qp) & 0x3F) |
+           ((static_cast<uint64_t>(r1) & 0x7F) << 6) |
+           (0x33ULL << 27);
+}
+
 // Test CMP instructions
 void test_compare_instructions() {
     std::cout << "Testing compare instructions..." << std::endl;
@@ -537,6 +549,31 @@ void test_application_register_moves() {
     assert_true("mov-to-predicate should clear PR10 from source bit", !cpu.GetPR(10));
     assert_true("mov-to-predicate should set rotating PR16", cpu.GetPR(16));
     assert_true("mov-to-predicate should set high rotating predicate", cpu.GetPR(63));
+
+    InstructionEx mov_from_ip = decoder.DecodeSlot(build_mov_from_ip_slot(0, 11), UnitType::I_UNIT, 0x2f000);
+    assert_true("mov from ip should decode", mov_from_ip.GetType() == InstructionType::MOV_FROM_IP);
+    assert_equal("mov from ip destination register", 11, mov_from_ip.GetDst());
+    assert_string("mov from ip disassembly",
+                  "mov r11 = ip",
+                  mov_from_ip.GetDisassembly());
+
+    cpu.SetIP(0x123456789abcdef0ULL);
+    mov_from_ip.Execute(cpu, memory);
+    assert_equal("mov from ip should copy the current IP", 0x123456789abcdef0ULL, cpu.GetGR(11));
+
+    InstructionEx mov_from_pr = decoder.DecodeSlot(build_mov_from_pr_slot(0, 12), UnitType::I_UNIT, 0x2f010);
+    assert_true("mov from pr should decode", mov_from_pr.GetType() == InstructionType::MOV_FROM_PR);
+    assert_equal("mov from pr destination register", 12, mov_from_pr.GetDst());
+    assert_string("mov from pr disassembly",
+                  "mov r12 = pr",
+                  mov_from_pr.GetDisassembly());
+
+    cpu.SetPR(1, true);
+    cpu.SetPR(16, true);
+    cpu.SetPR(63, true);
+    mov_from_pr.Execute(cpu, memory);
+    assert_equal("mov from pr should pack predicate bits into a GR",
+                 0x8000000000010002ULL, cpu.GetGR(12));
 
     InstructionEx filler_m_nop = decoder.DecodeSlot(0x2b86ULL, UnitType::M_UNIT, 0x42008);
     assert_true("Final-loop predicated M nop should decode",
