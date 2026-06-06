@@ -542,3 +542,25 @@ message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "")
+
+# RISC-V CPU implementation
+set(RISCV_CPU_SOURCES
+    src/riscv/riscv_cpu.cpp
+)
+
+# Add RISC-V test for minimal execution harness
+add_executable(test_riscv_minimal_execution
+    tests/test_riscv_minimal_execution.cpp
+    
+    src/decoder/riscv_decoder.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_riscv_minimal_execution PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_minimal_execution PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Add to the test suite
+add_test(NAME RiscVMinimalExecutionTest COMMAND test_riscv_minimal_execution)
+
