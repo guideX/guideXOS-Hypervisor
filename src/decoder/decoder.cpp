@@ -1531,8 +1531,8 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
     const uint8_t x6 = static_cast<uint8_t>((slotBits >> 27) & 0x3F);
 
     auto decodeAlloc = [&]() -> bool {
-        // IA-64 alloc uses M34: major opcode 0 with x3=1 and x6=6.
-        if (!(major == 0x0 && x3 == 0x1 && x6 == 0x06)) {
+        // IA-64 alloc uses M34: major opcode 1 with x3=6.
+        if (!(major == 0x1 && x3 == 0x6)) {
             return false;
         }
 
