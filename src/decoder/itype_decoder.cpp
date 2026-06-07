@@ -172,57 +172,52 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
             }
         }
         
-        // Zero/sign extend operations
-        if (op == 0x10 || op == 0x11 || op == 0x12) {
-            InstructionType type = InstructionType::ZXT1;
-            if (op == 0x11) {
-                type = InstructionType::ZXT2;
-            } else if (op == 0x12) {
-                type = InstructionType::ZXT4;
-            }
-
-            instr = InstructionEx(type, UnitType::I_UNIT);
-            instr.SetPredicate(fmt.qp);
-            instr.SetOperands(fmt.r1, fmt.r3, 0);
-            return true;
-        }
-
-        if ((op & 0xF0) == 0x00) {
-            uint8_t subop = op & 0x0F;
-            
-            if (subop == 0x4) { // ZXT1
+        // Zero/sign extend operations and ALLOC
+        switch (op) {
+            case 0x10: // ZXT1
                 instr = InstructionEx(InstructionType::ZXT1, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
-            } else if (subop == 0x5) { // ZXT2
+
+            case 0x11: // ZXT2
                 instr = InstructionEx(InstructionType::ZXT2, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
-            } else if (subop == 0x6) { // ZXT4
+
+            case 0x12: // ZXT4
                 instr = InstructionEx(InstructionType::ZXT4, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
-            } else if (subop == 0x8) { // SXT1
+
+            case 0x14: // SXT1
                 instr = InstructionEx(InstructionType::SXT1, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
-            } else if (subop == 0x9) { // SXT2
+
+            case 0x15: // SXT2
                 instr = InstructionEx(InstructionType::SXT2, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
-            } else if (subop == 0xA) { // SXT4
+
+            case 0x16: // SXT4
                 instr = InstructionEx(InstructionType::SXT4, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
-            } else if (subop == 0xC) { // ALLOC
+
+            case 0x0C: // ALLOC
                 instr = InstructionEx(InstructionType::ALLOC, UnitType::I_UNIT);
                 instr.SetOperands(fmt.r1, 0, 0);
                 // Encode SOF, SOL, SOR in immediate
-                uint64_t alloc_imm = fmt.sof | (static_cast<uint64_t>(fmt.sol) << 7) | 
+                uint64_t alloc_imm = fmt.sof | (static_cast<uint64_t>(fmt.sol) << 7) |
                                      (static_cast<uint64_t>(fmt.sor) << 14);
                 instr.SetImmediate(alloc_imm);
                 return true;
-            }
         }
         
         return false;

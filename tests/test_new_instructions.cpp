@@ -345,6 +345,42 @@ void test_latest_boot_log_blockers() {
     zxt2_value.Execute(cpu, memory);
     assert_equal("Boot zxt2 should keep low 16 bits", 0x807fULL, cpu.GetGR(63));
 
+    InstructionEx sxt1_value = decoder.DecodeSlot(0xa0800200ULL, UnitType::I_UNIT, 0x31c60);
+    assert_true("Boot raw sxt1 should decode", sxt1_value.GetType() == InstructionType::SXT1);
+    assert_equal("Boot sxt1 destination", 8, sxt1_value.GetDst());
+    assert_equal("Boot sxt1 source", 8, sxt1_value.GetSrc1());
+    assert_string("Boot sxt1 disassembly",
+                  "sxt1 r8 = r8",
+                  sxt1_value.GetDisassembly());
+
+    cpu.SetGR(8, 0xffffffffffffff80ULL);
+    sxt1_value.Execute(cpu, memory);
+    assert_equal("Boot sxt1 should sign-extend byte", 0xffffffffffffff80ULL, cpu.GetGR(8));
+
+    InstructionEx sxt2_value = decoder.DecodeSlot(0xa8800200ULL, UnitType::I_UNIT, 0x31c70);
+    assert_true("Boot raw sxt2 should decode", sxt2_value.GetType() == InstructionType::SXT2);
+    assert_equal("Boot sxt2 destination", 8, sxt2_value.GetDst());
+    assert_equal("Boot sxt2 source", 8, sxt2_value.GetSrc1());
+    assert_string("Boot sxt2 disassembly",
+                  "sxt2 r8 = r8",
+                  sxt2_value.GetDisassembly());
+
+    cpu.SetGR(8, 0xffffffffffff8001ULL);
+    sxt2_value.Execute(cpu, memory);
+    assert_equal("Boot sxt2 should sign-extend halfword", 0xffffffffffff8001ULL, cpu.GetGR(8));
+
+    InstructionEx sxt4_value = decoder.DecodeSlot(0xb0800200ULL, UnitType::I_UNIT, 0x31c80);
+    assert_true("Boot raw sxt4 should decode", sxt4_value.GetType() == InstructionType::SXT4);
+    assert_equal("Boot sxt4 destination", 8, sxt4_value.GetDst());
+    assert_equal("Boot sxt4 source", 8, sxt4_value.GetSrc1());
+    assert_string("Boot sxt4 disassembly",
+                  "sxt4 r8 = r8",
+                  sxt4_value.GetDisassembly());
+
+    cpu.SetGR(8, 0xffffffff80000001ULL);
+    sxt4_value.Execute(cpu, memory);
+    assert_equal("Boot sxt4 should sign-extend word", 0xffffffff80000001ULL, cpu.GetGR(8));
+
     InstructionEx cloop = decoder.DecodeSlot(0xb1ffffc140ULL, UnitType::B_UNIT, 0xa120);
     assert_true("Boot raw counted-loop branch should decode",
                 cloop.GetType() == InstructionType::BR_CLOOP);
