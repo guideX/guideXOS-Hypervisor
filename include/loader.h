@@ -112,6 +112,7 @@ enum class RelocationType : uint32_t {
     R_IA64_PCREL21B = 0x49,
     R_IA64_PCREL21M = 0x4a,
     R_IA64_PCREL21F = 0x4b,
+    R_IA64_REL64LSB = 0x6f,
     R_IA64_LTOFF22 = 0x52,
     R_IA64_LTOFF64I = 0x53
 };

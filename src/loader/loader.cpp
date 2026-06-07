@@ -372,6 +372,13 @@ bool ELFLoader::ApplyRelocation(const ELF64_Rela& rela, uint64_t symValue, Memor
             break;
         }
 
+        case RelocationType::R_IA64_REL64LSB: {
+            // Relative 64-bit relocation used by IA-64 EFI images
+            uint64_t value = baseAddress_ + addend;
+            memory.write<uint64_t>(relocAddr, value);
+            break;
+        }
+
         default:
             // Unknown relocation type - log but don't fail
             // In a real implementation, this might need to fail
