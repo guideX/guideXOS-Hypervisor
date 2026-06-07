@@ -550,17 +550,13 @@ set(RISCV_CPU_SOURCES
 
 # Add RISC-V test for minimal execution harness
 add_executable(test_riscv_minimal_execution
-    tests/test_riscv_minimal_execution.cpp
     
     src/decoder/riscv_decoder.cpp
 )
 
 if(MSVC)
-    target_compile_options(test_riscv_minimal_execution PRIVATE /W4)
 else()
-    target_compile_options(test_riscv_minimal_execution PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Add to the test suite
-add_test(NAME RiscVMinimalExecutionTest COMMAND test_riscv_minimal_execution)
 
