@@ -103,7 +103,9 @@
     </ClCompile>
     <ClCompile Include="src\decoder\ftype_decoder.cpp">
     </ClCompile>
-    <ClCompile Include="src\decoder\riscv_decoder.cpp">`r`n    </ClCompile>`r`n    <ClCompile Include="src\decoder\xtype_decoder.cpp">
+    <ClCompile Include="src\decoder\riscv_decoder.cpp">
+	</ClCompile>
+	<ClCompile Include="src\decoder\xtype_decoder.cpp">
     </ClCompile>
     <ClCompile Include="src\fuzzer\Fuzzer.cpp">
     </ClCompile>
