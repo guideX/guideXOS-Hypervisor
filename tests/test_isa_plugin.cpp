@@ -1162,6 +1162,49 @@ void testIA64LegacyCallOutputInputs() {
     std::cout << "  ? caller outputs become callee input registers after alloc\n";
 }
 
+void testIA64LegacyAllocPreservesPreviousFrameState() {
+    std::cout << "Testing IA-64 legacy alloc preserves previous frame state...\n";
+
+    Memory memory(64 * 1024);
+    InstructionDecoder decoder;
+    CPU cpu(memory, decoder);
+
+    cpu.getState().SetCFM(6 | (static_cast<uint64_t>(4) << 7));
+    cpu.getState().SetGR(60, 0x55aa55aa);
+
+    InstructionEx alloc(InstructionType::ALLOC, UnitType::I_UNIT);
+    alloc.SetOperands(60, 0, 0);
+    alloc.SetImmediate(10 | (static_cast<uint64_t>(5) << 7) | (static_cast<uint64_t>(2) << 14));
+    cpu.executeInstruction(alloc);
+
+    assert(cpu.getState().GetGR(60) == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(cpu.getState().GetPFS() == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(cpu.getState().GetCFM() == (10 | (static_cast<uint64_t>(5) << 7) | (static_cast<uint64_t>(2) << 14)));
+
+    std::cout << "  ? alloc preserves ar.pfs and updates the current frame\n";
+}
+
+void testIA64LegacyAllocRejectsInvalidFrame() {
+    std::cout << "Testing IA-64 legacy alloc rejects invalid frame sizes...\n";
+
+    Memory memory(64 * 1024);
+    InstructionDecoder decoder;
+    CPU cpu(memory, decoder);
+
+    cpu.getState().SetCFM(0x200);
+
+    InstructionEx alloc(InstructionType::ALLOC, UnitType::I_UNIT);
+    alloc.SetOperands(60, 0, 0);
+    alloc.SetImmediate(10 | (static_cast<uint64_t>(12) << 7) | (static_cast<uint64_t>(2) << 14));
+
+    cpu.executeInstruction(alloc);
+    assert(cpu.getState().GetCFM() == 0x200);
+    assert(cpu.getState().GetPFS() == 0);
+    assert(cpu.getState().GetGR(60) == 0);
+
+    std::cout << "  ? invalid alloc frame sizes fail safely\n";
+}
+
 void testIA64LegacyCallDecodedCountedLoop() {
     std::cout << "Testing IA-64 legacy call-decoded counted loop execution...\n";
 
@@ -2167,6 +2210,12 @@ int main() {
         std::cout << "\n";
 
         testIA64LegacyCallOutputInputs();
+        std::cout << "\n";
+
+        testIA64LegacyAllocPreservesPreviousFrameState();
+        std::cout << "\n";
+
+        testIA64LegacyAllocRejectsInvalidFrame();
         std::cout << "\n";
 
         testIA64LegacyCallDecodedCountedLoop();

@@ -43,6 +43,29 @@ constexpr size_t NUM_BRANCH_REGISTERS = 8;
 // - Examples: AR.RSC (RSE config), AR.BSP (backing store pointer)
 constexpr size_t NUM_APPLICATION_REGISTERS = 128;
 
+struct RSEState {
+    uint64_t cfm;
+    uint64_t rsc;
+    uint64_t bsp;
+    uint64_t bspstore;
+    uint64_t rnat;
+    uint64_t pfs;
+    uint8_t sof;
+    uint8_t sol;
+    uint8_t sor;
+
+    RSEState()
+        : cfm(0)
+        , rsc(0)
+        , bsp(0)
+        , bspstore(0)
+        , rnat(0)
+        , pfs(0)
+        , sof(0)
+        , sol(0)
+        , sor(0) {}
+};
+
 /**
  * CPUState - IA-64 Architectural State
  * 
@@ -95,6 +118,18 @@ public:
     uint64_t GetAR(size_t index) const;
     void SetAR(size_t index, uint64_t value);
 
+    // Explicit RSE accessors
+    uint64_t GetRSC() const { return GetAR(16); }
+    uint64_t GetBSP() const { return GetAR(17); }
+    uint64_t GetBSPSTORE() const { return GetAR(18); }
+    uint64_t GetRNAT() const { return GetAR(19); }
+    uint64_t GetPFS() const { return GetAR(64); }
+    void SetRSC(uint64_t value) { SetAR(16, value); }
+    void SetBSP(uint64_t value) { SetAR(17, value); }
+    void SetBSPSTORE(uint64_t value) { SetAR(18, value); }
+    void SetRNAT(uint64_t value) { SetAR(19, value); }
+    void SetPFS(uint64_t value) { SetAR(64, value); }
+
     // Instruction pointer (IP/PC)
     uint64_t GetIP() const { return ip_; }
     void SetIP(uint64_t value) { ip_ = value; }
@@ -108,7 +143,14 @@ public:
     //   Bits 25-31: RRB.fr (FP register rotation base)
     //   Bits 32-37: RRB.pr (predicate register rotation base)
     uint64_t GetCFM() const { return cfm_; }
-    void SetCFM(uint64_t value) { cfm_ = value; }
+    void SetCFM(uint64_t value) {
+        cfm_ = value;
+        rse_.cfm = value;
+        rse_.pfs = value;
+        rse_.sof = static_cast<uint8_t>(value & 0x7F);
+        rse_.sol = static_cast<uint8_t>((value >> 7) & 0x7F);
+        rse_.sor = static_cast<uint8_t>((value >> 14) & 0xF);
+    }
     
     // Helper methods to extract CFM fields
     uint8_t GetSOF() const { return cfm_ & 0x7F; }
@@ -121,6 +163,8 @@ public:
     // Processor status register (PSR)
     uint64_t GetPSR() const { return psr_; }
     void SetPSR(uint64_t value) { psr_ = value; }
+
+    const RSEState& GetRSEState() const { return rse_; }
 
     // Reset CPU to initial state
     void Reset();
@@ -144,6 +188,9 @@ private:
 
     // Application registers (64-bit)
     std::array<uint64_t, NUM_APPLICATION_REGISTERS> ar_;
+
+    // Explicit RSE view of the architectural state
+    RSEState rse_;
 
     // Special registers
     uint64_t ip_;   // Instruction pointer

@@ -1086,6 +1086,13 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
         std::memcpy(buffer + offset, &val, sizeof(uint64_t));
         offset += sizeof(uint64_t);
     }
+
+    // Application registers (128 * 8 bytes) keep RSE-visible state intact
+    for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) {
+        uint64_t val = cpuState_.GetAR(i);
+        std::memcpy(buffer + offset, &val, sizeof(uint64_t));
+        offset += sizeof(uint64_t);
+    }
     
     // Special registers
     uint64_t ip = cpuState_.GetIP();
@@ -1154,6 +1161,14 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
         cpuState_.SetBR(i, val);
         offset += sizeof(uint64_t);
     }
+
+    // Application registers
+    for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) {
+        uint64_t val;
+        std::memcpy(&val, buffer + offset, sizeof(uint64_t));
+        cpuState_.SetAR(i, val);
+        offset += sizeof(uint64_t);
+    }
     
     // Special registers
     uint64_t ip;
@@ -1205,6 +1220,7 @@ size_t IA64ISAState::getStateSize() const {
     size += NUM_GENERAL_REGISTERS * sizeof(uint64_t);  // GRs
     size += NUM_PREDICATE_REGISTERS;                   // PRs (padded to bytes)
     size += NUM_BRANCH_REGISTERS * sizeof(uint64_t);   // BRs
+    size += NUM_APPLICATION_REGISTERS * sizeof(uint64_t); // ARs
     size += 3 * sizeof(uint64_t);                      // IP, CFM, PSR
     
     // Runtime state
@@ -1224,6 +1240,11 @@ std::string IA64ISAState::toString() const {
     ss << "IA-64 CPU State:\n";
     ss << "  IP: 0x" << std::hex << cpuState_.GetIP() << std::dec << "\n";
     ss << "  CFM: 0x" << std::hex << cpuState_.GetCFM() << std::dec << "\n";
+    ss << "  RSE: rsc=0x" << std::hex << cpuState_.GetRSC()
+       << " bsp=0x" << cpuState_.GetBSP()
+       << " bspstore=0x" << cpuState_.GetBSPSTORE()
+       << " rnat=0x" << cpuState_.GetRNAT()
+       << " pfs=0x" << cpuState_.GetPFS() << std::dec << "\n";
     ss << "  PSR: 0x" << std::hex << cpuState_.GetPSR() << std::dec << "\n";
     
     ss << "  General Registers:\n";

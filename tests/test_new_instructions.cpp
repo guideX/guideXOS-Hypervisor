@@ -1125,14 +1125,68 @@ void test_alloc_instruction() {
     
     // Check saved CFM
     assert_equal("ALLOC: saved CFM", 0x12345678, cpu.GetGR(10));
+    assert_equal("ALLOC: ar.pfs should preserve previous frame state", 0x12345678, cpu.GetPFS());
+    assert_equal("ALLOC: ar.pfs alias should update with CFM", 0x12345678, cpu.GetRSEState().pfs);
     
     // Check new CFM fields
     uint64_t new_cfm = cpu.GetCFM();
     assert_equal("ALLOC: new SOF", 10, new_cfm & 0x7F);
     assert_equal("ALLOC: new SOL", 5, (new_cfm >> 7) & 0x7F);
     assert_equal("ALLOC: new SOR", 2, (new_cfm >> 14) & 0xF);
+    assert_equal("ALLOC: explicit RSE SOF should track CFM", 10, cpu.GetRSEState().sof);
+    assert_equal("ALLOC: explicit RSE SOL should track CFM", 5, cpu.GetRSEState().sol);
+    assert_equal("ALLOC: explicit RSE SOR should track CFM", 2, cpu.GetRSEState().sor);
     
     std::cout << "  ? ALLOC instruction passed" << std::endl;
+}
+
+void test_rse_state_aliases() {
+    std::cout << "Testing RSE state aliases..." << std::endl;
+
+    CPUState cpu;
+
+    cpu.SetRSC(0x11);
+    cpu.SetBSP(0x80000000000ULL);
+    cpu.SetBSPSTORE(0x80000000020ULL);
+    cpu.SetRNAT(0xdeadbeef);
+    cpu.SetPFS(0x1234 | (static_cast<uint64_t>(7) << 7) | (static_cast<uint64_t>(1) << 14));
+
+    assert_equal("RSE: RSC alias", 0x11, cpu.GetRSC());
+    assert_equal("RSE: BSP alias", 0x80000000000ULL, cpu.GetBSP());
+    assert_equal("RSE: BSPSTORE alias", 0x80000000020ULL, cpu.GetBSPSTORE());
+    assert_equal("RSE: RNAT alias", 0xdeadbeef, cpu.GetRNAT());
+    assert_equal("RSE: PFS alias", 0x1234 | (static_cast<uint64_t>(7) << 7) | (static_cast<uint64_t>(1) << 14), cpu.GetPFS());
+    assert_equal("RSE: explicit CFM from PFS", cpu.GetPFS(), cpu.GetCFM());
+    assert_equal("RSE: frame size fields updated", 0x34, cpu.GetRSEState().sof);
+    assert_equal("RSE: local size fields updated", 0x07, cpu.GetRSEState().sol);
+    assert_equal("RSE: rotating size fields updated", 0x01, cpu.GetRSEState().sor);
+
+    std::cout << "  ? RSE state aliases passed" << std::endl;
+}
+
+void test_alloc_invalid_frame_size_fails_safe() {
+    std::cout << "Testing ALLOC invalid frame sizes..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    cpu.SetCFM(0x100);
+
+    InstructionEx alloc(InstructionType::ALLOC, UnitType::I_UNIT);
+    alloc.SetOperands(10, 0, 0);
+    alloc.SetImmediate((2ULL << 14) | (12ULL << 7) | 10ULL);
+
+    bool threw = false;
+    try {
+        alloc.Execute(cpu, memory);
+    } catch (const std::out_of_range& ex) {
+        threw = std::string(ex.what()).find("ALLOC frame size invalid") != std::string::npos;
+    }
+
+    assert_true("ALLOC should reject sol > sof", threw);
+    assert_equal("ALLOC invalid frame should leave CFM unchanged", 0x100, cpu.GetCFM());
+    assert_equal("ALLOC invalid frame should leave ar.pfs unchanged", 0, cpu.GetPFS());
+
+    std::cout << "  ? ALLOC invalid frame sizes fail safely" << std::endl;
 }
 
 // Test 32-bit compare instructions
@@ -1179,6 +1233,8 @@ int main() {
         test_memory_operations();
         test_predicated_execution();
         test_alloc_instruction();
+        test_rse_state_aliases();
+        test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();
         
         std::cout << std::endl;
