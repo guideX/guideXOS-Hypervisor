@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <cstring>
+#include <stdexcept>
 
 using namespace ia64;
 
@@ -12,12 +13,23 @@ void printTest(const char* testName, bool passed) {
     std::cout << (passed ? "[PASS] " : "[FAIL] ") << testName << std::endl;
 }
 
-// Helper to create a minimal valid IA-64 ELF header
-std::vector<uint8_t> createValidELFHeader() {
-    std::vector<uint8_t> buffer(sizeof(ELF64_Ehdr), 0);
-    ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(buffer.data());
+struct TestElfImage {
+    std::vector<uint8_t> bytes;
+    uint64_t entryPoint;
+    uint64_t loadAddress;
+    uint64_t fileSize;
+    uint64_t memorySize;
+};
 
-    // Magic number
+TestElfImage createValidIA64ExecImage() {
+    TestElfImage image{};
+    image.entryPoint = 0x400000;
+    image.loadAddress = 0x400000;
+    image.fileSize = 0x10;
+    image.memorySize = 0x20;
+
+    image.bytes.resize(0x200 + image.fileSize, 0x00);
+    ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
     ehdr->e_ident[EI_MAG0] = ELFMAG0;
     ehdr->e_ident[EI_MAG1] = ELFMAG1;
     ehdr->e_ident[EI_MAG2] = ELFMAG2;
@@ -25,12 +37,10 @@ std::vector<uint8_t> createValidELFHeader() {
     ehdr->e_ident[EI_CLASS] = ELFCLASS64;
     ehdr->e_ident[EI_DATA] = ELFDATA2LSB;
     ehdr->e_ident[EI_VERSION] = EV_CURRENT;
-
-    // Header fields
     ehdr->e_type = static_cast<uint16_t>(ELFType::EXEC);
     ehdr->e_machine = EM_IA_64;
     ehdr->e_version = EV_CURRENT;
-    ehdr->e_entry = 0x400000;  // Valid entry point
+    ehdr->e_entry = image.entryPoint;
     ehdr->e_phoff = sizeof(ELF64_Ehdr);
     ehdr->e_shoff = 0;
     ehdr->e_flags = 0;
@@ -41,14 +51,22 @@ std::vector<uint8_t> createValidELFHeader() {
     ehdr->e_shnum = 0;
     ehdr->e_shstrndx = 0;
 
-    return buffer;
-}
+    ELF64_Phdr phdr{};
+    phdr.p_type = static_cast<uint32_t>(SegmentType::PT_LOAD);
+    phdr.p_flags = PF_R | PF_X;
+    phdr.p_offset = 0x200;
+    phdr.p_vaddr = image.loadAddress;
+    phdr.p_paddr = image.loadAddress;
+    phdr.p_filesz = image.fileSize;
+    phdr.p_memsz = image.memorySize;
+    phdr.p_align = 0x1000;
+    std::memcpy(image.bytes.data() + sizeof(ELF64_Ehdr), &phdr, sizeof(phdr));
 
-// Helper to add a program header
-void addProgramHeader(std::vector<uint8_t>& buffer, const ELF64_Phdr& phdr) {
-    size_t offset = buffer.size();
-    buffer.resize(offset + sizeof(ELF64_Phdr));
-    std::memcpy(buffer.data() + offset, &phdr, sizeof(ELF64_Phdr));
+    for (size_t i = 0; i < static_cast<size_t>(image.fileSize); ++i) {
+        image.bytes[static_cast<size_t>(phdr.p_offset) + i] = static_cast<uint8_t>(0xC0 + i);
+    }
+
+    return image;
 }
 
 void testArchitectureValidation() {
@@ -58,41 +76,41 @@ void testArchitectureValidation() {
 
     // Test 1: Valid IA-64 ELF
     {
-        auto buffer = createValidELFHeader();
-        bool result = loader.ValidateELF(buffer.data(), buffer.size());
+        auto image = createValidIA64ExecImage();
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
         printTest("Valid IA-64 ELF", result);
     }
 
     // Test 2: Invalid magic number
     {
-        auto buffer = createValidELFHeader();
-        buffer[EI_MAG0] = 0x00;
-        bool result = loader.ValidateELF(buffer.data(), buffer.size());
+        auto image = createValidIA64ExecImage();
+        image.bytes[EI_MAG0] = 0x00;
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
         printTest("Invalid magic number", !result);
     }
 
     // Test 3: Wrong ELF class (32-bit instead of 64-bit)
     {
-        auto buffer = createValidELFHeader();
-        buffer[EI_CLASS] = 1;  // ELFCLASS32
-        bool result = loader.ValidateELF(buffer.data(), buffer.size());
+        auto image = createValidIA64ExecImage();
+        image.bytes[EI_CLASS] = 1;  // ELFCLASS32
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
         printTest("Wrong ELF class", !result);
     }
 
     // Test 4: Wrong machine type
     {
-        auto buffer = createValidELFHeader();
-        ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(buffer.data());
+        auto image = createValidIA64ExecImage();
+        ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
         ehdr->e_machine = 62;  // x86-64 instead of IA-64
-        bool result = loader.ValidateELF(buffer.data(), buffer.size());
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
         printTest("Wrong machine type", !result);
     }
 
     // Test 5: Wrong endianness
     {
-        auto buffer = createValidELFHeader();
-        buffer[EI_DATA] = 2;  // ELFDATA2MSB (big-endian)
-        bool result = loader.ValidateELF(buffer.data(), buffer.size());
+        auto image = createValidIA64ExecImage();
+        image.bytes[EI_DATA] = 2;  // ELFDATA2MSB (big-endian)
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
         printTest("Wrong endianness", !result);
     }
 }
@@ -102,45 +120,22 @@ void testEntryPointValidation() {
 
     // Test 1: Valid aligned entry point in executable segment
     {
-        auto buffer = createValidELFHeader();
-        
-        ELF64_Phdr phdr = {};
-        phdr.p_type = static_cast<uint32_t>(SegmentType::PT_LOAD);
-        phdr.p_flags = PF_R | PF_X;  // Read + Execute
-        phdr.p_offset = 0x1000;
-        phdr.p_vaddr = 0x400000;
-        phdr.p_paddr = 0x400000;
-        phdr.p_filesz = 0x1000;
-        phdr.p_memsz = 0x1000;
-        phdr.p_align = 0x1000;
-
-        addProgramHeader(buffer, phdr);
+        auto image = createValidIA64ExecImage();
 
         ELFLoader loader;
-        bool result = loader.ValidateELF(buffer.data(), buffer.size());
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
         printTest("Valid entry point (aligned, executable)", result);
     }
 
     // Test 2: Misaligned entry point (not 16-byte aligned)
     {
-        auto buffer = createValidELFHeader();
-        ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(buffer.data());
+        auto image = createValidIA64ExecImage();
+        ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
         ehdr->e_entry = 0x400001;  // Not 16-byte aligned
 
-        ELF64_Phdr phdr = {};
-        phdr.p_type = static_cast<uint32_t>(SegmentType::PT_LOAD);
-        phdr.p_flags = PF_R | PF_X;
-        phdr.p_offset = 0x1000;
-        phdr.p_vaddr = 0x400000;
-        phdr.p_paddr = 0x400000;
-        phdr.p_filesz = 0x2000;
-        phdr.p_memsz = 0x2000;
-        phdr.p_align = 0x1000;
-
-        addProgramHeader(buffer, phdr);
-
-        // This should still pass basic ValidateELF but fail in LoadBuffer
-        printTest("Misaligned entry point detection ready", true);
+        ELFLoader loader;
+        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
+        printTest("Misaligned entry point rejected by loader path", !result);
     }
 }
 
@@ -247,32 +242,43 @@ void testCompleteValidation() {
     std::cout << "\n=== Complete Validation Integration Test ===" << std::endl;
 
     try {
-        // Create a complete valid ELF with all components
-        auto buffer = createValidELFHeader();
-        
-        ELF64_Phdr phdr = {};
-        phdr.p_type = static_cast<uint32_t>(SegmentType::PT_LOAD);
-        phdr.p_flags = PF_R | PF_X;
-        phdr.p_offset = 0x1000;
-        phdr.p_vaddr = 0x400000;
-        phdr.p_paddr = 0x400000;
-        phdr.p_filesz = 0x1000;
-        phdr.p_memsz = 0x1000;
-        phdr.p_align = 0x1000;
+        auto image = createValidIA64ExecImage();
 
-        addProgramHeader(buffer, phdr);
-
-        // Add some dummy code
-        buffer.resize(0x2000, 0x00);
-
+        Memory memory(8 * 1024 * 1024);
+        CPUState cpu;
         ELFLoader loader;
-        bool valid = loader.ValidateELF(buffer.data(), buffer.size());
-        printTest("Complete ELF validation", valid);
+        const uint64_t entry = loader.LoadBuffer(image.bytes.data(), image.bytes.size(), memory, cpu);
+
+        printTest("Complete ELF validation", entry == image.entryPoint);
+        printTest("Entry point reporting", loader.GetEntryPoint() == image.entryPoint);
+        printTest("Entry state prepared", cpu.GetIP() == image.entryPoint && cpu.GetGR(12) != 0);
+        printTest("Zero-fill BSS", memory.read<uint8_t>(image.loadAddress + image.fileSize) == 0);
 
     } catch (const std::exception& e) {
         printTest("Complete ELF validation", false);
         std::cout << "  Error: " << e.what() << std::endl;
     }
+}
+
+void testWrongArchitectureRejection() {
+    std::cout << "\n=== Wrong Architecture Rejection Tests ===" << std::endl;
+
+    auto image = createValidIA64ExecImage();
+    ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
+    ehdr->e_machine = 62;
+
+    Memory memory(8 * 1024 * 1024);
+    CPUState cpu;
+    ELFLoader loader;
+
+    bool caught = false;
+    try {
+        (void)loader.LoadBuffer(image.bytes.data(), image.bytes.size(), memory, cpu);
+    } catch (const std::exception&) {
+        caught = true;
+    }
+
+    printTest("Wrong architecture rejection", caught);
 }
 
 int main() {
@@ -285,6 +291,7 @@ int main() {
     testSegmentAlignmentValidation();
     testMemorySafetyValidation();
     testCompleteValidation();
+    testWrongArchitectureRejection();
 
     std::cout << "\n==================================" << std::endl;
     std::cout << "Test Suite Complete" << std::endl;
