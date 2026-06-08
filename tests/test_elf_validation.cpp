@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 using namespace ia64;
 
@@ -28,7 +29,7 @@ TestElfImage createValidIA64ExecImage() {
     image.fileSize = 0x10;
     image.memorySize = 0x20;
 
-    image.bytes.resize(0x200 + image.fileSize, 0x00);
+    image.bytes.resize(0x1000 + image.fileSize, 0x00);
     ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
     ehdr->e_ident[EI_MAG0] = ELFMAG0;
     ehdr->e_ident[EI_MAG1] = ELFMAG1;
@@ -54,7 +55,7 @@ TestElfImage createValidIA64ExecImage() {
     ELF64_Phdr phdr{};
     phdr.p_type = static_cast<uint32_t>(SegmentType::PT_LOAD);
     phdr.p_flags = PF_R | PF_X;
-    phdr.p_offset = 0x200;
+    phdr.p_offset = 0x1000;
     phdr.p_vaddr = image.loadAddress;
     phdr.p_paddr = image.loadAddress;
     phdr.p_filesz = image.fileSize;
@@ -133,9 +134,16 @@ void testEntryPointValidation() {
         ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
         ehdr->e_entry = 0x400001;  // Not 16-byte aligned
 
+        Memory memory(8 * 1024 * 1024);
+        CPUState cpu;
         ELFLoader loader;
-        bool result = loader.ValidateELF(image.bytes.data(), image.bytes.size());
-        printTest("Misaligned entry point rejected by loader path", !result);
+        bool caught = false;
+        try {
+            (void)loader.LoadBuffer(image.bytes.data(), image.bytes.size(), memory, cpu);
+        } catch (const std::exception&) {
+            caught = true;
+        }
+        printTest("Misaligned entry point rejected by loader path", caught);
     }
 }
 
@@ -281,6 +289,57 @@ void testWrongArchitectureRejection() {
     printTest("Wrong architecture rejection", caught);
 }
 
+void testDiagnosticsCoverage() {
+    std::cout << "\n=== Diagnostics Coverage Tests ===" << std::endl;
+
+    // File not found
+    {
+        Memory memory(8 * 1024 * 1024);
+        CPUState cpu;
+        ELFLoader loader;
+        bool caught = false;
+        try {
+            (void)loader.LoadFile("D:\\dev\\guideXOS_Emulator\\does_not_exist.elf", memory, cpu);
+        } catch (const std::exception& e) {
+            caught = std::string(e.what()).find("file not found") != std::string::npos;
+        }
+        printTest("File not found diagnostic", caught);
+    }
+
+    // Not ELF
+    {
+        std::vector<uint8_t> buffer(64, 0x42);
+        Memory memory(8 * 1024 * 1024);
+        CPUState cpu;
+        ELFLoader loader;
+        bool caught = false;
+        try {
+            (void)loader.LoadBuffer(buffer.data(), buffer.size(), memory, cpu);
+        } catch (const std::exception& e) {
+            caught = std::string(e.what()).find("not ELF") != std::string::npos;
+        }
+        printTest("Not-ELF diagnostic", caught);
+    }
+
+    // Supported IA-64 ELF but not executable handoff path
+    {
+        auto image = createValidIA64ExecImage();
+        ELF64_Ehdr* ehdr = reinterpret_cast<ELF64_Ehdr*>(image.bytes.data());
+        ehdr->e_type = static_cast<uint16_t>(ELFType::DYN);
+
+        Memory memory(8 * 1024 * 1024);
+        CPUState cpu;
+        ELFLoader loader;
+        bool caught = false;
+        try {
+            (void)loader.LoadBuffer(image.bytes.data(), image.bytes.size(), memory, cpu);
+        } catch (const std::exception& e) {
+            caught = std::string(e.what()).find("ET_EXEC only") != std::string::npos;
+        }
+        printTest("Unsupported ELF type diagnostic", caught);
+    }
+}
+
 int main() {
     std::cout << "==================================" << std::endl;
     std::cout << "ELF Validation Test Suite" << std::endl;
@@ -292,6 +351,7 @@ int main() {
     testMemorySafetyValidation();
     testCompleteValidation();
     testWrongArchitectureRejection();
+    testDiagnosticsCoverage();
 
     std::cout << "\n==================================" << std::endl;
     std::cout << "Test Suite Complete" << std::endl;
