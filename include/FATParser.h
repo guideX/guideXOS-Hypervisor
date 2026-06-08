@@ -82,6 +82,12 @@ public:
     
     // Directory operations
     bool listDirectory(const std::string& path, std::vector<FATFileInfo>& entries);
+
+    // Probe whether a byte buffer appears to contain a FAT filesystem.
+    static bool LooksLikeFAT(const uint8_t* data, size_t size);
+
+    // Human-readable summary of the parsed filesystem.
+    std::string getSummary() const;
     
     // Get filesystem info
     bool isValid() const { return valid_; }
@@ -101,6 +107,9 @@ private:
     
     std::string getDOSName(const FATDirectoryEntry& entry);
     bool matchDOSName(const std::string& dosName, const std::string& searchName);
+
+    static std::string normalizeSearchComponent(const std::string& value);
+    static bool isEndOfDirectoryMarker(const FATDirectoryEntry& entry);
     
     const uint8_t* imageData_;
     size_t imageSize_;

@@ -53,6 +53,37 @@ bool FATParser::parse(const uint8_t* data, size_t size) {
     return true;
 }
 
+bool FATParser::LooksLikeFAT(const uint8_t* data, size_t size) {
+    if (!data || size < sizeof(FATBootSector)) {
+        return false;
+    }
+
+    const FATBootSector* boot = reinterpret_cast<const FATBootSector*>(data);
+    if (boot->bytesPerSector != 512 && boot->bytesPerSector != 1024 &&
+        boot->bytesPerSector != 2048 && boot->bytesPerSector != 4096) {
+        return false;
+    }
+
+    if (boot->sectorsPerCluster == 0 || boot->numFATs == 0) {
+        return false;
+    }
+
+    return true;
+}
+
+std::string FATParser::getSummary() const {
+    if (!valid_) {
+        return "FAT{invalid}";
+    }
+
+    return "FAT{" + std::string(fatType_ == FATType::FAT12 ? "FAT12" :
+                                 fatType_ == FATType::FAT16 ? "FAT16" : "FAT32") +
+           ", bytesPerSector=" + std::to_string(bootSector_.bytesPerSector) +
+           ", sectorsPerCluster=" + std::to_string(bootSector_.sectorsPerCluster) +
+           ", rootEntries=" + std::to_string(bootSector_.rootEntryCount) +
+           ", totalClusters=" + std::to_string(totalClusters_) + "}";
+}
+
 bool FATParser::parseBootSector() {
     std::memcpy(&bootSector_, imageData_, sizeof(FATBootSector));
     
@@ -90,6 +121,21 @@ bool FATParser::parseBootSector() {
     dataSector_ = rootDirSector_ + rootDirSectors_;
     
     return true;
+}
+
+std::string FATParser::normalizeSearchComponent(const std::string& value) {
+    std::string result;
+    for (char ch : value) {
+        if (ch == '/' || ch == '\\') {
+            continue;
+        }
+        result.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+    }
+    return result;
+}
+
+bool FATParser::isEndOfDirectoryMarker(const FATDirectoryEntry& entry) {
+    return entry.filename[0] == 0x00;
 }
 
 bool FATParser::parseFAT() {
@@ -231,7 +277,7 @@ bool FATParser::readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryE
             reinterpret_cast<const FATDirectoryEntry*>(imageData_ + rootOffset);
         
         for (uint32_t i = 0; i < bootSector_.rootEntryCount; i++) {
-            if (dirEntries[i].filename[0] == 0x00) {
+            if (isEndOfDirectoryMarker(dirEntries[i])) {
                 break; // End of directory
             }
             if (dirEntries[i].filename[0] == 0xE5) {
@@ -265,7 +311,7 @@ bool FATParser::readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryE
         uint32_t entriesPerCluster = bytesPerCluster / sizeof(FATDirectoryEntry);
         
         for (uint32_t i = 0; i < entriesPerCluster; i++) {
-            if (dirEntries[i].filename[0] == 0x00) {
+            if (isEndOfDirectoryMarker(dirEntries[i])) {
                 return true; // End of directory
             }
             if (dirEntries[i].filename[0] == 0xE5) {
@@ -295,7 +341,7 @@ bool FATParser::findFileInDirectory(const std::string& name, uint32_t dirCluster
     for (const auto& entry : entries) {
         std::string dosName = getDOSName(entry);
         
-        if (matchDOSName(dosName, name)) {
+        if (matchDOSName(dosName, normalizeSearchComponent(name))) {
             fileInfo.name = dosName;
             fileInfo.isDirectory = (entry.attributes & ATTR_DIRECTORY) != 0;
             fileInfo.size = entry.fileSize;
@@ -321,7 +367,7 @@ bool FATParser::findFile(const std::string& path, FATFileInfo& fileInfo) {
     for (char c : path) {
         if (c == '/' || c == '\\') {
             if (!current.empty()) {
-                components.push_back(current);
+                components.push_back(normalizeSearchComponent(current));
                 current.clear();
             }
         } else {
@@ -330,7 +376,7 @@ bool FATParser::findFile(const std::string& path, FATFileInfo& fileInfo) {
     }
     
     if (!current.empty()) {
-        components.push_back(current);
+        components.push_back(normalizeSearchComponent(current));
     }
     
     if (components.empty()) {

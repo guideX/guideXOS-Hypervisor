@@ -1,13 +1,225 @@
 #include "decoder.h"
 #include "cpu_state.h"
 #include "memory.h"
+#include "ISO9660Parser.h"
+#include "FATParser.h"
+#include "IStorageDevice.h"
 #include <iostream>
 #include <cassert>
+#include <algorithm>
+#include <cstring>
 #include <iomanip>
 #include <string>
+#include <vector>
 #include <stdexcept>
 
 using namespace ia64;
+
+namespace {
+
+class MemoryStorageDevice : public IStorageDevice {
+public:
+    explicit MemoryStorageDevice(std::vector<uint8_t> data, uint32_t blockSize = 2048)
+        : data_(std::move(data)), blockSize_(blockSize) {}
+
+    StorageDeviceInfo getInfo() const override {
+        StorageDeviceInfo info;
+        info.deviceId = "memory-storage";
+        info.type = StorageDeviceType::MEMORY_BACKED;
+        info.sizeBytes = data_.size();
+        info.blockSize = blockSize_;
+        info.connected = true;
+        return info;
+    }
+
+    std::string getDeviceId() const override { return "memory-storage"; }
+    uint64_t getSize() const override { return data_.size(); }
+    uint32_t getBlockSize() const override { return blockSize_; }
+    bool isReadOnly() const override { return true; }
+    bool isConnected() const override { return true; }
+
+    int64_t readBlocks(uint64_t blockNumber, uint64_t blockCount, uint8_t* buffer) override {
+        const uint64_t offset = blockNumber * blockSize_;
+        const uint64_t size = blockCount * blockSize_;
+        if (!buffer || offset + size > data_.size()) {
+            return -1;
+        }
+        std::memcpy(buffer, data_.data() + offset, static_cast<size_t>(size));
+        return static_cast<int64_t>(blockCount);
+    }
+
+    int64_t writeBlocks(uint64_t, uint64_t, const uint8_t*) override { return -1; }
+    bool flush() override { return true; }
+    bool connect() override { return true; }
+    void disconnect() override {}
+
+private:
+    std::vector<uint8_t> data_;
+    uint32_t blockSize_;
+};
+
+void write_le16(std::vector<uint8_t>& buffer, size_t offset, uint16_t value) {
+    buffer[offset] = static_cast<uint8_t>(value & 0xff);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+}
+
+void write_le32(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) {
+    buffer[offset] = static_cast<uint8_t>(value & 0xff);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+    buffer[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xff);
+    buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xff);
+}
+
+std::vector<uint8_t> makeFatImageWithBootLoader() {
+    std::vector<uint8_t> image(8 * 512, 0);
+    auto* boot = reinterpret_cast<guideXOS::FATBootSector*>(image.data());
+    boot->bytesPerSector = 512;
+    boot->sectorsPerCluster = 1;
+    boot->reservedSectors = 1;
+    boot->numFATs = 1;
+    boot->rootEntryCount = 16;
+    boot->totalSectors16 = 8;
+    boot->mediaType = 0xF8;
+    boot->sectorsPerFAT = 1;
+    boot->bootSignature = 0x29;
+    std::memcpy(boot->fileSystemType, "FAT16   ", 8);
+
+    auto* fat = image.data() + 512;
+    fat[0] = 0xF8;
+    fat[1] = 0xFF;
+    fat[2] = 0xFF;
+    fat[3] = 0xFF;
+
+    auto* root = reinterpret_cast<guideXOS::FATDirectoryEntry*>(image.data() + 1024);
+    std::memcpy(root[0].filename, "EFI     ", 8);
+    std::memcpy(root[0].extension, "   ", 3);
+    root[0].attributes = guideXOS::ATTR_DIRECTORY;
+    root[0].firstClusterLow = 2;
+    std::memcpy(root[1].filename, "BOOTIA64", 8);
+    std::memcpy(root[1].extension, "EFI", 3);
+    root[1].attributes = guideXOS::ATTR_ARCHIVE;
+    root[1].firstClusterLow = 3;
+    root[1].fileSize = 8;
+    root[2].filename[0] = 0x00;
+
+    auto* efiDir = image.data() + 1536;
+    auto* efiEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(efiDir);
+    std::memcpy(efiEntry[0].filename, "BOOTIA64", 8);
+    std::memcpy(efiEntry[0].extension, "EFI", 3);
+    efiEntry[0].attributes = guideXOS::ATTR_ARCHIVE;
+    efiEntry[0].firstClusterLow = 3;
+    efiEntry[0].fileSize = 8;
+    efiEntry[1].filename[0] = 0x00;
+
+    auto* data = image.data() + 2048;
+    std::memcpy(data, "BOOTIA64", 8);
+    return image;
+}
+
+std::vector<uint8_t> makeIsoWithDirectBootLoader() {
+    std::vector<uint8_t> image(32 * 2048, 0);
+    auto* pvd = image.data() + 16 * 2048;
+    pvd[0] = 1;
+    std::memcpy(pvd + 1, "CD001", 5);
+    pvd[6] = 1;
+    write_le16(image, 16 * 2048 + 128, 2048);
+    write_le32(image, 16 * 2048 + 80, 32);
+    auto* rootRecord = pvd + 156;
+    rootRecord[0] = 34;
+    write_le32(image, 16 * 2048 + 156 + 2, 20);
+    write_le32(image, 16 * 2048 + 156 + 10, 2048);
+    rootRecord[25] = 2;
+    rootRecord[32] = 1;
+
+    auto* rootDir = image.data() + 20 * 2048;
+    rootDir[0] = 34;
+    write_le32(image, 20 * 2048 + 2, 21);
+    write_le32(image, 20 * 2048 + 10, 8);
+    rootDir[25] = 0;
+    rootDir[32] = 12;
+    std::memcpy(rootDir + 33, "BOOTIA64.EFI;1", 14);
+    rootDir[34 + 0] = 0;
+
+    std::memcpy(image.data() + 21 * 2048, "BOOTIA64", 8);
+    return image;
+}
+
+std::vector<uint8_t> makeElToritoImageWithFatBootLoader() {
+    std::vector<uint8_t> image(64 * 2048, 0);
+    auto* bootRecord = image.data() + 17 * 2048;
+    bootRecord[0] = 0;
+    std::memcpy(bootRecord + 1, "CD001", 5);
+    bootRecord[6] = 1;
+    std::memcpy(bootRecord + 7, "EL TORITO SPECIFICATION", 23);
+    write_le32(image, 17 * 2048 + 71, 18);
+
+    auto* validation = image.data() + 18 * 2048;
+    validation[0] = 1;
+    validation[1] = 0xEF;
+    validation[21] = 0x55;
+    validation[22] = 0xAA;
+    auto* entry = image.data() + 18 * 2048 + 32;
+    entry[0] = 0x88;
+    entry[1] = 0;
+    write_le16(image, 18 * 2048 + 34, 1);
+    write_le32(image, 18 * 2048 + 40, 19);
+
+    auto fat = makeFatImageWithBootLoader();
+    std::memcpy(image.data() + 19 * 2048, fat.data(), fat.size());
+    return image;
+}
+
+void test_iso_boot_media_direct_path() {
+    std::cout << "Testing ISO9660 direct boot-media lookup..." << std::endl;
+
+    auto image = makeIsoWithDirectBootLoader();
+    MemoryStorageDevice device(std::move(image), 2048);
+    ISO9660Parser parser(&device);
+
+    assert_true("ISO parse should succeed", parser.parse());
+    std::vector<uint8_t> executable;
+    assert_true("ISO bootloader should be found", parser.extractEFIExecutable(executable));
+    assert_true("ISO bootloader should not be empty", !executable.empty());
+    assert_true("Direct ISO path should be reported", parser.getLastBootMediaDiagnostics().find("BOOTIA64.EFI found at path") != std::string::npos);
+
+    std::cout << "  ? ISO direct boot-media lookup passed" << std::endl;
+}
+
+void test_fat_boot_media_lookup() {
+    std::cout << "Testing FAT boot-media lookup..." << std::endl;
+
+    auto image = makeFatImageWithBootLoader();
+    guideXOS::FATParser fat;
+    assert_true("FAT parse should succeed", fat.parse(image.data(), image.size()));
+    guideXOS::FATFileInfo info{};
+    assert_true("FAT path should resolve", fat.findFile("/EFI/BOOT/BOOTIA64.EFI", info));
+    assert_true("FAT path should be file", !info.isDirectory);
+    assert_true("FAT file should have data", info.size == 8);
+    std::vector<uint8_t> data;
+    assert_true("FAT file should read", fat.readFile(info, data));
+    assert_true("FAT data should match", data.size() == 8 && std::memcmp(data.data(), "BOOTIA64", 8) == 0);
+
+    std::cout << "  ? FAT boot-media lookup passed" << std::endl;
+}
+
+void test_el_torito_fat_boot_media_lookup() {
+    std::cout << "Testing El Torito EFI boot-image lookup..." << std::endl;
+
+    auto image = makeElToritoImageWithFatBootLoader();
+    MemoryStorageDevice device(std::move(image), 2048);
+    ISO9660Parser parser(&device);
+
+    assert_true("ISO parse should succeed", parser.parse());
+    assert_true("Boot catalog should parse", parser.findBootCatalog());
+    std::vector<uint8_t> executable;
+    assert_true("Boot image should yield EFI loader", parser.extractEFIExecutable(executable));
+    assert_true("Boot image should not be empty", !executable.empty());
+    assert_true("Boot image diagnostic should mention BOOTIA64.EFI", parser.getLastBootMediaDiagnostics().find("BOOTIA64.EFI found at path") != std::string::npos);
+
+    std::cout << "  ? El Torito EFI boot-image lookup passed" << std::endl;
+}
+
+} // namespace
 
 // Test helper
 void assert_equal(const char* name, uint64_t expected, uint64_t actual) {
@@ -955,6 +1167,9 @@ int main() {
         test_compare_instructions();
         test_compare_ne_decoder();
         test_latest_boot_log_blockers();
+        test_iso_boot_media_direct_path();
+        test_fat_boot_media_lookup();
+        test_el_torito_fat_boot_media_lookup();
         test_memory_bounds_throw();
         test_application_register_moves();
         test_test_instructions();
