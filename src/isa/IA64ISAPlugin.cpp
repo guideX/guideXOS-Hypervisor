@@ -85,6 +85,8 @@ constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF80U
 constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x2000ULL;
 constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
 constexpr bool IA64_STRICT_RECOVERY = false;
+constexpr uint64_t IA64_EXECUTABLE_IMAGE_BASE = 0x100000ULL;
+constexpr uint64_t IA64_EXECUTABLE_IMAGE_END = 0x200000ULL;
 using EfiGuid = std::array<uint8_t, 16>;
 struct EfiSlotName {
     uint64_t offset;
@@ -104,6 +106,18 @@ std::string cpuSummary(const CPUState& cpu) {
         << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
         << " psr=" << BootStageTrace::Hex(cpu.GetPSR());
     return oss.str();
+}
+
+std::string formatHex(uint64_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::hex << value;
+    return oss.str();
+}
+
+bool isBranchRegisterTargetInstruction(InstructionType type) {
+    return type == InstructionType::BR_COND ||
+           type == InstructionType::BR_CALL ||
+           type == InstructionType::BR_RET;
 }
 
 constexpr EfiGuid EFI_LOADED_IMAGE_PROTOCOL_GUID = {{
@@ -1533,6 +1547,21 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << ", Slot=" << state_.currentSlot_ << "] "
                       << decodeResult.disassembly << std::endl;
         }
+
+        if (decodeResult.instructionAddress == 0x36CC0ULL) {
+            const uint8_t templateField = static_cast<uint8_t>(state_.currentBundle_.templateType);
+            std::cout << "[IA64-BUNDLE] ip=" << formatHex(decodeResult.instructionAddress)
+                      << " template=" << formatHex(static_cast<uint64_t>(templateField))
+                      << std::endl;
+            for (size_t i = 0; i < state_.currentBundle_.instructions.size(); ++i) {
+                const InstructionEx& bundleInstr = state_.currentBundle_.instructions[i];
+                std::cout << "[IA64-BUNDLE] slot=" << i
+                          << " raw=" << formatHex(bundleInstr.GetRawBits())
+                          << " type=" << static_cast<int>(bundleInstr.GetType())
+                          << " disasm=" << bundleInstr.GetDisassembly()
+                          << std::endl;
+            }
+        }
         const bool tracePostSimpleFsPath =
             (decodeResult.instructionAddress >= 0x1CD0ULL &&
              decodeResult.instructionAddress <= 0x1D70ULL) ||
@@ -1631,6 +1660,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         const uint64_t branchTargetValue = cachedInstruction_.HasBranchTarget()
             ? cachedInstruction_.GetBranchTarget()
             : 0;
+        const uint64_t branchRegisterValue = isBranchRegisterTargetInstruction(cachedInstruction_.GetType())
+            ? state_.getCPUState().GetBR(cachedInstruction_.GetSrc1())
+            : 0;
         // Some boot code reaches a counted loop form through the conservative
         // br.call decoder. Treat a short backward br.call b5 as ar.lc-driven.
         const bool callLooksLikeCountedLoop =
@@ -1649,7 +1681,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 if (livePredicateTrue) {
                     branchTarget = cachedInstruction_.HasBranchTarget()
                         ? cachedInstruction_.GetBranchTarget()
-                        : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                        : branchRegisterValue;
                     // The IA-64 EFI bootloader uses a small low-address thunk for
                     // Boot Services calls that decodes as br.cond b6, but it is
                     // followed by an EFI function that returns through b0. Link
@@ -1674,7 +1706,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 } else if (livePredicateTrue) {
                     branchTarget = cachedInstruction_.HasBranchTarget()
                         ? cachedInstruction_.GetBranchTarget()
-                        : state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                        : branchRegisterValue;
                     const uint64_t originalBranchTarget = branchTarget;
                     if (!cachedInstruction_.HasBranchTarget()) {
                         ++descriptorCallCount_;
@@ -2302,7 +2334,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 
             case InstructionType::BR_RET:
                 if (livePredicateTrue) {
-                    branchTarget = state_.getCPUState().GetBR(cachedInstruction_.GetSrc1());
+                    branchTarget = branchRegisterValue;
                     isBranch = true;
                 }
                 break;
@@ -2457,20 +2489,33 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << " ip=0x" << std::hex << currentIP
                           << " slot=" << std::dec << state_.currentSlot_
                           << " kind=" << branchKind
-                          << " branchTarget=0x" << std::hex << branchTarget
-                          << " normalized=0x" << branchEntryIP
-                          << " guestSize=0x" << memorySize
-                          << " gp(r1)=0x" << cpu.GetGR(1)
-                          << " r2=0x" << cpu.GetGR(2)
-                          << " r8=0x" << cpu.GetGR(8)
-                          << " r14=0x" << cpu.GetGR(14)
-                          << " r33=0x" << cpu.GetGR(33)
-                          << " br0=0x" << cpu.GetBR(0)
-                          << " br6=0x" << cpu.GetBR(6)
+                           << " branchTarget=0x" << std::hex << branchTarget
+                           << " normalized=0x" << branchEntryIP
+                           << " guestSize=0x" << memorySize
+                           << " gp(r1)=0x" << cpu.GetGR(1)
+                           << " r2=0x" << cpu.GetGR(2)
+                           << " r8=0x" << cpu.GetGR(8)
+                           << " r14=0x" << cpu.GetGR(14)
+                           << " r33=0x" << cpu.GetGR(33)
+                           << " br0=0x" << cpu.GetBR(0)
+                           << " br6=0x" << cpu.GetBR(6)
                           << ". Missing next milestone: kernel handoff; suspect corrupt IA-64"
                           << " function-descriptor/control-flow data from PE/COFF loading, relocations,"
                           << " or GP-relative addressing rather than ConsoleOut/GOP."
                           << std::dec << "\n";
+                state_.bundleValid_ = false;
+                hasCachedInstruction_ = false;
+                return ISAExecutionResult::EXCEPTION;
+            }
+            if (!branchIntoSyntheticEfi && memorySize != 0 && branchEntryIP >= memorySize) {
+                std::cerr << "[FETCH-FAULT] IA-64 branch target left mapped guest memory"
+                          << " ip=0x" << std::hex << currentIP
+                          << " target=0x" << branchTarget
+                          << " normalized=0x" << branchEntryIP
+                          << " guestSize=0x" << memorySize
+                          << " br0=0x" << cpu.GetBR(0)
+                          << " br6=0x" << cpu.GetBR(6)
+                          << std::dec << std::endl;
                 state_.bundleValid_ = false;
                 hasCachedInstruction_ = false;
                 return ISAExecutionResult::EXCEPTION;

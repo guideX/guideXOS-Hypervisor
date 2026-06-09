@@ -47,11 +47,16 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
+
+        const bool registerBranch = (major == 0x1) || (major == 0x4 && btype == 0x4) || (major == 0x0 && btype == 0x4);
         
         // Decode based on major opcode
         switch (major) {
             case 0x0:   // IP-relative branches
             case 0x4:
+                if (registerBranch) {
+                    return decodeIndirect(raw_instruction, btype, x6, result);
+                }
                 return decodeIPRelative(raw_instruction, btype, x6, current_ip, result);
 
             case 0x5:   // IP-relative br.call
@@ -220,12 +225,7 @@ static bool decodeIndirect(uint64_t raw, uint8_t btype, uint8_t x6,
         
         switch (operation) {
             case 0x00:
-                // Boot service calls use the branch-register call form
-                // encoded as major=1/x6=0 with b1 holding the link register
-                // and b2 holding the target branch register.  The upper x6
-                // bit carries a branch hint, so x6=0x20 is the same call
-                // operation and appears in the EFI HandleProtocol path as
-                // br.call b0 = b0.
+                // Boot service calls use the branch-register call form.
                 result.type = formats::BFormat::BranchType::CALL;
                 break;
                 
