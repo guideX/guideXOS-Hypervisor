@@ -416,6 +416,46 @@ void test_latest_boot_log_blockers() {
                   "cmp.eq p10, p9 = r8, r10",
                   cmp_eq_m_unit.GetDisassembly());
 
+    const uint8_t efiEntryBundle[16] = {
+        0x00, 0x10, 0x19, 0x08, 0x80, 0x05, 0x30, 0x02,
+        0x00, 0x62, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00
+    };
+    const uint64_t expectedSlot0 = 0x2c0040c880ULL;
+    const uint64_t expectedSlot1 = 0x1880008c0ULL;
+    const uint64_t expectedSlot2 = 0x8000000ULL;
+
+    uint64_t low = 0;
+    uint64_t high = 0;
+    for (int i = 0; i < 8; ++i) {
+        low |= static_cast<uint64_t>(efiEntryBundle[i]) << (i * 8);
+        high |= static_cast<uint64_t>(efiEntryBundle[i + 8]) << (i * 8);
+    }
+    const uint64_t slot0 = (low >> 5) & 0x1FFFFFFFFFFULL;
+    const uint64_t slot1 = ((low >> 46) | ((high & 0x7FFFFFFULL) << 18)) & 0x1FFFFFFFFFFULL;
+    const uint64_t slot2 = (high >> 23) & 0x1FFFFFFFFFFULL;
+    assert_equal("EFI entry bundle slot0 extraction", expectedSlot0, slot0);
+    assert_equal("EFI entry bundle slot1 extraction", expectedSlot1, slot1);
+    assert_equal("EFI entry bundle slot2 extraction", expectedSlot2, slot2);
+
+    Bundle bundle = decoder.DecodeBundleAt(efiEntryBundle, 0x1000);
+    assert_true("EFI entry bundle should decode as MII", bundle.templateType == TemplateType::MII);
+    assert_true("EFI entry bundle should have three instructions", bundle.instructions.size() == 3);
+    assert_true("EFI entry bundle slot 0 should decode as alloc",
+                bundle.instructions[0].GetType() == InstructionType::ALLOC);
+    assert_true("EFI entry bundle slot 1 should decode as mov from branch",
+                bundle.instructions[1].GetType() == InstructionType::MOV_FROM_BR);
+    assert_true("EFI entry bundle slot 2 should decode as nop",
+                bundle.instructions[2].GetType() == InstructionType::NOP);
+    assert_string("EFI entry bundle slot 0 disassembly",
+                  "alloc r16 = ar.pfs, 3, 2, 0",
+                  bundle.instructions[0].GetDisassembly());
+    assert_string("EFI entry bundle slot 1 disassembly",
+                  "mov r17 = b6",
+                  bundle.instructions[1].GetDisassembly());
+    assert_string("EFI entry bundle slot 2 disassembly",
+                  "nop",
+                  bundle.instructions[2].GetDisassembly());
+
     cpu.SetGR(8, 0x1234);
     cpu.SetGR(10, 0x1234);
     cmp_eq.Execute(cpu, memory);
