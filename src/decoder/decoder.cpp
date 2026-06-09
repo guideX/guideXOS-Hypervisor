@@ -769,19 +769,28 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::ALLOC:
             // alloc rDst = ar.pfs, sof, sol, sor
             if (hasImmediate_) {
-                // Save current CFM
-                uint64_t old_cfm = cpu.GetCFM();
-                cpu.SetGR(dst_, old_cfm);
-                
-                // Extract fields from immediate
-                uint8_t sof = static_cast<uint8_t>(immediate_ & 0x7F);
-                uint8_t sol = static_cast<uint8_t>((immediate_ >> 7) & 0x7F);
-                uint8_t sor = static_cast<uint8_t>((immediate_ >> 14) & 0xF);
-                
-                // Build new CFM
-                uint64_t new_cfm = sof | (static_cast<uint64_t>(sol) << 7) | 
-                                   (static_cast<uint64_t>(sor) << 14);
-                cpu.SetCFM(new_cfm);
+                const uint8_t sof = static_cast<uint8_t>(immediate_ & 0x7F);
+                const uint8_t sol = static_cast<uint8_t>((immediate_ >> 7) & 0x7F);
+                const uint8_t sor = static_cast<uint8_t>((immediate_ >> 14) & 0xF);
+                if (sol > sof || sof > 96 || sor > 4) {
+                    throw std::out_of_range("ALLOC frame size invalid");
+                }
+
+                const uint64_t old_cfm = cpu.GetCFM();
+                const uint64_t old_pfs = cpu.GetAR(64);
+                cpu.SetGR(dst_, old_pfs == 0 ? old_cfm : old_pfs);
+                cpu.SetAR(64, old_cfm);
+                cpu.SetCFM(sof | (static_cast<uint64_t>(sol) << 7) |
+                           (static_cast<uint64_t>(sor) << 14));
+                std::cout << "[IA64-RSE] alloc ip=0x" << std::hex << cpu.GetIP()
+                          << " dst=r" << std::dec << static_cast<int>(dst_)
+                          << " oldCFM=0x" << std::hex << old_cfm
+                          << " oldPFS=0x" << old_pfs
+                          << " sof=" << std::dec << static_cast<unsigned>(sof)
+                          << " sol=" << static_cast<unsigned>(sol)
+                          << " sor=" << static_cast<unsigned>(sor)
+                          << " newCFM=0x" << std::hex << cpu.GetCFM()
+                          << std::dec << std::endl;
             }
             break;
         

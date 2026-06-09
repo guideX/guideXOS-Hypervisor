@@ -21,12 +21,6 @@
     <ClCompile Include="src\decoder\riscv_decoder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="tests\test_riscv_decoder.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="tests\test_riscv_fetch_decode.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cpu_state.h">
@@ -279,5 +273,6 @@
     <None Include="fix_projects.ps1" />
     <None Include="add_project_ref.ps1" />
     <None Include="cleanup_hypervisor.ps1" />
+    <None Include="test_elf_validation.vcxproj" />
   </ItemGroup>
 </Project>

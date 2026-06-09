@@ -4,16 +4,95 @@
 #include "bootstrap.h"
 #include "dynamic_linker.h"
 #include "KernelValidator.h"
+#include "BootTraceSystem.h"
+#include "logger.h"
 #include <fstream>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
 #include <cerrno>
+#include <sstream>
 
 namespace ia64 {
 
 // IA-64 specific constants
 constexpr uint64_t PAGE_SIZE = 4096;
+
+namespace {
+
+const char* elfTypeName(uint16_t type) {
+    switch (static_cast<ELFType>(type)) {
+        case ELFType::NONE: return "NONE";
+        case ELFType::REL: return "REL";
+        case ELFType::EXEC: return "EXEC";
+        case ELFType::DYN: return "DYN";
+        case ELFType::CORE: return "CORE";
+        default: return "UNKNOWN";
+    }
+}
+
+std::string describeElfValidationFailure(const uint8_t* buffer, size_t size) {
+    if (!buffer) {
+        return "file buffer is null";
+    }
+
+    if (size < sizeof(ELF64_Ehdr)) {
+        return "file found but too small to be ELF64";
+    }
+
+    const ELF64_Ehdr* ehdr = reinterpret_cast<const ELF64_Ehdr*>(buffer);
+    if (ehdr->e_ident[EI_MAG0] != ELFMAG0 ||
+        ehdr->e_ident[EI_MAG1] != ELFMAG1 ||
+        ehdr->e_ident[EI_MAG2] != ELFMAG2 ||
+        ehdr->e_ident[EI_MAG3] != ELFMAG3) {
+        return "file found but not ELF: invalid magic";
+    }
+
+    if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
+        return "ELF is not ELF64";
+    }
+
+    if (ehdr->e_ident[EI_DATA] != ELFDATA2LSB) {
+        return "ELF64 is not little-endian";
+    }
+
+    if (ehdr->e_ident[EI_VERSION] != EV_CURRENT || ehdr->e_version != EV_CURRENT) {
+        return "ELF version is not current";
+    }
+
+    if (ehdr->e_machine != EM_IA_64) {
+        std::ostringstream oss;
+        oss << "ELF but not IA-64 (machine=" << ehdr->e_machine << ')';
+        return oss.str();
+    }
+
+    if (ehdr->e_type != static_cast<uint16_t>(ELFType::EXEC) &&
+        ehdr->e_type != static_cast<uint16_t>(ELFType::DYN) &&
+        ehdr->e_type != static_cast<uint16_t>(ELFType::REL) &&
+        ehdr->e_type != static_cast<uint16_t>(ELFType::CORE)) {
+        std::ostringstream oss;
+        oss << "unsupported ELF type " << elfTypeName(ehdr->e_type);
+        return oss.str();
+    }
+
+    if (ehdr->e_ehsize != sizeof(ELF64_Ehdr)) {
+        return "ELF header size mismatch";
+    }
+
+    if (ehdr->e_phentsize != 0 && ehdr->e_phentsize != sizeof(ELF64_Phdr)) {
+        return "program header entry size mismatch";
+    }
+
+    return {};
+}
+
+std::string hexValue(uint64_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::hex << value;
+    return oss.str();
+}
+
+} // namespace
 
 ELFLoader::ELFLoader()
     : entryPoint_(0)
@@ -35,7 +114,8 @@ uint64_t ELFLoader::LoadFile(const std::string& filePath, MemorySystem& memory, 
     // Open file
     std::ifstream file(filePath, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open ELF file: " + filePath);
+        LOG_ERROR("IA-64 ELF file not found: " + filePath);
+        throw std::runtime_error("file not found: " + filePath);
     }
 
     // Get file size
@@ -45,7 +125,8 @@ uint64_t ELFLoader::LoadFile(const std::string& filePath, MemorySystem& memory, 
     // Read entire file into buffer
     std::vector<uint8_t> buffer(fileSize);
     if (!file.read(reinterpret_cast<char*>(buffer.data()), fileSize)) {
-        throw std::runtime_error("Failed to read ELF file: " + filePath);
+        LOG_ERROR("Failed to read IA-64 ELF file: " + filePath);
+        throw std::runtime_error("failed to read ELF file: " + filePath);
     }
 
     file.close();
@@ -55,28 +136,50 @@ uint64_t ELFLoader::LoadFile(const std::string& filePath, MemorySystem& memory, 
 }
 
 uint64_t ELFLoader::LoadBuffer(const uint8_t* buffer, size_t size, MemorySystem& memory, CPUState& cpu) {
-// Validate ELF header
-if (!ValidateELF(buffer, size)) {
-    throw std::runtime_error("Invalid IA-64 ELF file");
-}
+    programHeaders_.clear();
+    segments_.clear();
+    entryPoint_ = 0;
+    baseAddress_ = 0;
+    dynamicAddr_ = 0;
+    dynamicSize_ = 0;
+    hasInterpreter_ = false;
+    interpreterPath_.clear();
+    isLoaded_ = false;
+    elfType_ = ELFType::NONE;
 
-// Parse header and program headers
-if (!ParseHeader(buffer, size)) {
-    throw std::runtime_error("Failed to parse ELF header");
-}
+    const std::string validationFailure = describeElfValidationFailure(buffer, size);
+    if (!validationFailure.empty()) {
+        LOG_ERROR("IA-64 ELF load rejected: " + validationFailure);
+        throw std::runtime_error(validationFailure);
+    }
 
-// Perform enhanced validation checks
-const ELF64_Ehdr* ehdr = reinterpret_cast<const ELF64_Ehdr*>(buffer);
+    // Parse header and program headers
+    if (!ParseHeader(buffer, size)) {
+        LOG_ERROR("IA-64 ELF load rejected: failed to parse program headers");
+        throw std::runtime_error("failed to parse ELF header/program headers");
+    }
 
-// Validate architecture and machine type
-if (!ValidateArchitecture(ehdr)) {
-    throw std::runtime_error("ELF architecture validation failed");
-}
+    const ELF64_Ehdr* ehdr = reinterpret_cast<const ELF64_Ehdr*>(buffer);
 
-// Validate entry point
-if (!ValidateEntryPoint(ehdr, programHeaders_)) {
-    throw std::runtime_error("Invalid entry point: not aligned or not in executable segment");
-}
+    if (ehdr->e_type != static_cast<uint16_t>(ELFType::EXEC)) {
+        std::ostringstream oss;
+        oss << "unsupported ELF type " << elfTypeName(ehdr->e_type)
+            << " (minimal IA-64 Linux handoff supports ET_EXEC only)";
+        LOG_WARN("IA-64 ELF loaded but execution not yet supported: " + oss.str());
+        throw std::runtime_error(oss.str());
+    }
+
+    // Validate architecture and machine type
+    if (!ValidateArchitecture(ehdr)) {
+        LOG_ERROR("IA-64 ELF load rejected: architecture validation failed");
+        throw std::runtime_error("ELF architecture validation failed");
+    }
+
+    // Validate entry point
+    if (!ValidateEntryPoint(ehdr, programHeaders_)) {
+        LOG_ERROR("IA-64 ELF load rejected: entry point not aligned or not executable");
+        throw std::runtime_error("invalid entry point: not aligned or not in executable segment");
+    }
 
 // Optional kernel-specific validation
 if (kernelValidationEnabled_) {
@@ -102,40 +205,48 @@ if (kernelValidationEnabled_) {
     if (ownsValidator) delete validator;
 }
 
-// Validate segment alignment and memory safety
-for (const auto& phdr : programHeaders_) {
-    if (!ValidateSegmentAlignment(phdr)) {
-        throw std::runtime_error("Segment alignment validation failed");
+    // Validate segment alignment and memory safety
+    for (const auto& phdr : programHeaders_) {
+        if (!ValidateSegmentAlignment(phdr)) {
+            LOG_ERROR("IA-64 ELF load rejected: segment alignment validation failed");
+            throw std::runtime_error("segment alignment validation failed");
+        }
+
+        if (!ValidateMemorySafety(phdr, size, memory.GetTotalSize())) {
+            LOG_ERROR("IA-64 ELF load rejected: segment memory safety validation failed");
+            throw std::runtime_error("segment memory safety validation failed");
+        }
     }
 
-    if (!ValidateMemorySafety(phdr, size, memory.GetTotalSize())) {
-        throw std::runtime_error("Segment memory safety validation failed");
-    }
-}
-
-// Load segments into memory
-if (!LoadSegments(buffer, size, memory)) {
-    throw std::runtime_error("Failed to load ELF segments");
-}
-
-    // Process relocations (for PIE/shared objects)
-    if (!ProcessRelocations(buffer, size, memory)) {
-        throw std::runtime_error("Failed to process relocations");
+    // Load segments into memory
+    if (!LoadSegments(buffer, size, memory)) {
+        LOG_ERROR("IA-64 ELF load rejected: no PT_LOAD segments could be loaded");
+        throw std::runtime_error("failed to load ELF segments");
     }
 
-    // Setup bootstrap configuration
-    BootstrapConfig config;
+    // Process relocations are intentionally not applied in this minimal handoff path.
+    // TODO: Revisit once IA-64 relocation and Linux ABI notes in the local docs are expanded.
+
+    // Setup a minimal kernel-style bootstrap configuration.
+    KernelBootstrapConfig config;
     config.entryPoint = entryPoint_;
-    config.argv = { "program" };  // Default argv[0]
-    config.envp = {};  // Empty environment for now
-    config.globalPointer = 0;  // For static executables
-    config.programHeaderAddr = baseAddress_ + header_.e_phoff;
-    config.programHeaderEntrySize = header_.e_phentsize;
-    config.programHeaderCount = header_.e_phnum;
-    config.baseAddress = baseAddress_;
+    config.globalPointer = 0;
+    config.bootParamAddress = 0;
+    config.commandLineAddress = 0;
+    config.memoryMapAddress = 0;
+    config.memoryMapSize = 0;
+    config.pageTableBase = 0;
+    config.efiSystemTable = 0;
+    config.initramfsAddress = 0;
+    config.initramfsSize = 0;
+    config.enableVirtualAddressing = false;
 
-    // Initialize CPU and memory state using bootstrap module
-    InitializeBootstrapState(cpu, memory, config);
+    uint64_t stackPointer = InitializeKernelBootstrapState(cpu, memory, config);
+
+    LOG_INFO("IA-64 ELF64 loaded and entry state prepared: entry=" +
+             hexValue(entryPoint_) +
+             " stack=" + hexValue(stackPointer));
+    LOG_INFO("IA-64 Linux handoff is intentionally minimal; see include/bootstrap.h for the remaining ABI TODOs");
 
     isLoaded_ = true;
     return entryPoint_;
@@ -266,6 +377,15 @@ bool ELFLoader::LoadSegments(const uint8_t* buffer, size_t size, MemorySystem& m
         // Calculate actual load address
         uint64_t loadAddr = baseAddress_ + phdr.p_vaddr;
 
+        std::ostringstream segmentLog;
+        segmentLog << "IA-64 PT_LOAD vaddr=" << hexValue(phdr.p_vaddr)
+                   << " paddr=" << hexValue(phdr.p_paddr)
+                   << " offset=" << hexValue(phdr.p_offset)
+                   << " filesz=" << hexValue(phdr.p_filesz)
+                   << " memsz=" << hexValue(phdr.p_memsz)
+                   << " flags=" << hexValue(phdr.p_flags);
+        LOG_INFO(segmentLog.str());
+
         // Validate file offset and size
         if (phdr.p_offset + phdr.p_filesz > size) {
             throw std::runtime_error("Segment extends beyond file size");
@@ -286,6 +406,9 @@ bool ELFLoader::LoadSegments(const uint8_t* buffer, size_t size, MemorySystem& m
         if (phdr.p_memsz > phdr.p_filesz) {
             uint64_t bssStart = loadAddr + phdr.p_filesz;
             uint64_t bssSize = phdr.p_memsz - phdr.p_filesz;
+
+            LOG_INFO("Zero-filling IA-64 BSS: start=" + hexValue(bssStart) +
+                     " size=" + hexValue(bssSize));
             
             std::vector<uint8_t> zeros(bssSize, 0);
             memory.loadBuffer(bssStart, zeros.data(), bssSize);
@@ -369,6 +492,13 @@ bool ELFLoader::ApplyRelocation(const ELF64_Rela& rela, uint64_t symValue, Memor
             // PC-relative relocations for branches
             // These require patching instruction bundles - complex for IA-64
             // For now, skip or implement simplified version
+            break;
+        }
+
+        case RelocationType::R_IA64_REL64LSB: {
+            // Relative 64-bit relocation used by IA-64 EFI images
+            uint64_t value = baseAddress_ + addend;
+            memory.write<uint64_t>(relocAddr, value);
             break;
         }
 

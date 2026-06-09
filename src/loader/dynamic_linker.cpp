@@ -386,6 +386,15 @@ bool DynamicLinker::ApplyRelocation(const ELF64_Rela& relocation, uint64_t baseA
             }
             break;
         }
+
+        case static_cast<uint32_t>(RelocationType::R_IA64_REL64LSB): {
+            // Relative 64-bit relocation used by IA-64 EFI images
+            uint64_t value = baseAddress + relocation.r_addend;
+            for (int i = 0; i < 8; ++i) {
+                memory.write<uint8_t>(relocAddr + i, (value >> (i * 8)) & 0xFF);
+            }
+            break;
+        }
         
         default:
             // Unsupported relocation type - skip

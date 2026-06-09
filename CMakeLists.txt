@@ -331,6 +331,21 @@ else()
     target_compile_options(test_bootstrap PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# ELF validation / loader regression test
+add_executable(test_elf_validation
+    tests/test_elf_validation.cpp
+    ${LOADER_SOURCES}
+    ${MEMORY_SOURCES}
+    ${CORE_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_elf_validation PRIVATE /W4)
+else()
+    target_compile_options(test_elf_validation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # Syscall dispatcher test
 add_executable(test_syscall_dispatcher
     tests/test_syscall_dispatcher.cpp
@@ -530,6 +545,7 @@ add_test(NAME ProfilerTests COMMAND test_profiler)
 add_test(NAME FuzzerTests COMMAND test_fuzzer)
 add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
+add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)

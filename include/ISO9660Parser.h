@@ -224,6 +224,11 @@ public:
      */
     void listRootDirectory();
 
+    /**
+     * Get the most recent EFI boot-media diagnostic summary.
+     */
+    const std::string& getLastBootMediaDiagnostics() const { return lastBootMediaDiagnostics_; }
+
 private:
     IStorageDevice* device_;
     ISO9660PrimaryVolumeDescriptor pvd_;
@@ -244,6 +249,20 @@ private:
      * Parse El Torito boot catalog
      */
     bool parseBootCatalog(uint32_t catalogLBA);
+
+    /**
+     * Attempt to extract a bootloader directly from the ISO9660 filesystem.
+     */
+    bool tryExtractIsoBootloader(std::vector<uint8_t>& executableData, std::string& resolvedPath);
+
+    /**
+     * Attempt to extract an EFI bootloader from a boot image, including FAT
+     * filesystems stored at the image root or inside an EFI System Partition.
+     */
+    bool tryExtractBootImageEfiLoader(const std::vector<uint8_t>& bootImage,
+                                      std::vector<uint8_t>& executableData,
+                                      std::string& resolvedPath,
+                                      std::string& failureReason);
     
     /**
      * Search for file in directory
@@ -265,6 +284,8 @@ private:
     bool searchDirectoryInternal(uint32_t dirLBA, uint32_t dirSize, const std::string& fileName,
                                  uint32_t& lba, uint32_t& fileSize, 
                                  std::set<uint32_t>& visited, int depth, int maxDepth);
+
+    std::string lastBootMediaDiagnostics_;
 };
 
 } // namespace ia64

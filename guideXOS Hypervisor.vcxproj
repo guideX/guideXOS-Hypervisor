@@ -130,7 +130,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="debug_harness.cpp" />
-    <ClCompile Include="src\decoder\riscv_decoder.cpp" />  </ItemGroup>
+    <ClCompile Include="src\decoder\riscv_decoder.cpp" />
+  </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\abi.h" />
     <ClInclude Include="include\APISerializer.h" />
@@ -232,6 +233,7 @@
     <None Include="kernels\minimal_kernel.s" />
     <None Include="README.md" />
     <None Include="docs\RELOCATION_BUG_FIX.md" />
+    <None Include="test_elf_validation.vcxproj" />
     <None Include="test_programs\README.md" />
     <None Include="test_programs\TestKernelGenerator\Program.cs" />
     <None Include="test_programs\TestKernelGenerator\TestKernelGenerator.csproj" />

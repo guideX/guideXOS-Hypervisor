@@ -8,6 +8,76 @@
 
 namespace ia64 {
 
+namespace {
+
+#pragma pack(push, 1)
+struct MBRPartitionEntry {
+    uint8_t status;
+    uint8_t chsFirst[3];
+    uint8_t partitionType;
+    uint8_t chsLast[3];
+    uint32_t lbaFirst;
+    uint32_t sectorCount;
+};
+
+struct GPTHeader {
+    uint64_t signature;
+    uint32_t revision;
+    uint32_t headerSize;
+    uint32_t headerCrc32;
+    uint32_t reserved;
+    uint64_t currentLba;
+    uint64_t backupLba;
+    uint64_t firstUsableLba;
+    uint64_t lastUsableLba;
+    uint8_t diskGuid[16];
+    uint64_t partitionEntriesLba;
+    uint32_t numberOfPartitionEntries;
+    uint32_t sizeOfPartitionEntry;
+    uint32_t partitionEntriesCrc32;
+};
+
+struct GPTPartitionEntry {
+    uint8_t partitionTypeGuid[16];
+    uint8_t uniquePartitionGuid[16];
+    uint64_t firstLba;
+    uint64_t lastLba;
+    uint64_t attributes;
+    uint16_t name[36];
+};
+#pragma pack(pop)
+
+constexpr uint8_t MBR_PARTITION_EFI = 0xEF;
+
+bool isZeroGuid(const uint8_t* guid, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+        if (guid[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isEfiSystemPartitionGuid(const uint8_t guid[16]) {
+    static constexpr uint8_t espGuid[16] = {
+        0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
+        0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b
+    };
+    return std::memcmp(guid, espGuid, sizeof(espGuid)) == 0;
+}
+
+std::string trimPathComponent(std::string value) {
+    while (!value.empty() && (value.front() == '/' || value.front() == '\\')) {
+        value.erase(value.begin());
+    }
+    while (!value.empty() && (value.back() == '/' || value.back() == '\\')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+} // namespace
+
 ISO9660Parser::ISO9660Parser(IStorageDevice* device)
     : device_(device)
     , pvdValid_(false)
@@ -33,6 +103,7 @@ bool ISO9660Parser::readSector(uint32_t lba, uint8_t* buffer, size_t bufferSize)
 
 bool ISO9660Parser::parse() {
     LOG_INFO("Parsing ISO 9660 filesystem...");
+    lastBootMediaDiagnostics_.clear();
     
     if (!device_) {
         LOG_ERROR("No storage device provided");
@@ -321,24 +392,44 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
     using namespace guideXOS;
     
     executableData.clear();
-    
+    std::string resolvedPath;
+    static const char* isoPaths[] = {
+        "/EFI/BOOT/BOOTIA64.EFI",
+        "EFI/BOOT/BOOTIA64.EFI",
+        "/BOOTIA64.EFI",
+        "BOOTIA64.EFI",
+        "/EFI/BOOT/ELILO.EFI",
+        "EFI/BOOT/ELILO.EFI",
+        "/ELILO.EFI",
+        "ELILO.EFI"
+    };
+
+    for (const char* path : isoPaths) {
+        LOG_INFO("Searching ISO filesystem for: " + std::string(path));
+        if (extractFile(path, executableData)) {
+            resolvedPath = path;
+            lastBootMediaDiagnostics_ = "BOOTIA64.EFI found at path " + resolvedPath + " (ISO9660)";
+            BootStageTrace::Stage(50, "BOOTIA64.EFI found",
+                                  std::string("path=\"") + path + "\" source=ISO9660");
+            return true;
+        }
+    }
+
     if (!efiBootEntry_.isBootable) {
-        LOG_ERROR("No EFI boot entry available");
+        lastBootMediaDiagnostics_ = "No El Torito EFI boot image found and ISO probing failed";
+        LOG_WARN(lastBootMediaDiagnostics_);
         return false;
     }
-    
+
     LOG_INFO("Extracting EFI executable from boot image...");
-    
-    // Read the EFI boot image (FAT filesystem)
     std::vector<uint8_t> bootImage;
     int64_t bytesRead = readFile(efiBootEntry_.loadLBA, efiBootEntry_.sectorCount, bootImage);
-    
     if (bytesRead <= 0 || bootImage.empty()) {
-        LOG_ERROR("Failed to read EFI boot image");
+        lastBootMediaDiagnostics_ = "EFI boot image found but could not be read";
+        LOG_ERROR(lastBootMediaDiagnostics_);
         return false;
     }
-    
-    LOG_INFO("Read " + std::to_string(bytesRead) + " bytes of EFI boot image");
+
     {
         std::ostringstream ctx;
         ctx << "loadLBA=" << efiBootEntry_.loadLBA
@@ -346,71 +437,120 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
             << " bytesRead=" << bytesRead;
         BootStageTrace::Stage(30, "EFI boot image extracted", ctx.str());
     }
-    
-    // Parse as FAT filesystem
-    FATParser fatParser;
-    if (!fatParser.parse(bootImage.data(), bootImage.size())) {
-        LOG_ERROR("Failed to parse EFI boot image as FAT filesystem");
-        return false;
-    }
-    
-    LOG_INFO("FAT filesystem parsed successfully");
-    BootStageTrace::Stage(40, "FAT image mounted",
-                          "source=ElToritoBootImage bytes=" + std::to_string(bootImage.size()));
-    
-    // Try common EFI bootloader paths for IA-64
-    const char* efiPaths[] = {
+
+    static const char* efiPaths[] = {
         "EFI/BOOT/BOOTIA64.EFI",
         "efi/boot/bootia64.efi",
         "EFI\\BOOT\\BOOTIA64.EFI",
         "BOOTIA64.EFI",
-        "bootia64.efi"
+        "ELILO.EFI",
+        "elilo.efi"
     };
-    
-    FATFileInfo fileInfo;
-    bool found = false;
-    
-    for (const char* path : efiPaths) {
-        LOG_INFO("Searching for: " + std::string(path));
-        if (fatParser.findFile(path, fileInfo)) {
-            LOG_INFO("? Found EFI executable: " + fileInfo.name);
-            LOG_INFO("  Size: " + std::to_string(fileInfo.size) + " bytes");
-            std::ostringstream ctx;
-            ctx << "path=\"" << path << "\""
-                << " fatName=\"" << fileInfo.name << "\""
-                << " size=" << fileInfo.size
-                << " firstCluster=" << fileInfo.firstCluster;
-            BootStageTrace::Stage(50, "BOOTIA64.EFI found", ctx.str());
-            found = true;
-            break;
+
+    auto tryFatSource = [&](const uint8_t* fatData,
+                            size_t fatSize,
+                            const std::string& source,
+                            std::string& failureReason) -> bool {
+        FATParser fatParser;
+        if (!fatParser.parse(fatData, fatSize)) {
+            failureReason = "FAT parse failed for source " + source;
+            return false;
         }
-    }
-    
-    if (!found) {
-        LOG_ERROR("Could not find EFI bootloader in boot image");
-        
-        // List root directory to help debug
-        std::vector<FATFileInfo> rootEntries;
-        if (fatParser.listDirectory("/", rootEntries)) {
-            LOG_INFO("Root directory contents:");
-            for (const auto& entry : rootEntries) {
-                LOG_INFO("  " + entry.name + (entry.isDirectory ? " [DIR]" : ""));
+
+        BootStageTrace::Stage(40, "FAT image mounted",
+                              "source=" + source + " bytes=" + std::to_string(fatSize));
+
+        FATFileInfo fileInfo;
+        for (const char* path : efiPaths) {
+            if (fatParser.findFile(path, fileInfo) &&
+                !fileInfo.isDirectory &&
+                fatParser.readFile(fileInfo, executableData)) {
+                resolvedPath = path;
+                BootStageTrace::Stage(50, "BOOTIA64.EFI found",
+                                      std::string("path=\"") + path + "\" source=" + source);
+                return true;
             }
         }
-        
+
+        failureReason = "FAT parsed but BOOTIA64.EFI/ELILO.EFI not found in " + source;
         return false;
+    };
+
+    std::string fatFailure;
+    if (tryFatSource(bootImage.data(), bootImage.size(), "ElToritoBootImage", fatFailure)) {
+        lastBootMediaDiagnostics_ = "BOOTIA64.EFI found at path " + resolvedPath + " (El Torito FAT)";
+        return true;
     }
-    
-    // Read the EFI executable
-    if (!fatParser.readFile(fileInfo, executableData)) {
-        LOG_ERROR("Failed to read EFI executable from FAT filesystem");
-        return false;
+
+    if (bootImage.size() >= 512 &&
+        bootImage[510] == 0x55 &&
+        bootImage[511] == 0xAA) {
+        if (bootImage.size() >= 1024) {
+            const GPTHeader* gpt = reinterpret_cast<const GPTHeader*>(bootImage.data() + 512);
+            static constexpr uint64_t GPT_SIGNATURE = 0x5452415020494645ULL; // "EFI PART"
+            if (gpt->signature == GPT_SIGNATURE && gpt->sizeOfPartitionEntry >= sizeof(GPTPartitionEntry)) {
+                const size_t entryTableOffset = static_cast<size_t>(gpt->partitionEntriesLba) * 512;
+                for (uint32_t i = 0; i < gpt->numberOfPartitionEntries; ++i) {
+                    const size_t entryOffset = entryTableOffset + static_cast<size_t>(i) * gpt->sizeOfPartitionEntry;
+                    if (entryOffset + sizeof(GPTPartitionEntry) > bootImage.size()) {
+                        break;
+                    }
+
+                    const GPTPartitionEntry* entry =
+                        reinterpret_cast<const GPTPartitionEntry*>(bootImage.data() + entryOffset);
+                    if (isZeroGuid(entry->partitionTypeGuid, sizeof(entry->partitionTypeGuid))) {
+                        continue;
+                    }
+                    if (!isEfiSystemPartitionGuid(entry->partitionTypeGuid)) {
+                        continue;
+                    }
+                    if (entry->lastLba < entry->firstLba) {
+                        continue;
+                    }
+
+                    const size_t espOffset = static_cast<size_t>(entry->firstLba) * 512;
+                    const size_t espSectors = static_cast<size_t>(entry->lastLba - entry->firstLba + 1);
+                    const size_t espSize = espSectors * 512;
+                    if (espOffset >= bootImage.size()) {
+                        continue;
+                    }
+                    const size_t available = bootImage.size() - espOffset;
+                    const size_t probeSize = espSize < available ? espSize : available;
+                    if (tryFatSource(bootImage.data() + espOffset, probeSize, "GPT/ESP", fatFailure)) {
+                        lastBootMediaDiagnostics_ = "BOOTIA64.EFI found at path " + resolvedPath + " (GPT ESP)";
+                        return true;
+                    }
+                }
+            }
+        }
+
+        const MBRPartitionEntry* mbr =
+            reinterpret_cast<const MBRPartitionEntry*>(bootImage.data() + 446);
+        for (int i = 0; i < 4; ++i) {
+            const MBRPartitionEntry& entry = mbr[i];
+            if (entry.partitionType != MBR_PARTITION_EFI || entry.lbaFirst == 0 || entry.sectorCount == 0) {
+                continue;
+            }
+
+            const size_t espOffset = static_cast<size_t>(entry.lbaFirst) * 512;
+            const size_t espSize = static_cast<size_t>(entry.sectorCount) * 512;
+            if (espOffset >= bootImage.size()) {
+                continue;
+            }
+            const size_t available = bootImage.size() - espOffset;
+            const size_t probeSize = espSize < available ? espSize : available;
+            if (tryFatSource(bootImage.data() + espOffset, probeSize, "MBR/ESP", fatFailure)) {
+                lastBootMediaDiagnostics_ = "BOOTIA64.EFI found at path " + resolvedPath + " (MBR ESP)";
+                return true;
+            }
+        }
     }
-    
-    LOG_INFO("? EFI executable extracted successfully: " + 
-            std::to_string(executableData.size()) + " bytes");
-    
-    return true;
+
+    lastBootMediaDiagnostics_ = fatFailure.empty()
+        ? "EFI boot image found but FAT root could not be parsed"
+        : fatFailure;
+    LOG_ERROR(lastBootMediaDiagnostics_);
+    return false;
 }
 
 bool ISO9660Parser::searchDirectory(uint32_t dirLBA, uint32_t dirSize, 

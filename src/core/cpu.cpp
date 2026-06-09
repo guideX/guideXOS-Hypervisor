@@ -28,6 +28,9 @@ void CPUState::Reset() {
     
     // Clear application registers
     ar_.fill(0);
+
+    // Reset explicit RSE view
+    rse_ = RSEState();
     
     // Initialize special registers
     ip_ = 0;
@@ -127,6 +130,30 @@ void CPUState::SetAR(size_t index, uint64_t value) {
         throw std::out_of_range("Application register index out of range");
     }
     ar_[index] = value;
+
+    switch (index) {
+        case 16:
+            rse_.rsc = value;
+            break;
+        case 17:
+            rse_.bsp = value;
+            break;
+        case 18:
+            rse_.bspstore = value;
+            break;
+        case 19:
+            rse_.rnat = value;
+            break;
+        case 64:
+            rse_.pfs = value;
+            rse_.cfm = value;
+            rse_.sof = static_cast<uint8_t>(value & 0x7F);
+            rse_.sol = static_cast<uint8_t>((value >> 7) & 0x7F);
+            rse_.sor = static_cast<uint8_t>((value >> 14) & 0xF);
+            break;
+        default:
+            break;
+    }
 }
 
 void CPUState::Dump() const {
@@ -137,6 +164,15 @@ void CPUState::Dump() const {
     std::cout << "IP:  0x" << std::hex << std::setw(16) << std::setfill('0') << ip_ << std::dec << "\n";
     std::cout << "CFM: 0x" << std::hex << std::setw(16) << std::setfill('0') << cfm_ << std::dec << "\n";
     std::cout << "PSR: 0x" << std::hex << std::setw(16) << std::setfill('0') << psr_ << std::dec << "\n\n";
+    std::cout << "RSE: rsc=0x" << std::hex << std::setw(16) << std::setfill('0') << rse_.rsc
+              << " bsp=0x" << std::setw(16) << rse_.bsp
+              << " bspstore=0x" << std::setw(16) << rse_.bspstore
+              << " rnat=0x" << std::setw(16) << rse_.rnat
+              << " pfs=0x" << std::setw(16) << rse_.pfs
+              << " sof=" << std::dec << static_cast<unsigned>(rse_.sof)
+              << " sol=" << static_cast<unsigned>(rse_.sol)
+              << " sor=" << static_cast<unsigned>(rse_.sor)
+              << std::dec << "\n\n";
     
     // General registers (show first 16)
     std::cout << "General Registers (first 16):\n";
