@@ -234,7 +234,7 @@ if (validation->key55 != 0x55 || validation->keyAA != 0xAA) {
 }
     
 LOG_INFO("? Validation entry verified");
-LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) + 
+LOG_INFO("  Platform ID: " + BootStageTrace::Hex(validation->platformID) + 
          (validation->platformID == 0xEF ? " (EFI)" : 
           validation->platformID == 0 ? " (x86)" : ""));
     
@@ -252,8 +252,8 @@ LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) +
     }
     LOG_INFO(rawBytes);
     LOG_INFO("  bootIndicator offset: " + std::to_string((uint8_t*)&defaultEntry->bootIndicator - catalogBuffer));
-    LOG_INFO("  bootIndicator value (raw byte): 0x" + std::to_string((int)catalogBuffer[32]));
-    LOG_INFO("  bootIndicator value (struct): 0x" + std::to_string((int)defaultEntry->bootIndicator));
+    LOG_INFO("  bootIndicator value (raw byte): " + BootStageTrace::Hex(catalogBuffer[32]));
+    LOG_INFO("  bootIndicator value (struct): " + BootStageTrace::Hex(defaultEntry->bootIndicator));
     
     LOG_INFO("Default boot entry:");
     LOG_INFO("  Boot indicator: 0x" + std::to_string((int)defaultEntry->bootIndicator) + 
@@ -278,8 +278,8 @@ LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) +
             
             return true;
         } else {
-            LOG_WARN("  ISO boot catalog is for platform 0x" + 
-                    std::to_string(validation->platformID) + 
+            LOG_WARN("  ISO boot catalog is for platform " + 
+                    BootStageTrace::Hex(validation->platformID) + 
                     (validation->platformID == 0 ? " (x86/BIOS)" : ""));
             LOG_WARN("  This ISO is NOT designed for EFI boot (IA-64 requires EFI)");
             LOG_INFO("  Scanning for additional entries...");
@@ -317,7 +317,7 @@ LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) +
             ElToritoBootEntry* entry = reinterpret_cast<ElToritoBootEntry*>(entryBytes);
             
             LOG_INFO("? Bootable entry found");
-            LOG_INFO("  Platform: 0x" + std::to_string(currentPlatformID) + 
+            LOG_INFO("  Platform: " + BootStageTrace::Hex(currentPlatformID) + 
                      (currentPlatformID == 0xEF ? " (EFI)" : 
                       currentPlatformID == 0 ? " (x86)" : ""));
             LOG_INFO("  Media type: 0x" + std::to_string(entry->bootMediaType));
@@ -346,7 +346,7 @@ LOG_INFO("  Platform ID: 0x" + std::to_string(validation->platformID) +
     
     if (efiBootEntry_.isBootable) {
         LOG_INFO("? EFI boot entry configured:");
-        LOG_INFO("  Platform: 0x" + std::to_string(efiBootEntry_.platformID));
+            LOG_INFO("  Platform: " + BootStageTrace::Hex(efiBootEntry_.platformID));
         LOG_INFO("  LBA: " + std::to_string(efiBootEntry_.loadLBA));
         LOG_INFO("  Size: " + std::to_string(efiBootEntry_.sectorCount) + " sectors");
         std::ostringstream ctx;

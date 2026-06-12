@@ -1692,6 +1692,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         currentIP >= 0x1900 && currentIP < 0x1A00 &&
                         branchTarget >= 0x1FE00000ULL && branchTarget < 0x1FE01000ULL) {
                         state_.getCPUState().SetBR(0, currentIP + 16);
+                        std::cout << "[IA64-BR] thunk br.cond b6 resolved via b6="
+                                  << formatHex(branchTarget)
+                                  << " callerIP=" << formatHex(currentIP)
+                                  << std::endl;
                     }
                     isBranch = true;
                 }
