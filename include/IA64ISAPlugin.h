@@ -9,6 +9,7 @@
 #include <memory>
 #include <cstring>
 #include <array>
+#include <deque>
 #include <map>
 #include <string>
 #include <vector>
@@ -210,6 +211,9 @@ private:
                            uint64_t descriptorAddress,
                            uint64_t codePointer,
                            uint64_t status);
+    void recordRecentInstruction(uint64_t ip, size_t slot, const std::string& disasm);
+    void recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm);
+    void dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, size_t slot, const InstructionEx& instr, uint64_t baseBefore) const;
     bool ensureEfiBootFat(IMemory& memory);
     void installFileProtocolTable(IMemory& memory, uint64_t protocolAddress);
     uint64_t allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment = 16);
@@ -302,6 +306,20 @@ private:
     uint64_t lastDescriptorCode_;
     uint64_t lastDescriptorGp_;
     std::vector<uint64_t> lastBranchTargets_;
+    struct RecentInstructionTrace {
+        uint64_t ip = 0;
+        size_t slot = 0;
+        std::string disasm;
+    };
+    struct RecentRegisterWriteTrace {
+        size_t reg = 0;
+        uint64_t value = 0;
+        uint64_t ip = 0;
+        size_t slot = 0;
+        std::string disasm;
+    };
+    std::deque<RecentInstructionTrace> recentInstructions_;
+    std::deque<RecentRegisterWriteTrace> recentTrackedRegisterWrites_;
 
     struct EfiFileHandle {
         uint64_t protocolAddress = 0;

@@ -1400,6 +1400,8 @@ void IA64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    recentInstructions_.clear();
+    recentTrackedRegisterWrites_.clear();
     efiPoolNext_ = EFI_POOL_BASE;
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
@@ -2477,6 +2479,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             const size_t memorySize = memory.GetTotalSize();
             const bool branchIntoSyntheticEfi =
                 branchEntryIP >= EFI_HANDOFF_REGION_BASE && branchEntryIP < EFI_HANDOFF_REGION_END;
+            const CPUState& cpu = state_.getCPUState();
             if (memorySize != 0 &&
                 !branchIntoSyntheticEfi &&
                 (branchEntryIP >= memorySize || branchEntryIP + 16 > memorySize)) {
@@ -2488,7 +2491,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 } else if (cachedInstruction_.GetType() == InstructionType::BR_COND) {
                     branchKind = "br.cond";
                 }
-                const CPUState& cpu = state_.getCPUState();
                 std::cerr << "[EFI-MILESTONE] IA-64 control-flow target outside guest memory before kernel handoff"
                           << " ip=0x" << std::hex << currentIP
                           << " slot=" << std::dec << state_.currentSlot_
@@ -2913,6 +2915,68 @@ void IA64ISAPlugin::rememberBranchTarget(uint64_t target) {
     if (lastBranchTargets_.size() > 5) {
         lastBranchTargets_.erase(lastBranchTargets_.begin());
     }
+}
+
+void IA64ISAPlugin::recordRecentInstruction(uint64_t ip, size_t slot, const std::string& disasm) {
+    recentInstructions_.push_back(RecentInstructionTrace{ip, slot, disasm});
+    if (recentInstructions_.size() > 16) {
+        recentInstructions_.pop_front();
+    }
+}
+
+void IA64ISAPlugin::recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm) {
+    if (reg != 16 && reg != 17) {
+        return;
+    }
+
+    recentTrackedRegisterWrites_.push_back(RecentRegisterWriteTrace{reg, value, ip, slot, disasm});
+    if (recentTrackedRegisterWrites_.size() > 16) {
+        recentTrackedRegisterWrites_.pop_front();
+    }
+}
+
+void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, size_t slot, const InstructionEx& instr, uint64_t baseBefore) const {
+    std::cerr << "[IA64-FAULT-HISTORY] ip=0x" << std::hex << ip
+              << " slot=" << std::dec << slot
+              << " disasm=\"" << instr.GetDisassembly() << "\""
+              << " baseBefore=0x" << std::hex << baseBefore
+              << " r1=0x" << cpu.GetGR(1)
+              << " r12=0x" << cpu.GetGR(12)
+              << " r14=0x" << cpu.GetGR(14)
+              << " r16=0x" << cpu.GetGR(16)
+              << " r17=0x" << cpu.GetGR(17)
+              << " r18=0x" << cpu.GetGR(18)
+              << " r32=0x" << cpu.GetGR(32)
+              << " r33=0x" << cpu.GetGR(33)
+              << " r34=0x" << cpu.GetGR(34)
+              << " r35=0x" << cpu.GetGR(35)
+              << std::dec << "\n";
+
+    std::cerr << "[IA64-FAULT-HISTORY] recent-instructions:";
+    if (recentInstructions_.empty()) {
+        std::cerr << " <empty>";
+    } else {
+        for (const auto& entry : recentInstructions_) {
+            std::cerr << " [ip=0x" << std::hex << entry.ip
+                      << " slot=" << std::dec << entry.slot
+                      << " \"" << entry.disasm << "\"]";
+        }
+    }
+    std::cerr << std::dec << "\n";
+
+    std::cerr << "[IA64-FAULT-HISTORY] recent-r16-r17-writes:";
+    if (recentTrackedRegisterWrites_.empty()) {
+        std::cerr << " <empty>";
+    } else {
+        for (const auto& entry : recentTrackedRegisterWrites_) {
+            std::cerr << " [r" << std::dec << entry.reg
+                      << "=0x" << std::hex << entry.value
+                      << " ip=0x" << entry.ip
+                      << " slot=" << std::dec << entry.slot
+                      << " \"" << entry.disasm << "\"]";
+        }
+    }
+    std::cerr << std::dec << "\n";
 }
 
 uint64_t IA64ISAPlugin::allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment) {
@@ -3349,6 +3413,7 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
 void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
         CPUState& cpu = state_.getCPUState();
+        recordRecentInstruction(cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
         static constexpr uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = 0x1FF93010ULL;
         static constexpr size_t EFI_POST_SIMPLEFS_OUT_WATCH_SIZE = 0x10;
         const size_t storeSize = storeSizeForInstruction(instr.GetType());
@@ -3417,6 +3482,10 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 " lastEfiIP=" + BootStageTrace::Hex(lastEfiCallIP_));
         }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        if (instr.GetDst() == 16 || instr.GetDst() == 17) {
+            recordTrackedRegisterWrite(instr.GetDst(), state_.getCPUState().GetGR(instr.GetDst()),
+                                       cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
+        }
         if (watchPostSimpleFsOutStore) {
             std::cout << "[EFI-OUT-WATCH] post store ip=0x" << std::hex << cpu.GetIP()
                       << " slot=" << std::dec << state_.currentSlot_
@@ -3489,6 +3558,7 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         }
         std::cerr << " strictRecovery=" << (IA64_STRICT_RECOVERY ? "on" : "off")
                   << std::dec << "\n";
+        dumpRecentFaultContext(cpu, ip, state_.currentSlot_, instr, baseBefore);
         if (IA64_STRICT_RECOVERY) {
             throw;
         }
