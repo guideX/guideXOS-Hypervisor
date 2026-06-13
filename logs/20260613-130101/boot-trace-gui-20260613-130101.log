@@ -1,0 +1,2 @@
+2026-06-13T13:01:01.8375083-07:00 BOOT_TRACE_BEGIN path="D:\dev\guideXOS_Emulator\guideXOS Hypervisor GUI\bin\Debug\net9.0-windows\logs\boot-trace-gui-20260613-130101.log"
+2026-06-13T13:01:20.5144535-07:00 BOOT_STAGE_001 Host VM window created vmId="Virtual Machine 1-000000" vmName="Virtual Machine 1" isRunning=false

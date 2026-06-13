@@ -1,0 +1,29 @@
+[2026-06-13T13:01:08] native stderr logging started
+Log file: D:\dev\guideXOS_Emulator\guideXOS Hypervisor GUI\bin\Debug\net9.0-windows\logs\native-error-20260613-130108.log
+Error executing instruction at IP=0xeac0 Slot=1 raw=0x80c1000380 disasm="ld8 r14 = [r16]": Memory address 0x3a002000650064 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeac0 type="ld8 r14 = [r16]" targetAddress=0x3a002000650064 targetRegister=r14 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0xec40,0xea00,0xa180,0xa220,0xea70] addressHint=looks-like-packed-utf16 strictRecovery=off
+Recovered failed IA-64 load by zeroing r14, sanitizing the base register, and continuing.
+Error executing instruction at IP=0xeb60 Slot=1 raw=0x8cc0a24007 disasm="st8 [r10] = r18": Memory address 0x3a002000650064 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeb60 type="st8 [r10] = r18" targetAddress=0x1fe02000 targetRegister=r10 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0xea00,0xa180,0xa220,0xea70,0xeb00] addressHint=efi-table-or-pool-relative strictRecovery=off
+Treating as NOP and continuing...
+Error executing instruction at IP=0xeac0 Slot=1 raw=0x80c1000380 disasm="ld8 r14 = [r16]": Memory address 0xa007300250020 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeac0 type="ld8 r14 = [r16]" targetAddress=0xa007300250020 targetRegister=r14 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0xec70,0xea00,0xa180,0xa220,0xea70] addressHint=looks-like-packed-utf16 strictRecovery=off
+Recovered failed IA-64 load by zeroing r14, sanitizing the base register, and continuing.
+Error executing instruction at IP=0xeb60 Slot=1 raw=0x8cc0a24007 disasm="st8 [r10] = r18": Memory address 0xa007300250020 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeb60 type="st8 [r10] = r18" targetAddress=0x1fe02020 targetRegister=r10 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0xea00,0xa180,0xa220,0xea70,0xeb00] addressHint=efi-table-or-pool-relative strictRecovery=off
+Treating as NOP and continuing...
+Error executing instruction at IP=0xeac0 Slot=1 raw=0x80c1000380 disasm="ld8 r14 = [r16]": Memory address 0x3a002000650064 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeac0 type="ld8 r14 = [r16]" targetAddress=0x3a002000650064 targetRegister=r14 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0x1e6c0,0xea00,0xa180,0xa220,0xea70] addressHint=looks-like-packed-utf16 strictRecovery=off
+Recovered failed IA-64 load by zeroing r14, sanitizing the base register, and continuing.
+Error executing instruction at IP=0xeb60 Slot=1 raw=0x8cc0a24007 disasm="st8 [r10] = r18": Memory address 0x3a002000650064 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeb60 type="st8 [r10] = r18" targetAddress=0x1fe02040 targetRegister=r10 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0xea00,0xa180,0xa220,0xea70,0xeb00] addressHint=efi-table-or-pool-relative strictRecovery=off
+Treating as NOP and continuing...
+Error executing instruction at IP=0xeac0 Slot=1 raw=0x80c1000380 disasm="ld8 r14 = [r16]": Memory address 0xa007300250020 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeac0 type="ld8 r14 = [r16]" targetAddress=0xa007300250020 targetRegister=r14 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0x1e6f0,0xea00,0xa180,0xa220,0xea70] addressHint=looks-like-packed-utf16 strictRecovery=off
+Recovered failed IA-64 load by zeroing r14, sanitizing the base register, and continuing.
+Error executing instruction at IP=0xeb60 Slot=1 raw=0x8cc0a24007 disasm="st8 [r10] = r18": Memory address 0xa007300250020 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0xeb60 type="st8 [r10] = r18" targetAddress=0x1fe02060 targetRegister=r10 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0xea00,0xa180,0xa220,0xea70,0xeb00] addressHint=efi-table-or-pool-relative strictRecovery=off
+Treating as NOP and continuing...
+Error executing instruction at IP=0x3f30 Slot=1 raw=0x8040e00440 disasm="ld2 r17 = [r14]": Memory address 0x66007500620020 out of bounds (size: 0x20000000)
+[IA64-MEM-RECOVERY] ip=0x3f30 type="ld2 r17 = [r14]" targetAddress=0x66007500620020 targetRegister=r17 gp(r1)=0x238000 lastEfiCall="BootServices.AllocatePool" lastEfiIP=0xa210 lastDescriptor=0x1fe00e40 lastDescriptorCode=0x1fe00e00 lastDescriptorGp=0x238000 branchHistory=[0x34c80,0x34d10,0x33c30,0x1ee0,0x3ec0] addressHint=looks-like-packed-utf16 strictRecovery=off
+Recovered failed IA-64 load by zeroing r17, sanitizing the base register, and continuing.

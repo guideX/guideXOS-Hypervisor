@@ -1,0 +1,20 @@
+[2026-06-13T13:01:01.8352658-07:00] guideXOS Hypervisor GUI logging started
+Log file: D:\dev\guideXOS_Emulator\guideXOS Hypervisor GUI\bin\Debug\net9.0-windows\logs\app-20260613-130101.log
+VM list initialized (empty). Create VMs using the 'New' button.
+Attempting to load native VMManager DLL...
+? Native VMManager DLL loaded successfully!
+? Native VMManager DLL loaded successfully!
+CreateVM called. Mock mode: False
+Native manager handle: 1756881520192
+Calling native VMManager_CreateVM with JSON:
+{"name":"Virtual Machine 1","cpu":{"isaType":"IA-64","cpuCount":1,"clockFrequency":0,"enableProfiling":true},"memory":{"memorySize":536870912,"enableMMU":true,"pageSize":16384},"boot":{"bootDevice":"disk0","kernelPath":"","initrdPath":"","bootArgs":"","entryPoint":0,"directBoot":false},"storageDevices":[{"deviceId":"disk0","deviceType":"raw","imagePath":"D:\\bkup\\unsorted\\debian-7.11.0-ia64-netinst.iso","readOnly":true,"sizeBytes":0,"blockSize":2048}],"enableDebugger":true,"enableSnapshots":true}
+(JSON length: 503 characters)
+JSON saved to: last_vm_config.json
+? VM created with ID: Virtual Machine 1-000000
+OnStartVM: Attempting to start VM Virtual Machine 1-000000
+StartVM called for Virtual Machine 1-000000. Mock mode: False
+Calling native VMManager_StartVM...
+Native StartVM returned: True
+OnStartVM: StartVM returned True
+[VMExecLoop] VM Virtual Machine 1-000000 halted (cyclesExecuted=0). Stopping loop.
+[VMExecLoop] Execution loop ended for VM Virtual Machine 1-000000
