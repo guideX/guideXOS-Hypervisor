@@ -212,9 +212,7 @@
     <Text Include="output.log" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="add_project_ref.ps1" />
     <None Include="build_dll.ps1" />
-    <None Include="cleanup_hypervisor.ps1" />
     <None Include="examples\configs\minimal-vm.json" />
     <None Include="examples\configs\server-vm.json" />
     <None Include="examples\configs\standard-vm.json" />
@@ -222,8 +220,6 @@
     <None Include="fix_build.ps1" />
     <None Include="fix_core_project.ps1" />
     <None Include="fix_decoders.py" />
-    <None Include="fix_projects.ps1" />
-    <None Include="fix_projects.py" />
     <None Include="fix_vcxproj.ps1" />
     <None Include="fix_vcxproj2.ps1" />
     <None Include="guideXOS Hypervisor Core.vcxproj" />
@@ -237,6 +233,7 @@
     <None Include="test_programs\README.md" />
     <None Include="test_programs\TestKernelGenerator\Program.cs" />
     <None Include="test_programs\TestKernelGenerator\TestKernelGenerator.csproj" />
+    <None Include="test_programs\TestKernelGenerator\TestKernelGeneratorTests.cs" />
     <None Include="web\app.js" />
     <None Include="web\index.html" />
     <None Include="web\style.css" />
