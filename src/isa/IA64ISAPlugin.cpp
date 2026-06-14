@@ -2303,8 +2303,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         handledFirmwareCallStub = true;
                         ++efiGenericSuccessCalls_;
                         const CPUState& cpu = state_.getCPUState();
+                        // `r8` is the EFI return status here, not a descriptor pointer.
+                        // Use the actual stub code target to describe/log the call.
                         const uint64_t descriptorCandidate =
-                            cpu.GetGR(8) >= 8 ? cpu.GetGR(8) - 8 : 0;
+                            efiDescriptorForCodePointer(originalBranchTarget);
                         const uint64_t slotCandidate = cpu.GetGR(9);
                         const uint64_t receiverCandidate = readCallerOutputRegister(cpu, 0);
                         const uint64_t r14Candidate = cpu.GetGR(14);

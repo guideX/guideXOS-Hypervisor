@@ -279,7 +279,10 @@ static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
 
         // Check for zero/sign extend (x3 = 0, x6 = 0x10-0x16)
         if (x3 == 0 && (x6 >= 0x10 && x6 <= 0x16)) {
-            // ZXT/SXT operations - no additional fields needed
+            // Preserve the full opcode so toInstruction() can distinguish
+            // ZXT1/ZXT2/ZXT4 and SXT1/SXT2/SXT4 instead of collapsing to the
+            // low nibble.
+            result.opcode = x6;
             return true;
         }
 

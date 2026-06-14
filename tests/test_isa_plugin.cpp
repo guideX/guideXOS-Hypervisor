@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstring>
 #include <map>
+#include <stdexcept>
 
 using namespace ia64;
 
@@ -40,6 +41,44 @@ public:
     const uint8_t* GetRawData() const override { return nullptr; }
 
 private:
+    std::map<uint64_t, uint8_t> bytes_;
+};
+
+class GuardedSparseMemory : public IMemory {
+public:
+    explicit GuardedSparseMemory(uint64_t forbiddenReadAddress)
+        : forbiddenReadAddress_(forbiddenReadAddress) {}
+
+    void Read(uint64_t address, uint8_t* dest, size_t size) const override {
+        if (address == forbiddenReadAddress_) {
+            throw std::runtime_error("forbidden descriptor probe");
+        }
+        for (size_t i = 0; i < size; ++i) {
+            const auto it = bytes_.find(address + i);
+            dest[i] = it == bytes_.end() ? 0 : it->second;
+        }
+    }
+
+    void Write(uint64_t address, const uint8_t* src, size_t size) override {
+        for (size_t i = 0; i < size; ++i) {
+            bytes_[address + i] = src[i];
+        }
+    }
+
+    void loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) override {
+        Write(address, buffer, size);
+    }
+
+    void loadBuffer(uint64_t address, const std::vector<uint8_t>& buffer) override {
+        Write(address, buffer.data(), buffer.size());
+    }
+
+    size_t GetTotalSize() const override { return 0; }
+    void Clear() override { bytes_.clear(); }
+    const uint8_t* GetRawData() const override { return nullptr; }
+
+private:
+    uint64_t forbiddenReadAddress_;
     std::map<uint64_t, uint8_t> bytes_;
 };
 
@@ -1644,6 +1683,26 @@ void testIA64PluginNullIndirectCallIgnoresDescriptorCandidate() {
     std::cout << "  ? null indirect br.call stays null even when r8 points at a descriptor\n";
 }
 
+void testIA64PluginGenericSuccessStubDoesNotProbeR8DescriptorCandidate() {
+    std::cout << "Testing IA-64 plugin generic success stub avoids r8 descriptor probing...\n";
+
+    GuardedSparseMemory memory(0x8000000000000006ULL);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallFromB0ReturnBr4Decoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetBR(0, 0x1FE00000ULL + 0xF80ULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetBR(4) == 0x1010);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+
+    std::cout << "  ? generic EFI success stub uses the actual stub descriptor, not r8-derived bytes\n";
+}
+
 void testIA64PluginBranchRegisterMovesPreserveExactValues() {
     std::cout << "Testing IA-64 plugin branch-register move round trip...\n";
 
@@ -2403,6 +2462,24 @@ void testIA64MUnitBootLoadStoreDecode() {
     std::cout << "  ? boot M-unit rows distinguish normal stores, normal loads, and immediate-update loads\n";
 }
 
+void testIA64IUnitExtendDecode() {
+    std::cout << "Testing IA-64 I-unit extend decode...\n";
+
+    InstructionDecoder decoder;
+
+    const uint64_t sxt4Bits = 0xb0800200ULL;
+    InstructionEx sxt4 = decoder.DecodeSlot(sxt4Bits, UnitType::I_UNIT, 0x34b10);
+    assert(sxt4.GetType() == InstructionType::SXT4);
+    assert(sxt4.GetDisassembly().rfind("sxt4 ", 0) == 0);
+
+    const uint64_t zxt4Bits = (sxt4Bits & ~(0x3FULL << 27)) | (0x12ULL << 27);
+    InstructionEx zxt4 = decoder.DecodeSlot(zxt4Bits, UnitType::I_UNIT, 0x34b10);
+    assert(zxt4.GetType() == InstructionType::ZXT4);
+    assert(zxt4.GetDisassembly().rfind("zxt4 ", 0) == 0);
+
+    std::cout << "  ? extend opcodes decode as SXT4 and ZXT4 instead of UNKNOWN\n";
+}
+
 // Test state dump
 void testStateDump() {
     std::cout << "Testing state dump...\n";
@@ -2554,6 +2631,9 @@ int main() {
         testIA64PluginNullIndirectCallIgnoresDescriptorCandidate();
         std::cout << "\n";
 
+        testIA64PluginGenericSuccessStubDoesNotProbeR8DescriptorCandidate();
+        std::cout << "\n";
+
         testIA64PluginBranchRegisterMovesPreserveExactValues();
         std::cout << "\n";
 
@@ -2614,7 +2694,10 @@ int main() {
 
         testIA64MUnitBootLoadStoreDecode();
         std::cout << "\n";
-        
+
+        testIA64IUnitExtendDecode();
+        std::cout << "\n";
+
         testStateDump();
         std::cout << "\n";
         
