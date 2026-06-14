@@ -8,6 +8,7 @@ D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_riscv_fetch_decode.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_watchpoint.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/debug_harness.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_bootstrap.dir
+D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_elf_validation.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_syscall_dispatcher.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_io_devices.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_debugger.dir
@@ -22,6 +23,7 @@ D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/virtual_devices_example.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/boot_trace_example.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/kernel_validation_example.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/copy_web_files.dir
+D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test_riscv_minimal_execution.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/test.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/edit_cache.dir
 D:/dev/guideXOS_Emulator/build-riscv/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,1954 @@
+
+---
+events:
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      The system is: Windows - 10.0.26200 - AMD64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeNinjaFindMake.cmake:5 (find_program)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_MAKE_PROGRAM"
+    description: "Program used to build from build.ninja files."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ninja-build"
+      - "ninja"
+      - "samu"
+    candidate_directories:
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/mingw64/bin/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/ninja-build.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/ninja-build.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/ninja-build"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/ninja.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/ninja.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/ninja"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/samu.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/samu.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/samu"
+      - "C:/Windows/System32/ninja-build.com"
+      - "C:/Windows/System32/ninja-build.exe"
+      - "C:/Windows/System32/ninja-build"
+      - "C:/Windows/System32/ninja.com"
+      - "C:/Windows/System32/ninja.exe"
+      - "C:/Windows/System32/ninja"
+      - "C:/Windows/System32/samu.com"
+      - "C:/Windows/System32/samu.exe"
+      - "C:/Windows/System32/samu"
+      - "C:/Windows/ninja-build.com"
+      - "C:/Windows/ninja-build.exe"
+      - "C:/Windows/ninja-build"
+      - "C:/Windows/ninja.com"
+      - "C:/Windows/ninja.exe"
+      - "C:/Windows/ninja"
+      - "C:/Windows/samu.com"
+      - "C:/Windows/samu.exe"
+      - "C:/Windows/samu"
+      - "C:/Windows/System32/wbem/ninja-build.com"
+      - "C:/Windows/System32/wbem/ninja-build.exe"
+      - "C:/Windows/System32/wbem/ninja-build"
+      - "C:/Windows/System32/wbem/ninja.com"
+      - "C:/Windows/System32/wbem/ninja.exe"
+      - "C:/Windows/System32/wbem/ninja"
+      - "C:/Windows/System32/wbem/samu.com"
+      - "C:/Windows/System32/wbem/samu.exe"
+      - "C:/Windows/System32/wbem/samu"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/ninja-build.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/ninja-build.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/ninja-build"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/ninja.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/ninja.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/ninja"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/samu.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/samu.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/samu"
+      - "C:/Windows/System32/OpenSSH/ninja-build.com"
+      - "C:/Windows/System32/OpenSSH/ninja-build.exe"
+      - "C:/Windows/System32/OpenSSH/ninja-build"
+      - "C:/Windows/System32/OpenSSH/ninja.com"
+      - "C:/Windows/System32/OpenSSH/ninja.exe"
+      - "C:/Windows/System32/OpenSSH/ninja"
+      - "C:/Windows/System32/OpenSSH/samu.com"
+      - "C:/Windows/System32/OpenSSH/samu.exe"
+      - "C:/Windows/System32/OpenSSH/samu"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/ninja-build.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/ninja-build.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/ninja-build"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/ninja.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/ninja.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/ninja"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/samu.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/samu.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/samu"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/ninja-build.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/ninja-build.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/ninja-build"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/ninja.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/ninja.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/ninja"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/samu.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/samu.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/samu"
+      - "C:/Program Files/dotnet/ninja-build.com"
+      - "C:/Program Files/dotnet/ninja-build.exe"
+      - "C:/Program Files/dotnet/ninja-build"
+      - "C:/Program Files/dotnet/ninja.com"
+      - "C:/Program Files/dotnet/ninja.exe"
+      - "C:/Program Files/dotnet/ninja"
+      - "C:/Program Files/dotnet/samu.com"
+      - "C:/Program Files/dotnet/samu.exe"
+      - "C:/Program Files/dotnet/samu"
+      - "C:/Program Files/UVtools/ninja-build.com"
+      - "C:/Program Files/UVtools/ninja-build.exe"
+      - "C:/Program Files/UVtools/ninja-build"
+      - "C:/Program Files/UVtools/ninja.com"
+      - "C:/Program Files/UVtools/ninja.exe"
+      - "C:/Program Files/UVtools/ninja"
+      - "C:/Program Files/UVtools/samu.com"
+      - "C:/Program Files/UVtools/samu.exe"
+      - "C:/Program Files/UVtools/samu"
+      - "C:/Program Files/TortoiseGit/bin/ninja-build.com"
+      - "C:/Program Files/TortoiseGit/bin/ninja-build.exe"
+      - "C:/Program Files/TortoiseGit/bin/ninja-build"
+      - "C:/Program Files/TortoiseGit/bin/ninja.com"
+      - "C:/Program Files/TortoiseGit/bin/ninja.exe"
+      - "C:/Program Files/TortoiseGit/bin/ninja"
+      - "C:/Program Files/TortoiseGit/bin/samu.com"
+      - "C:/Program Files/TortoiseGit/bin/samu.exe"
+      - "C:/Program Files/TortoiseGit/bin/samu"
+      - "C:/Program Files/Git/cmd/ninja-build.com"
+      - "C:/Program Files/Git/cmd/ninja-build.exe"
+      - "C:/Program Files/Git/cmd/ninja-build"
+      - "C:/Program Files/Git/cmd/ninja.com"
+      - "C:/Program Files/Git/cmd/ninja.exe"
+      - "C:/Program Files/Git/cmd/ninja"
+      - "C:/Program Files/Git/cmd/samu.com"
+      - "C:/Program Files/Git/cmd/samu.exe"
+      - "C:/Program Files/Git/cmd/samu"
+      - "C:/mingw64/bin/ninja-build.com"
+      - "C:/mingw64/bin/ninja-build.exe"
+      - "C:/mingw64/bin/ninja-build"
+      - "C:/mingw64/bin/ninja.com"
+    found: "C:/mingw64/bin/ninja.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCXXCompilerId.cpp.in"
+    candidate_directories:
+      - "C:/mingw64/share/cmake-4.3/Modules/"
+    found: "C:/mingw64/share/cmake-4.3/Modules/CMakeCXXCompilerId.cpp.in"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: C:/mingw64/bin/g++.exe 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.exe"
+      
+      The CXX compiler identification is GNU, found in:
+        D:/dev/guideXOS_Emulator/build-mingw/CMakeFiles/4.3.1/CompilerIdCXX/a.exe
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ar"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/ar.com"
+    found: "C:/mingw64/bin/ar.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_RANLIB"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ranlib"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/ranlib.com"
+    found: "C:/mingw64/bin/ranlib.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_STRIP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "strip"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/strip.com"
+    found: "C:/mingw64/bin/strip.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ld"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/ld.com"
+    found: "C:/mingw64/bin/ld.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_NM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "nm"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/nm.com"
+    found: "C:/mingw64/bin/nm.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJDUMP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "objdump"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/objdump.com"
+    found: "C:/mingw64/bin/objdump.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJCOPY"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "objcopy"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/objcopy.com"
+    found: "C:/mingw64/bin/objcopy.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_READELF"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "readelf"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/readelf.com"
+    found: "C:/mingw64/bin/readelf.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_DLLTOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "dlltool"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/dlltool.com"
+    found: "C:/mingw64/bin/dlltool.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_ADDR2LINE"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "addr2line"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/addr2line.com"
+    found: "C:/mingw64/bin/addr2line.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:206 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_TAPI"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "tapi"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/tapi.com"
+      - "C:/mingw64/bin/tapi.exe"
+      - "C:/mingw64/bin/tapi"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/tapi.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/tapi.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/tapi"
+      - "C:/Windows/System32/tapi.com"
+      - "C:/Windows/System32/tapi.exe"
+      - "C:/Windows/System32/tapi"
+      - "C:/Windows/tapi.com"
+      - "C:/Windows/tapi.exe"
+      - "C:/Windows/tapi"
+      - "C:/Windows/System32/wbem/tapi.com"
+      - "C:/Windows/System32/wbem/tapi.exe"
+      - "C:/Windows/System32/wbem/tapi"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/tapi.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/tapi.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/tapi"
+      - "C:/Windows/System32/OpenSSH/tapi.com"
+      - "C:/Windows/System32/OpenSSH/tapi.exe"
+      - "C:/Windows/System32/OpenSSH/tapi"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/tapi.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/tapi.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/tapi"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/tapi.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/tapi.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/tapi"
+      - "C:/Program Files/dotnet/tapi.com"
+      - "C:/Program Files/dotnet/tapi.exe"
+      - "C:/Program Files/dotnet/tapi"
+      - "C:/Program Files/UVtools/tapi.com"
+      - "C:/Program Files/UVtools/tapi.exe"
+      - "C:/Program Files/UVtools/tapi"
+      - "C:/Program Files/TortoiseGit/bin/tapi.com"
+      - "C:/Program Files/TortoiseGit/bin/tapi.exe"
+      - "C:/Program Files/TortoiseGit/bin/tapi"
+      - "C:/Program Files/Git/cmd/tapi.com"
+      - "C:/Program Files/Git/cmd/tapi.exe"
+      - "C:/Program Files/Git/cmd/tapi"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/tapi.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/tapi.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/tapi"
+      - "C:/i686-elf-tools/bin/tapi.com"
+      - "C:/i686-elf-tools/bin/tapi.exe"
+      - "C:/i686-elf-tools/bin/tapi"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/tapi.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/tapi.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/tapi"
+      - "C:/Users/guideX/.dotnet/tools/tapi.com"
+      - "C:/Users/guideX/.dotnet/tools/tapi.exe"
+      - "C:/Users/guideX/.dotnet/tools/tapi"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/tapi.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/tapi.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/tapi"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/tapi.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/tapi.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/tapi"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/tapi.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/tapi.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/tapi"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:207 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gcc-ar-15.2"
+      - "gcc-ar-15"
+      - "gcc-ar15"
+      - "gcc-ar"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/gcc-ar-15.2.com"
+      - "C:/mingw64/bin/gcc-ar-15.2.exe"
+      - "C:/mingw64/bin/gcc-ar-15.2"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar-15.2.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar-15.2.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar-15.2"
+      - "C:/Windows/System32/gcc-ar-15.2.com"
+      - "C:/Windows/System32/gcc-ar-15.2.exe"
+      - "C:/Windows/System32/gcc-ar-15.2"
+      - "C:/Windows/gcc-ar-15.2.com"
+      - "C:/Windows/gcc-ar-15.2.exe"
+      - "C:/Windows/gcc-ar-15.2"
+      - "C:/Windows/System32/wbem/gcc-ar-15.2.com"
+      - "C:/Windows/System32/wbem/gcc-ar-15.2.exe"
+      - "C:/Windows/System32/wbem/gcc-ar-15.2"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar-15.2.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar-15.2.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar-15.2"
+      - "C:/Windows/System32/OpenSSH/gcc-ar-15.2.com"
+      - "C:/Windows/System32/OpenSSH/gcc-ar-15.2.exe"
+      - "C:/Windows/System32/OpenSSH/gcc-ar-15.2"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar-15.2.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar-15.2.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar-15.2"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar-15.2.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar-15.2.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar-15.2"
+      - "C:/Program Files/dotnet/gcc-ar-15.2.com"
+      - "C:/Program Files/dotnet/gcc-ar-15.2.exe"
+      - "C:/Program Files/dotnet/gcc-ar-15.2"
+      - "C:/Program Files/UVtools/gcc-ar-15.2.com"
+      - "C:/Program Files/UVtools/gcc-ar-15.2.exe"
+      - "C:/Program Files/UVtools/gcc-ar-15.2"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar-15.2.com"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar-15.2.exe"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar-15.2"
+      - "C:/Program Files/Git/cmd/gcc-ar-15.2.com"
+      - "C:/Program Files/Git/cmd/gcc-ar-15.2.exe"
+      - "C:/Program Files/Git/cmd/gcc-ar-15.2"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar-15.2.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar-15.2.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar-15.2"
+      - "C:/i686-elf-tools/bin/gcc-ar-15.2.com"
+      - "C:/i686-elf-tools/bin/gcc-ar-15.2.exe"
+      - "C:/i686-elf-tools/bin/gcc-ar-15.2"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar-15.2.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar-15.2.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar-15.2"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar-15.2.com"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar-15.2.exe"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar-15.2"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar-15.2.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar-15.2.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar-15.2"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar-15.2.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar-15.2.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar-15.2"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar-15.2.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar-15.2.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar-15.2"
+      - "C:/mingw64/bin/gcc-ar-15.com"
+      - "C:/mingw64/bin/gcc-ar-15.exe"
+      - "C:/mingw64/bin/gcc-ar-15"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar-15.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar-15.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar-15"
+      - "C:/Windows/System32/gcc-ar-15.com"
+      - "C:/Windows/System32/gcc-ar-15.exe"
+      - "C:/Windows/System32/gcc-ar-15"
+      - "C:/Windows/gcc-ar-15.com"
+      - "C:/Windows/gcc-ar-15.exe"
+      - "C:/Windows/gcc-ar-15"
+      - "C:/Windows/System32/wbem/gcc-ar-15.com"
+      - "C:/Windows/System32/wbem/gcc-ar-15.exe"
+      - "C:/Windows/System32/wbem/gcc-ar-15"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar-15.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar-15.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar-15"
+      - "C:/Windows/System32/OpenSSH/gcc-ar-15.com"
+      - "C:/Windows/System32/OpenSSH/gcc-ar-15.exe"
+      - "C:/Windows/System32/OpenSSH/gcc-ar-15"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar-15.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar-15.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar-15"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar-15.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar-15.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar-15"
+      - "C:/Program Files/dotnet/gcc-ar-15.com"
+      - "C:/Program Files/dotnet/gcc-ar-15.exe"
+      - "C:/Program Files/dotnet/gcc-ar-15"
+      - "C:/Program Files/UVtools/gcc-ar-15.com"
+      - "C:/Program Files/UVtools/gcc-ar-15.exe"
+      - "C:/Program Files/UVtools/gcc-ar-15"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar-15.com"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar-15.exe"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar-15"
+      - "C:/Program Files/Git/cmd/gcc-ar-15.com"
+      - "C:/Program Files/Git/cmd/gcc-ar-15.exe"
+      - "C:/Program Files/Git/cmd/gcc-ar-15"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar-15.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar-15.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar-15"
+      - "C:/i686-elf-tools/bin/gcc-ar-15.com"
+      - "C:/i686-elf-tools/bin/gcc-ar-15.exe"
+      - "C:/i686-elf-tools/bin/gcc-ar-15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar-15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar-15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar-15"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar-15.com"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar-15.exe"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar-15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar-15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar-15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar-15"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar-15.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar-15.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar-15"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar-15.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar-15.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar-15"
+      - "C:/mingw64/bin/gcc-ar15.com"
+      - "C:/mingw64/bin/gcc-ar15.exe"
+      - "C:/mingw64/bin/gcc-ar15"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar15.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar15.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ar15"
+      - "C:/Windows/System32/gcc-ar15.com"
+      - "C:/Windows/System32/gcc-ar15.exe"
+      - "C:/Windows/System32/gcc-ar15"
+      - "C:/Windows/gcc-ar15.com"
+      - "C:/Windows/gcc-ar15.exe"
+      - "C:/Windows/gcc-ar15"
+      - "C:/Windows/System32/wbem/gcc-ar15.com"
+      - "C:/Windows/System32/wbem/gcc-ar15.exe"
+      - "C:/Windows/System32/wbem/gcc-ar15"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar15.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar15.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ar15"
+      - "C:/Windows/System32/OpenSSH/gcc-ar15.com"
+      - "C:/Windows/System32/OpenSSH/gcc-ar15.exe"
+      - "C:/Windows/System32/OpenSSH/gcc-ar15"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar15.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar15.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ar15"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar15.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar15.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ar15"
+      - "C:/Program Files/dotnet/gcc-ar15.com"
+      - "C:/Program Files/dotnet/gcc-ar15.exe"
+      - "C:/Program Files/dotnet/gcc-ar15"
+      - "C:/Program Files/UVtools/gcc-ar15.com"
+      - "C:/Program Files/UVtools/gcc-ar15.exe"
+      - "C:/Program Files/UVtools/gcc-ar15"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar15.com"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar15.exe"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ar15"
+      - "C:/Program Files/Git/cmd/gcc-ar15.com"
+      - "C:/Program Files/Git/cmd/gcc-ar15.exe"
+      - "C:/Program Files/Git/cmd/gcc-ar15"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar15.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar15.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ar15"
+      - "C:/i686-elf-tools/bin/gcc-ar15.com"
+      - "C:/i686-elf-tools/bin/gcc-ar15.exe"
+      - "C:/i686-elf-tools/bin/gcc-ar15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ar15"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar15.com"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar15.exe"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ar15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ar15"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar15.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar15.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ar15"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar15.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar15.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ar15"
+      - "C:/mingw64/bin/gcc-ar.com"
+    found: "C:/mingw64/bin/gcc-ar.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCXXCompiler.cmake:207 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gcc-ranlib-15.2"
+      - "gcc-ranlib-15"
+      - "gcc-ranlib15"
+      - "gcc-ranlib"
+    candidate_directories:
+      - "C:/mingw64/bin/"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+    searched_directories:
+      - "C:/mingw64/bin/gcc-ranlib-15.2.com"
+      - "C:/mingw64/bin/gcc-ranlib-15.2.exe"
+      - "C:/mingw64/bin/gcc-ranlib-15.2"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib-15.2.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib-15.2.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib-15.2"
+      - "C:/Windows/System32/gcc-ranlib-15.2.com"
+      - "C:/Windows/System32/gcc-ranlib-15.2.exe"
+      - "C:/Windows/System32/gcc-ranlib-15.2"
+      - "C:/Windows/gcc-ranlib-15.2.com"
+      - "C:/Windows/gcc-ranlib-15.2.exe"
+      - "C:/Windows/gcc-ranlib-15.2"
+      - "C:/Windows/System32/wbem/gcc-ranlib-15.2.com"
+      - "C:/Windows/System32/wbem/gcc-ranlib-15.2.exe"
+      - "C:/Windows/System32/wbem/gcc-ranlib-15.2"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib-15.2.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib-15.2.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib-15.2"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib-15.2.com"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib-15.2.exe"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib-15.2"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib-15.2.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib-15.2"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib-15.2.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib-15.2"
+      - "C:/Program Files/dotnet/gcc-ranlib-15.2.com"
+      - "C:/Program Files/dotnet/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/dotnet/gcc-ranlib-15.2"
+      - "C:/Program Files/UVtools/gcc-ranlib-15.2.com"
+      - "C:/Program Files/UVtools/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/UVtools/gcc-ranlib-15.2"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib-15.2.com"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib-15.2"
+      - "C:/Program Files/Git/cmd/gcc-ranlib-15.2.com"
+      - "C:/Program Files/Git/cmd/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/Git/cmd/gcc-ranlib-15.2"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib-15.2.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib-15.2.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib-15.2"
+      - "C:/i686-elf-tools/bin/gcc-ranlib-15.2.com"
+      - "C:/i686-elf-tools/bin/gcc-ranlib-15.2.exe"
+      - "C:/i686-elf-tools/bin/gcc-ranlib-15.2"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib-15.2.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib-15.2.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib-15.2"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib-15.2.com"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib-15.2.exe"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib-15.2"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib-15.2.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib-15.2.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib-15.2"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib-15.2.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib-15.2.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib-15.2"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib-15.2.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib-15.2.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib-15.2"
+      - "C:/mingw64/bin/gcc-ranlib-15.com"
+      - "C:/mingw64/bin/gcc-ranlib-15.exe"
+      - "C:/mingw64/bin/gcc-ranlib-15"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib-15.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib-15.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib-15"
+      - "C:/Windows/System32/gcc-ranlib-15.com"
+      - "C:/Windows/System32/gcc-ranlib-15.exe"
+      - "C:/Windows/System32/gcc-ranlib-15"
+      - "C:/Windows/gcc-ranlib-15.com"
+      - "C:/Windows/gcc-ranlib-15.exe"
+      - "C:/Windows/gcc-ranlib-15"
+      - "C:/Windows/System32/wbem/gcc-ranlib-15.com"
+      - "C:/Windows/System32/wbem/gcc-ranlib-15.exe"
+      - "C:/Windows/System32/wbem/gcc-ranlib-15"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib-15.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib-15.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib-15"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib-15.com"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib-15.exe"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib-15"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib-15.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib-15.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib-15"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib-15.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib-15.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib-15"
+      - "C:/Program Files/dotnet/gcc-ranlib-15.com"
+      - "C:/Program Files/dotnet/gcc-ranlib-15.exe"
+      - "C:/Program Files/dotnet/gcc-ranlib-15"
+      - "C:/Program Files/UVtools/gcc-ranlib-15.com"
+      - "C:/Program Files/UVtools/gcc-ranlib-15.exe"
+      - "C:/Program Files/UVtools/gcc-ranlib-15"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib-15.com"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib-15.exe"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib-15"
+      - "C:/Program Files/Git/cmd/gcc-ranlib-15.com"
+      - "C:/Program Files/Git/cmd/gcc-ranlib-15.exe"
+      - "C:/Program Files/Git/cmd/gcc-ranlib-15"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib-15.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib-15.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib-15"
+      - "C:/i686-elf-tools/bin/gcc-ranlib-15.com"
+      - "C:/i686-elf-tools/bin/gcc-ranlib-15.exe"
+      - "C:/i686-elf-tools/bin/gcc-ranlib-15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib-15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib-15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib-15"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib-15.com"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib-15.exe"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib-15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib-15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib-15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib-15"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib-15.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib-15.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib-15"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib-15.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib-15.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib-15"
+      - "C:/mingw64/bin/gcc-ranlib15.com"
+      - "C:/mingw64/bin/gcc-ranlib15.exe"
+      - "C:/mingw64/bin/gcc-ranlib15"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib15.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib15.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/gcc-ranlib15"
+      - "C:/Windows/System32/gcc-ranlib15.com"
+      - "C:/Windows/System32/gcc-ranlib15.exe"
+      - "C:/Windows/System32/gcc-ranlib15"
+      - "C:/Windows/gcc-ranlib15.com"
+      - "C:/Windows/gcc-ranlib15.exe"
+      - "C:/Windows/gcc-ranlib15"
+      - "C:/Windows/System32/wbem/gcc-ranlib15.com"
+      - "C:/Windows/System32/wbem/gcc-ranlib15.exe"
+      - "C:/Windows/System32/wbem/gcc-ranlib15"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib15.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib15.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/gcc-ranlib15"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib15.com"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib15.exe"
+      - "C:/Windows/System32/OpenSSH/gcc-ranlib15"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib15.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib15.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/gcc-ranlib15"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib15.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib15.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/gcc-ranlib15"
+      - "C:/Program Files/dotnet/gcc-ranlib15.com"
+      - "C:/Program Files/dotnet/gcc-ranlib15.exe"
+      - "C:/Program Files/dotnet/gcc-ranlib15"
+      - "C:/Program Files/UVtools/gcc-ranlib15.com"
+      - "C:/Program Files/UVtools/gcc-ranlib15.exe"
+      - "C:/Program Files/UVtools/gcc-ranlib15"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib15.com"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib15.exe"
+      - "C:/Program Files/TortoiseGit/bin/gcc-ranlib15"
+      - "C:/Program Files/Git/cmd/gcc-ranlib15.com"
+      - "C:/Program Files/Git/cmd/gcc-ranlib15.exe"
+      - "C:/Program Files/Git/cmd/gcc-ranlib15"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib15.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib15.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/gcc-ranlib15"
+      - "C:/i686-elf-tools/bin/gcc-ranlib15.com"
+      - "C:/i686-elf-tools/bin/gcc-ranlib15.exe"
+      - "C:/i686-elf-tools/bin/gcc-ranlib15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/gcc-ranlib15"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib15.com"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib15.exe"
+      - "C:/Users/guideX/.dotnet/tools/gcc-ranlib15"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib15.com"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib15.exe"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/gcc-ranlib15"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib15.com"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib15.exe"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/gcc-ranlib15"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib15.com"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib15.exe"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/gcc-ranlib15"
+      - "C:/mingw64/bin/gcc-ranlib.com"
+    found: "C:/mingw64/bin/gcc-ranlib.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineRCCompiler.cmake:40 (find_program)"
+      - "C:/mingw64/share/cmake-4.3/Modules/Platform/Windows-GNU.cmake:167 (enable_language)"
+      - "C:/mingw64/share/cmake-4.3/Modules/Platform/Windows-GNU-CXX.cmake:2 (__windows_compiler_gnu)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeCXXInformation.cmake:48 (include)"
+      - "CMakeLists.txt:3 (project)"
+    mode: "program"
+    variable: "CMAKE_RC_COMPILER"
+    description: "RC compiler"
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "windres"
+      - "windres"
+    candidate_directories:
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files/UVtools/"
+      - "C:/Program Files/TortoiseGit/bin/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/mingw64/bin/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/i686-elf-tools/bin/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/guideX/.dotnet/tools/"
+      - "C:/Users/guideX/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/"
+      - "C:/Users/guideX/AppData/Local/OpenAI/Codex/bin/ada252862d154cdd/"
+      - "C:/Program Files/WindowsApps/OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0/app/resources/"
+      - "C:/Program Files/bin/"
+      - "C:/Program Files/sbin/"
+      - "C:/Program Files/"
+      - "C:/Program Files (x86)/bin/"
+      - "C:/Program Files (x86)/sbin/"
+      - "C:/Program Files (x86)/"
+      - "C:/mingw64/bin/"
+      - "C:/mingw64/sbin/"
+      - "C:/mingw64/"
+      - "C:/Program Files (x86)/IA64Emulator/bin/"
+      - "C:/Program Files (x86)/IA64Emulator/sbin/"
+      - "C:/Program Files (x86)/IA64Emulator/"
+    searched_directories:
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/windres.com"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/windres.exe"
+      - "C:/Users/guideX/.codex/tmp/arg0/codex-arg0jBHgJv/windres"
+      - "C:/Windows/System32/windres.com"
+      - "C:/Windows/System32/windres.exe"
+      - "C:/Windows/System32/windres"
+      - "C:/Windows/windres.com"
+      - "C:/Windows/windres.exe"
+      - "C:/Windows/windres"
+      - "C:/Windows/System32/wbem/windres.com"
+      - "C:/Windows/System32/wbem/windres.exe"
+      - "C:/Windows/System32/wbem/windres"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/windres.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/windres.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/windres"
+      - "C:/Windows/System32/OpenSSH/windres.com"
+      - "C:/Windows/System32/OpenSSH/windres.exe"
+      - "C:/Windows/System32/OpenSSH/windres"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/windres.com"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/windres.exe"
+      - "C:/Program Files/Microsoft SQL Server/170/Tools/Binn/windres"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/windres.com"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/windres.exe"
+      - "C:/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/windres"
+      - "C:/Program Files/dotnet/windres.com"
+      - "C:/Program Files/dotnet/windres.exe"
+      - "C:/Program Files/dotnet/windres"
+      - "C:/Program Files/UVtools/windres.com"
+      - "C:/Program Files/UVtools/windres.exe"
+      - "C:/Program Files/UVtools/windres"
+      - "C:/Program Files/TortoiseGit/bin/windres.com"
+      - "C:/Program Files/TortoiseGit/bin/windres.exe"
+      - "C:/Program Files/TortoiseGit/bin/windres"
+      - "C:/Program Files/Git/cmd/windres.com"
+      - "C:/Program Files/Git/cmd/windres.exe"
+      - "C:/Program Files/Git/cmd/windres"
+      - "C:/mingw64/bin/windres.com"
+    found: "C:/mingw64/bin/windres.exe"
+    search_context:
+      ENV{PATH}:
+        - "C:\\Users\\guideX\\.codex\\tmp\\arg0\\codex-arg0jBHgJv"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files\\UVtools\\"
+        - "C:\\Program Files\\TortoiseGit\\bin"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\mingw64\\bin"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\i686-elf-tools\\bin"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\guideX\\.dotnet\\tools"
+        - "C:\\Users\\guideX\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        - "C:\\Users\\guideX\\AppData\\Local\\OpenAI\\Codex\\bin\\ada252862d154cdd"
+        - "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\\app\\resources"
+      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/IA64Emulator"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "C:/Program Files"
+        - "C:/Program Files (x86)"
+        - "C:/mingw64"
+        - "C:/Program Files (x86)/IA64Emulator"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:3 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "D:/dev/guideXOS_Emulator/build-mingw/CMakeFiles/CMakeScratch/TryCompile-r6kccc"
+      binary: "D:/dev/guideXOS_Emulator/build-mingw/CMakeFiles/CMakeScratch/TryCompile-r6kccc"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_CXX_STDLIB_MODULES_JSON: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/dev/guideXOS_Emulator/build-mingw/CMakeFiles/CMakeScratch/TryCompile-r6kccc'
+        
+        Run Build Command(s): C:/mingw64/bin/ninja.exe -v cmTC_81c04
+        [1/2] C:\\mingw64\\bin\\g++.exe   -v -o CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj -c C:/mingw64/share/cmake-4.3/Modules/CMakeCXXCompilerABI.cpp
+        Using built-in specs.
+        COLLECT_GCC=C:\\mingw64\\bin\\g++.exe
+        OFFLOAD_TARGET_NAMES=nvptx-none
+        Target: x86_64-w64-mingw32
+        Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe
+        Thread model: posix
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 15.2.0 (MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7) 
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_81c04.dir/'
+         C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/cc1plus.exe -quiet -v -iprefix C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/ -D_REENTRANT C:/mingw64/share/cmake-4.3/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_81c04.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o C:\\Users\\guideX\\AppData\\Local\\Temp\\ccuAzIdg.s
+        GNU C++17 (MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7) version 15.2.0 (x86_64-w64-mingw32)
+        	compiled by GNU C version 15.2.0, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.0, isl version isl-0.27-GMP
+        
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0"
+        ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/x86_64-w64-mingw32"
+        ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/backward"
+        ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/include"
+        ignoring nonexistent directory "R:/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc/include"
+        ignoring nonexistent directory "/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc/include"
+        ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed"
+        ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include"
+        ignoring nonexistent directory "/mingw/include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/x86_64-w64-mingw32
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/backward
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include
+        End of search list.
+        Compiler executable checksum: 9bd10ef57c4553cbdfb62b3e644d24ce
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_81c04.dir/'
+         C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/as.exe -v -o CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj C:\\Users\\guideX\\AppData\\Local\\Temp\\ccuAzIdg.s
+        GNU assembler version 2.46.0 (x86_64-w64-mingw32) using BFD version (Binutils for MinGW-W64 x86_64, built by Brecht Sanders, r7) 2.46.0.20260210
+        COMPILER_PATH=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/;C:/mingw64/bin/../libexec/gcc/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/
+        LIBRARY_PATH=C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/;C:/mingw64/bin/../lib/gcc/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.'
+        [2/2] C:\\WINDOWS\\system32\\cmd.exe /C "cd . && C:\\mingw64\\bin\\g++.exe  -v -Wl,-v CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_81c04.exe -Wl,--out-implib,libcmTC_81c04.dll.a -Wl,--major-image-version,0,--minor-image-version,0   && cd ."
+        Using built-in specs.
+        COLLECT_GCC=C:\\mingw64\\bin\\g++.exe
+        COLLECT_LTO_WRAPPER=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/lto-wrapper.exe
+        OFFLOAD_TARGET_NAMES=nvptx-none
+        Target: x86_64-w64-mingw32
+        Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe
+        Thread model: posix
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 15.2.0 (MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7) 
+        COMPILER_PATH=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/;C:/mingw64/bin/../libexec/gcc/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/
+        LIBRARY_PATH=C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/;C:/mingw64/bin/../lib/gcc/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/;C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../
+        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_81c04.exe' '-foffload-options=-l_GCC_stdc++' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_81c04.'
+         C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/collect2.exe -plugin C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/liblto_plugin.dll -plugin-opt=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/lto-wrapper.exe -plugin-opt=-fresolution=C:\\Users\\guideX\\AppData\\Local\\Temp\\ccfMFBFn.res -plugin-opt=-pass-through=-lmingw32 -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lmingwex -plugin-opt=-pass-through=-lmsvcrt -plugin-opt=-pass-through=-lkernel32 -plugin-opt=-pass-through=-lpthread -plugin-opt=-pass-through=-ladvapi32 -plugin-opt=-pass-through=-lshell32 -plugin-opt=-pass-through=-luser32 -plugin-opt=-pass-through=-lkernel32 -plugin-opt=-pass-through=-lmingw32 -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lmingwex -plugin-opt=-pass-through=-lmsvcrt -plugin-opt=-pass-through=-lkernel32 -m i386pep -Bdynamic -o cmTC_81c04.exe C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/crt2.o C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0 -LC:/mingw64/bin/../lib/gcc -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../.. -v CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj --out-implib libcmTC_81c04.dll.a --major-image-version 0 --minor-image-version 0 -lstdc++ -lmingw32 -lgcc_s -lgcc -lmingwex -lmsvcrt -lkernel32 -lpthread -ladvapi32 -lshell32 -luser32 -lkernel32 -lmingw32 -lgcc_s -lgcc -lmingwex -lmsvcrt -lkernel32 C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o
+        collect2 version 15.2.0
+        C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe -plugin C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/liblto_plugin.dll -plugin-opt=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/lto-wrapper.exe -plugin-opt=-fresolution=C:\\Users\\guideX\\AppData\\Local\\Temp\\ccfMFBFn.res -plugin-opt=-pass-through=-lmingw32 -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lmingwex -plugin-opt=-pass-through=-lmsvcrt -plugin-opt=-pass-through=-lkernel32 -plugin-opt=-pass-through=-lpthread -plugin-opt=-pass-through=-ladvapi32 -plugin-opt=-pass-through=-lshell32 -plugin-opt=-pass-through=-luser32 -plugin-opt=-pass-through=-lkernel32 -plugin-opt=-pass-through=-lmingw32 -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lmingwex -plugin-opt=-pass-through=-lmsvcrt -plugin-opt=-pass-through=-lkernel32 -m i386pep -Bdynamic -o cmTC_81c04.exe C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/crt2.o C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0 -LC:/mingw64/bin/../lib/gcc -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../.. -v CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj --out-implib libcmTC_81c04.dll.a --major-image-version 0 --minor-image-version 0 -lstdc++ -lmingw32 -lgcc_s -lgcc -lmingwex -lmsvcrt -lkernel32 -lpthread -ladvapi32 -lshell32 -luser32 -lkernel32 -lmingw32 -lgcc_s -lgcc -lmingwex -lmsvcrt -lkernel32 C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o
+        GNU ld (Binutils for MinGW-W64 x86_64, built by Brecht Sanders, r7) 2.46.0.20260210
+        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_81c04.exe' '-foffload-options=-l_GCC_stdc++' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_81c04.'
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      Parsed CXX implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0]
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/x86_64-w64-mingw32]
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/backward]
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include]
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include]
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed]
+          add: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include]
+        end of search list found
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0] ==> [C:/mingw64/include/c++/15.2.0]
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/x86_64-w64-mingw32] ==> [C:/mingw64/include/c++/15.2.0/x86_64-w64-mingw32]
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/backward] ==> [C:/mingw64/include/c++/15.2.0/backward]
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include] ==> [C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include]
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include] ==> [C:/mingw64/include]
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed] ==> [C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed]
+        collapse include dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include] ==> [C:/mingw64/x86_64-w64-mingw32/include]
+        implicit include dirs: [C:/mingw64/include/c++/15.2.0;C:/mingw64/include/c++/15.2.0/x86_64-w64-mingw32;C:/mingw64/include/c++/15.2.0/backward;C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include;C:/mingw64/include;C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed;C:/mingw64/x86_64-w64-mingw32/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: 'D:/dev/guideXOS_Emulator/build-mingw/CMakeFiles/CMakeScratch/TryCompile-r6kccc']
+        ignore line: []
+        ignore line: [Run Build Command(s): C:/mingw64/bin/ninja.exe -v cmTC_81c04]
+        ignore line: [[1/2] C:\\mingw64\\bin\\g++.exe   -v -o CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj -c C:/mingw64/share/cmake-4.3/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=C:\\mingw64\\bin\\g++.exe]
+        ignore line: [OFFLOAD_TARGET_NAMES=nvptx-none]
+        ignore line: [Target: x86_64-w64-mingw32]
+        ignore line: [Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 15.2.0 (MinGW-W64 x86_64-msvcrt-posix-seh  built by Brecht Sanders  r7) ]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_81c04.dir/']
+        ignore line: [ C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/cc1plus.exe -quiet -v -iprefix C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/ -D_REENTRANT C:/mingw64/share/cmake-4.3/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_81c04.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o C:\\Users\\guideX\\AppData\\Local\\Temp\\ccuAzIdg.s]
+        ignore line: [GNU C++17 (MinGW-W64 x86_64-msvcrt-posix-seh  built by Brecht Sanders  r7) version 15.2.0 (x86_64-w64-mingw32)]
+        ignore line: [	compiled by GNU C version 15.2.0  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.0  isl version isl-0.27-GMP]
+        ignore line: []
+        ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+        ignore line: [ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0"]
+        ignore line: [ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/x86_64-w64-mingw32"]
+        ignore line: [ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/backward"]
+        ignore line: [ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/include"]
+        ignore line: [ignoring nonexistent directory "R:/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc/include"]
+        ignore line: [ignoring nonexistent directory "/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc/include"]
+        ignore line: [ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed"]
+        ignore line: [ignoring duplicate directory "C:/mingw64/lib/gcc/../../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include"]
+        ignore line: [ignoring nonexistent directory "/mingw/include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/x86_64-w64-mingw32]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include/c++/15.2.0/backward]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../include]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/include-fixed]
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include]
+        ignore line: [End of search list.]
+        ignore line: [Compiler executable checksum: 9bd10ef57c4553cbdfb62b3e644d24ce]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_81c04.dir/']
+        ignore line: [ C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/as.exe -v -o CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj C:\\Users\\guideX\\AppData\\Local\\Temp\\ccuAzIdg.s]
+        ignore line: [GNU assembler version 2.46.0 (x86_64-w64-mingw32) using BFD version (Binutils for MinGW-W64 x86_64  built by Brecht Sanders  r7) 2.46.0.20260210]
+        ignore line: [COMPILER_PATH=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/]
+        ignore line: [C:/mingw64/bin/../libexec/gcc/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/]
+        ignore line: [LIBRARY_PATH=C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.']
+        ignore line: [[2/2] C:\\WINDOWS\\system32\\cmd.exe /C "cd . && C:\\mingw64\\bin\\g++.exe  -v -Wl -v CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_81c04.exe -Wl --out-implib libcmTC_81c04.dll.a -Wl --major-image-version 0 --minor-image-version 0   && cd ."]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=C:\\mingw64\\bin\\g++.exe]
+        ignore line: [COLLECT_LTO_WRAPPER=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/lto-wrapper.exe]
+        ignore line: [OFFLOAD_TARGET_NAMES=nvptx-none]
+        ignore line: [Target: x86_64-w64-mingw32]
+        ignore line: [Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 15.2.0 (MinGW-W64 x86_64-msvcrt-posix-seh  built by Brecht Sanders  r7) ]
+        ignore line: [COMPILER_PATH=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/]
+        ignore line: [C:/mingw64/bin/../libexec/gcc/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/bin/]
+        ignore line: [LIBRARY_PATH=C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/]
+        ignore line: [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_81c04.exe' '-foffload-options=-l_GCC_stdc++' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_81c04.']
+        link line: [ C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/collect2.exe -plugin C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/liblto_plugin.dll -plugin-opt=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/lto-wrapper.exe -plugin-opt=-fresolution=C:\\Users\\guideX\\AppData\\Local\\Temp\\ccfMFBFn.res -plugin-opt=-pass-through=-lmingw32 -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lmingwex -plugin-opt=-pass-through=-lmsvcrt -plugin-opt=-pass-through=-lkernel32 -plugin-opt=-pass-through=-lpthread -plugin-opt=-pass-through=-ladvapi32 -plugin-opt=-pass-through=-lshell32 -plugin-opt=-pass-through=-luser32 -plugin-opt=-pass-through=-lkernel32 -plugin-opt=-pass-through=-lmingw32 -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lmingwex -plugin-opt=-pass-through=-lmsvcrt -plugin-opt=-pass-through=-lkernel32 -m i386pep -Bdynamic -o cmTC_81c04.exe C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/crt2.o C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0 -LC:/mingw64/bin/../lib/gcc -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib -LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../.. -v CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj --out-implib libcmTC_81c04.dll.a --major-image-version 0 --minor-image-version 0 -lstdc++ -lmingw32 -lgcc_s -lgcc -lmingwex -lmsvcrt -lkernel32 -lpthread -ladvapi32 -lshell32 -luser32 -lkernel32 -lmingw32 -lgcc_s -lgcc -lmingwex -lmsvcrt -lkernel32 C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o]
+          arg [C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/collect2.exe] ==> ignore
+          arg [-plugin] ==> ignore
+          arg [C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/liblto_plugin.dll] ==> ignore
+          arg [-plugin-opt=C:/mingw64/bin/../libexec/gcc/x86_64-w64-mingw32/15.2.0/lto-wrapper.exe] ==> ignore
+          arg [-plugin-opt=-fresolution=C:\\Users\\guideX\\AppData\\Local\\Temp\\ccfMFBFn.res] ==> ignore
+          arg [-plugin-opt=-pass-through=-lmingw32] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc_s] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lmingwex] ==> ignore
+          arg [-plugin-opt=-pass-through=-lmsvcrt] ==> ignore
+          arg [-plugin-opt=-pass-through=-lkernel32] ==> ignore
+          arg [-plugin-opt=-pass-through=-lpthread] ==> ignore
+          arg [-plugin-opt=-pass-through=-ladvapi32] ==> ignore
+          arg [-plugin-opt=-pass-through=-lshell32] ==> ignore
+          arg [-plugin-opt=-pass-through=-luser32] ==> ignore
+          arg [-plugin-opt=-pass-through=-lkernel32] ==> ignore
+          arg [-plugin-opt=-pass-through=-lmingw32] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc_s] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lmingwex] ==> ignore
+          arg [-plugin-opt=-pass-through=-lmsvcrt] ==> ignore
+          arg [-plugin-opt=-pass-through=-lkernel32] ==> ignore
+          arg [-m] ==> ignore
+          arg [i386pep] ==> ignore
+          arg [-Bdynamic] ==> search dynamic
+          arg [-o] ==> ignore
+          arg [cmTC_81c04.exe] ==> ignore
+          arg [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/crt2.o] ==> obj [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/crt2.o]
+          arg [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o] ==> obj [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o]
+          arg [-LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0] ==> dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0]
+          arg [-LC:/mingw64/bin/../lib/gcc] ==> dir [C:/mingw64/bin/../lib/gcc]
+          arg [-LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib] ==> dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib]
+          arg [-LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib] ==> dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib]
+          arg [-LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib] ==> dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib]
+          arg [-LC:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../..] ==> dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../..]
+          arg [-v] ==> ignore
+          arg [CMakeFiles/cmTC_81c04.dir/CMakeCXXCompilerABI.cpp.obj] ==> ignore
+          arg [--out-implib] ==> ignore
+          arg [libcmTC_81c04.dll.a] ==> ignore
+          arg [--major-image-version] ==> ignore
+          arg [0] ==> ignore
+          arg [--minor-image-version] ==> ignore
+          arg [0] ==> ignore
+          arg [-lstdc++] ==> lib [stdc++]
+          arg [-lmingw32] ==> lib [mingw32]
+          arg [-lgcc_s] ==> lib [gcc_s]
+          arg [-lgcc] ==> lib [gcc]
+          arg [-lmingwex] ==> lib [mingwex]
+          arg [-lmsvcrt] ==> lib [msvcrt]
+          arg [-lkernel32] ==> lib [kernel32]
+          arg [-lpthread] ==> lib [pthread]
+          arg [-ladvapi32] ==> lib [advapi32]
+          arg [-lshell32] ==> lib [shell32]
+          arg [-luser32] ==> lib [user32]
+          arg [-lkernel32] ==> lib [kernel32]
+          arg [-lmingw32] ==> lib [mingw32]
+          arg [-lgcc_s] ==> lib [gcc_s]
+          arg [-lgcc] ==> lib [gcc]
+          arg [-lmingwex] ==> lib [mingwex]
+          arg [-lmsvcrt] ==> lib [msvcrt]
+          arg [-lkernel32] ==> lib [kernel32]
+          arg [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o] ==> obj [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o]
+        linker tool for 'CXX': Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe
+        remove lib [msvcrt]
+        remove lib [msvcrt]
+        collapse obj [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib/crt2.o] ==> [C:/mingw64/x86_64-w64-mingw32/lib/crt2.o]
+        collapse obj [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o] ==> [C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o]
+        collapse obj [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o] ==> [C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o]
+        collapse library dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0] ==> [C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0]
+        collapse library dir [C:/mingw64/bin/../lib/gcc] ==> [C:/mingw64/lib/gcc]
+        collapse library dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib/../lib] ==> [C:/mingw64/x86_64-w64-mingw32/lib]
+        collapse library dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../lib] ==> [C:/mingw64/lib]
+        collapse library dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/lib] ==> [C:/mingw64/x86_64-w64-mingw32/lib]
+        collapse library dir [C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.2.0/../../..] ==> [C:/mingw64/lib]
+        implicit libs: [stdc++;mingw32;gcc_s;gcc;mingwex;kernel32;pthread;advapi32;shell32;user32;kernel32;mingw32;gcc_s;gcc;mingwex;kernel32]
+        implicit objs: [C:/mingw64/x86_64-w64-mingw32/lib/crt2.o;C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/crtbegin.o;C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/crtend.o]
+        implicit dirs: [C:/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0;C:/mingw64/lib/gcc;C:/mingw64/x86_64-w64-mingw32/lib;C:/mingw64/lib]
+        implicit fwks: []
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      Running the CXX compiler's linker: "Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe" "-v"
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      Running the CXX compiler's linker: "Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe" "-V"
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/mingw64/share/cmake-4.3/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/mingw64/share/cmake-4.3/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:3 (project)"
+    message: |
+      Running the CXX compiler's linker: "Configured with: ../configure --prefix=/R/winlibs_staging_msvcrt64/inst_gcc-15.2.0/share/gcc --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --enable-offload-targets=nvptx-none --with-pkgversion='MinGW-W64 x86_64-msvcrt-posix-seh, built by Brecht Sanders, r7' --with-tune=generic --enable-checking=release --enable-threads=posix --disable-sjlj-exceptions --disable-libunwind-exceptions --disable-serial-configure --disable-bootstrap --enable-host-shared --enable-plugin --disable-default-ssp --disable-rpath --disable-libstdcxx-debug --disable-version-specific-runtime-libs --disable-symvers --enable-languages=c,c++,fortran,lto,objc,obj-c++ --disable-gold --disable-nls --disable-stage1-checking --disable-win32-registry --disable-multilib --enable-ld --enable-libquadmath --enable-libada --enable-libssp --enable-libstdcxx --enable-lto --enable-fully-dynamic-string --enable-libgomp --enable-graphite --enable-mingw-wildcard --enable-libstdcxx-time --enable-libstdcxx-pch --with-mpc=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-mpfr=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-gmp=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --with-isl=/c/Prog/winlibs_staging_msvcrt/custombuilt64 --disable-libstdcxx-backtrace --enable-install-libiberty --enable-__cxa_atexit --without-included-gettext --with-diagnostics-color=auto --enable-clocale=generic --enable-libgdiagnostics --with-libiconv --with-system-zlib --with-build-sysroot=/R/winlibs_staging_msvcrt64/gcc-15.2.0/build_mingw/mingw-w64 CFLAGS='-I/c/Prog/winlibs_staging_msvcrt/custombuilt64/include/libdl-win32   -march=nocona -msahf -mtune=generic -O2 -Wno-error=format' CXXFLAGS='-Wno-int-conversion  -march=nocona -msahf -mtune=generic -O2' LDFLAGS='-pthread -Wl,--no-insert-timestamp -Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat -Wl,--tsaware' LD=/c/Prog/winlibs_staging_msvcrt/custombuilt64/share/binutils/bin/ld.exe" "--version"
+      
+...

@@ -320,6 +320,7 @@ private:
     };
     std::deque<RecentInstructionTrace> recentInstructions_;
     std::deque<RecentRegisterWriteTrace> recentTrackedRegisterWrites_;
+    size_t recentInstructionSequenceRepeatCount_;
 
     struct EfiFileHandle {
         uint64_t protocolAddress = 0;

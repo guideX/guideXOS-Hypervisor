@@ -244,10 +244,12 @@ servicePendingInterrupt();
     const InstructionEx& instr = currentBundle_.instructions[currentSlot_];
 
     if (instr.GetType() == InstructionType::UNKNOWN) {
-        std::ostringstream oss;
-        oss << "[SKIP] Unimplemented IA-64 instruction at IP=0x" << std::hex << state_.GetIP()
-            << std::dec << " Slot=" << currentSlot_ << ": " << instr.GetDisassembly();
-        LOG_WARN(oss.str());
+        LOG_WARN(FormatIA64UnknownSlot(state_.GetIP(),
+                                       currentSlot_,
+                                       currentBundle_.templateType,
+                                       instr.GetUnit(),
+                                       instr.GetRawBits(),
+                                       true));
         // Treat as NOP and advance — do not halt the CPU
         currentSlot_++;
         if (currentSlot_ >= currentBundle_.instructions.size()) {

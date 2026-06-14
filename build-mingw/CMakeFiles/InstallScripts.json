@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/dev/guideXOS_Emulator/build-mingw/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

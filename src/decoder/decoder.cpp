@@ -11,6 +11,102 @@
 
 namespace ia64 {
 
+const char* DescribeIA64Template(TemplateType templateType) {
+    switch (templateType) {
+        case TemplateType::MII: return "MII";
+        case TemplateType::MII_STOP: return "MII_STOP";
+        case TemplateType::MI_I: return "MI_I";
+        case TemplateType::MI_I_STOP: return "MI_I_STOP";
+        case TemplateType::MLX: return "MLX";
+        case TemplateType::MLX_STOP: return "MLX_STOP";
+        case TemplateType::MMI: return "MMI";
+        case TemplateType::MMI_STOP: return "MMI_STOP";
+        case TemplateType::M_MI: return "M_MI";
+        case TemplateType::M_MI_STOP: return "M_MI_STOP";
+        case TemplateType::MFI: return "MFI";
+        case TemplateType::MFI_STOP: return "MFI_STOP";
+        case TemplateType::MMF: return "MMF";
+        case TemplateType::MMF_STOP: return "MMF_STOP";
+        case TemplateType::MIB: return "MIB";
+        case TemplateType::MIB_STOP: return "MIB_STOP";
+        case TemplateType::MBB: return "MBB";
+        case TemplateType::MBB_STOP: return "MBB_STOP";
+        case TemplateType::BBB: return "BBB";
+        case TemplateType::BBB_STOP: return "BBB_STOP";
+        case TemplateType::MMB: return "MMB";
+        case TemplateType::MMB_STOP: return "MMB_STOP";
+        case TemplateType::MFB: return "MFB";
+        case TemplateType::MFB_STOP: return "MFB_STOP";
+        case TemplateType::INVALID:
+        default:
+            return "INVALID";
+    }
+}
+
+const char* DescribeIA64SlotType(UnitType unitType) {
+    switch (unitType) {
+        case UnitType::M_UNIT: return "M";
+        case UnitType::I_UNIT: return "I";
+        case UnitType::F_UNIT: return "F";
+        case UnitType::B_UNIT: return "B";
+        case UnitType::L_UNIT: return "L";
+        case UnitType::X_UNIT: return "X";
+        case UnitType::INVALID:
+        default:
+            return "?";
+    }
+}
+
+const char* DescribeIA64DecoderFamily(UnitType unitType, uint8_t majorOpcode) {
+    switch (unitType) {
+        case UnitType::M_UNIT:
+            return (majorOpcode <= 0x7) ? "M-type" : "A-type";
+        case UnitType::I_UNIT:
+            return (majorOpcode <= 0x7) ? "I-type" : "A-type";
+        case UnitType::F_UNIT:
+            return "F-type";
+        case UnitType::B_UNIT:
+            return "B-type";
+        case UnitType::L_UNIT:
+            return "L-unit";
+        case UnitType::X_UNIT:
+            return "X-type";
+        case UnitType::INVALID:
+        default:
+            return "unknown";
+    }
+}
+
+uint8_t ExtractIA64MajorOpcode(uint64_t slotBits) {
+    return static_cast<uint8_t>((slotBits >> 37) & 0x0F);
+}
+
+std::string FormatIA64UnknownSlot(uint64_t bundleIP,
+                                  size_t slotIndex,
+                                  TemplateType templateType,
+                                  UnitType unitType,
+                                  uint64_t rawBits,
+                                  bool fallbackPath) {
+    const uint64_t raw41 = rawBits & 0x1FFFFFFFFFFULL;
+    const uint8_t major = ExtractIA64MajorOpcode(raw41);
+    const uint8_t x3 = static_cast<uint8_t>((raw41 >> 33) & 0x7);
+    const uint8_t x6 = static_cast<uint8_t>((raw41 >> 27) & 0x3F);
+
+    std::ostringstream oss;
+    oss << "UNKNOWN IA64 SLOT: IP=0x" << std::hex << bundleIP
+        << ", slot=" << std::dec << slotIndex
+        << ", template=0x" << std::hex << static_cast<unsigned>(static_cast<uint8_t>(templateType))
+        << "(" << DescribeIA64Template(templateType) << ")"
+        << ", slotType=" << DescribeIA64SlotType(unitType)
+        << ", raw41=0x" << raw41
+        << ", major=0x" << static_cast<unsigned>(major)
+        << ", x3=0x" << static_cast<unsigned>(x3)
+        << ", x6=0x" << static_cast<unsigned>(x6)
+        << ", path=" << (fallbackPath ? "fallback" : "normal")
+        << ", decoder=" << DescribeIA64DecoderFamily(unitType, major);
+    return oss.str();
+}
+
 // InstructionEx implementation
 InstructionEx::InstructionEx() 
     : type_(InstructionType::NOP)

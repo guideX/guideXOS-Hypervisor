@@ -15,6 +15,11 @@
 
 using namespace ia64;
 
+// Test helper forward declarations
+void assert_equal(const char* name, uint64_t expected, uint64_t actual);
+void assert_true(const char* name, bool condition);
+void assert_string(const char* name, const std::string& expected, const std::string& actual);
+
 namespace {
 
 class MemoryStorageDevice : public IStorageDevice {
@@ -222,6 +227,10 @@ void test_el_torito_fat_boot_media_lookup() {
 } // namespace
 
 // Test helper
+void assert_equal(const char* name, uint64_t expected, uint64_t actual);
+void assert_true(const char* name, bool condition);
+void assert_string(const char* name, const std::string& expected, const std::string& actual);
+
 void assert_equal(const char* name, uint64_t expected, uint64_t actual) {
     if (expected != actual) {
         std::cerr << "TEST FAILED: " << name << std::endl;
@@ -1264,6 +1273,37 @@ void test_cmp4_instructions() {
     std::cout << "  ? CMP4 instructions passed" << std::endl;
 }
 
+void test_ia64_unknown_slot_formatter() {
+    std::cout << "Testing IA-64 unknown-slot formatter..." << std::endl;
+
+    const std::string msg = FormatIA64UnknownSlot(
+        0x36e70,
+        1,
+        TemplateType::MII,
+        UnitType::I_UNIT,
+        0x1ULL,
+        false);
+
+    assert_true("unknown-slot formatter should include IP",
+                msg.find("IP=0x36e70") != std::string::npos);
+    assert_true("unknown-slot formatter should include slot index",
+                msg.find("slot=1") != std::string::npos);
+    assert_true("unknown-slot formatter should include template value",
+                msg.find("template=0x0(MII)") != std::string::npos);
+    assert_true("unknown-slot formatter should include slot type",
+                msg.find("slotType=I") != std::string::npos);
+    assert_true("unknown-slot formatter should include raw syllable",
+                msg.find("raw41=0x1") != std::string::npos);
+    assert_true("unknown-slot formatter should include major opcode",
+                msg.find("major=0x") != std::string::npos);
+    assert_true("unknown-slot formatter should include path",
+                msg.find("path=normal") != std::string::npos);
+    assert_true("unknown-slot formatter should include decoder family",
+                msg.find("decoder=I-type") != std::string::npos);
+
+    std::cout << "  ? IA-64 unknown-slot formatter passed" << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "IA-64 Instruction Set Tests" << std::endl;
@@ -1289,6 +1329,7 @@ int main() {
         test_rse_state_aliases();
         test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();
+        test_ia64_unknown_slot_formatter();
         
         std::cout << std::endl;
         std::cout << "========================================" << std::endl;

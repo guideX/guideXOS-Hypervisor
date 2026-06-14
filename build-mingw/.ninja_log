@@ -1,0 +1,13 @@
+# ninja log v7
+39	1064	8031513275296733	CMakeFiles/test_new_instructions.dir/src/decoder/atype_decoder.cpp.obj	3e55494d2f5f8668
+30	1090	8031513275209523	CMakeFiles/test_new_instructions.dir/src/core/cpu.cpp.obj	acf9657f7add030f
+1067	1823	8031513285578755	CMakeFiles/test_new_instructions.dir/src/decoder/itype_decoder.cpp.obj	ccf05f060cc01e7d
+1090	1894	8031513285809161	CMakeFiles/test_new_instructions.dir/src/decoder/mtype_decoder.cpp.obj	5beb07b3350e1fb3
+34	2131	8031513275244806	CMakeFiles/test_new_instructions.dir/src/decoder/decoder.cpp.obj	b985ec65993fe911
+26	2239	8031513275165011	CMakeFiles/test_new_instructions.dir/tests/test_new_instructions.cpp.obj	8d7c426d0b8f7023
+1823	2584	8031513293144825	CMakeFiles/test_new_instructions.dir/src/decoder/btype_decoder.cpp.obj	43c81abd58de553d
+1894	2617	8031513293844623	CMakeFiles/test_new_instructions.dir/src/decoder/ftype_decoder.cpp.obj	71a2379c24666cf2
+2131	2814	8031513296220697	CMakeFiles/test_new_instructions.dir/src/decoder/lx_decoder.cpp.obj	3aba81a18164ddd6
+2239	2983	8031513297298060	CMakeFiles/test_new_instructions.dir/src/decoder/xtype_decoder.cpp.obj	e5e55d252719e860
+2585	3645	8031513300756621	CMakeFiles/test_new_instructions.dir/src/decoder/riscv_decoder.cpp.obj	657f8a6fbea5c498
+2617	6228	8031513301078894	CMakeFiles/test_new_instructions.dir/src/memory/memory.cpp.obj	492dd53bc1d89afa

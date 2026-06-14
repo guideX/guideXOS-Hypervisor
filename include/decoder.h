@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 #include <string>
 #include <array>
@@ -229,6 +230,17 @@ enum class CompareCompleter : uint8_t {
     OR,
     OR_ANDCM
 };
+
+const char* DescribeIA64Template(TemplateType templateType);
+const char* DescribeIA64SlotType(UnitType unitType);
+const char* DescribeIA64DecoderFamily(UnitType unitType, uint8_t majorOpcode);
+uint8_t ExtractIA64MajorOpcode(uint64_t slotBits);
+std::string FormatIA64UnknownSlot(uint64_t bundleIP,
+                                  size_t slotIndex,
+                                  TemplateType templateType,
+                                  UnitType unitType,
+                                  uint64_t rawBits,
+                                  bool fallbackPath);
 
 // Simplified instruction structure per user requirements
 // NOTE: This is a simplified representation for initial implementation.

@@ -1367,6 +1367,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , lastDescriptorCode_(0)
     , lastDescriptorGp_(0)
     , lastBranchTargets_()
+    , recentInstructionSequenceRepeatCount_(0)
     , efiFileHandles_()
     , efiBootImage_()
     , efiBootFat_(nullptr)
@@ -1420,6 +1421,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , lastDescriptorCode_(0)
     , lastDescriptorGp_(0)
     , lastBranchTargets_()
+    , recentInstructionSequenceRepeatCount_(0)
     , efiFileHandles_()
     , efiBootImage_()
     , efiBootFat_(nullptr)
@@ -1432,6 +1434,7 @@ void IA64ISAPlugin::reset() {
     pendingCallInputs_.clear();
     recentInstructions_.clear();
     recentTrackedRegisterWrites_.clear();
+    recentInstructionSequenceRepeatCount_ = 0;
     efiPoolNext_ = EFI_POOL_BASE;
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
@@ -1469,6 +1472,7 @@ void IA64ISAPlugin::reset() {
     lastDescriptorCode_ = 0;
     lastDescriptorGp_ = 0;
     lastBranchTargets_.clear();
+    recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
     efiBootImage_.clear();
     efiBootFat_.reset();
@@ -1633,30 +1637,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         }
 
         if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
-            const uint64_t rawBits = cachedInstruction_.GetRawBits();
-            {
-                std::ostringstream ctx;
-                ctx << "ip=" << BootStageTrace::Hex(decodeResult.instructionAddress)
-                    << " slot=" << state_.currentSlot_
-                    << " template=" << BootStageTrace::Hex(static_cast<uint64_t>(state_.currentBundle_.templateType))
-                    << " raw=" << BootStageTrace::Hex(rawBits)
-                    << " opcode=" << BootStageTrace::Hex((rawBits >> 37) & 0x0F)
-                    << " qp=" << (rawBits & 0x3F)
-                    << " disasm=\"" << decodeResult.disassembly << "\" "
-                    << cpuSummary(state_.getCPUState());
-                BootStageTrace::EventOnce("FIRST_UNIMPLEMENTED_INSTRUCTION", ctx.str());
-            }
-            std::cerr << "Unsupported IA-64 instruction: "
-                      << "bundle=0x" << std::hex << decodeResult.instructionAddress
-                      << " slot=" << std::dec << state_.currentSlot_
-                      << " template=0x" << std::hex
-                      << static_cast<int>(state_.currentBundle_.templateType)
-                      << " raw=0x" << rawBits
-                      << " opcode=0x" << ((rawBits >> 37) & 0x0F)
-                      << " qp=" << std::dec << (rawBits & 0x3F)
-                      << " x3=" << ((rawBits >> 33) & 0x07)
-                      << " x6=" << ((rawBits >> 27) & 0x3F)
-                      << " disasm=\"" << decodeResult.disassembly << "\"\n";
+            const std::string unknownSlot = FormatIA64UnknownSlot(
+                decodeResult.instructionAddress,
+                state_.currentSlot_,
+                state_.currentBundle_.templateType,
+                cachedInstruction_.GetUnit(),
+                cachedInstruction_.GetRawBits(),
+                false);
+            BootStageTrace::EventOnce("FIRST_UNIMPLEMENTED_INSTRUCTION", unknownSlot);
+            std::cerr << unknownSlot << std::endl;
             hasCachedInstruction_ = false;
             return ISAExecutionResult::EXCEPTION;
         }
@@ -1685,6 +1674,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         bool isBranch = false;
         bool handledFirmwareCallStub = false;
         uint64_t branchTarget = 0;
+        const uint64_t gpBeforeBranch = state_.getCPUState().GetGR(1);
+        std::array<uint64_t, 8> branchRegistersBefore{};
+        for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
+            branchRegistersBefore[i] = state_.getCPUState().GetBR(i);
+        }
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
         const bool livePredicateTrue = (predicate == 0) || state_.getCPUState().GetPR(predicate);
@@ -1747,31 +1741,28 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     if (!cachedInstruction_.HasBranchTarget()) {
                         ++descriptorCallCount_;
                         const CPUState& cpu = state_.getCPUState();
-                        const uint64_t descriptorCandidate = cpu.GetGR(8) >= 8 ? cpu.GetGR(8) - 8 : 0;
                         const uint64_t oldGp = cpu.GetGR(1);
-                        uint64_t rejectedDescriptorCode = 0;
-                        uint64_t rejectedDescriptorGp = 0;
-                        bool rejectedDescriptorReadable = false;
                         uint64_t descriptorCode = 0;
                         uint64_t descriptorGp = 0;
                         bool descriptorReadable = false;
-                        if (descriptorCandidate != 0) {
+                        bool resolvedViaDescriptor = false;
+                        bool resolvedViaKnownStub = false;
+                        uint64_t descriptorAddress = branchTarget;
+                        // Resolve only from the actual branch target. Speculatively
+                        // treating unrelated registers as function descriptors can
+                        // mask bad control-flow values and create repeat loops.
+                        if (branchTarget != 0) {
                             try {
-                                memory.Read(descriptorCandidate, reinterpret_cast<uint8_t*>(&descriptorCode), sizeof(descriptorCode));
-                                memory.Read(descriptorCandidate + 8, reinterpret_cast<uint8_t*>(&descriptorGp), sizeof(descriptorGp));
-                                descriptorReadable = true;
+                                if (tryResolveIa64FunctionDescriptor(memory, branchTarget,
+                                                                     descriptorCode,
+                                                                     descriptorGp)) {
+                                    descriptorReadable = true;
+                                    resolvedViaDescriptor = true;
+                                    descriptorAddress = branchTarget;
+                                    branchTarget = descriptorCode;
+                                }
                             } catch (const std::exception&) {
                             }
-                        }
-                        uint64_t descriptorAddress = descriptorCandidate;
-                        if (descriptorReadable && descriptorCode != branchTarget) {
-                            rejectedDescriptorCode = descriptorCode;
-                            rejectedDescriptorGp = descriptorGp;
-                            rejectedDescriptorReadable = true;
-                            descriptorAddress = 0;
-                            descriptorCode = 0;
-                            descriptorGp = 0;
-                            descriptorReadable = false;
                         }
                         if (!descriptorReadable) {
                             const uint64_t knownDescriptor = efiDescriptorForCodePointer(branchTarget);
@@ -1781,23 +1772,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                     memory.Read(knownDescriptor + 8, reinterpret_cast<uint8_t*>(&descriptorGp), sizeof(descriptorGp));
                                     descriptorAddress = knownDescriptor;
                                     descriptorReadable = true;
+                                    resolvedViaKnownStub = true;
                                 } catch (const std::exception&) {
                                     descriptorAddress = knownDescriptor;
                                     descriptorCode = 0;
                                     descriptorGp = 0;
                                 }
-                            }
-                        }
-                        if (!descriptorReadable) {
-                            uint64_t selfDescriptorCode = 0;
-                            uint64_t selfDescriptorGp = 0;
-                            if (tryResolveIa64FunctionDescriptor(memory, branchTarget,
-                                                                 selfDescriptorCode, selfDescriptorGp)) {
-                                descriptorAddress = branchTarget;
-                                descriptorCode = selfDescriptorCode;
-                                descriptorGp = selfDescriptorGp;
-                                descriptorReadable = true;
-                                branchTarget = selfDescriptorCode;
                             }
                         }
                         if (descriptorGp != 0 && descriptorGp != oldGp) {
@@ -1817,35 +1797,49 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             ++unknownRegionCallCount_;
                         }
                         lastDescriptorAddress_ = descriptorAddress;
-                        lastDescriptorCode_ = descriptorReadable ? descriptorCode : branchTarget;
+                        lastDescriptorCode_ = branchTarget;
                         lastDescriptorGp_ = descriptorGp;
-                        std::cout << "[IA64-DESC] indirect br.call callerIP=0x" << std::hex << currentIP
-                                  << " descriptor=0x" << descriptorAddress
-                                  << " readable=" << (descriptorReadable ? "yes" : "no")
-                                  << " descriptorCode=0x" << (descriptorReadable ? descriptorCode : 0)
-                                  << " resolvedCode=0x" << branchTarget
-                                  << " descriptorGp=0x" << descriptorGp
-                                  << " oldR1=0x" << oldGp
-                                  << " newR1=0x" << state_.getCPUState().GetGR(1)
-                                  << " returnBR=b" << std::dec << static_cast<int>(cachedInstruction_.GetDst())
-                                  << " region=";
-                        if (descriptorAddress >= EFI_HANDOFF_REGION_BASE && descriptorAddress < EFI_HANDOFF_REGION_END) {
-                            std::cout << "efi-table";
-                        } else if (descriptorAddress >= EFI_POOL_BASE && descriptorAddress < EFI_POOL_END) {
-                            std::cout << "pool";
-                        } else if (descriptorAddress >= 0x100000ULL && descriptorAddress < 0x200000ULL) {
-                            std::cout << "mirrored-section";
-                        } else if (descriptorAddress < memory.GetTotalSize()) {
-                            std::cout << "image-or-guest";
-                        } else {
-                            std::cout << "unknown";
+                        const bool verboseIndirectCall =
+                            descriptorCallCount_ <= 24 ||
+                            !descriptorReadable ||
+                            (descriptorCallCount_ % 128 == 0);
+                        if (verboseIndirectCall) {
+                            std::cout << "[IA64-DESC] indirect br.call callerIP=0x" << std::hex << currentIP
+                                      << " srcBR=b" << std::dec << static_cast<int>(cachedInstruction_.GetSrc1())
+                                      << " srcValue=0x" << std::hex << branchRegisterValue
+                                      << " target=0x" << originalBranchTarget
+                                      << " interpretedAs=";
+                            if (resolvedViaDescriptor) {
+                                std::cout << "descriptor";
+                            } else if (resolvedViaKnownStub) {
+                                std::cout << "known-stub-code";
+                            } else if (branchTarget == 0) {
+                                std::cout << "null";
+                            } else {
+                                std::cout << "invalid";
+                            }
+                            std::cout << " descriptor=0x" << descriptorAddress
+                                      << " readable=" << (descriptorReadable ? "yes" : "no")
+                                      << " descriptorCode=0x" << (descriptorReadable ? descriptorCode : 0)
+                                      << " resolvedCode=0x" << branchTarget
+                                      << " descriptorGp=0x" << descriptorGp
+                                      << " oldR1=0x" << oldGp
+                                      << " newR1=0x" << state_.getCPUState().GetGR(1)
+                                      << " returnBR=b" << static_cast<int>(cachedInstruction_.GetDst())
+                                      << " region=";
+                            if (descriptorAddress >= EFI_HANDOFF_REGION_BASE && descriptorAddress < EFI_HANDOFF_REGION_END) {
+                                std::cout << "efi-table";
+                            } else if (descriptorAddress >= EFI_POOL_BASE && descriptorAddress < EFI_POOL_END) {
+                                std::cout << "pool";
+                            } else if (descriptorAddress >= 0x100000ULL && descriptorAddress < 0x200000ULL) {
+                                std::cout << "mirrored-section";
+                            } else if (descriptorAddress < memory.GetTotalSize()) {
+                                std::cout << "image-or-guest";
+                            } else {
+                                std::cout << "unknown";
+                            }
+                            std::cout << std::dec << std::endl;
                         }
-                        if (rejectedDescriptorReadable) {
-                            std::cout << " rejectedDescriptorCandidate=0x" << std::hex << descriptorCandidate
-                                      << " rejectedCode=0x" << rejectedDescriptorCode
-                                      << " rejectedGp=0x" << rejectedDescriptorGp;
-                        }
-                        std::cout << std::dec << std::endl;
                     }
                     if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_ALLOCATE_POOL_STUB_CODE_ADDR) {
@@ -2466,10 +2460,30 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 ctx << "kind=" << branchKind
                     << " callerIP=" << BootStageTrace::Hex(currentIP)
                     << " slot=" << state_.currentSlot_
+                    << " srcBR=b" << static_cast<int>(cachedInstruction_.GetSrc1())
+                    << " srcValue=" << BootStageTrace::Hex(branchRegisterValue)
+                    << " dstBR=b" << static_cast<int>(cachedInstruction_.GetDst())
                     << " target=" << BootStageTrace::Hex(branchTarget)
                     << " normalized=" << BootStageTrace::Hex(normalizeBranchEntryIP(branchTarget))
                     << " predicate=p" << static_cast<int>(predicate)
                     << " livePredicate=" << (livePredicateTrue ? "true" : "false")
+                    << " oldR1=" << BootStageTrace::Hex(gpBeforeBranch)
+                    << " newR1=" << BootStageTrace::Hex(state_.getCPUState().GetGR(1))
+                    << " oldBRs=[";
+                for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
+                    if (i != 0) {
+                        ctx << ',';
+                    }
+                    ctx << 'b' << i << '=' << BootStageTrace::Hex(branchRegistersBefore[i]);
+                }
+                ctx << "] newBRs=[";
+                for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
+                    if (i != 0) {
+                        ctx << ',';
+                    }
+                    ctx << 'b' << i << '=' << BootStageTrace::Hex(state_.getCPUState().GetBR(i));
+                }
+                ctx << "]"
                     << " disasm=\"" << decodeResult.disassembly << "\" "
                     << cpuSummary(state_.getCPUState());
                 BootStageTrace::Stage(120, "First branch/call observed", ctx.str());
@@ -2697,6 +2711,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     lastDescriptorCode_ = 0;
     lastDescriptorGp_ = 0;
     lastBranchTargets_.clear();
+    recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
     efiBootImage_.clear();
     efiBootFat_.reset();
@@ -3017,6 +3032,48 @@ void IA64ISAPlugin::recordRecentInstruction(uint64_t ip, size_t slot, const std:
     recentInstructions_.push_back(RecentInstructionTrace{ip, slot, disasm});
     if (recentInstructions_.size() > 16) {
         recentInstructions_.pop_front();
+    }
+
+    constexpr size_t loopWindow = 6;
+    if (recentInstructions_.size() >= loopWindow * 2) {
+        const size_t start = recentInstructions_.size() - loopWindow * 2;
+        bool repeated = true;
+        for (size_t i = 0; i < loopWindow; ++i) {
+            const auto& previous = recentInstructions_[start + i];
+            const auto& current = recentInstructions_[start + loopWindow + i];
+            if (previous.ip != current.ip ||
+                previous.slot != current.slot ||
+                previous.disasm != current.disasm) {
+                repeated = false;
+                break;
+            }
+        }
+
+        if (repeated) {
+            ++recentInstructionSequenceRepeatCount_;
+            if (recentInstructionSequenceRepeatCount_ == 1 ||
+                (recentInstructionSequenceRepeatCount_ % 32) == 0) {
+                const auto& first = recentInstructions_[recentInstructions_.size() - loopWindow];
+                const auto& last = recentInstructions_.back();
+                std::cout << "[IA64-LOOP] repeated instruction window count="
+                          << recentInstructionSequenceRepeatCount_
+                          << " startIP=0x" << std::hex << first.ip
+                          << " endIP=0x" << last.ip
+                          << " sequence=";
+                for (size_t i = recentInstructions_.size() - loopWindow; i < recentInstructions_.size(); ++i) {
+                    const auto& entry = recentInstructions_[i];
+                    if (i != recentInstructions_.size() - loopWindow) {
+                        std::cout << " | ";
+                    }
+                    std::cout << "[ip=0x" << std::hex << entry.ip
+                              << " slot=" << std::dec << entry.slot
+                              << " \"" << entry.disasm << "\"]";
+                }
+                std::cout << std::dec << std::endl;
+            }
+        } else {
+            recentInstructionSequenceRepeatCount_ = 0;
+        }
     }
 }
 

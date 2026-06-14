@@ -175,6 +175,111 @@ public:
     }
 };
 
+class FakeDirectCallReturnBr4Decoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+        call.SetOperands(4, 0, 0);
+        call.SetBranchTarget(0x2408);
+        call.SetRawBits(0x200000c000ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
+class FakeIndirectCallFromB0ReturnBr4Decoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+        call.SetOperands(4, 0, 0);
+        call.SetRawBits(0x200000c000ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
+class FakeBranchRegisterRoundTripDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx toBranch(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+        toBranch.SetOperands(0, 37, 0);
+        toBranch.SetRawBits(0x1ULL);
+
+        InstructionEx fromBranch(InstructionType::MOV_FROM_BR, UnitType::I_UNIT);
+        fromBranch.SetOperands(10, 0, 0);
+        fromBranch.SetRawBits(0x2ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MII;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(toBranch);
+        bundle.instructions.push_back(fromBranch);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeIndirectSelfCallDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -1473,6 +1578,97 @@ void testIA64PluginIndirectCallExecution() {
     std::cout << "  ? plugin br.call b0 = b6 links b0 and enters at the target bundle boundary\n";
 }
 
+void testIA64PluginDirectCallWritesReturnBranchRegister() {
+    std::cout << "Testing IA-64 plugin direct br.call return branch selection...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeDirectCallReturnBr4Decoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2400);
+    assert(plugin.getCPUState().GetBR(4) == 0x1010);
+    assert(plugin.getCPUState().GetBR(0) == 0);
+
+    std::cout << "  ? direct br.call writes the chosen return branch register b4\n";
+}
+
+void testIA64PluginIndirectCallThroughB0WritesReturnBranchRegister() {
+    std::cout << "Testing IA-64 plugin indirect br.call through b0...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallFromB0ReturnBr4Decoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetBR(0, 0x2408);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2400);
+    assert(plugin.getCPUState().GetBR(4) == 0x1010);
+    assert(plugin.getCPUState().GetBR(0) == 0x2408);
+
+    std::cout << "  ? indirect br.call b4 = b0 uses b0 as target and links b4\n";
+}
+
+void testIA64PluginNullIndirectCallIgnoresDescriptorCandidate() {
+    std::cout << "Testing IA-64 plugin null indirect br.call ignores unrelated descriptor data...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    uint64_t descriptorCode = 0x3000;
+    uint64_t descriptorGp = 0x238000;
+    memory.Write(0x4000, reinterpret_cast<const uint8_t*>(&descriptorCode), sizeof(descriptorCode));
+    memory.Write(0x4008, reinterpret_cast<const uint8_t*>(&descriptorGp), sizeof(descriptorGp));
+
+    FakeIndirectCallFromB0ReturnBr4Decoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetBR(0, 0);
+    plugin.getCPUState().SetGR(8, 0x4008);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetBR(4) == 0x1010);
+    assert(plugin.getCPUState().GetBR(0) == 0);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+
+    std::cout << "  ? null indirect br.call stays null even when r8 points at a descriptor\n";
+}
+
+void testIA64PluginBranchRegisterMovesPreserveExactValues() {
+    std::cout << "Testing IA-64 plugin branch-register move round trip...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    FakeBranchRegisterRoundTripDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(37, 0x123456789abcdef0ULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetBR(0) == 0x123456789abcdef0ULL);
+    assert(plugin.getCPUState().GetGR(37) == 0x123456789abcdef0ULL);
+    assert(plugin.getCPUState().GetIP() == 0x1000);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(10) == 0x123456789abcdef0ULL);
+    assert(plugin.getCPUState().GetBR(0) == 0x123456789abcdef0ULL);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+
+    std::cout << "  ? mov bN = rN and mov rN = bN preserve exact 64-bit values\n";
+}
+
 void testIA64PluginIndirectCallThroughFunctionDescriptor() {
     std::cout << "Testing IA-64 plugin indirect call through function descriptor...\n";
 
@@ -2347,6 +2543,18 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginIndirectCallExecution();
+        std::cout << "\n";
+
+        testIA64PluginDirectCallWritesReturnBranchRegister();
+        std::cout << "\n";
+
+        testIA64PluginIndirectCallThroughB0WritesReturnBranchRegister();
+        std::cout << "\n";
+
+        testIA64PluginNullIndirectCallIgnoresDescriptorCandidate();
+        std::cout << "\n";
+
+        testIA64PluginBranchRegisterMovesPreserveExactValues();
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughFunctionDescriptor();
