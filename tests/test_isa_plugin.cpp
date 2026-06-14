@@ -142,6 +142,39 @@ public:
     }
 };
 
+class FakeDirectCallToDescriptorDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        (void)bundleIP;
+
+        InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+        call.SetBranchTarget(0x4000);
+        call.SetRawBits(0x200000c000ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeIndirectSelfCallDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -1459,8 +1492,56 @@ void testIA64PluginIndirectCallThroughFunctionDescriptor() {
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
     assert(plugin.getCPUState().GetGR(1) == 0x238000);
+    assert(plugin.getCPUState().GetGR(38) == 0x238000);
 
     std::cout << "  ? indirect br.call resolves IA-64 function descriptors to code and gp\n";
+}
+
+void testIA64PluginDirectCallToFunctionDescriptor() {
+    std::cout << "Testing IA-64 plugin direct call to function descriptor...\n";
+
+    Memory memory(64 * 1024);
+    uint64_t descriptorCode = 0x2000;
+    uint64_t descriptorGp = 0x238000;
+    memory.Write(0x4000, reinterpret_cast<const uint8_t*>(&descriptorCode), sizeof(descriptorCode));
+    memory.Write(0x4008, reinterpret_cast<const uint8_t*>(&descriptorGp), sizeof(descriptorGp));
+
+    FakeDirectCallToDescriptorDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(1, 0x185);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
+    assert(plugin.getCPUState().GetBR(0) == 0x1010);
+    assert(plugin.getCPUState().GetGR(1) == 0x238000);
+    assert(plugin.getCPUState().GetGR(38) == 0x238000);
+
+    std::cout << "  ? direct br.call resolves IA-64 function descriptors to code and gp\n";
+}
+
+void testIA64PluginFetchBundleRedirectsDescriptorToCode() {
+    std::cout << "Testing IA-64 plugin fetch bundle redirect from function descriptor...\n";
+
+    SparseMemory memory;
+    uint64_t descriptorCode = 0x2000;
+    uint64_t descriptorGp = 0x238000;
+    memory.Write(0x4000, reinterpret_cast<const uint8_t*>(&descriptorCode), sizeof(descriptorCode));
+    memory.Write(0x4008, reinterpret_cast<const uint8_t*>(&descriptorGp), sizeof(descriptorGp));
+    uint8_t codeBundle[16] = {};
+    memory.Write(0x2000, codeBundle, sizeof(codeBundle));
+
+    InstructionDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x4000);
+    plugin.getCPUState().SetGR(1, 0x185);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
+    assert(plugin.getCPUState().GetGR(1) == 0x238000);
+    assert(plugin.getCPUState().GetGR(38) == 0x238000);
+
+    std::cout << "  ? fetchBundle redirects descriptor bundles to executable code and gp\n";
 }
 
 void testIA64PluginZeroFilledFirmwareCallReturnsSuccess() {
@@ -2269,6 +2350,12 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughFunctionDescriptor();
+        std::cout << "\n";
+
+        testIA64PluginDirectCallToFunctionDescriptor();
+        std::cout << "\n";
+
+        testIA64PluginFetchBundleRedirectsDescriptorToCode();
         std::cout << "\n";
 
         testIA64PluginZeroFilledFirmwareCallReturnsSuccess();

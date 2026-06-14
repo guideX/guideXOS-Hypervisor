@@ -1804,6 +1804,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             ++gpSwitchCount_;
                             state_.getCPUState().SetGR(1, descriptorGp);
                         }
+                        // IA-64 callee prologues copy the caller GP back out of r38.
+                        // Mirror the resolved GP there so the next frame keeps the
+                        // right global pointer even when it re-materializes r1.
+                        state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
                         if (descriptorGp >= memory.GetTotalSize() && descriptorGp < EFI_HANDOFF_REGION_BASE) {
                             ++suspiciousGpCount_;
                         }
@@ -2399,6 +2403,33 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             default:
                 break;
         }
+
+        // Direct calls/branches can also land on IA-64 function descriptors.
+        // Resolve those before stub dispatch so imported EFI entry points jump
+        // to code rather than executing the descriptor payload as a bundle.
+        if (isBranch && branchTarget != 0) {
+            uint64_t resolvedCode = 0;
+            uint64_t resolvedGp = 0;
+            if (tryResolveIa64FunctionDescriptor(memory, branchTarget, resolvedCode, resolvedGp) &&
+                resolvedCode != branchTarget) {
+                const uint64_t oldGp = state_.getCPUState().GetGR(1);
+                if (resolvedGp != 0 && resolvedGp != oldGp) {
+                    ++gpSwitchCount_;
+                    state_.getCPUState().SetGR(1, resolvedGp);
+                }
+                lastDescriptorAddress_ = branchTarget;
+                lastDescriptorCode_ = resolvedCode;
+                lastDescriptorGp_ = resolvedGp;
+                std::cout << "[IA64-DESC] direct branch target descriptor=0x" << std::hex
+                          << branchTarget
+                          << " resolvedCode=0x" << resolvedCode
+                          << " descriptorGp=0x" << resolvedGp
+                          << " oldR1=0x" << oldGp
+                          << " newR1=0x" << state_.getCPUState().GetGR(1)
+                          << std::dec << std::endl;
+                branchTarget = resolvedCode;
+            }
+        }
         
         // Keep non-branch predicate execution on the instruction-group snapshot,
         // while branches use the current predicate state for boot-critical flow.
@@ -2850,6 +2881,28 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
     
     try {
         memory.Read(ip, bundleData, 16);
+
+        uint64_t descriptorCode = 0;
+        uint64_t descriptorGp = 0;
+        if (tryResolveIa64FunctionDescriptor(memory, ip, descriptorCode, descriptorGp) &&
+            descriptorCode != ip) {
+            const uint64_t oldGp = state_.getCPUState().GetGR(1);
+            if (descriptorGp != 0 && descriptorGp != oldGp) {
+                state_.getCPUState().SetGR(1, descriptorGp);
+            }
+            state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
+            state_.getCPUState().SetIP(descriptorCode);
+            ip = descriptorCode;
+            memory.Read(ip, bundleData, 16);
+            std::cout << "[IA64-DESC] fetch bundle descriptor ip=0x" << std::hex
+                      << state_.getCPUState().GetIP()
+                      << " resolvedCode=0x" << descriptorCode
+                      << " descriptorGp=0x" << descriptorGp
+                      << " oldR1=0x" << oldGp
+                      << " newR1=0x" << state_.getCPUState().GetGR(1)
+                      << std::dec << std::endl;
+        }
+
         state_.currentBundle_ = decoder_.DecodeBundleAt(bundleData, ip);
         state_.bundleValid_ = true;
         capturePredicateGroupSnapshot();
@@ -3020,6 +3073,33 @@ void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, siz
         }
     }
     std::cerr << std::dec << "\n";
+
+    std::ostringstream history;
+    history << "ip=" << BootStageTrace::Hex(ip)
+            << " slot=" << slot
+            << " disasm=\"" << instr.GetDisassembly() << "\""
+            << " baseBefore=" << BootStageTrace::Hex(baseBefore)
+            << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
+            << " r12=" << BootStageTrace::Hex(cpu.GetGR(12))
+            << " recent-r16-r17-writes=";
+    if (recentTrackedRegisterWrites_.empty()) {
+        history << "<empty>";
+    } else {
+        history << "[";
+        for (size_t i = 0; i < recentTrackedRegisterWrites_.size(); ++i) {
+            if (i != 0) {
+                history << ", ";
+            }
+            const auto& entry = recentTrackedRegisterWrites_[i];
+            history << "r" << entry.reg
+                    << "=0x" << std::hex << entry.value
+                    << " ip=0x" << entry.ip
+                    << " slot=" << std::dec << entry.slot
+                    << " \"" << entry.disasm << "\"";
+        }
+        history << "]";
+    }
+    BootStageTrace::EventOnce("FIRST_FAULT_REGISTER_HISTORY", history.str());
 }
 
 uint64_t IA64ISAPlugin::allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment) {
