@@ -1,6 +1,7 @@
 #include "mmu.h"
 #include "mmu.h"
 #include <algorithm>
+#include <cstring>
 #include <sstream>
 #include <iomanip>
 

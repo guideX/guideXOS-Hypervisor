@@ -1752,6 +1752,36 @@ void testIA64PluginIndirectCallThroughFunctionDescriptor() {
     std::cout << "  ? indirect br.call resolves IA-64 function descriptors to code and gp\n";
 }
 
+void testIA64PluginIndirectCallRejectsInvalidDescriptorGp() {
+    std::cout << "Testing IA-64 plugin indirect call ignores invalid descriptor GP...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+
+    // The target is readable but does not form a valid function descriptor:
+    // codePointer matches the branch target, so the probe must be rejected and
+    // the caller GP must stay unchanged.
+    uint64_t invalidDescriptorCode = 0x4000;
+    uint64_t invalidDescriptorGp = 0x1234567890ABCDEFULL;
+    memory.Write(0x4000, reinterpret_cast<const uint8_t*>(&invalidDescriptorCode), sizeof(invalidDescriptorCode));
+    memory.Write(0x4008, reinterpret_cast<const uint8_t*>(&invalidDescriptorGp), sizeof(invalidDescriptorGp));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(1, 0x185);
+    plugin.getCPUState().SetGR(38, 0x185);
+    plugin.getCPUState().SetBR(6, 0x4000);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x4000);
+    assert(plugin.getCPUState().GetGR(1) == 0x185);
+    assert(plugin.getCPUState().GetGR(38) == 0x185);
+
+    std::cout << "  ? invalid descriptor probes no longer clobber GP\n";
+}
+
 void testIA64PluginDirectCallToFunctionDescriptor() {
     std::cout << "Testing IA-64 plugin direct call to function descriptor...\n";
 
@@ -2638,6 +2668,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughFunctionDescriptor();
+        std::cout << "\n";
+
+        testIA64PluginIndirectCallRejectsInvalidDescriptorGp();
         std::cout << "\n";
 
         testIA64PluginDirectCallToFunctionDescriptor();

@@ -991,6 +991,31 @@ void test_bitwise_operations() {
     std::cout << "  ? Bitwise operations passed" << std::endl;
 }
 
+// Test subtract operations
+void test_subtract_operations() {
+    std::cout << "Testing subtract operations..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    cpu.SetGR(19, 9);
+    cpu.SetGR(20, 3);
+
+    InstructionEx sub_reg(InstructionType::SUB, UnitType::I_UNIT);
+    sub_reg.SetOperands(19, 19, 20);
+    sub_reg.Execute(cpu, memory);
+    assert_equal("SUB register", 6, cpu.GetGR(19));
+
+    cpu.SetGR(19, 9);
+    InstructionEx sub_imm(InstructionType::SUB_IMM, UnitType::I_UNIT);
+    sub_imm.SetOperands(19, 19, 0);
+    sub_imm.SetImmediate(3);
+    sub_imm.Execute(cpu, memory);
+    assert_equal("SUB immediate", 6, cpu.GetGR(19));
+
+    std::cout << "  ? Subtract operations passed" << std::endl;
+}
+
 // Test shift operations
 void test_shift_operations() {
     std::cout << "Testing shift operations..." << std::endl;
@@ -1321,6 +1346,7 @@ int main() {
         test_application_register_moves();
         test_test_instructions();
         test_bitwise_operations();
+        test_subtract_operations();
         test_shift_operations();
         test_extract_deposit();
         test_memory_operations();

@@ -1636,6 +1636,36 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << std::dec << std::endl;
         }
 
+        const bool traceBootLoopPath =
+            (decodeResult.instructionAddress >= 0x36D60ULL &&
+             decodeResult.instructionAddress <= 0x36ED0ULL);
+        if (traceBootLoopPath) {
+            const CPUState& cpu = state_.getCPUState();
+            const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
+            const bool traceLivePredicate =
+                (tracePredicate == 0) || cpu.GetPR(tracePredicate);
+            std::ostringstream ctx;
+            ctx << "ip=0x" << std::hex << decodeResult.instructionAddress
+                << " slot=" << std::dec << state_.currentSlot_
+                << " pred=p" << static_cast<int>(tracePredicate)
+                << " livePred=" << (traceLivePredicate ? "true" : "false")
+                << " p6=" << cpu.GetPR(6)
+                << " p7=" << cpu.GetPR(7)
+                << std::hex
+                << " r19=0x" << cpu.GetGR(19)
+                << " r20=0x" << cpu.GetGR(20)
+                << " r21=0x" << cpu.GetGR(21)
+                << " r22=0x" << cpu.GetGR(22)
+                << " r23=0x" << cpu.GetGR(23)
+                << " r24=0x" << cpu.GetGR(24)
+                << " r25=0x" << cpu.GetGR(25)
+                << " r33=0x" << cpu.GetGR(33)
+                << " b0=0x" << cpu.GetBR(0)
+                << " lastEfiCall=\"" << lastEfiCallName_ << "\""
+                << " lastEfiIP=0x" << lastEfiCallIP_;
+            BootStageTrace::EventOnce("EFI_DYNAMIC_SCAN_HOT_PATH", ctx.str());
+        }
+
         if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
             const std::string unknownSlot = FormatIA64UnknownSlot(
                 decodeResult.instructionAddress,
@@ -1780,7 +1810,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 }
                             }
                         }
-                        if (descriptorGp != 0 && descriptorGp != oldGp) {
+                        if (descriptorReadable && descriptorGp != 0 && descriptorGp != oldGp) {
                             ++gpSwitchCount_;
                             state_.getCPUState().SetGR(1, descriptorGp);
                         }
@@ -1788,7 +1818,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         // Mirror the resolved GP there so the next frame keeps the
                         // right global pointer even when it re-materializes r1.
                         state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
-                        if (descriptorGp >= memory.GetTotalSize() && descriptorGp < EFI_HANDOFF_REGION_BASE) {
+                        if (descriptorReadable &&
+                            descriptorGp >= memory.GetTotalSize() &&
+                            descriptorGp < EFI_HANDOFF_REGION_BASE) {
                             ++suspiciousGpCount_;
                         }
                         const bool knownFirmwareTarget =
@@ -1798,7 +1830,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         }
                         lastDescriptorAddress_ = descriptorAddress;
                         lastDescriptorCode_ = branchTarget;
-                        lastDescriptorGp_ = descriptorGp;
+                        lastDescriptorGp_ = descriptorReadable ? descriptorGp : 0;
                         const bool verboseIndirectCall =
                             descriptorCallCount_ <= 24 ||
                             !descriptorReadable ||
