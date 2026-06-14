@@ -1732,6 +1732,16 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
+            if (major == 0x0 && x3 == 0x2 && x6 == 0x38) {
+                const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
+                const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                result = InstructionEx(InstructionType::MOV_FROM_AR, UnitType::I_UNIT);
+                result.SetOperands(r1, ar3, 0);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             // I-unit can execute A-type (ALU) or I-type (non-ALU integer) instructions
             // Try A-type first for ALU operations (major 0x8-0xF)
             if (major >= 0x8 && major <= 0xF) {
