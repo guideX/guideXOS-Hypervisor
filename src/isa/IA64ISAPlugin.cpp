@@ -141,6 +141,36 @@ uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
 }
 
+bool tryResolveIa64FunctionDescriptor(IMemory& memory,
+                                      uint64_t target,
+                                      uint64_t& codePointer,
+                                      uint64_t& descriptorGp) {
+    if (target == 0 || (target & 0xFULL) != 0) {
+        return false;
+    }
+
+    if (memory.GetTotalSize() != 0 && target >= memory.GetTotalSize()) {
+        return false;
+    }
+
+    try {
+        memory.Read(target, reinterpret_cast<uint8_t*>(&codePointer), sizeof(codePointer));
+        memory.Read(target + 8, reinterpret_cast<uint8_t*>(&descriptorGp), sizeof(descriptorGp));
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    if (codePointer == 0 || codePointer == target || (codePointer & 0xFULL) != 0) {
+        return false;
+    }
+
+    if (memory.GetTotalSize() != 0 && codePointer >= memory.GetTotalSize()) {
+        return false;
+    }
+
+    return true;
+}
+
 bool isZeroFilledEfiHandoffBundle(IMemory& memory, uint64_t target) {
     const uint64_t entryIP = normalizeBranchEntryIP(target);
     if (entryIP < EFI_HANDOFF_REGION_BASE || entryIP >= EFI_HANDOFF_REGION_END) {
@@ -1758,8 +1788,21 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 }
                             }
                         }
+                        if (!descriptorReadable) {
+                            uint64_t selfDescriptorCode = 0;
+                            uint64_t selfDescriptorGp = 0;
+                            if (tryResolveIa64FunctionDescriptor(memory, branchTarget,
+                                                                 selfDescriptorCode, selfDescriptorGp)) {
+                                descriptorAddress = branchTarget;
+                                descriptorCode = selfDescriptorCode;
+                                descriptorGp = selfDescriptorGp;
+                                descriptorReadable = true;
+                                branchTarget = selfDescriptorCode;
+                            }
+                        }
                         if (descriptorGp != 0 && descriptorGp != oldGp) {
                             ++gpSwitchCount_;
+                            state_.getCPUState().SetGR(1, descriptorGp);
                         }
                         if (descriptorGp >= memory.GetTotalSize() && descriptorGp < EFI_HANDOFF_REGION_BASE) {
                             ++suspiciousGpCount_;
