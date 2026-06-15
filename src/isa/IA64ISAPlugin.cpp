@@ -114,6 +114,39 @@ std::string formatHex(uint64_t value) {
     return oss.str();
 }
 
+void logScanLoopState(const char* phase, const CPUState& cpu, size_t slot,
+                      const InstructionEx& instr) {
+    std::cout << "[IA64-SCAN] phase=" << phase
+              << " ip=" << formatHex(cpu.GetIP())
+              << " slot=" << std::dec << slot
+              << " instr=\"" << instr.GetDisassembly() << "\""
+              << " r1=" << formatHex(cpu.GetGR(1))
+              << " r8=" << formatHex(cpu.GetGR(8))
+              << " r12=" << formatHex(cpu.GetGR(12))
+              << " r16=" << formatHex(cpu.GetGR(16))
+              << " r17=" << formatHex(cpu.GetGR(17))
+              << " r18=" << formatHex(cpu.GetGR(18))
+              << " r19=" << formatHex(cpu.GetGR(19))
+              << " r20=" << formatHex(cpu.GetGR(20))
+              << " r21=" << formatHex(cpu.GetGR(21))
+              << " r22=" << formatHex(cpu.GetGR(22))
+              << " r23=" << formatHex(cpu.GetGR(23))
+              << " r24=" << formatHex(cpu.GetGR(24))
+              << " r25=" << formatHex(cpu.GetGR(25))
+              << " r26=" << formatHex(cpu.GetGR(26))
+              << " r27=" << formatHex(cpu.GetGR(27))
+              << " r32=" << formatHex(cpu.GetGR(32))
+              << " r33=" << formatHex(cpu.GetGR(33))
+              << " br0=" << formatHex(cpu.GetBR(0))
+              << " br4=" << formatHex(cpu.GetBR(4))
+              << " br6=" << formatHex(cpu.GetBR(6))
+              << " p6=" << cpu.GetPR(6)
+              << " p7=" << cpu.GetPR(7)
+              << " p8=" << cpu.GetPR(8)
+              << " cfm=" << formatHex(cpu.GetCFM())
+              << std::dec << std::endl;
+}
+
 bool isBranchRegisterTargetInstruction(InstructionType type) {
     return type == InstructionType::BR_COND ||
            type == InstructionType::BR_CALL ||
@@ -3627,6 +3660,15 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
 void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
         CPUState& cpu = state_.getCPUState();
+        const uint64_t currentIP = cpu.GetIP();
+        const bool traceScanLoop =
+            currentIP >= 0x36D90ULL && currentIP <= 0x36F10ULL;
+        static uint64_t scanLoopTraceCount = 0;
+        const bool emitScanLoopTrace =
+            traceScanLoop && (scanLoopTraceCount < 64 || (scanLoopTraceCount % 256) == 0);
+        if (emitScanLoopTrace) {
+            logScanLoopState("pre", cpu, state_.currentSlot_, instr);
+        }
         recordRecentInstruction(cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
         static constexpr uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = 0x1FF93010ULL;
         static constexpr size_t EFI_POST_SIMPLEFS_OUT_WATCH_SIZE = 0x10;
@@ -3696,6 +3738,12 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 " lastEfiIP=" + BootStageTrace::Hex(lastEfiCallIP_));
         }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        if (traceScanLoop && emitScanLoopTrace) {
+            logScanLoopState("post", state_.getCPUState(), state_.currentSlot_, instr);
+            ++scanLoopTraceCount;
+        } else if (traceScanLoop) {
+            ++scanLoopTraceCount;
+        }
         if (instr.GetDst() == 16 || instr.GetDst() == 17) {
             recordTrackedRegisterWrite(instr.GetDst(), state_.getCPUState().GetGR(instr.GetDst()),
                                        cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
