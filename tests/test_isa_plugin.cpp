@@ -2031,6 +2031,44 @@ void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
     std::cout << "  ? OpenVolume writes a root FileProtocol pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginLocateHandleReturnsHandleList() {
+    std::cout << "Testing IA-64 plugin BootServices LocateHandle stub...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+
+    uint64_t bufferSize = 16;
+    uint64_t handles[2] = {};
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(handles), sizeof(handles));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetCFM(5);
+    plugin.getCPUState().SetBR(6, 0x1fe01700ULL);
+    plugin.getCPUState().SetGR(32, 0);
+    plugin.getCPUState().SetGR(33, 0);
+    plugin.getCPUState().SetGR(34, 0x5000);
+    plugin.getCPUState().SetGR(35, 0x6000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t returnedSize = 0;
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&returnedSize), sizeof(returnedSize));
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(handles), sizeof(handles));
+    assert(plugin.getCPUState().GetIP() == 0x30e50);
+    assert(plugin.getCPUState().GetBR(0) == 0x30e50);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(returnedSize == 16);
+    assert(handles[0] == 0x1ULL);
+    assert(handles[1] == 0x40ULL);
+
+    std::cout << "  ? LocateHandle writes a minimal handle list and returns EFI_SUCCESS\n";
+}
+
 void testIA64PluginFileProtocolOpenNoMediaIsSafe() {
     std::cout << "Testing IA-64 plugin FileProtocol Open without backing media...\n";
 
@@ -2695,6 +2733,10 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginOpenVolumeReturnsRootFileProtocol();
+        std::cout << "\n";
+
+        testIA64PluginLocateHandleReturnsHandleList();
+        std::cout << "\n";
         testIA64PluginFileProtocolOpenNoMediaIsSafe();
         std::cout << "\n";
 

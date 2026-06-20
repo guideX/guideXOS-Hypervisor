@@ -910,7 +910,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x40, EFI_ALLOCATE_POOL_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x48, EFI_SUCCESS_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x98, EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x118, EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0xB0, EFI_LOCATE_HANDLE_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x138, EFI_LOCATE_HANDLE_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0xC8, EFI_LOAD_IMAGE_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0xD0, EFI_START_IMAGE_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0xE8, EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR);
