@@ -1,4 +1,5 @@
 #include "loader.h"
+#include "PEParser.h"
 #include "memory.h"
 #include "cpu_state.h"
 #include <iostream>
@@ -340,6 +341,26 @@ void testDiagnosticsCoverage() {
     }
 }
 
+void testIa64EfiAliasBaseComputation() {
+    std::cout << "\n=== IA-64 EFI Alias Base Tests ===" << std::endl;
+
+    guideXOS::PEImageInfo imageInfo{};
+    imageInfo.globalPointer = 0x238000ULL;
+    imageInfo.hasGlobalPointer = true;
+    imageInfo.sections = {
+        {".text", 0x1000, 0x36110, 0, 0, guideXOS::IMAGE_SCN_MEM_EXECUTE},
+        {".sdata", 0x38000, 0x540, 0, 0, 0},
+        {".data", 0x39000, 0x1D390, 0, 0, 0}
+    };
+
+    const uint64_t aliasBase = guideXOS::ComputeIa64EfiAliasBase(imageInfo);
+    printTest("GP-relative alias base uses .sdata anchor", aliasBase == 0x200000ULL);
+
+    imageInfo.sections.clear();
+    const uint64_t fallbackAliasBase = guideXOS::ComputeIa64EfiAliasBase(imageInfo);
+    printTest("Alias base fallback remains stable", fallbackAliasBase == 0x100000ULL);
+}
+
 int main() {
     std::cout << "==================================" << std::endl;
     std::cout << "ELF Validation Test Suite" << std::endl;
@@ -352,6 +373,7 @@ int main() {
     testCompleteValidation();
     testWrongArchitectureRejection();
     testDiagnosticsCoverage();
+    testIa64EfiAliasBaseComputation();
 
     std::cout << "\n==================================" << std::endl;
     std::cout << "Test Suite Complete" << std::endl;

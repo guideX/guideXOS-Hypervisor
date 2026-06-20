@@ -170,6 +170,10 @@ struct PEImageInfo {
     std::vector<PESectionInfo> sections;
 };
 
+// Compute the IA-64 EFI alias base used to back GP-relative data.
+uint64_t ComputeIa64EfiAliasBase(const PEImageInfo& imageInfo,
+                                 uint64_t fallbackAliasBase = 0x100000ULL);
+
 class PEParser {
 public:
     PEParser();

@@ -604,13 +604,14 @@ bool VMManager::startVM(const std::string& vmId) {
                                                             LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
                                                             
                                                             // Load into VM memory
-                                                            if (instance->vm->loadProgram(imageBuffer.data(), 
+                                                                if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                                          imageBuffer.size(), 
                                                                                          loadAddress)) {
-                                                                const auto& peInfo = peParser.getImageInfo();
-                                                                if (peInfo.hasGlobalPointer && loadAddress == 0 &&
-                                                                    peInfo.globalPointer >= imageBuffer.size()) {
-                                                                    constexpr uint64_t IA64_EFI_IMAGE_ALIAS_BASE = 0x100000ULL;
+                                                                    const auto& peInfo = peParser.getImageInfo();
+                                                                    if (peInfo.hasGlobalPointer && loadAddress == 0 &&
+                                                                        peInfo.globalPointer >= imageBuffer.size()) {
+                                                                        const uint64_t ia64EfiImageAliasBase =
+                                                                            guideXOS::ComputeIa64EfiAliasBase(peInfo);
                                                                     size_t mirroredSections = 0;
                                                                     size_t mirroredBytes = 0;
                                                                     for (const auto& section : peInfo.sections) {
@@ -628,7 +629,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             sectionSize,
                                                                             imageBuffer.size() - section.virtualAddress);
                                                                         instance->vm->getMemory().Write(
-                                                                            IA64_EFI_IMAGE_ALIAS_BASE + section.virtualAddress,
+                                                                            ia64EfiImageAliasBase + section.virtualAddress,
                                                                             imageBuffer.data() + section.virtualAddress,
                                                                             static_cast<size_t>(copySize));
                                                                         ++mirroredSections;
@@ -636,8 +637,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     }
                                                                     oss.str("");
                                                                     oss << "[EFI-MILESTONE] Mirrored IA-64 EFI non-executable sections at 0x"
-                                                                        << std::hex << IA64_EFI_IMAGE_ALIAS_BASE
-                                                                        << "-0x" << (IA64_EFI_IMAGE_ALIAS_BASE + imageBuffer.size())
+                                                                        << std::hex << ia64EfiImageAliasBase
+                                                                        << "-0x" << (ia64EfiImageAliasBase + imageBuffer.size())
                                                                         << " while keeping entry=0x" << entryPoint
                                                                         << "; GP=0x" << peInfo.globalPointer
                                                                         << " maps GP-relative data into the mirror for load-base diagnosis; "

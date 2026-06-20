@@ -15,6 +15,31 @@ using ia64::BootStageTrace;
 
 namespace guideXOS {
 
+uint64_t ComputeIa64EfiAliasBase(const PEImageInfo& imageInfo, uint64_t fallbackAliasBase) {
+    const auto findSection = [&](const std::string& sectionName) -> const PESectionInfo* {
+        for (const auto& section : imageInfo.sections) {
+            if (section.name == sectionName) {
+                return &section;
+            }
+        }
+        return nullptr;
+    };
+
+    const PESectionInfo* anchor = findSection(".sdata");
+    if (anchor == nullptr) {
+        anchor = findSection(".data");
+    }
+
+    if (anchor != nullptr && imageInfo.globalPointer >= anchor->virtualAddress) {
+        const uint64_t aliasBase = imageInfo.globalPointer - anchor->virtualAddress;
+        if (aliasBase != 0) {
+            return aliasBase;
+        }
+    }
+
+    return fallbackAliasBase;
+}
+
 PEParser::PEParser()
     : imageData_(nullptr)
     , imageSize_(0)
