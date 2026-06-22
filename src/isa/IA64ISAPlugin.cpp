@@ -1672,6 +1672,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         const bool traceBootLoopPath =
             (decodeResult.instructionAddress >= 0x36D60ULL &&
              decodeResult.instructionAddress <= 0x36ED0ULL);
+        static bool bootLoopScanActive = false;
+        static uint64_t bootLoopScanLastIP = 0;
+        static size_t bootLoopScanLastSlot = 0;
         if (traceBootLoopPath) {
             const CPUState& cpu = state_.getCPUState();
             const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
@@ -1696,7 +1699,37 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 << " b0=0x" << cpu.GetBR(0)
                 << " lastEfiCall=\"" << lastEfiCallName_ << "\""
                 << " lastEfiIP=0x" << lastEfiCallIP_;
+            if (!bootLoopScanActive) {
+                bootLoopScanActive = true;
+                std::ostringstream begin;
+                begin << "startIP=" << BootStageTrace::Hex(decodeResult.instructionAddress)
+                      << " slot=" << state_.currentSlot_
+                      << " pred=p" << static_cast<int>(tracePredicate)
+                      << " livePred=" << (traceLivePredicate ? "true" : "false")
+                      << " r19=0x" << std::hex << cpu.GetGR(19)
+                      << " r20=0x" << cpu.GetGR(20)
+                      << " r21=0x" << cpu.GetGR(21)
+                      << " r22=0x" << cpu.GetGR(22)
+                      << " r23=0x" << cpu.GetGR(23)
+                      << " r24=0x" << cpu.GetGR(24)
+                      << " r25=0x" << cpu.GetGR(25)
+                      << " r33=0x" << cpu.GetGR(33)
+                      << " b0=0x" << cpu.GetBR(0)
+                      << " lastEfiCall=\"" << lastEfiCallName_ << "\""
+                      << " lastEfiIP=0x" << lastEfiCallIP_;
+                BootStageTrace::Event("EFI_DYNAMIC_SCAN_BEGIN", begin.str());
+            }
+            bootLoopScanLastIP = decodeResult.instructionAddress;
+            bootLoopScanLastSlot = state_.currentSlot_;
             BootStageTrace::EventOnce("EFI_DYNAMIC_SCAN_HOT_PATH", ctx.str());
+        } else if (bootLoopScanActive) {
+            bootLoopScanActive = false;
+            std::ostringstream end;
+            end << "endIP=" << BootStageTrace::Hex(bootLoopScanLastIP)
+                << " endSlot=" << bootLoopScanLastSlot
+                << " nextIP=" << BootStageTrace::Hex(decodeResult.instructionAddress)
+                << " nextSlot=" << state_.currentSlot_;
+            BootStageTrace::Event("EFI_DYNAMIC_SCAN_END", end.str());
         }
 
         if (cachedInstruction_.GetType() == InstructionType::UNKNOWN) {
