@@ -574,6 +574,28 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                      " base=0x18000000 size=0x" +
                                                                      std::to_string(bootImageBackingStoreData.size()) +
                                                                      " metadata=0x1fe01d00");
+                                                            {
+                                                                uint64_t metadataSignature = 0;
+                                                                uint64_t metadataBase = 0;
+                                                                uint64_t metadataSize = 0;
+                                                                instance->vm->getMemory().Read(
+                                                                    EFI_BOOT_IMAGE_METADATA_ADDR,
+                                                                    reinterpret_cast<uint8_t*>(&metadataSignature),
+                                                                    sizeof(metadataSignature));
+                                                                instance->vm->getMemory().Read(
+                                                                    EFI_BOOT_IMAGE_METADATA_ADDR + 8,
+                                                                    reinterpret_cast<uint8_t*>(&metadataBase),
+                                                                    sizeof(metadataBase));
+                                                                instance->vm->getMemory().Read(
+                                                                    EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                    reinterpret_cast<uint8_t*>(&metadataSize),
+                                                                    sizeof(metadataSize));
+                                                                LOG_INFO(std::string("[EFI-MILESTONE] publish-readback boot image metadata signature=0x") +
+                                                                         BootStageTrace::Hex(metadataSignature) +
+                                                                         " base=0x" + BootStageTrace::Hex(metadataBase) +
+                                                                         " size=0x" + BootStageTrace::Hex(metadataSize) +
+                                                                         " addr=0x" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
+                                                            }
                                                             BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                 "base=0x18000000 size=" +
                                                                 BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
@@ -866,6 +888,26 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     auto write64 = [&](uint64_t address, uint64_t value) {
                                                                         instance->vm->getMemory().Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                                                                     };
+                                                                    auto logBootImageMetadata = [&](const char* phase) {
+                                                                        uint64_t metadataSignature = 0;
+                                                                        uint64_t metadataBase = 0;
+                                                                        uint64_t metadataSize = 0;
+                                                                        instance->vm->getMemory().Read(EFI_BOOT_IMAGE_METADATA_ADDR,
+                                                                            reinterpret_cast<uint8_t*>(&metadataSignature),
+                                                                            sizeof(metadataSignature));
+                                                                        instance->vm->getMemory().Read(EFI_BOOT_IMAGE_METADATA_ADDR + 8,
+                                                                            reinterpret_cast<uint8_t*>(&metadataBase),
+                                                                            sizeof(metadataBase));
+                                                                        instance->vm->getMemory().Read(EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                            reinterpret_cast<uint8_t*>(&metadataSize),
+                                                                            sizeof(metadataSize));
+                                                                        LOG_INFO(std::string("[EFI-MILESTONE] ") + phase +
+                                                                                 " boot image metadata signature=0x" +
+                                                                                 BootStageTrace::Hex(metadataSignature) +
+                                                                                 " base=0x" + BootStageTrace::Hex(metadataBase) +
+                                                                                 " size=0x" + BootStageTrace::Hex(metadataSize) +
+                                                                                 " addr=0x" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
+                                                                    };
 
                                                                     write64(EFI_STUB_ADDR + 0x00, EFI_TABLE_SIGNATURE);
                                                                     write32(EFI_STUB_ADDR + 0x08, 0x00010010U); // EFI 1.10-style revision
@@ -1054,6 +1096,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
                                                                             << std::dec;
                                                                         LOG_INFO(oss.str());
+                                                                        logBootImageMetadata("publish-readback");
                                                                         BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                             "base=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_GUEST_BASE) +
                                                                             " size=" + BootStageTrace::Hex(static_cast<uint64_t>(bootImgData.size())) +
@@ -1236,6 +1279,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     instance->vm->getMemory().Read(EFI_STUB_ADDR + 0x68,
                                                                         reinterpret_cast<uint8_t*>(&configTableCount),
                                                                         sizeof(configTableCount));
+                                                                    logBootImageMetadata("pre-handoff-readback");
                                                                     oss.str("");
                                                                     oss << "  EFI System Table stub at: 0x" << std::hex << EFI_STUB_ADDR
                                                                         << " (RuntimeServices=0x" << EFI_RUNTIME_SERVICES_ADDR

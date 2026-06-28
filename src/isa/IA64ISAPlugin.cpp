@@ -1771,9 +1771,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         bool handledFirmwareCallStub = false;
         uint64_t branchTarget = 0;
         const uint64_t gpBeforeBranch = state_.getCPUState().GetGR(1);
+        const uint64_t r8BeforeBranch = state_.getCPUState().GetGR(8);
         std::array<uint64_t, 8> branchRegistersBefore{};
         for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
             branchRegistersBefore[i] = state_.getCPUState().GetBR(i);
+        }
+        std::array<uint64_t, 8> callArgumentRegistersBefore{};
+        for (size_t i = 0; i < callArgumentRegistersBefore.size(); ++i) {
+            callArgumentRegistersBefore[i] = state_.getCPUState().GetGR(32 + i);
         }
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
@@ -1938,6 +1943,60 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             }
                             std::cout << std::dec << std::endl;
                         }
+                    }
+                    if (normalizeBranchEntryIP(branchTarget) == 0xEA00ULL) {
+                        std::ostringstream ea00;
+                        ea00 << "path=diagnostic-string-helper"
+                             << " callerIP=0x" << std::hex << currentIP
+                             << " slot=" << std::dec << state_.currentSlot_
+                             << " kind=call"
+                             << " srcBR=b" << static_cast<int>(cachedInstruction_.GetSrc1())
+                             << " dstBR=b" << static_cast<int>(cachedInstruction_.GetDst())
+                             << " target=0x" << std::hex << branchTarget
+                             << " normalized=0x" << normalizeBranchEntryIP(branchTarget)
+                             << " predicate=p" << std::dec << static_cast<int>(predicate)
+                             << " livePredicate=" << (livePredicateTrue ? "true" : "false")
+                             << " r8_before=0x" << std::hex << r8BeforeBranch
+                             << " r8_after=0x" << state_.getCPUState().GetGR(8)
+                             << " oldR1=0x" << gpBeforeBranch
+                             << " newR1=0x" << state_.getCPUState().GetGR(1)
+                             << " cfm=0x" << state_.getCPUState().GetCFM()
+                             << " pfs=0x" << state_.getCPUState().GetPFS()
+                             << " sof=" << std::dec << static_cast<int>(state_.getCPUState().GetSOF())
+                             << " sol=" << static_cast<int>(state_.getCPUState().GetSOL())
+                             << " sor=" << static_cast<int>(state_.getCPUState().GetSOR())
+                             << " r32=0x" << std::hex << callArgumentRegistersBefore[0]
+                             << " r33=0x" << callArgumentRegistersBefore[1]
+                             << " r34=0x" << callArgumentRegistersBefore[2]
+                             << " r35=0x" << callArgumentRegistersBefore[3]
+                             << " r36=0x" << callArgumentRegistersBefore[4]
+                             << " r37=0x" << callArgumentRegistersBefore[5]
+                             << " r38=0x" << callArgumentRegistersBefore[6]
+                             << " r39=0x" << callArgumentRegistersBefore[7]
+                             << " oldBRs=[";
+                        for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
+                            if (i != 0) {
+                                ea00 << ',';
+                            }
+                            ea00 << 'b' << i << "=0x" << std::hex << branchRegistersBefore[i];
+                        }
+                        ea00 << "] newBRs=[";
+                        for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
+                            if (i != 0) {
+                                ea00 << ',';
+                            }
+                            ea00 << 'b' << i << "=0x" << std::hex << state_.getCPUState().GetBR(i);
+                        }
+                        ea00 << "]"
+                             << " utf16@0x3d048=\"" << readUtf16Preview(memory, 0x3d048ULL) << "\""
+                             << " utf16@0x3d050=\"" << readUtf16Preview(memory, 0x3d050ULL) << "\""
+                             << " utf16@0x3d068=\"" << readUtf16Preview(memory, 0x3d068ULL) << "\""
+                             << " utf16@0x3d080=\"" << readUtf16Preview(memory, 0x3d080ULL) << "\""
+                             << " utf16@0x3d0b0=\"" << readUtf16Preview(memory, 0x3d0b0ULL) << "\""
+                             << " pathClass=error/diagnostic"
+                             << " disasm=\"" << decodeResult.disassembly << "\" "
+                             << cpuSummary(state_.getCPUState());
+                        BootStageTrace::Event("IA64_EA00_CALL", ea00.str());
                     }
                     if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_ALLOCATE_POOL_STUB_CODE_ADDR) {
@@ -3343,14 +3402,25 @@ bool IA64ISAPlugin::ensureEfiBootFat(IMemory& memory) {
     uint64_t signature = 0;
     uint64_t base = 0;
     uint64_t size = 0;
+    bool metadataReadable = true;
     try {
         memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR, reinterpret_cast<uint8_t*>(&signature), sizeof(signature));
         memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR + 8, reinterpret_cast<uint8_t*>(&base), sizeof(base));
         memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR + 16, reinterpret_cast<uint8_t*>(&size), sizeof(size));
     } catch (const std::exception&) {
+        metadataReadable = false;
+        std::cout << "[EFI-FILE] boot image metadata unreadable metadata=0x"
+                  << std::hex << EFI_BOOT_IMAGE_METADATA_ADDR << std::dec << std::endl;
         return false;
     }
     if (signature != EFI_BOOT_IMAGE_METADATA_SIGNATURE || base == 0 || size == 0 || size > 64ULL * 1024ULL * 1024ULL) {
+        std::cout << "[EFI-FILE] boot image metadata invalid metadata=0x"
+                  << std::hex << EFI_BOOT_IMAGE_METADATA_ADDR
+                  << " signature=0x" << signature
+                  << " base=0x" << base
+                  << " size=0x" << size
+                  << " readable=" << (metadataReadable ? "yes" : "no")
+                  << std::dec << std::endl;
         return false;
     }
 
@@ -3358,6 +3428,11 @@ bool IA64ISAPlugin::ensureEfiBootFat(IMemory& memory) {
     try {
         memory.Read(base, efiBootImage_.data(), efiBootImage_.size());
     } catch (const std::exception&) {
+        std::cout << "[EFI-FILE] boot image backing store unreadable base=0x"
+                  << std::hex << base
+                  << " size=0x" << size
+                  << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
+                  << std::dec << std::endl;
         efiBootImage_.clear();
         return false;
     }
