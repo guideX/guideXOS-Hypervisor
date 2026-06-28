@@ -1811,17 +1811,17 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
-            if (major == 0x0 && x3 == 0x0 && (x6 == 0x2A || x6 == 0x32)) {
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x0A || x6 == 0x2A || x6 == 0x32)) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
                 const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
                 const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
-                result = InstructionEx(x6 == 0x2A ? InstructionType::MOV_TO_AR
-                                                   : InstructionType::MOV_FROM_AR,
+                result = InstructionEx(x6 == 0x32 ? InstructionType::MOV_FROM_AR
+                                                   : InstructionType::MOV_TO_AR,
                                        UnitType::I_UNIT);
-                if (x6 == 0x2A) {
-                    result.SetOperands(ar3, r2, 0);
-                } else {
+                if (x6 == 0x32) {
                     result.SetOperands(r1, ar3, 0);
+                } else {
+                    result.SetOperands(ar3, r2, 0);
                 }
                 result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
                 result.SetRawBits(slotBits);

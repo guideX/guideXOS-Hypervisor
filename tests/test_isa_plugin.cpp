@@ -1306,6 +1306,28 @@ void testIA64MoveFromBranchDecode() {
     std::cout << "  ? raw boot branch-register move decodes as mov r62 = b0\n";
 }
 
+void testIA64MoveToAppRegisterDecode() {
+    std::cout << "Testing IA-64 move to application register decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx mov = decoder.DecodeSlot(0x5411c000ULL, UnitType::I_UNIT, 0x6860);
+
+    assert(mov.GetType() == InstructionType::MOV_TO_AR);
+    assert(mov.GetDst() == 65);
+    assert(mov.GetSrc1() == 14);
+    assert(mov.GetDisassembly() == "mov ar.lc = r14");
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetGR(14, 0x1122334455667788ULL);
+    cpu.SetCFM(0x1122000000000000ULL);
+    mov.Execute(cpu, memory);
+    assert(cpu.GetCFM() == 0x1122000000000000ULL);
+    assert(cpu.GetAR(65) == 0x1122334455667788ULL);
+
+    std::cout << "  ? raw boot mov.i ar.lc = r14 decodes and updates ar.lc\n";
+}
+
 void testIA64AddsImm14Decode() {
     std::cout << "Testing IA-64 adds imm14 decode...\n";
 
@@ -2724,6 +2746,9 @@ int main() {
         std::cout << "\n";
 
         testIA64MoveFromBranchDecode();
+        std::cout << "\n";
+
+        testIA64MoveToAppRegisterDecode();
         std::cout << "\n";
 
         testIA64AddsImm14Decode();

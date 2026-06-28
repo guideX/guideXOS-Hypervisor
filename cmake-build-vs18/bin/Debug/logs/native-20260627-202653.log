@@ -1,0 +1,175 @@
+[2026-06-27T20:26:53] native stdout logging started
+Log file: D:\dev\guideXOS_Emulator\cmake-build-vs18\bin\Debug\logs\native-20260627-202653.log
+[IP=0x1000, Slot=0] br.cond 0x2000
+[IP=0x1000, Slot=0] br.cond 0x2000
+  ? False-predicated branch falls through; true predicate branches
+
+Testing IA-64 counted loop branch execution...
+[IP=0x1000, Slot=0] br.cloop 0x1000
+[IP=0x1000, Slot=0] br.cloop 0x1000
+  ? br.cloop decrements ar.lc and falls through at zero
+
+Testing IA-64 call-decoded counted loop execution...
+[IP=0x1000, Slot=0] br.call b5 = 0xfe0
+[IP=0x1000, Slot=0] br.call b5 = 0xfe0
+[IP=0x1000, Slot=0] br.call b5 = 0x1000
+[IP=0x1000, Slot=0] br.call b5 = 0x1000
+  ? backward/self br.call b5 uses ar.lc and does not link
+
+Testing IA-64 branch predicate visibility across instruction groups...
+[IP=0x1000, Slot=0] cmp.eq p1, p2 = r0, r0
+[IP=0x1000, Slot=1] br.cond 0x2000
+[IP=0x1000, Slot=0] cmp.eq p1, p2 = r0, r0
+[IP=0x1000, Slot=1] br.cond 0x2000
+  ? Same-group predicate write is visible to branches with or without a stop
+
+Testing IA-64 non-branch predicate visibility across instruction groups...
+[IP=0x1000, Slot=0] cmp.eq p1, p2 = r0, r0
+[IP=0x1000, Slot=1] st8 [r10] = r11
+[IP=0x1000, Slot=0] cmp.eq p1, p2 = r0, r0
+[IP=0x1000, Slot=1] st8 [r10] = r11
+  ? Same-group predicate write is deferred for stores; stop makes it visible
+
+Testing IA-64 add imm22 decode...
+  ? add imm22 raw boot slot decodes and executes
+
+Testing IA-64 addl imm22 source decode...
+  ? addl imm22 uses 2-bit r3 field instead of immediate bits
+
+Testing IA-64 plugin indirect br.call through b0 transfers to the target bundle...
+[IP=0x1000, Slot=0] br.call b4 = b0
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x2408 target=0x2408 interpretedAs=invalid descriptor=0x2408 readable=no descriptorCode=0x0 resolvedCode=0x2408 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=image-or-guest
+[IP=0x2400, Slot=0] mov r8 = 0x1122334455667788
+  ? br.call b4 = b0 reaches the target bundle and does not fall through
+
+Testing IA-64 return branch decode...
+  ? raw boot return branch decodes as br.ret b0
+
+Testing IA-64 indirect call decode...
+  ? raw boot indirect service call decodes through b6 and links b0
+
+Testing IA-64 hinted indirect self-call decode...
+  ? raw boot hinted br.call b0 = b0 decodes as call, not cond
+
+Testing IA-64 nop decode variants...
+  ? raw boot NOP slot decodes on I and B units
+
+Testing IA-64 move from branch register decode...
+  ? raw boot branch-register move decodes as mov r62 = b0
+
+Testing IA-64 move to application register decode...
+  ? raw boot mov.i ar.lc = r14 decodes and updates ar.lc
+
+Testing IA-64 adds imm14 decode...
+  ? raw boot stack adjustment decodes and executes
+
+Testing IA-64 MLX movl boot bundle decode...
+  ? raw boot MLX bundle decodes movl r36 = -0x238000
+
+Testing IA-64 legacy call output/input register bridge...
+[IA64-RSE] alloc ip=0x2000 dst=r60 oldCFM=0x206 oldPFS=0x0 sof=36 sol=31 sor=0 newCFM=0xfa4
+  ? caller outputs become callee input registers after alloc
+
+Testing IA-64 legacy alloc preserves previous frame state...
+[IA64-RSE] alloc ip=0x0 dst=r60 oldCFM=0x206 oldPFS=0x0 sof=10 sol=5 sor=2 newCFM=0x828a
+  ? alloc preserves ar.pfs and updates the current frame
+
+Testing IA-64 legacy alloc rejects invalid frame sizes...
+[WARN ] [EXEC-ERR] Exception at IP=0x0 Slot=0 (alloc r60 = ar.pfs, 10, 12, 2): ALLOC frame size invalid
+  ? invalid alloc frame sizes fail safely
+
+Testing IA-64 legacy call-decoded counted loop execution...
+[IP=0x1000, Slot=0] br.call b5 = 0xfe0
+[IP=0x1000, Slot=0] br.call b5 = 0xfe0
+[IP=0x1000, Slot=0] br.call b5 = 0x1000
+[IP=0x1000, Slot=0] br.call b5 = 0x1000
+  ? legacy backward/self br.call b5 uses ar.lc and does not link
+
+Testing IA-64 legacy indirect branch execution...
+[IP=0x1000, Slot=0] br.cond b6
+  ? legacy br.cond b6 enters at the target bundle boundary
+
+Testing IA-64 legacy indirect call execution...
+  ? legacy br.call b0 = b6 links b0 and enters at the target bundle boundary
+
+Testing IA-64 plugin call output/input register bridge...
+[IP=0x1000, Slot=0] br.call b0 = 0x2000
+[IP=0x2000, Slot=0] alloc r60 = ar.pfs, 36, 31, 0
+[IA64-RSE] alloc ip=0x2000 dst=r60 oldCFM=0x206 oldPFS=0x0 sof=36 sol=31 sor=0 newCFM=0xfa4
+[IP=0x2000, Slot=1] add r36 = r0, r0
+[IP=0x2010, Slot=0] br.ret b0
+  ? plugin br.call passes inputs and br.ret restores caller frame
+
+Testing IA-64 plugin call-frame restore skips stale frames...
+[IP=0x1000, Slot=0] br.call b0 = 0x2000
+[IP=0x2000, Slot=0] alloc r50 = ar.pfs, 8, 6, 0
+[IA64-RSE] alloc ip=0x2000 dst=r50 oldCFM=0x206 oldPFS=0x0 sof=8 sol=6 sor=0 newCFM=0x308
+[IP=0x2000, Slot=1] br.call b0 = 0x3000
+[IP=0x3000, Slot=0] alloc r51 = ar.pfs, 5, 3, 0
+[IA64-RSE] alloc ip=0x3000 dst=r51 oldCFM=0x308 oldPFS=0x206 sof=5 sol=3 sor=0 newCFM=0x185
+[IP=0x3000, Slot=1] mov b0 = r40
+[IP=0x3000, Slot=2] br.ret b0
+  ? returning to an older saved address restores the matching caller frame
+
+Testing IA-64 plugin indirect branch execution...
+[IP=0x1000, Slot=0] br.cond b6
+  ? plugin br.cond b6 enters at the target bundle boundary
+
+Testing IA-64 plugin EFI service thunk return link...
+[IP=0x1990, Slot=0] br.cond b6
+[IA64-BR] thunk br.cond b6 resolved via b6=0x1fe00f80 callerIP=0x1990
+  ? plugin EFI br.cond b6 thunk links b0 for service return
+
+Testing IA-64 plugin EFI thunk return preserves outer call frame...
+[IP=0x1000, Slot=0] br.call b0 = 0x1990
+[IP=0x1990, Slot=0] mov r61 = r1
+[IP=0x1990, Slot=1] br.cond b6
+[IA64-BR] thunk br.cond b6 resolved via b6=0x1fe00f80 callerIP=0x1990
+[IP=0x1fe00f80, Slot=0] br.ret b0
+  ? EFI service br.ret does not restore an unrelated br.call frame
+
+Testing IA-64 plugin indirect call execution...
+[IP=0x1000, Slot=0] br.call b0 = b6
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x2408 target=0x2408 interpretedAs=invalid descriptor=0x2408 readable=no descriptorCode=0x0 resolvedCode=0x2408 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=image-or-guest
+  ? plugin br.call b0 = b6 links b0 and enters at the target bundle boundary
+
+Testing IA-64 plugin direct br.call return branch selection...
+[IP=0x1000, Slot=0] br.call b4 = 0x2408
+  ? direct br.call writes the chosen return branch register b4
+
+Testing IA-64 plugin indirect br.call through b0...
+[IP=0x1000, Slot=0] br.call b4 = b0
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x2408 target=0x2408 interpretedAs=invalid descriptor=0x2408 readable=no descriptorCode=0x0 resolvedCode=0x2408 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=image-or-guest
+  ? indirect br.call b4 = b0 uses b0 as target and links b4
+
+Testing IA-64 plugin null indirect br.call ignores unrelated descriptor data...
+[IP=0x1000, Slot=0] br.call b4 = b0
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x0 target=0x0 interpretedAs=null descriptor=0x0 readable=no descriptorCode=0x0 resolvedCode=0x0 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=unknown
+[EFI-STUB] indirect br.call target is null; returning EFI_SUCCESS
+  ? null indirect br.call stays null even when r8 points at a descriptor
+
+Testing IA-64 plugin generic success stub avoids r8 descriptor probing...
+[IP=0x1000, Slot=0] br.call b4 = b0
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x1fe00f80 target=0x1fe00f80 interpretedAs=known-stub-code descriptor=0x1fe00fc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00f80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=efi-table
+[EFI-STUB] generic success service callsite=0x1000 target=0x1fe00f80 descriptorCandidate=0x1fe00fc0 [Success descriptor] slotCandidate[r9]=0x0 receiver[r32]=0x0 r14=0x0 -> EFI_SUCCESS
+[EFI-CALL] service=EFI.GenericSuccess callerIP=0x1000 descriptor=0x1fe00fc0 code=0x1fe00f80 gp(r1)=0x0 args=[0x0,0x0,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Success descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? generic EFI success stub uses the actual stub descriptor, not r8-derived bytes
+
+Testing IA-64 plugin branch-register move round trip...
+[IP=0x1000, Slot=0] mov b0 = r37
+[IP=0x1000, Slot=1] mov r10 = b0
+  ? mov bN = rN and mov rN = bN preserve exact 64-bit values
+
+Testing IA-64 plugin indirect call through function descriptor...
+[IP=0x1000, Slot=0] br.call b0 = b6
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x4000 target=0x4000 interpretedAs=descriptor descriptor=0x4000 readable=yes descriptorCode=0x2000 resolvedCode=0x2000 descriptorGp=0x238000 oldR1=0x185 newR1=0x238000 returnBR=b0 region=image-or-guest
+  ? indirect br.call resolves IA-64 function descriptors to code and gp
+
+Testing IA-64 plugin indirect call ignores invalid descriptor GP...
+[IP=0x1000, Slot=0] br.call b0 = b6
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x4000 target=0x4000 interpretedAs=invalid descriptor=0x4000 readable=no descriptorCode=0x0 resolvedCode=0x4000 descriptorGp=0x1234567890abcdef oldR1=0x185 newR1=0x185 returnBR=b0 region=image-or-guest
+  ? invalid descriptor probes no longer clobber GP
+
+Testing IA-64 plugin direct call to function descriptor...
+[IP=0x1000, Slot=0] br.call b0 = 0x4000
+[IA64-DESC] direct branch target descriptor=0x4000 resolvedCode=0x2000 descriptorGp=0x238000 oldR1=0x185 newR1=0x238000
