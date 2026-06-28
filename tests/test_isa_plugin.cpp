@@ -281,6 +281,53 @@ public:
     }
 };
 
+class FakeIndirectCallFromB0WithSentinelDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x1000) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(4, 0, 0);
+            call.SetRawBits(0x200000c000ULL);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x2400) {
+            InstructionEx targetWrite(InstructionType::MOV_IMM, UnitType::I_UNIT);
+            targetWrite.SetOperands(8, 0, 0);
+            targetWrite.SetImmediate(0x1122334455667788ULL);
+            targetWrite.SetRawBits(0x2400ULL);
+            bundle.instructions.push_back(targetWrite);
+        } else if (bundleIP == 0x1010) {
+            InstructionEx fallthroughWrite(InstructionType::MOV_IMM, UnitType::I_UNIT);
+            fallthroughWrite.SetOperands(8, 0, 0);
+            fallthroughWrite.SetImmediate(0x8877665544332211ULL);
+            fallthroughWrite.SetRawBits(0x1010ULL);
+            bundle.instructions.push_back(fallthroughWrite);
+        }
+
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeBranchRegisterRoundTripDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -1656,6 +1703,34 @@ void testIA64PluginIndirectCallThroughB0WritesReturnBranchRegister() {
     std::cout << "  ? indirect br.call b4 = b0 uses b0 as target and links b4\n";
 }
 
+void testIA64PluginIndirectCallThroughB0TransfersToTargetBundle() {
+    std::cout << "Testing IA-64 plugin indirect br.call through b0 transfers to the target bundle...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x2400, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1010, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectCallFromB0WithSentinelDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetBR(0, 0x2408);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2400);
+    assert(plugin.getCPUState().GetBR(4) == 0x1010);
+    assert(plugin.getCPUState().GetBR(0) == 0x2408);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2410);
+    assert(plugin.getCPUState().GetGR(8) == 0x1122334455667788ULL);
+    assert(plugin.getCPUState().GetBR(4) == 0x1010);
+    assert(plugin.getCPUState().GetGR(8) != 0x8877665544332211ULL);
+
+    std::cout << "  ? br.call b4 = b0 reaches the target bundle and does not fall through\n";
+}
+
 void testIA64PluginNullIndirectCallIgnoresDescriptorCandidate() {
     std::cout << "Testing IA-64 plugin null indirect br.call ignores unrelated descriptor data...\n";
 
@@ -2631,6 +2706,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddlImm22SourceDecode();
+        std::cout << "\n";
+
+        testIA64PluginIndirectCallThroughB0TransfersToTargetBundle();
         std::cout << "\n";
 
         testIA64ReturnBranchDecode();

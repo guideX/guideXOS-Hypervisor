@@ -63,6 +63,7 @@ set(LOADER_SOURCES
     src/loader/dynamic_linker.cpp
     src/loader/crt0.cpp
     src/loader/KernelValidator.cpp
+    src/loader/TestKernelHandler.cpp
 )
 
 set(ABI_SOURCES
@@ -78,6 +79,7 @@ set(IO_SOURCES
     src/io/ConsoleOutputBuffer.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
+    src/io/FramebufferDevice.cpp
 )
 
 set(VM_SOURCES
@@ -88,6 +90,7 @@ set(VM_SOURCES
     src/vm/SimpleCPUScheduler.cpp
     src/vm/BootTraceSystem.cpp
     src/vm/KernelPanic.cpp
+    src/vm/VMSnapshotManager.cpp
 )
 
 set(STORAGE_SOURCES
@@ -117,6 +120,7 @@ set(FUZZER_SOURCES
 
 set(API_SOURCES
     src/api/RestAPIServer.cpp
+    src/api/VMControlAPIHandler.cpp
 )
 
 set(WEBUI_SOURCES
