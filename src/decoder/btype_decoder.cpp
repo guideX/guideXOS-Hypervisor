@@ -48,7 +48,13 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
 
-        const bool registerBranch = (major == 0x1) || (major == 0x4 && btype == 0x4) || (major == 0x0 && btype == 0x4);
+        // Keep the bootloader's raw br.ret b0 encoding on the IP-relative path
+        // so the return special-case below can classify it as BR_RET instead of
+        // letting it fall into the indirect-call decoder.
+        const bool registerBranch =
+            (major == 0x1) ||
+            (major == 0x4 && btype == 0x4) ||
+            (major == 0x0 && btype == 0x4 && x6 != 0x21);
         
         // Decode based on major opcode
         switch (major) {
