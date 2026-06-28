@@ -1,0 +1,39 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260628071640
+Username: LEON2_RDT\guideX
+RunAs User: LEON2_RDT\guideX
+Configuration Name: 
+Machine: LEON2_RDT (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -Command try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}
+Set-Location 'D:\dev\guideXOS_Emulator\x64\Debug'; Start-Transcript -Path 'D:\dev\guideXOS_Emulator\boot_harness_child_20260628_0716.transcript.txt' -Force; .\boot_harness.ps1; Stop-Transcript
+Process ID: 30116
+PSVersion: 5.1.26100.8737
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8737
+BuildVersion: 10.0.26100.8737
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is D:\dev\guideXOS_Emulator\boot_harness_child_20260628_0716.transcript.txt
+Exception calling "Run" with "1" argument(s): "Unable to load DLL 'guideXOS_Hypervisor.dll': The specified module could 
+not be found. (Exception from HRESULT: 0x8007007E)"
+At D:\dev\guideXOS_Emulator\x64\Debug\boot_harness.ps1:44 char:1
++ [Harness]::Run('D:\dev\guideXOS_Emulator\guideXOS Hypervisor GUI\bin\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [], MethodInvocationException
+    + FullyQualifiedErrorId : DllNotFoundException
+Exception calling "Run" with "1" argument(s): "Unable to load DLL 'guideXOS_Hypervisor.dll': The specified module
+could not be found. (Exception from HRESULT: 0x8007007E)"
+At D:\dev\guideXOS_Emulator\x64\Debug\boot_harness.ps1:44 char:1
++ [Harness]::Run('D:\dev\guideXOS_Emulator\guideXOS Hypervisor GUI\bin\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [], MethodInvocationException
+    + FullyQualifiedErrorId : DllNotFoundException
+
+**********************
+Windows PowerShell transcript end
+End time: 20260628071640
+**********************

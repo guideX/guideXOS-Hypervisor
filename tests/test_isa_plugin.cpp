@@ -1696,11 +1696,15 @@ void testIA64PluginDirectCallWritesReturnBranchRegister() {
     FakeDirectCallReturnBr4Decoder decoder;
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(1, 0x185);
+    plugin.getCPUState().SetGR(38, 0x185);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2400);
     assert(plugin.getCPUState().GetBR(4) == 0x1010);
     assert(plugin.getCPUState().GetBR(0) == 0);
+    assert(plugin.getCPUState().GetGR(1) == 0x185);
+    assert(plugin.getCPUState().GetGR(38) == 0x185);
 
     std::cout << "  ? direct br.call writes the chosen return branch register b4\n";
 }

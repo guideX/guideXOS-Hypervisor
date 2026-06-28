@@ -1,0 +1,15 @@
+[2026-06-28T07:14:36] native stderr logging started
+Log file: D:\dev\guideXOS_Emulator\cmake-build-vs18\bin\Debug\logs\native-error-20260628-071436.log
+[EXEC-ERR] Exception at IP=0x0 Slot=0 (alloc r60 = ar.pfs, 10, 12, 2): ALLOC frame size invalid
+Error executing instruction at IP=0x1000 Slot=0 raw=0xbadf00d disasm="ld8 r14 = [r8], 8": Memory address 0xffff00000004 out of bounds (size: 0x10000)
+[IA64-MEM-RECOVERY] ip=0x1000 type="ld8 r14 = [r8], 8" targetAddress=0xffff00000004 targetRegister=r14 gp(r1)=0x0 lastEfiCall="" lastEfiIP=0x0 lastDescriptor=0x0 lastDescriptorCode=0x0 lastDescriptorGp=0x0 branchHistory=[] addressHint=totally-invalid strictRecovery=off
+[IA64-FAULT-HISTORY] ip=0x1000 slot=0 disasm="ld8 r14 = [r8], 8" baseBefore=0xffff00000004 r1=0x0 r12=0x0 r14=0xdeadbeefcafebabe r16=0x0 r17=0x0 r18=0x0 r32=0x0 r33=0x0 r34=0x0 r35=0x0
+[IA64-FAULT-HISTORY] recent-instructions: [ip=0x1000 slot=0 "ld8 r14 = [r8], 8"]
+[IA64-FAULT-HISTORY] recent-r16-r17-writes: <empty>
+Recovered failed IA-64 load by zeroing r14, sanitizing the base register, and continuing.
+Error executing instruction at IP=0x2000 Slot=0 raw=0x8080e003c0 disasm="ld4 r15 = [r14]": Memory address 0x685421cd4c01b829 out of bounds (size: 0x10000)
+[IA64-MEM-RECOVERY] ip=0x2000 type="ld4 r15 = [r14]" targetAddress=0x685421cd4c01b829 targetRegister=r15 gp(r1)=0x0 lastEfiCall="" lastEfiIP=0x0 lastDescriptor=0x0 lastDescriptorCode=0x0 lastDescriptorGp=0x0 branchHistory=[] addressHint=looks-like-packed-utf16 strictRecovery=off
+[IA64-FAULT-HISTORY] ip=0x2000 slot=0 disasm="ld4 r15 = [r14]" baseBefore=0x685421cd4c01b829 r1=0x0 r12=0x0 r14=0x685421cd4c01b829 r16=0x0 r17=0x0 r18=0x0 r32=0x0 r33=0x0 r34=0x0 r35=0x0
+[IA64-FAULT-HISTORY] recent-instructions: [ip=0x2000 slot=0 "ld4 r15 = [r14]"]
+[IA64-FAULT-HISTORY] recent-r16-r17-writes: <empty>
+Recovered failed IA-64 load by zeroing r15, sanitizing the base register, and continuing.

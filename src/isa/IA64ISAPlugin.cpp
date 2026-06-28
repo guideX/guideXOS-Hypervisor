@@ -2511,6 +2511,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     ++gpSwitchCount_;
                     state_.getCPUState().SetGR(1, resolvedGp);
                 }
+                // Keep the caller GP mirrored in r38 for the next callee frame,
+                // matching the indirect-call and fetch-bundle descriptor paths.
+                state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
                 lastDescriptorAddress_ = branchTarget;
                 lastDescriptorCode_ = resolvedCode;
                 lastDescriptorGp_ = resolvedGp;
