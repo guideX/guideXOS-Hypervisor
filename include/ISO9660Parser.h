@@ -168,6 +168,12 @@ public:
      * @return Boot entry info, or nullptr if not found
      */
     const BootEntryInfo* getEFIBootEntry() const;
+
+    /**
+     * Get the default El Torito boot image entry.
+     * This is the boot image backing store even when the catalog is not EFI-specific.
+     */
+    const BootEntryInfo* getBootImageEntry() const;
     
     /**
      * Read file data from ISO
@@ -238,6 +244,7 @@ private:
     // Boot catalog information
     bool bootCatalogFound_;
     uint32_t bootCatalogLBA_;
+    BootEntryInfo bootImageEntry_;
     BootEntryInfo efiBootEntry_;
     
     /**

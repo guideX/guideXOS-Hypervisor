@@ -84,8 +84,12 @@ ISO9660Parser::ISO9660Parser(IStorageDevice* device)
     , blockSize_(2048)  // Standard CD-ROM block size
     , bootCatalogFound_(false)
     , bootCatalogLBA_(0)
+    , bootImageEntry_{}
+    , efiBootEntry_{}
 {
     std::memset(&pvd_, 0, sizeof(pvd_));
+    bootImageEntry_.isBootable = false;
+    efiBootEntry_.isBootable = false;
 }
 
 bool ISO9660Parser::readSector(uint32_t lba, uint8_t* buffer, size_t bufferSize) {
@@ -264,6 +268,13 @@ LOG_INFO("  Platform ID: " + BootStageTrace::Hex(validation->platformID) +
         LOG_INFO("  Media type: 0x" + std::to_string(defaultEntry->bootMediaType));
         LOG_INFO("  Load LBA: " + std::to_string(defaultEntry->loadLBA));
         LOG_INFO("  Sector count: " + std::to_string(defaultEntry->sectorCount));
+
+        bootImageEntry_.isBootable = true;
+        bootImageEntry_.platformID = validation->platformID;
+        bootImageEntry_.loadLBA = defaultEntry->loadLBA;
+        bootImageEntry_.sectorCount = defaultEntry->sectorCount > 0 ?
+                                      defaultEntry->sectorCount : 1;
+        bootImageEntry_.mediaType = defaultEntry->bootMediaType;
         
         // Check if this is EFI boot (platform ID 0xEF from validation entry)
         if (validation->platformID == 0xEF) {
@@ -367,6 +378,10 @@ const BootEntryInfo* ISO9660Parser::getEFIBootEntry() const {
     return efiBootEntry_.isBootable ? &efiBootEntry_ : nullptr;
 }
 
+const BootEntryInfo* ISO9660Parser::getBootImageEntry() const {
+    return bootImageEntry_.isBootable ? &bootImageEntry_ : nullptr;
+}
+
 int64_t ISO9660Parser::readFile(uint32_t lba, uint32_t sectorCount, 
                                  std::vector<uint8_t>& buffer) {
     if (!device_) {
@@ -415,15 +430,15 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
         }
     }
 
-    if (!efiBootEntry_.isBootable) {
-        lastBootMediaDiagnostics_ = "No El Torito EFI boot image found and ISO probing failed";
+    if (!bootImageEntry_.isBootable) {
+        lastBootMediaDiagnostics_ = "No El Torito boot image found and ISO probing failed";
         LOG_WARN(lastBootMediaDiagnostics_);
         return false;
     }
 
     LOG_INFO("Extracting EFI executable from boot image...");
     std::vector<uint8_t> bootImage;
-    int64_t bytesRead = readFile(efiBootEntry_.loadLBA, efiBootEntry_.sectorCount, bootImage);
+    int64_t bytesRead = readFile(bootImageEntry_.loadLBA, bootImageEntry_.sectorCount, bootImage);
     if (bytesRead <= 0 || bootImage.empty()) {
         lastBootMediaDiagnostics_ = "EFI boot image found but could not be read";
         LOG_ERROR(lastBootMediaDiagnostics_);
@@ -432,8 +447,8 @@ bool ISO9660Parser::extractEFIExecutable(std::vector<uint8_t>& executableData) {
 
     {
         std::ostringstream ctx;
-        ctx << "loadLBA=" << efiBootEntry_.loadLBA
-            << " sectorCount=" << efiBootEntry_.sectorCount
+        ctx << "loadLBA=" << bootImageEntry_.loadLBA
+            << " sectorCount=" << bootImageEntry_.sectorCount
             << " bytesRead=" << bytesRead;
         BootStageTrace::Stage(30, "EFI boot image extracted", ctx.str());
     }

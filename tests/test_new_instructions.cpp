@@ -149,7 +149,7 @@ std::vector<uint8_t> makeIsoWithDirectBootLoader() {
     return image;
 }
 
-std::vector<uint8_t> makeElToritoImageWithFatBootLoader() {
+std::vector<uint8_t> makeElToritoImageWithFatBootLoader(uint8_t platformId = 0xEF) {
     std::vector<uint8_t> image(64 * 2048, 0);
     auto* bootRecord = image.data() + 17 * 2048;
     bootRecord[0] = 0;
@@ -160,7 +160,7 @@ std::vector<uint8_t> makeElToritoImageWithFatBootLoader() {
 
     auto* validation = image.data() + 18 * 2048;
     validation[0] = 1;
-    validation[1] = 0xEF;
+    validation[1] = platformId;
     validation[21] = 0x55;
     validation[22] = 0xAA;
     auto* entry = image.data() + 18 * 2048 + 32;
@@ -222,6 +222,24 @@ void test_el_torito_fat_boot_media_lookup() {
     assert_true("Boot image diagnostic should mention BOOTIA64.EFI", parser.getLastBootMediaDiagnostics().find("BOOTIA64.EFI found at path") != std::string::npos);
 
     std::cout << "  ? El Torito EFI boot-image lookup passed" << std::endl;
+}
+
+void test_el_torito_x86_boot_image_lookup() {
+    std::cout << "Testing El Torito x86 boot-image fallback lookup..." << std::endl;
+
+    auto image = makeElToritoImageWithFatBootLoader(0x00);
+    MemoryStorageDevice device(std::move(image), 2048);
+    ISO9660Parser parser(&device);
+
+    assert_true("ISO parse should succeed", parser.parse());
+    assert_true("Boot catalog should parse", parser.findBootCatalog());
+    std::vector<uint8_t> executable;
+    assert_true("x86 El Torito boot image should yield EFI loader", parser.extractEFIExecutable(executable));
+    assert_true("x86 El Torito boot image should not be empty", !executable.empty());
+    assert_true("x86 boot image diagnostic should mention BOOTIA64.EFI",
+                parser.getLastBootMediaDiagnostics().find("BOOTIA64.EFI found at path") != std::string::npos);
+
+    std::cout << "  ? El Torito x86 boot-image fallback lookup passed" << std::endl;
 }
 
 } // namespace

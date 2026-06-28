@@ -370,6 +370,47 @@ bool VMManager::startVM(const std::string& vmId) {
                         
                         // Get EFI boot entry
                         const BootEntryInfo* efiEntry = isoParser.getEFIBootEntry();
+
+                        // Capture a boot-image backing store up front so both the
+                        // direct EFI-entry path and the embedded-boot-image fallback
+                        // can publish the same media for FileProtocol.Open.
+                        const char* bootImgPaths[] = {
+                            "/boot/boot.img",
+                            "/BOOT/BOOT.IMG",
+                            "boot/boot.img",
+                            "BOOT/BOOT.IMG",
+                            "/boot.img",
+                            "/BOOT.IMG"
+                        };
+                        std::vector<uint8_t> bootImageBackingStoreData;
+                        bool bootImageBackingStoreFound = false;
+                        std::string bootImageBackingStorePath;
+                            for (const char* path : bootImgPaths) {
+                                if (isoParser.extractFile(path, bootImageBackingStoreData)) {
+                                    LOG_INFO("? Found boot image: " + std::string(path));
+                                    bootImageBackingStoreFound = true;
+                                    bootImageBackingStorePath = path;
+                                    break;
+                                }
+                            }
+                            if (!bootImageBackingStoreFound) {
+                                const BootEntryInfo* bootImageEntry = isoParser.getBootImageEntry();
+                                if (bootImageEntry && bootImageEntry->isBootable) {
+                                    LOG_INFO("  Boot catalog boot image at LBA " +
+                                             std::to_string(bootImageEntry->loadLBA) +
+                                             " size=" + std::to_string(bootImageEntry->sectorCount) +
+                                             " sectors");
+                                    if (isoParser.readFile(bootImageEntry->loadLBA,
+                                                           bootImageEntry->sectorCount,
+                                                           bootImageBackingStoreData) > 0 &&
+                                        !bootImageBackingStoreData.empty()) {
+                                        bootImageBackingStoreFound = true;
+                                        bootImageBackingStorePath = "El Torito boot catalog";
+                                        LOG_INFO("? Found boot image via El Torito catalog");
+                                    }
+                                }
+                            }
+
                         if (efiEntry) {
                             LOG_INFO("? EFI boot entry found");
                             LOG_INFO("  Loading from LBA: " + std::to_string(efiEntry->loadLBA));
@@ -485,6 +526,74 @@ bool VMManager::startVM(const std::string& vmId) {
                                                 LOG_INFO("? EFI bootloader loaded successfully from filesystem");
                                                 LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
                                                 LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
+
+                                                if (bootImageBackingStoreFound && !bootImageBackingStoreData.empty()) {
+                                                    LOG_INFO("? Boot image extracted: " +
+                                                             std::to_string(bootImageBackingStoreData.size()) + " bytes");
+                                                    {
+                                                        std::ostringstream ctx;
+                                                        ctx << "sourcePath=\"" << bootImageBackingStorePath << "\""
+                                                            << " bytes=" << bootImageBackingStoreData.size();
+                                                        BootStageTrace::Stage(30, "EFI boot image extracted", ctx.str());
+                                                    }
+                                                    LOG_INFO("  Parsing as FAT filesystem...");
+
+                                                    guideXOS::FATParser fatParser;
+                                                    if (fatParser.parse(bootImageBackingStoreData.data(),
+                                                                        bootImageBackingStoreData.size())) {
+                                                        LOG_INFO("? FAT filesystem parsed successfully");
+                                                        BootStageTrace::Stage(40, "FAT image mounted",
+                                                                              "sourcePath=\"" + bootImageBackingStorePath + "\" bytes=" +
+                                                                              std::to_string(bootImageBackingStoreData.size()));
+                                                        constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = 0x1FE01D00ULL;
+                                                        constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIGNATURE = 0x42465441494D4645ULL;
+                                                        constexpr uint64_t EFI_BOOT_IMAGE_GUEST_BASE = 0x18000000ULL;
+                                                        const uint64_t memorySizeForBootImage =
+                                                            static_cast<uint64_t>(instance->vm->getMemory().GetTotalSize());
+                                                        if (EFI_BOOT_IMAGE_GUEST_BASE + bootImageBackingStoreData.size() < memorySizeForBootImage &&
+                                                            EFI_BOOT_IMAGE_GUEST_BASE + bootImageBackingStoreData.size() < 0x1FE00000ULL) {
+                                                            instance->vm->getMemory().Write(
+                                                                EFI_BOOT_IMAGE_GUEST_BASE,
+                                                                bootImageBackingStoreData.data(),
+                                                                bootImageBackingStoreData.size());
+                                                            instance->vm->getMemory().Write(
+                                                                EFI_BOOT_IMAGE_METADATA_ADDR,
+                                                                reinterpret_cast<const uint8_t*>(&EFI_BOOT_IMAGE_METADATA_SIGNATURE),
+                                                                sizeof(EFI_BOOT_IMAGE_METADATA_SIGNATURE));
+                                                            instance->vm->getMemory().Write(
+                                                                EFI_BOOT_IMAGE_METADATA_ADDR + 8,
+                                                                reinterpret_cast<const uint8_t*>(&EFI_BOOT_IMAGE_GUEST_BASE),
+                                                                sizeof(EFI_BOOT_IMAGE_GUEST_BASE));
+                                                            const uint64_t bootImageSize =
+                                                                static_cast<uint64_t>(bootImageBackingStoreData.size());
+                                                            instance->vm->getMemory().Write(
+                                                                EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                reinterpret_cast<const uint8_t*>(&bootImageSize),
+                                                                sizeof(bootImageSize));
+                                                            LOG_INFO("[EFI-MILESTONE] Published read-only EFI boot image backing store"
+                                                                     " base=0x18000000 size=0x" +
+                                                                     std::to_string(bootImageBackingStoreData.size()) +
+                                                                     " metadata=0x1fe01d00");
+                                                            BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
+                                                                "base=0x18000000 size=" +
+                                                                BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
+                                                                " metadata=0x1fe01d00");
+                                                        } else {
+                                                            LOG_WARN("[EFI-MILESTONE] EFI boot image backing store not published; FileProtocol will report EFI_NO_MEDIA");
+                                                            BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
+                                                                "published=false base=0x18000000 size=" +
+                                                                BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
+                                                                " metadata=0x1fe01d00");
+                                                        }
+                                                    } else {
+                                                        LOG_WARN("[EFI-MILESTONE] EFI boot image backing store present but FAT parse failed; "
+                                                                 "FileProtocol may still report EFI_NO_MEDIA");
+                                                        BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
+                                                            "published=false base=0x18000000 size=" +
+                                                            BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
+                                                            " metadata=0x1fe01d00");
+                                                    }
+                                                }
                                             } else {
                                                 LOG_ERROR("Failed to load EFI bootloader into memory");
                                             }
@@ -520,6 +629,12 @@ bool VMManager::startVM(const std::string& vmId) {
                                         bootImgPath = path;
                                         break;
                                     }
+                                }
+                                if (!foundBootImg && bootImageBackingStoreFound && !bootImageBackingStoreData.empty()) {
+                                    bootImgData = bootImageBackingStoreData;
+                                    foundBootImg = true;
+                                    bootImgPath = bootImageBackingStorePath;
+                                    LOG_INFO("? Reusing El Torito catalog boot image");
                                 }
                                 
                                 bool bootedFromImage = false;
@@ -939,8 +1054,16 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
                                                                             << std::dec;
                                                                         LOG_INFO(oss.str());
+                                                                        BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
+                                                                            "base=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_GUEST_BASE) +
+                                                                            " size=" + BootStageTrace::Hex(static_cast<uint64_t>(bootImgData.size())) +
+                                                                            " metadata=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
                                                                     } else {
                                                                         LOG_WARN("[EFI-MILESTONE] EFI boot image backing store not published; FileProtocol will report EFI_NO_MEDIA");
+                                                                        BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
+                                                                            "published=false base=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_GUEST_BASE) +
+                                                                            " size=" + BootStageTrace::Hex(static_cast<uint64_t>(bootImgData.size())) +
+                                                                            " metadata=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
                                                                     }
 
                                                                     static const uint16_t firmwareVendor[] = {
@@ -963,11 +1086,11 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x18, EFI_IMAGE_DEVICE_HANDLE);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
-                                                                    // No command-line load options. Advertising a non-null
-                                                                    // empty UTF-16 buffer makes this bootloader build one empty
-                                                                    // argv entry and later dereference copied text as a pointer.
+                                                                    // Provide a real empty UTF-16 load-options buffer so the
+                                                                    // bootloader never has to chase a null pointer when it
+                                                                    // probes argv-like state during early file/path setup.
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30, 0U);
-                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, 0ULL);
+                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 2U);
@@ -996,6 +1119,60 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write8(filePathEndNode + 0x01, 0xFFU);
                                                                     write16(filePathEndNode + 0x02, 0x04U);
                                                                     write16(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 0U);
+
+                                                                    uint32_t loadedImageRevision = 0;
+                                                                    uint64_t loadedImageFilePath = 0;
+                                                                    uint64_t loadedImageLoadOptions = 0;
+                                                                    uint64_t loadedImageImageBase = 0;
+                                                                    uint64_t loadedImageImageSize = 0;
+                                                                    instance->vm->getMemory().Read(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x00,
+                                                                        reinterpret_cast<uint8_t*>(&loadedImageRevision),
+                                                                        sizeof(loadedImageRevision));
+                                                                    instance->vm->getMemory().Read(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20,
+                                                                        reinterpret_cast<uint8_t*>(&loadedImageFilePath),
+                                                                        sizeof(loadedImageFilePath));
+                                                                    instance->vm->getMemory().Read(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38,
+                                                                        reinterpret_cast<uint8_t*>(&loadedImageLoadOptions),
+                                                                        sizeof(loadedImageLoadOptions));
+                                                                    instance->vm->getMemory().Read(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40,
+                                                                        reinterpret_cast<uint8_t*>(&loadedImageImageBase),
+                                                                        sizeof(loadedImageImageBase));
+                                                                    instance->vm->getMemory().Read(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48,
+                                                                        reinterpret_cast<uint8_t*>(&loadedImageImageSize),
+                                                                        sizeof(loadedImageImageSize));
+                                                                    auto previewBytes = [&](uint64_t address, size_t count) {
+                                                                        std::array<uint8_t, 32> buffer{};
+                                                                        const size_t toRead = std::min(count, buffer.size());
+                                                                        instance->vm->getMemory().Read(address,
+                                                                            buffer.data(),
+                                                                            toRead);
+                                                                        std::ostringstream bytes;
+                                                                        bytes << std::hex;
+                                                                        for (size_t i = 0; i < toRead; ++i) {
+                                                                            if (i != 0) {
+                                                                                bytes << ' ';
+                                                                            }
+                                                                            bytes.width(2);
+                                                                            bytes.fill('0');
+                                                                            bytes << static_cast<unsigned>(buffer[i]);
+                                                                        }
+                                                                        return bytes.str();
+                                                                    };
+                                                                    oss.str("");
+                                                                    oss << "  LoadedImage verify: revision=0x" << std::hex << loadedImageRevision
+                                                                        << " filePath=0x" << loadedImageFilePath
+                                                                        << " loadOptions=0x" << loadedImageLoadOptions
+                                                                        << " imageBase=0x" << loadedImageImageBase
+                                                                        << " imageSize=0x" << loadedImageImageSize
+                                                                        << " filePathBytes=" << previewBytes(EFI_LOADED_IMAGE_FILE_PATH_ADDR, 16)
+                                                                        << " loadOptionsBytes=" << previewBytes(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 16);
+                                                                    LOG_INFO(oss.str());
+                                                                    BootStageTrace::Event("EFI_LOADED_IMAGE_VERIFY",
+                                                                        "revision=" + BootStageTrace::Hex(loadedImageRevision) +
+                                                                        " filePath=" + BootStageTrace::Hex(loadedImageFilePath) +
+                                                                        " loadOptions=" + BootStageTrace::Hex(loadedImageLoadOptions) +
+                                                                        " imageBase=" + BootStageTrace::Hex(loadedImageImageBase) +
+                                                                        " imageSize=" + BootStageTrace::Hex(loadedImageImageSize));
 
                                                                     // Minimal Simple Text Output protocol for BOOTIA64.EFI
                                                                     // status/diagnostic writes. This avoids bootloader printf
@@ -1071,7 +1248,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << ", OpenVolume=0x" << EFI_OPEN_VOLUME_STUB_DESC_ADDR
                                                                         << ", TextOutput=0x" << EFI_TEXT_OUTPUT_PROTOCOL_ADDR
                                                                         << ", LoadedImageFilePath=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
-                                                                        << ", LoadOptionsPtr=0x0"
+                                                                        << ", LoadOptionsPtr=0x" << EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR
                                                                         << ", LoadOptionsBuffer=0x" << EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR
                                                                         << ", ConfigTables=" << std::dec << configTableCount << ")";
                                                                     LOG_INFO(oss.str());
