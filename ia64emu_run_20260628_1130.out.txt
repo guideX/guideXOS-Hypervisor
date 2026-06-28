@@ -1,0 +1,67 @@
+Registered ISA plugin: IA-64
+IA-64 Emulator - Windows Edition
+=================================
+
+CPU initialized
+Memory system initialized (16MB)
+Instruction decoder initialized
+
+Loaded 32 bytes at 0x10000
+
+Beginning execution...
+----------------------
+Bundle 1 @ 0x10000:
+  Template: 0x0
+  Instructions: 3
+    [0] nop
+    [1] nop
+    [2] unknown (0x200000000)
+
+Bundle 2 @ 0x10010:
+  Template: 0x0
+  Instructions: 3
+    [0] nop
+    [1] nop
+    [2] unknown (0x200000000)
+
+Execution complete. Executed 2 bundles.
+
+Final CPU State:
+CPU State Dump:
+---------------
+IP:  0x0000000000010020
+CFM: 0x0000000000000000
+PSR: 0x0000000000000000
+
+RSE: rsc=0x0000000000000000 bsp=0x0000000000000000 bspstore=0x0000000000000000 rnat=0x0000000000000000 pfs=0x0000000000000000 sof=0 sol=0 sor=0
+
+General Registers (first 16):
+  GR000: 0x0000000000000000
+  GR001: 0x0000000000000000
+  GR002: 0x0000000000000000
+  GR003: 0x0000000000000000
+  GR004: 0x0000000000000000
+  GR005: 0x0000000000000000
+  GR006: 0x0000000000000000
+  GR007: 0x0000000000000000
+  GR008: 0x0000000000000000
+  GR009: 0x0000000000000000
+  GR010: 0x0000000000000000
+  GR011: 0x0000000000000000
+  GR012: 0x0000000000000000
+  GR013: 0x0000000000000000
+  GR014: 0x0000000000000000
+  GR015: 0x0000000000000000
+
+Predicate Registers (first 8):
+  PR0=1 PR1=0 PR2=0 PR3=0 PR4=0 PR5=0 PR6=0 PR7=0 
+
+Branch Registers:
+  BR0: 0x0000000000000000
+  BR1: 0x0000000000000000
+  BR2: 0x0000000000000000
+  BR3: 0x0000000000000000
+  BR4: 0x0000000000000000
+  BR5: 0x0000000000000000
+  BR6: 0x0000000000000000
+  BR7: 0x0000000000000000

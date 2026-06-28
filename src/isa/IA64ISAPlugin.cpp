@@ -2265,6 +2265,24 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             std::cout << "[EFI-MILESTONE] first OpenVolume call callerIP=0x"
                                       << std::hex << currentIP << std::dec << std::endl;
                         }
+                        uint64_t openVolumeSignature = 0;
+                        uint64_t openVolumeBase = 0;
+                        uint64_t openVolumeSize = 0;
+                        memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR,
+                                    reinterpret_cast<uint8_t*>(&openVolumeSignature),
+                                    sizeof(openVolumeSignature));
+                        memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR + 8,
+                                    reinterpret_cast<uint8_t*>(&openVolumeBase),
+                                    sizeof(openVolumeBase));
+                        memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                    reinterpret_cast<uint8_t*>(&openVolumeSize),
+                                    sizeof(openVolumeSize));
+                        std::cout << "[EFI-FILE] OpenVolume metadata snapshot metadata=0x"
+                                  << std::hex << EFI_BOOT_IMAGE_METADATA_ADDR
+                                  << " signature=0x" << openVolumeSignature
+                                  << " base=0x" << openVolumeBase
+                                  << " size=0x" << openVolumeSize
+                                  << std::dec << std::endl;
                         const uint64_t rootOut = readCallerOutputRegister(state_.getCPUState(), 1);
                         if (rootOut != 0) {
                             memory.Write(rootOut,
@@ -3486,6 +3504,12 @@ uint64_t IA64ISAPlugin::handleEfiFileOpen(IMemory& memory) {
     if (!ensureEfiBootFat(memory)) {
         const uint64_t nullHandle = 0;
         memory.Write(newHandleOut, reinterpret_cast<const uint8_t*>(&nullHandle), sizeof(nullHandle));
+        std::cout << "[EFI-FILE] FileProtocol.Open returning EFI_NO_MEDIA"
+                  << " path=\"" << fileName << "\""
+                  << " parent=0x" << std::hex << thisProtocol
+                  << " newHandleOut=0x" << newHandleOut
+                  << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
+                  << std::dec << std::endl;
         return EFI_STATUS_NO_MEDIA;
     }
 

@@ -1,0 +1,23 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260628114125
+Username: LEON2_RDT\guideX
+RunAs User: LEON2_RDT\guideX
+Configuration Name: 
+Machine: LEON2_RDT (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -Command try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}
+$env:PATH = 'D:\dev\guideXOS_Emulator\x64\Debug;' + $env:PATH; Set-Location 'D:\dev\guideXOS_Emulator\x64\Debug'; $transcript = 'D:\dev\guideXOS_Emulator\boot_harness_1140.transcript.txt'; Start-Transcript -Path $transcript -Force | Out-Null; try { .\boot_harness.ps1 } finally { Stop-Transcript | Out-Null }
+Process ID: 28192
+PSVersion: 5.1.26100.8737
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8737
+BuildVersion: 10.0.26100.8737
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+**********************
+Windows PowerShell transcript end
+End time: 20260628114206
+**********************

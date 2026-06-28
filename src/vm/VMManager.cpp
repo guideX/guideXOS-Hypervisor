@@ -5,6 +5,7 @@
 #include "FATParser.h"
 #include "PEParser.h"
 #include "TestKernelHandler.h"
+#include "memory.h"
 #include "logger.h"
 #include "BootStageTrace.h"
 #include <sstream>
@@ -12,6 +13,8 @@
 #include <algorithm>
 #include <fstream>
 #include <cstring>
+#include <mutex>
+#include <unordered_set>
 
 namespace ia64 {
 
@@ -43,6 +46,73 @@ void DrawBootStatus(VMInstance* instance,
     }
     // Footer hint
     fb->DrawText(32, 460, "CHECK LOGS FOR DETAILS", 0xFF606060, 1);
+}
+
+void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
+    if (!instance || !instance->vm || !phase) {
+        return;
+    }
+
+    auto* memory = dynamic_cast<Memory*>(&instance->vm->getMemory());
+    if (!memory) {
+        return;
+    }
+
+    static std::mutex tracedMutex;
+    static std::unordered_set<const VirtualMachine*> tracedVms;
+    {
+        std::lock_guard<std::mutex> lock(tracedMutex);
+        if (!tracedVms.insert(instance->vm.get()).second) {
+            return;
+        }
+    }
+
+    constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = 0x1FE01D00ULL;
+    constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIZE = 24ULL;
+    auto firstHit = std::make_shared<bool>(false);
+
+    memory->GetMMU().RegisterWriteHook(
+        [instance,
+         phaseLabel = std::string(phase),
+         firstHit,
+         metadataAddr = EFI_BOOT_IMAGE_METADATA_ADDR,
+         metadataSize = EFI_BOOT_IMAGE_METADATA_SIZE](HookContext& context, uint8_t* data) {
+            const uint64_t writeEnd = context.address + static_cast<uint64_t>(context.size);
+            const uint64_t metadataEnd = metadataAddr + metadataSize;
+            if (writeEnd <= metadataAddr || context.address >= metadataEnd) {
+                return;
+            }
+
+            if (*firstHit) {
+                return;
+            }
+            *firstHit = true;
+
+            const uint64_t overlapStart = std::max(context.address, metadataAddr);
+            const uint64_t overlapEnd = std::min(writeEnd, metadataEnd);
+            std::ostringstream bytes;
+            bytes << std::hex << std::setfill('0');
+            for (uint64_t addr = overlapStart; addr < overlapEnd; ++addr) {
+                if (addr != overlapStart) {
+                    bytes << ' ';
+                }
+                bytes << std::setw(2)
+                      << static_cast<unsigned>(data[static_cast<size_t>(addr - context.address)]);
+            }
+
+            std::cout << "[EFI-MILESTONE] " << phaseLabel
+                      << " first metadata write observed"
+                      << " ip=0x" << std::hex << instance->vm->getIP()
+                      << " address=0x" << context.address
+                      << " size=0x" << context.size
+                      << " overlapBytes=" << bytes.str()
+                      << std::dec << std::endl;
+            BootStageTrace::Event("EFI_BOOT_IMAGE_METADATA_WRITE",
+                "phase=\"" + phaseLabel + "\" ip=" + BootStageTrace::Hex(instance->vm->getIP()) +
+                " address=" + BootStageTrace::Hex(context.address) +
+                " size=" + BootStageTrace::Hex(static_cast<uint64_t>(context.size)) +
+                " overlapBytes=" + bytes.str());
+        });
 }
 
 uint64_t SetupMinimalEfiStack(VMInstance* instance, std::ostringstream& oss) {
@@ -590,12 +660,13 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     EFI_BOOT_IMAGE_METADATA_ADDR + 16,
                                                                     reinterpret_cast<uint8_t*>(&metadataSize),
                                                                     sizeof(metadataSize));
-                                                                LOG_INFO(std::string("[EFI-MILESTONE] publish-readback boot image metadata signature=0x") +
-                                                                         BootStageTrace::Hex(metadataSignature) +
-                                                                         " base=0x" + BootStageTrace::Hex(metadataBase) +
-                                                                         " size=0x" + BootStageTrace::Hex(metadataSize) +
-                                                                         " addr=0x" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
+                                                                        LOG_INFO(std::string("[EFI-MILESTONE] publish-readback boot image metadata signature=0x") +
+                                                                                 BootStageTrace::Hex(metadataSignature) +
+                                                                                 " base=0x" + BootStageTrace::Hex(metadataBase) +
+                                                                                 " size=0x" + BootStageTrace::Hex(metadataSize) +
+                                                                                 " addr=0x" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
                                                             }
+                                                            installEfiBootMetadataWriteTrace(instance, "boot-image publication");
                                                             BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                 "base=0x18000000 size=" +
                                                                 BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
@@ -1097,6 +1168,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             << std::dec;
                                                                         LOG_INFO(oss.str());
                                                                         logBootImageMetadata("publish-readback");
+                                                                        installEfiBootMetadataWriteTrace(instance, "boot-image publication");
                                                                         BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                             "base=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_GUEST_BASE) +
                                                                             " size=" + BootStageTrace::Hex(static_cast<uint64_t>(bootImgData.size())) +

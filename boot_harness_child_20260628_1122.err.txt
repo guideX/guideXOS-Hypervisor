@@ -1,0 +1,7 @@
+At line:1 char:15
++ $env:PATH = ''D:\dev\guideXOS_Emulator\x64\Debug;'' + $env:PATH
++               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unexpected token 'D:\dev\guideXOS_Emulator\x64\Debug' in expression or statement.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : UnexpectedToken
+ 

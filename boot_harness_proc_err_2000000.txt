@@ -1,0 +1,406 @@
+C:\Users\guideX\.codex\tmp\arg0\codex-arg0iu5cwd : The term 'C:\Users\guideX\.codex\tmp\arg0\codex-arg0iu5cwd' is not 
+recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if 
+a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ C:\Users\guideX\.codex\tmp\arg0\codex-arg0iu5cwd;C:\WINDOWS\system32; ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...odex-arg0iu5cwd:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\system32 : The term 'C:\WINDOWS\system32' is not recognized as the name of a cmdlet, function, script file, 
+or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and 
+try again.
+At line:1 char:50
++ ... s\guideX\.codex\tmp\arg0\codex-arg0iu5cwd;C:\WINDOWS\system32;C:\WIND ...
++                                               ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\system32:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS : The term 'C:\WINDOWS' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:70
++ ... odex\tmp\arg0\codex-arg0iu5cwd;C:\WINDOWS\system32;C:\WINDOWS;C:\WIND ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\System32\Wbem : The term 'C:\WINDOWS\System32\Wbem' is not recognized as the name of a cmdlet, function, 
+script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is 
+correct and try again.
+At line:1 char:81
++ ... u5cwd;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WIND ...
++                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\System32\Wbem:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\ : The term 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\' is not recognized 
+as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was 
+included, verify that the path is correct and try again.
+At line:1 char:106
++ ... OWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WIND ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\Syst...owerShell\v1.0\:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\System32\OpenSSH\ : The term 'C:\WINDOWS\System32\OpenSSH\' is not recognized as the name of a cmdlet, 
+function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the 
+path is correct and try again.
+At line:1 char:150
++ ... System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Prog ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\System32\OpenSSH\:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:179
++ ... ndowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\M ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:233
++ ... Program Files\Microsoft SQL Server\170\Tools\Binn\;C:\Program Files\M ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:303
++ ... crosoft SQL Server\Client SDK\ODBC\170\Tools\Binn\;C:\Program Files\d ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:328
++ ...  SDK\ODBC\170\Tools\Binn\;C:\Program Files\dotnet\;C:\Program Files\U ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:354
++ ... C:\Program Files\dotnet\;C:\Program Files\UVtools\;C:\Program Files\T ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:387
++ ... am Files\UVtools\;C:\Program Files\TortoiseGit\bin;C:\Program Files\G ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\mingw64\bin : The term 'C:\mingw64\bin' is not recognized as the name of a cmdlet, function, script file, or 
+operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try 
+again.
+At line:1 char:412
++ ... Files\TortoiseGit\bin;C:\Program Files\Git\cmd;C:\mingw64\bin;C:\Prog ...
++                                                    ~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\mingw64\bin:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+x86 : The term 'x86' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:445
++ ... C:\Program Files\Git\cmd;C:\mingw64\bin;C:\Program Files (x86)\Window ...
++                                                               ~~~
+    + CategoryInfo          : ObjectNotFound: (x86:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\i686-elf-tools\bin : The term 'C:\i686-elf-tools\bin' is not recognized as the name of a cmdlet, function, script 
+file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct 
+and try again.
+At line:1 char:495
++ ... ws Kits\10\Windows Performance Toolkit\;C:\i686-elf-tools\bin;C:\User ...
++                                             ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\i686-elf-tools\bin:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\Programs\OpenAI\Codex\bin : The term 
+'C:\Users\guideX\AppData\Local\Programs\OpenAI\Codex\bin' is not recognized as the name of a cmdlet, function, script 
+file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct 
+and try again.
+At line:1 char:517
++ ... f-tools\bin;C:\Users\guideX\AppData\Local\Programs\OpenAI\Codex\bin;C ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...penAI\Codex\bin:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\Microsoft\WindowsApps : The term 'C:\Users\guideX\AppData\Local\Microsoft\WindowsApps' 
+is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, 
+or if a path was included, verify that the path is correct and try again.
+At line:1 char:573
++ ... I\Codex\bin;C:\Users\guideX\AppData\Local\Microsoft\WindowsApps;C:\Us ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...oft\WindowsApps:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\.dotnet\tools : The term 'C:\Users\guideX\.dotnet\tools' is not recognized as the name of a cmdlet, 
+function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the 
+path is correct and try again.
+At line:1 char:625
++ ... ata\Local\Microsoft\WindowsApps;C:\Users\guideX\.dotnet\tools;C:\User ...
++                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX\.dotnet\tools:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\Microsoft\WinGet\Packages\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe : 
+The term 
+'C:\Users\guideX\AppData\Local\Microsoft\WinGet\Packages\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe' 
+is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, 
+or if a path was included, verify that the path is correct and try again.
+At line:1 char:655
++ ... otnet\tools;C:\Users\guideX\AppData\Local\Microsoft\WinGet\Packages\A ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...e_8wekyb3d8bbwe:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd : The term 
+'C:\Users\guideX\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd' is not recognized as the name of a cmdlet, function, 
+script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is 
+correct and try again.
+At line:1 char:770
++ ... ekyb3d8bbwe;C:\Users\guideX\AppData\Local\OpenAI\Codex\bin\ada252862d ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...da252862d154cdd:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:834
++ ... eX\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd;C:\Program Files\W ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\system32 : The term 'C:\WINDOWS\system32' is not recognized as the name of a cmdlet, function, script file, 
+or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and 
+try again.
+At line:1 char:1014
++ ... s\guideX\.codex\tmp\arg0\codex-arg0iu5cwd;C:\WINDOWS\system32;C:\WIND ...
++                                               ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\system32:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS : The term 'C:\WINDOWS' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1034
++ ... odex\tmp\arg0\codex-arg0iu5cwd;C:\WINDOWS\system32;C:\WINDOWS;C:\WIND ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\System32\Wbem : The term 'C:\WINDOWS\System32\Wbem' is not recognized as the name of a cmdlet, function, 
+script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is 
+correct and try again.
+At line:1 char:1045
++ ... u5cwd;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WIND ...
++                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\System32\Wbem:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\ : The term 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\' is not recognized 
+as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was 
+included, verify that the path is correct and try again.
+At line:1 char:1070
++ ... OWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WIND ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\Syst...owerShell\v1.0\:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\WINDOWS\System32\OpenSSH\ : The term 'C:\WINDOWS\System32\OpenSSH\' is not recognized as the name of a cmdlet, 
+function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the 
+path is correct and try again.
+At line:1 char:1114
++ ... System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Prog ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WINDOWS\System32\OpenSSH\:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1143
++ ... ndowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\M ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1197
++ ... Program Files\Microsoft SQL Server\170\Tools\Binn\;C:\Program Files\M ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1267
++ ... crosoft SQL Server\Client SDK\ODBC\170\Tools\Binn\;C:\Program Files\d ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1292
++ ...  SDK\ODBC\170\Tools\Binn\;C:\Program Files\dotnet\;C:\Program Files\U ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1318
++ ... C:\Program Files\dotnet\;C:\Program Files\UVtools\;C:\Program Files\T ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1351
++ ... am Files\UVtools\;C:\Program Files\TortoiseGit\bin;C:\Program Files\G ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\mingw64\bin : The term 'C:\mingw64\bin' is not recognized as the name of a cmdlet, function, script file, or 
+operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try 
+again.
+At line:1 char:1376
++ ... Files\TortoiseGit\bin;C:\Program Files\Git\cmd;C:\mingw64\bin;C:\Prog ...
++                                                    ~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\mingw64\bin:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+x86 : The term 'x86' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1409
++ ... C:\Program Files\Git\cmd;C:\mingw64\bin;C:\Program Files (x86)\Window ...
++                                                               ~~~
+    + CategoryInfo          : ObjectNotFound: (x86:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\i686-elf-tools\bin : The term 'C:\i686-elf-tools\bin' is not recognized as the name of a cmdlet, function, script 
+file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct 
+and try again.
+At line:1 char:1459
++ ... ws Kits\10\Windows Performance Toolkit\;C:\i686-elf-tools\bin;C:\User ...
++                                             ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\i686-elf-tools\bin:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\Programs\OpenAI\Codex\bin : The term 
+'C:\Users\guideX\AppData\Local\Programs\OpenAI\Codex\bin' is not recognized as the name of a cmdlet, function, script 
+file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct 
+and try again.
+At line:1 char:1481
++ ... f-tools\bin;C:\Users\guideX\AppData\Local\Programs\OpenAI\Codex\bin;C ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...penAI\Codex\bin:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\Microsoft\WindowsApps : The term 'C:\Users\guideX\AppData\Local\Microsoft\WindowsApps' 
+is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, 
+or if a path was included, verify that the path is correct and try again.
+At line:1 char:1537
++ ... I\Codex\bin;C:\Users\guideX\AppData\Local\Microsoft\WindowsApps;C:\Us ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...oft\WindowsApps:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\.dotnet\tools : The term 'C:\Users\guideX\.dotnet\tools' is not recognized as the name of a cmdlet, 
+function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the 
+path is correct and try again.
+At line:1 char:1589
++ ... ata\Local\Microsoft\WindowsApps;C:\Users\guideX\.dotnet\tools;C:\User ...
++                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX\.dotnet\tools:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\Microsoft\WinGet\Packages\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe : 
+The term 
+'C:\Users\guideX\AppData\Local\Microsoft\WinGet\Packages\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe' 
+is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, 
+or if a path was included, verify that the path is correct and try again.
+At line:1 char:1619
++ ... otnet\tools;C:\Users\guideX\AppData\Local\Microsoft\WinGet\Packages\A ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...e_8wekyb3d8bbwe:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Users\guideX\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd : The term 
+'C:\Users\guideX\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd' is not recognized as the name of a cmdlet, function, 
+script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is 
+correct and try again.
+At line:1 char:1734
++ ... ekyb3d8bbwe;C:\Users\guideX\AppData\Local\OpenAI\Codex\bin\ada252862d ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\guideX...da252862d154cdd:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+C:\Program : The term 'C:\Program' is not recognized as the name of a cmdlet, function, script file, or operable 
+program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1798
++ ... eX\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd;C:\Program Files\W ...
++                                                        ~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Program:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+Invoke-Expression : At line:1 char:9
++ $code = @
++         ~
+Unrecognized token in source text.
+At line:2 char:6
++ using System;
++      ~
+Missing using directive
+At line:2 char:1
++ using System;
++ ~~~~~
+A 'using' statement must appear before any other statements in a script.
+At line:3 char:6
++ using System.IO;
++      ~
+Missing using directive
+At line:3 char:1
++ using System.IO;
++ ~~~~~
+A 'using' statement must appear before any other statements in a script.
+At line:4 char:6
++ using System.Runtime.InteropServices;
++      ~
+Missing using directive
+At line:4 char:1
++ using System.Runtime.InteropServices;
++ ~~~~~
+A 'using' statement must appear before any other statements in a script.
+At line:7 char:16
++     [DllImport(guideXOS_Hypervisor.dll, CallingConvention = CallingCo ...
++                ~
+Missing closing ')' in expression.
+At line:7 char:5
++     [DllImport(guideXOS_Hypervisor.dll, CallingConvention = CallingCo ...
++     ~~~~~~~~~~~
+Unexpected attribute 'DllImport'.
+At line:7 char:35
++     [DllImport(guideXOS_Hypervisor.dll, CallingConvention = CallingCo ...
++                                   ~~~~
+Unexpected token '.dll' in expression or statement.
+Not all parse errors were reported.  Correct the reported errors and try again.
+At line:1 char:1888
++ ... _26.616.9593.0_x64__2p2nqsd0c76g0\app\resources; Invoke-Expression @'
++                                                      ~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ParserError: (:) [Invoke-Expression], ParseException
+    + FullyQualifiedErrorId : UnrecognizedToken,Microsoft.PowerShell.Commands.InvokeExpressionCommand
+ 
