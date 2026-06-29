@@ -11,6 +11,8 @@
 #include <cctype>
 #include <algorithm>
 #include <iomanip>
+#include <cstdint>
+#include <utility>
 
 namespace ia64 {
 
@@ -1404,6 +1406,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiFileHandles_()
     , efiBootImage_()
     , efiBootFat_(nullptr)
+    , efiBootImageFromVmManager_(false)
     , callFrameStack_() {
 }
 
@@ -1458,7 +1461,14 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiFileHandles_()
     , efiBootImage_()
     , efiBootFat_(nullptr)
+    , efiBootImageFromVmManager_(false)
     , callFrameStack_() {
+}
+
+void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
+    efiBootImage_ = std::move(bootImage);
+    efiBootImageFromVmManager_ = true;
+    efiBootFat_.reset();
 }
 
 void IA64ISAPlugin::reset() {
@@ -1509,6 +1519,7 @@ void IA64ISAPlugin::reset() {
     efiFileHandles_.clear();
     efiBootImage_.clear();
     efiBootFat_.reset();
+    efiBootImageFromVmManager_ = false;
     callFrameStack_.clear();
 }
 
@@ -2268,6 +2279,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         uint64_t openVolumeSignature = 0;
                         uint64_t openVolumeBase = 0;
                         uint64_t openVolumeSize = 0;
+                        auto* memoryObject = dynamic_cast<Memory*>(&memory);
                         memory.Read(EFI_BOOT_IMAGE_METADATA_ADDR,
                                     reinterpret_cast<uint8_t*>(&openVolumeSignature),
                                     sizeof(openVolumeSignature));
@@ -2279,6 +2291,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                     sizeof(openVolumeSize));
                         std::cout << "[EFI-FILE] OpenVolume metadata snapshot metadata=0x"
                                   << std::hex << EFI_BOOT_IMAGE_METADATA_ADDR
+                                  << " this=0x" << reinterpret_cast<uintptr_t>(this)
+                                  << " memoryRef=0x" << reinterpret_cast<uintptr_t>(&memory)
+                                  << " memoryObj=0x" << reinterpret_cast<uintptr_t>(memoryObject)
+                                  << " handoffProvided=" << (efiBootImageFromVmManager_ ? "yes" : "no")
+                                  << " cachedBytes=0x" << efiBootImage_.size()
                                   << " signature=0x" << openVolumeSignature
                                   << " base=0x" << openVolumeBase
                                   << " size=0x" << openVolumeSize
@@ -2895,6 +2912,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiFileHandles_.clear();
     efiBootImage_.clear();
     efiBootFat_.reset();
+    efiBootImageFromVmManager_ = false;
     callFrameStack_.clear();
 }
 
@@ -3417,6 +3435,38 @@ bool IA64ISAPlugin::ensureEfiBootFat(IMemory& memory) {
         return true;
     }
 
+    auto* memoryObject = dynamic_cast<Memory*>(&memory);
+    const bool hasExplicitHandoff = efiBootImageFromVmManager_ && !efiBootImage_.empty();
+    std::cout << "[EFI-FILE] boot image handoff probe"
+              << " this=0x" << std::hex << reinterpret_cast<uintptr_t>(this)
+              << " memoryRef=0x" << reinterpret_cast<uintptr_t>(&memory)
+              << " memoryObj=0x" << reinterpret_cast<uintptr_t>(memoryObject)
+              << " totalSize=0x" << memory.GetTotalSize()
+              << " explicitHandoff=" << (hasExplicitHandoff ? "yes" : "no")
+              << " cachedBytes=0x" << efiBootImage_.size()
+              << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
+              << std::dec << std::endl;
+
+    if (hasExplicitHandoff) {
+        efiBootFat_ = std::make_unique<guideXOS::FATParser>();
+        if (!efiBootFat_->parse(efiBootImage_.data(), efiBootImage_.size())) {
+            std::cout << "[EFI-FILE] explicit boot image handoff FAT parse failed"
+                      << " this=0x" << std::hex << reinterpret_cast<uintptr_t>(this)
+                      << " bytes=0x" << efiBootImage_.size()
+                      << " metadata=0x" << EFI_BOOT_IMAGE_METADATA_ADDR
+                      << std::dec << std::endl;
+            efiBootFat_.reset();
+            return false;
+        }
+
+        std::cout << "[EFI-MILESTONE] EFI FileProtocol backing FAT boot image is available"
+                  << " source=vmmanager-handoff"
+                  << " this=0x" << std::hex << reinterpret_cast<uintptr_t>(this)
+                  << " bytes=0x" << efiBootImage_.size()
+                  << std::dec << std::endl;
+        return true;
+    }
+
     uint64_t signature = 0;
     uint64_t base = 0;
     uint64_t size = 0;
@@ -3454,6 +3504,7 @@ bool IA64ISAPlugin::ensureEfiBootFat(IMemory& memory) {
         efiBootImage_.clear();
         return false;
     }
+    efiBootImageFromVmManager_ = false;
 
     efiBootFat_ = std::make_unique<guideXOS::FATParser>();
     if (!efiBootFat_->parse(efiBootImage_.data(), efiBootImage_.size())) {
@@ -3464,6 +3515,8 @@ bool IA64ISAPlugin::ensureEfiBootFat(IMemory& memory) {
     }
 
     std::cout << "[EFI-MILESTONE] EFI FileProtocol backing FAT boot image is available"
+              << " source=guest-memory"
+              << " this=0x" << std::hex << reinterpret_cast<uintptr_t>(this)
               << " base=0x" << std::hex << base
               << " size=0x" << size << std::dec << std::endl;
     return true;

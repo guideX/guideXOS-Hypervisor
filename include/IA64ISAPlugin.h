@@ -176,6 +176,13 @@ public:
     void setProfiler(Profiler* profiler) { 
         profiler_ = profiler; 
     }
+
+    /**
+     * Provide the EFI boot image backing store directly from VMManager.
+     * This lets the firmware file path consume the same extracted media
+     * even if the live guest memory object is not the source of truth.
+     */
+    void setBootImageBackingStore(std::vector<uint8_t> bootImage);
     
     /**
      * Get optional components
@@ -334,6 +341,7 @@ private:
     std::map<uint64_t, EfiFileHandle> efiFileHandles_;
     std::vector<uint8_t> efiBootImage_;
     std::unique_ptr<guideXOS::FATParser> efiBootFat_;
+    bool efiBootImageFromVmManager_;
 
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;

@@ -2,6 +2,7 @@
 #include "IA64ISAPlugin.h"
 #include "ExampleISAPlugin.h"
 #include "ISAPluginRegistry.h"
+#include "FATParser.h"
 #include "memory.h"
 #include "decoder.h"
 #include "cpu.h"
@@ -81,6 +82,97 @@ private:
     uint64_t forbiddenReadAddress_;
     std::map<uint64_t, uint8_t> bytes_;
 };
+
+void writeLe16(std::vector<uint8_t>& buffer, size_t offset, uint16_t value) {
+    buffer[offset] = static_cast<uint8_t>(value & 0xff);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+}
+
+void writeLe32(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) {
+    buffer[offset] = static_cast<uint8_t>(value & 0xff);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+    buffer[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xff);
+    buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xff);
+}
+
+std::vector<uint8_t> makeFatImageWithBootLoader() {
+    std::vector<uint8_t> image(8 * 512, 0);
+    auto* boot = reinterpret_cast<guideXOS::FATBootSector*>(image.data());
+    boot->bytesPerSector = 512;
+    boot->sectorsPerCluster = 1;
+    boot->reservedSectors = 1;
+    boot->numFATs = 1;
+    boot->rootEntryCount = 16;
+    boot->totalSectors16 = 8;
+    boot->mediaType = 0xF8;
+    boot->sectorsPerFAT = 1;
+    boot->bootSignature = 0x29;
+    std::memcpy(boot->fileSystemType, "FAT16   ", 8);
+
+    auto* fat = image.data() + 512;
+    fat[0] = 0xF8;
+    fat[1] = 0xFF;
+    fat[2] = 0xFF;
+    fat[3] = 0xFF;
+
+    auto* root = reinterpret_cast<guideXOS::FATDirectoryEntry*>(image.data() + 1024);
+    std::memcpy(root[0].filename, "EFI     ", 8);
+    std::memcpy(root[0].extension, "   ", 3);
+    root[0].attributes = guideXOS::ATTR_DIRECTORY;
+    root[0].firstClusterLow = 2;
+    std::memcpy(root[1].filename, "BOOTIA64", 8);
+    std::memcpy(root[1].extension, "EFI", 3);
+    root[1].attributes = guideXOS::ATTR_ARCHIVE;
+    root[1].firstClusterLow = 4;
+    root[1].fileSize = 8;
+    root[2].filename[0] = 0x00;
+
+    auto* efiDir = image.data() + 1536;
+    auto* efiEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(efiDir);
+    std::memcpy(efiEntry[0].filename, "BOOT    ", 8);
+    std::memcpy(efiEntry[0].extension, "   ", 3);
+    efiEntry[0].attributes = guideXOS::ATTR_DIRECTORY;
+    efiEntry[0].firstClusterLow = 3;
+    efiEntry[1].filename[0] = 0x00;
+
+    auto* bootDir = image.data() + 2048;
+    auto* bootEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(bootDir);
+    std::memcpy(bootEntry[0].filename, "BOOTIA64", 8);
+    std::memcpy(bootEntry[0].extension, "EFI", 3);
+    bootEntry[0].attributes = guideXOS::ATTR_ARCHIVE;
+    bootEntry[0].firstClusterLow = 4;
+    bootEntry[0].fileSize = 8;
+    bootEntry[1].filename[0] = 0x00;
+
+    auto* data = image.data() + 2560;
+    std::memcpy(data, "BOOTIA64", 8);
+    return image;
+}
+
+std::vector<uint8_t> makeElToritoImageWithFatBootLoader(uint8_t platformId = 0xEF) {
+    std::vector<uint8_t> image(64 * 2048, 0);
+    auto* bootRecord = image.data() + 17 * 2048;
+    bootRecord[0] = 0;
+    std::memcpy(bootRecord + 1, "CD001", 5);
+    bootRecord[6] = 1;
+    std::memcpy(bootRecord + 7, "EL TORITO SPECIFICATION", 23);
+    writeLe32(image, 17 * 2048 + 71, 18);
+
+    auto* validation = image.data() + 18 * 2048;
+    validation[0] = 1;
+    validation[1] = platformId;
+    validation[21] = 0x55;
+    validation[22] = 0xAA;
+    auto* entry = image.data() + 18 * 2048 + 32;
+    entry[0] = 0x88;
+    entry[1] = 0;
+    writeLe16(image, 18 * 2048 + 34, 1);
+    writeLe32(image, 18 * 2048 + 40, 19);
+
+    auto fat = makeFatImageWithBootLoader();
+    std::memcpy(image.data() + 19 * 2048, fat.data(), fat.size());
+    return image;
+}
 
 class FakeBranchDecoder : public IDecoder {
 public:
@@ -2132,6 +2224,51 @@ void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
     std::cout << "  ? OpenVolume writes a root FileProtocol pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginOpenVolumeUsesVmManagerBootImageHandoff() {
+    std::cout << "Testing IA-64 plugin boot-image handoff into OpenVolume/FileProtocol.Open...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+    const uint16_t kernelPath[] = { '\\','E','F','I','\\','B','O','O','T','\\','B','O','O','T','I','A','6','4','.','E','F','I',0 };
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(kernelPath), sizeof(kernelPath));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.setBootImageBackingStore(makeFatImageWithBootLoader());
+
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetCFM(2);
+    plugin.getCPUState().SetBR(6, 0x1fe00c80ULL);
+    plugin.getCPUState().SetGR(33, 0x5000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t rootFileProtocol = 0;
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&rootFileProtocol), sizeof(rootFileProtocol));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(rootFileProtocol == 0x1fe01040ULL);
+
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(6, 0x1fe01400ULL);
+    plugin.getCPUState().SetGR(32, rootFileProtocol);
+    plugin.getCPUState().SetGR(33, 0x5000);
+    plugin.getCPUState().SetGR(34, 0x6000);
+    plugin.getCPUState().SetGR(35, 1);
+    plugin.getCPUState().SetGR(36, 0);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint64_t newHandle = 0xffffffffffffffffULL;
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&newHandle), sizeof(newHandle));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(newHandle != 0);
+
+    std::cout << "  ? Explicit boot-image handoff keeps OpenVolume/FileProtocol.Open on the success path\n";
+}
+
 void testIA64PluginLocateHandleReturnsHandleList() {
     std::cout << "Testing IA-64 plugin BootServices LocateHandle stub...\n";
 
@@ -2840,6 +2977,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginOpenVolumeReturnsRootFileProtocol();
+        std::cout << "\n";
+
+        testIA64PluginOpenVolumeUsesVmManagerBootImageHandoff();
         std::cout << "\n";
 
         testIA64PluginLocateHandleReturnsHandleList();

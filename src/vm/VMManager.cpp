@@ -6,6 +6,7 @@
 #include "PEParser.h"
 #include "TestKernelHandler.h"
 #include "memory.h"
+#include "IA64ISAPlugin.h"
 #include "logger.h"
 #include "BootStageTrace.h"
 #include <sstream>
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <fstream>
 #include <cstring>
+#include <cstdint>
 #include <mutex>
 #include <unordered_set>
 
@@ -46,6 +48,15 @@ void DrawBootStatus(VMInstance* instance,
     }
     // Footer hint
     fb->DrawText(32, 460, "CHECK LOGS FOR DETAILS", 0xFF606060, 1);
+}
+
+IA64ISAPlugin* getActiveIa64Plugin(VMInstance* instance) {
+    if (!instance || !instance->vm) {
+        return nullptr;
+    }
+
+    CPU& cpu = instance->vm->getCPU();
+    return dynamic_cast<IA64ISAPlugin*>(cpu.getISAPlugin());
 }
 
 void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
@@ -640,6 +651,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 EFI_BOOT_IMAGE_METADATA_ADDR + 16,
                                                                 reinterpret_cast<const uint8_t*>(&bootImageSize),
                                                                 sizeof(bootImageSize));
+                                                            IA64ISAPlugin* ia64Plugin = getActiveIa64Plugin(instance);
+                                                            if (ia64Plugin) {
+                                                                ia64Plugin->setBootImageBackingStore(bootImageBackingStoreData);
+                                                            }
                                                             LOG_INFO("[EFI-MILESTONE] Published read-only EFI boot image backing store"
                                                                      " base=0x18000000 size=0x" +
                                                                      std::to_string(bootImageBackingStoreData.size()) +
@@ -656,15 +671,23 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     EFI_BOOT_IMAGE_METADATA_ADDR + 8,
                                                                     reinterpret_cast<uint8_t*>(&metadataBase),
                                                                     sizeof(metadataBase));
-                                                                instance->vm->getMemory().Read(
-                                                                    EFI_BOOT_IMAGE_METADATA_ADDR + 16,
-                                                                    reinterpret_cast<uint8_t*>(&metadataSize),
-                                                                    sizeof(metadataSize));
-                                                                        LOG_INFO(std::string("[EFI-MILESTONE] publish-readback boot image metadata signature=0x") +
-                                                                                 BootStageTrace::Hex(metadataSignature) +
-                                                                                 " base=0x" + BootStageTrace::Hex(metadataBase) +
-                                                                                 " size=0x" + BootStageTrace::Hex(metadataSize) +
-                                                                                 " addr=0x" + BootStageTrace::Hex(EFI_BOOT_IMAGE_METADATA_ADDR));
+                                                                    instance->vm->getMemory().Read(
+                                                                        EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                        reinterpret_cast<uint8_t*>(&metadataSize),
+                                                                        sizeof(metadataSize));
+                                                                    std::ostringstream trace;
+                                                                    trace << "[EFI-MILESTONE] publish-readback boot image metadata"
+                                                                          << " vm=0x" << std::hex << reinterpret_cast<uintptr_t>(instance->vm.get())
+                                                                          << " cpu=0x" << reinterpret_cast<uintptr_t>(&instance->vm->getCPU())
+                                                                          << " memoryRef=0x" << reinterpret_cast<uintptr_t>(&instance->vm->getMemory())
+                                                                          << " memoryObj=0x" << reinterpret_cast<uintptr_t>(dynamic_cast<Memory*>(&instance->vm->getMemory()))
+                                                                          << " plugin=0x" << reinterpret_cast<uintptr_t>(ia64Plugin)
+                                                                          << " bootImageBytes=0x" << bootImageBackingStoreData.size()
+                                                                          << " signature=0x" << metadataSignature
+                                                                          << " base=0x" << metadataBase
+                                                                          << " size=0x" << metadataSize
+                                                                          << " addr=0x" << EFI_BOOT_IMAGE_METADATA_ADDR;
+                                                                    LOG_INFO(trace.str());
                                                             }
                                                             installEfiBootMetadataWriteTrace(instance, "boot-image publication");
                                                             BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
@@ -1160,6 +1183,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         write64(EFI_BOOT_IMAGE_METADATA_ADDR + 8, EFI_BOOT_IMAGE_GUEST_BASE);
                                                                         write64(EFI_BOOT_IMAGE_METADATA_ADDR + 16,
                                                                                 static_cast<uint64_t>(bootImgData.size()));
+                                                                        IA64ISAPlugin* ia64Plugin = getActiveIa64Plugin(instance);
+                                                                        if (ia64Plugin) {
+                                                                            ia64Plugin->setBootImageBackingStore(bootImgData);
+                                                                        }
                                                                         oss.str("");
                                                                         oss << "[EFI-MILESTONE] Published read-only EFI boot image backing store"
                                                                             << " base=0x" << std::hex << EFI_BOOT_IMAGE_GUEST_BASE
@@ -1168,6 +1195,21 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                             << std::dec;
                                                                         LOG_INFO(oss.str());
                                                                         logBootImageMetadata("publish-readback");
+                                                                        {
+                                                                            std::ostringstream trace;
+                                                                            trace << "[EFI-MILESTONE] publish-readback boot image metadata"
+                                                                                  << " vm=0x" << std::hex << reinterpret_cast<uintptr_t>(instance->vm.get())
+                                                                                  << " cpu=0x" << reinterpret_cast<uintptr_t>(&instance->vm->getCPU())
+                                                                                  << " memoryRef=0x" << reinterpret_cast<uintptr_t>(&instance->vm->getMemory())
+                                                                                  << " memoryObj=0x" << reinterpret_cast<uintptr_t>(dynamic_cast<Memory*>(&instance->vm->getMemory()))
+                                                                                  << " plugin=0x" << reinterpret_cast<uintptr_t>(ia64Plugin)
+                                                                                  << " bootImageBytes=0x" << bootImgData.size()
+                                                                                  << " signature=0x" << EFI_BOOT_IMAGE_METADATA_SIGNATURE
+                                                                                  << " base=0x" << EFI_BOOT_IMAGE_GUEST_BASE
+                                                                                  << " size=0x" << bootImgData.size()
+                                                                                  << " addr=0x" << EFI_BOOT_IMAGE_METADATA_ADDR;
+                                                                            LOG_INFO(trace.str());
+                                                                        }
                                                                         installEfiBootMetadataWriteTrace(instance, "boot-image publication");
                                                                         BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                             "base=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_GUEST_BASE) +
