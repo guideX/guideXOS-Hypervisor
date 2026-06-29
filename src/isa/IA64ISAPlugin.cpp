@@ -3858,6 +3858,28 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             logScanLoopState("pre", cpu, state_.currentSlot_, instr);
         }
         recordRecentInstruction(cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
+        const bool traceBootStringPath =
+            currentIP == 0x1DD0ULL ||
+            currentIP == 0x1DE0ULL ||
+            currentIP == 0x33CA0ULL ||
+            currentIP == 0x34D40ULL;
+        if (traceBootStringPath) {
+            constexpr uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = 0x1FE01340ULL;
+            std::ostringstream trace;
+            trace << "ip=" << BootStageTrace::Hex(currentIP)
+                  << " slot=" << state_.currentSlot_
+                  << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
+                  << " r18=" << BootStageTrace::Hex(cpu.GetGR(18))
+                  << " r20=" << BootStageTrace::Hex(cpu.GetGR(20))
+                  << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                  << " r36=" << BootStageTrace::Hex(cpu.GetGR(36))
+                  << " mem[r32]=" << readHexBytesPreview(memory, cpu.GetGR(32), 32)
+                  << " loadedImage=" << describeLoadedImageProtocol(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR)
+                  << " loadOptions=" << readHexBytesPreview(memory, EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR, 16)
+                  << " imageBaseBytes=" << readHexBytesPreview(memory, 0x5E000ULL, 0x80);
+            std::cout << "[EFI-STRING-TRACE] " << trace.str() << std::endl;
+            BootStageTrace::Event("EFI_STRING_TRACE", trace.str());
+        }
         static constexpr uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = 0x1FF93010ULL;
         static constexpr size_t EFI_POST_SIMPLEFS_OUT_WATCH_SIZE = 0x10;
         const size_t storeSize = storeSizeForInstruction(instr.GetType());
