@@ -525,6 +525,25 @@ size_t storeSizeForInstruction(InstructionType type) {
     }
 }
 
+size_t loadSizeForInstruction(InstructionType type) {
+    switch (type) {
+        case InstructionType::LD1:
+        case InstructionType::LD1_S:
+            return 1;
+        case InstructionType::LD2:
+        case InstructionType::LD2_S:
+            return 2;
+        case InstructionType::LD4:
+        case InstructionType::LD4_S:
+            return 4;
+        case InstructionType::LD8:
+        case InstructionType::LD8_S:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
 bool rangesOverlap(uint64_t leftStart, size_t leftSize, uint64_t rightStart, size_t rightSize) {
     if (leftSize == 0 || rightSize == 0) {
         return false;
@@ -541,6 +560,60 @@ bool rangesOverlap(uint64_t leftStart, size_t leftSize, uint64_t rightStart, siz
 bool isAdvancedLoadCheckInstruction(InstructionType type) {
     return type == InstructionType::CHK_A_NC ||
            type == InstructionType::CHK_A_CLR;
+}
+
+const char* instructionAccessTypeName(InstructionType type) {
+    switch (type) {
+        case InstructionType::LD1: return "LD1";
+        case InstructionType::LD2: return "LD2";
+        case InstructionType::LD4: return "LD4";
+        case InstructionType::LD8: return "LD8";
+        case InstructionType::LD1_S: return "LD1_S";
+        case InstructionType::LD2_S: return "LD2_S";
+        case InstructionType::LD4_S: return "LD4_S";
+        case InstructionType::LD8_S: return "LD8_S";
+        case InstructionType::ST1: return "ST1";
+        case InstructionType::ST2: return "ST2";
+        case InstructionType::ST4: return "ST4";
+        case InstructionType::ST8: return "ST8";
+        default: return "OTHER";
+    }
+}
+
+std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count);
+
+void logBootLocalAccess(const char* phase,
+                        const CPUState& cpu,
+                        size_t slot,
+                        const InstructionEx& instr,
+                        uint64_t address,
+                        size_t size,
+                        uint64_t registerNumber,
+                        uint64_t registerValue,
+                        IMemory& memory) {
+    static constexpr uint64_t kBootLocalTraceBase = 0x5E000ULL;
+    static constexpr uint64_t kBootLocalTraceEnd = 0x5E080ULL;
+    if (size == 0 || !rangesOverlap(address, size, kBootLocalTraceBase,
+                                    static_cast<size_t>(kBootLocalTraceEnd - kBootLocalTraceBase))) {
+        return;
+    }
+
+    std::ostringstream trace;
+    trace << "phase=" << phase
+          << " ip=" << BootStageTrace::Hex(cpu.GetIP())
+          << " slot=" << slot
+          << " type=" << instructionAccessTypeName(instr.GetType())
+          << " disasm=\"" << instr.GetDisassembly() << "\""
+          << " address=" << BootStageTrace::Hex(address)
+          << " size=" << BootStageTrace::Hex(static_cast<uint64_t>(size))
+          << " reg=r" << std::dec << registerNumber
+          << " value=" << BootStageTrace::Hex(registerValue);
+    if (instr.HasImmediate()) {
+        trace << " imm=" << static_cast<int64_t>(instr.GetImmediate());
+    }
+    trace << " bytes=" << readHexBytesPreview(memory, address, size);
+    std::cout << "[EFI-LOCAL-TRACE] " << trace.str() << std::endl;
+    BootStageTrace::Event("EFI_LOCAL_TRACE", trace.str());
 }
 
 uint64_t readCallerOutputRegister(const CPUState& cpu, size_t index) {
@@ -3882,10 +3955,26 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         }
         static constexpr uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = 0x1FF93010ULL;
         static constexpr size_t EFI_POST_SIMPLEFS_OUT_WATCH_SIZE = 0x10;
+        const size_t loadSize = loadSizeForInstruction(instr.GetType());
+        const uint64_t loadAddress = loadSize != 0 ? cpu.GetGR(instr.GetSrc1()) : 0;
         const size_t storeSize = storeSizeForInstruction(instr.GetType());
-        const uint64_t storeAddress = isStoreInstruction(instr.GetType())
-            ? cpu.GetGR(instr.GetSrc1())
-            : 0;
+        const uint64_t storeAddress = storeSize != 0 ? cpu.GetGR(instr.GetDst()) : 0;
+        const bool traceBootLocalLoad =
+            loadSize != 0 &&
+            rangesOverlap(loadAddress, loadSize, 0x5E000ULL, 0x80ULL);
+        const bool traceBootLocalStore =
+            storeSize != 0 &&
+            rangesOverlap(storeAddress, storeSize, 0x5E000ULL, 0x80ULL);
+        if (traceBootLocalLoad) {
+            logBootLocalAccess("pre-read", cpu, state_.currentSlot_, instr,
+                               loadAddress, loadSize, instr.GetDst(),
+                               cpu.GetGR(instr.GetDst()), memory);
+        }
+        if (traceBootLocalStore) {
+            logBootLocalAccess("pre-write", cpu, state_.currentSlot_, instr,
+                               storeAddress, storeSize, instr.GetSrc1(),
+                               cpu.GetGR(instr.GetSrc1()), memory);
+        }
         const bool watchPostSimpleFsOutStore =
             storeSize != 0 &&
             rangesOverlap(storeAddress, storeSize,
@@ -3948,6 +4037,16 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 " lastEfiIP=" + BootStageTrace::Hex(lastEfiCallIP_));
         }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        if (traceBootLocalLoad) {
+            logBootLocalAccess("post-read", state_.getCPUState(), state_.currentSlot_, instr,
+                               loadAddress, loadSize, instr.GetDst(),
+                               state_.getCPUState().GetGR(instr.GetDst()), memory);
+        }
+        if (traceBootLocalStore) {
+            logBootLocalAccess("post-write", state_.getCPUState(), state_.currentSlot_, instr,
+                               storeAddress, storeSize, instr.GetSrc1(),
+                               state_.getCPUState().GetGR(instr.GetSrc1()), memory);
+        }
         if (traceScanLoop && emitScanLoopTrace) {
             logScanLoopState("post", state_.getCPUState(), state_.currentSlot_, instr);
             ++scanLoopTraceCount;
