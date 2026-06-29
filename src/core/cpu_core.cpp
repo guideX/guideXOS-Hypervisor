@@ -447,6 +447,39 @@ void CPU::captureCallOutputRegisters() {
         pendingCallInputs_.push_back(value);
         state_.SetGR(32 + i, value);
     }
+
+    const uint64_t currentIP = state_.GetIP();
+    bool traceBridge = false;
+    for (const uint64_t value : pendingCallInputs_) {
+        if (value >= 0x5E000ULL && value <= 0x5E080ULL) {
+            traceBridge = true;
+            break;
+        }
+    }
+    if (!traceBridge) {
+        traceBridge = currentIP == 0x1D30ULL ||
+                      currentIP == 0x33CA0ULL ||
+                      currentIP == 0x34D40ULL ||
+                      currentIP == 0x1CC0ULL ||
+                      currentIP == 0x1A50ULL;
+    }
+    if (traceBridge) {
+        std::ostringstream oss;
+        oss << "[IA64-RSE] capture-call-inputs ip=0x" << std::hex << currentIP
+            << " sof=" << std::dec << static_cast<int>(sof)
+            << " sol=" << static_cast<int>(sol)
+            << " outputCount=" << outputCount
+            << " firstOutput=r" << firstOutput
+            << " mapped=[";
+        for (size_t i = 0; i < pendingCallInputs_.size(); ++i) {
+            if (i != 0) {
+                oss << ',';
+            }
+            oss << "r" << (32 + i) << "=0x" << std::hex << pendingCallInputs_[i];
+        }
+        oss << "]";
+        std::cout << oss.str() << std::endl;
+    }
 }
 
 void CPU::applyPendingCallInputRegisters() {
@@ -456,6 +489,35 @@ void CPU::applyPendingCallInputRegisters() {
 
     for (size_t i = 0; i < pendingCallInputs_.size() && 32 + i < NUM_GENERAL_REGISTERS; ++i) {
         state_.SetGR(32 + i, pendingCallInputs_[i]);
+    }
+
+    const uint64_t currentIP = state_.GetIP();
+    bool traceBridge = false;
+    for (const uint64_t value : pendingCallInputs_) {
+        if (value >= 0x5E000ULL && value <= 0x5E080ULL) {
+            traceBridge = true;
+            break;
+        }
+    }
+    if (!traceBridge) {
+        traceBridge = currentIP == 0x1D30ULL ||
+                      currentIP == 0x33C80ULL ||
+                      currentIP == 0x33CA0ULL ||
+                      currentIP == 0x34D40ULL ||
+                      currentIP == 0x2EDF0ULL;
+    }
+    if (traceBridge) {
+        std::ostringstream oss;
+        oss << "[IA64-RSE] apply-call-inputs ip=0x" << std::hex << currentIP
+            << " mapped=[";
+        for (size_t i = 0; i < pendingCallInputs_.size(); ++i) {
+            if (i != 0) {
+                oss << ',';
+            }
+            oss << "r" << (32 + i) << "=0x" << std::hex << pendingCallInputs_[i];
+        }
+        oss << "]";
+        std::cout << oss.str() << std::endl;
     }
 
     pendingCallInputs_.clear();
