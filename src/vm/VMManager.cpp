@@ -59,6 +59,10 @@ IA64ISAPlugin* getActiveIa64Plugin(VMInstance* instance) {
     return dynamic_cast<IA64ISAPlugin*>(cpu.getISAPlugin());
 }
 
+std::string previewBytes(IMemory& memory, uint64_t address, size_t count);
+std::string previewUtf16(IMemory& memory, uint64_t address);
+std::string describeEfiDevicePath(IMemory& memory, uint64_t address);
+
 void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
     if (!instance || !instance->vm || !phase) {
         return;
@@ -155,6 +159,7 @@ void installEfiLoadedImageReadTrace(VMInstance* instance,
 
     memory->GetMMU().RegisterReadHook(
         [instance,
+         memory,
          phaseLabel = std::string(phase),
          loadedImageAddress,
          loadedImageSize = EFI_LOADED_IMAGE_PROTOCOL_SIZE,
@@ -196,9 +201,23 @@ void installEfiLoadedImageReadTrace(VMInstance* instance,
                   << std::dec;
             if (shouldLogLoadedImage) {
                 trace << " field=LoadedImageProtocol";
+                uint64_t loadedImageFilePath = 0;
+                try {
+                    memory->Read(loadedImageAddress + 0x20,
+                                 reinterpret_cast<uint8_t*>(&loadedImageFilePath),
+                                 sizeof(loadedImageFilePath));
+                } catch (const std::exception&) {
+                    loadedImageFilePath = 0;
+                }
+                trace << " loadedImageFilePath=0x" << std::hex << loadedImageFilePath
+                      << " loadedImageBytes=" << previewBytes(*memory, loadedImageAddress, loadedImageSize);
             }
             if (shouldLogFilePath) {
                 trace << " field=LoadedImageFilePath";
+                trace << " filePathState="
+                      << describeEfiDevicePath(*memory, filePathAddress)
+                      << " filePathBytes="
+                      << previewBytes(*memory, filePathAddress, filePathSize);
             }
 
             std::cout << "[EFI-READ-TRACE] " << trace.str() << std::endl;
@@ -254,6 +273,116 @@ void WriteIa64Bundle(VMInstance* instance,
     std::memcpy(bundle, &lo, sizeof(lo));
     std::memcpy(bundle + sizeof(lo), &hi, sizeof(hi));
     instance->vm->getMemory().Write(address, bundle, sizeof(bundle));
+}
+
+std::string previewBytes(IMemory& memory, uint64_t address, size_t count) {
+    if (address == 0 || count == 0) {
+        return {};
+    }
+
+    std::ostringstream bytes;
+    bytes << std::hex;
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t value = 0;
+        try {
+            memory.Read(address + i, &value, sizeof(value));
+        } catch (const std::exception&) {
+            if (i == 0) {
+                return "<unreadable>";
+            }
+            bytes << " ...";
+            break;
+        }
+        if (i != 0) {
+            bytes << ' ';
+        }
+        if (value < 0x10) {
+            bytes << '0';
+        }
+        bytes << static_cast<unsigned>(value);
+    }
+    return bytes.str();
+}
+
+std::string previewUtf16(IMemory& memory, uint64_t address) {
+    if (address == 0) {
+        return {};
+    }
+
+    std::string text;
+    for (size_t i = 0; i < 80; ++i) {
+        uint16_t ch = 0;
+        try {
+            memory.Read(address + i * sizeof(ch), reinterpret_cast<uint8_t*>(&ch), sizeof(ch));
+        } catch (const std::exception&) {
+            if (text.empty()) {
+                return "<unreadable>";
+            }
+            break;
+        }
+
+        if (ch == 0) {
+            break;
+        }
+        if (ch >= 0x20 && ch <= 0x7E) {
+            text.push_back(static_cast<char>(ch));
+        } else {
+            text.push_back('?');
+        }
+    }
+
+    return text;
+}
+
+std::string describeEfiDevicePath(IMemory& memory, uint64_t address) {
+    if (address == 0) {
+        return "null";
+    }
+
+    std::ostringstream oss;
+    oss << "0x" << std::hex << address << " nodes=[";
+    uint64_t nodeAddress = address;
+    for (size_t nodeIndex = 0; nodeIndex < 8; ++nodeIndex) {
+        uint8_t type = 0;
+        uint8_t subtype = 0;
+        uint16_t length = 0;
+        try {
+            memory.Read(nodeAddress, &type, sizeof(type));
+            memory.Read(nodeAddress + 1, &subtype, sizeof(subtype));
+            memory.Read(nodeAddress + 2, reinterpret_cast<uint8_t*>(&length), sizeof(length));
+        } catch (const std::exception&) {
+            if (nodeIndex != 0) {
+                oss << ' ';
+            }
+            oss << "<unreadable@0x" << nodeAddress << ">";
+            break;
+        }
+
+        if (nodeIndex != 0) {
+            oss << ' ';
+        }
+        oss << "{type=0x" << std::hex << static_cast<unsigned>(type)
+            << ",sub=0x" << static_cast<unsigned>(subtype)
+            << ",len=0x" << length;
+        if (type == 0x04 && subtype == 0x04 && length >= 4) {
+            const std::string path = previewUtf16(memory, nodeAddress + 4);
+            if (!path.empty()) {
+                oss << ",path=\"" << path << "\"";
+            }
+        }
+        oss << "}";
+
+        if (type == 0x7F && subtype == 0xFF) {
+            break;
+        }
+        if (length < 4) {
+            oss << " <bad-length>";
+            break;
+        }
+        nodeAddress += length;
+    }
+    oss << "]";
+    return oss.str();
 }
 }
 
@@ -1405,7 +1534,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << " imageBase=0x" << loadedImageImageBase
                                                                         << " imageSize=0x" << loadedImageImageSize
                                                                         << " loadedImageFilePathAddr=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
-                                                                        << " loadedImageFilePathBytes=" << previewBytes(EFI_LOADED_IMAGE_FILE_PATH_ADDR, 32)
+                                                                        << " loadedImageFilePathNodeLength=0x" << filePathNodeLength
+                                                                        << " loadedImageFilePathBytes=" << previewBytes(EFI_LOADED_IMAGE_FILE_PATH_ADDR, static_cast<size_t>(filePathNodeLength) + 4ULL)
+                                                                        << " loadedImageFilePathNodes=" << describeEfiDevicePath(instance->vm->getMemory(), EFI_LOADED_IMAGE_FILE_PATH_ADDR)
                                                                         << " loadOptionsBytes=" << previewBytes(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 16);
                                                                     LOG_INFO(oss.str());
                                                                     BootStageTrace::Event("EFI_LOADED_IMAGE_VERIFY",

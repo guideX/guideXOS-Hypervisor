@@ -1,0 +1,10 @@
+^D:\DEV\GUIDEXOS_EMULATOR\CMAKE-BUILD-DIAG\CMAKEFILES\F97B69D457B797D8D5FB90121EF3DA45\GENERATE.STAMP.RULE
+setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Emulator -BD:/dev/guideXOS_Emulator/cmake-build-diag --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/dev/guideXOS_Emulator/cmake-build-diag/IA64Emulator.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

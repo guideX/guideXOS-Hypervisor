@@ -116,3 +116,15 @@
 3835	8844	8043705873414904	CMakeFiles/test_vmmanager.dir/src/io/Console.cpp.obj	ebfd5672f2db9f34
 1804	9422	8043705853096665	CMakeFiles/test_vmmanager.dir/src/memory/memory.cpp.obj	31839faadc0bb0a6
 41	11259	8043705835446935	CMakeFiles/test_vmmanager.dir/src/isa/IA64ISAPlugin.cpp.obj	b4ba33995f34b101
+44	3693	8044896153979168	CMakeFiles/test_isa_plugin.dir/src/isa/ISAPluginRegistry.cpp.obj	bf78506184d87a0e
+48	3736	8044896154029860	CMakeFiles/test_isa_plugin.dir/src/decoder/decoder.cpp.obj	a50888b039e5042e
+77	4667	8044896154312788	CMakeFiles/test_isa_plugin.dir/src/vm/CPUContext.cpp.obj	d7a0be6a25ff5aed
+93	5078	8044896154478897	CMakeFiles/test_isa_plugin.dir/src/vm/SimpleCPUScheduler.cpp.obj	b067069e9d4a7c80
+97	5421	8044896154508044	CMakeFiles/test_isa_plugin.dir/src/vm/BootTraceSystem.cpp.obj	91a1561b0b76b86a
+66	5502	8044896154214446	CMakeFiles/test_isa_plugin.dir/src/io/InterruptController.cpp.obj	52662f92709f2345
+35	5762	8044896153902615	CMakeFiles/test_isa_plugin.dir/src/core/cpu_core.cpp.obj	2e34a38ff6eb0b17
+89	6129	8044896154433832	CMakeFiles/test_isa_plugin.dir/src/vm/VMBootStateMachine.cpp.obj	f7c20848958e885d
+31	6468	8044896153851541	CMakeFiles/test_isa_plugin.dir/tests/test_isa_plugin.cpp.obj	4abaa8e4946d490c
+72	8117	8044896154255183	CMakeFiles/test_isa_plugin.dir/src/vm/VirtualMachine.cpp.obj	7550a9fcef8339e3
+84	10020	8044896154382714	CMakeFiles/test_isa_plugin.dir/src/vm/VMManager.cpp.obj	4c58878dd56316da
+40	10025	8044896153943686	CMakeFiles/test_isa_plugin.dir/src/isa/IA64ISAPlugin.cpp.obj	3495033c254e2504

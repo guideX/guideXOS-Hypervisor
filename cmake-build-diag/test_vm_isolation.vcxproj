@@ -1,0 +1,494 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{C38FC8F0-8FD1-335E-9433-27BA6A2D252A}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>test_vm_isolation</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\bin\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">test_vm_isolation.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">test_vm_isolation</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\bin\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">test_vm_isolation.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">test_vm_isolation</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\bin\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">test_vm_isolation.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">test_vm_isolation</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\bin\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">test_vm_isolation.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">test_vm_isolation</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <ForcedIncludeFiles>errno.h</ForcedIncludeFiles>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/dev/guideXOS_Emulator/cmake-build-diag/lib/Debug/test_vm_isolation.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/dev/guideXOS_Emulator/cmake-build-diag/bin/Debug/test_vm_isolation.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <ForcedIncludeFiles>errno.h</ForcedIncludeFiles>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/dev/guideXOS_Emulator/cmake-build-diag/lib/Release/test_vm_isolation.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/dev/guideXOS_Emulator/cmake-build-diag/bin/Release/test_vm_isolation.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <ForcedIncludeFiles>errno.h</ForcedIncludeFiles>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/dev/guideXOS_Emulator/cmake-build-diag/lib/MinSizeRel/test_vm_isolation.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/dev/guideXOS_Emulator/cmake-build-diag/bin/MinSizeRel/test_vm_isolation.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <ForcedIncludeFiles>errno.h</ForcedIncludeFiles>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;_CRT_DECLARE_NONSTDC_NAMES=1;_CRT_NONSTDC_NO_WARNINGS=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Emulator\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/dev/guideXOS_Emulator/cmake-build-diag/lib/RelWithDebInfo/test_vm_isolation.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/dev/guideXOS_Emulator/cmake-build-diag/bin/RelWithDebInfo/test_vm_isolation.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\guideXOS_Emulator\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/dev/guideXOS_Emulator/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Emulator -BD:/dev/guideXOS_Emulator/cmake-build-diag --check-stamp-file D:/dev/guideXOS_Emulator/cmake-build-diag/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/dev/guideXOS_Emulator/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Emulator -BD:/dev/guideXOS_Emulator/cmake-build-diag --check-stamp-file D:/dev/guideXOS_Emulator/cmake-build-diag/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/dev/guideXOS_Emulator/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Emulator -BD:/dev/guideXOS_Emulator/cmake-build-diag --check-stamp-file D:/dev/guideXOS_Emulator/cmake-build-diag/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/dev/guideXOS_Emulator/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Emulator -BD:/dev/guideXOS_Emulator/cmake-build-diag --check-stamp-file D:/dev/guideXOS_Emulator/cmake-build-diag/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\dev\guideXOS_Emulator\cmake-build-diag\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="D:\dev\guideXOS_Emulator\tests\test_vm_isolation.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\core\cpu.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\core\cpu_core.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\isa\IA64ISAPlugin.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\isa\ISAPluginRegistry.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\isa\ExampleISAPlugin.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\atype_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\itype_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\mtype_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\btype_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\ftype_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\lx_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\xtype_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\decoder\riscv_decoder.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\memory\memory.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\mmu\mmu.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\loader\loader.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\loader\bootstrap.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\loader\dynamic_linker.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\loader\crt0.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\loader\KernelValidator.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\loader\TestKernelHandler.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\abi\abi.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\libc\libc_bridge.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\io\Console.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\io\ConsoleOutputBuffer.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\io\Timer.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\io\InterruptController.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\io\FramebufferDevice.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\VirtualMachine.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\CPUContext.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\VMManager.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\VMBootStateMachine.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\SimpleCPUScheduler.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\BootTraceSystem.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\KernelPanic.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\vm\VMSnapshotManager.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\RawDiskDevice.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\VirtualBlockDevice.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\FilesystemMount.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\SimpleReadOnlyFS.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\PathResolver.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\VirtualDiskManager.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\InitramfsDevice.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\ISO9660Parser.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\FATParser.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\storage\PEParser.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\syscall\SyscallDispatcher.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\profiler\Profiler.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\fuzzer\Fuzzer.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\api\RestAPIServer.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\api\VMControlAPIHandler.cpp" />
+    <ClCompile Include="D:\dev\guideXOS_Emulator\src\webui\WebUIServer.cpp" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\cpu_state.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\cpu.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\decoder.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\memory.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\loader.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\bootstrap.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\abi.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\libc_bridge.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\dynamic_linker.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\crt0.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\logger.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\KernelValidator.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IDecoder.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\ICPU.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IMemory.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IISA.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IA64ISAPlugin.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\ISAPluginRegistry.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\ExampleISAPlugin.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\riscv_decoder.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\SyscallDispatcher.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\CPUContext.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IVirtualMachine.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\VirtualMachine.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\VMConfiguration.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\VMMetadata.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\VMManager.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IStorageDevice.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\RawDiskDevice.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\VirtualBlockDevice.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IFilesystem.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\FilesystemMount.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\SimpleReadOnlyFS.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\PathResolver.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\VirtualDiskManager.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\Watchpoint.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\Console.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\Timer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\InterruptController.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\Profiler.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\Fuzzer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\APITypes.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\APIServer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\APISerializer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\RestAPIServer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\IPCAPIServer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\WebSocketServer.h" />
+    <ClInclude Include="D:\dev\guideXOS_Emulator\include\WebUIServer.h" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\dev\guideXOS_Emulator\cmake-build-diag\ZERO_CHECK.vcxproj">
+      <Project>{F70B0F64-644F-3F5F-966F-51CC1F48FE10}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

@@ -1,11 +1,147 @@
 #include "VMManager.h"
 #include "RawDiskDevice.h"
+#include "FATParser.h"
 #include <iostream>
 #include <cassert>
+#include <cstring>
 #include <thread>
 #include <chrono>
+#include <vector>
 
 using namespace ia64;
+
+namespace {
+
+void writeLe16(std::vector<uint8_t>& buffer, size_t offset, uint16_t value) {
+    buffer[offset] = static_cast<uint8_t>(value & 0xff);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+}
+
+void writeLe32(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) {
+    buffer[offset] = static_cast<uint8_t>(value & 0xff);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+    buffer[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xff);
+    buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xff);
+}
+
+std::vector<uint8_t> makeFatImageWithBootLoader() {
+    std::vector<uint8_t> image(8 * 512, 0);
+    auto* boot = reinterpret_cast<guideXOS::FATBootSector*>(image.data());
+    boot->bytesPerSector = 512;
+    boot->sectorsPerCluster = 1;
+    boot->reservedSectors = 1;
+    boot->numFATs = 1;
+    boot->rootEntryCount = 16;
+    boot->totalSectors16 = 8;
+    boot->mediaType = 0xF8;
+    boot->sectorsPerFAT = 1;
+    boot->bootSignature = 0x29;
+    std::memcpy(boot->fileSystemType, "FAT16   ", 8);
+
+    auto* fat = image.data() + 512;
+    fat[0] = 0xF8;
+    fat[1] = 0xFF;
+    fat[2] = 0xFF;
+    fat[3] = 0xFF;
+
+    auto* root = reinterpret_cast<guideXOS::FATDirectoryEntry*>(image.data() + 1024);
+    std::memcpy(root[0].filename, "EFI     ", 8);
+    std::memcpy(root[0].extension, "   ", 3);
+    root[0].attributes = guideXOS::ATTR_DIRECTORY;
+    root[0].firstClusterLow = 2;
+    std::memcpy(root[1].filename, "BOOTIA64", 8);
+    std::memcpy(root[1].extension, "EFI", 3);
+    root[1].attributes = guideXOS::ATTR_ARCHIVE;
+    root[1].firstClusterLow = 4;
+    root[1].fileSize = 8;
+    root[2].filename[0] = 0x00;
+
+    auto* efiDir = image.data() + 1536;
+    auto* efiEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(efiDir);
+    std::memcpy(efiEntry[0].filename, "BOOT    ", 8);
+    std::memcpy(efiEntry[0].extension, "   ", 3);
+    efiEntry[0].attributes = guideXOS::ATTR_DIRECTORY;
+    efiEntry[0].firstClusterLow = 3;
+    efiEntry[1].filename[0] = 0x00;
+
+    auto* bootDir = image.data() + 2048;
+    auto* bootEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(bootDir);
+    std::memcpy(bootEntry[0].filename, "BOOTIA64", 8);
+    std::memcpy(bootEntry[0].extension, "EFI", 3);
+    bootEntry[0].attributes = guideXOS::ATTR_ARCHIVE;
+    bootEntry[0].firstClusterLow = 4;
+    bootEntry[0].fileSize = 8;
+    bootEntry[1].filename[0] = 0x00;
+
+    auto* data = image.data() + 2560;
+    std::memcpy(data, "BOOTIA64", 8);
+    return image;
+}
+
+std::vector<uint8_t> makeElToritoImageWithFatBootLoader(uint8_t platformId = 0xEF) {
+    std::vector<uint8_t> image(64 * 2048, 0);
+
+    // Minimal ISO9660 primary volume descriptor so the parser accepts the image.
+    auto* pvd = image.data() + 16 * 2048;
+    pvd[0] = 1;
+    std::memcpy(pvd + 1, "CD001", 5);
+    pvd[6] = 1;
+    writeLe16(image, 16 * 2048 + 128, 2048);
+    writeLe32(image, 16 * 2048 + 80, 64);
+    auto* rootRecord = pvd + 156;
+    rootRecord[0] = 34;
+    writeLe32(image, 16 * 2048 + 156 + 2, 20);
+    writeLe32(image, 16 * 2048 + 156 + 10, 2048);
+    rootRecord[25] = 2;
+    rootRecord[32] = 1;
+
+    auto* bootRecord = image.data() + 17 * 2048;
+    bootRecord[0] = 0;
+    std::memcpy(bootRecord + 1, "CD001", 5);
+    bootRecord[6] = 1;
+    std::memcpy(bootRecord + 7, "EL TORITO SPECIFICATION", 23);
+    writeLe32(image, 17 * 2048 + 71, 18);
+
+    auto* validation = image.data() + 18 * 2048;
+    validation[0] = 1;
+    validation[1] = platformId;
+    validation[21] = 0x55;
+    validation[22] = 0xAA;
+    auto* entry = image.data() + 18 * 2048 + 32;
+    entry[0] = 0x88;
+    entry[1] = 0;
+    writeLe16(image, 18 * 2048 + 34, 1);
+    writeLe32(image, 18 * 2048 + 40, 19);
+
+    auto fat = makeFatImageWithBootLoader();
+    std::memcpy(image.data() + 19 * 2048, fat.data(), fat.size());
+    return image;
+}
+
+void testBootImageFilePathDiagnostics() {
+    std::cout << "Testing VMManager EFI boot handoff diagnostics...\n";
+
+    VMManager manager;
+    VMConfiguration config = VMConfiguration::createStandard("boot-vm", 64);
+    config.cpu.cpuCount = 1;
+    config.boot.bootDevice = "disk0";
+    config.boot.directBoot = false;
+
+    std::string vmId = manager.createVM(config);
+    assert(!vmId.empty());
+
+    auto image = makeElToritoImageWithFatBootLoader();
+    auto disk = std::make_unique<MemoryBackedDisk>("disk0", image.size(), 2048);
+    std::memcpy(disk->getBuffer(), image.data(), image.size());
+    assert(manager.attachStorage(vmId, std::move(disk)));
+
+    assert(manager.startVM(vmId));
+    uint64_t cycles = manager.runVM(vmId, 20000);
+    std::cout << "  ? VMManager boot run executed " << cycles << " cycles\n";
+    std::cout << "  ? Check native/boot trace logs for LoadedImage.FilePath and 0x5e018 diagnostics\n";
+}
+
+} // namespace
 
 // Test VM creation
 void testVMCreation() {
@@ -393,6 +529,9 @@ int main() {
         std::cout << "\n";
         
         testVMWithStorage();
+        std::cout << "\n";
+
+        testBootImageFilePathDiagnostics();
         std::cout << "\n";
         
         std::cout << "=== All tests passed! ===\n";

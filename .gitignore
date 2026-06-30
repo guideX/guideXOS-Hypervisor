@@ -11,3 +11,4 @@
 /iso
 /cmake-build-vs18/bin
 /build-mingw/bin
+/cmake-build-diag/bin
