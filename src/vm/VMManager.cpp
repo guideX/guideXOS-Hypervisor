@@ -126,6 +126,86 @@ void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
         });
 }
 
+void installEfiLoadedImageReadTrace(VMInstance* instance,
+                                    const char* phase,
+                                    uint64_t loadedImageAddress,
+                                    uint64_t filePathAddress,
+                                    uint64_t filePathSize) {
+    if (!instance || !instance->vm || !phase) {
+        return;
+    }
+
+    auto* memory = dynamic_cast<Memory*>(&instance->vm->getMemory());
+    if (!memory) {
+        return;
+    }
+
+    static std::mutex tracedMutex;
+    static std::unordered_set<const VirtualMachine*> tracedVms;
+    {
+        std::lock_guard<std::mutex> lock(tracedMutex);
+        if (!tracedVms.insert(instance->vm.get()).second) {
+            return;
+        }
+    }
+
+    constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_SIZE = 0x70ULL;
+    auto loadedImageFirstHit = std::make_shared<bool>(false);
+    auto filePathFirstHit = std::make_shared<bool>(false);
+
+    memory->GetMMU().RegisterReadHook(
+        [instance,
+         phaseLabel = std::string(phase),
+         loadedImageAddress,
+         loadedImageSize = EFI_LOADED_IMAGE_PROTOCOL_SIZE,
+         loadedImageFirstHit,
+         filePathAddress,
+         filePathSize,
+         filePathFirstHit](HookContext& context, uint8_t* /*data*/) {
+            const uint64_t readEnd = context.address + static_cast<uint64_t>(context.size);
+            const uint64_t loadedImageEnd = loadedImageAddress + loadedImageSize;
+            const uint64_t filePathEnd = filePathAddress + filePathSize;
+            const bool overlapsLoadedImage =
+                !(readEnd <= loadedImageAddress || context.address >= loadedImageEnd);
+            const bool overlapsFilePath =
+                filePathAddress != 0 &&
+                !(readEnd <= filePathAddress || context.address >= filePathEnd);
+
+            if (!overlapsLoadedImage && !overlapsFilePath) {
+                return;
+            }
+
+            const bool shouldLogLoadedImage = overlapsLoadedImage && !*loadedImageFirstHit;
+            const bool shouldLogFilePath = overlapsFilePath && !*filePathFirstHit;
+            if (!shouldLogLoadedImage && !shouldLogFilePath) {
+                return;
+            }
+
+            if (shouldLogLoadedImage) {
+                *loadedImageFirstHit = true;
+            }
+            if (shouldLogFilePath) {
+                *filePathFirstHit = true;
+            }
+
+            std::ostringstream trace;
+            trace << "phase=\"" << phaseLabel << "\""
+                  << " ip=0x" << std::hex << instance->vm->getIP()
+                  << " address=0x" << context.address
+                  << " size=0x" << context.size
+                  << std::dec;
+            if (shouldLogLoadedImage) {
+                trace << " field=LoadedImageProtocol";
+            }
+            if (shouldLogFilePath) {
+                trace << " field=LoadedImageFilePath";
+            }
+
+            std::cout << "[EFI-READ-TRACE] " << trace.str() << std::endl;
+            BootStageTrace::Event("EFI_LOADED_IMAGE_READ", trace.str());
+        });
+}
+
 uint64_t SetupMinimalEfiStack(VMInstance* instance, std::ostringstream& oss) {
     constexpr uint64_t EFI_STACK_SIZE = 0x40000ULL;   // 256 KiB
     constexpr uint64_t EFI_STACK_GUARD = 0x10000ULL;  // leave the top page range unused
@@ -1243,6 +1323,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x10, EFI_STUB_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x18, EFI_IMAGE_DEVICE_HANDLE);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
+                                                                    LOG_INFO(std::string("[EFI-MILESTONE] LoadedImage.FilePath pointer written")
+                                                                             + " field=0x" + BootStageTrace::Hex(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20)
+                                                                             + " value=0x" + BootStageTrace::Hex(EFI_LOADED_IMAGE_FILE_PATH_ADDR));
                                                                     // Provide a real empty UTF-16 load-options buffer so the
                                                                     // bootloader never has to chase a null pointer when it
                                                                     // probes argv-like state during early file/path setup.
@@ -1321,7 +1404,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << " loadOptions=0x" << loadedImageLoadOptions
                                                                         << " imageBase=0x" << loadedImageImageBase
                                                                         << " imageSize=0x" << loadedImageImageSize
-                                                                        << " filePathBytes=" << previewBytes(EFI_LOADED_IMAGE_FILE_PATH_ADDR, 16)
+                                                                        << " loadedImageFilePathAddr=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
+                                                                        << " loadedImageFilePathBytes=" << previewBytes(EFI_LOADED_IMAGE_FILE_PATH_ADDR, 32)
                                                                         << " loadOptionsBytes=" << previewBytes(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 16);
                                                                     LOG_INFO(oss.str());
                                                                     BootStageTrace::Event("EFI_LOADED_IMAGE_VERIFY",
@@ -1330,6 +1414,11 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         " loadOptions=" + BootStageTrace::Hex(loadedImageLoadOptions) +
                                                                         " imageBase=" + BootStageTrace::Hex(loadedImageImageBase) +
                                                                         " imageSize=" + BootStageTrace::Hex(loadedImageImageSize));
+                                                                    installEfiLoadedImageReadTrace(instance,
+                                                                                                   "boot-image setup",
+                                                                                                   EFI_LOADED_IMAGE_PROTOCOL_ADDR,
+                                                                                                   EFI_LOADED_IMAGE_FILE_PATH_ADDR,
+                                                                                                   static_cast<uint64_t>(filePathNodeLength) + 4ULL);
 
                                                                     // Minimal Simple Text Output protocol for BOOTIA64.EFI
                                                                     // status/diagnostic writes. This avoids bootloader printf

@@ -897,6 +897,7 @@ std::string describeLoadedImageProtocol(IMemory& memory, uint64_t address) {
         << " SystemTable=0x" << systemTable
         << " DeviceHandle=0x" << deviceHandle
         << " FilePath=0x" << filePath
+        << " FilePathBytes=" << readHexBytesPreview(memory, filePath, 32)
         << " LoadOptionsSize=0x" << loadOptionsSize
         << " LoadOptions=0x" << loadOptions
         << " ImageBase=0x" << imageBase
