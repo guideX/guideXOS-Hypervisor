@@ -5,6 +5,7 @@
 #include "FATParser.h"
 #include "PEParser.h"
 #include "TestKernelHandler.h"
+#include "IA64EfiHandoffLayout.h"
 #include "memory.h"
 #include "IA64ISAPlugin.h"
 #include "logger.h"
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_set>
+#include <stdexcept>
 
 namespace ia64 {
 
@@ -63,7 +65,9 @@ std::string previewBytes(IMemory& memory, uint64_t address, size_t count);
 std::string previewUtf16(IMemory& memory, uint64_t address);
 std::string describeEfiDevicePath(IMemory& memory, uint64_t address);
 
-void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
+void installEfiBootMetadataWriteTrace(VMInstance* instance,
+                                      const char* phase,
+                                      uint64_t metadataAddr) {
     if (!instance || !instance->vm || !phase) {
         return;
     }
@@ -82,7 +86,6 @@ void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
         }
     }
 
-    constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = 0x1FE01D00ULL;
     constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIZE = 24ULL;
     auto firstHit = std::make_shared<bool>(false);
 
@@ -90,7 +93,7 @@ void installEfiBootMetadataWriteTrace(VMInstance* instance, const char* phase) {
         [instance,
          phaseLabel = std::string(phase),
          firstHit,
-         metadataAddr = EFI_BOOT_IMAGE_METADATA_ADDR,
+         metadataAddr,
          metadataSize = EFI_BOOT_IMAGE_METADATA_SIZE](HookContext& context, uint8_t* data) {
             const uint64_t writeEnd = context.address + static_cast<uint64_t>(context.size);
             const uint64_t metadataEnd = metadataAddr + metadataSize;
@@ -561,6 +564,35 @@ bool VMManager::startVM(const std::string& vmId) {
         
         // Load bootloader from boot device if configured
         const auto& bootConfig = instance->metadata.configuration.boot;
+        const uint64_t guestMemorySize =
+            static_cast<uint64_t>(instance->vm->getMemory().GetTotalSize());
+        EfiHandoffLayout efiLayout{};
+        bool efiLayoutReady = false;
+        auto ensureEfiLayout = [&]() -> const EfiHandoffLayout& {
+            if (!efiLayoutReady) {
+                if (!tryComputeEfiHandoffLayout(guestMemorySize, efiLayout)) {
+                    std::ostringstream error;
+                    error << "Guest memory too small for IA-64 EFI handoff region"
+                          << " guestMemorySize=0x" << std::hex << guestMemorySize;
+                    LOG_ERROR(error.str());
+                    throw std::runtime_error(error.str());
+                }
+                efiLayoutReady = true;
+                std::ostringstream layoutLog;
+                layoutLog << "[EFI-MILESTONE] EFI handoff layout"
+                          << " base=0x" << std::hex << efiLayout.base
+                          << " end=0x" << efiLayout.end
+                          << " loadedImage=0x" << efiLayout.loadedImageProtocolAddr
+                          << " filePath=0x" << efiLayout.loadedImageFilePathAddr
+                          << " loadOptions=0x" << efiLayout.loadedImageLoadOptionsAddr
+                          << " bootImageMetadata=0x" << efiLayout.bootImageMetadataAddr
+                          << " poolBase=0x" << efiLayout.poolBase
+                          << " poolEnd=0x" << efiLayout.poolEnd
+                          << " guestMemorySize=0x" << guestMemorySize;
+                LOG_INFO(layoutLog.str());
+            }
+            return efiLayout;
+        };
         
         // Handle direct boot mode (load kernel directly)
         if (bootConfig.directBoot && !bootConfig.kernelPath.empty()) {
@@ -835,29 +867,29 @@ bool VMManager::startVM(const std::string& vmId) {
                                                         BootStageTrace::Stage(40, "FAT image mounted",
                                                                               "sourcePath=\"" + bootImageBackingStorePath + "\" bytes=" +
                                                                               std::to_string(bootImageBackingStoreData.size()));
-                                                        constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = 0x1FE01D00ULL;
+                                                        const EfiHandoffLayout& layout = ensureEfiLayout();
                                                         constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIGNATURE = 0x42465441494D4645ULL;
                                                         constexpr uint64_t EFI_BOOT_IMAGE_GUEST_BASE = 0x18000000ULL;
                                                         const uint64_t memorySizeForBootImage =
-                                                            static_cast<uint64_t>(instance->vm->getMemory().GetTotalSize());
+                                                            guestMemorySize;
                                                         if (EFI_BOOT_IMAGE_GUEST_BASE + bootImageBackingStoreData.size() < memorySizeForBootImage &&
-                                                            EFI_BOOT_IMAGE_GUEST_BASE + bootImageBackingStoreData.size() < 0x1FE00000ULL) {
+                                                            EFI_BOOT_IMAGE_GUEST_BASE + bootImageBackingStoreData.size() < layout.base) {
                                                             instance->vm->getMemory().Write(
                                                                 EFI_BOOT_IMAGE_GUEST_BASE,
                                                                 bootImageBackingStoreData.data(),
                                                                 bootImageBackingStoreData.size());
                                                             instance->vm->getMemory().Write(
-                                                                EFI_BOOT_IMAGE_METADATA_ADDR,
+                                                                layout.bootImageMetadataAddr,
                                                                 reinterpret_cast<const uint8_t*>(&EFI_BOOT_IMAGE_METADATA_SIGNATURE),
                                                                 sizeof(EFI_BOOT_IMAGE_METADATA_SIGNATURE));
                                                             instance->vm->getMemory().Write(
-                                                                EFI_BOOT_IMAGE_METADATA_ADDR + 8,
+                                                                layout.bootImageMetadataAddr + 8,
                                                                 reinterpret_cast<const uint8_t*>(&EFI_BOOT_IMAGE_GUEST_BASE),
                                                                 sizeof(EFI_BOOT_IMAGE_GUEST_BASE));
                                                             const uint64_t bootImageSize =
                                                                 static_cast<uint64_t>(bootImageBackingStoreData.size());
                                                             instance->vm->getMemory().Write(
-                                                                EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                layout.bootImageMetadataAddr + 16,
                                                                 reinterpret_cast<const uint8_t*>(&bootImageSize),
                                                                 sizeof(bootImageSize));
                                                             IA64ISAPlugin* ia64Plugin = getActiveIa64Plugin(instance);
@@ -867,21 +899,21 @@ bool VMManager::startVM(const std::string& vmId) {
                                                             LOG_INFO("[EFI-MILESTONE] Published read-only EFI boot image backing store"
                                                                      " base=0x18000000 size=0x" +
                                                                      std::to_string(bootImageBackingStoreData.size()) +
-                                                                     " metadata=0x1fe01d00");
+                                                                     " metadata=0x" + BootStageTrace::Hex(layout.bootImageMetadataAddr));
                                                             {
                                                                 uint64_t metadataSignature = 0;
                                                                 uint64_t metadataBase = 0;
                                                                 uint64_t metadataSize = 0;
                                                                 instance->vm->getMemory().Read(
-                                                                    EFI_BOOT_IMAGE_METADATA_ADDR,
+                                                                    layout.bootImageMetadataAddr,
                                                                     reinterpret_cast<uint8_t*>(&metadataSignature),
                                                                     sizeof(metadataSignature));
                                                                 instance->vm->getMemory().Read(
-                                                                    EFI_BOOT_IMAGE_METADATA_ADDR + 8,
+                                                                    layout.bootImageMetadataAddr + 8,
                                                                     reinterpret_cast<uint8_t*>(&metadataBase),
                                                                     sizeof(metadataBase));
                                                                     instance->vm->getMemory().Read(
-                                                                        EFI_BOOT_IMAGE_METADATA_ADDR + 16,
+                                                                        layout.bootImageMetadataAddr + 16,
                                                                         reinterpret_cast<uint8_t*>(&metadataSize),
                                                                         sizeof(metadataSize));
                                                                     std::ostringstream trace;
@@ -895,20 +927,22 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                           << " signature=0x" << metadataSignature
                                                                           << " base=0x" << metadataBase
                                                                           << " size=0x" << metadataSize
-                                                                          << " addr=0x" << EFI_BOOT_IMAGE_METADATA_ADDR;
+                                                                          << " addr=0x" << layout.bootImageMetadataAddr;
                                                                     LOG_INFO(trace.str());
                                                             }
-                                                            installEfiBootMetadataWriteTrace(instance, "boot-image publication");
+                                                            installEfiBootMetadataWriteTrace(instance,
+                                                                                             "boot-image publication",
+                                                                                             layout.bootImageMetadataAddr);
                                                             BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                 "base=0x18000000 size=" +
                                                                 BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
-                                                                " metadata=0x1fe01d00");
+                                                                " metadata=" + BootStageTrace::Hex(layout.bootImageMetadataAddr));
                                                         } else {
                                                             LOG_WARN("[EFI-MILESTONE] EFI boot image backing store not published; FileProtocol will report EFI_NO_MEDIA");
                                                             BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                 "published=false base=0x18000000 size=" +
                                                                 BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
-                                                                " metadata=0x1fe01d00");
+                                                                " metadata=" + BootStageTrace::Hex(layout.bootImageMetadataAddr));
                                                         }
                                                     } else {
                                                         LOG_WARN("[EFI-MILESTONE] EFI boot image backing store present but FAT parse failed; "
@@ -916,7 +950,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                         BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                             "published=false base=0x18000000 size=" +
                                                             BootStageTrace::Hex(static_cast<uint64_t>(bootImageBackingStoreData.size())) +
-                                                            " metadata=0x1fe01d00");
+                                                            " metadata=" + BootStageTrace::Hex(ensureEfiLayout().bootImageMetadataAddr));
                                                     }
                                                 }
                                             } else {
@@ -1108,7 +1142,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // and early bootloader scratch space. The IA-64 stack is
                                                                 // placed near the top of memory with a guard, so this page
                                                                 // remains below it while staying outside low guest RAM.
-                                                                constexpr uint64_t EFI_STUB_ADDR = 0x1FE00000ULL;
+                                                                const EfiHandoffLayout& layout = ensureEfiLayout();
+                                                                const uint64_t EFI_STUB_ADDR = layout.base;
                                                                 constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
                                                                 constexpr uint64_t EFI_IMAGE_DEVICE_HANDLE = 0x40ULL; // boot media handle advertised by LocateHandle/SimpleFS
 
@@ -1117,57 +1152,57 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 // to pass non-null service table probes; service calls
                                                                 // still trap/fail through normal unsupported paths.
                                                                 {
-                                                                    constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_STUB_ADDR + 0x400ULL;
-                                                                    constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_STUB_ADDR + 0x800ULL;
-                                                                    constexpr uint64_t EFI_FIRMWARE_VENDOR_ADDR = EFI_STUB_ADDR + 0xC00ULL;
-                                                                    constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_STUB_ADDR + 0x1D00ULL;
+                                                                    const uint64_t EFI_RUNTIME_SERVICES_ADDR = layout.runtimeServicesAddr;
+                                                                    const uint64_t EFI_BOOT_SERVICES_ADDR = layout.bootServicesAddr;
+                                                                    const uint64_t EFI_FIRMWARE_VENDOR_ADDR = layout.firmwareVendorAddr;
+                                                                    const uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = layout.bootImageMetadataAddr;
                                                                     constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIGNATURE = 0x42465441494D4645ULL;
                                                                     constexpr uint64_t EFI_BOOT_IMAGE_GUEST_BASE = 0x18000000ULL;
-                                                                    constexpr uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xC80ULL;
-                                                                    constexpr uint64_t EFI_OPEN_VOLUME_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xCC0ULL;
-                                                                    constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_STUB_ADDR + 0xD00ULL;
-                                                                    constexpr uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_STUB_ADDR + 0x1000ULL;
-                                                                    constexpr uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_STUB_ADDR + 0x1040ULL;
-                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = EFI_STUB_ADDR + 0x1200ULL;
-                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_STUB_ADDR + 0x1260ULL;
-                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1280ULL;
-                                                                    constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x12C0ULL;
-                                                                    constexpr uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1400ULL;
-                                                                    constexpr uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1440ULL;
-                                                                    constexpr uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1480ULL;
-                                                                    constexpr uint64_t EFI_FILE_CLOSE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x14C0ULL;
-                                                                    constexpr uint64_t EFI_FILE_READ_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1500ULL;
-                                                                    constexpr uint64_t EFI_FILE_READ_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1540ULL;
-                                                                    constexpr uint64_t EFI_FILE_GET_POSITION_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1580ULL;
-                                                                    constexpr uint64_t EFI_FILE_GET_POSITION_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x15C0ULL;
-                                                                    constexpr uint64_t EFI_FILE_SET_POSITION_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1600ULL;
-                                                                    constexpr uint64_t EFI_FILE_SET_POSITION_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1640ULL;
-                                                                    constexpr uint64_t EFI_FILE_GET_INFO_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1680ULL;
-                                                                    constexpr uint64_t EFI_FILE_GET_INFO_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x16C0ULL;
-                                                                    constexpr uint64_t EFI_LOCATE_HANDLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1700ULL;
-                                                                    constexpr uint64_t EFI_LOCATE_HANDLE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1740ULL;
-                                                                    constexpr uint64_t EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1780ULL;
-                                                                    constexpr uint64_t EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x17C0ULL;
-                                                                    constexpr uint64_t EFI_GET_MEMORY_MAP_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1800ULL;
-                                                                    constexpr uint64_t EFI_GET_MEMORY_MAP_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1840ULL;
-                                                                    constexpr uint64_t EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1880ULL;
-                                                                    constexpr uint64_t EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x18C0ULL;
-                                                                    constexpr uint64_t EFI_LOAD_IMAGE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1900ULL;
-                                                                    constexpr uint64_t EFI_LOAD_IMAGE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x1940ULL;
-                                                                    constexpr uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0x1980ULL;
-                                                                    constexpr uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0x19C0ULL;
-                                                                    constexpr uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_STUB_ADDR + 0x1300ULL;
-                                                                    constexpr uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = EFI_STUB_ADDR + 0x1340ULL;
-                                                                    constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xD80ULL;
-                                                                    constexpr uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xDC0ULL;
-                                                                    constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xE00ULL;
-                                                                    constexpr uint64_t EFI_ALLOCATE_POOL_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xE40ULL;
-                                                                    constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xE80ULL;
-                                                                    constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xEC0ULL;
-                                                                    constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xF00ULL;
-                                                                    constexpr uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xF40ULL;
-                                                                    constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_STUB_ADDR + 0xF80ULL;
-                                                                    constexpr uint64_t EFI_SUCCESS_STUB_DESC_ADDR = EFI_STUB_ADDR + 0xFC0ULL;
+                                                                    const uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = layout.openVolumeStubCodeAddr;
+                                                                    const uint64_t EFI_OPEN_VOLUME_STUB_DESC_ADDR = layout.openVolumeStubDescAddr;
+                                                                    const uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = layout.loadedImageProtocolAddr;
+                                                                    const uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = layout.simpleFileSystemProtocolAddr;
+                                                                    const uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = layout.rootFileProtocolAddr;
+                                                                    const uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = layout.textOutputProtocolAddr;
+                                                                    const uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = layout.textOutputModeAddr;
+                                                                    const uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = layout.textOutputStringStubCodeAddr;
+                                                                    const uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = layout.textOutputStringStubDescAddr;
+                                                                    const uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = layout.fileOpenStubCodeAddr;
+                                                                    const uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = layout.fileOpenStubDescAddr;
+                                                                    const uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = layout.fileCloseStubCodeAddr;
+                                                                    const uint64_t EFI_FILE_CLOSE_STUB_DESC_ADDR = layout.fileCloseStubDescAddr;
+                                                                    const uint64_t EFI_FILE_READ_STUB_CODE_ADDR = layout.fileReadStubCodeAddr;
+                                                                    const uint64_t EFI_FILE_READ_STUB_DESC_ADDR = layout.fileReadStubDescAddr;
+                                                                    const uint64_t EFI_FILE_GET_POSITION_STUB_CODE_ADDR = layout.fileGetPositionStubCodeAddr;
+                                                                    const uint64_t EFI_FILE_GET_POSITION_STUB_DESC_ADDR = layout.fileGetPositionStubDescAddr;
+                                                                    const uint64_t EFI_FILE_SET_POSITION_STUB_CODE_ADDR = layout.fileSetPositionStubCodeAddr;
+                                                                    const uint64_t EFI_FILE_SET_POSITION_STUB_DESC_ADDR = layout.fileSetPositionStubDescAddr;
+                                                                    const uint64_t EFI_FILE_GET_INFO_STUB_CODE_ADDR = layout.fileGetInfoStubCodeAddr;
+                                                                    const uint64_t EFI_FILE_GET_INFO_STUB_DESC_ADDR = layout.fileGetInfoStubDescAddr;
+                                                                    const uint64_t EFI_LOCATE_HANDLE_STUB_CODE_ADDR = layout.locateHandleStubCodeAddr;
+                                                                    const uint64_t EFI_LOCATE_HANDLE_STUB_DESC_ADDR = layout.locateHandleStubDescAddr;
+                                                                    const uint64_t EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR = layout.locateProtocolStubCodeAddr;
+                                                                    const uint64_t EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR = layout.locateProtocolStubDescAddr;
+                                                                    const uint64_t EFI_GET_MEMORY_MAP_STUB_CODE_ADDR = layout.getMemoryMapStubCodeAddr;
+                                                                    const uint64_t EFI_GET_MEMORY_MAP_STUB_DESC_ADDR = layout.getMemoryMapStubDescAddr;
+                                                                    const uint64_t EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR = layout.exitBootServicesStubCodeAddr;
+                                                                    const uint64_t EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR = layout.exitBootServicesStubDescAddr;
+                                                                    const uint64_t EFI_LOAD_IMAGE_STUB_CODE_ADDR = layout.loadImageStubCodeAddr;
+                                                                    const uint64_t EFI_LOAD_IMAGE_STUB_DESC_ADDR = layout.loadImageStubDescAddr;
+                                                                    const uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = layout.startImageStubCodeAddr;
+                                                                    const uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = layout.startImageStubDescAddr;
+                                                                    const uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = layout.loadedImageFilePathAddr;
+                                                                    const uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = layout.loadedImageLoadOptionsAddr;
+                                                                    const uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = layout.getVariableStubCodeAddr;
+                                                                    const uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = layout.getVariableStubDescAddr;
+                                                                    const uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = layout.allocatePoolStubCodeAddr;
+                                                                    const uint64_t EFI_ALLOCATE_POOL_STUB_DESC_ADDR = layout.allocatePoolStubDescAddr;
+                                                                    const uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = layout.handleProtocolStubCodeAddr;
+                                                                    const uint64_t EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = layout.handleProtocolStubDescAddr;
+                                                                    const uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = layout.unsupportedStubCodeAddr;
+                                                                    const uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = layout.unsupportedStubDescAddr;
+                                                                    const uint64_t EFI_SUCCESS_STUB_CODE_ADDR = layout.successStubCodeAddr;
+                                                                    const uint64_t EFI_SUCCESS_STUB_DESC_ADDR = layout.successStubDescAddr;
                                                                     constexpr uint64_t EFI_TABLE_SIGNATURE = 0x5453595320494249ULL; // "IBI SYST"
                                                                     constexpr uint64_t EFI_BOOT_SERVICES_SIGNATURE = 0x56524553544F4F42ULL; // "BOOTSERV"
                                                                     constexpr uint64_t EFI_RUNTIME_SERVICES_SIGNATURE = 0x56524553544E5552ULL; // "RUNTSERV"
@@ -1419,7 +1454,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                   << " addr=0x" << EFI_BOOT_IMAGE_METADATA_ADDR;
                                                                             LOG_INFO(trace.str());
                                                                         }
-                                                                        installEfiBootMetadataWriteTrace(instance, "boot-image publication");
+                                                                        installEfiBootMetadataWriteTrace(instance,
+                                                                                                         "boot-image publication",
+                                                                                                         EFI_BOOT_IMAGE_METADATA_ADDR);
                                                                         BootStageTrace::Event("EFI_BOOT_IMAGE_BACKING_STORE",
                                                                             "base=" + BootStageTrace::Hex(EFI_BOOT_IMAGE_GUEST_BASE) +
                                                                             " size=" + BootStageTrace::Hex(static_cast<uint64_t>(bootImgData.size())) +

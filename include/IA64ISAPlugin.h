@@ -221,6 +221,7 @@ private:
     void recordRecentInstruction(uint64_t ip, size_t slot, const std::string& disasm);
     void recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm);
     void dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, size_t slot, const InstructionEx& instr, uint64_t baseBefore) const;
+    bool ensureEfiHandoffLayout(IMemory& memory);
     bool ensureEfiBootFat(IMemory& memory);
     void installFileProtocolTable(IMemory& memory, uint64_t protocolAddress);
     uint64_t allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment = 16);
@@ -342,6 +343,8 @@ private:
     std::vector<uint8_t> efiBootImage_;
     std::unique_ptr<guideXOS::FATParser> efiBootFat_;
     bool efiBootImageFromVmManager_;
+    uint64_t efiHandoffLayoutMemorySize_;
+    bool efiHandoffLayoutInitialized_;
 
     struct CallFrameSnapshot {
         std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;

@@ -1,6 +1,8 @@
 #include "VMManager.h"
 #include "RawDiskDevice.h"
 #include "FATParser.h"
+#include "IA64EfiHandoffLayout.h"
+#include "IMemory.h"
 #include <iostream>
 #include <cassert>
 #include <cstring>
@@ -118,6 +120,27 @@ std::vector<uint8_t> makeElToritoImageWithFatBootLoader(uint8_t platformId = 0xE
     return image;
 }
 
+std::string decodeUtf16GuestString(const IMemory& memory, uint64_t address, size_t maxChars = 64) {
+    if (address == 0) {
+        return "<null>";
+    }
+
+    std::string out;
+    for (size_t i = 0; i < maxChars; ++i) {
+        uint16_t ch = 0;
+        memory.Read(address + i * sizeof(ch), reinterpret_cast<uint8_t*>(&ch), sizeof(ch));
+        if (ch == 0) {
+            break;
+        }
+        if (ch >= 0x20 && ch <= 0x7E) {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('?');
+        }
+    }
+    return out;
+}
+
 void testBootImageFilePathDiagnostics() {
     std::cout << "Testing VMManager EFI boot handoff diagnostics...\n";
 
@@ -136,9 +159,53 @@ void testBootImageFilePathDiagnostics() {
     assert(manager.attachStorage(vmId, std::move(disk)));
 
     assert(manager.startVM(vmId));
-    uint64_t cycles = manager.runVM(vmId, 20000);
-    std::cout << "  ? VMManager boot run executed " << cycles << " cycles\n";
-    std::cout << "  ? Check native/boot trace logs for LoadedImage.FilePath and 0x5e018 diagnostics\n";
+
+    const VirtualMachine* vm = manager.getVMDirect(vmId);
+    assert(vm != nullptr);
+    const IMemory& memory = vm->getMemory();
+    const uint64_t guestMemorySize = static_cast<uint64_t>(memory.GetTotalSize());
+    EfiHandoffLayout layout{};
+    assert(tryComputeEfiHandoffLayout(guestMemorySize, layout));
+
+    assert(layout.loadedImageProtocolAddr < guestMemorySize);
+    assert(layout.loadedImageFilePathAddr < guestMemorySize);
+    assert(layout.bootImageMetadataAddr < guestMemorySize);
+
+    uint64_t filePathPtr = 0;
+    memory.Read(layout.loadedImageProtocolAddr + 0x20,
+                reinterpret_cast<uint8_t*>(&filePathPtr),
+                sizeof(filePathPtr));
+    assert(filePathPtr < guestMemorySize);
+
+    uint8_t nodeHeader[4] = {};
+    memory.Read(filePathPtr, nodeHeader, sizeof(nodeHeader));
+    assert(nodeHeader[0] == 0x04);
+    assert(nodeHeader[1] == 0x04);
+
+    uint16_t nodeLength = 0;
+    std::memcpy(&nodeLength, nodeHeader + 2, sizeof(nodeLength));
+    assert(nodeLength >= 4);
+    assert(filePathPtr + nodeLength + 4 <= guestMemorySize);
+
+    uint8_t endNode[4] = {};
+    memory.Read(filePathPtr + nodeLength, endNode, sizeof(endNode));
+    assert(endNode[0] == 0x7F);
+    assert(endNode[1] == 0xFF);
+    assert(endNode[2] == 0x04);
+    assert(endNode[3] == 0x00);
+    assert(filePathPtr + nodeLength + sizeof(endNode) <= guestMemorySize);
+
+    const std::string decodedPath = decodeUtf16GuestString(memory, filePathPtr + 4);
+    std::cout << "  ? EFI metadata base: 0x" << std::hex << layout.base << std::dec << "\n";
+    std::cout << "  ? LoadedImage protocol: 0x" << std::hex << layout.loadedImageProtocolAddr << std::dec << "\n";
+    std::cout << "  ? Staged FilePath address: 0x" << std::hex << layout.loadedImageFilePathAddr << std::dec << "\n";
+    std::cout << "  ? LoadedImage.FilePath pointer: 0x" << std::hex << filePathPtr << std::dec << "\n";
+    std::cout << "  ? FilePath device path: type=0x" << std::hex << static_cast<unsigned>(nodeHeader[0])
+              << " sub=0x" << static_cast<unsigned>(nodeHeader[1])
+              << " len=0x" << nodeLength
+              << " path=\"" << decodedPath << "\""
+              << " endNode=0x" << (filePathPtr + nodeLength) << std::dec << "\n";
+    std::cout << "  ? LoadedImage FilePath bytes are readable inside guest RAM\n";
 }
 
 } // namespace
@@ -491,10 +558,18 @@ void testVMWithStorage() {
     std::cout << "  ? Storage configuration structure tested\n";
 }
 
-int main() {
+int main(int argc, char** argv) {
     std::cout << "=== VMManager Test Suite ===\n\n";
     
+    const bool bootOnly = argc >= 2 && std::string(argv[1]) == "--boot-only";
+    
     try {
+        if (bootOnly) {
+            testBootImageFilePathDiagnostics();
+            std::cout << "\n=== Boot-only test passed! ===\n";
+            return 0;
+        }
+
         testVMCreation();
         std::cout << "\n";
         

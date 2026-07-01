@@ -1,4 +1,5 @@
 #include "IA64ISAPlugin.h"
+#include "IA64EfiHandoffLayout.h"
 #include "SyscallDispatcher.h"
 #include "Profiler.h"
 #include "memory.h"
@@ -34,58 +35,64 @@ constexpr uint64_t EFI_STATUS_BUFFER_TOO_SMALL = 0x8000000000000005ULL;
 constexpr uint64_t EFI_STATUS_WRITE_PROTECTED = 0x8000000000000008ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_STATUS_NO_MEDIA = 0x800000000000000CULL;
-constexpr uint64_t EFI_HANDOFF_REGION_BASE = 0x1FE00000ULL;
-constexpr uint64_t EFI_HANDOFF_REGION_END = 0x20000000ULL;
-constexpr uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + 0x400ULL;
-constexpr uint64_t EFI_BOOT_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + 0x800ULL;
-constexpr uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_HANDOFF_REGION_BASE + 0x1D00ULL;
+constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_BASE = 0x1FE00000ULL;
+constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_END = 0x20000000ULL;
+uint64_t EFI_HANDOFF_REGION_BASE = EFI_DEFAULT_HANDOFF_REGION_BASE;
+uint64_t EFI_HANDOFF_REGION_END = EFI_DEFAULT_HANDOFF_REGION_END;
+uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRuntimeServicesOffset;
+uint64_t EFI_BOOT_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootServicesOffset;
+uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootImageMetadataOffset;
 constexpr uint64_t EFI_BOOT_IMAGE_METADATA_SIGNATURE = 0x42465441494D4645ULL; // "EFMIATFB"
 constexpr uint64_t EFI_BOOT_IMAGE_GUEST_BASE = 0x18000000ULL;
-constexpr uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xC80ULL;
-constexpr uint64_t EFI_OPEN_VOLUME_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xCC0ULL;
-constexpr uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0xD00ULL;
-constexpr uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xDC0ULL;
-constexpr uint64_t EFI_ALLOCATE_POOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xE40ULL;
-constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xEC0ULL;
-constexpr uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xF40ULL;
-constexpr uint64_t EFI_SUCCESS_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0xFC0ULL;
-constexpr uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1000ULL;
-constexpr uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1040ULL;
-constexpr uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + 0x1200ULL;
-constexpr uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1260ULL;
-constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1280ULL;
-constexpr uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x12C0ULL;
-constexpr uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1400ULL;
-constexpr uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x1440ULL;
-constexpr uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1480ULL;
-constexpr uint64_t EFI_FILE_CLOSE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x14C0ULL;
-constexpr uint64_t EFI_FILE_READ_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1500ULL;
-constexpr uint64_t EFI_FILE_READ_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x1540ULL;
-constexpr uint64_t EFI_FILE_GET_POSITION_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1580ULL;
-constexpr uint64_t EFI_FILE_GET_POSITION_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x15C0ULL;
-constexpr uint64_t EFI_FILE_SET_POSITION_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1600ULL;
-constexpr uint64_t EFI_FILE_SET_POSITION_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x1640ULL;
-constexpr uint64_t EFI_FILE_GET_INFO_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1680ULL;
-constexpr uint64_t EFI_FILE_GET_INFO_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x16C0ULL;
-constexpr uint64_t EFI_LOCATE_HANDLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1700ULL;
-constexpr uint64_t EFI_LOCATE_HANDLE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x1740ULL;
-constexpr uint64_t EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1780ULL;
-constexpr uint64_t EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x17C0ULL;
-constexpr uint64_t EFI_GET_MEMORY_MAP_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1800ULL;
-constexpr uint64_t EFI_GET_MEMORY_MAP_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x1840ULL;
-constexpr uint64_t EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1880ULL;
-constexpr uint64_t EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x18C0ULL;
-constexpr uint64_t EFI_LOAD_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1900ULL;
-constexpr uint64_t EFI_LOAD_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x1940ULL;
-constexpr uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0x1980ULL;
-constexpr uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + 0x19C0ULL;
-constexpr uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xD80ULL;
-constexpr uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE00ULL;
-constexpr uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xE80ULL;
-constexpr uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF00ULL;
-constexpr uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + 0xF80ULL;
-constexpr uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + 0x2000ULL;
-constexpr uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + 0x80000ULL;
+uint64_t EFI_OPEN_VOLUME_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiOpenVolumeStubCodeOffset;
+uint64_t EFI_OPEN_VOLUME_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiOpenVolumeStubDescOffset;
+uint64_t EFI_LOADED_IMAGE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageProtocolOffset;
+uint64_t EFI_GET_VARIABLE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiGetVariableStubDescOffset;
+uint64_t EFI_ALLOCATE_POOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiAllocatePoolStubDescOffset;
+uint64_t EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiHandleProtocolStubDescOffset;
+uint64_t EFI_UNSUPPORTED_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiUnsupportedStubDescOffset;
+uint64_t EFI_SUCCESS_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSuccessStubDescOffset;
+uint64_t EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSimpleFileSystemProtocolOffset;
+uint64_t EFI_ROOT_FILE_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRootFileProtocolOffset;
+uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputProtocolOffset;
+uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputModeOffset;
+uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputStringStubCodeOffset;
+uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputStringStubDescOffset;
+uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileOpenStubCodeOffset;
+uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileOpenStubDescOffset;
+uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileCloseStubCodeOffset;
+uint64_t EFI_FILE_CLOSE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileCloseStubDescOffset;
+uint64_t EFI_FILE_READ_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileReadStubCodeOffset;
+uint64_t EFI_FILE_READ_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileReadStubDescOffset;
+uint64_t EFI_FILE_GET_POSITION_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileGetPositionStubCodeOffset;
+uint64_t EFI_FILE_GET_POSITION_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileGetPositionStubDescOffset;
+uint64_t EFI_FILE_SET_POSITION_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileSetPositionStubCodeOffset;
+uint64_t EFI_FILE_SET_POSITION_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileSetPositionStubDescOffset;
+uint64_t EFI_FILE_GET_INFO_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileGetInfoStubCodeOffset;
+uint64_t EFI_FILE_GET_INFO_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileGetInfoStubDescOffset;
+uint64_t EFI_LOCATE_HANDLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLocateHandleStubCodeOffset;
+uint64_t EFI_LOCATE_HANDLE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLocateHandleStubDescOffset;
+uint64_t EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLocateProtocolStubCodeOffset;
+uint64_t EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLocateProtocolStubDescOffset;
+uint64_t EFI_GET_MEMORY_MAP_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiGetMemoryMapStubCodeOffset;
+uint64_t EFI_GET_MEMORY_MAP_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiGetMemoryMapStubDescOffset;
+uint64_t EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiExitBootServicesStubCodeOffset;
+uint64_t EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiExitBootServicesStubDescOffset;
+uint64_t EFI_LOAD_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadImageStubCodeOffset;
+uint64_t EFI_LOAD_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadImageStubDescOffset;
+uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiStartImageStubCodeOffset;
+uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiStartImageStubDescOffset;
+uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageFilePathOffset;
+uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageLoadOptionsOffset;
+uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiGetVariableStubCodeOffset;
+uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiAllocatePoolStubCodeOffset;
+uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiHandleProtocolStubCodeOffset;
+uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiUnsupportedStubCodeOffset;
+uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSuccessStubCodeOffset;
+uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + kEfiPoolBaseOffset;
+uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + kEfiPoolEndOffset;
+uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR;
+uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = EFI_HANDOFF_REGION_BASE + 0x193010ULL;
 constexpr bool IA64_STRICT_RECOVERY = false;
 constexpr uint64_t IA64_EXECUTABLE_IMAGE_BASE = 0x100000ULL;
 constexpr uint64_t IA64_EXECUTABLE_IMAGE_END = 0x200000ULL;
@@ -236,6 +243,67 @@ const char* lookupEfiSlotName(uint64_t offset, const EfiSlotName (&slots)[N]) {
         }
     }
     return nullptr;
+}
+
+void applyEfiHandoffLayoutBase(uint64_t base) {
+    EFI_HANDOFF_REGION_BASE = base;
+    EFI_HANDOFF_REGION_END = base + kEfiHandoffRegionSpan;
+    EFI_RUNTIME_SERVICES_ADDR = base + kEfiRuntimeServicesOffset;
+    EFI_BOOT_SERVICES_ADDR = base + kEfiBootServicesOffset;
+    EFI_BOOT_IMAGE_METADATA_ADDR = base + kEfiBootImageMetadataOffset;
+    EFI_OPEN_VOLUME_STUB_CODE_ADDR = base + kEfiOpenVolumeStubCodeOffset;
+    EFI_OPEN_VOLUME_STUB_DESC_ADDR = base + kEfiOpenVolumeStubDescOffset;
+    EFI_LOADED_IMAGE_PROTOCOL_ADDR = base + kEfiLoadedImageProtocolOffset;
+    EFI_GET_VARIABLE_STUB_DESC_ADDR = base + kEfiGetVariableStubDescOffset;
+    EFI_ALLOCATE_POOL_STUB_DESC_ADDR = base + kEfiAllocatePoolStubDescOffset;
+    EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR = base + kEfiHandleProtocolStubDescOffset;
+    EFI_UNSUPPORTED_STUB_DESC_ADDR = base + kEfiUnsupportedStubDescOffset;
+    EFI_SUCCESS_STUB_DESC_ADDR = base + kEfiSuccessStubDescOffset;
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR = base + kEfiSimpleFileSystemProtocolOffset;
+    EFI_ROOT_FILE_PROTOCOL_ADDR = base + kEfiRootFileProtocolOffset;
+    EFI_TEXT_OUTPUT_PROTOCOL_ADDR = base + kEfiTextOutputProtocolOffset;
+    EFI_TEXT_OUTPUT_MODE_ADDR = base + kEfiTextOutputModeOffset;
+    EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = base + kEfiTextOutputStringStubCodeOffset;
+    EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = base + kEfiTextOutputStringStubDescOffset;
+    EFI_FILE_OPEN_STUB_CODE_ADDR = base + kEfiFileOpenStubCodeOffset;
+    EFI_FILE_OPEN_STUB_DESC_ADDR = base + kEfiFileOpenStubDescOffset;
+    EFI_FILE_CLOSE_STUB_CODE_ADDR = base + kEfiFileCloseStubCodeOffset;
+    EFI_FILE_CLOSE_STUB_DESC_ADDR = base + kEfiFileCloseStubDescOffset;
+    EFI_FILE_READ_STUB_CODE_ADDR = base + kEfiFileReadStubCodeOffset;
+    EFI_FILE_READ_STUB_DESC_ADDR = base + kEfiFileReadStubDescOffset;
+    EFI_FILE_GET_POSITION_STUB_CODE_ADDR = base + kEfiFileGetPositionStubCodeOffset;
+    EFI_FILE_GET_POSITION_STUB_DESC_ADDR = base + kEfiFileGetPositionStubDescOffset;
+    EFI_FILE_SET_POSITION_STUB_CODE_ADDR = base + kEfiFileSetPositionStubCodeOffset;
+    EFI_FILE_SET_POSITION_STUB_DESC_ADDR = base + kEfiFileSetPositionStubDescOffset;
+    EFI_FILE_GET_INFO_STUB_CODE_ADDR = base + kEfiFileGetInfoStubCodeOffset;
+    EFI_FILE_GET_INFO_STUB_DESC_ADDR = base + kEfiFileGetInfoStubDescOffset;
+    EFI_LOCATE_HANDLE_STUB_CODE_ADDR = base + kEfiLocateHandleStubCodeOffset;
+    EFI_LOCATE_HANDLE_STUB_DESC_ADDR = base + kEfiLocateHandleStubDescOffset;
+    EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR = base + kEfiLocateProtocolStubCodeOffset;
+    EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR = base + kEfiLocateProtocolStubDescOffset;
+    EFI_GET_MEMORY_MAP_STUB_CODE_ADDR = base + kEfiGetMemoryMapStubCodeOffset;
+    EFI_GET_MEMORY_MAP_STUB_DESC_ADDR = base + kEfiGetMemoryMapStubDescOffset;
+    EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR = base + kEfiExitBootServicesStubCodeOffset;
+    EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR = base + kEfiExitBootServicesStubDescOffset;
+    EFI_LOAD_IMAGE_STUB_CODE_ADDR = base + kEfiLoadImageStubCodeOffset;
+    EFI_LOAD_IMAGE_STUB_DESC_ADDR = base + kEfiLoadImageStubDescOffset;
+    EFI_START_IMAGE_STUB_CODE_ADDR = base + kEfiStartImageStubCodeOffset;
+    EFI_START_IMAGE_STUB_DESC_ADDR = base + kEfiStartImageStubDescOffset;
+    EFI_LOADED_IMAGE_FILE_PATH_ADDR = base + kEfiLoadedImageFilePathOffset;
+    EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = base + kEfiLoadedImageLoadOptionsOffset;
+    EFI_GET_VARIABLE_STUB_CODE_ADDR = base + kEfiGetVariableStubCodeOffset;
+    EFI_ALLOCATE_POOL_STUB_CODE_ADDR = base + kEfiAllocatePoolStubCodeOffset;
+    EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = base + kEfiHandleProtocolStubCodeOffset;
+    EFI_UNSUPPORTED_STUB_CODE_ADDR = base + kEfiUnsupportedStubCodeOffset;
+    EFI_SUCCESS_STUB_CODE_ADDR = base + kEfiSuccessStubCodeOffset;
+    EFI_POOL_BASE = base + kEfiPoolBaseOffset;
+    EFI_POOL_END = base + kEfiPoolEndOffset;
+    EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR;
+    EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = base + 0x193010ULL;
+}
+
+void resetEfiHandoffLayoutGlobals() {
+    applyEfiHandoffLayoutBase(EFI_DEFAULT_HANDOFF_REGION_BASE);
 }
 
 std::string describeEfiTableSlot(uint64_t address) {
@@ -1481,6 +1549,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiBootImage_()
     , efiBootFat_(nullptr)
     , efiBootImageFromVmManager_(false)
+    , efiHandoffLayoutMemorySize_(0)
+    , efiHandoffLayoutInitialized_(false)
     , callFrameStack_() {
 }
 
@@ -1536,6 +1606,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiBootImage_()
     , efiBootFat_(nullptr)
     , efiBootImageFromVmManager_(false)
+    , efiHandoffLayoutMemorySize_(0)
+    , efiHandoffLayoutInitialized_(false)
     , callFrameStack_() {
 }
 
@@ -1545,6 +1617,50 @@ void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
     efiBootFat_.reset();
 }
 
+bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
+    const uint64_t memorySize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (efiHandoffLayoutInitialized_ && memorySize == efiHandoffLayoutMemorySize_) {
+        return true;
+    }
+
+    if (memorySize == 0) {
+        resetEfiHandoffLayoutGlobals();
+        efiHandoffLayoutMemorySize_ = 0;
+        efiHandoffLayoutInitialized_ = true;
+        return true;
+    }
+
+    EfiHandoffLayout layout{};
+    if (!tryComputeEfiHandoffLayout(memorySize, layout)) {
+        resetEfiHandoffLayoutGlobals();
+        efiPoolNext_ = EFI_POOL_BASE;
+        efiHandoffLayoutMemorySize_ = memorySize;
+        efiHandoffLayoutInitialized_ = true;
+        std::cerr << "[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; "
+                  << "falling back to default fixed layout"
+                  << " guestMemorySize=0x" << std::hex << memorySize
+                  << " requestedRegionSpan=0x" << kEfiHandoffRegionSpan
+                  << " defaultBase=0x" << EFI_DEFAULT_HANDOFF_REGION_BASE
+                  << std::dec << std::endl;
+        return true;
+    }
+
+    applyEfiHandoffLayoutBase(layout.base);
+    efiPoolNext_ = EFI_POOL_BASE;
+    efiHandoffLayoutMemorySize_ = memorySize;
+    efiHandoffLayoutInitialized_ = true;
+    std::cout << "[EFI-MILESTONE] IA-64 EFI handoff layout configured"
+              << " guestMemorySize=0x" << std::hex << memorySize
+              << " base=0x" << EFI_HANDOFF_REGION_BASE
+              << " end=0x" << EFI_HANDOFF_REGION_END
+              << " loadedImage=0x" << EFI_LOADED_IMAGE_PROTOCOL_ADDR
+              << " filePath=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
+              << " poolBase=0x" << EFI_POOL_BASE
+              << " poolEnd=0x" << EFI_POOL_END
+              << std::dec << std::endl;
+    return true;
+}
+
 void IA64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
@@ -1552,6 +1668,7 @@ void IA64ISAPlugin::reset() {
     recentInstructions_.clear();
     recentTrackedRegisterWrites_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
+    resetEfiHandoffLayoutGlobals();
     efiPoolNext_ = EFI_POOL_BASE;
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
@@ -1594,6 +1711,8 @@ void IA64ISAPlugin::reset() {
     efiBootImage_.clear();
     efiBootFat_.reset();
     efiBootImageFromVmManager_ = false;
+    efiHandoffLayoutMemorySize_ = 0;
+    efiHandoffLayoutInitialized_ = false;
     callFrameStack_.clear();
 }
 
@@ -1918,7 +2037,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     if (!cachedInstruction_.HasBranchTarget() &&
                         cachedInstruction_.GetSrc1() == 6 &&
                         currentIP >= 0x1900 && currentIP < 0x1A00 &&
-                        branchTarget >= 0x1FE00000ULL && branchTarget < 0x1FE01000ULL) {
+                        branchTarget >= EFI_HANDOFF_REGION_BASE &&
+                        branchTarget < EFI_HANDOFF_REGION_BASE + 0x1000ULL) {
                         state_.getCPUState().SetBR(0, currentIP + 16);
                         std::cout << "[IA64-BR] thunk br.cond b6 resolved via b6="
                                   << formatHex(branchTarget)
@@ -2941,6 +3061,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
 }
 
 ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
+    if (!ensureEfiHandoffLayout(memory)) {
+        state_.bundleValid_ = false;
+        hasCachedInstruction_ = false;
+        return ISAExecutionResult::HALT;
+    }
+
     // Service interrupts first
     servicePendingInterrupt(memory);
     
@@ -3956,7 +4082,6 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             currentIP == 0x34D50ULL ||
             currentIP == 0x34D90ULL;
         if (traceBootStringPath) {
-            constexpr uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = 0x1FE01340ULL;
             const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
             const bool traceLivePredicate =
                 (tracePredicate == 0) || state_.getCPUState().GetPR(tracePredicate);
@@ -3993,7 +4118,6 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             std::cout << "[EFI-STRING-TRACE] " << trace.str() << std::endl;
             BootStageTrace::Event("EFI_STRING_TRACE", trace.str());
         }
-        static constexpr uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = 0x1FF93010ULL;
         static constexpr size_t EFI_POST_SIMPLEFS_OUT_WATCH_SIZE = 0x10;
         const size_t loadSize = loadSizeForInstruction(instr.GetType());
         const uint64_t loadAddress = loadSize != 0 ? cpu.GetGR(instr.GetSrc1()) : 0;
