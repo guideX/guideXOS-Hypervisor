@@ -649,6 +649,7 @@ const char* instructionAccessTypeName(InstructionType type) {
 }
 
 std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count);
+std::string describeEfiDevicePath(IMemory& memory, uint64_t address);
 
 void logBootLocalAccess(const char* phase,
                         const CPUState& cpu,
@@ -682,6 +683,119 @@ void logBootLocalAccess(const char* phase,
     trace << " bytes=" << readHexBytesPreview(memory, address, size);
     std::cout << "[EFI-LOCAL-TRACE] " << trace.str() << std::endl;
     BootStageTrace::Event("EFI_LOCAL_TRACE", trace.str());
+}
+
+std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemory& memory) {
+    std::ostringstream oss;
+    bool first = true;
+    auto append = [&](const char* text) {
+        if (!first) {
+            oss << ";";
+        }
+        oss << text;
+        first = false;
+    };
+
+    const auto overlaps = [&](uint64_t base, size_t span) {
+        return rangesOverlap(address, size, base, span);
+    };
+
+    if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL)) {
+        append("LoadedImage");
+        if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20ULL, sizeof(uint64_t))) {
+            append("LoadedImage.FilePathField");
+        }
+        if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30ULL, sizeof(uint32_t))) {
+            append("LoadedImage.LoadOptionsSize");
+        }
+        if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38ULL, sizeof(uint64_t))) {
+            append("LoadedImage.LoadOptions");
+        }
+    }
+
+    if (overlaps(EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL)) {
+        append("LoadedImage.FilePathNode");
+        if (address <= EFI_LOADED_IMAGE_FILE_PATH_ADDR + 4ULL &&
+            address + static_cast<uint64_t>(size) > EFI_LOADED_IMAGE_FILE_PATH_ADDR + 4ULL) {
+            append("FilePathUtf16");
+        }
+        if (overlaps(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x36ULL, 0x4ULL)) {
+            append("FilePathEndNode");
+        }
+    }
+
+    if (overlaps(0x5E000ULL, 0x80ULL)) {
+        append("LoaderLocalBuffer");
+        if (overlaps(0x5E018ULL, sizeof(uint16_t))) {
+            append("LocalUtf16Probe");
+        }
+    }
+
+    if (first) {
+        return {};
+    }
+
+    oss << "decoded=";
+    if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL)) {
+        if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x20ULL, sizeof(uint64_t))) {
+            oss << "LoadedImage.FilePath pointer field";
+        } else if (overlaps(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38ULL, sizeof(uint64_t))) {
+            oss << "LoadedImage.LoadOptions pointer field";
+        } else {
+            oss << "LoadedImage protocol block";
+        }
+    } else if (overlaps(EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL)) {
+        if (address == EFI_LOADED_IMAGE_FILE_PATH_ADDR) {
+            oss << describeEfiDevicePath(memory, EFI_LOADED_IMAGE_FILE_PATH_ADDR);
+        } else {
+            oss << "LoadedImage.FilePath payload";
+        }
+    } else if (overlaps(0x5E000ULL, 0x80ULL)) {
+        oss << "loader-local CHAR16 buffer";
+    }
+    return oss.str();
+}
+
+void logEfiHandoffAccess(const char* phase,
+                         const CPUState& cpu,
+                         size_t slot,
+                         const InstructionEx& instr,
+                         uint64_t address,
+                         size_t size,
+                         uint64_t registerNumber,
+                         uint64_t registerValue,
+                         IMemory& memory) {
+    if (size == 0) {
+        return;
+    }
+
+    const bool overlapsLoadedImage =
+        rangesOverlap(address, size, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL);
+    const bool overlapsFilePath =
+        rangesOverlap(address, size, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL);
+    const bool overlapsLocalBuffer =
+        rangesOverlap(address, size, 0x5E000ULL, 0x80ULL);
+    if (!overlapsLoadedImage && !overlapsFilePath && !overlapsLocalBuffer) {
+        return;
+    }
+
+    std::ostringstream trace;
+    trace << "phase=" << phase
+          << " ip=0x" << std::hex << cpu.GetIP()
+          << " slot=" << std::dec << slot
+          << " type=" << instructionAccessTypeName(instr.GetType())
+          << " disasm=\"" << instr.GetDisassembly() << "\""
+          << " address=0x" << std::hex << address
+          << " size=0x" << size
+          << " reg=r" << std::dec << registerNumber
+          << " value=0x" << std::hex << registerValue
+          << " bytes=" << readHexBytesPreview(memory, address, size)
+          << " meaning=\"" << describeEfiHandoffAccessMeaning(address, size, memory) << "\"";
+    if (instr.HasImmediate()) {
+        trace << " imm=" << std::dec << static_cast<int64_t>(instr.GetImmediate()) << std::hex;
+    }
+    std::cout << "[EFI-HANDOFF-TRACE] " << trace.str() << std::endl;
+    BootStageTrace::Event("EFI_HANDOFF_TRACE", trace.str());
 }
 
 uint64_t readCallerOutputRegister(const CPUState& cpu, size_t index) {
@@ -4129,6 +4243,14 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const bool traceBootLocalStore =
             storeSize != 0 &&
             rangesOverlap(storeAddress, storeSize, 0x5E000ULL, 0x80ULL);
+        const bool traceEfiHandoffLoad =
+            loadSize != 0 &&
+            (rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL));
+        const bool traceEfiHandoffStore =
+            storeSize != 0 &&
+            (rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL));
         if (traceBootLocalLoad) {
             logBootLocalAccess("pre-read", cpu, state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),
@@ -4138,6 +4260,16 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             logBootLocalAccess("pre-write", cpu, state_.currentSlot_, instr,
                                storeAddress, storeSize, instr.GetSrc1(),
                                cpu.GetGR(instr.GetSrc1()), memory);
+        }
+        if (traceEfiHandoffLoad) {
+            logEfiHandoffAccess("pre-read", cpu, state_.currentSlot_, instr,
+                                loadAddress, loadSize, instr.GetDst(),
+                                cpu.GetGR(instr.GetDst()), memory);
+        }
+        if (traceEfiHandoffStore) {
+            logEfiHandoffAccess("pre-write", cpu, state_.currentSlot_, instr,
+                                storeAddress, storeSize, instr.GetSrc1(),
+                                cpu.GetGR(instr.GetSrc1()), memory);
         }
         const bool watchPostSimpleFsOutStore =
             storeSize != 0 &&
@@ -4210,6 +4342,16 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             logBootLocalAccess("post-write", state_.getCPUState(), state_.currentSlot_, instr,
                                storeAddress, storeSize, instr.GetSrc1(),
                                state_.getCPUState().GetGR(instr.GetSrc1()), memory);
+        }
+        if (traceEfiHandoffLoad) {
+            logEfiHandoffAccess("post-read", state_.getCPUState(), state_.currentSlot_, instr,
+                                loadAddress, loadSize, instr.GetDst(),
+                                state_.getCPUState().GetGR(instr.GetDst()), memory);
+        }
+        if (traceEfiHandoffStore) {
+            logEfiHandoffAccess("post-write", state_.getCPUState(), state_.currentSlot_, instr,
+                                storeAddress, storeSize, instr.GetSrc1(),
+                                state_.getCPUState().GetGR(instr.GetSrc1()), memory);
         }
         if (traceScanLoop && emitScanLoopTrace) {
             logScanLoopState("post", state_.getCPUState(), state_.currentSlot_, instr);

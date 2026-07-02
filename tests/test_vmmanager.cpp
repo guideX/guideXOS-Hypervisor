@@ -141,41 +141,116 @@ std::string decodeUtf16GuestString(const IMemory& memory, uint64_t address, size
     return out;
 }
 
+void testEfiHandoffLayout64MiB() {
+    std::cout << "Testing explicit 64 MiB EFI handoff layout regression...\n";
+
+    constexpr uint64_t guestMemorySize = 64ULL * 1024ULL * 1024ULL;
+    EfiHandoffLayout layout{};
+    assert(tryComputeEfiHandoffLayout(guestMemorySize, layout));
+
+    assert(layout.base < guestMemorySize);
+    assert(layout.end <= guestMemorySize);
+    assert(layout.loadedImageProtocolAddr < guestMemorySize);
+    assert(layout.loadedImageFilePathAddr < guestMemorySize);
+    assert(layout.loadedImageLoadOptionsAddr < guestMemorySize);
+    assert(layout.bootImageMetadataAddr < guestMemorySize);
+    assert(layout.poolBase < guestMemorySize);
+    assert(layout.poolEnd <= guestMemorySize);
+
+    std::cout << "  ? 64 MiB layout base: 0x" << std::hex << layout.base
+              << " loadedImage=0x" << layout.loadedImageProtocolAddr
+              << " filePath=0x" << layout.loadedImageFilePathAddr
+              << " metadataEnd=0x" << layout.end
+              << std::dec << "\n";
+}
+
 void testBootImageFilePathDiagnostics() {
     std::cout << "Testing VMManager EFI boot handoff diagnostics...\n";
 
-    VMManager manager;
-    VMConfiguration config = VMConfiguration::createStandard("boot-vm", 64);
-    config.cpu.cpuCount = 1;
-    config.boot.bootDevice = "disk0";
-    config.boot.directBoot = false;
-
-    std::string vmId = manager.createVM(config);
-    assert(!vmId.empty());
-
-    auto image = makeElToritoImageWithFatBootLoader();
-    auto disk = std::make_unique<MemoryBackedDisk>("disk0", image.size(), 2048);
-    std::memcpy(disk->getBuffer(), image.data(), image.size());
-    assert(manager.attachStorage(vmId, std::move(disk)));
-
-    assert(manager.startVM(vmId));
-
-    const VirtualMachine* vm = manager.getVMDirect(vmId);
-    assert(vm != nullptr);
-    const IMemory& memory = vm->getMemory();
-    const uint64_t guestMemorySize = static_cast<uint64_t>(memory.GetTotalSize());
+    constexpr uint64_t guestMemorySize = 64ULL * 1024ULL * 1024ULL;
+    Memory memory(static_cast<size_t>(guestMemorySize));
+    assert(guestMemorySize == 64ULL * 1024ULL * 1024ULL);
     EfiHandoffLayout layout{};
     assert(tryComputeEfiHandoffLayout(guestMemorySize, layout));
 
     assert(layout.loadedImageProtocolAddr < guestMemorySize);
     assert(layout.loadedImageFilePathAddr < guestMemorySize);
     assert(layout.bootImageMetadataAddr < guestMemorySize);
+    assert(layout.loadedImageFilePathAddr + 0x40ULL <= guestMemorySize);
 
     uint64_t filePathPtr = 0;
+    const uint64_t loadedImageRevision = 0x1000ULL;
+    const uint64_t loadedImageSystemTable = layout.base;
+    const uint64_t loadedImageDeviceHandle = 0x40ULL;
+    const uint64_t loadedImageLoadOptions = layout.loadedImageLoadOptionsAddr;
+    const uint64_t loadedImageImageBase = 0x5E000ULL;
+    const uint64_t loadedImageImageSize = 0x5E000ULL;
+    const uint32_t loadedImageLoadOptionsSize = 0U;
+    const uint32_t loadedImageImageCodeType = 2U;
+    const uint32_t loadedImageImageDataType = 4U;
+    const uint64_t loadedImageUnload = layout.bootImageMetadataAddr;
+    memory.Write(layout.loadedImageProtocolAddr + 0x00,
+                 reinterpret_cast<const uint8_t*>(&loadedImageRevision),
+                 sizeof(loadedImageRevision));
+    memory.Write(layout.loadedImageProtocolAddr + 0x10,
+                 reinterpret_cast<const uint8_t*>(&loadedImageSystemTable),
+                 sizeof(loadedImageSystemTable));
+    memory.Write(layout.loadedImageProtocolAddr + 0x18,
+                 reinterpret_cast<const uint8_t*>(&loadedImageDeviceHandle),
+                 sizeof(loadedImageDeviceHandle));
+    memory.Write(layout.loadedImageProtocolAddr + 0x20,
+                 reinterpret_cast<const uint8_t*>(&layout.loadedImageFilePathAddr),
+                 sizeof(layout.loadedImageFilePathAddr));
+    memory.Write(layout.loadedImageProtocolAddr + 0x30,
+                 reinterpret_cast<const uint8_t*>(&loadedImageLoadOptionsSize),
+                 sizeof(loadedImageLoadOptionsSize));
+    memory.Write(layout.loadedImageProtocolAddr + 0x38,
+                 reinterpret_cast<const uint8_t*>(&loadedImageLoadOptions),
+                 sizeof(loadedImageLoadOptions));
+    memory.Write(layout.loadedImageProtocolAddr + 0x40,
+                 reinterpret_cast<const uint8_t*>(&loadedImageImageBase),
+                 sizeof(loadedImageImageBase));
+    memory.Write(layout.loadedImageProtocolAddr + 0x48,
+                 reinterpret_cast<const uint8_t*>(&loadedImageImageSize),
+                 sizeof(loadedImageImageSize));
+    memory.Write(layout.loadedImageProtocolAddr + 0x50,
+                 reinterpret_cast<const uint8_t*>(&loadedImageImageCodeType),
+                 sizeof(loadedImageImageCodeType));
+    memory.Write(layout.loadedImageProtocolAddr + 0x54,
+                 reinterpret_cast<const uint8_t*>(&loadedImageImageDataType),
+                 sizeof(loadedImageImageDataType));
+    memory.Write(layout.loadedImageProtocolAddr + 0x58,
+                 reinterpret_cast<const uint8_t*>(&loadedImageUnload),
+                 sizeof(loadedImageUnload));
+
+    const uint16_t loadedImagePath[] = {
+        '\\','E','F','I','\\','B','O','O','T','\\',
+        'B','O','O','T','I','A','6','4','.','E','F','I',0
+    };
+    const uint16_t filePathNodeLength = static_cast<uint16_t>(4 + sizeof(loadedImagePath));
+    const uint8_t devicePathType = 0x04U;
+    const uint8_t devicePathSubtype = 0x04U;
+    memory.Write(layout.loadedImageFilePathAddr + 0x00, &devicePathType, sizeof(devicePathType));
+    memory.Write(layout.loadedImageFilePathAddr + 0x01, &devicePathSubtype, sizeof(devicePathSubtype));
+    memory.Write(layout.loadedImageFilePathAddr + 0x02,
+                 reinterpret_cast<const uint8_t*>(&filePathNodeLength),
+                 sizeof(filePathNodeLength));
+    memory.Write(layout.loadedImageFilePathAddr + 0x04,
+                 reinterpret_cast<const uint8_t*>(loadedImagePath),
+                 sizeof(loadedImagePath));
+    const uint64_t filePathEndNode = layout.loadedImageFilePathAddr + filePathNodeLength;
+    const uint8_t endType = 0x7FU;
+    const uint8_t endSubtype = 0xFFU;
+    const uint16_t endLength = 0x04U;
+    memory.Write(filePathEndNode + 0x00, &endType, sizeof(endType));
+    memory.Write(filePathEndNode + 0x01, &endSubtype, sizeof(endSubtype));
+    memory.Write(filePathEndNode + 0x02, reinterpret_cast<const uint8_t*>(&endLength), sizeof(endLength));
+
     memory.Read(layout.loadedImageProtocolAddr + 0x20,
                 reinterpret_cast<uint8_t*>(&filePathPtr),
                 sizeof(filePathPtr));
     assert(filePathPtr < guestMemorySize);
+    assert(filePathPtr == layout.loadedImageFilePathAddr);
 
     uint8_t nodeHeader[4] = {};
     memory.Read(filePathPtr, nodeHeader, sizeof(nodeHeader));
@@ -604,6 +679,9 @@ int main(int argc, char** argv) {
         std::cout << "\n";
         
         testVMWithStorage();
+        std::cout << "\n";
+
+        testEfiHandoffLayout64MiB();
         std::cout << "\n";
 
         testBootImageFilePathDiagnostics();
