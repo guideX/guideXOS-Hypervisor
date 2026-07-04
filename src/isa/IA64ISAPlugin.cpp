@@ -117,6 +117,29 @@ std::string cpuSummary(const CPUState& cpu) {
     return oss.str();
 }
 
+std::string predicateWindowSummary(const CPUState& cpu, size_t count = 8) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < count; ++i) {
+        if (i != 0) {
+            oss << ' ';
+        }
+        oss << 'p' << i << '=' << (cpu.GetPR(i) ? 1 : 0);
+    }
+    return oss.str();
+}
+
+std::string generalRegisterWindowSummary(const CPUState& cpu, size_t first, size_t count) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < count; ++i) {
+        if (i != 0) {
+            oss << ' ';
+        }
+        const size_t reg = first + i;
+        oss << 'r' << reg << '=' << BootStageTrace::Hex(cpu.GetGR(reg));
+    }
+    return oss.str();
+}
+
 std::string formatHex(uint64_t value) {
     std::ostringstream oss;
     oss << "0x" << std::hex << value;
@@ -2617,9 +2640,29 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         const bool statusCmpLtZero = static_cast<int64_t>(efiStatus) < 0;
                         const bool interfaceOutMatchesExpected =
                             hasInterfaceOutValue && interfaceOutValue == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+                        const bool detailedHandleProtocolTrace = currentIP == 0x1CC0ULL;
+                        if (detailedHandleProtocolTrace) {
+                            std::cout << "[EFI-HP-CALL] callsite=0x" << std::hex << currentIP
+                                      << " slot=" << std::dec << state_.currentSlot_
+                                      << " callBR=b" << static_cast<int>(cachedInstruction_.GetSrc1())
+                                      << " target=0x" << std::hex << originalBranchTarget
+                                      << " preB0=0x" << branchRegistersBefore[0]
+                                      << " b6=0x" << branchRegisterValue
+                                      << " gp=0x" << state_.getCPUState().GetGR(1)
+                                      << " sp=0x" << state_.getCPUState().GetGR(12)
+                                      << " r8=0x" << state_.getCPUState().GetGR(8)
+                                      << " predicates=" << predicateWindowSummary(state_.getCPUState())
+                                      << " r32-r39=" << generalRegisterWindowSummary(state_.getCPUState(), 32, 8)
+                                      << " interfaceOut=0x" << interfaceOut
+                                      << " interfaceOutReadable=" << (hasInterfaceOutValue ? "true" : "false")
+                                      << " interfaceOutValue=" << BootStageTrace::Hex(interfaceOutValue)
+                                      << " interfaceOutBytes=" << readHexBytesPreview(memory, interfaceOut, 16)
+                                      << " simpleFs=" << describeSimpleFileSystemProtocol(memory, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR)
+                                      << std::dec << std::endl;
+                        }
                         if (protocolAddress == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR &&
                             statusIsSuccess) {
-                            postSimpleFsTraceBudget_ = 96;
+                            postSimpleFsTraceBudget_ = 60;
                             postSimpleFsTraceActive_ = true;
                             postSimpleFsProtocolAddress_ = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
                         }
@@ -2703,6 +2746,25 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         logEfiServiceCall(memory, "BootServices.HandleProtocol", currentIP,
                                           EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR, originalBranchTarget,
                                           state_.getCPUState().GetGR(8));
+                        if (detailedHandleProtocolTrace) {
+                            std::cout << "[EFI-HP-RET] normalizedNextIP=0x" << std::hex
+                                      << normalizeBranchEntryIP(branchTarget)
+                                      << " rawNextIP=0x" << branchTarget
+                                      << " b0_before=0x" << branchRegistersBefore[0]
+                                      << " b0_after=0x" << state_.getCPUState().GetBR(0)
+                                      << " b6=0x" << branchRegistersBefore[6]
+                                      << " gp=0x" << state_.getCPUState().GetGR(1)
+                                      << " sp=0x" << state_.getCPUState().GetGR(12)
+                                      << " r8=0x" << state_.getCPUState().GetGR(8)
+                                      << " predicates=" << predicateWindowSummary(state_.getCPUState())
+                                      << " r32-r39=" << generalRegisterWindowSummary(state_.getCPUState(), 32, 8)
+                                      << " interfaceOut=0x" << interfaceOut
+                                      << " interfaceOutValue=" << BootStageTrace::Hex(interfaceOutValue)
+                                      << " interfaceOutBytes=" << readHexBytesPreview(memory, interfaceOut, 16)
+                                      << " simpleFs=" << describeSimpleFileSystemProtocol(memory, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR)
+                                      << " nextTraceBundles=20"
+                                      << std::dec << std::endl;
+                        }
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_OPEN_VOLUME_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
