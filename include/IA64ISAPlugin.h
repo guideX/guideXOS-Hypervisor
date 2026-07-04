@@ -308,6 +308,9 @@ private:
     size_t suspiciousGpCount_;
     size_t unknownRegionCallCount_;
     size_t recoveredLoadStoreCount_;
+    size_t postSimpleFsTraceBudget_;
+    bool postSimpleFsTraceActive_;
+    uint64_t postSimpleFsProtocolAddress_;
     std::string lastEfiCallName_;
     uint64_t lastEfiCallIP_;
     uint64_t lastDescriptorAddress_;

@@ -724,6 +724,20 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
         }
     }
 
+    if (overlaps(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL)) {
+        append("SimpleFileSystem");
+        if (overlaps(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, sizeof(uint64_t))) {
+            append("SimpleFileSystem.Revision");
+        }
+        if (overlaps(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR + 0x8ULL, sizeof(uint64_t))) {
+            append("SimpleFileSystem.OpenVolumeField");
+        }
+    }
+
+    if (overlaps(EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL)) {
+        append("OpenVolumeDescriptor");
+    }
+
     if (overlaps(0x5E000ULL, 0x80ULL)) {
         append("LoaderLocalBuffer");
         if (overlaps(0x5E018ULL, sizeof(uint16_t))) {
@@ -773,9 +787,14 @@ void logEfiHandoffAccess(const char* phase,
         rangesOverlap(address, size, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL);
     const bool overlapsFilePath =
         rangesOverlap(address, size, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL);
+    const bool overlapsSimpleFs =
+        rangesOverlap(address, size, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL);
+    const bool overlapsOpenVolumeDescriptor =
+        rangesOverlap(address, size, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL);
     const bool overlapsLocalBuffer =
         rangesOverlap(address, size, 0x5E000ULL, 0x80ULL);
-    if (!overlapsLoadedImage && !overlapsFilePath && !overlapsLocalBuffer) {
+    if (!overlapsLoadedImage && !overlapsFilePath && !overlapsSimpleFs &&
+        !overlapsOpenVolumeDescriptor && !overlapsLocalBuffer) {
         return;
     }
 
@@ -1652,6 +1671,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , suspiciousGpCount_(0)
     , unknownRegionCallCount_(0)
     , recoveredLoadStoreCount_(0)
+    , postSimpleFsTraceBudget_(0)
+    , postSimpleFsTraceActive_(false)
+    , postSimpleFsProtocolAddress_(0)
     , lastEfiCallName_()
     , lastEfiCallIP_(0)
     , lastDescriptorAddress_(0)
@@ -1709,6 +1731,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , suspiciousGpCount_(0)
     , unknownRegionCallCount_(0)
     , recoveredLoadStoreCount_(0)
+    , postSimpleFsTraceBudget_(0)
+    , postSimpleFsTraceActive_(false)
+    , postSimpleFsProtocolAddress_(0)
     , lastEfiCallName_()
     , lastEfiCallIP_(0)
     , lastDescriptorAddress_(0)
@@ -1814,6 +1839,9 @@ void IA64ISAPlugin::reset() {
     suspiciousGpCount_ = 0;
     unknownRegionCallCount_ = 0;
     recoveredLoadStoreCount_ = 0;
+    postSimpleFsTraceBudget_ = 0;
+    postSimpleFsTraceActive_ = false;
+    postSimpleFsProtocolAddress_ = 0;
     lastEfiCallName_.clear();
     lastEfiCallIP_ = 0;
     lastDescriptorAddress_ = 0;
@@ -1953,7 +1981,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             (decodeResult.instructionAddress >= 0x1CD0ULL &&
              decodeResult.instructionAddress <= 0x1D70ULL) ||
             (decodeResult.instructionAddress >= 0x33C80ULL &&
-             decodeResult.instructionAddress <= 0x33CC0ULL);
+             decodeResult.instructionAddress <= 0x34D90ULL) ||
+            (postSimpleFsTraceActive_ && postSimpleFsTraceBudget_ > 0);
         if (tracePostSimpleFsPath) {
             const CPUState& cpu = state_.getCPUState();
             const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
@@ -1991,6 +2020,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << decodeResult.instructionAddress
                       << " slot=" << std::dec << state_.currentSlot_
                       << " disasm=\"" << decodeResult.disassembly << "\""
+                      << " windowActive=" << (postSimpleFsTraceActive_ ? "true" : "false")
+                      << " windowRemaining=" << postSimpleFsTraceBudget_
                       << " pred=p" << static_cast<int>(tracePredicate)
                       << " livePred=" << (traceLivePredicate ? "true" : "false")
                       << " branchInstruction=" << (traceBranchInstruction ? "true" : "false")
@@ -2041,6 +2072,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " mem[r32]=" << readHexBytesPreview(memory, cpu.GetGR(32), 16)
                       << " mem[r36]=" << readHexBytesPreview(memory, cpu.GetGR(36), 16)
                       << " mem[r38]=" << readHexBytesPreview(memory, cpu.GetGR(38), 8)
+                      << " simpleFs=" << describeEfiHandoffAccessMeaning(
+                             postSimpleFsProtocolAddress_, 0x10ULL, memory)
+                      << " simpleFsBytes=" << readHexBytesPreview(
+                             memory, postSimpleFsProtocolAddress_, 0x10)
+                      << " simpleFsOpenVolumeBytes=" << readHexBytesPreview(
+                             memory, postSimpleFsProtocolAddress_ + 0x8ULL, 8)
                       << " lastEfiCall=\"" << lastEfiCallName_ << "\""
                       << " lastEfiIP=0x" << lastEfiCallIP_
                       << std::dec << std::endl;
@@ -2571,11 +2608,24 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         uint64_t interfaceOutValue = 0;
                         const bool hasInterfaceOutValue =
                             interfaceOut != 0 && readGuestU64(memory, interfaceOut, interfaceOutValue);
+                        const uint64_t efiStatus = protocolAddress != 0
+                            ? EFI_STATUS_SUCCESS
+                            : EFI_STATUS_NOT_FOUND;
+                        const bool statusIsSuccess = efiStatus == EFI_STATUS_SUCCESS;
+                        const bool statusIsError = efiStatus != EFI_STATUS_SUCCESS;
+                        const bool statusCmpEqZero = efiStatus == 0;
+                        const bool statusCmpLtZero = static_cast<int64_t>(efiStatus) < 0;
+                        const bool interfaceOutMatchesExpected =
+                            hasInterfaceOutValue && interfaceOutValue == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+                        if (protocolAddress == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR &&
+                            statusIsSuccess) {
+                            postSimpleFsTraceBudget_ = 96;
+                            postSimpleFsTraceActive_ = true;
+                            postSimpleFsProtocolAddress_ = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+                        }
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, protocolAddress != 0
-                            ? EFI_STATUS_SUCCESS
-                            : EFI_STATUS_NOT_FOUND);
+                        state_.getCPUState().SetGR(8, efiStatus);
                         std::cout << "[EFI-STUB] BootServices.HandleProtocol guid=0x"
                                   << std::hex << protocolGuid;
                         if (hasGuid) {
@@ -2600,7 +2650,25 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << readHexBytesPreview(memory, interfaceOut, 16);
                         }
                         std::cout << " handle=0x" << handle
-                                  << " callsite=0x" << currentIP;
+                                  << " slot=" << std::dec << state_.currentSlot_
+                                  << " callsite=0x" << std::hex << currentIP
+                                  << " returnAddress=0x" << originalBranchTarget
+                                  << " r8=0x" << state_.getCPUState().GetGR(8)
+                                  << " argRegs=[r32=0x" << readCallerOutputRegister(state_.getCPUState(), 0)
+                                  << ",r33=0x" << readCallerOutputRegister(state_.getCPUState(), 1)
+                                  << ",r34=0x" << readCallerOutputRegister(state_.getCPUState(), 2)
+                                  << ",r35=0x" << readCallerOutputRegister(state_.getCPUState(), 3)
+                                  << ",r36=0x" << readCallerOutputRegister(state_.getCPUState(), 4)
+                                  << ",r37=0x" << readCallerOutputRegister(state_.getCPUState(), 5)
+                                  << "]"
+                                  << std::dec
+                                  << " statusIsSuccess=" << (statusIsSuccess ? "true" : "false")
+                                  << " statusIsError=" << (statusIsError ? "true" : "false")
+                                  << " statusCmpEqZero=" << (statusCmpEqZero ? "true" : "false")
+                                  << " statusCmpLtZero=" << (statusCmpLtZero ? "true" : "false")
+                                  << " interfaceOutReadable=" << (hasInterfaceOutValue ? "true" : "false")
+                                  << " interfaceOutMatchesExpected="
+                                  << (interfaceOutMatchesExpected ? "true" : "false");
                         if (zeroGuid) {
                             const uint64_t currentGp = state_.getCPUState().GetGR(1);
                             const int64_t guidMinusGp =
@@ -3275,6 +3343,9 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     suspiciousGpCount_ = 0;
     unknownRegionCallCount_ = 0;
     recoveredLoadStoreCount_ = 0;
+    postSimpleFsTraceBudget_ = 0;
+    postSimpleFsTraceActive_ = false;
+    postSimpleFsProtocolAddress_ = 0;
     lastEfiCallName_.clear();
     lastEfiCallIP_ = 0;
     lastDescriptorAddress_ = 0;
@@ -4328,11 +4399,15 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const bool traceEfiHandoffLoad =
             loadSize != 0 &&
             (rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
-             rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL));
+             rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL));
         const bool traceEfiHandoffStore =
             storeSize != 0 &&
             (rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
-             rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL));
+             rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL));
         if (traceBootLocalLoad) {
             logBootLocalAccess("pre-read", cpu, state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),
@@ -4454,6 +4529,12 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                       << readHexBytesPreview(memory, EFI_POST_SIMPLEFS_OUT_WATCH_ADDR,
                                              EFI_POST_SIMPLEFS_OUT_WATCH_SIZE)
                       << std::dec << std::endl;
+        }
+        if (postSimpleFsTraceActive_ && postSimpleFsTraceBudget_ > 0) {
+            --postSimpleFsTraceBudget_;
+            if (postSimpleFsTraceBudget_ == 0) {
+                postSimpleFsTraceActive_ = false;
+            }
         }
         if (isAdvancedLoadCheckInstruction(instr.GetType())) {
             std::cout << "[ALAT-STUB] " << instr.GetDisassembly()
