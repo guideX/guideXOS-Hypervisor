@@ -16,6 +16,7 @@
 #include <fstream>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_set>
 #include <stdexcept>
@@ -64,6 +65,64 @@ IA64ISAPlugin* getActiveIa64Plugin(VMInstance* instance) {
 std::string previewBytes(IMemory& memory, uint64_t address, size_t count);
 std::string previewUtf16(IMemory& memory, uint64_t address);
 std::string describeEfiDevicePath(IMemory& memory, uint64_t address);
+
+bool shouldSeedLoaderLocalUtf16Probe() {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t valueLen = 0;
+    if (_dupenv_s(&value, &valueLen, "GUIDEXOS_EFI_DIAG_SEED_LOADER_LOCAL_5E018") != 0 ||
+        value == nullptr || *value == '\0') {
+        if (value) {
+            free(value);
+        }
+        return false;
+    }
+    const std::string envValue(value);
+    free(value);
+#else
+    const char* rawValue = std::getenv("GUIDEXOS_EFI_DIAG_SEED_LOADER_LOCAL_5E018");
+    if (!rawValue || *rawValue == '\0') {
+        return false;
+    }
+    const std::string envValue(rawValue);
+#endif
+    return envValue != "0" &&
+           envValue != "false" &&
+           envValue != "off" &&
+           envValue != "no";
+}
+
+void seedLoaderLocalUtf16Probe(VMInstance* instance) {
+    if (!instance || !instance->vm || !shouldSeedLoaderLocalUtf16Probe()) {
+        return;
+    }
+
+    static constexpr uint64_t kLoaderLocalProbeAddress = 0x5E018ULL;
+    static const uint16_t kSeededPath[] = {
+        '\\','E','F','I','\\','B','O','O','T','\\',
+        'B','O','O','T','I','A','6','4','.','E','F','I',0
+    };
+
+    auto& memory = instance->vm->getMemory();
+    const uint64_t seedEnd = kLoaderLocalProbeAddress + sizeof(kSeededPath);
+    if (seedEnd > memory.GetTotalSize()) {
+        LOG_WARN("[EFI-DIAG] Requested loader-local CHAR16 seed does not fit in guest memory");
+        return;
+    }
+
+    memory.Write(kLoaderLocalProbeAddress,
+                 reinterpret_cast<const uint8_t*>(kSeededPath),
+                 sizeof(kSeededPath));
+
+    std::ostringstream oss;
+    oss << "[EFI-DIAG] Seeded loader-local CHAR16 buffer"
+        << " addr=0x" << std::hex << kLoaderLocalProbeAddress
+        << " bytes=" << previewUtf16(memory, kLoaderLocalProbeAddress);
+    LOG_INFO(oss.str());
+    BootStageTrace::Event("EFI_DIAG_SEED_LOADER_LOCAL_UTF16",
+                          "addr=" + BootStageTrace::Hex(kLoaderLocalProbeAddress) +
+                          " text=\"\\EFI\\BOOT\\BOOTIA64.EFI\"");
+}
 
 void installEfiBootMetadataWriteTrace(VMInstance* instance,
                                       const char* phase,
@@ -768,6 +827,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                             if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                          imageBuffer.size(), 
                                                                          loadAddress)) {
+                                                seedLoaderLocalUtf16Probe(instance);
                                                 // Set entry point from PE header
                                                 instance->vm->setEntryPoint(entryPoint);
                                                 LOG_INFO("? EFI bootloader loaded successfully");
@@ -843,6 +903,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                             if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                          imageBuffer.size(), 
                                                                          loadAddress)) {
+                                                seedLoaderLocalUtf16Probe(instance);
                                                 // Set entry point from PE header
                                                 instance->vm->setEntryPoint(entryPoint);
                                                 LOG_INFO("? EFI bootloader loaded successfully from filesystem");
@@ -1081,6 +1142,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                                          imageBuffer.size(), 
                                                                                          loadAddress)) {
+                                                                    seedLoaderLocalUtf16Probe(instance);
                                                                     const auto& peInfo = peParser.getImageInfo();
                                                                     if (peInfo.hasGlobalPointer && loadAddress == 0 &&
                                                                         peInfo.globalPointer >= imageBuffer.size()) {

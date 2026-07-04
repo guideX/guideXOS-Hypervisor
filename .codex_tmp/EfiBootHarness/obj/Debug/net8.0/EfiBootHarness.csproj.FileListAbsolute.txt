@@ -1,0 +1,15 @@
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\bin\Debug\net8.0\EfiBootHarness.exe
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\bin\Debug\net8.0\EfiBootHarness.deps.json
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\bin\Debug\net8.0\EfiBootHarness.runtimeconfig.json
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\bin\Debug\net8.0\EfiBootHarness.dll
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\bin\Debug\net8.0\EfiBootHarness.pdb
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.GeneratedMSBuildEditorConfig.editorconfig
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.AssemblyInfoInputs.cache
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.AssemblyInfo.cs
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.csproj.CoreCompileInputs.cache
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.sourcelink.json
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.dll
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\refint\EfiBootHarness.dll
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.pdb
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\EfiBootHarness.genruntimeconfig.cache
+D:\dev\guideXOS_Emulator\.codex_tmp\EfiBootHarness\obj\Debug\net8.0\ref\EfiBootHarness.dll

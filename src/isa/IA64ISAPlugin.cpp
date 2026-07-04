@@ -1972,6 +1972,21 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 (cachedInstruction_.GetType() == InstructionType::BR_CLOOP ?
                     (traceLivePredicate && cpu.GetAR(65) != 0) :
                     false);
+            auto appendRegisterTag = [&](std::ostream& trace, uint64_t value) {
+                if (value == EFI_LOADED_IMAGE_PROTOCOL_ADDR) {
+                    trace << " [LoadedImage]";
+                } else if (value == EFI_LOADED_IMAGE_FILE_PATH_ADDR) {
+                    trace << " [LoadedImage.FilePath]";
+                } else if (value == EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR) {
+                    trace << " [LoadedImage.LoadOptions]";
+                } else if (value == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR) {
+                    trace << " [SimpleFileSystem]";
+                } else if (value == EFI_ROOT_FILE_PROTOCOL_ADDR) {
+                    trace << " [RootFileProtocol]";
+                } else if (value == EFI_OPEN_VOLUME_STUB_DESC_ADDR) {
+                    trace << " [OpenVolumeDescriptor]";
+                }
+            };
             std::cout << "[EFI-POST-SIMPLEFS] pre ip=0x" << std::hex
                       << decodeResult.instructionAddress
                       << " slot=" << std::dec << state_.currentSlot_
@@ -1980,6 +1995,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " livePred=" << (traceLivePredicate ? "true" : "false")
                       << " branchInstruction=" << (traceBranchInstruction ? "true" : "false")
                       << " branchWouldTake=" << (traceBranchWouldTake ? "true" : "false")
+                      << " p0=" << cpu.GetPR(0)
+                      << " p1=" << cpu.GetPR(1)
+                      << " p2=" << cpu.GetPR(2)
+                      << " p3=" << cpu.GetPR(3)
+                      << " p4=" << cpu.GetPR(4)
+                      << " p5=" << cpu.GetPR(5)
                       << " p6=" << cpu.GetPR(6)
                       << " p7=" << cpu.GetPR(7)
                       << std::hex
@@ -1990,10 +2011,32 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " r18=0x" << cpu.GetGR(18)
                       << " r20=0x" << cpu.GetGR(20)
                       << " r32=0x" << cpu.GetGR(32)
+                      << " r33=0x" << cpu.GetGR(33)
+                      << " r34=0x" << cpu.GetGR(34)
+                      << " r35=0x" << cpu.GetGR(35)
                       << " r36=0x" << cpu.GetGR(36)
+                      << " r37=0x" << cpu.GetGR(37)
                       << " r38=0x" << cpu.GetGR(38)
+                      << " r39=0x" << cpu.GetGR(39)
                       << " r61=0x" << cpu.GetGR(61)
                       << " b0=0x" << cpu.GetBR(0)
+                      << " r32Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(32));
+            std::cout << " r33Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(33));
+            std::cout << " r34Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(34));
+            std::cout << " r35Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(35));
+            std::cout << " r36Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(36));
+            std::cout << " r37Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(37));
+            std::cout << " r38Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(38));
+            std::cout << " r39Tag=";
+            appendRegisterTag(std::cout, cpu.GetGR(39));
+            std::cout
                       << " mem[r16]=" << readHexBytesPreview(memory, cpu.GetGR(16), 8)
                       << " mem[r32]=" << readHexBytesPreview(memory, cpu.GetGR(32), 16)
                       << " mem[r36]=" << readHexBytesPreview(memory, cpu.GetGR(36), 16)
@@ -4192,6 +4235,7 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             currentIP == 0x1DD0ULL ||
             currentIP == 0x1DE0ULL ||
             currentIP == 0x33CA0ULL ||
+            currentIP == 0x33CB0ULL ||
             currentIP == 0x34D40ULL ||
             currentIP == 0x34D50ULL ||
             currentIP == 0x34D90ULL;
@@ -4212,6 +4256,21 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 (cachedInstruction_.GetType() == InstructionType::BR_CLOOP ?
                     (traceLivePredicate && state_.getCPUState().GetAR(65) != 0) :
                     false);
+            auto appendRegisterTag = [&](std::ostream& trace, uint64_t value) {
+                if (value == EFI_LOADED_IMAGE_PROTOCOL_ADDR) {
+                    trace << " [LoadedImage]";
+                } else if (value == EFI_LOADED_IMAGE_FILE_PATH_ADDR) {
+                    trace << " [LoadedImage.FilePath]";
+                } else if (value == EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR) {
+                    trace << " [LoadedImage.LoadOptions]";
+                } else if (value == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR) {
+                    trace << " [SimpleFileSystem]";
+                } else if (value == EFI_ROOT_FILE_PROTOCOL_ADDR) {
+                    trace << " [RootFileProtocol]";
+                } else if (value == EFI_OPEN_VOLUME_STUB_DESC_ADDR) {
+                    trace << " [OpenVolumeDescriptor]";
+                }
+            };
             std::ostringstream trace;
             trace << "ip=" << BootStageTrace::Hex(currentIP)
                   << " slot=" << state_.currentSlot_
@@ -4221,14 +4280,37 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                   << " branchInstruction=" << (traceBranchInstruction ? "true" : "false")
                   << " branchWouldTake=" << (traceBranchWouldTake ? "true" : "false")
                   << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
+                  << " r8=" << BootStageTrace::Hex(cpu.GetGR(8))
+                  << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                  << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+                  << " r34=" << BootStageTrace::Hex(cpu.GetGR(34))
+                  << " r35=" << BootStageTrace::Hex(cpu.GetGR(35))
                   << " r18=" << BootStageTrace::Hex(cpu.GetGR(18))
                   << " r20=" << BootStageTrace::Hex(cpu.GetGR(20))
-                  << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
                   << " r36=" << BootStageTrace::Hex(cpu.GetGR(36))
+                  << " r37=" << BootStageTrace::Hex(cpu.GetGR(37))
+                  << " r38=" << BootStageTrace::Hex(cpu.GetGR(38))
+                  << " r39=" << BootStageTrace::Hex(cpu.GetGR(39))
                   << " mem[r32]=" << readHexBytesPreview(memory, cpu.GetGR(32), 32)
                   << " loadedImage=" << describeLoadedImageProtocol(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR)
                   << " loadOptions=" << readHexBytesPreview(memory, EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR, 16)
-                  << " imageBaseBytes=" << readHexBytesPreview(memory, 0x5E000ULL, 0x80);
+                  << " imageBaseBytes=" << readHexBytesPreview(memory, 0x5E000ULL, 0x80)
+                  << " r32Tag=";
+            appendRegisterTag(trace, cpu.GetGR(32));
+            trace << " r33Tag=";
+            appendRegisterTag(trace, cpu.GetGR(33));
+            trace << " r34Tag=";
+            appendRegisterTag(trace, cpu.GetGR(34));
+            trace << " r35Tag=";
+            appendRegisterTag(trace, cpu.GetGR(35));
+            trace << " r36Tag=";
+            appendRegisterTag(trace, cpu.GetGR(36));
+            trace << " r37Tag=";
+            appendRegisterTag(trace, cpu.GetGR(37));
+            trace << " r38Tag=";
+            appendRegisterTag(trace, cpu.GetGR(38));
+            trace << " r39Tag=";
+            appendRegisterTag(trace, cpu.GetGR(39));
             std::cout << "[EFI-STRING-TRACE] " << trace.str() << std::endl;
             BootStageTrace::Event("EFI_STRING_TRACE", trace.str());
         }
