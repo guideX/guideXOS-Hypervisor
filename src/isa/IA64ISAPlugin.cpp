@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <cstdint>
 #include <utility>
+#include <cstdlib>
 
 namespace ia64 {
 
@@ -27,6 +28,23 @@ struct CountedLoopTraceState {
 };
 
 CountedLoopTraceState g_countedLoopTrace;
+
+bool shouldEmitBootPathTrace() {
+    static const bool enabled = []() {
+        const char* raw = std::getenv("GUIDEXOS_IA64_BOOT_PATH_TRACE");
+        if (!raw || *raw == '\0') {
+            return false;
+        }
+        std::string value(raw);
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value != "0" &&
+               value != "false" &&
+               value != "off" &&
+               value != "no";
+    }();
+    return enabled;
+}
 
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_STATUS_INVALID_PARAMETER = 0x8000000000000002ULL;
@@ -2001,16 +2019,23 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             }
         }
         const bool tracePostSimpleFsPath =
-            (decodeResult.instructionAddress >= 0x1CD0ULL &&
-             decodeResult.instructionAddress <= 0x1D70ULL) ||
-            (decodeResult.instructionAddress >= 0x33C80ULL &&
-             decodeResult.instructionAddress <= 0x34D90ULL) ||
-            (postSimpleFsTraceActive_ && postSimpleFsTraceBudget_ > 0);
+            shouldEmitBootPathTrace() &&
+            ((decodeResult.instructionAddress >= 0x1CD0ULL &&
+              decodeResult.instructionAddress <= 0x1D70ULL) ||
+             (decodeResult.instructionAddress >= 0x33C80ULL &&
+              decodeResult.instructionAddress <= 0x34D90ULL) ||
+             (postSimpleFsTraceActive_ && postSimpleFsTraceBudget_ > 0));
         if (tracePostSimpleFsPath) {
             const CPUState& cpu = state_.getCPUState();
             const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
             const bool traceLivePredicate =
                 (tracePredicate == 0) || cpu.GetPR(tracePredicate);
+            const uint64_t traceBranchTargetValue = cachedInstruction_.HasBranchTarget()
+                ? cachedInstruction_.GetBranchTarget()
+                : 0;
+            const uint64_t traceBranchRegisterValue = isBranchRegisterTargetInstruction(cachedInstruction_.GetType())
+                ? cpu.GetBR(cachedInstruction_.GetSrc1())
+                : 0;
             const bool traceBranchInstruction =
                 cachedInstruction_.GetType() == InstructionType::BR_COND ||
                 cachedInstruction_.GetType() == InstructionType::BR_CALL ||
@@ -2049,6 +2074,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " livePred=" << (traceLivePredicate ? "true" : "false")
                       << " branchInstruction=" << (traceBranchInstruction ? "true" : "false")
                       << " branchWouldTake=" << (traceBranchWouldTake ? "true" : "false")
+                      << " branchTargetHint=" << BootStageTrace::Hex(traceBranchTargetValue)
+                      << " sp=" << BootStageTrace::Hex(cpu.GetGR(12))
+                      << " r15=" << BootStageTrace::Hex(cpu.GetGR(15))
                       << " p0=" << cpu.GetPR(0)
                       << " p1=" << cpu.GetPR(1)
                       << " p2=" << cpu.GetPR(2)
@@ -2072,6 +2100,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " r37=0x" << cpu.GetGR(37)
                       << " r38=0x" << cpu.GetGR(38)
                       << " r39=0x" << cpu.GetGR(39)
+                      << " branchRegisterValue=" << BootStageTrace::Hex(traceBranchRegisterValue)
+                      << " stackAtSp=" << readHexBytesPreview(memory, cpu.GetGR(12), 32)
+                      << " stackAtR16=" << readHexBytesPreview(memory, cpu.GetGR(16), 32)
+                      << " simpleFsOutWatch=" << readHexBytesPreview(memory, EFI_POST_SIMPLEFS_OUT_WATCH_ADDR, 16)
                       << " r61=0x" << cpu.GetGR(61)
                       << " b0=0x" << cpu.GetBR(0)
                       << " r32Tag=";
@@ -4365,17 +4397,24 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         }
         recordRecentInstruction(cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
         const bool traceBootStringPath =
-            currentIP == 0x1DD0ULL ||
-            currentIP == 0x1DE0ULL ||
-            currentIP == 0x33CA0ULL ||
-            currentIP == 0x33CB0ULL ||
-            currentIP == 0x34D40ULL ||
-            currentIP == 0x34D50ULL ||
-            currentIP == 0x34D90ULL;
+            shouldEmitBootPathTrace() &&
+            (currentIP == 0x1DD0ULL ||
+             currentIP == 0x1DE0ULL ||
+             currentIP == 0x33CA0ULL ||
+             currentIP == 0x33CB0ULL ||
+             currentIP == 0x34D40ULL ||
+             currentIP == 0x34D50ULL ||
+             currentIP == 0x34D90ULL);
         if (traceBootStringPath) {
             const uint8_t tracePredicate = cachedInstruction_.GetPredicate();
             const bool traceLivePredicate =
                 (tracePredicate == 0) || state_.getCPUState().GetPR(tracePredicate);
+            const uint64_t traceBranchTargetValue = cachedInstruction_.HasBranchTarget()
+                ? cachedInstruction_.GetBranchTarget()
+                : 0;
+            const uint64_t traceBranchRegisterValue = isBranchRegisterTargetInstruction(cachedInstruction_.GetType())
+                ? state_.getCPUState().GetBR(cachedInstruction_.GetSrc1())
+                : 0;
             const bool traceBranchInstruction =
                 cachedInstruction_.GetType() == InstructionType::BR_COND ||
                 cachedInstruction_.GetType() == InstructionType::BR_CALL ||
@@ -4412,6 +4451,10 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                   << " livePred=" << (traceLivePredicate ? "true" : "false")
                   << " branchInstruction=" << (traceBranchInstruction ? "true" : "false")
                   << " branchWouldTake=" << (traceBranchWouldTake ? "true" : "false")
+                  << " branchTargetHint=0x" << BootStageTrace::Hex(traceBranchTargetValue)
+                  << " branchRegisterValue=0x" << BootStageTrace::Hex(traceBranchRegisterValue)
+                  << " sp=0x" << BootStageTrace::Hex(cpu.GetGR(12))
+                  << " r15=0x" << BootStageTrace::Hex(cpu.GetGR(15))
                   << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
                   << " r8=" << BootStageTrace::Hex(cpu.GetGR(8))
                   << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))

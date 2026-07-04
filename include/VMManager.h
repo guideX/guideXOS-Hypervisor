@@ -165,7 +165,7 @@ public:
      * @return True if successful
      */
     bool resumeVM(const std::string& vmId);
-    
+
     /**
      * Reset a virtual machine
      * 
