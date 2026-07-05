@@ -31,11 +31,27 @@ CountedLoopTraceState g_countedLoopTrace;
 
 bool shouldEmitBootPathTrace() {
     static const bool enabled = []() {
-        const char* raw = std::getenv("GUIDEXOS_IA64_BOOT_PATH_TRACE");
+        const char* raw = nullptr;
+#ifdef _MSC_VER
+        char* rawBuffer = nullptr;
+        size_t rawLength = 0;
+        if (_dupenv_s(&rawBuffer, &rawLength, "GUIDEXOS_IA64_BOOT_PATH_TRACE") != 0) {
+            return false;
+        }
+        raw = rawBuffer;
+#else
+        raw = std::getenv("GUIDEXOS_IA64_BOOT_PATH_TRACE");
+#endif
         if (!raw || *raw == '\0') {
+#ifdef _MSC_VER
+            std::free(const_cast<char*>(raw));
+#endif
             return false;
         }
         std::string value(raw);
+#ifdef _MSC_VER
+        std::free(const_cast<char*>(raw));
+#endif
         std::transform(value.begin(), value.end(), value.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return value != "0" &&
@@ -2020,8 +2036,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         }
         const bool tracePostSimpleFsPath =
             shouldEmitBootPathTrace() &&
-            ((decodeResult.instructionAddress >= 0x1CD0ULL &&
-              decodeResult.instructionAddress <= 0x1D70ULL) ||
+            ((decodeResult.instructionAddress >= 0x1D40ULL &&
+              decodeResult.instructionAddress <= 0x1F80ULL) ||
              (decodeResult.instructionAddress >= 0x33C80ULL &&
               decodeResult.instructionAddress <= 0x34D90ULL) ||
              (postSimpleFsTraceActive_ && postSimpleFsTraceBudget_ > 0));
@@ -2064,6 +2080,31 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     trace << " [OpenVolumeDescriptor]";
                 }
             };
+            auto emitBootOpenContinuationSnapshot = [&]() {
+                std::ostringstream snapshot;
+                snapshot << "ip=0x" << std::hex << decodeResult.instructionAddress
+                         << " slot=" << std::dec << state_.currentSlot_
+                         << " disasm=\"" << decodeResult.disassembly << "\""
+                         << " r8=0x" << std::hex << cpu.GetGR(8)
+                         << " gp(r1)=0x" << cpu.GetGR(1)
+                         << " sp=0x" << cpu.GetGR(12)
+                         << " b0=0x" << cpu.GetBR(0)
+                         << " predicates=" << predicateWindowSummary(cpu)
+                         << " r32-r39=" << generalRegisterWindowSummary(cpu, 32, 8)
+                         << " outparam[0x1ff93010]="
+                         << readHexBytesPreview(memory, 0x1FF93010ULL, 0x10ULL)
+                         << " simpleFs[0x1fdb1000]="
+                         << readHexBytesPreview(memory, 0x1FDB1000ULL, 0x10ULL)
+                         << " simpleFsOpenVolumeField[0x1fdb1008]="
+                         << readHexBytesPreview(memory, 0x1FDB1008ULL, 0x8ULL)
+                         << " openVolumeTarget[0x1fdb0cc0]="
+                         << readHexBytesPreview(memory, 0x1FDB0CC0ULL, 0x10ULL)
+                         << " symbolicOutparam=" << readHexBytesPreview(memory, EFI_POST_SIMPLEFS_OUT_WATCH_ADDR, 0x10ULL)
+                         << " symbolicSimpleFs=" << readHexBytesPreview(memory, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL)
+                         << " symbolicOpenVolumeDescriptor=" << readHexBytesPreview(memory, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x10ULL);
+                std::cout << "[EFI-POST-SIMPLEFS-ENTRY] " << snapshot.str() << std::endl;
+                BootStageTrace::Event("EFI_POST_SIMPLEFS_ENTRY", snapshot.str());
+            };
             std::cout << "[EFI-POST-SIMPLEFS] pre ip=0x" << std::hex
                       << decodeResult.instructionAddress
                       << " slot=" << std::dec << state_.currentSlot_
@@ -2100,6 +2141,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " r37=0x" << cpu.GetGR(37)
                       << " r38=0x" << cpu.GetGR(38)
                       << " r39=0x" << cpu.GetGR(39)
+                      << " outparam[0x1ff93010]=" << readHexBytesPreview(memory, 0x1FF93010ULL, 0x10ULL)
+                      << " simpleFs[0x1fdb1000]=" << readHexBytesPreview(memory, 0x1FDB1000ULL, 0x10ULL)
+                      << " simpleFsOpenVolumeField[0x1fdb1008]=" << readHexBytesPreview(memory, 0x1FDB1008ULL, 0x8ULL)
+                      << " openVolumeTarget[0x1fdb0cc0]=" << readHexBytesPreview(memory, 0x1FDB0CC0ULL, 0x10ULL)
                       << " branchRegisterValue=" << BootStageTrace::Hex(traceBranchRegisterValue)
                       << " stackAtSp=" << readHexBytesPreview(memory, cpu.GetGR(12), 32)
                       << " stackAtR16=" << readHexBytesPreview(memory, cpu.GetGR(16), 32)
@@ -2136,6 +2181,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                       << " lastEfiCall=\"" << lastEfiCallName_ << "\""
                       << " lastEfiIP=0x" << lastEfiCallIP_
                       << std::dec << std::endl;
+            if (decodeResult.instructionAddress == 0x1D40ULL) {
+                if (!postSimpleFsTraceActive_ || postSimpleFsTraceBudget_ < 200) {
+                    postSimpleFsTraceActive_ = true;
+                    postSimpleFsTraceBudget_ = 200;
+                    postSimpleFsProtocolAddress_ = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+                }
+                emitBootOpenContinuationSnapshot();
+            }
         }
 
         const bool traceBootLoopPath =
@@ -4533,6 +4586,65 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                                 storeAddress, storeSize, instr.GetSrc1(),
                                 cpu.GetGR(instr.GetSrc1()), memory);
         }
+        const bool traceDiagOutRead =
+            loadSize != 0 &&
+            rangesOverlap(loadAddress, loadSize, 0x1FF93010ULL, 0x10ULL);
+        const bool traceDiagSimpleFsRead =
+            loadSize != 0 &&
+            rangesOverlap(loadAddress, loadSize, 0x1FDB1000ULL, 0x10ULL);
+        const bool traceDiagSimpleFsOpenVolumeRead =
+            loadSize != 0 &&
+            rangesOverlap(loadAddress, loadSize, 0x1FDB1008ULL, 0x8ULL);
+        const bool traceDiagOpenVolumeTargetRead =
+            loadSize != 0 &&
+            rangesOverlap(loadAddress, loadSize, 0x1FDB0CC0ULL, 0x10ULL);
+        const bool traceDiagOutStore =
+            storeSize != 0 &&
+            rangesOverlap(storeAddress, storeSize, 0x1FF93010ULL, 0x10ULL);
+        const bool traceDiagSimpleFsStore =
+            storeSize != 0 &&
+            rangesOverlap(storeAddress, storeSize, 0x1FDB1000ULL, 0x10ULL);
+        const bool traceDiagSimpleFsOpenVolumeStore =
+            storeSize != 0 &&
+            rangesOverlap(storeAddress, storeSize, 0x1FDB1008ULL, 0x8ULL);
+        const bool traceDiagOpenVolumeTargetStore =
+            storeSize != 0 &&
+            rangesOverlap(storeAddress, storeSize, 0x1FDB0CC0ULL, 0x10ULL);
+        const bool traceDiagAnyAccess =
+            traceDiagOutRead || traceDiagSimpleFsRead || traceDiagSimpleFsOpenVolumeRead ||
+            traceDiagOpenVolumeTargetRead || traceDiagOutStore || traceDiagSimpleFsStore ||
+            traceDiagSimpleFsOpenVolumeStore || traceDiagOpenVolumeTargetStore;
+        if (traceDiagAnyAccess) {
+            std::cout << "[EFI-BOOT-WATCH] phase=pre"
+                      << " ip=0x" << std::hex << cpu.GetIP()
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " disasm=\"" << instr.GetDisassembly() << "\""
+                      << " kind=" << (loadSize != 0 ? "read" : "write")
+                      << " address=0x" << std::hex
+                      << (loadSize != 0 ? loadAddress : storeAddress)
+                      << " size=0x" << (loadSize != 0 ? loadSize : storeSize)
+                      << " reg=r" << std::dec
+                      << static_cast<int>(loadSize != 0 ? instr.GetDst() : instr.GetSrc1())
+                      << " value=0x" << std::hex
+                      << (loadSize != 0 ? cpu.GetGR(instr.GetDst()) : cpu.GetGR(instr.GetSrc1()))
+                      << " predicates=" << predicateWindowSummary(cpu)
+                      << " r1=0x" << cpu.GetGR(1)
+                      << " r8=0x" << cpu.GetGR(8)
+                      << " r32-r39=" << generalRegisterWindowSummary(cpu, 32, 8)
+                      << " bytes=" << readHexBytesPreview(memory, loadSize != 0 ? loadAddress : storeAddress,
+                                                           loadSize != 0 ? loadSize : storeSize)
+                      << " outparam=" << readHexBytesPreview(memory, 0x1FF93010ULL, 0x10ULL)
+                      << " simpleFs=" << readHexBytesPreview(memory, 0x1FDB1000ULL, 0x10ULL)
+                      << " simpleFsOpenVolumeField=" << readHexBytesPreview(memory, 0x1FDB1008ULL, 0x8ULL)
+                      << " openVolumeTarget=" << readHexBytesPreview(memory, 0x1FDB0CC0ULL, 0x10ULL)
+                      << std::dec << std::endl;
+            BootStageTrace::Event("EFI_BOOT_WATCH",
+                std::string("phase=pre ip=") + BootStageTrace::Hex(cpu.GetIP()) +
+                " slot=" + std::to_string(state_.currentSlot_) +
+                " disasm=\"" + instr.GetDisassembly() + "\"" +
+                " address=" + BootStageTrace::Hex(loadSize != 0 ? loadAddress : storeAddress) +
+                " size=" + BootStageTrace::Hex(static_cast<uint64_t>(loadSize != 0 ? loadSize : storeSize)));
+        }
         const bool watchPostSimpleFsOutStore =
             storeSize != 0 &&
             rangesOverlap(storeAddress, storeSize,
@@ -4614,6 +4726,28 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             logEfiHandoffAccess("post-write", state_.getCPUState(), state_.currentSlot_, instr,
                                 storeAddress, storeSize, instr.GetSrc1(),
                                 state_.getCPUState().GetGR(instr.GetSrc1()), memory);
+        }
+        if (traceDiagAnyAccess) {
+            const CPUState& postCpu = state_.getCPUState();
+            std::cout << "[EFI-BOOT-WATCH] phase=post"
+                      << " ip=0x" << std::hex << postCpu.GetIP()
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " disasm=\"" << instr.GetDisassembly() << "\""
+                      << " kind=" << (loadSize != 0 ? "read" : "write")
+                      << " address=0x" << std::hex
+                      << (loadSize != 0 ? loadAddress : storeAddress)
+                      << " size=0x" << (loadSize != 0 ? loadSize : storeSize)
+                      << " reg=r" << std::dec
+                      << static_cast<int>(loadSize != 0 ? instr.GetDst() : instr.GetSrc1())
+                      << " value=0x" << std::hex
+                      << (loadSize != 0 ? postCpu.GetGR(instr.GetDst()) : postCpu.GetGR(instr.GetSrc1()))
+                      << " bytes=" << readHexBytesPreview(memory, loadSize != 0 ? loadAddress : storeAddress,
+                                                           loadSize != 0 ? loadSize : storeSize)
+                      << " outparam=" << readHexBytesPreview(memory, 0x1FF93010ULL, 0x10ULL)
+                      << " simpleFs=" << readHexBytesPreview(memory, 0x1FDB1000ULL, 0x10ULL)
+                      << " simpleFsOpenVolumeField=" << readHexBytesPreview(memory, 0x1FDB1008ULL, 0x8ULL)
+                      << " openVolumeTarget=" << readHexBytesPreview(memory, 0x1FDB0CC0ULL, 0x10ULL)
+                      << std::dec << std::endl;
         }
         if (traceScanLoop && emitScanLoopTrace) {
             logScanLoopState("post", state_.getCPUState(), state_.currentSlot_, instr);
