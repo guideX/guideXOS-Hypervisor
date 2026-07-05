@@ -20,6 +20,7 @@
 #include <mutex>
 #include <unordered_set>
 #include <stdexcept>
+#include <vector>
 
 namespace ia64 {
 
@@ -122,6 +123,96 @@ void seedLoaderLocalUtf16Probe(VMInstance* instance) {
     BootStageTrace::Event("EFI_DIAG_SEED_LOADER_LOCAL_UTF16",
                           "addr=" + BootStageTrace::Hex(kLoaderLocalProbeAddress) +
                           " text=\"\\EFI\\BOOT\\BOOTIA64.EFI\"");
+}
+
+std::string getDiagLoadOptionsSeedText() {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t valueLen = 0;
+    if (_dupenv_s(&value, &valueLen, "GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS") != 0 ||
+        value == nullptr || *value == '\0') {
+        if (value) {
+            free(value);
+        }
+        return {};
+    }
+    const std::string envValue(value);
+    free(value);
+#else
+    const char* rawValue = std::getenv("GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS");
+    if (!rawValue || *rawValue == '\0') {
+        return {};
+    }
+    const std::string envValue(rawValue);
+#endif
+    if (envValue == "0" ||
+        envValue == "false" ||
+        envValue == "False" ||
+        envValue == "off" ||
+        envValue == "Off" ||
+        envValue == "no" ||
+        envValue == "No") {
+        return {};
+    }
+    if (envValue == "1" ||
+        envValue == "true" ||
+        envValue == "True" ||
+        envValue == "on" ||
+        envValue == "On" ||
+        envValue == "yes" ||
+        envValue == "Yes") {
+        return "elilo-forced";
+    }
+    return envValue;
+}
+
+void seedLoadedImageLoadOptions(VMInstance* instance,
+                                uint64_t loadedImageProtocolAddr,
+                                uint64_t loadOptionsAddr) {
+    if (!instance || !instance->vm) {
+        return;
+    }
+
+    const std::string seedText = getDiagLoadOptionsSeedText();
+    if (seedText.empty()) {
+        return;
+    }
+
+    auto& memory = instance->vm->getMemory();
+    std::vector<uint16_t> utf16(seedText.size() + 1U, 0U);
+    for (size_t i = 0; i < seedText.size(); ++i) {
+        utf16[i] = static_cast<uint8_t>(seedText[i]);
+    }
+
+    const uint64_t seedBytes = static_cast<uint64_t>(utf16.size() * sizeof(uint16_t));
+    if (loadOptionsAddr + seedBytes > memory.GetTotalSize()) {
+        LOG_WARN("[EFI-DIAG] Requested LoadedImage.LoadOptions seed does not fit in guest memory");
+        return;
+    }
+
+    memory.Write(loadOptionsAddr,
+                 reinterpret_cast<const uint8_t*>(utf16.data()),
+                 static_cast<size_t>(seedBytes));
+    const uint32_t loadOptionsSizeBytes =
+        static_cast<uint32_t>(seedText.size() * sizeof(uint16_t));
+    memory.Write(loadedImageProtocolAddr + 0x30,
+                 reinterpret_cast<const uint8_t*>(&loadOptionsSizeBytes),
+                 sizeof(loadOptionsSizeBytes));
+    memory.Write(loadedImageProtocolAddr + 0x38,
+                 reinterpret_cast<const uint8_t*>(&loadOptionsAddr),
+                 sizeof(loadOptionsAddr));
+
+    std::ostringstream oss;
+    oss << "[EFI-DIAG] Seeded LoadedImage.LoadOptions"
+        << " addr=0x" << std::hex << loadOptionsAddr
+        << " size=0x" << loadOptionsSizeBytes
+        << " text=\"" << seedText << "\""
+        << " utf16=" << previewUtf16(memory, loadOptionsAddr);
+    LOG_INFO(oss.str());
+    BootStageTrace::Event("EFI_DIAG_SEED_LOAD_OPTIONS",
+                          "addr=" + BootStageTrace::Hex(loadOptionsAddr) +
+                          " size=" + BootStageTrace::Hex(loadOptionsSizeBytes) +
+                          " text=\"" + seedText + "\"");
 }
 
 void installEfiBootMetadataWriteTrace(VMInstance* instance,
@@ -1587,6 +1678,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write8(filePathEndNode + 0x01, 0xFFU);
                                                                     write16(filePathEndNode + 0x02, 0x04U);
                                                                     write16(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 0U);
+                                                                    seedLoadedImageLoadOptions(instance,
+                                                                                              EFI_LOADED_IMAGE_PROTOCOL_ADDR,
+                                                                                              EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR);
 
                                                                     uint32_t loadedImageRevision = 0;
                                                                     uint64_t loadedImageFilePath = 0;
