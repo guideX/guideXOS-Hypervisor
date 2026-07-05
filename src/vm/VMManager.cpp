@@ -166,6 +166,104 @@ std::string getDiagLoadOptionsSeedText() {
     return envValue;
 }
 
+bool shouldEnableGpRelativeDataDiag() {
+    return !getDiagLoadOptionsSeedText().empty();
+}
+
+void installGpRelativeDataWriteTrace(VMInstance* instance, const char* phase) {
+    if (!instance || !instance->vm || !phase || !shouldEnableGpRelativeDataDiag()) {
+        return;
+    }
+
+    auto* memory = dynamic_cast<Memory*>(&instance->vm->getMemory());
+    if (!memory) {
+        return;
+    }
+
+    static std::mutex tracedMutex;
+    static std::unordered_set<const VirtualMachine*> tracedVms;
+    {
+        std::lock_guard<std::mutex> lock(tracedMutex);
+        if (!tracedVms.insert(instance->vm.get()).second) {
+            return;
+        }
+    }
+
+    constexpr uint64_t kWatchStart = 0x3D000ULL;
+    constexpr uint64_t kWatchEnd = 0x3D100ULL;
+    constexpr uint64_t kWord0 = 0x3D050ULL;
+    constexpr uint64_t kWord1 = 0x3D058ULL;
+
+    std::ostringstream install;
+    install << "[EFI-GP-DIAG] installed watch for 0x" << std::hex << kWatchStart
+            << "..0x" << kWatchEnd
+            << " phase=\"" << phase << "\""
+            << " initial[0x3d050]=" << previewBytes(*memory, kWord0, 8)
+            << " initial[0x3d058]=" << previewBytes(*memory, kWord1, 8)
+            << std::dec;
+    LOG_INFO(install.str());
+    BootStageTrace::Event("EFI_GP_RANGE_TRACE",
+                          "phase=\"" + std::string(phase) +
+                          "\" watchStart=" + BootStageTrace::Hex(kWatchStart) +
+                          " watchEnd=" + BootStageTrace::Hex(kWatchEnd) +
+                          " word3d050=" + previewBytes(*memory, kWord0, 8) +
+                          " word3d058=" + previewBytes(*memory, kWord1, 8));
+
+    memory->GetMMU().RegisterWriteHook(
+        [instance,
+         memory,
+         phaseLabel = std::string(phase)](HookContext& context, uint8_t* data) {
+            constexpr uint64_t kWriteStart = 0x3D000ULL;
+            constexpr uint64_t kWriteEnd = 0x3D100ULL;
+            const uint64_t writeEnd = context.address + static_cast<uint64_t>(context.size);
+            if (writeEnd <= kWriteStart || context.address >= kWriteEnd) {
+                return;
+            }
+
+            const uint64_t overlapStart = std::max(context.address, kWriteStart);
+            const uint64_t overlapEnd = std::min(writeEnd, kWriteEnd);
+            if (overlapStart >= overlapEnd) {
+                return;
+            }
+
+            const uint8_t* raw = memory->GetRawData();
+            std::ostringstream beforeBytes;
+            std::ostringstream afterBytes;
+            beforeBytes << std::hex << std::setfill('0');
+            afterBytes << std::hex << std::setfill('0');
+            for (uint64_t addr = overlapStart; addr < overlapEnd; ++addr) {
+                if (addr != overlapStart) {
+                    beforeBytes << ' ';
+                    afterBytes << ' ';
+                }
+                beforeBytes << std::setw(2)
+                            << static_cast<unsigned>(raw[static_cast<size_t>(addr)]);
+                afterBytes << std::setw(2)
+                           << static_cast<unsigned>(data[static_cast<size_t>(addr - context.address)]);
+            }
+
+            std::ostringstream trace;
+            trace << "[EFI-GP-WRITE] phase=\"" << phaseLabel << "\""
+                  << " ip=0x" << std::hex << instance->vm->getIP()
+                  << " address=0x" << context.address
+                  << " size=0x" << context.size
+                  << " overlap=0x" << overlapStart << "..0x" << overlapEnd
+                  << " before=" << beforeBytes.str()
+                  << " after=" << afterBytes.str()
+                  << std::dec;
+            LOG_INFO(trace.str());
+            BootStageTrace::Event("EFI_GP_RANGE_WRITE",
+                                  "phase=\"" + phaseLabel +
+                                  "\" ip=" + BootStageTrace::Hex(instance->vm->getIP()) +
+                                  " address=" + BootStageTrace::Hex(context.address) +
+                                  " size=" + BootStageTrace::Hex(static_cast<uint64_t>(context.size)) +
+                                  " overlapStart=" + BootStageTrace::Hex(overlapStart) +
+                                  " overlapEnd=" + BootStageTrace::Hex(overlapEnd) +
+                                  " before=" + beforeBytes.str() +
+                                  " after=" + afterBytes.str());
+        });
+}
+
 void seedLoadedImageLoadOptions(VMInstance* instance,
                                 uint64_t loadedImageProtocolAddr,
                                 uint64_t loadOptionsAddr) {
@@ -1233,6 +1331,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                                          imageBuffer.size(), 
                                                                                          loadAddress)) {
+                                                                    installGpRelativeDataWriteTrace(instance,
+                                                                                                   "boot-image load");
                                                                     seedLoaderLocalUtf16Probe(instance);
                                                                     const auto& peInfo = peParser.getImageInfo();
                                                                     if (peInfo.hasGlobalPointer && loadAddress == 0 &&

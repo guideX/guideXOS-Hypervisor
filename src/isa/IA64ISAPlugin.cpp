@@ -62,6 +62,39 @@ bool shouldEmitBootPathTrace() {
     return enabled;
 }
 
+bool shouldEmitGpRelativeDataDiag() {
+    static const bool enabled = []() {
+        const char* raw = nullptr;
+#ifdef _MSC_VER
+        char* rawBuffer = nullptr;
+        size_t rawLength = 0;
+        if (_dupenv_s(&rawBuffer, &rawLength, "GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS") != 0) {
+            return false;
+        }
+        raw = rawBuffer;
+#else
+        raw = std::getenv("GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS");
+#endif
+        if (!raw || *raw == '\0') {
+#ifdef _MSC_VER
+            std::free(const_cast<char*>(raw));
+#endif
+            return false;
+        }
+        std::string value(raw);
+#ifdef _MSC_VER
+        std::free(const_cast<char*>(raw));
+#endif
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value != "0" &&
+               value != "false" &&
+               value != "off" &&
+               value != "no";
+    }();
+    return enabled;
+}
+
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_STATUS_INVALID_PARAMETER = 0x8000000000000002ULL;
 constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
@@ -1080,6 +1113,19 @@ std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count)
         oss << value;
     }
     return oss.str();
+}
+
+void emitGuestHexDumpTrace(const char* eventName,
+                           IMemory& memory,
+                           uint64_t start,
+                           size_t count) {
+    constexpr size_t kBytesPerLine = 16;
+    for (size_t offset = 0; offset < count; offset += kBytesPerLine) {
+        const size_t lineSize = std::min(kBytesPerLine, count - offset);
+        BootStageTrace::Event(eventName,
+                              "address=" + BootStageTrace::Hex(start + offset) +
+                              " bytes=" + readHexBytesPreview(memory, start + offset, lineSize));
+    }
 }
 
 std::string readUtf16CodeUnitPreview(IMemory& memory, uint64_t address, size_t count) {
@@ -4873,6 +4919,52 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 " lastEfiCall=\"" + lastEfiCallName_ + "\"" +
                 " lastEfiIP=" + BootStageTrace::Hex(lastEfiCallIP_));
         }
+        static bool gpRangeDumpEmitted = false;
+        static size_t regcfgTraceCount = 0;
+        const bool traceRegisterConfigWindow =
+            shouldEmitGpRelativeDataDiag() &&
+            cpu.GetIP() >= 0xEA80ULL &&
+            cpu.GetIP() < 0xEB80ULL &&
+            regcfgTraceCount < 96;
+        if (shouldEmitGpRelativeDataDiag() &&
+            !gpRangeDumpEmitted &&
+            cpu.GetIP() == 0xEAC0ULL &&
+            state_.currentSlot_ == 0) {
+            gpRangeDumpEmitted = true;
+            BootStageTrace::Event("IA64_REGCFG_GUEST_WORDS",
+                                  "phase=prefault"
+                                  " word3d050=" + readHexBytesPreview(memory, 0x3D050ULL, 8) +
+                                  " word3d058=" + readHexBytesPreview(memory, 0x3D058ULL, 8) +
+                                  " r1=" + BootStageTrace::Hex(cpu.GetGR(1)) +
+                                  " r17=" + BootStageTrace::Hex(cpu.GetGR(17)));
+            emitGuestHexDumpTrace("IA64_REGCFG_GUEST_DUMP", memory, 0x3CF00ULL, 0x220ULL);
+        }
+        if (traceRegisterConfigWindow) {
+            std::ostringstream trace;
+            trace << "phase=pre"
+                  << " ip=" << BootStageTrace::Hex(cpu.GetIP())
+                  << " slot=" << state_.currentSlot_
+                  << " disasm=\"" << instr.GetDisassembly() << "\""
+                  << " p6=" << (cpu.GetPR(6) ? 1 : 0)
+                  << " p7=" << (cpu.GetPR(7) ? 1 : 0)
+                  << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
+                  << " r8=" << BootStageTrace::Hex(cpu.GetGR(8))
+                  << " r9=" << BootStageTrace::Hex(cpu.GetGR(9))
+                  << " r14=" << BootStageTrace::Hex(cpu.GetGR(14))
+                  << " r16=" << BootStageTrace::Hex(cpu.GetGR(16))
+                  << " r17=" << BootStageTrace::Hex(cpu.GetGR(17))
+                  << " r18=" << BootStageTrace::Hex(cpu.GetGR(18))
+                  << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                  << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+                  << " r34=" << BootStageTrace::Hex(cpu.GetGR(34))
+                  << " r35=" << BootStageTrace::Hex(cpu.GetGR(35))
+                  << " mem[r17]=" << readHexBytesPreview(memory, cpu.GetGR(17), 16)
+                  << " mem[r16]=" << readHexBytesPreview(memory, cpu.GetGR(16), 16)
+                  << " word3d050=" << readHexBytesPreview(memory, 0x3D050ULL, 8)
+                  << " word3d058=" << readHexBytesPreview(memory, 0x3D058ULL, 8);
+            BootStageTrace::Event("IA64_REGCFG_TRACE", trace.str());
+            ++regcfgTraceCount;
+        }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
         if (traceBootLocalLoad) {
             logBootLocalAccess("post-read", state_.getCPUState(), state_.currentSlot_, instr,
@@ -4915,6 +5007,33 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                       << " simpleFsOpenVolumeField=" << readHexBytesPreview(memory, 0x1FDB1008ULL, 0x8ULL)
                       << " openVolumeTarget=" << readHexBytesPreview(memory, 0x1FDB0CC0ULL, 0x10ULL)
                       << std::dec << std::endl;
+        }
+        if (traceRegisterConfigWindow) {
+            const CPUState& postCpu = state_.getCPUState();
+            std::ostringstream trace;
+            trace << "phase=post"
+                  << " ip=" << BootStageTrace::Hex(postCpu.GetIP())
+                  << " slot=" << state_.currentSlot_
+                  << " disasm=\"" << instr.GetDisassembly() << "\""
+                  << " p6=" << (postCpu.GetPR(6) ? 1 : 0)
+                  << " p7=" << (postCpu.GetPR(7) ? 1 : 0)
+                  << " r1=" << BootStageTrace::Hex(postCpu.GetGR(1))
+                  << " r8=" << BootStageTrace::Hex(postCpu.GetGR(8))
+                  << " r9=" << BootStageTrace::Hex(postCpu.GetGR(9))
+                  << " r14=" << BootStageTrace::Hex(postCpu.GetGR(14))
+                  << " r16=" << BootStageTrace::Hex(postCpu.GetGR(16))
+                  << " r17=" << BootStageTrace::Hex(postCpu.GetGR(17))
+                  << " r18=" << BootStageTrace::Hex(postCpu.GetGR(18))
+                  << " r32=" << BootStageTrace::Hex(postCpu.GetGR(32))
+                  << " r33=" << BootStageTrace::Hex(postCpu.GetGR(33))
+                  << " r34=" << BootStageTrace::Hex(postCpu.GetGR(34))
+                  << " r35=" << BootStageTrace::Hex(postCpu.GetGR(35))
+                  << " mem[r17]=" << readHexBytesPreview(memory, postCpu.GetGR(17), 16)
+                  << " mem[r16]=" << readHexBytesPreview(memory, postCpu.GetGR(16), 16)
+                  << " word3d050=" << readHexBytesPreview(memory, 0x3D050ULL, 8)
+                  << " word3d058=" << readHexBytesPreview(memory, 0x3D058ULL, 8);
+            BootStageTrace::Event("IA64_REGCFG_TRACE", trace.str());
+            ++regcfgTraceCount;
         }
         if (traceScanLoop && emitScanLoopTrace) {
             logScanLoopState("post", state_.getCPUState(), state_.currentSlot_, instr);
