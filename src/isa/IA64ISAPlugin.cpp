@@ -928,6 +928,105 @@ bool readGuestU64(IMemory& memory, uint64_t address, uint64_t& value) {
     }
 }
 
+bool guestRangeWithinReportedMemory(const IMemory& memory,
+                                    uint64_t address,
+                                    uint64_t size,
+                                    bool& known) {
+    const uint64_t totalSize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (totalSize == 0) {
+        known = false;
+        return false;
+    }
+
+    known = true;
+    if (size == 0) {
+        return address <= totalSize;
+    }
+    return address < totalSize && size <= totalSize - address;
+}
+
+bool guestRangeHasPermission(const IMemory& memory,
+                             uint64_t address,
+                             uint64_t size,
+                             MemoryAccessType accessType,
+                             bool& known) {
+    const Memory* concreteMemory = dynamic_cast<const Memory*>(&memory);
+    if (concreteMemory == nullptr) {
+        known = false;
+        return false;
+    }
+
+    bool boundsKnown = false;
+    if (!guestRangeWithinReportedMemory(memory, address, size, boundsKnown) || !boundsKnown) {
+        known = boundsKnown;
+        return false;
+    }
+
+    known = true;
+    const MMU& mmu = concreteMemory->GetMMU();
+    const uint64_t totalSize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (size == 0) {
+        if (address == totalSize) {
+            return true;
+        }
+        return mmu.CheckPermission(address, accessType);
+    }
+
+    const uint64_t pageSize = static_cast<uint64_t>(mmu.GetPageSize());
+    const uint64_t rangeEnd = address + size;
+    for (uint64_t page = address; page < rangeEnd; ) {
+        if (!mmu.CheckPermission(page, accessType)) {
+            return false;
+        }
+
+        uint64_t nextPage = ((page / pageSize) + 1ULL) * pageSize;
+        if (nextPage <= page) {
+            break;
+        }
+        page = std::min(nextPage, rangeEnd);
+    }
+    return true;
+}
+
+std::string describeGuestRangeAccess(const IMemory& memory,
+                                     uint64_t address,
+                                     uint64_t size) {
+    if (address == 0) {
+        return "null";
+    }
+
+    std::ostringstream oss;
+    bool boundsKnown = false;
+    const bool inBounds = guestRangeWithinReportedMemory(memory, address, size, boundsKnown);
+    oss << "bounds=";
+    if (!boundsKnown) {
+        oss << "unknown";
+    } else {
+        oss << (inBounds ? "in" : "oob");
+    }
+
+    bool readKnown = false;
+    bool writeKnown = false;
+    const bool readable = guestRangeHasPermission(memory, address, size, MemoryAccessType::READ, readKnown);
+    const bool writable = guestRangeHasPermission(memory, address, size, MemoryAccessType::WRITE, writeKnown);
+
+    oss << " read=";
+    if (!readKnown) {
+        oss << "unknown";
+    } else {
+        oss << (readable ? "yes" : "no");
+    }
+
+    oss << " write=";
+    if (!writeKnown) {
+        oss << "unknown";
+    } else {
+        oss << (writable ? "yes" : "no");
+    }
+
+    return oss.str();
+}
+
 std::string formatEfiGuid(const EfiGuid& guid) {
     std::ostringstream oss;
     oss << std::hex;
@@ -2191,6 +2290,34 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             }
         }
 
+        const bool traceRtSetMemPath =
+            shouldEmitBootPathTrace() &&
+            decodeResult.instructionAddress >= 0x34840ULL &&
+            decodeResult.instructionAddress <= 0x34890ULL;
+        if (traceRtSetMemPath) {
+            static bool rtSetMemEntryLogged = false;
+            if (!rtSetMemEntryLogged) {
+                rtSetMemEntryLogged = true;
+                const CPUState& cpu = state_.getCPUState();
+                const uint64_t destination = cpu.GetGR(32);
+                const uint64_t length = cpu.GetGR(33);
+                const size_t previewLength =
+                    static_cast<size_t>(std::min<uint64_t>(length, 16ULL));
+                std::ostringstream trace;
+                trace << "entryIP=" << BootStageTrace::Hex(decodeResult.instructionAddress)
+                      << " slot=" << state_.currentSlot_
+                      << " firstLoopIP=0x34880"
+                      << " disasm=\"" << decodeResult.disassembly << "\""
+                      << " dest=" << BootStageTrace::Hex(destination)
+                      << " length=" << BootStageTrace::Hex(length)
+                      << " fill=0x00"
+                      << " range={" << describeGuestRangeAccess(memory, destination, length) << "}"
+                      << " previewBefore=" << readHexBytesPreview(memory, destination, previewLength);
+                std::cout << "[EFI-RTSETMEM] " << trace.str() << std::endl;
+                BootStageTrace::EventOnce("EFI_RTSETMEM_ENTRY", trace.str());
+            }
+        }
+
         const bool traceBootLoopPath =
             (decodeResult.instructionAddress >= 0x36D60ULL &&
              decodeResult.instructionAddress <= 0x36ED0ULL);
@@ -2556,6 +2683,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         const uint64_t dataSizeOut = readCallerOutputRegister(state_.getCPUState(), 3);
                         const uint64_t dataOut = readCallerOutputRegister(state_.getCPUState(), 4);
                         const std::string variableNameText = readUtf16AsciiString(memory, variableName);
+                        const std::string variableNamePreview = readUtf16Preview(memory, variableName);
+                        const std::string variableNameCodeUnits =
+                            readUtf16CodeUnitPreview(memory, variableName, 16);
+                        EfiGuid guid = {};
+                        const bool hasGuid = readEfiGuid(memory, vendorGuid, guid);
+                        const std::string guidBytes =
+                            readHexBytesPreview(memory, vendorGuid, guid.size());
 
                         std::vector<uint8_t> variableData;
                         if (variableNameText == "BootCurrent") {
@@ -2567,62 +2701,95 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         }
 
                         uint64_t providedSize = 0;
-                        if (dataSizeOut != 0) {
-                            try {
-                                memory.Read(dataSizeOut,
-                                            reinterpret_cast<uint8_t*>(&providedSize),
-                                            sizeof(providedSize));
-                            } catch (const std::exception&) {
-                                providedSize = 0;
-                            }
-                        }
+                        const bool providedSizeReadable =
+                            dataSizeOut != 0 && readGuestU64(memory, dataSizeOut, providedSize);
+                        uint32_t attributesBefore = 0;
+                        const bool attributesReadable =
+                            attributesOut != 0 && readGuestU32(memory, attributesOut, attributesBefore);
+                        const uint64_t requiredSize = static_cast<uint64_t>(variableData.size());
+                        bool wroteDataSize = false;
+                        bool wroteAttributes = false;
+                        bool wroteData = false;
 
                         uint64_t status = EFI_STATUS_NOT_FOUND;
                         if (!variableData.empty() && dataSizeOut != 0) {
-                            const uint64_t requiredSize = static_cast<uint64_t>(variableData.size());
                             memory.Write(dataSizeOut,
                                          reinterpret_cast<const uint8_t*>(&requiredSize),
                                          sizeof(requiredSize));
+                            wroteDataSize = true;
                             if (attributesOut != 0) {
                                 const uint32_t attributes = 0x7U; // NV | BS | RT
                                 memory.Write(attributesOut,
                                              reinterpret_cast<const uint8_t*>(&attributes),
                                              sizeof(attributes));
+                                wroteAttributes = true;
                             }
-                            if (dataOut != 0 && providedSize >= requiredSize) {
+                            if (dataOut != 0 && providedSizeReadable && providedSize >= requiredSize) {
                                 memory.Write(dataOut, variableData.data(), variableData.size());
+                                wroteData = true;
                                 status = EFI_STATUS_SUCCESS;
                             } else {
                                 status = EFI_STATUS_BUFFER_TOO_SMALL;
                             }
-                        } else if (dataSizeOut != 0) {
-                            const uint64_t zero = 0;
-                            memory.Write(dataSizeOut,
-                                         reinterpret_cast<const uint8_t*>(&zero),
-                                         sizeof(zero));
                         }
+                        // UEFI updates DataSize for EFI_BUFFER_TOO_SMALL probes, but an
+                        // absent variable should not clobber the caller's probe state.
+                        uint64_t sizeAfter = 0;
+                        const bool sizeAfterReadable =
+                            dataSizeOut != 0 && readGuestU64(memory, dataSizeOut, sizeAfter);
+                        uint32_t attributesAfter = 0;
+                        const bool attributesAfterReadable =
+                            attributesOut != 0 && readGuestU32(memory, attributesOut, attributesAfter);
+                        const uint64_t dataAccessSize =
+                            requiredSize != 0 ? requiredSize : std::min<uint64_t>(providedSize, 16ULL);
 
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, status);
-                        std::cout << "[EFI-STUB] RuntimeServices.GetVariable name=0x"
-                                  << std::hex << variableName
-                                  << " \"" << variableNameText << "\""
-                                  << " guid=0x" << vendorGuid
-                                  << " attrOut=0x" << attributesOut
-                                  << " sizeOut=0x" << dataSizeOut
-                                  << " dataOut=0x" << dataOut;
-                        if (!variableData.empty()) {
-                            std::cout << " required=0x" << variableData.size();
-                        }
-                        if (status == EFI_STATUS_SUCCESS) {
-                            std::cout << " -> EFI_SUCCESS";
-                        } else if (status == EFI_STATUS_BUFFER_TOO_SMALL) {
-                            std::cout << " -> EFI_BUFFER_TOO_SMALL";
+                        std::cout << "[EFI-STUB] RuntimeServices.GetVariable"
+                                  << " callerIP=0x" << std::hex << currentIP
+                                  << " slot=" << std::dec << state_.currentSlot_
+                                  << " namePtr=0x" << std::hex << variableName
+                                  << " nameAscii=\"" << variableNameText << "\""
+                                  << " nameUtf16=\"" << variableNamePreview << "\""
+                                  << " nameCodeUnits=[" << variableNameCodeUnits << "]"
+                                  << " guidPtr=0x" << vendorGuid
+                                  << " guidBytes=[" << guidBytes << "]";
+                        if (hasGuid) {
+                            std::cout << " guid=[" << formatEfiGuid(guid) << "]";
                         } else {
-                            std::cout << " -> EFI_NOT_FOUND";
+                            std::cout << " guid=<unreadable>";
                         }
-                        std::cout << std::dec << std::endl;
+                        std::cout << " attrOut=0x" << attributesOut
+                                  << " attrAccess={" << describeGuestRangeAccess(
+                                         memory, attributesOut, sizeof(uint32_t)) << "}";
+                        if (attributesReadable) {
+                            std::cout << " attrBefore=0x" << std::hex << attributesBefore;
+                        }
+                        if (attributesAfterReadable) {
+                            std::cout << " attrAfter=0x" << std::hex << attributesAfter;
+                        }
+                        std::cout << " sizeOut=0x" << dataSizeOut
+                                  << " sizeAccess={" << describeGuestRangeAccess(
+                                         memory, dataSizeOut, sizeof(uint64_t)) << "}";
+                        if (providedSizeReadable) {
+                            std::cout << " sizeBefore=0x" << std::hex << providedSize;
+                        } else if (dataSizeOut != 0) {
+                            std::cout << " sizeBefore=<unreadable>";
+                        }
+                        if (sizeAfterReadable) {
+                            std::cout << " sizeAfter=0x" << std::hex << sizeAfter;
+                        }
+                        std::cout << " dataOut=0x" << dataOut
+                                  << " dataAccess={" << describeGuestRangeAccess(
+                                         memory, dataOut, dataAccessSize) << "}"
+                                  << " required=0x" << requiredSize
+                                  << " wroteSize=" << (wroteDataSize ? "yes" : "no")
+                                  << " wroteAttr=" << (wroteAttributes ? "yes" : "no")
+                                  << " wroteData=" << (wroteData ? "yes" : "no")
+                                  << " status=0x" << status
+                                  << " (" << efiStatusName(status) << ")"
+                                  << std::dec << std::endl;
                         logEfiServiceCall(memory, "RuntimeServices.GetVariable", currentIP,
                                           EFI_GET_VARIABLE_STUB_DESC_ADDR, originalBranchTarget, status);
                     } else if (!cachedInstruction_.HasBranchTarget() &&

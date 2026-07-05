@@ -2430,15 +2430,19 @@ void testIA64PluginGetVariableBootVariables() {
         plugin.getCPUState().SetGR(8, 0);
 
         uint64_t size = 0x1234;
+        uint32_t attributes = 0xCAFEBABE;
         memory.Write(0x8000, reinterpret_cast<const uint8_t*>(&size), sizeof(size));
+        memory.Write(0x9000, reinterpret_cast<const uint8_t*>(&attributes), sizeof(attributes));
 
         assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
 
         memory.Read(0x8000, reinterpret_cast<uint8_t*>(&size), sizeof(size));
+        memory.Read(0x9000, reinterpret_cast<uint8_t*>(&attributes), sizeof(attributes));
         assert(plugin.getCPUState().GetIP() == 0x2ee60);
         assert(plugin.getCPUState().GetBR(0) == 0x2ee60);
         assert(plugin.getCPUState().GetGR(8) == 0x800000000000000eULL);
-        assert(size == 0);
+        assert(size == 0x1234);
+        assert(attributes == 0xCAFEBABE);
     }
 
     {
