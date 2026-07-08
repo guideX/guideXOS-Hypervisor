@@ -12,6 +12,7 @@
 #include "BootStageTrace.h"
 #include <sstream>
 #include <iomanip>
+#include <array>
 #include <algorithm>
 #include <fstream>
 #include <cstring>
@@ -646,6 +647,349 @@ std::string previewBytesRaw(const IMemory& memory, uint64_t address, size_t coun
         bytes << "...";
     }
     return bytes.str();
+}
+
+constexpr char kEliloAddressCompatSha256[] =
+    "D1AE6A8433971EC191B86D40371CDD1CD27E4EB360B5B487089593FC394245DA";
+constexpr uint64_t kEliloCompatListHeadGroup0 = 0x3D050ULL;
+constexpr uint64_t kEliloCompatListHeadGroup1 = 0x3D058ULL;
+constexpr uint64_t kEliloCompatRealGlobalOptionList = 0x3FB80ULL;
+constexpr uint64_t kEliloCompatRealImageOptionList = 0x3FFE0ULL;
+constexpr uint64_t kEliloCompatRuntimeGlobalOptionList = 0x12F000ULL;
+constexpr uint64_t kEliloCompatRuntimeImageOptionList = 0x137060ULL;
+// ELILO config_option_t is two 32-bit enums plus four 64-bit pointers on IA-64.
+constexpr size_t kEliloConfigOptionEntrySize = 40U;
+constexpr size_t kEliloGlobalOptionCount = 0x1CU;
+constexpr size_t kEliloImageOptionCount = 0x9U;
+constexpr size_t kEliloGlobalOptionCopyBytes = kEliloGlobalOptionCount * kEliloConfigOptionEntrySize;
+constexpr size_t kEliloImageOptionCopyBytes = kEliloImageOptionCount * kEliloConfigOptionEntrySize;
+
+bool isTruthyDiagEnvValue(const char* value) {
+    if (!value || *value == '\0') {
+        return false;
+    }
+
+    const std::string envValue(value);
+    return envValue != "0" &&
+           envValue != "false" &&
+           envValue != "False" &&
+           envValue != "off" &&
+           envValue != "Off" &&
+           envValue != "no" &&
+           envValue != "No";
+}
+
+bool shouldEnableEliloAddressCompat() {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t valueLen = 0;
+    if (_dupenv_s(&value, &valueLen, "GUIDEXOS_EFI_DIAG_ELILO_ADDRESS_COMPAT") != 0) {
+        return false;
+    }
+    const bool enabled = isTruthyDiagEnvValue(value);
+    if (value) {
+        free(value);
+    }
+    return enabled;
+#else
+    return isTruthyDiagEnvValue(std::getenv("GUIDEXOS_EFI_DIAG_ELILO_ADDRESS_COMPAT"));
+#endif
+}
+
+uint32_t sha256RotateRight(uint32_t value, unsigned amount) {
+    return (value >> amount) | (value << (32U - amount));
+}
+
+std::array<uint8_t, 32> sha256Digest(const uint8_t* data, size_t size) {
+    static constexpr uint32_t kInitialState[8] = {
+        0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+        0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U
+    };
+    static constexpr uint32_t kConstants[64] = {
+        0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+        0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+        0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+        0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+        0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+        0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+        0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+        0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+        0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+        0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+        0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+        0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+        0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+        0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+        0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+        0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
+    };
+
+    std::array<uint8_t, 32> digest{};
+    if (!data || size == 0) {
+        return digest;
+    }
+
+    std::vector<uint8_t> message(data, data + size);
+    message.push_back(0x80U);
+    while ((message.size() % 64U) != 56U) {
+        message.push_back(0x00U);
+    }
+
+    const uint64_t bitLength = static_cast<uint64_t>(size) * 8ULL;
+    for (int shift = 7; shift >= 0; --shift) {
+        message.push_back(static_cast<uint8_t>((bitLength >> (shift * 8)) & 0xFFU));
+    }
+
+    uint32_t state[8];
+    std::memcpy(state, kInitialState, sizeof(state));
+
+    for (size_t chunkOffset = 0; chunkOffset < message.size(); chunkOffset += 64U) {
+        uint32_t w[64];
+        for (size_t i = 0; i < 16; ++i) {
+            const size_t offset = chunkOffset + i * 4U;
+            w[i] = (static_cast<uint32_t>(message[offset]) << 24U) |
+                   (static_cast<uint32_t>(message[offset + 1U]) << 16U) |
+                   (static_cast<uint32_t>(message[offset + 2U]) << 8U) |
+                   static_cast<uint32_t>(message[offset + 3U]);
+        }
+        for (size_t i = 16; i < 64; ++i) {
+            const uint32_t s0 = sha256RotateRight(w[i - 15], 7U) ^
+                                sha256RotateRight(w[i - 15], 18U) ^
+                                (w[i - 15] >> 3U);
+            const uint32_t s1 = sha256RotateRight(w[i - 2], 17U) ^
+                                sha256RotateRight(w[i - 2], 19U) ^
+                                (w[i - 2] >> 10U);
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+
+        uint32_t a = state[0];
+        uint32_t b = state[1];
+        uint32_t c = state[2];
+        uint32_t d = state[3];
+        uint32_t e = state[4];
+        uint32_t f = state[5];
+        uint32_t g = state[6];
+        uint32_t h = state[7];
+
+        for (size_t i = 0; i < 64; ++i) {
+            const uint32_t ch = (e & f) ^ ((~e) & g);
+            const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const uint32_t s1 = sha256RotateRight(e, 6U) ^
+                                sha256RotateRight(e, 11U) ^
+                                sha256RotateRight(e, 25U);
+            const uint32_t s0 = sha256RotateRight(a, 2U) ^
+                                sha256RotateRight(a, 13U) ^
+                                sha256RotateRight(a, 22U);
+            const uint32_t temp1 = h + s1 + ch + kConstants[i] + w[i];
+            const uint32_t temp2 = s0 + maj;
+
+            h = g;
+            g = f;
+            f = e;
+            e = d + temp1;
+            d = c;
+            c = b;
+            b = a;
+            a = temp1 + temp2;
+        }
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+        state[5] += f;
+        state[6] += g;
+        state[7] += h;
+    }
+
+    for (size_t i = 0; i < 8; ++i) {
+        digest[i * 4U + 0U] = static_cast<uint8_t>((state[i] >> 24U) & 0xFFU);
+        digest[i * 4U + 1U] = static_cast<uint8_t>((state[i] >> 16U) & 0xFFU);
+        digest[i * 4U + 2U] = static_cast<uint8_t>((state[i] >> 8U) & 0xFFU);
+        digest[i * 4U + 3U] = static_cast<uint8_t>(state[i] & 0xFFU);
+    }
+
+    return digest;
+}
+
+std::string sha256Hex(const uint8_t* data, size_t size) {
+    const std::array<uint8_t, 32> digest = sha256Digest(data, size);
+    std::ostringstream oss;
+    oss << std::uppercase << std::hex << std::setfill('0');
+    for (uint8_t byte : digest) {
+        oss << std::setw(2) << static_cast<unsigned>(byte);
+    }
+    return oss.str();
+}
+
+void logEliloCompatRangeSnapshot(const IMemory& memory,
+                                 const char* phase,
+                                 const char* label,
+                                 uint64_t start,
+                                 uint64_t end) {
+    if (!phase || !label || end <= start) {
+        return;
+    }
+
+    std::ostringstream oss;
+    oss << "[EFI-DIAG][ELILO-COMPAT] " << phase
+        << " label=\"" << label << "\""
+        << " range=0x" << std::hex << start << "..0x" << end
+        << " bytes=" << previewBytesRaw(memory, start, static_cast<size_t>(end - start));
+    LOG_INFO(oss.str());
+}
+
+// Diagnostic-only compatibility shim for the exact ELILO payload hash.
+bool applyEliloAddressCompatShim(VMInstance* instance,
+                                 const guideXOS::PEParser& peParser,
+                                 uint64_t loadAddress) {
+    if (!instance || !instance->vm || !shouldEnableEliloAddressCompat()) {
+        return false;
+    }
+
+    const uint8_t* imageData = peParser.getImageData();
+    const size_t imageSize = peParser.getImageSize();
+    if (!imageData || imageSize == 0) {
+        LOG_WARN("[EFI-DIAG][ELILO-COMPAT] original image bytes unavailable; shim not applied");
+        return false;
+    }
+
+    const std::string imageSha256 = sha256Hex(imageData, imageSize);
+    const bool hashMatch = imageSha256 == kEliloAddressCompatSha256;
+
+    {
+        std::ostringstream oss;
+        oss << "[EFI-DIAG][ELILO-COMPAT] candidate"
+            << " enabled=true"
+            << " loadAddress=0x" << std::hex << loadAddress
+            << " imageSize=0x" << imageSize
+            << " sha256=" << imageSha256
+            << " expected=" << kEliloAddressCompatSha256
+            << " match=" << (hashMatch ? "true" : "false")
+            << std::dec;
+        LOG_INFO(oss.str());
+        BootStageTrace::Event("EFI_ELILO_ADDRESS_COMPAT",
+                              "enabled=true loadAddress=" + BootStageTrace::Hex(loadAddress) +
+                              " imageSize=" + BootStageTrace::Hex(static_cast<uint64_t>(imageSize)) +
+                              " sha256=" + imageSha256 +
+                              " expected=" + kEliloAddressCompatSha256 +
+                              " match=" + (hashMatch ? std::string("true") : std::string("false")));
+    }
+
+    if (!hashMatch) {
+        LOG_INFO("[EFI-DIAG][ELILO-COMPAT] exact ELILO hash mismatch; leaving image untouched");
+        return false;
+    }
+
+    auto& memory = instance->vm->getMemory();
+    const uint64_t memorySize = memory.GetTotalSize();
+    const auto fits = [memorySize](uint64_t address, size_t bytes) {
+        return address <= memorySize && bytes <= memorySize - address;
+    };
+    const auto writeZeroQword = [&](uint64_t address, const char* label) {
+        if (!fits(address, sizeof(uint64_t))) {
+            LOG_WARN(std::string("[EFI-DIAG][ELILO-COMPAT] ") + label + " out of guest memory bounds");
+            return false;
+        }
+        const uint64_t zero = 0ULL;
+        memory.Write(address, reinterpret_cast<const uint8_t*>(&zero), sizeof(zero));
+        return true;
+    };
+    const auto copyRange = [&](uint64_t src, uint64_t dst, size_t bytes, const char* label, size_t entryCount) {
+        if (!fits(src, bytes) || !fits(dst, bytes)) {
+            std::ostringstream warn;
+            warn << "[EFI-DIAG][ELILO-COMPAT] copy skipped label=\"" << label << "\""
+                 << " src=0x" << std::hex << src
+                 << " dst=0x" << dst
+                 << " bytes=0x" << bytes
+                 << " guestSize=0x" << memorySize
+                 << std::dec;
+            LOG_WARN(warn.str());
+            return false;
+        }
+
+        std::vector<uint8_t> buffer(bytes);
+        try {
+            memory.Read(src, buffer.data(), bytes);
+        } catch (const std::exception& ex) {
+            std::ostringstream warn;
+            warn << "[EFI-DIAG][ELILO-COMPAT] source read failed label=\"" << label << "\""
+                 << " src=0x" << std::hex << src
+                 << " bytes=0x" << bytes
+                 << " what=\"" << ex.what() << "\""
+                 << std::dec;
+            LOG_WARN(warn.str());
+            return false;
+        }
+
+        memory.Write(dst, buffer.data(), bytes);
+
+        std::ostringstream oss;
+        oss << "[EFI-DIAG][ELILO-COMPAT] copied label=\"" << label << "\""
+            << " src=0x" << std::hex << src
+            << " dst=0x" << dst
+            << " bytes=0x" << bytes
+            << " entrySize=0x" << kEliloConfigOptionEntrySize
+            << " entries=0x" << entryCount
+            << std::dec
+            << " sha256Range=" << imageSha256;
+        LOG_INFO(oss.str());
+        return true;
+    };
+
+    const struct SnapshotRange {
+        const char* label;
+        uint64_t start;
+        uint64_t end;
+    } ranges[] = {
+        {"list_heads", 0x382D0ULL, 0x382E0ULL},
+        {"gp_targets", 0x3D050ULL, 0x3D060ULL},
+        {"common_options", 0x3FB80ULL, 0x40100ULL},
+        {"runtime_ptr_12f000", 0x12F000ULL, 0x12F200ULL},
+        {"runtime_ptr_137060", 0x137060ULL, 0x137200ULL},
+    };
+
+    for (const auto& range : ranges) {
+        logEliloCompatRangeSnapshot(memory, "before", range.label, range.start, range.end);
+    }
+
+    bool success = true;
+    success &= writeZeroQword(kEliloCompatListHeadGroup0, "list-head-group0");
+    success &= writeZeroQword(kEliloCompatListHeadGroup1, "list-head-group1");
+    success &= copyRange(kEliloCompatRealGlobalOptionList,
+                         kEliloCompatRuntimeGlobalOptionList,
+                         kEliloGlobalOptionCopyBytes,
+                         "global_common_options",
+                         kEliloGlobalOptionCount);
+    success &= copyRange(kEliloCompatRealImageOptionList,
+                         kEliloCompatRuntimeImageOptionList,
+                         kEliloImageOptionCopyBytes,
+                         "image_common_options",
+                         kEliloImageOptionCount);
+
+    for (const auto& range : ranges) {
+        logEliloCompatRangeSnapshot(memory, "after", range.label, range.start, range.end);
+    }
+
+    std::ostringstream summary;
+    summary << "[EFI-DIAG][ELILO-COMPAT] compatibility shim "
+            << (success ? "applied" : "partially applied")
+            << " listHeadCells=2"
+            << " globalCopyBytes=0x" << std::hex << kEliloGlobalOptionCopyBytes
+            << " imageCopyBytes=0x" << kEliloImageOptionCopyBytes
+            << " entrySize=0x" << kEliloConfigOptionEntrySize
+            << std::dec;
+    LOG_INFO(summary.str());
+
+    BootStageTrace::Event("EFI_ELILO_ADDRESS_COMPAT",
+                          "applied=" + std::string(success ? "true" : "false") +
+                          " listHeadCells=2" +
+                          " globalCopyBytes=" + BootStageTrace::Hex(static_cast<uint64_t>(kEliloGlobalOptionCopyBytes)) +
+                          " imageCopyBytes=" + BootStageTrace::Hex(static_cast<uint64_t>(kEliloImageOptionCopyBytes)) +
+                          " entrySize=" + BootStageTrace::Hex(static_cast<uint64_t>(kEliloConfigOptionEntrySize)));
+
+    return success;
 }
 
 std::string previewUtf16(IMemory& memory, uint64_t address) {
@@ -1424,6 +1768,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 if (instance->vm->loadProgram(imageBuffer.data(), 
                                                                                          imageBuffer.size(), 
                                                                                          loadAddress)) {
+                                                                    applyEliloAddressCompatShim(instance,
+                                                                                                peParser,
+                                                                                                loadAddress);
                                                                     installGpRelativeDataWriteTrace(instance,
                                                                                                    "boot-image load");
                                                                     seedLoaderLocalUtf16Probe(instance);

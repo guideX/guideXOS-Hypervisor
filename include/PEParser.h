@@ -184,6 +184,8 @@ public:
     
     // Get image information
     const PEImageInfo& getImageInfo() const { return imageInfo_; }
+    const uint8_t* getImageData() const { return imageData_; }
+    size_t getImageSize() const { return imageSize_; }
     
     // Load sections into memory buffer
     bool loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddress, uint64_t& entryPoint);
