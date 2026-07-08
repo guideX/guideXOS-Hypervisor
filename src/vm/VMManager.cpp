@@ -64,6 +64,7 @@ IA64ISAPlugin* getActiveIa64Plugin(VMInstance* instance) {
 }
 
 std::string previewBytes(IMemory& memory, uint64_t address, size_t count);
+std::string previewBytesRaw(const IMemory& memory, uint64_t address, size_t count);
 std::string previewUtf16(IMemory& memory, uint64_t address);
 std::string describeEfiDevicePath(IMemory& memory, uint64_t address);
 
@@ -189,79 +190,136 @@ void installGpRelativeDataWriteTrace(VMInstance* instance, const char* phase) {
         }
     }
 
-    constexpr uint64_t kWatchStart = 0x3D000ULL;
-    constexpr uint64_t kWatchEnd = 0x3D100ULL;
-    constexpr uint64_t kWord0 = 0x3D050ULL;
-    constexpr uint64_t kWord1 = 0x3D058ULL;
+    struct RangeSpec {
+        const char* label;
+        uint64_t start;
+        uint64_t end;
+    };
+
+    const std::vector<RangeSpec> watchedRanges = {
+        {"list_heads", 0x382D0ULL, 0x382E0ULL},
+        {"gp_targets", 0x3D050ULL, 0x3D060ULL},
+        {"common_options", 0x3FB80ULL, 0x40100ULL},
+        {"runtime_ptr_12f000", 0x12F000ULL, 0x12F200ULL},
+        {"runtime_ptr_137060", 0x137060ULL, 0x137200ULL},
+    };
 
     std::ostringstream install;
-    install << "[EFI-GP-DIAG] installed watch for 0x" << std::hex << kWatchStart
-            << "..0x" << kWatchEnd
-            << " phase=\"" << phase << "\""
-            << " initial[0x3d050]=" << previewBytes(*memory, kWord0, 8)
-            << " initial[0x3d058]=" << previewBytes(*memory, kWord1, 8)
-            << std::dec;
+    install << "[EFI-RANGE-DIAG] installed exact watches phase=\"" << phase << "\"";
+    for (const auto& range : watchedRanges) {
+        install << " " << range.label << "=0x" << std::hex << range.start
+                << "..0x" << range.end;
+    }
     LOG_INFO(install.str());
-    BootStageTrace::Event("EFI_GP_RANGE_TRACE",
-                          "phase=\"" + std::string(phase) +
-                          "\" watchStart=" + BootStageTrace::Hex(kWatchStart) +
-                          " watchEnd=" + BootStageTrace::Hex(kWatchEnd) +
-                          " word3d050=" + previewBytes(*memory, kWord0, 8) +
-                          " word3d058=" + previewBytes(*memory, kWord1, 8));
 
-    memory->GetMMU().RegisterWriteHook(
-        [instance,
-         memory,
-         phaseLabel = std::string(phase)](HookContext& context, uint8_t* data) {
-            constexpr uint64_t kWriteStart = 0x3D000ULL;
-            constexpr uint64_t kWriteEnd = 0x3D100ULL;
-            const uint64_t writeEnd = context.address + static_cast<uint64_t>(context.size);
-            if (writeEnd <= kWriteStart || context.address >= kWriteEnd) {
-                return;
+    auto formatBytes = [](uint64_t start, uint64_t end, const uint8_t* raw) {
+        const uint64_t count = end > start ? end - start : 0;
+        const uint64_t limit = std::min<uint64_t>(count, 32ULL);
+        std::ostringstream bytes;
+        bytes << std::hex << std::setfill('0');
+        for (uint64_t i = 0; i < limit; ++i) {
+            if (i != 0) {
+                bytes << ' ';
             }
-
-            const uint64_t overlapStart = std::max(context.address, kWriteStart);
-            const uint64_t overlapEnd = std::min(writeEnd, kWriteEnd);
-            if (overlapStart >= overlapEnd) {
-                return;
+            bytes << std::setw(2)
+                  << static_cast<unsigned>(raw[static_cast<size_t>(start + i)]);
+        }
+        if (count > limit) {
+            if (limit != 0) {
+                bytes << ' ';
             }
+            bytes << "...";
+        }
+        return bytes.str();
+    };
 
-            const uint8_t* raw = memory->GetRawData();
-            std::ostringstream beforeBytes;
-            std::ostringstream afterBytes;
-            beforeBytes << std::hex << std::setfill('0');
-            afterBytes << std::hex << std::setfill('0');
-            for (uint64_t addr = overlapStart; addr < overlapEnd; ++addr) {
-                if (addr != overlapStart) {
-                    beforeBytes << ' ';
-                    afterBytes << ' ';
+    for (const auto& range : watchedRanges) {
+        memory->GetMMU().RegisterReadHook(
+            [instance,
+             memory,
+             phaseLabel = std::string(phase),
+             range,
+             formatBytes](HookContext& context, uint8_t* /*data*/) {
+                const uint64_t readEnd = context.address + static_cast<uint64_t>(context.size);
+                if (readEnd <= range.start || context.address >= range.end) {
+                    return;
                 }
-                beforeBytes << std::setw(2)
-                            << static_cast<unsigned>(raw[static_cast<size_t>(addr)]);
-                afterBytes << std::setw(2)
-                           << static_cast<unsigned>(data[static_cast<size_t>(addr - context.address)]);
-            }
 
-            std::ostringstream trace;
-            trace << "[EFI-GP-WRITE] phase=\"" << phaseLabel << "\""
-                  << " ip=0x" << std::hex << instance->vm->getIP()
-                  << " address=0x" << context.address
-                  << " size=0x" << context.size
-                  << " overlap=0x" << overlapStart << "..0x" << overlapEnd
-                  << " before=" << beforeBytes.str()
-                  << " after=" << afterBytes.str()
-                  << std::dec;
-            LOG_INFO(trace.str());
-            BootStageTrace::Event("EFI_GP_RANGE_WRITE",
-                                  "phase=\"" + phaseLabel +
-                                  "\" ip=" + BootStageTrace::Hex(instance->vm->getIP()) +
-                                  " address=" + BootStageTrace::Hex(context.address) +
-                                  " size=" + BootStageTrace::Hex(static_cast<uint64_t>(context.size)) +
-                                  " overlapStart=" + BootStageTrace::Hex(overlapStart) +
-                                  " overlapEnd=" + BootStageTrace::Hex(overlapEnd) +
-                                  " before=" + beforeBytes.str() +
-                                  " after=" + afterBytes.str());
-        });
+                const uint64_t overlapStart = std::max(context.address, range.start);
+                const uint64_t overlapEnd = std::min(readEnd, range.end);
+                if (overlapStart >= overlapEnd) {
+                    return;
+                }
+
+                const uint8_t* raw = memory->GetRawData();
+                std::ostringstream trace;
+                trace << "[EFI-RANGE-READ] phase=\"" << phaseLabel << "\""
+                      << " label=\"" << range.label << "\""
+                      << " ip=0x" << std::hex << instance->vm->getIP()
+                      << " address=0x" << context.address
+                      << " size=0x" << context.size
+                      << " overlap=0x" << overlapStart << "..0x" << overlapEnd
+                      << " bytes=" << formatBytes(overlapStart, overlapEnd, raw)
+                      << std::dec;
+                std::cout << trace.str() << std::endl;
+            });
+
+        memory->GetMMU().RegisterWriteHook(
+            [instance,
+             memory,
+             phaseLabel = std::string(phase),
+             range,
+             formatBytes](HookContext& context, uint8_t* data) {
+                const uint64_t writeEnd = context.address + static_cast<uint64_t>(context.size);
+                if (writeEnd <= range.start || context.address >= range.end) {
+                    return;
+                }
+
+                const uint64_t overlapStart = std::max(context.address, range.start);
+                const uint64_t overlapEnd = std::min(writeEnd, range.end);
+                if (overlapStart >= overlapEnd) {
+                    return;
+                }
+
+                const uint8_t* raw = memory->GetRawData();
+                std::ostringstream beforeBytes;
+                std::ostringstream afterBytes;
+                beforeBytes << std::hex << std::setfill('0');
+                afterBytes << std::hex << std::setfill('0');
+                const uint64_t limit = std::min<uint64_t>(overlapEnd - overlapStart, 32ULL);
+                for (uint64_t i = 0; i < limit; ++i) {
+                    const uint64_t addr = overlapStart + i;
+                    if (i != 0) {
+                        beforeBytes << ' ';
+                        afterBytes << ' ';
+                    }
+                    beforeBytes << std::setw(2)
+                                << static_cast<unsigned>(raw[static_cast<size_t>(addr)]);
+                    afterBytes << std::setw(2)
+                               << static_cast<unsigned>(data[static_cast<size_t>(addr - context.address)]);
+                }
+                if (overlapEnd - overlapStart > limit) {
+                    if (limit != 0) {
+                        beforeBytes << ' ';
+                        afterBytes << ' ';
+                    }
+                    beforeBytes << "...";
+                    afterBytes << "...";
+                }
+
+                std::ostringstream trace;
+                trace << "[EFI-RANGE-WRITE] phase=\"" << phaseLabel << "\""
+                      << " label=\"" << range.label << "\""
+                      << " ip=0x" << std::hex << instance->vm->getIP()
+                      << " address=0x" << context.address
+                      << " size=0x" << context.size
+                      << " overlap=0x" << overlapStart << "..0x" << overlapEnd
+                      << " before=" << beforeBytes.str()
+                      << " after=" << afterBytes.str()
+                      << std::dec;
+                std::cout << trace.str() << std::endl;
+            });
+    }
 }
 
 void seedLoadedImageLoadOptions(VMInstance* instance,
@@ -305,7 +363,7 @@ void seedLoadedImageLoadOptions(VMInstance* instance,
         << " addr=0x" << std::hex << loadOptionsAddr
         << " size=0x" << loadOptionsSizeBytes
         << " text=\"" << seedText << "\""
-        << " utf16=" << previewUtf16(memory, loadOptionsAddr);
+        << " utf16Seed=\"" << seedText << "\"";
     LOG_INFO(oss.str());
     BootStageTrace::Event("EFI_DIAG_SEED_LOAD_OPTIONS",
                           "addr=" + BootStageTrace::Hex(loadOptionsAddr) +
@@ -461,14 +519,12 @@ void installEfiLoadedImageReadTrace(VMInstance* instance,
                     loadedImageFilePath = 0;
                 }
                 trace << " loadedImageFilePath=0x" << std::hex << loadedImageFilePath
-                      << " loadedImageBytes=" << previewBytes(*memory, loadedImageAddress, loadedImageSize);
+                      << " loadedImageBytes=" << previewBytesRaw(*memory, loadedImageAddress, loadedImageSize);
             }
             if (shouldLogFilePath) {
                 trace << " field=LoadedImageFilePath";
-                trace << " filePathState="
-                      << describeEfiDevicePath(*memory, filePathAddress)
-                      << " filePathBytes="
-                      << previewBytes(*memory, filePathAddress, filePathSize);
+                trace << " filePathBytes="
+                      << previewBytesRaw(*memory, filePathAddress, filePathSize);
             }
 
             std::cout << "[EFI-READ-TRACE] " << trace.str() << std::endl;
@@ -551,6 +607,43 @@ std::string previewBytes(IMemory& memory, uint64_t address, size_t count) {
             bytes << '0';
         }
         bytes << static_cast<unsigned>(value);
+    }
+    return bytes.str();
+}
+
+std::string previewBytesRaw(const IMemory& memory, uint64_t address, size_t count) {
+    if (address == 0 || count == 0) {
+        return {};
+    }
+
+    const uint8_t* raw = memory.GetRawData();
+    if (!raw) {
+        return "<unreadable>";
+    }
+
+    const uint64_t totalSize = memory.GetTotalSize();
+    if (address >= totalSize) {
+        return "<unreadable>";
+    }
+
+    const uint64_t limit = std::min<uint64_t>(count, totalSize - address);
+    std::ostringstream bytes;
+    bytes << std::hex;
+    for (uint64_t i = 0; i < limit; ++i) {
+        if (i != 0) {
+            bytes << ' ';
+        }
+        const int value = raw[static_cast<size_t>(address + i)];
+        if (value < 0x10) {
+            bytes << '0';
+        }
+        bytes << value;
+    }
+    if (limit < count) {
+        if (limit != 0) {
+            bytes << ' ';
+        }
+        bytes << "...";
     }
     return bytes.str();
 }
@@ -1802,24 +1895,6 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     instance->vm->getMemory().Read(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48,
                                                                         reinterpret_cast<uint8_t*>(&loadedImageImageSize),
                                                                         sizeof(loadedImageImageSize));
-                                                                    auto previewBytes = [&](uint64_t address, size_t count) {
-                                                                        std::array<uint8_t, 32> buffer{};
-                                                                        const size_t toRead = std::min(count, buffer.size());
-                                                                        instance->vm->getMemory().Read(address,
-                                                                            buffer.data(),
-                                                                            toRead);
-                                                                        std::ostringstream bytes;
-                                                                        bytes << std::hex;
-                                                                        for (size_t i = 0; i < toRead; ++i) {
-                                                                            if (i != 0) {
-                                                                                bytes << ' ';
-                                                                            }
-                                                                            bytes.width(2);
-                                                                            bytes.fill('0');
-                                                                            bytes << static_cast<unsigned>(buffer[i]);
-                                                                        }
-                                                                        return bytes.str();
-                                                                    };
                                                                     oss.str("");
                                                                     oss << "  LoadedImage verify: revision=0x" << std::hex << loadedImageRevision
                                                                         << " filePath=0x" << loadedImageFilePath
@@ -1828,9 +1903,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         << " imageSize=0x" << loadedImageImageSize
                                                                         << " loadedImageFilePathAddr=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
                                                                         << " loadedImageFilePathNodeLength=0x" << filePathNodeLength
-                                                                        << " loadedImageFilePathBytes=" << previewBytes(EFI_LOADED_IMAGE_FILE_PATH_ADDR, static_cast<size_t>(filePathNodeLength) + 4ULL)
-                                                                        << " loadedImageFilePathNodes=" << describeEfiDevicePath(instance->vm->getMemory(), EFI_LOADED_IMAGE_FILE_PATH_ADDR)
-                                                                        << " loadOptionsBytes=" << previewBytes(EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 16);
+                                                                        << " loadedImageFilePathBytes=" << previewBytesRaw(instance->vm->getMemory(), EFI_LOADED_IMAGE_FILE_PATH_ADDR, static_cast<size_t>(filePathNodeLength) + 4ULL)
+                                                                        << " loadedImageFilePathNodes=<omitted>"
+                                                                        << " loadOptionsBytes=" << previewBytesRaw(instance->vm->getMemory(), EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR, 16);
                                                                     LOG_INFO(oss.str());
                                                                     BootStageTrace::Event("EFI_LOADED_IMAGE_VERIFY",
                                                                         "revision=" + BootStageTrace::Hex(loadedImageRevision) +

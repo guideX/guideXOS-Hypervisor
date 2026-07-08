@@ -95,6 +95,21 @@ bool shouldEmitGpRelativeDataDiag() {
     return enabled;
 }
 
+constexpr uint64_t kRegisterConfigCallsiteA = 0xEC60ULL;
+constexpr uint64_t kRegisterConfigCallsiteB = 0xECA0ULL;
+constexpr uint64_t kRegisterConfigComputedListHead0Delta = 0x1FAFB0ULL;
+constexpr uint64_t kRegisterConfigComputedListHead1Delta = 0x1FAFA8ULL;
+constexpr uint64_t kRegisterConfigExpectedListHead0 = 0x382D0ULL;
+constexpr uint64_t kRegisterConfigExpectedListHead1 = 0x382D8ULL;
+
+bool isRegisterConfigCallsite(uint64_t ip) {
+    return ip == kRegisterConfigCallsiteA || ip == kRegisterConfigCallsiteB;
+}
+
+bool isLikelyGuestPointer(const IMemory& memory, uint64_t value) {
+    return value >= 0x1000ULL && value < memory.GetTotalSize();
+}
+
 constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_STATUS_INVALID_PARAMETER = 0x8000000000000002ULL;
 constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
@@ -1115,6 +1130,43 @@ std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count)
     return oss.str();
 }
 
+std::string readHexBytesPreviewRaw(const IMemory& memory, uint64_t address, size_t count) {
+    if (address == 0 || count == 0) {
+        return {};
+    }
+
+    const uint8_t* raw = memory.GetRawData();
+    if (!raw) {
+        return "<unreadable>";
+    }
+
+    const uint64_t totalSize = memory.GetTotalSize();
+    if (address >= totalSize) {
+        return "<unreadable>";
+    }
+
+    const uint64_t limit = std::min<uint64_t>(count, totalSize - address);
+    std::ostringstream oss;
+    oss << std::hex;
+    for (uint64_t i = 0; i < limit; ++i) {
+        if (i != 0) {
+            oss << ' ';
+        }
+        const int value = raw[static_cast<size_t>(address + i)];
+        if (value < 0x10) {
+            oss << '0';
+        }
+        oss << value;
+    }
+    if (limit < count) {
+        if (limit != 0) {
+            oss << ' ';
+        }
+        oss << "...";
+    }
+    return oss.str();
+}
+
 void emitGuestHexDumpTrace(const char* eventName,
                            IMemory& memory,
                            uint64_t start,
@@ -1889,7 +1941,10 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiBootImageFromVmManager_(false)
     , efiHandoffLayoutMemorySize_(0)
     , efiHandoffLayoutInitialized_(false)
-    , callFrameStack_() {
+    , callFrameStack_()
+    , pendingRegisterConfigEntryTarget_(0)
+    , pendingRegisterConfigEntryCallsite_(0)
+    , pendingRegisterConfigEntryArmed_(false) {
 }
 
 IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder, 
@@ -1949,7 +2004,10 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiBootImageFromVmManager_(false)
     , efiHandoffLayoutMemorySize_(0)
     , efiHandoffLayoutInitialized_(false)
-    , callFrameStack_() {
+    , callFrameStack_()
+    , pendingRegisterConfigEntryTarget_(0)
+    , pendingRegisterConfigEntryCallsite_(0)
+    , pendingRegisterConfigEntryArmed_(false) {
 }
 
 void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
@@ -2058,6 +2116,9 @@ void IA64ISAPlugin::reset() {
     efiHandoffLayoutMemorySize_ = 0;
     efiHandoffLayoutInitialized_ = false;
     callFrameStack_.clear();
+    pendingRegisterConfigEntryTarget_ = 0;
+    pendingRegisterConfigEntryCallsite_ = 0;
+    pendingRegisterConfigEntryArmed_ = false;
 }
 
 ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
@@ -3361,8 +3422,61 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                           EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
                                           EFI_STATUS_UNSUPPORTED);
                     } else {
+                        const bool traceRegisterConfigCallsite =
+                            shouldEmitGpRelativeDataDiag() &&
+                            isRegisterConfigCallsite(currentIP);
+                        std::array<uint64_t, 6> registerConfigOutgoingArgs{};
+                        if (traceRegisterConfigCallsite) {
+                            for (size_t i = 0; i < registerConfigOutgoingArgs.size(); ++i) {
+                                registerConfigOutgoingArgs[i] =
+                                    readCallerOutputRegister(state_.getCPUState(), i);
+                            }
+                        }
                         saveCallFrame(currentIP + 16);
                         captureCallOutputRegisters();
+                        if (traceRegisterConfigCallsite) {
+                            const CPUState& callCpu = state_.getCPUState();
+                            std::ostringstream trace;
+                            trace << "[REGCFG-CALL]"
+                                  << " callsite=0x" << std::hex << currentIP
+                                  << " r1=0x" << callCpu.GetGR(1)
+                                  << " outgoing=["
+                                  << "r32=0x" << registerConfigOutgoingArgs[0]
+                                  << ",r33=0x" << registerConfigOutgoingArgs[1]
+                                  << ",r34=0x" << registerConfigOutgoingArgs[2]
+                                  << ",r35=0x" << registerConfigOutgoingArgs[3]
+                                  << ",r36=0x" << registerConfigOutgoingArgs[4]
+                                  << ",r37=0x" << registerConfigOutgoingArgs[5]
+                                  << "]"
+                                  << " callee=["
+                                  << "r32=0x" << callCpu.GetGR(32)
+                                  << ",r33=0x" << callCpu.GetGR(33)
+                                  << ",r34=0x" << callCpu.GetGR(34)
+                                  << "]"
+                                  << " arg0Bytes=" << (isLikelyGuestPointer(memory, registerConfigOutgoingArgs[0])
+                                                      ? readHexBytesPreviewRaw(memory, registerConfigOutgoingArgs[0], 32)
+                                                      : std::string())
+                                  << " arg1Bytes=" << (isLikelyGuestPointer(memory, registerConfigOutgoingArgs[1])
+                                                      ? readHexBytesPreviewRaw(memory, registerConfigOutgoingArgs[1], 32)
+                                                      : std::string())
+                                  << " arg2Bytes=" << (isLikelyGuestPointer(memory, registerConfigOutgoingArgs[2])
+                                                      ? readHexBytesPreviewRaw(memory, registerConfigOutgoingArgs[2], 32)
+                                                      : std::string())
+                                  << " arg3Bytes=" << (isLikelyGuestPointer(memory, registerConfigOutgoingArgs[3])
+                                                      ? readHexBytesPreviewRaw(memory, registerConfigOutgoingArgs[3], 32)
+                                                      : std::string())
+                                  << " arg4Bytes=" << (isLikelyGuestPointer(memory, registerConfigOutgoingArgs[4])
+                                                      ? readHexBytesPreviewRaw(memory, registerConfigOutgoingArgs[4], 32)
+                                                      : std::string())
+                                  << " arg5Bytes=" << (isLikelyGuestPointer(memory, registerConfigOutgoingArgs[5])
+                                                      ? readHexBytesPreviewRaw(memory, registerConfigOutgoingArgs[5], 32)
+                                                      : std::string())
+                                  << std::dec;
+                            std::cout << trace.str() << std::endl;
+                            pendingRegisterConfigEntryTarget_ = normalizeBranchEntryIP(branchTarget);
+                            pendingRegisterConfigEntryCallsite_ = currentIP;
+                            pendingRegisterConfigEntryArmed_ = true;
+                        }
                     }
                     isBranch = true;
                 }
@@ -4919,51 +5033,33 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 " lastEfiCall=\"" + lastEfiCallName_ + "\"" +
                 " lastEfiIP=" + BootStageTrace::Hex(lastEfiCallIP_));
         }
-        static bool gpRangeDumpEmitted = false;
-        static size_t regcfgTraceCount = 0;
-        const bool traceRegisterConfigWindow =
-            shouldEmitGpRelativeDataDiag() &&
-            cpu.GetIP() >= 0xEA80ULL &&
-            cpu.GetIP() < 0xEB80ULL &&
-            regcfgTraceCount < 96;
         if (shouldEmitGpRelativeDataDiag() &&
-            !gpRangeDumpEmitted &&
-            cpu.GetIP() == 0xEAC0ULL &&
-            state_.currentSlot_ == 0) {
-            gpRangeDumpEmitted = true;
-            BootStageTrace::Event("IA64_REGCFG_GUEST_WORDS",
-                                  "phase=prefault"
-                                  " word3d050=" + readHexBytesPreview(memory, 0x3D050ULL, 8) +
-                                  " word3d058=" + readHexBytesPreview(memory, 0x3D058ULL, 8) +
-                                  " r1=" + BootStageTrace::Hex(cpu.GetGR(1)) +
-                                  " r17=" + BootStageTrace::Hex(cpu.GetGR(17)));
-            emitGuestHexDumpTrace("IA64_REGCFG_GUEST_DUMP", memory, 0x3CF00ULL, 0x220ULL);
-        }
-        if (traceRegisterConfigWindow) {
+            pendingRegisterConfigEntryArmed_ &&
+            cpu.GetIP() == pendingRegisterConfigEntryTarget_) {
+            const uint64_t gp = cpu.GetGR(1);
+            const uint64_t computedListHead0 = gp - kRegisterConfigComputedListHead0Delta;
+            const uint64_t computedListHead1 = gp - kRegisterConfigComputedListHead1Delta;
             std::ostringstream trace;
-            trace << "phase=pre"
-                  << " ip=" << BootStageTrace::Hex(cpu.GetIP())
-                  << " slot=" << state_.currentSlot_
-                  << " disasm=\"" << instr.GetDisassembly() << "\""
-                  << " p6=" << (cpu.GetPR(6) ? 1 : 0)
-                  << " p7=" << (cpu.GetPR(7) ? 1 : 0)
-                  << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
-                  << " r8=" << BootStageTrace::Hex(cpu.GetGR(8))
-                  << " r9=" << BootStageTrace::Hex(cpu.GetGR(9))
-                  << " r14=" << BootStageTrace::Hex(cpu.GetGR(14))
-                  << " r16=" << BootStageTrace::Hex(cpu.GetGR(16))
-                  << " r17=" << BootStageTrace::Hex(cpu.GetGR(17))
-                  << " r18=" << BootStageTrace::Hex(cpu.GetGR(18))
-                  << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
-                  << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
-                  << " r34=" << BootStageTrace::Hex(cpu.GetGR(34))
-                  << " r35=" << BootStageTrace::Hex(cpu.GetGR(35))
-                  << " mem[r17]=" << readHexBytesPreview(memory, cpu.GetGR(17), 16)
-                  << " mem[r16]=" << readHexBytesPreview(memory, cpu.GetGR(16), 16)
-                  << " word3d050=" << readHexBytesPreview(memory, 0x3D050ULL, 8)
-                  << " word3d058=" << readHexBytesPreview(memory, 0x3D058ULL, 8);
-            BootStageTrace::Event("IA64_REGCFG_TRACE", trace.str());
-            ++regcfgTraceCount;
+            trace << "[REGCFG-ENTRY]"
+                  << " entry=0x" << std::hex << cpu.GetIP()
+                  << " fromCallsite=0x" << pendingRegisterConfigEntryCallsite_
+                  << " r1=0x" << gp
+                  << " r32=0x" << cpu.GetGR(32)
+                  << " r33=0x" << cpu.GetGR(33)
+                  << " r34=0x" << cpu.GetGR(34)
+                  << " computedListHead0=0x" << computedListHead0
+                  << " computedListHead0Bytes=" << readHexBytesPreviewRaw(memory, computedListHead0, 16)
+                  << " expectedListHead0=0x" << kRegisterConfigExpectedListHead0
+                  << " expectedListHead0Bytes=" << readHexBytesPreviewRaw(memory, kRegisterConfigExpectedListHead0, 16)
+                  << " computedListHead1=0x" << computedListHead1
+                  << " computedListHead1Bytes=" << readHexBytesPreviewRaw(memory, computedListHead1, 16)
+                  << " expectedListHead1=0x" << kRegisterConfigExpectedListHead1
+                  << " expectedListHead1Bytes=" << readHexBytesPreviewRaw(memory, kRegisterConfigExpectedListHead1, 16)
+                  << std::dec;
+            std::cout << trace.str() << std::endl;
+            pendingRegisterConfigEntryArmed_ = false;
+            pendingRegisterConfigEntryTarget_ = 0;
+            pendingRegisterConfigEntryCallsite_ = 0;
         }
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
         if (traceBootLocalLoad) {
@@ -5007,33 +5103,6 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                       << " simpleFsOpenVolumeField=" << readHexBytesPreview(memory, 0x1FDB1008ULL, 0x8ULL)
                       << " openVolumeTarget=" << readHexBytesPreview(memory, 0x1FDB0CC0ULL, 0x10ULL)
                       << std::dec << std::endl;
-        }
-        if (traceRegisterConfigWindow) {
-            const CPUState& postCpu = state_.getCPUState();
-            std::ostringstream trace;
-            trace << "phase=post"
-                  << " ip=" << BootStageTrace::Hex(postCpu.GetIP())
-                  << " slot=" << state_.currentSlot_
-                  << " disasm=\"" << instr.GetDisassembly() << "\""
-                  << " p6=" << (postCpu.GetPR(6) ? 1 : 0)
-                  << " p7=" << (postCpu.GetPR(7) ? 1 : 0)
-                  << " r1=" << BootStageTrace::Hex(postCpu.GetGR(1))
-                  << " r8=" << BootStageTrace::Hex(postCpu.GetGR(8))
-                  << " r9=" << BootStageTrace::Hex(postCpu.GetGR(9))
-                  << " r14=" << BootStageTrace::Hex(postCpu.GetGR(14))
-                  << " r16=" << BootStageTrace::Hex(postCpu.GetGR(16))
-                  << " r17=" << BootStageTrace::Hex(postCpu.GetGR(17))
-                  << " r18=" << BootStageTrace::Hex(postCpu.GetGR(18))
-                  << " r32=" << BootStageTrace::Hex(postCpu.GetGR(32))
-                  << " r33=" << BootStageTrace::Hex(postCpu.GetGR(33))
-                  << " r34=" << BootStageTrace::Hex(postCpu.GetGR(34))
-                  << " r35=" << BootStageTrace::Hex(postCpu.GetGR(35))
-                  << " mem[r17]=" << readHexBytesPreview(memory, postCpu.GetGR(17), 16)
-                  << " mem[r16]=" << readHexBytesPreview(memory, postCpu.GetGR(16), 16)
-                  << " word3d050=" << readHexBytesPreview(memory, 0x3D050ULL, 8)
-                  << " word3d058=" << readHexBytesPreview(memory, 0x3D058ULL, 8);
-            BootStageTrace::Event("IA64_REGCFG_TRACE", trace.str());
-            ++regcfgTraceCount;
         }
         if (traceScanLoop && emitScanLoopTrace) {
             logScanLoopState("post", state_.getCPUState(), state_.currentSlot_, instr);

@@ -355,6 +355,11 @@ private:
         uint64_t returnAddress;
     };
     std::vector<CallFrameSnapshot> callFrameStack_;
+
+    // Narrow diagnostics for register_config_options only.
+    uint64_t pendingRegisterConfigEntryTarget_;
+    uint64_t pendingRegisterConfigEntryCallsite_;
+    bool pendingRegisterConfigEntryArmed_;
 };
 
 /**
