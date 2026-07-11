@@ -90,7 +90,8 @@ enum class InstructionType {
     MOV_TO_AR,  // Move from general register to application register
     MOV_FROM_PR,// Move predicate registers to general register
     MOV_FROM_IP,// Move instruction pointer to general register
-    MOV_TO_PR,  // Move general register to predicate registers
+    MOV_TO_PR,      // Move general register to predicate registers
+    MOV_TO_PR_ROT,  // Move immediate to rotating predicate registers
     MOV_IMM,    // Move immediate to register
     MOVL,       // Move 64-bit immediate (L+X slots)
     GETF_SIG,   // Move floating-point significand to general register

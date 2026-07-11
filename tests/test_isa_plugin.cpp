@@ -1420,6 +1420,52 @@ void testIA64MoveToAppRegisterDecode() {
     std::cout << "  ? raw boot mov.i ar.lc = r14 decodes and updates ar.lc\n";
 }
 
+void testIA64MoveToRotatingPredicateDecode() {
+    std::cout << "Testing IA-64 move to rotating predicate decode...\n";
+
+    const uint8_t bundleBytes[16] = {
+        0x01, 0x10, 0x00, 0x40, 0x00, 0x21, 0x00, 0x31,
+        0x88, 0x78, 0x29, 0x20, 0x00, 0x00, 0x00, 0x02
+    };
+
+    InstructionDecoder decoder;
+    Bundle bundle = decoder.DecodeBundleAt(bundleBytes, 0x27ff0);
+
+    assert(bundle.templateType == TemplateType::MII_STOP);
+    assert(bundle.hasStop);
+    assert(bundle.stopAfterSlot[1]);
+    assert(bundle.instructions.size() == 3);
+    assert(bundle.instructions[0].GetDisassembly() == "add r2 = r32, 0");
+    assert(bundle.instructions[1].GetDisassembly() == "extr r16 = r34, 3, 61");
+
+    const InstructionEx& mov_pr_rot = bundle.instructions[2];
+    assert(mov_pr_rot.GetType() == InstructionType::MOV_TO_PR_ROT);
+    assert(mov_pr_rot.GetPredicate() == 0);
+    assert(mov_pr_rot.HasImmediate());
+    assert(mov_pr_rot.GetImmediate() == 0x10000ULL);
+    assert(mov_pr_rot.GetDisassembly() == "mov pr.rot = 0x10000");
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetCFM(1ULL << 32);
+    cpu.SetPR(16, false);
+    cpu.SetPR(17, false);
+    cpu.SetPR(18, true);
+    cpu.SetPR(63, true);
+    mov_pr_rot.Execute(cpu, memory);
+    assert(cpu.GetPR(16));
+    assert(!cpu.GetPR(17));
+    assert(!cpu.GetPR(18));
+    assert(!cpu.GetPR(63));
+
+    InstructionEx f_nop = decoder.DecodeSlot(0x8000000ULL, UnitType::F_UNIT, 0x28070);
+    assert(f_nop.GetType() == InstructionType::NOP);
+    assert(f_nop.GetRawBits() == 0x8000000ULL);
+    assert(f_nop.GetDisassembly() == "nop");
+
+    std::cout << "  ? memcpy bundle slot 2 decodes as mov pr.rot and writes the rotating predicate window\n";
+}
+
 void testIA64AddsImm14Decode() {
     std::cout << "Testing IA-64 adds imm14 decode...\n";
 
@@ -2894,6 +2940,9 @@ int main() {
         std::cout << "\n";
 
         testIA64MoveToAppRegisterDecode();
+        std::cout << "\n";
+
+        testIA64MoveToRotatingPredicateDecode();
         std::cout << "\n";
 
         testIA64AddsImm14Decode();

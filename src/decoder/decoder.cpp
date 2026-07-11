@@ -181,6 +181,15 @@ static int64_t SignExtend(uint64_t value, int bits) {
     return static_cast<int64_t>(value);
 }
 
+static uint64_t DecodeMovPrRotImmediate(uint64_t slotBits) {
+    // I24: mov pr.rot = imm44. The 28-bit encoded immediate is split across
+    // the I-format payload and sign-extended before the low 16 bits are restored.
+    const uint64_t imm27 = (slotBits >> 6) & 0x7FFFFFFULL;
+    const uint64_t sign = (slotBits >> 36) & 0x1ULL;
+    const uint64_t imm28 = imm27 | (sign << 27);
+    return static_cast<uint64_t>(SignExtend(imm28, 28)) << 16;
+}
+
 static bool IsCompareInstruction(InstructionType type) {
     switch (type) {
         case InstructionType::CMP_EQ:
@@ -343,6 +352,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     if ((mask >> i) & 0x1ULL) {
                         cpu.SetPR(i, ((value >> i) & 0x1ULL) != 0);
                     }
+                }
+            }
+            break;
+
+        case InstructionType::MOV_TO_PR_ROT:
+            {
+                const uint64_t value = immediate_;
+                for (uint8_t i = 16; i < 64; ++i) {
+                    cpu.SetPR(i, ((value >> i) & 0x1ULL) != 0);
                 }
             }
             break;
@@ -1009,6 +1027,10 @@ std::string InstructionEx::GetDisassembly() const {
             if (hasImmediate_) {
                 oss << ", 0x" << std::hex << immediate_ << std::dec;
             }
+            break;
+
+        case InstructionType::MOV_TO_PR_ROT:
+            oss << "mov pr.rot = 0x" << std::hex << immediate_ << std::dec;
             break;
 
         case InstructionType::GETF_SIG:
@@ -1777,6 +1799,14 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
+            if (major == 0x0 && x3 == 0x2 && x6 == 0x00) {
+                result = InstructionEx(InstructionType::MOV_TO_PR_ROT, UnitType::I_UNIT);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetImmediate(DecodeMovPrRotImmediate(slotBits));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             if (major == 0x0 && x3 == 0x0 && (x6 == 0x31 || x6 == 0x33)) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
                 const uint8_t b2 = static_cast<uint8_t>((slotBits >> 13) & 0x7);
@@ -1886,6 +1916,13 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             break;
             
         case UnitType::F_UNIT:
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x00 || x6 == 0x01)) {
+                result = InstructionEx(InstructionType::NOP, UnitType::F_UNIT);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
             // F-unit for floating-point operations
             result = decoder::FTypeDecoder::decode(slotBits);
             result.SetRawBits(slotBits);
