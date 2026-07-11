@@ -12,10 +12,7 @@
 /cmake-build-vs18/bin
 /build-mingw/bin
 /cmake-build-diag/bin
-/.codex_tmp/EfiBootHarness/bin/Debug/net8.0/fresh_noseed_run_20260704.console.log
-/.codex_tmp/EfiBootHarness/bin/Debug/net8.0/logs/boot-trace-20260704-110022.log
-/.codex_tmp/EfiBootHarness/bin/Debug/net8.0/logs/native-20260704-110022.log
-/.codex_tmp/EfiBootHarness/bin/Debug/net8.0/logs/native-error-20260704-110022.log
+/.codex_tmp/EfiBootHarness/bin/Debug/
 /cmake-build-diag/debug_harness.dir/Debug
 /.codex_tmp/boot_path_trace_bp_20260704.log
 /.codex_tmp/boot_path_trace_2000000.log
