@@ -1427,16 +1427,40 @@ void testIA64MoveToRotatingPredicateDecode() {
         0x01, 0x10, 0x00, 0x40, 0x00, 0x21, 0x00, 0x31,
         0x88, 0x78, 0x29, 0x20, 0x00, 0x00, 0x00, 0x02
     };
+    const uint64_t slot0Raw = 0x10802000080ULL;
+    const uint64_t slot1Raw = 0x0A5E220C400ULL;
+    const uint64_t slot2Raw = 0x400000040ULL;
 
     InstructionDecoder decoder;
     Bundle bundle = decoder.DecodeBundleAt(bundleBytes, 0x27ff0);
 
     assert(bundle.templateType == TemplateType::MII_STOP);
     assert(bundle.hasStop);
+    assert(!bundle.stopAfterSlot[0]);
     assert(bundle.stopAfterSlot[1]);
+    assert(!bundle.stopAfterSlot[2]);
     assert(bundle.instructions.size() == 3);
     assert(bundle.instructions[0].GetDisassembly() == "add r2 = r32, 0");
     assert(bundle.instructions[1].GetDisassembly() == "extr r16 = r34, 3, 61");
+    assert(bundle.instructions[0].GetRawBits() == slot0Raw);
+    assert(bundle.instructions[1].GetRawBits() == slot1Raw);
+    assert(bundle.instructions[2].GetRawBits() == slot2Raw);
+
+    InstructionEx extr = decoder.DecodeSlot(slot1Raw, UnitType::I_UNIT, 0x27ff0);
+    assert(extr.GetType() == InstructionType::EXTR);
+    assert(extr.GetPredicate() == 0);
+    assert(extr.GetDst() == 16);
+    assert(extr.GetSrc1() == 34);
+    assert(extr.HasImmediate());
+    assert(extr.GetImmediate() == 0xF03ULL);
+    assert(extr.GetDisassembly() == "extr r16 = r34, 3, 61");
+
+    CPUState extrCpu;
+    Memory extrMemory(64 * 1024);
+    extrCpu.SetGR(34, 0xFFFFFFFFFFFFFFFFULL);
+    extr.Execute(extrCpu, extrMemory);
+    assert(extrCpu.GetGR(16) == 0x1FFFFFFFFFFFFFFFULL);
+    assert(extrCpu.GetGR(34) == 0xFFFFFFFFFFFFFFFFULL);
 
     const InstructionEx& mov_pr_rot = bundle.instructions[2];
     assert(mov_pr_rot.GetType() == InstructionType::MOV_TO_PR_ROT);

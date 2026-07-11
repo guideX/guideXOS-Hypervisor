@@ -45,3 +45,6 @@
 /cmake-build-diag/test_elf_validation.dir/Debug
 /cmake-build-diag/test_debugger.dir/Debug
 /cmake-build-diag/x64/Debug
+/cmake-build-diag/test_isa_plugin.dir/Debug
+/cmake-build-refresh/test_isa_plugin.dir/Debug
+
