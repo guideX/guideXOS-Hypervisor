@@ -12,6 +12,7 @@
 		<BuildDependency Project="boot_trace_example.vcxproj"/>
 		<BuildDependency Project="copy_web_files.vcxproj"/>
 		<BuildDependency Project="debug_harness.vcxproj"/>
+		<BuildDependency Project="ia64_iso_matrix.vcxproj"/>
 		<BuildDependency Project="ia64emu.vcxproj"/>
 		<BuildDependency Project="ia64emu_tests.vcxproj"/>
 		<BuildDependency Project="kernel_validation_example.vcxproj"/>
@@ -59,6 +60,9 @@
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
 	</Project>
 	<Project Path="debug_harness.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="505fdcf3-07f6-364b-b35c-a7d0172bf64c">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="ia64_iso_matrix.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d290800d-da16-355c-94a4-94c0d4d2442e">
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
 	</Project>
 	<Project Path="ia64emu.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d235bd42-fa2e-3d6d-b898-a680d158a72e">

@@ -14,6 +14,7 @@ D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_io_devices.dir
 D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_debugger.dir
 D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_isa_plugin.dir
 D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_vmmanager.dir
+D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/ia64_iso_matrix.dir
 D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_profiler.dir
 D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_fuzzer.dir
 D:/dev/guideXOS_Hypervisor/cmake-build-refresh/CMakeFiles/test_vm_isolation.dir

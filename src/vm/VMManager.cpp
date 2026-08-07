@@ -840,6 +840,29 @@ void logEliloCompatRangeSnapshot(const IMemory& memory,
     LOG_INFO(oss.str());
 }
 
+void logEfiLoaderIdentity(const std::string& source,
+                          const std::string& selectedPath,
+                          const std::vector<uint8_t>& image) {
+    if (image.empty()) {
+        return;
+    }
+
+    const std::string imageSha256 = sha256Hex(image.data(), image.size());
+    std::ostringstream oss;
+    oss << "[EFI-MILESTONE] EFI loader identity"
+        << " source=\"" << source << "\""
+        << " path=\"" << selectedPath << "\""
+        << " bytes=0x" << std::hex << image.size()
+        << " sha256=" << imageSha256
+        << std::dec;
+    LOG_INFO(oss.str());
+    BootStageTrace::Event("EFI_LOADER_IDENTITY",
+                          "source=\"" + source + "\"" +
+                          " path=\"" + selectedPath + "\"" +
+                          " bytes=" + BootStageTrace::Hex(static_cast<uint64_t>(image.size())) +
+                          " sha256=" + imageSha256);
+}
+
 // Diagnostic-only compatibility shim for the exact ELILO payload hash.
 bool applyEliloAddressCompatShim(VMInstance* instance,
                                  const guideXOS::PEParser& peParser,
@@ -1418,7 +1441,14 @@ bool VMManager::startVM(const std::string& vmId) {
                                 }
                             }
 
-                        if (efiEntry) {
+                        // When the El Torito boot image is available, route the
+                        // loader through the common EFI handoff path below so
+                        // direct EFI catalog entries receive the same system
+                        // table, protocol, and backing-store setup as the
+                        // Debian-style boot-image fallback. Keep the small
+                        // direct path only for catalog entries without a
+                        // recoverable boot image.
+                        if (efiEntry && !bootImageBackingStoreFound) {
                             LOG_INFO("? EFI boot entry found");
                             LOG_INFO("  Loading from LBA: " + std::to_string(efiEntry->loadLBA));
                             LOG_INFO("  Size: " + std::to_string(efiEntry->sectorCount) + " sectors");
@@ -1428,6 +1458,9 @@ bool VMManager::startVM(const std::string& vmId) {
                             if (isoParser.extractEFIExecutable(efiExecutable)) {
                                 LOG_INFO("? EFI executable extracted: " + 
                                         std::to_string(efiExecutable.size()) + " bytes");
+                                logEfiLoaderIdentity("El-Torito-default-entry",
+                                                     "/EFI/BOOT/BOOTIA64.EFI",
+                                                     efiExecutable);
                                 
                                 // Parse PE/COFF format
                                 guideXOS::PEParser peParser;
@@ -1491,12 +1524,14 @@ bool VMManager::startVM(const std::string& vmId) {
                             
                             std::vector<uint8_t> efiExecutable;
                             bool foundEFI = false;
+                            std::string foundEFIPath;
                             
                             for (const char* path : efiPaths) {
                                 LOG_INFO("Searching for: " + std::string(path));
                                 if (isoParser.extractFile(path, efiExecutable)) {
                                     LOG_INFO("? Found EFI bootloader: " + std::string(path));
                                     foundEFI = true;
+                                    foundEFIPath = path;
                                     break;
                                 }
                             }
@@ -1504,6 +1539,9 @@ bool VMManager::startVM(const std::string& vmId) {
                             if (foundEFI) {
                                 LOG_INFO("? EFI bootloader extracted: " + 
                                         std::to_string(efiExecutable.size()) + " bytes");
+                                logEfiLoaderIdentity("ISO9660-filesystem",
+                                                     foundEFIPath,
+                                                     efiExecutable);
                                 
                                 // Parse PE/COFF format
                                 guideXOS::PEParser peParser;
@@ -1735,6 +1773,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                             if (fatParser.readFile(efiFileInfo, efiExecutable)) {
                                                 LOG_INFO("??? EFI bootloader extracted from boot image: " + 
                                                         std::to_string(efiExecutable.size()) + " bytes");
+                                                logEfiLoaderIdentity(bootImgPath,
+                                                                     foundEFIPath,
+                                                                     efiExecutable);
                                                 
                                                 // Parse and load the EFI executable
                                                 guideXOS::PEParser peParser;

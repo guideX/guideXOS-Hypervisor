@@ -1349,6 +1349,20 @@ void testIA64IndirectCallDecode() {
     std::cout << "  ? raw boot indirect service call decodes through b6 and links b0\n";
 }
 
+void testIA64IndirectConditionalBranchDecode() {
+    std::cout << "Testing IA-64 indirect conditional branch decode...\n";
+
+    InstructionDecoder decoder;
+    InstructionEx branch = decoder.DecodeSlot(0x10000c000ULL, UnitType::B_UNIT, 0x36cc0);
+
+    assert(branch.GetType() == InstructionType::BR_COND);
+    assert(branch.GetSrc1() == 6);
+    assert(!branch.HasBranchTarget());
+    assert(branch.GetDisassembly() == "br.cond b6");
+
+    std::cout << "  ? raw br.cond b6 preserves register-target semantics\n";
+}
+
 void testIA64IndirectSelfCallDecode() {
     std::cout << "Testing IA-64 hinted indirect self-call decode...\n";
 
@@ -2952,6 +2966,9 @@ int main() {
         std::cout << "\n";
 
         testIA64IndirectCallDecode();
+        std::cout << "\n";
+
+        testIA64IndirectConditionalBranchDecode();
         std::cout << "\n";
 
         testIA64IndirectSelfCallDecode();

@@ -54,14 +54,25 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         const bool registerBranch =
             (major == 0x1) ||
             (major == 0x4 && btype == 0x4) ||
-            (major == 0x0 && btype == 0x4 && x6 != 0x21);
+            (major == 0x0 && btype == 0x4 && x6 != 0x21) ||
+            // br.cond bN uses the major-0/x6=0x20 encoding. It is the
+            // indirect conditional form used by EFI thunk sequences; treating
+            // it as IP-relative turns the branch into a bogus jump outside
+            // the loaded image.
+            (major == 0x0 && x6 == 0x20);
         
         // Decode based on major opcode
         switch (major) {
             case 0x0:   // IP-relative branches
             case 0x4:
                 if (registerBranch) {
-                    return decodeIndirect(raw_instruction, btype, x6, result);
+                    const bool decoded = decodeIndirect(raw_instruction, btype, x6, result);
+                    if (major == 0x0 && x6 == 0x20) {
+                        result.type = formats::BFormat::BranchType::COND;
+                        result.indirect = true;
+                        result.has_target = false;
+                    }
+                    return decoded;
                 }
                 return decodeIPRelative(raw_instruction, btype, x6, current_ip, result);
 

@@ -1,0 +1,9 @@
+{
+    "runDir":  "D:\\dev\\guideXOS_Hypervisor\\.codex_tmp\\ia64_matrix\\20260807_121001",
+    "exe":  "D:\\dev\\guideXOS_Hypervisor\\cmake-build-refresh\\bin\\Debug\\ia64_iso_matrix.exe",
+    "iso":  "D:\\bkup\\os\\debian-7.11.0-ia64-DVD-1.iso",
+    "start":  "\/Date(1786129801170)\/",
+    "end":  "\/Date(1786129838546)\/",
+    "exitCode":  0,
+    "compat":  "1"
+}

@@ -417,6 +417,19 @@ else()
     target_compile_options(test_vmmanager PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Reproducible IA-64 ISO boot matrix runner
+add_executable(ia64_iso_matrix
+    tools/ia64_iso_matrix.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(ia64_iso_matrix PRIVATE /W4)
+else()
+    target_compile_options(ia64_iso_matrix PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 
 if(MSVC)
     target_compile_options(test_debugger PRIVATE /W4)

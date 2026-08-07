@@ -1,0 +1,19 @@
+BasicTests 0 0
+NewInstructionTests 0 0
+SyscallTests 0 0
+DebuggerTests 0 0
+ProfilerTests 0 0
+FuzzerTests 0 0
+VMIsolationTests 0 0
+RiscVDecoderSmokeTest 0 0
+ELFValidationTests 0 0
+---
+BasicTests
+NewInstructionTests
+SyscallTests
+DebuggerTests
+ProfilerTests
+FuzzerTests
+VMIsolationTests
+RiscVDecoderSmokeTest
+ELFValidationTests
