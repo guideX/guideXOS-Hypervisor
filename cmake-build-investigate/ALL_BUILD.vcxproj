@@ -1,0 +1,291 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{EECE7B42-B291-3D07-A5F1-9A8413F51A90}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Hypervisor\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Hypervisor\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Hypervisor\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Hypervisor\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\guideXOS_Hypervisor\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/dev/guideXOS_Hypervisor/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/cmake-build-investigate --check-stamp-file D:/dev/guideXOS_Hypervisor/cmake-build-investigate/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/dev/guideXOS_Hypervisor/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/cmake-build-investigate --check-stamp-file D:/dev/guideXOS_Hypervisor/cmake-build-investigate/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/dev/guideXOS_Hypervisor/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/cmake-build-investigate --check-stamp-file D:/dev/guideXOS_Hypervisor/cmake-build-investigate/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/dev/guideXOS_Hypervisor/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/cmake-build-investigate --check-stamp-file D:/dev/guideXOS_Hypervisor/cmake-build-investigate/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\dev\guideXOS_Hypervisor\cmake-build-investigate\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\ZERO_CHECK.vcxproj">
+      <Project>{E5942F88-0015-3148-BC0B-52627BA7DCE1}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\boot_trace_example.vcxproj">
+      <Project>{F1F5787E-C584-31CC-8269-09328D573B5C}</Project>
+      <Name>boot_trace_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\copy_web_files.vcxproj">
+      <Project>{35B091B8-6D53-3E5F-9D0A-11BA71658977}</Project>
+      <Name>copy_web_files</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\debug_harness.vcxproj">
+      <Project>{226208CE-99F7-3E0C-90CF-9C52537E3479}</Project>
+      <Name>debug_harness</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\ia64_iso_matrix.vcxproj">
+      <Project>{F45FF9E4-89BF-3F1F-BC28-275F118C79BA}</Project>
+      <Name>ia64_iso_matrix</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\ia64emu.vcxproj">
+      <Project>{33EB57FA-A074-36F6-8AFC-877D66B237B0}</Project>
+      <Name>ia64emu</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\ia64emu_tests.vcxproj">
+      <Project>{9E0EEF90-D1FF-3573-9E35-05A8A87BB8C8}</Project>
+      <Name>ia64emu_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\kernel_validation_example.vcxproj">
+      <Project>{1D26B338-11AA-3AA1-90C2-91F8843E8B4E}</Project>
+      <Name>kernel_validation_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_bootstrap.vcxproj">
+      <Project>{2F6DC3EA-E737-35CD-8422-9723B821A3E9}</Project>
+      <Name>test_bootstrap</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_cpu_execution.vcxproj">
+      <Project>{F34C077A-20E5-3ABC-8CA8-4BCC11BD67F1}</Project>
+      <Name>test_cpu_execution</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_debugger.vcxproj">
+      <Project>{E53042B2-B4F3-3A16-86B7-DA9165FBAD54}</Project>
+      <Name>test_debugger</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_elf_validation.vcxproj">
+      <Project>{EBDD8F68-E8CB-3D6D-A0E0-DB991BB594F5}</Project>
+      <Name>test_elf_validation</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_fuzzer.vcxproj">
+      <Project>{33BFB206-6D16-3A09-9352-ED06514951FD}</Project>
+      <Name>test_fuzzer</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_io_devices.vcxproj">
+      <Project>{A6385514-8D7F-38B9-B3AA-F372BDC741B3}</Project>
+      <Name>test_io_devices</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_isa_plugin.vcxproj">
+      <Project>{DD3724A4-B877-33D7-9D59-4020E742A398}</Project>
+      <Name>test_isa_plugin</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_mov_imm.vcxproj">
+      <Project>{2CB75AA0-9F27-3CE1-A37D-D51A37441C43}</Project>
+      <Name>test_mov_imm</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_new_instructions.vcxproj">
+      <Project>{71974B03-470F-3C85-AB94-F5AD316639EC}</Project>
+      <Name>test_new_instructions</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_profiler.vcxproj">
+      <Project>{68F0459C-CCDF-3E3D-B73B-0D3F4DDEC49C}</Project>
+      <Name>test_profiler</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_riscv_decoder.vcxproj">
+      <Project>{047C5386-39F2-3B02-AA30-D2DB8F83C4E6}</Project>
+      <Name>test_riscv_decoder</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_riscv_fetch_decode.vcxproj">
+      <Project>{0A7D42CD-C419-3F16-9740-61DC1FA02F7B}</Project>
+      <Name>test_riscv_fetch_decode</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_riscv_minimal_execution.vcxproj">
+      <Project>{C5D732FA-2FEB-3088-8208-7C26B9E3A787}</Project>
+      <Name>test_riscv_minimal_execution</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_syscall_dispatcher.vcxproj">
+      <Project>{2288563E-C7F4-3A57-B3E2-C872A795EADB}</Project>
+      <Name>test_syscall_dispatcher</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_vm_isolation.vcxproj">
+      <Project>{73751A34-0162-3E31-950E-CE16345216F5}</Project>
+      <Name>test_vm_isolation</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_vmmanager.vcxproj">
+      <Project>{77E4A0DC-16FF-3E85-8749-1F762D069A53}</Project>
+      <Name>test_vmmanager</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\test_watchpoint.vcxproj">
+      <Project>{C063101B-97CB-35AF-91C9-9199254BF879}</Project>
+      <Name>test_watchpoint</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\virtual_devices_example.vcxproj">
+      <Project>{EBB7B358-997A-3833-BB4F-F83C55A891AB}</Project>
+      <Name>virtual_devices_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\virtual_disk_example.vcxproj">
+      <Project>{CD038A6A-F8A6-3922-93A4-D0C33697899C}</Project>
+      <Name>virtual_disk_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\cmake-build-investigate\webui_example.vcxproj">
+      <Project>{157ABC82-3225-3402-9EC9-41303B1F5D6C}</Project>
+      <Name>webui_example</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

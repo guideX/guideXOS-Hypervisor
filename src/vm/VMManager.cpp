@@ -1301,6 +1301,194 @@ bool VMManager::startVM(const std::string& vmId) {
             }
             return efiLayout;
         };
+
+        // Build the same generic firmware-facing structures for every EFI
+        // loader source.  The ISO9660 path must not rely on the boot-image
+        // fallback having initialized the SystemTable and service tables.
+        auto prepareEfiHandoff = [&](const EfiHandoffLayout& layout,
+                                     uint64_t imageBase,
+                                     uint64_t imageSize,
+                                     uint64_t globalPointer) {
+            auto& memory = instance->vm->getMemory();
+            constexpr uint64_t imageHandle = 0x1ULL;
+            constexpr uint64_t deviceHandle = 0x40ULL;
+            constexpr uint64_t tableSignature = 0x5453595320494249ULL;
+            constexpr uint64_t bootServicesSignature = 0x56524553544F4F42ULL;
+            constexpr uint64_t runtimeServicesSignature = 0x56524553544E5552ULL;
+            constexpr uint64_t addR8MinusOne = 0x13fffcfe200ULL;
+            constexpr uint64_t addR8Zero = 0x12000000200ULL;
+            constexpr uint64_t nopI = 0x0ULL;
+            constexpr uint64_t brRetB0 = 0x108000100ULL;
+            const uint64_t descriptorGp = globalPointer != 0 ? globalPointer : layout.base;
+
+            std::array<uint8_t, 0x2000> zeroPages{};
+            memory.Write(layout.base, zeroPages.data(), zeroPages.size());
+            auto write8 = [&](uint64_t address, uint8_t value) {
+                memory.Write(address, &value, sizeof(value));
+            };
+            auto write16 = [&](uint64_t address, uint16_t value) {
+                memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+            };
+            auto write32 = [&](uint64_t address, uint32_t value) {
+                memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+            };
+            auto write64 = [&](uint64_t address, uint64_t value) {
+                memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+            };
+            auto writeDescriptor = [&](uint64_t address, uint64_t code) {
+                write64(address, code);
+                write64(address + 8, descriptorGp);
+            };
+            auto writeCallableStub = [&](uint64_t address, uint64_t result) {
+                WriteIa64Bundle(instance, address, 0x10,
+                                result == static_cast<uint64_t>(-1) ? addR8MinusOne : addR8Zero,
+                                nopI, brRetB0);
+            };
+
+            write64(layout.base + 0x00, tableSignature);
+            write32(layout.base + 0x08, 0x00010010U);
+            write32(layout.base + 0x0C, 0x78U);
+            write64(layout.base + 0x18, layout.firmwareVendorAddr);
+            write32(layout.base + 0x20, 1U);
+            write64(layout.base + 0x38, imageHandle);
+            write64(layout.base + 0x40, layout.textOutputProtocolAddr);
+            write64(layout.base + 0x48, imageHandle);
+            write64(layout.base + 0x50, layout.textOutputProtocolAddr);
+            write64(layout.base + 0x58, layout.runtimeServicesAddr);
+            write64(layout.base + 0x60, layout.bootServicesAddr);
+            write64(layout.base + 0x68, 0ULL);
+            write64(layout.base + 0x70, 0ULL);
+
+            write64(layout.runtimeServicesAddr + 0x00, runtimeServicesSignature);
+            write32(layout.runtimeServicesAddr + 0x08, 0x00010010U);
+            write32(layout.runtimeServicesAddr + 0x0C, 0x88U);
+            write64(layout.bootServicesAddr + 0x00, bootServicesSignature);
+            write32(layout.bootServicesAddr + 0x08, 0x00010010U);
+            write32(layout.bootServicesAddr + 0x0C, 0x180U);
+
+            writeCallableStub(layout.unsupportedStubCodeAddr, static_cast<uint64_t>(-1));
+            writeCallableStub(layout.successStubCodeAddr, 0);
+            writeCallableStub(layout.allocatePoolStubCodeAddr, 0);
+            writeCallableStub(layout.handleProtocolStubCodeAddr, 0);
+            writeCallableStub(layout.openVolumeStubCodeAddr, 0);
+            writeCallableStub(layout.textOutputStringStubCodeAddr, 0);
+            writeCallableStub(layout.getVariableStubCodeAddr, static_cast<uint64_t>(-1));
+            const uint64_t zeroResultStubs[] = {
+                layout.fileOpenStubCodeAddr, layout.fileCloseStubCodeAddr,
+                layout.fileReadStubCodeAddr, layout.fileGetPositionStubCodeAddr,
+                layout.fileSetPositionStubCodeAddr, layout.fileGetInfoStubCodeAddr,
+                layout.locateHandleStubCodeAddr, layout.locateProtocolStubCodeAddr,
+                layout.getMemoryMapStubCodeAddr, layout.exitBootServicesStubCodeAddr,
+                layout.loadImageStubCodeAddr, layout.startImageStubCodeAddr
+            };
+            for (uint64_t address : zeroResultStubs) {
+                writeCallableStub(address, 0);
+            }
+
+            writeDescriptor(layout.unsupportedStubDescAddr, layout.unsupportedStubCodeAddr);
+            writeDescriptor(layout.getVariableStubDescAddr, layout.getVariableStubCodeAddr);
+            writeDescriptor(layout.successStubDescAddr, layout.successStubCodeAddr);
+            writeDescriptor(layout.allocatePoolStubDescAddr, layout.allocatePoolStubCodeAddr);
+            writeDescriptor(layout.handleProtocolStubDescAddr, layout.handleProtocolStubCodeAddr);
+            writeDescriptor(layout.openVolumeStubDescAddr, layout.openVolumeStubCodeAddr);
+            writeDescriptor(layout.textOutputStringStubDescAddr, layout.textOutputStringStubCodeAddr);
+            writeDescriptor(layout.fileOpenStubDescAddr, layout.fileOpenStubCodeAddr);
+            writeDescriptor(layout.fileCloseStubDescAddr, layout.fileCloseStubCodeAddr);
+            writeDescriptor(layout.fileReadStubDescAddr, layout.fileReadStubCodeAddr);
+            writeDescriptor(layout.fileGetPositionStubDescAddr, layout.fileGetPositionStubCodeAddr);
+            writeDescriptor(layout.fileSetPositionStubDescAddr, layout.fileSetPositionStubCodeAddr);
+            writeDescriptor(layout.fileGetInfoStubDescAddr, layout.fileGetInfoStubCodeAddr);
+            writeDescriptor(layout.locateHandleStubDescAddr, layout.locateHandleStubCodeAddr);
+            writeDescriptor(layout.locateProtocolStubDescAddr, layout.locateProtocolStubCodeAddr);
+            writeDescriptor(layout.getMemoryMapStubDescAddr, layout.getMemoryMapStubCodeAddr);
+            writeDescriptor(layout.exitBootServicesStubDescAddr, layout.exitBootServicesStubCodeAddr);
+            writeDescriptor(layout.loadImageStubDescAddr, layout.loadImageStubCodeAddr);
+            writeDescriptor(layout.startImageStubDescAddr, layout.startImageStubCodeAddr);
+
+            for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
+                write64(layout.runtimeServicesAddr + offset, layout.unsupportedStubDescAddr);
+            }
+            write64(layout.runtimeServicesAddr + 0x48, layout.getVariableStubDescAddr);
+            for (uint64_t offset = 0x18; offset < 0x180; offset += 8) {
+                write64(layout.bootServicesAddr + offset, layout.unsupportedStubDescAddr);
+            }
+            write64(layout.bootServicesAddr + 0x38, layout.getMemoryMapStubDescAddr);
+            write64(layout.bootServicesAddr + 0x40, layout.allocatePoolStubDescAddr);
+            write64(layout.bootServicesAddr + 0x48, layout.successStubDescAddr);
+            write64(layout.bootServicesAddr + 0x98, layout.handleProtocolStubDescAddr);
+            write64(layout.bootServicesAddr + 0x118, layout.handleProtocolStubDescAddr);
+            write64(layout.bootServicesAddr + 0xB0, layout.locateHandleStubDescAddr);
+            write64(layout.bootServicesAddr + 0x138, layout.locateHandleStubDescAddr);
+            write64(layout.bootServicesAddr + 0xC8, layout.loadImageStubDescAddr);
+            write64(layout.bootServicesAddr + 0xD0, layout.startImageStubDescAddr);
+            write64(layout.bootServicesAddr + 0xE8, layout.exitBootServicesStubDescAddr);
+            write64(layout.bootServicesAddr + 0x100, layout.successStubDescAddr);
+            write64(layout.bootServicesAddr + 0x140, layout.locateProtocolStubDescAddr);
+
+            static const uint16_t vendor[] = {
+                'g','u','i','d','e','X','O','S',' ','H','y','p','e','r','v','i','s','o','r',0
+            };
+            memory.Write(layout.firmwareVendorAddr,
+                         reinterpret_cast<const uint8_t*>(vendor), sizeof(vendor));
+
+            write32(layout.loadedImageProtocolAddr + 0x00, 0x1000U);
+            write64(layout.loadedImageProtocolAddr + 0x10, layout.base);
+            write64(layout.loadedImageProtocolAddr + 0x18, deviceHandle);
+            write64(layout.loadedImageProtocolAddr + 0x20, layout.loadedImageFilePathAddr);
+            write32(layout.loadedImageProtocolAddr + 0x30, 0U);
+            write64(layout.loadedImageProtocolAddr + 0x38, layout.loadedImageLoadOptionsAddr);
+            write64(layout.loadedImageProtocolAddr + 0x40, imageBase);
+            write64(layout.loadedImageProtocolAddr + 0x48, imageSize);
+            write32(layout.loadedImageProtocolAddr + 0x50, 2U);
+            write32(layout.loadedImageProtocolAddr + 0x54, 4U);
+            write64(layout.loadedImageProtocolAddr + 0x58, layout.unsupportedStubDescAddr);
+            static const uint16_t loadedImagePath[] = {
+                '\\','E','F','I','\\','B','O','O','T','\\',
+                'B','O','O','T','I','A','6','4','.','E','F','I',0
+            };
+            const uint16_t pathLength = static_cast<uint16_t>(4 + sizeof(loadedImagePath));
+            write8(layout.loadedImageFilePathAddr + 0x00, 0x04U);
+            write8(layout.loadedImageFilePathAddr + 0x01, 0x04U);
+            write16(layout.loadedImageFilePathAddr + 0x02, pathLength);
+            memory.Write(layout.loadedImageFilePathAddr + 0x04,
+                         reinterpret_cast<const uint8_t*>(loadedImagePath), sizeof(loadedImagePath));
+            const uint64_t endNode = layout.loadedImageFilePathAddr + pathLength;
+            write8(endNode + 0x00, 0x7FU);
+            write8(endNode + 0x01, 0xFFU);
+            write16(endNode + 0x02, 0x04U);
+            write16(layout.loadedImageLoadOptionsAddr, 0U);
+
+            write64(layout.textOutputProtocolAddr + 0x00, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x08, layout.textOutputStringStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x10, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x18, layout.unsupportedStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x20, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x28, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x30, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x38, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x40, layout.successStubDescAddr);
+            write64(layout.textOutputProtocolAddr + 0x48, layout.textOutputModeAddr);
+            write32(layout.textOutputModeAddr + 0x00, 1U);
+            write32(layout.textOutputModeAddr + 0x04, 0U);
+            write32(layout.textOutputModeAddr + 0x08, 0x0FU);
+            write32(layout.textOutputModeAddr + 0x0C, 0U);
+            write32(layout.textOutputModeAddr + 0x10, 0U);
+            write8(layout.textOutputModeAddr + 0x14, 1U);
+
+            write64(layout.simpleFileSystemProtocolAddr + 0x00, 0x00010000ULL);
+            write64(layout.simpleFileSystemProtocolAddr + 0x08, layout.openVolumeStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x00, 0x00010000ULL);
+            write64(layout.rootFileProtocolAddr + 0x08, layout.fileOpenStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x10, layout.fileCloseStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x18, layout.unsupportedStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x20, layout.fileReadStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x28, layout.unsupportedStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x30, layout.fileGetPositionStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x38, layout.fileSetPositionStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x40, layout.fileGetInfoStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x48, layout.unsupportedStubDescAddr);
+            write64(layout.rootFileProtocolAddr + 0x50, layout.successStubDescAddr);
+        };
         
         // Handle direct boot mode (load kernel directly)
         if (bootConfig.directBoot && !bootConfig.kernelPath.empty()) {
@@ -1570,6 +1758,30 @@ bool VMManager::startVM(const std::string& vmId) {
                                                 seedLoaderLocalUtf16Probe(instance);
                                                 // Set entry point from PE header
                                                 instance->vm->setEntryPoint(entryPoint);
+                                                const auto& peInfo = peParser.getImageInfo();
+                                                const EfiHandoffLayout& layout = ensureEfiLayout();
+                                                constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;
+                                                prepareEfiHandoff(
+                                                    layout,
+                                                    loadAddress,
+                                                    static_cast<uint64_t>(imageBuffer.size()),
+                                                    peInfo.hasGlobalPointer ? peInfo.globalPointer : 0ULL);
+                                                instance->vm->writeGR(
+                                                    0, 1, peInfo.hasGlobalPointer ? peInfo.globalPointer : 0ULL);
+                                                instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
+                                                instance->vm->writeGR(0, 33, layout.base);
+                                                std::ostringstream efiEntryOss;
+                                                const uint64_t efiStackTop =
+                                                    SetupMinimalEfiStack(instance, efiEntryOss);
+                                                efiEntryOss.str("");
+                                                efiEntryOss << "[EFI-MILESTONE] Direct ISO9660 EFI handoff prepared"
+                                                             << " entry=0x" << std::hex << entryPoint
+                                                             << " gp=0x"
+                                                             << (peInfo.hasGlobalPointer ? peInfo.globalPointer : 0ULL)
+                                                             << " r32_ImageHandle=0x" << EFI_IMAGE_HANDLE
+                                                             << " r33_SystemTable=0x" << layout.base
+                                                             << " r12_StackTop=0x" << efiStackTop;
+                                                LOG_INFO(efiEntryOss.str());
                                                 LOG_INFO("? EFI bootloader loaded successfully from filesystem");
                                                 LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
                                                 LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
