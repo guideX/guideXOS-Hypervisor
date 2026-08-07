@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\guideXOS_Hypervisor\cmake-build-refresh\CMakeFiles\06259c7603abeba37bb18a23cd1e01ce\RUN_TESTS_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{E5444330-D969-30B5-ADAE-4063300A4EE5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
