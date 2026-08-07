@@ -289,6 +289,18 @@ inline int64_t signExtend(uint64_t value, int bits) {
     return static_cast<int64_t>(value);
 }
 
+// IA-64 A5 addl immediate: the imm22 bits are dispersed across the slot.
+// Volume 3, Table 4-74: s:imm5c:imm9d:imm7b -> imm22.
+inline int64_t extractImm22(uint64_t instruction) {
+    const uint64_t s = extractBits(instruction, 36, 1);
+    const uint64_t imm5c = extractBits(instruction, 22, 5);
+    const uint64_t imm9d = extractBits(instruction, 27, 9);
+    const uint64_t imm7b = extractBits(instruction, 13, 7);
+    const uint64_t encoded = (s << 21) | (imm5c << 16) |
+                             (imm9d << 7) | imm7b;
+    return signExtend(encoded, 22);
+}
+
 // Reconstruct 64-bit immediate from L+X format
 inline uint64_t reconstructImm64(const LFormat& l, const XFormat& x) {
     // Combine fields according to IA-64 specification

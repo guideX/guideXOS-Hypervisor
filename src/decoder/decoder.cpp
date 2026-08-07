@@ -392,6 +392,13 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetGR(dst_, cpu.GetGR(src1_) + immediate_);
             }
             break;
+
+        case InstructionType::ADDL:
+            // addl rDst = imm22, rSrc1
+            if (hasImmediate_) {
+                cpu.SetGR(dst_, cpu.GetGR(src1_) + immediate_);
+            }
+            break;
             
         case InstructionType::SUB:
             // sub rDst = rSrc1, rSrc2
@@ -1071,6 +1078,16 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::ADD_IMM:
             oss << "add r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", " << static_cast<int64_t>(immediate_);
+            break;
+
+        case InstructionType::ADDL:
+            oss << "addl r" << static_cast<int>(dst_) << " = ";
+            if (static_cast<int64_t>(immediate_) < 0) {
+                oss << static_cast<int64_t>(immediate_);
+            } else {
+                oss << "0x" << std::hex << immediate_ << std::dec;
+            }
+            oss << ", r" << static_cast<int>(src1_);
             break;
             
         case InstructionType::SUB_IMM:

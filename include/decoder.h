@@ -99,6 +99,7 @@ enum class InstructionType {
     // Arithmetic operations (A-type)
     ADD,
     ADD_IMM,    // Add immediate (14-bit)
+    ADDL,       // Add dispersed signed immediate (22-bit, A5)
     SUB,
     SUB_IMM,
     ADDP4,      // Add pointer (32-bit)

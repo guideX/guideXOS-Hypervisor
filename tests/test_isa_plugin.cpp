@@ -1283,11 +1283,12 @@ void testIA64AddImm22Decode() {
     InstructionDecoder decoder;
     InstructionEx add = decoder.DecodeSlot(0x12000000200ULL, UnitType::M_UNIT, 0x36e80);
 
-    assert(add.GetType() == InstructionType::ADD_IMM);
+    assert(add.GetType() == InstructionType::ADDL);
     assert(add.GetDst() == 8);
     assert(add.GetSrc1() == 0);
     assert(add.HasImmediate());
     assert(add.GetImmediate() == 0);
+    assert(add.GetDisassembly() == "addl r8 = 0x0, r0");
 
     CPUState cpu;
     Memory memory(64 * 1024);
@@ -1302,22 +1303,76 @@ void testIA64AddlImm22SourceDecode() {
     std::cout << "Testing IA-64 addl imm22 source decode...\n";
 
     InstructionDecoder decoder;
-    InstructionEx add = decoder.DecodeSlot(0x13b90520880ULL, UnitType::M_UNIT, 0x18e0);
+    InstructionEx add = decoder.DecodeSlot(0x12a80dd0380ULL, UnitType::M_UNIT, 0xac20);
 
-    assert(add.GetType() == InstructionType::ADD_IMM);
-    assert(add.GetDst() == 34);
+    assert(add.GetType() == InstructionType::ADDL);
+    assert(add.GetDst() == 14);
     assert(add.GetSrc1() == 1);
     assert(add.HasImmediate());
-    assert(static_cast<int64_t>(add.GetImmediate()) == -581488);
-    assert(add.GetDisassembly() == "add r34 = r1, -581488");
+    assert(add.GetImmediate() == 0x3a868);
+    assert(add.GetDisassembly() == "addl r14 = 0x3a868, r1");
 
     CPUState cpu;
     Memory memory(64 * 1024);
-    cpu.SetGR(1, 0x238000);
+    cpu.SetGR(1, 0x100000);
     add.Execute(cpu, memory);
-    assert(cpu.GetGR(34) == 0x1aa090);
+    assert(cpu.GetGR(14) == 0x13a868);
 
-    std::cout << "  ? addl imm22 uses 2-bit r3 field instead of immediate bits\n";
+    InstructionEx second = decoder.DecodeSlot(0x12a80de03c0ULL, UnitType::M_UNIT, 0xac20);
+    assert(second.GetType() == InstructionType::ADDL);
+    assert(second.GetDst() == 15);
+    assert(second.GetSrc1() == 1);
+    assert(second.GetImmediate() == 0x3a870);
+    assert(second.GetDisassembly() == "addl r15 = 0x3a870, r1");
+    second.Execute(cpu, memory);
+    assert(cpu.GetGR(15) == 0x13a870);
+
+    std::cout << "  ? real modern-loader addl slots decode and execute\n";
+}
+
+uint64_t makeIA64AddlSlot(int64_t immediate, uint8_t destination,
+                          uint8_t base, uint8_t predicate = 0) {
+    assert(immediate >= -(1LL << 21) && immediate <= ((1LL << 21) - 1));
+    const uint32_t encoded = static_cast<uint32_t>(immediate) & 0x3FFFFF;
+    return (static_cast<uint64_t>(predicate & 0x3F)) |
+           (static_cast<uint64_t>(destination & 0x7F) << 6) |
+           (static_cast<uint64_t>(encoded & 0x7F) << 13) |
+           (static_cast<uint64_t>(base & 0x3) << 20) |
+           (static_cast<uint64_t>((encoded >> 16) & 0x1F) << 22) |
+           (static_cast<uint64_t>((encoded >> 7) & 0x1FF) << 27) |
+           (static_cast<uint64_t>((encoded >> 21) & 0x1) << 36) |
+           (static_cast<uint64_t>(0x9) << 37);
+}
+
+void testIA64AddlImm22Boundaries() {
+    std::cout << "Testing IA-64 addl imm22 field reconstruction and sign extension...\n";
+
+    InstructionDecoder decoder;
+    const int64_t cases[] = {1, 0x155555, 0x1FFFFF, -1, -0x155555, -0x200000};
+    for (const int64_t immediate : cases) {
+        InstructionEx addl = decoder.DecodeSlot(
+            makeIA64AddlSlot(immediate, 17, 3, 5), UnitType::M_UNIT, 0x2000);
+        assert(addl.GetType() == InstructionType::ADDL);
+        assert(static_cast<int64_t>(addl.GetImmediate()) == immediate);
+        assert(addl.GetDst() == 17);
+        assert(addl.GetSrc1() == 3);
+
+        CPUState cpu;
+        Memory memory(64 * 1024);
+        cpu.SetPR(5, true);
+        cpu.SetGR(3, 0x100000);
+        addl.Execute(cpu, memory);
+        assert(static_cast<int64_t>(cpu.GetGR(17)) == 0x100000 + immediate);
+    }
+
+    const auto first = decoder.DecodeSlot(
+        makeIA64AddlSlot(0x12345, 8, 0, 0), UnitType::M_UNIT, 0x2000);
+    const auto varied = decoder.DecodeSlot(
+        makeIA64AddlSlot(0x12345, 63, 3, 63), UnitType::M_UNIT, 0x2000);
+    assert(first.GetImmediate() == varied.GetImmediate());
+    assert(first.GetImmediate() == 0x12345);
+
+    std::cout << "  ? distributed addl fields, signed limits, and unrelated fields pass\n";
 }
 
 void testIA64ReturnBranchDecode() {
@@ -2957,6 +3012,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddlImm22SourceDecode();
+        std::cout << "\n";
+
+        testIA64AddlImm22Boundaries();
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughB0TransfersToTargetBundle();

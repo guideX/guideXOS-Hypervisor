@@ -61,7 +61,7 @@ enum class AOpcode {
 // Forward declarations of helper functions
 static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b, 
                           uint8_t x4, uint8_t ve, formats::AFormat& result);
-static bool decodeAddImm22(uint64_t raw, formats::AFormat& result);
+static bool decodeAddlImm22(uint64_t raw, formats::AFormat& result);
 static bool decodeShiftAdd(uint64_t raw, uint8_t x2a, uint8_t x4,
                         formats::AFormat& result);
 static bool decodeCompare(uint64_t raw, uint8_t major, uint8_t x2a,
@@ -97,7 +97,7 @@ bool ATypeDecoder::decode(uint64_t raw_instruction, formats::AFormat& result) {
             return decodeIntegerALU(raw_instruction, x2a, x2b, x4, ve, result);
             
         case 0x9:   // Add immediate (22-bit)
-            return decodeAddImm22(raw_instruction, result);
+            return decodeAddlImm22(raw_instruction, result);
             
         case 0xA:   // Shift and add
             return decodeShiftAdd(raw_instruction, x2a, x4, result);
@@ -203,7 +203,7 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
     }
 
     if ((op & 0xF0) == 0x90) {
-        instr = InstructionEx(InstructionType::ADD_IMM, UnitType::I_UNIT);
+        instr = InstructionEx(InstructionType::ADDL, UnitType::I_UNIT);
         instr.SetPredicate(fmt.qp);
         instr.SetOperands(fmt.r1, fmt.r3, 0);
         instr.SetImmediate(fmt.imm);
@@ -329,17 +329,12 @@ static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b,
     return true;
 }
 
-static bool decodeAddImm22(uint64_t raw, formats::AFormat& result) {
+static bool decodeAddlImm22(uint64_t raw, formats::AFormat& result) {
     result.has_imm = true;
     result.r3 = static_cast<uint8_t>(formats::extractBits(raw, 20, 2));
-    
-    // Extract imm22: imm5c (bits 22-26), imm9d (bits 27-35), imm7b (bits 13-19), s (bit 36)
-    uint32_t imm5c = formats::extractBits(raw, 22, 5);
-    uint32_t imm9d = formats::extractBits(raw, 27, 9);
-    uint32_t imm7b = formats::extractBits(raw, 13, 7);
-    uint32_t s = formats::extractBits(raw, 36, 1);
-    
-    result.imm = formats::signExtend((s << 21) | (imm9d << 12) | (imm5c << 7) | imm7b, 22);
+
+    // A5 imm22 is dispersed across s, imm5c, imm9d, and imm7b.
+    result.imm = static_cast<uint64_t>(formats::extractImm22(raw));
     
     return true;
 }
