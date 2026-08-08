@@ -153,11 +153,15 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                 return true;
 
             case 0x2: // ADDP4
-                // A1 addp4 r1 = r2, r3.  The executor applies the
-                // pointer-specific low-32-bit and region-bit semantics.
+                // A1 addp4 r1 = r2, r3 and A4 addp4 r1 = imm14, r3.
                 instr = InstructionEx(InstructionType::ADDP4, UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
-                instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+                if (fmt.has_imm) {
+                    instr.SetOperands(fmt.r1, fmt.r3, 0);
+                    instr.SetImmediate(fmt.imm);
+                } else {
+                    instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+                }
                 return true;
                 
             case 0x3: // AND
@@ -315,6 +319,18 @@ static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b,
         result.imm = formats::signExtend((s << 13) | (imm6d << 7) | imm7b, 14);
         result.r2 = result.r3;
         result.opcode = 0x80;
+        return true;
+    }
+
+    if (x2a == 0x3 && ve == 0) {
+        // A4 addp4 r1 = imm14, r3.  The immediate occupies the
+        // imm7b/imm6d/s fields; bits 20:26 remain the base register.
+        result.has_imm = true;
+        const uint8_t imm6d = static_cast<uint8_t>(formats::extractBits(raw, 27, 6));
+        const uint8_t imm7b = static_cast<uint8_t>(formats::extractBits(raw, 13, 7));
+        const uint8_t s = static_cast<uint8_t>(formats::extractBits(raw, 36, 1));
+        result.imm = formats::signExtend((s << 13) | (imm6d << 7) | imm7b, 14);
+        result.opcode = 0x82;
         return true;
     }
 

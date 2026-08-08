@@ -1385,6 +1385,19 @@ uint64_t makeIA64Addp4Slot(uint8_t destination, uint8_t source, uint8_t base,
            (static_cast<uint64_t>(0x2)                << 29);
 }
 
+uint64_t makeIA64Addp4Imm14Slot(uint8_t destination, int16_t immediate,
+                                uint8_t base, uint8_t predicate = 0) {
+    const uint16_t encoded = static_cast<uint16_t>(immediate) & 0x3FFFU;
+    return (static_cast<uint64_t>(predicate & 0x3F)) |
+           (static_cast<uint64_t>(destination & 0x7F) << 6) |
+           (static_cast<uint64_t>(encoded & 0x7F) << 13) |
+           (static_cast<uint64_t>(base & 0x7F) << 20) |
+           (static_cast<uint64_t>((encoded >> 7) & 0x3F) << 27) |
+           (static_cast<uint64_t>(0x3) << 34) |
+           (static_cast<uint64_t>((encoded >> 13) & 0x1) << 36) |
+           (static_cast<uint64_t>(0x8) << 37);
+}
+
 void testIA64Addp4MUnitDecodeAndExecution() {
     std::cout << "Testing IA-64 A1 addp4 in M and I slots...\n";
 
@@ -1436,6 +1449,103 @@ void testIA64Addp4MUnitDecodeAndExecution() {
     assert(!cpu.GetGRNaT(17));
 
     std::cout << "  ? raw 0x1004001e440 routes through A decoding in M/I slots and executes architecturally\n";
+}
+
+void testIA64XmaAndImmediateAddp4Regressions() {
+    std::cout << "Testing IA-64 XMA and immediate ADDP4 regressions...\n";
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(64 * 1024);
+
+    constexpr uint64_t xmaRaw = 0x1d048a10280ULL;
+    const InstructionEx xma = decoder.DecodeSlot(xmaRaw, UnitType::F_UNIT, 0x36ed0);
+    assert(xma.GetType() == InstructionType::XMA);
+    assert(xma.GetDst() == 10);
+    assert(xma.GetSrc1() == 10);
+    assert(xma.GetSrc2() == 9);
+    assert(xma.GetSrc3() == 8);
+    assert(xma.GetDisassembly() == "xma.l f10 = f10, f9, f8");
+
+    uint8_t f8[16] = {};
+    uint8_t f9[16] = {};
+    uint8_t f10[16] = {};
+    f8[0] = 5;
+    f9[0] = 7;
+    f10[0] = 3;
+    cpu.SetFR(8, f8);
+    cpu.SetFR(9, f9);
+    cpu.SetFR(10, f10);
+    xma.Execute(cpu, memory);
+    uint8_t lowResult[16] = {};
+    cpu.GetFR(10, lowResult);
+    assert(lowResult[0] == 26);
+
+    const InstructionEx xmaH = decoder.DecodeSlot(
+        0x1dc48a10280ULL, UnitType::F_UNIT, 0x36ed0);
+    const InstructionEx xmaHu = decoder.DecodeSlot(
+        0x1d848a10280ULL, UnitType::F_UNIT, 0x36ed0);
+    assert(xmaH.GetType() == InstructionType::XMA_H);
+    assert(xmaHu.GetType() == InstructionType::XMA_HU);
+    uint8_t negativeOne[16] = {};
+    uint8_t two[16] = {};
+    uint8_t zero[16] = {};
+    std::memset(negativeOne, 0xff, sizeof(negativeOne));
+    std::memset(two, 0, sizeof(two));
+    two[0] = 2;
+    cpu.SetFR(10, negativeOne);
+    cpu.SetFR(9, two);
+    cpu.SetFR(8, zero);
+    xmaH.Execute(cpu, memory);
+    uint8_t highResult[16] = {};
+    cpu.GetFR(10, highResult);
+    uint64_t highSignificand = 0;
+    for (int i = 0; i < 8; ++i) {
+        highSignificand |= static_cast<uint64_t>(highResult[i]) << (i * 8);
+    }
+    assert(highSignificand == 0xffffffffffffffffULL);
+    xmaHu.Execute(cpu, memory);
+    cpu.GetFR(10, highResult);
+    highSignificand = 0;
+    for (int i = 0; i < 8; ++i) {
+        highSignificand |= static_cast<uint64_t>(highResult[i]) << (i * 8);
+    }
+    assert(highSignificand == 1);
+
+    constexpr uint64_t immediateRaw = 0x11df80fe940ULL;
+    const InstructionEx immediate = decoder.DecodeSlot(
+        immediateRaw, UnitType::M_UNIT, 0xf6e0);
+    assert(immediate.GetType() == InstructionType::ADDP4);
+    assert(immediate.GetDst() == 37);
+    assert(immediate.GetSrc1() == 0);
+    assert(immediate.HasImmediate());
+    assert(static_cast<int64_t>(immediate.GetImmediate()) == -1);
+    assert(immediate.GetDisassembly() == "addp4 r37 = -1, r0");
+    cpu.SetGR(0, 0);
+    immediate.Execute(cpu, memory);
+    assert(cpu.GetGR(37) == 0xffffffffULL);
+
+    const InstructionEx positive = decoder.DecodeSlot(
+        makeIA64Addp4Imm14Slot(37, 5, 14), UnitType::M_UNIT, 0xf6e0);
+    assert(positive.GetType() == InstructionType::ADDP4);
+    assert(static_cast<int64_t>(positive.GetImmediate()) == 5);
+    cpu.SetGR(14, 0xc000000080000003ULL);
+    positive.Execute(cpu, memory);
+    assert(cpu.GetGR(37) == 0x4000000080000008ULL);
+
+    const InstructionEx falsePredicated = decoder.DecodeSlot(
+        makeIA64Addp4Imm14Slot(37, 5, 14, 1), UnitType::M_UNIT, 0xf6e0);
+    cpu.SetPR(1, false);
+    cpu.SetGR(37, 0xfeedfaceULL);
+    falsePredicated.Execute(cpu, memory);
+    assert(cpu.GetGR(37) == 0xfeedfaceULL);
+
+    cpu.SetPR(1, true);
+    cpu.SetGRNaT(14, true);
+    positive.Execute(cpu, memory);
+    assert(cpu.GetGRNaT(37));
+
+    std::cout << "  ? raw XMA, XMA.H/XMA.HU, and immediate ADDP4 regressions pass\n";
 }
 
 void testIA64ReturnBranchDecode() {
@@ -3081,6 +3191,9 @@ int main() {
         std::cout << "\n";
 
         testIA64Addp4MUnitDecodeAndExecution();
+        std::cout << "\n";
+
+        testIA64XmaAndImmediateAddp4Regressions();
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughB0TransfersToTargetBundle();

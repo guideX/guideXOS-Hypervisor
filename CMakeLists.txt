@@ -259,6 +259,8 @@ add_executable(test_new_instructions
     ${DECODER_SOURCES}
     src/memory/memory.cpp
     src/mmu/mmu.cpp
+    src/storage/ISO9660Parser.cpp
+    src/storage/FATParser.cpp
     ${HEADERS}
 )
 

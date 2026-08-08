@@ -304,6 +304,19 @@ uint64_t build_mov_from_pr_slot(uint8_t qp, uint8_t r1) {
            (0x33ULL << 27);
 }
 
+uint64_t build_addp4_imm14_slot(uint8_t destination, int16_t immediate,
+                                uint8_t base, uint8_t predicate = 0) {
+    const uint16_t encoded = static_cast<uint16_t>(immediate) & 0x3FFFU;
+    return (static_cast<uint64_t>(predicate & 0x3F)) |
+           ((static_cast<uint64_t>(destination & 0x7F)) << 6) |
+           ((static_cast<uint64_t>(encoded & 0x7F)) << 13) |
+           ((static_cast<uint64_t>(base & 0x7F)) << 20) |
+           ((static_cast<uint64_t>((encoded >> 7) & 0x3F)) << 27) |
+           (static_cast<uint64_t>(0x3) << 34) |
+           (static_cast<uint64_t>((encoded >> 13) & 0x1) << 36) |
+           (static_cast<uint64_t>(0x8) << 37);
+}
+
 // Test CMP instructions
 void test_compare_instructions() {
     std::cout << "Testing compare instructions..." << std::endl;
@@ -539,6 +552,46 @@ void test_latest_boot_log_blockers() {
     getf_sig.Execute(cpu, memory);
     assert_equal("Boot xma.l should compute signed low product plus addend", 26, cpu.GetGR(21));
 
+    const InstructionEx xma_h = decoder.DecodeSlot(0x1dc48a10280ULL, UnitType::F_UNIT, 0x36ed0);
+    const InstructionEx xma_hu = decoder.DecodeSlot(0x1d848a10280ULL, UnitType::F_UNIT, 0x36ed0);
+    assert_true("Boot raw xma.h should decode", xma_h.GetType() == InstructionType::XMA_H);
+    assert_true("Boot raw xma.hu should decode", xma_hu.GetType() == InstructionType::XMA_HU);
+    assert_string("Boot xma.h disassembly",
+                  "xma.h f10 = f10, f9, f8",
+                  xma_h.GetDisassembly());
+    assert_string("Boot xma.hu disassembly",
+                  "xma.hu f10 = f10, f9, f8",
+                  xma_hu.GetDisassembly());
+
+    uint8_t frNegativeOne[16] = {};
+    uint8_t frTwo[16] = {};
+    uint8_t frZero[16] = {};
+    std::memset(frNegativeOne, 0xff, sizeof(frNegativeOne));
+    frNegativeOne[8] = 0;
+    frNegativeOne[9] = 0;
+    frTwo[0] = 2;
+    cpu.SetFR(10, frNegativeOne); // f3 = -1
+    cpu.SetFR(9, frTwo);          // f4 = 2
+    cpu.SetFR(8, frZero);         // f2 = 0
+    xma_h.Execute(cpu, memory);
+    uint8_t xmaHighResult[16] = {};
+    cpu.GetFR(10, xmaHighResult);
+    uint64_t xmaHighSignificand = 0;
+    for (int i = 0; i < 8; ++i) {
+        xmaHighSignificand |= static_cast<uint64_t>(xmaHighResult[i]) << (i * 8);
+    }
+    assert_equal("Boot xma.h should use signed high-half multiplication",
+                 0xffffffffffffffffULL, xmaHighSignificand);
+
+    xma_hu.Execute(cpu, memory);
+    cpu.GetFR(10, xmaHighResult);
+    xmaHighSignificand = 0;
+    for (int i = 0; i < 8; ++i) {
+        xmaHighSignificand |= static_cast<uint64_t>(xmaHighResult[i]) << (i * 8);
+    }
+    assert_equal("Boot xma.hu should use unsigned high-half multiplication",
+                 1, xmaHighSignificand);
+
     uint8_t natVal[16] = {};
     natVal[8] = 0xfe;
     natVal[9] = 0xff;
@@ -562,6 +615,59 @@ void test_latest_boot_log_blockers() {
     cpu.GetFR(10, predicatedResult);
     assert_true("False-predicated xma.l should preserve its destination",
                 std::memcmp(sentinel, predicatedResult, sizeof(sentinel)) == 0);
+
+    const uint64_t immediateAddp4Raw = 0x11df80fe940ULL;
+    InstructionEx immediateAddp4 = decoder.DecodeSlot(
+        immediateAddp4Raw, UnitType::M_UNIT, 0xf6e0);
+    assert_true("Boot raw immediate addp4 should decode",
+                immediateAddp4.GetType() == InstructionType::ADDP4);
+    assert_equal("Immediate addp4 predicate", 0, immediateAddp4.GetPredicate());
+    assert_equal("Immediate addp4 destination", 37, immediateAddp4.GetDst());
+    assert_equal("Immediate addp4 base register", 0, immediateAddp4.GetSrc1());
+    assert_true("Immediate addp4 should retain its immediate form",
+                immediateAddp4.HasImmediate());
+    assert_equal("Immediate addp4 raw immediate", 0x3fff, immediateAddp4.GetImmediate() & 0x3fff);
+    assert_true("Immediate addp4 should sign-extend imm14",
+                static_cast<int64_t>(immediateAddp4.GetImmediate()) == -1);
+    assert_string("Immediate addp4 disassembly",
+                  "addp4 r37 = -1, r0",
+                  immediateAddp4.GetDisassembly());
+
+    cpu.SetGR(0, 0);
+    cpu.SetGR(37, 0xaaaaaaaaaaaaaaaaULL);
+    immediateAddp4.Execute(cpu, memory);
+    assert_equal("Immediate addp4 negative value should use low-32 arithmetic",
+                 0xffffffffULL, cpu.GetGR(37));
+
+    const InstructionEx positiveAddp4 = decoder.DecodeSlot(
+        build_addp4_imm14_slot(37, 5, 14), UnitType::M_UNIT, 0xf6e0);
+    assert_true("Positive immediate addp4 should decode",
+                positiveAddp4.GetType() == InstructionType::ADDP4);
+    assert_equal("Positive immediate addp4 base register", 14, positiveAddp4.GetSrc1());
+    assert_true("Positive immediate addp4 value should be 5",
+                static_cast<int64_t>(positiveAddp4.GetImmediate()) == 5);
+    assert_string("Positive immediate addp4 disassembly",
+                  "addp4 r37 = 5, r14",
+                  positiveAddp4.GetDisassembly());
+    cpu.SetGR(14, 0xc000000080000003ULL);
+    positiveAddp4.Execute(cpu, memory);
+    assert_equal("Immediate addp4 should preserve base pointer region bits",
+                 0x4000000080000008ULL, cpu.GetGR(37));
+
+    const InstructionEx falseImmediateAddp4 = decoder.DecodeSlot(
+        build_addp4_imm14_slot(37, 5, 14, 1), UnitType::M_UNIT, 0xf6e0);
+    cpu.SetPR(1, false);
+    cpu.SetGR(37, 0xfeedfaceULL);
+    falseImmediateAddp4.Execute(cpu, memory);
+    assert_equal("False-predicated immediate addp4 should preserve destination",
+                 0xfeedfaceULL, cpu.GetGR(37));
+
+    cpu.SetPR(1, true);
+    cpu.SetGRNaT(14, true);
+    positiveAddp4.Execute(cpu, memory);
+    assert_true("Immediate addp4 should propagate base NaT",
+                cpu.GetGRNaT(37));
+    cpu.SetGRNaT(14, false);
 
     InstructionEx mov_to_br = decoder.DecodeSlot(0xe0014a000ULL, UnitType::I_UNIT, 0x30700);
     assert_true("Boot raw mov-to-branch should decode", mov_to_br.GetType() == InstructionType::MOV_TO_BR);

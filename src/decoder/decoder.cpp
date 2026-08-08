@@ -260,6 +260,18 @@ static void WriteNatVal(uint8_t* bytes) {
     WriteLittleEndian64(bytes + 8, 0x1FFFEULL);
 }
 
+static void ExecuteAddp4(CPUState& cpu,
+                         uint8_t destination,
+                         uint64_t firstOperand,
+                         bool firstOperandNat,
+                         uint64_t baseOperand,
+                         bool baseOperandNat) {
+    const uint64_t low32 = (firstOperand + baseOperand) & 0xFFFFFFFFULL;
+    const uint64_t regionBits = ((baseOperand >> 30) & 0x3ULL) << 61;
+    cpu.SetGR(destination, low32 | regionBits);
+    cpu.SetGRNaT(destination, firstOperandNat || baseOperandNat);
+}
+
 static bool IsCompareInstruction(InstructionType type) {
     switch (type) {
         case InstructionType::CMP_EQ:
@@ -516,17 +528,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::ADDP4:
-            // addp4 rDst = rSrc1, rSrc2
-            //
-            // IA-64 Vol. 3 specifies that the sum is truncated to 32 bits,
-            // then GR[rSrc2]{31:30} is copied into result{62:61}.
-            {
-                const uint64_t source = cpu.GetGR(src1_);
-                const uint64_t base = cpu.GetGR(src2_);
-                const uint64_t low32 = (source + base) & 0xFFFFFFFFULL;
-                const uint64_t regionBits = ((base >> 30) & 0x3ULL) << 61;
-                cpu.SetGR(dst_, low32 | regionBits);
-                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_) || cpu.GetGRNaT(src2_));
+            // Register form: addp4 rDst = rSrc1, rSrc2.
+            // Immediate form: addp4 rDst = imm14, rSrc1.
+            if (hasImmediate_) {
+                ExecuteAddp4(cpu, dst_, immediate_, false,
+                             cpu.GetGR(src1_), cpu.GetGRNaT(src1_));
+            } else {
+                ExecuteAddp4(cpu, dst_, cpu.GetGR(src1_), cpu.GetGRNaT(src1_),
+                             cpu.GetGR(src2_), cpu.GetGRNaT(src2_));
             }
             break;
             
@@ -1218,9 +1227,14 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::ADDP4:
-            oss << "addp4 r" << static_cast<int>(dst_) << " = r"
-                << static_cast<int>(src1_) << ", r"
-                << static_cast<int>(src2_);
+            oss << "addp4 r" << static_cast<int>(dst_) << " = ";
+            if (hasImmediate_) {
+                oss << static_cast<int64_t>(immediate_) << ", r"
+                    << static_cast<int>(src1_);
+            } else {
+                oss << "r" << static_cast<int>(src1_) << ", r"
+                    << static_cast<int>(src2_);
+            }
             break;
             
         case InstructionType::SUB_IMM:
