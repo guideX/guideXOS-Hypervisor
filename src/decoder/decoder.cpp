@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <iostream>
+#include <cstring>
 
 namespace ia64 {
 
@@ -190,6 +191,75 @@ static uint64_t DecodeMovPrRotImmediate(uint64_t slotBits) {
     return static_cast<uint64_t>(SignExtend(imm28, 28)) << 16;
 }
 
+struct UInt128Parts {
+    uint64_t lo;
+    uint64_t hi;
+};
+
+static UInt128Parts MultiplyUnsigned64(uint64_t left, uint64_t right) {
+    const uint64_t leftLo = left & 0xFFFFFFFFULL;
+    const uint64_t leftHi = left >> 32;
+    const uint64_t rightLo = right & 0xFFFFFFFFULL;
+    const uint64_t rightHi = right >> 32;
+    const uint64_t p0 = leftLo * rightLo;
+    const uint64_t p1 = leftLo * rightHi;
+    const uint64_t p2 = leftHi * rightLo;
+    const uint64_t p3 = leftHi * rightHi;
+
+    UInt128Parts result{p0, p3};
+    const uint64_t middle = (p0 >> 32) + (p1 & 0xFFFFFFFFULL) +
+                            (p2 & 0xFFFFFFFFULL);
+    result.lo = (p0 & 0xFFFFFFFFULL) | (middle << 32);
+    result.hi += (p1 >> 32) + (p2 >> 32) + (middle >> 32);
+    return result;
+}
+
+static UInt128Parts MultiplySigned64(uint64_t left, uint64_t right) {
+    UInt128Parts result = MultiplyUnsigned64(left, right);
+    if ((left >> 63) != 0) {
+        result.hi -= right;
+    }
+    if ((right >> 63) != 0) {
+        result.hi -= left;
+    }
+    return result;
+}
+
+static UInt128Parts AddUInt128(UInt128Parts left, uint64_t right) {
+    const uint64_t oldLo = left.lo;
+    left.lo += right;
+    if (left.lo < oldLo) {
+        ++left.hi;
+    }
+    return left;
+}
+
+static uint64_t ReadLittleEndian64(const uint8_t* bytes) {
+    uint64_t value = 0;
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        value |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+    }
+    return value;
+}
+
+static void WriteLittleEndian64(uint8_t* bytes, uint64_t value) {
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        bytes[i] = static_cast<uint8_t>(value >> (i * 8));
+    }
+}
+
+static bool IsNatVal(const uint8_t* bytes) {
+    const uint64_t significand = ReadLittleEndian64(bytes);
+    const uint64_t signAndExponent = ReadLittleEndian64(bytes + 8);
+    return significand == 0 &&
+           (signAndExponent & 0x3FFFFULL) == 0x1FFFEULL;
+}
+
+static void WriteNatVal(uint8_t* bytes) {
+    std::memset(bytes, 0, 16);
+    WriteLittleEndian64(bytes + 8, 0x1FFFEULL);
+}
+
 static bool IsCompareInstruction(InstructionType type) {
     switch (type) {
         case InstructionType::CMP_EQ:
@@ -325,6 +395,39 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 uint8_t fr[16] = {};
                 cpu.GetFR(src1_, fr);
                 cpu.SetFR(dst_, fr);
+            }
+            break;
+
+        case InstructionType::XMA:
+        case InstructionType::XMA_H:
+        case InstructionType::XMA_HU:
+            {
+                uint8_t fr2[16] = {};
+                uint8_t fr3[16] = {};
+                uint8_t fr4[16] = {};
+                uint8_t resultFR[16] = {};
+                cpu.GetFR(src3_, fr2); // xma operand f2 is the addend.
+                cpu.GetFR(src1_, fr3);
+                cpu.GetFR(src2_, fr4);
+
+                if (IsNatVal(fr2) || IsNatVal(fr3) || IsNatVal(fr4)) {
+                    WriteNatVal(resultFR);
+                    cpu.SetFR(dst_, resultFR);
+                    break;
+                }
+
+                const uint64_t addend = ReadLittleEndian64(fr2);
+                const uint64_t left = ReadLittleEndian64(fr3);
+                const uint64_t right = ReadLittleEndian64(fr4);
+                const bool high = type_ != InstructionType::XMA;
+                const bool unsignedHigh = type_ == InstructionType::XMA_HU;
+                UInt128Parts product = unsignedHigh
+                    ? MultiplyUnsigned64(left, right)
+                    : MultiplySigned64(left, right);
+                product = AddUInt128(product, addend);
+                WriteLittleEndian64(resultFR, high ? product.hi : product.lo);
+                WriteLittleEndian64(resultFR + 8, 0x1003EULL);
+                cpu.SetFR(dst_, resultFR);
             }
             break;
 
@@ -1064,6 +1167,24 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::FCVT_XUF:
             oss << "fcvt.xuf f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::XMA:
+            oss << "xma.l f" << static_cast<int>(dst_) << " = f"
+                << static_cast<int>(src1_) << ", f" << static_cast<int>(src2_)
+                << ", f" << static_cast<int>(src3_);
+            break;
+
+        case InstructionType::XMA_H:
+            oss << "xma.h f" << static_cast<int>(dst_) << " = f"
+                << static_cast<int>(src1_) << ", f" << static_cast<int>(src2_)
+                << ", f" << static_cast<int>(src3_);
+            break;
+
+        case InstructionType::XMA_HU:
+            oss << "xma.hu f" << static_cast<int>(dst_) << " = f"
+                << static_cast<int>(src1_) << ", f" << static_cast<int>(src2_)
+                << ", f" << static_cast<int>(src3_);
             break;
             
         case InstructionType::MOV_IMM:

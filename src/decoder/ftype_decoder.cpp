@@ -240,10 +240,10 @@ InstructionEx FTypeDecoder::decode(uint64_t slot) {
             break;
         }
         
-        case 0x9:  // Fixed multiply-add (XMA)
+        case 0x9:  // Fixed multiply-add (legacy/alternate decoder family)
             if (decodeF2(slot, fmt)) {
                 inst.SetType(InstructionType::XMA);
-                inst.SetOperands4(fmt.f1, fmt.f2, fmt.f3, fmt.f4);
+                inst.SetOperands4(fmt.f1, fmt.f3, fmt.f4, fmt.f2);
             }
             break;
             
@@ -296,19 +296,26 @@ InstructionEx FTypeDecoder::decode(uint64_t slot) {
             }
             break;
             
-        case 0xE:  // FCVT family
+        case 0xE:  // Fixed-point multiply-add and select
         {
-            uint8_t x = formats::extractBits(slot, 33, 1);
-            if (x == 0) {
-                if (decodeF10(slot, fmt)) {
-                    inst.SetType(InstructionType::FCVT_FX);
-                    inst.SetOperands(fmt.f1, fmt.f2, 0);
+            const uint8_t x = formats::extractBits(slot, 36, 1);
+            const uint8_t x2 = formats::extractBits(slot, 34, 2);
+            if (x == 1 && decodeF2(slot, fmt)) {
+                switch (x2) {
+                    case 0:
+                        inst.SetType(InstructionType::XMA);
+                        break;
+                    case 2:
+                        inst.SetType(InstructionType::XMA_HU);
+                        break;
+                    case 3:
+                        inst.SetType(InstructionType::XMA_H);
+                        break;
+                    default:
+                        inst.SetType(InstructionType::UNKNOWN);
+                        break;
                 }
-            } else {
-                if (decodeF11(slot, fmt)) {
-                    inst.SetType(InstructionType::FCVT_XF);
-                    inst.SetOperands(fmt.f1, fmt.f2, 0);
-                }
+                inst.SetOperands4(fmt.f1, fmt.f3, fmt.f4, fmt.f2);
             }
             break;
         }

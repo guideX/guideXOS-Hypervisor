@@ -511,23 +511,57 @@ void test_latest_boot_log_blockers() {
     getf_sig.Execute(cpu, memory);
     assert_equal("Boot getf.sig should copy significand bytes", significand, cpu.GetGR(21));
 
-    InstructionEx fcvt_fx = decoder.DecodeSlot(0x1d048a10280ULL, UnitType::F_UNIT, 0x36ed0);
-    assert_true("Boot raw F-unit fcvt.fx should decode", fcvt_fx.GetType() == InstructionType::FCVT_FX);
-    assert_equal("Boot fcvt.fx destination FP register", 10, fcvt_fx.GetDst());
-    assert_equal("Boot fcvt.fx source FP register", 8, fcvt_fx.GetSrc1());
-    assert_string("Boot fcvt.fx disassembly",
-                  "fcvt.fx f10 = f8",
-                  fcvt_fx.GetDisassembly());
+    InstructionEx xma_l = decoder.DecodeSlot(0x1d048a10280ULL, UnitType::F_UNIT, 0x36ed0);
+    assert_true("Boot raw F-unit xma.l should decode", xma_l.GetType() == InstructionType::XMA);
+    assert_equal("Boot xma.l destination FP register", 10, xma_l.GetDst());
+    assert_equal("Boot xma.l f3 source FP register", 10, xma_l.GetSrc1());
+    assert_equal("Boot xma.l f4 source FP register", 9, xma_l.GetSrc2());
+    assert_equal("Boot xma.l f2 source FP register", 8, xma_l.GetSrc3());
+    assert_string("Boot xma.l disassembly",
+                  "xma.l f10 = f10, f9, f8",
+                  xma_l.GetDisassembly());
 
     uint8_t fr8[16] = {};
-    const uint64_t convertedSignificand = 0x0fedcba987654321ULL;
+    uint8_t fr9[16] = {};
+    uint8_t fr10_operands[16] = {};
+    const uint64_t addend = 5;
+    const uint64_t multiplicand = 3;
+    const uint64_t multiplier = 7;
     for (int i = 0; i < 8; ++i) {
-        fr8[i] = static_cast<uint8_t>((convertedSignificand >> (i * 8)) & 0xff);
+        fr8[i] = static_cast<uint8_t>((addend >> (i * 8)) & 0xff);
+        fr9[i] = static_cast<uint8_t>((multiplier >> (i * 8)) & 0xff);
+        fr10_operands[i] = static_cast<uint8_t>((multiplicand >> (i * 8)) & 0xff);
     }
     cpu.SetFR(8, fr8);
-    fcvt_fx.Execute(cpu, memory);
+    cpu.SetFR(9, fr9);
+    cpu.SetFR(10, fr10_operands);
+    xma_l.Execute(cpu, memory);
     getf_sig.Execute(cpu, memory);
-    assert_equal("Boot fcvt.fx should preserve significand for getf.sig", convertedSignificand, cpu.GetGR(21));
+    assert_equal("Boot xma.l should compute signed low product plus addend", 26, cpu.GetGR(21));
+
+    uint8_t natVal[16] = {};
+    natVal[8] = 0xfe;
+    natVal[9] = 0xff;
+    natVal[10] = 0x01;
+    cpu.SetFR(8, natVal);
+    xma_l.Execute(cpu, memory);
+    uint8_t natResult[16] = {};
+    cpu.GetFR(10, natResult);
+    assert_true("Boot xma.l should propagate a source NaTVal",
+                std::memcmp(natVal, natResult, sizeof(natVal)) == 0);
+
+    uint8_t sentinel[16] = {};
+    sentinel[0] = 0xa5;
+    cpu.SetFR(10, sentinel);
+    cpu.SetFR(8, fr8);
+    cpu.SetPR(1, false);
+    InstructionEx predicated_xma = xma_l;
+    predicated_xma.SetPredicate(1);
+    predicated_xma.Execute(cpu, memory);
+    uint8_t predicatedResult[16] = {};
+    cpu.GetFR(10, predicatedResult);
+    assert_true("False-predicated xma.l should preserve its destination",
+                std::memcmp(sentinel, predicatedResult, sizeof(sentinel)) == 0);
 
     InstructionEx mov_to_br = decoder.DecodeSlot(0xe0014a000ULL, UnitType::I_UNIT, 0x30700);
     assert_true("Boot raw mov-to-branch should decode", mov_to_br.GetType() == InstructionType::MOV_TO_BR);

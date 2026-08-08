@@ -193,7 +193,9 @@ enum class InstructionType {
     FMA,        // Fused multiply-add
     FMS,        // Fused multiply-subtract
     FNMA,       // Fused negative multiply-add
-    XMA,        // Fixed-point multiply-add
+    XMA,        // xma.l fixed-point multiply-add
+    XMA_H,      // xma.h fixed-point multiply-add
+    XMA_HU,     // xma.hu unsigned high fixed-point multiply-add
     FSELECT,    // Floating-point select
     FCMP,       // Floating-point compare
     FCLASS,     // Floating-point classify
