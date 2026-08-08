@@ -95,6 +95,163 @@ bool shouldEmitGpRelativeDataDiag() {
     return enabled;
 }
 
+bool shouldEmitFloatingRegisterTrace() {
+    static const bool enabled = []() {
+        const char* raw = std::getenv("GUIDEXOS_IA64_FP_TRACE");
+        if (!raw || *raw == '\0') {
+            return false;
+        }
+        std::string value(raw);
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value != "0" && value != "false" && value != "off" && value != "no";
+    }();
+    return enabled;
+}
+
+bool shouldEmitGentooLoopTrace() {
+    static const bool enabled = []() {
+        const char* raw = std::getenv("GUIDEXOS_IA64_GENTOO_LOOP_TRACE");
+        if (!raw || *raw == '\0') {
+            return false;
+        }
+        std::string value(raw);
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value != "0" && value != "false" && value != "off" && value != "no";
+    }();
+    return enabled;
+}
+
+bool shouldEmitDescriptorChainTrace() {
+    static const bool enabled = []() {
+        const char* raw = std::getenv("GUIDEXOS_IA64_DESCRIPTOR_TRACE");
+        if (!raw || *raw == '\0') {
+            return false;
+        }
+        std::string value(raw);
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value != "0" && value != "false" && value != "off" && value != "no";
+    }();
+    return enabled;
+}
+
+std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count);
+
+uint64_t readLittleEndian64(const uint8_t* bytes) {
+    uint64_t value = 0;
+    for (size_t i = 0; i < sizeof(value); ++i) {
+        value |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+    }
+    return value;
+}
+
+std::string formatFloatingRegisterValue(const uint8_t* bytes) {
+    const uint64_t significand = readLittleEndian64(bytes);
+    const uint64_t signAndExponent = readLittleEndian64(bytes + 8);
+    const uint64_t sign = (signAndExponent >> 17) & 0x1ULL;
+    const uint64_t exponent = signAndExponent & 0x1FFFFULL;
+    const bool natVal = significand == 0 &&
+                        (signAndExponent & 0x3FFFFULL) == 0x1FFFEULL;
+    std::ostringstream value;
+    value << "raw16=" << BootStageTrace::Hex(readLittleEndian64(bytes + 8))
+          << ":" << BootStageTrace::Hex(significand)
+          << " sign=" << sign
+          << " exponent=" << BootStageTrace::Hex(exponent)
+          << " significand=" << BootStageTrace::Hex(significand)
+          << " NaTVal=" << (natVal ? "true" : "false");
+    return value.str();
+}
+
+bool isFloatingRegisterWriter(InstructionType type) {
+    switch (type) {
+        case InstructionType::FMA:
+        case InstructionType::FMS:
+        case InstructionType::FNMA:
+        case InstructionType::XMA:
+        case InstructionType::XMA_H:
+        case InstructionType::XMA_HU:
+        case InstructionType::SETF_SIG:
+        case InstructionType::FSELECT:
+        case InstructionType::FRCPA:
+        case InstructionType::FRSQRTA:
+        case InstructionType::FPRCPA:
+        case InstructionType::FPRSQRTA:
+        case InstructionType::FMIN:
+        case InstructionType::FMAX:
+        case InstructionType::FAMIN:
+        case InstructionType::FAMAX:
+        case InstructionType::FMERGE:
+        case InstructionType::FABS:
+        case InstructionType::FNEG:
+        case InstructionType::FNEGABS:
+        case InstructionType::FPABS:
+        case InstructionType::FPNEG:
+        case InstructionType::FCVT_FX:
+        case InstructionType::FCVT_FXU:
+        case InstructionType::FCVT_XF:
+        case InstructionType::FCVT_XUF:
+        case InstructionType::FPCVT_FX:
+        case InstructionType::FPCVT_FXU:
+        case InstructionType::FPCVT_XF:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool isFloatingLoadCandidate(const InstructionEx& instr) {
+    return instr.GetType() != InstructionType::SETF_SIG &&
+           instr.GetUnit() == UnitType::M_UNIT &&
+           static_cast<uint8_t>((instr.GetRawBits() >> 37) & 0x0FULL) == 0x6 &&
+           instr.GetDst() >= 8 && instr.GetDst() <= 10;
+}
+
+std::string floatingSourceValues(const CPUState& cpu,
+                                 IMemory& memory,
+                                 const InstructionEx& instr) {
+    std::ostringstream values;
+    auto append = [&](uint8_t reg) {
+        uint8_t bytes[16] = {};
+        cpu.GetFR(reg, bytes);
+        values << "f" << static_cast<unsigned>(reg) << "{"
+               << formatFloatingRegisterValue(bytes) << "} ";
+    };
+
+    if (instr.GetType() == InstructionType::XMA ||
+        instr.GetType() == InstructionType::XMA_H ||
+        instr.GetType() == InstructionType::XMA_HU) {
+        append(instr.GetSrc1());
+        append(instr.GetSrc2());
+        append(instr.GetSrc3());
+    } else if (instr.GetType() == InstructionType::SETF_SIG) {
+        values << "r" << static_cast<unsigned>(instr.GetSrc1())
+               << "=" << BootStageTrace::Hex(cpu.GetGR(instr.GetSrc1()))
+               << " NaT=" << (cpu.GetGRNaT(instr.GetSrc1()) ? "true" : "false") << " ";
+    } else if (instr.GetType() == InstructionType::GETF_SIG ||
+               instr.GetType() == InstructionType::FCVT_FX ||
+               instr.GetType() == InstructionType::FCVT_FXU ||
+               instr.GetType() == InstructionType::FCVT_XF ||
+               instr.GetType() == InstructionType::FCVT_XUF) {
+        append(instr.GetSrc1());
+    } else if (isFloatingRegisterWriter(instr.GetType())) {
+        append(instr.GetSrc1());
+        append(instr.GetSrc2());
+        append(instr.GetSrc3());
+    }
+
+    if (isFloatingLoadCandidate(instr)) {
+        const uint64_t address = cpu.GetGR(instr.GetSrc1());
+        values << "loadAddress=" << BootStageTrace::Hex(address);
+        if (address < memory.GetTotalSize() &&
+            static_cast<uint64_t>(memory.GetTotalSize()) - address >= 16) {
+            values << " memory16=" << readHexBytesPreview(memory, address, 16);
+        }
+    }
+    return values.str();
+}
+
 constexpr uint64_t kRegisterConfigCallsiteA = 0xEC60ULL;
 constexpr uint64_t kRegisterConfigCallsiteB = 0xECA0ULL;
 constexpr uint64_t kRegisterConfigComputedListHead0Delta = 0x1FAFB0ULL;
@@ -1934,6 +2091,11 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , lastDescriptorCode_(0)
     , lastDescriptorGp_(0)
     , lastBranchTargets_()
+    , lastFloatingWrites_()
+    , executionCycle_(0)
+    , lastCallSite_(0)
+    , lastCallTarget_(0)
+    , lastCallReturn_(0)
     , recentInstructionSequenceRepeatCount_(0)
     , efiFileHandles_()
     , efiBootImage_()
@@ -2108,6 +2270,11 @@ void IA64ISAPlugin::reset() {
     lastDescriptorCode_ = 0;
     lastDescriptorGp_ = 0;
     lastBranchTargets_.clear();
+    lastFloatingWrites_ = {};
+    executionCycle_ = 0;
+    lastCallSite_ = 0;
+    lastCallTarget_ = 0;
+    lastCallReturn_ = 0;
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
     efiBootImage_.clear();
@@ -2196,6 +2363,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         std::cerr << "Warning: execute() called without prior decode()\n";
         return ISAExecutionResult::EXCEPTION;
     }
+
+    ++executionCycle_;
     
     try {
         // Profile instruction execution
@@ -2559,6 +2728,29 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             cachedInstruction_.GetType() == InstructionType::BR_CALL ||
             cachedInstruction_.GetType() == InstructionType::BR_RET ||
             cachedInstruction_.GetType() == InstructionType::BR_CLOOP;
+        if (shouldEmitFloatingRegisterTrace() &&
+            currentIP == 0x36ED0ULL && state_.currentSlot_ == 2 &&
+            cachedInstruction_.GetType() == InstructionType::BR_RET) {
+            std::cout << "[IA64-FP-XMA-RET] cycle=" << executionCycle_
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " raw=" << BootStageTrace::Hex(cachedInstruction_.GetRawBits())
+                      << " decoded=\"" << cachedInstruction_.GetDisassembly() << "\""
+                      << " predicate=p" << static_cast<unsigned>(predicate)
+                      << " value=" << (livePredicateTrue ? "true" : "false")
+                      << " snapshotValue=" << (snapshotPredicateTrue ? "true" : "false")
+                      << " b0=" << BootStageTrace::Hex(state_.getCPUState().GetBR(0))
+                      << " branchTarget=" << BootStageTrace::Hex(branchRegisterValue)
+                      << " r26=" << BootStageTrace::Hex(state_.getCPUState().GetGR(26))
+                      << " r27=" << BootStageTrace::Hex(state_.getCPUState().GetGR(27))
+                      << " fallThrough=" << (livePredicateTrue ? "false" : "true")
+                      << " fallThroughIP=0x36EE0"
+                      << " reason="
+                      << (livePredicateTrue
+                              ? "predicate_true_br_ret_taken"
+                              : "predicate_false_after_cmp_ltu_r26_r27")
+                      << std::endl;
+        }
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
                 if (livePredicateTrue) {
@@ -3647,6 +3839,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 restoreCallFrame(branchTarget);
             }
             const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
+            if (cachedInstruction_.GetType() == InstructionType::BR_CALL &&
+                livePredicateTrue && !callLooksLikeCountedLoop) {
+                lastCallSite_ = currentIP;
+                lastCallTarget_ = branchEntryIP;
+                lastCallReturn_ = currentIP + 16;
+            }
             rememberBranchTarget(branchEntryIP);
             if (efiExitBootServicesCalls_ > 0 &&
                 branchEntryIP < memory.GetTotalSize() &&
@@ -3826,6 +4024,11 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     lastDescriptorCode_ = 0;
     lastDescriptorGp_ = 0;
     lastBranchTargets_.clear();
+    lastFloatingWrites_ = {};
+    executionCycle_ = 0;
+    lastCallSite_ = 0;
+    lastCallTarget_ = 0;
+    lastCallReturn_ = 0;
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
     efiBootImage_.clear();
@@ -4767,6 +4970,79 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
     try {
         CPUState& cpu = state_.getCPUState();
         const uint64_t currentIP = cpu.GetIP();
+        static uint64_t gentooLoopIteration = 0;
+        if (shouldEmitGentooLoopTrace() &&
+            currentIP == 0x16F80ULL && state_.currentSlot_ == 0) {
+            ++gentooLoopIteration;
+            std::cout << "[IA64-GENTOO-LOOP] phase=entry iteration=" << gentooLoopIteration
+                      << " cycle=" << executionCycle_
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                      << " decoded=\"" << instr.GetDisassembly() << "\""
+                      << " predicate=p" << static_cast<unsigned>(instr.GetPredicate())
+                      << " predicateValue="
+                      << (((instr.GetPredicate() == 0) || cpu.GetPR(instr.GetPredicate()))
+                              ? "true" : "false")
+                      << " ar.lc=" << BootStageTrace::Hex(cpu.GetAR(65))
+                      << " ar.ec=" << BootStageTrace::Hex(cpu.GetAR(66))
+                      << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+                      << " r16=" << BootStageTrace::Hex(cpu.GetGR(16))
+                      << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                      << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+                      << " b0=" << BootStageTrace::Hex(cpu.GetBR(0))
+                      << " b5=" << BootStageTrace::Hex(cpu.GetBR(5))
+                      << " memoryWriteAddress=" << BootStageTrace::Hex(cpu.GetGR(16))
+                      << " memoryWriteValue=" << BootStageTrace::Hex(cpu.GetGR(33))
+                      << std::endl;
+        }
+        if (shouldEmitGentooLoopTrace() &&
+            currentIP == 0x170B0ULL && state_.currentSlot_ == 2) {
+            std::cout << "[IA64-GENTOO-LOOP] phase=backedge"
+                      << " iteration=" << gentooLoopIteration
+                      << " cycle=" << executionCycle_
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                      << " decoded=\"" << instr.GetDisassembly() << "\""
+                      << " predicate=p" << static_cast<unsigned>(instr.GetPredicate())
+                      << " predicateValue="
+                      << (((instr.GetPredicate() == 0) || cpu.GetPR(instr.GetPredicate()))
+                              ? "true" : "false")
+                      << " ar.lc=" << BootStageTrace::Hex(cpu.GetAR(65))
+                      << " ar.ec=" << BootStageTrace::Hex(cpu.GetAR(66))
+                      << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+                      << " r16=" << BootStageTrace::Hex(cpu.GetGR(16))
+                      << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                      << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+                      << " b0=" << BootStageTrace::Hex(cpu.GetBR(0))
+                      << " b5=" << BootStageTrace::Hex(cpu.GetBR(5))
+                      << std::endl;
+        }
+        if (shouldEmitGentooLoopTrace() &&
+            currentIP == 0x16F80ULL && state_.currentSlot_ == 2) {
+            std::cout << "[IA64-GENTOO-LOOP] phase=callsite"
+                      << " iteration=" << gentooLoopIteration
+                      << " cycle=" << executionCycle_
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                      << " decoded=\"" << instr.GetDisassembly() << "\""
+                      << " predicate=p" << static_cast<unsigned>(instr.GetPredicate())
+                      << " predicateValue="
+                      << (((instr.GetPredicate() == 0) || cpu.GetPR(instr.GetPredicate()))
+                              ? "true" : "false")
+                      << " target=" << BootStageTrace::Hex(instr.GetBranchTarget())
+                      << " ar.lc=" << BootStageTrace::Hex(cpu.GetAR(65))
+                      << " ar.ec=" << BootStageTrace::Hex(cpu.GetAR(66))
+                      << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+                      << " r16=" << BootStageTrace::Hex(cpu.GetGR(16))
+                      << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                      << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+                      << " b0=" << BootStageTrace::Hex(cpu.GetBR(0))
+                      << " b5=" << BootStageTrace::Hex(cpu.GetBR(5))
+                      << std::endl;
+        }
         const bool traceScanLoop =
             currentIP >= 0x36D90ULL && currentIP <= 0x36F10ULL;
         static uint64_t scanLoopTraceCount = 0;
@@ -5061,7 +5337,160 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             pendingRegisterConfigEntryTarget_ = 0;
             pendingRegisterConfigEntryCallsite_ = 0;
         }
+        const bool traceFloating = shouldEmitFloatingRegisterTrace();
+        std::array<std::array<uint8_t, 16>, 3> floatingBefore{};
+        if (traceFloating) {
+            for (size_t i = 0; i < floatingBefore.size(); ++i) {
+                cpu.GetFR(8 + i, floatingBefore[i].data());
+            }
+        }
+        const bool floatingLoadCandidate = traceFloating && isFloatingLoadCandidate(instr);
+        const bool floatingWriterCandidate =
+            traceFloating && isFloatingRegisterWriter(instr.GetType()) &&
+            instr.GetDst() >= 8 && instr.GetDst() <= 10;
+        const bool traceXmaInvocation =
+            traceFloating && currentIP == 0x36ED0ULL &&
+            instr.GetType() == InstructionType::XMA;
+        const std::string sourceValues =
+            traceFloating && (floatingLoadCandidate || floatingWriterCandidate || traceXmaInvocation)
+                ? floatingSourceValues(cpu, memory, instr)
+                : std::string();
+
+        auto describeLastFloatingWriter = [&](size_t index) {
+            const auto& last = lastFloatingWrites_[index];
+            if (!last.valid) {
+                return std::string("none_since_reset");
+            }
+            std::ostringstream description;
+            description << "cycle=" << last.cycle
+                        << " ip=" << BootStageTrace::Hex(last.ip)
+                        << " slot=" << last.slot
+                        << " raw=" << BootStageTrace::Hex(last.raw)
+                        << " predicate=p" << static_cast<unsigned>(last.predicate)
+                        << " disasm=\"" << last.disasm << "\""
+                        << " sourceValues=\"" << last.sourceValues << "\"";
+            return description.str();
+        };
+
+        auto emitFloatingSnapshot = [&](const char* phase,
+                                        const std::array<std::array<uint8_t, 16>, 3>& values) {
+            std::cout << "[IA64-FP-XMA] phase=" << phase
+                      << " cycle=" << executionCycle_
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                      << " decoded=\"" << instr.GetDisassembly() << "\""
+                      << " predicate=p" << static_cast<unsigned>(instr.GetPredicate())
+                      << " predicateValue="
+                      << (((instr.GetPredicate() == 0) || cpu.GetPR(instr.GetPredicate()))
+                              ? "true" : "false")
+                      << " predicates=\"" << predicateWindowSummary(cpu) << "\""
+                      << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+                      << " ar.pfs=" << BootStageTrace::Hex(cpu.GetPFS())
+                      << " b0=" << BootStageTrace::Hex(cpu.GetBR(0))
+                      << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
+                      << " r12=" << BootStageTrace::Hex(cpu.GetGR(12))
+                      << " r16=" << BootStageTrace::Hex(cpu.GetGR(16))
+                      << " r17=" << BootStageTrace::Hex(cpu.GetGR(17))
+                      << " r21=" << BootStageTrace::Hex(cpu.GetGR(21))
+                      << " r26=" << BootStageTrace::Hex(cpu.GetGR(26))
+                      << " r27=" << BootStageTrace::Hex(cpu.GetGR(27))
+                      << " r32=" << BootStageTrace::Hex(cpu.GetGR(32))
+                      << " r33=" << BootStageTrace::Hex(cpu.GetGR(33))
+                      << " callerIP=" << BootStageTrace::Hex(lastCallSite_)
+                      << " callerTarget=" << BootStageTrace::Hex(lastCallTarget_)
+                      << " returnAddress=" << BootStageTrace::Hex(lastCallReturn_)
+                      << " sourceValues=\"" << sourceValues << "\"";
+            for (size_t i = 0; i < values.size(); ++i) {
+                std::cout << " f" << (8 + i) << "={"
+                          << formatFloatingRegisterValue(values[i].data()) << "}";
+            }
+            if (std::string(phase) == "pre") {
+                std::cout << " lastWriterF8=\"" << describeLastFloatingWriter(0) << "\""
+                          << " lastWriterF9=\"" << describeLastFloatingWriter(1) << "\""
+                          << " lastWriterF10=\"" << describeLastFloatingWriter(2) << "\"";
+            }
+            std::cout << std::endl;
+        };
+
+        if (traceXmaInvocation) {
+            emitFloatingSnapshot("pre", floatingBefore);
+        }
+
         instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+
+        if (shouldEmitDescriptorChainTrace() &&
+            ((currentIP == 0x36EE0ULL && state_.currentSlot_ == 0) ||
+             (currentIP == 0x36EF0ULL && state_.currentSlot_ <= 1) ||
+             (currentIP == 0x36F00ULL && state_.currentSlot_ == 1))) {
+            std::cout << "[IA64-DESCRIPTOR-CHAIN]"
+                      << " cycle=" << executionCycle_
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                      << " decoded=\"" << instr.GetDisassembly() << "\""
+                      << " r21=" << BootStageTrace::Hex(cpu.GetGR(21))
+                      << " r17=" << BootStageTrace::Hex(cpu.GetGR(17))
+                      << " r26=" << BootStageTrace::Hex(cpu.GetGR(26))
+                      << " loadAddress=" << BootStageTrace::Hex(loadAddress)
+                      << " loadedR17=" << BootStageTrace::Hex(cpu.GetGR(17))
+                      << " storeAddress=" << BootStageTrace::Hex(storeAddress)
+                      << " storeValue=" << BootStageTrace::Hex(cpu.GetGR(instr.GetSrc1()))
+                      << " gp=" << BootStageTrace::Hex(cpu.GetGR(1))
+                      << std::endl;
+        }
+
+        if (traceFloating) {
+            std::array<std::array<uint8_t, 16>, 3> floatingAfter{};
+            for (size_t i = 0; i < floatingAfter.size(); ++i) {
+                cpu.GetFR(8 + i, floatingAfter[i].data());
+            }
+            for (size_t i = 0; i < floatingAfter.size(); ++i) {
+                if (std::memcmp(floatingBefore[i].data(), floatingAfter[i].data(), 16) == 0) {
+                    continue;
+                }
+                auto& last = lastFloatingWrites_[i];
+                last.valid = true;
+                last.cycle = executionCycle_;
+                last.ip = currentIP;
+                last.slot = state_.currentSlot_;
+                last.raw = instr.GetRawBits();
+                last.predicate = instr.GetPredicate();
+                last.disasm = instr.GetDisassembly();
+                last.sourceValues = sourceValues;
+                std::cout << "[IA64-FP-WRITE] cycle=" << executionCycle_
+                          << " ip=" << BootStageTrace::Hex(currentIP)
+                          << " slot=" << state_.currentSlot_
+                          << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                          << " decoded=\"" << instr.GetDisassembly() << "\""
+                          << " predicate=p" << static_cast<unsigned>(instr.GetPredicate())
+                          << " predicateValue="
+                          << (((instr.GetPredicate() == 0) || cpu.GetPR(instr.GetPredicate()))
+                                  ? "true" : "false")
+                          << " destination=f" << (8 + i)
+                          << " sourceValues=\"" << sourceValues << "\""
+                          << " old={" << formatFloatingRegisterValue(floatingBefore[i].data()) << "}"
+                          << " new={" << formatFloatingRegisterValue(floatingAfter[i].data()) << "}"
+                          << std::endl;
+            }
+            if (floatingLoadCandidate) {
+                const size_t target = instr.GetDst() - 8;
+                if (std::memcmp(floatingBefore[target].data(), floatingAfter[target].data(), 16) == 0) {
+                    std::cout << "[IA64-FP-WRITE-CANDIDATE] cycle=" << executionCycle_
+                              << " ip=" << BootStageTrace::Hex(currentIP)
+                              << " slot=" << state_.currentSlot_
+                              << " raw=" << BootStageTrace::Hex(instr.GetRawBits())
+                              << " decoded=\"" << instr.GetDisassembly() << "\""
+                              << " architecturalTarget=f" << static_cast<unsigned>(instr.GetDst())
+                              << " sourceValues=\"" << sourceValues << "\""
+                              << " transition=not_observed"
+                              << std::endl;
+                }
+            }
+            if (traceXmaInvocation) {
+                emitFloatingSnapshot("post", floatingAfter);
+            }
+        }
         if (traceBootLocalLoad) {
             logBootLocalAccess("post-read", state_.getCPUState(), state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),

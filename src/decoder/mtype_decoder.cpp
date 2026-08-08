@@ -114,7 +114,11 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
 
                 return false;
 
-            case 0x6:   // Floating-point loads
+            case 0x6:   // Floating-point loads and Set FR
+                if (x == 1 && m == 0 && x6 == 0x1C) {
+                    result.operation = formats::MFormat::MemOp::SETF;
+                    return true;
+                }
                 decodeLoad(x6, m, result);
                 return true;
 
@@ -194,6 +198,12 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         }
         else if (fmt.operation == formats::MFormat::MemOp::GETF) {
             instr = InstructionEx(InstructionType::GETF_SIG, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r2, 0);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::SETF) {
+            instr = InstructionEx(InstructionType::SETF_SIG, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r2, 0);
             return true;

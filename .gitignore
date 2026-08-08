@@ -429,3 +429,5 @@
 /cmake-build-refresh/x64/Release/ZERO_CHECK/ZERO_CHECK.tlog/CustomBuild.command.1.tlog
 /cmake-build-refresh/x64/Release/ZERO_CHECK/ZERO_CHECK.tlog/CustomBuild.read.1.tlog
 /cmake-build-refresh/x64/Release/ZERO_CHECK/ZERO_CHECK.tlog/CustomBuild.write.1.tlog
+/.codex_tmp/*.log
+*.log

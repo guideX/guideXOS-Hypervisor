@@ -317,6 +317,21 @@ private:
     uint64_t lastDescriptorCode_;
     uint64_t lastDescriptorGp_;
     std::vector<uint64_t> lastBranchTargets_;
+    struct FloatingWriteTraceRecord {
+        bool valid = false;
+        uint64_t cycle = 0;
+        uint64_t ip = 0;
+        size_t slot = 0;
+        uint64_t raw = 0;
+        uint8_t predicate = 0;
+        std::string disasm;
+        std::string sourceValues;
+    };
+    std::array<FloatingWriteTraceRecord, 3> lastFloatingWrites_;
+    uint64_t executionCycle_;
+    uint64_t lastCallSite_;
+    uint64_t lastCallTarget_;
+    uint64_t lastCallReturn_;
     struct RecentInstructionTrace {
         uint64_t ip = 0;
         size_t slot = 0;

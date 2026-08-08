@@ -401,6 +401,19 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::SETF_SIG:
+            {
+                uint8_t fr[16] = {};
+                if (cpu.GetGRNaT(src1_)) {
+                    WriteNatVal(fr);
+                } else {
+                    WriteLittleEndian64(fr, cpu.GetGR(src1_));
+                    WriteLittleEndian64(fr + 8, 0x1003EULL);
+                }
+                cpu.SetFR(dst_, fr);
+            }
+            break;
+
         case InstructionType::FCVT_FX:
         case InstructionType::FCVT_FXU:
             {
@@ -1160,6 +1173,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::GETF_SIG:
             oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::SETF_SIG:
+            oss << "setf.sig f" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
             break;
 
         case InstructionType::FCVT_FX:

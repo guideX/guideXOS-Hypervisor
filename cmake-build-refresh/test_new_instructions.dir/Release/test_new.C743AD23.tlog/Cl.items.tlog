@@ -1,0 +1,15 @@
+D:\dev\guideXOS_Hypervisor\tests\test_new_instructions.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\test_new_instructions.obj
+D:\dev\guideXOS_Hypervisor\src\core\cpu.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\cpu.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\atype_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\atype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\itype_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\itype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\mtype_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\mtype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\btype_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\btype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\ftype_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\ftype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\lx_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\lx_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\xtype_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\xtype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\riscv_decoder.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\riscv_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\memory\memory.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\memory.obj
+D:\dev\guideXOS_Hypervisor\src\mmu\mmu.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\mmu.obj
+D:\dev\guideXOS_Hypervisor\src\storage\ISO9660Parser.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\ISO9660Parser.obj
+D:\dev\guideXOS_Hypervisor\src\storage\FATParser.cpp;D:\dev\guideXOS_Hypervisor\cmake-build-refresh\test_new_instructions.dir\Release\FATParser.obj

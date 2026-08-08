@@ -487,10 +487,10 @@ void test_latest_boot_log_blockers() {
     assert_true("EFI entry bundle slot 2 should decode as nop",
                 bundle.instructions[2].GetType() == InstructionType::NOP);
     assert_string("EFI entry bundle slot 0 disassembly",
-                  "alloc r16 = ar.pfs, 3, 2, 0",
+                  "alloc r34 = ar.pfs, 6, 4, 0",
                   bundle.instructions[0].GetDisassembly());
     assert_string("EFI entry bundle slot 1 disassembly",
-                  "mov r17 = b6",
+                  "mov r35 = b0",
                   bundle.instructions[1].GetDisassembly());
     assert_string("EFI entry bundle slot 2 disassembly",
                   "nop",
@@ -523,6 +523,53 @@ void test_latest_boot_log_blockers() {
     cpu.SetFR(10, fr10);
     getf_sig.Execute(cpu, memory);
     assert_equal("Boot getf.sig should copy significand bytes", significand, cpu.GetGR(21));
+
+    InstructionEx setf_sig = decoder.DecodeSlot(0xC708032280ULL, UnitType::M_UNIT, 0x36ec0);
+    assert_true("Boot raw setf.sig should decode", setf_sig.GetType() == InstructionType::SETF_SIG);
+    assert_equal("Boot setf.sig destination FP register", 10, setf_sig.GetDst());
+    assert_equal("Boot setf.sig source general register", 25, setf_sig.GetSrc1());
+    assert_string("Boot setf.sig disassembly",
+                  "setf.sig f10 = r25",
+                  setf_sig.GetDisassembly());
+
+    const uint64_t setfValue = 0x0123456789abcdefULL;
+    cpu.SetGR(25, setfValue);
+    setf_sig.Execute(cpu, memory);
+    uint8_t setfResult[16] = {};
+    cpu.GetFR(10, setfResult);
+    uint64_t setfSignificand = 0;
+    uint64_t setfSignAndExponent = 0;
+    for (int i = 0; i < 8; ++i) {
+        setfSignificand |= static_cast<uint64_t>(setfResult[i]) << (i * 8);
+        setfSignAndExponent |= static_cast<uint64_t>(setfResult[8 + i]) << (i * 8);
+    }
+    assert_equal("setf.sig should copy the complete integer significand",
+                 setfValue, setfSignificand);
+    assert_equal("setf.sig should use the integer-format exponent",
+                 0x1003EULL, setfSignAndExponent);
+
+    cpu.SetGRNaT(25, true);
+    setf_sig.Execute(cpu, memory);
+    cpu.GetFR(10, setfResult);
+    uint64_t setfNatSignAndExponent = 0;
+    for (int i = 0; i < 8; ++i) {
+        setfNatSignAndExponent |= static_cast<uint64_t>(setfResult[8 + i]) << (i * 8);
+    }
+    assert_equal("setf.sig should produce FP NaTVal for a GR NaT source",
+                 0x1FFFEULL, setfNatSignAndExponent);
+    cpu.SetGRNaT(25, false);
+
+    std::memset(setfResult, 0xA5, sizeof(setfResult));
+    cpu.SetFR(10, setfResult);
+    cpu.SetPR(1, false);
+    InstructionEx predicatedSetf = setf_sig;
+    predicatedSetf.SetPredicate(1);
+    predicatedSetf.Execute(cpu, memory);
+    uint8_t predicatedSetfResult[16] = {};
+    cpu.GetFR(10, predicatedSetfResult);
+    assert_true("false-predicated setf.sig should preserve its destination",
+                std::memcmp(setfResult, predicatedSetfResult, sizeof(setfResult)) == 0);
+    cpu.SetPR(1, true);
 
     InstructionEx xma_l = decoder.DecodeSlot(0x1d048a10280ULL, UnitType::F_UNIT, 0x36ed0);
     assert_true("Boot raw F-unit xma.l should decode", xma_l.GetType() == InstructionType::XMA);
@@ -712,7 +759,7 @@ void test_latest_boot_log_blockers() {
     shladd_scale40.Execute(cpu, memory);
     assert_equal("Boot shladd scale-40 should compute base + index * 40", 0x1118, cpu.GetGR(16));
 
-    InstructionEx zxt4_return = decoder.DecodeSlot(0xb0800200ULL, UnitType::I_UNIT, 0x34b10);
+    InstructionEx zxt4_return = decoder.DecodeSlot(0x90800200ULL, UnitType::I_UNIT, 0x34b10);
     assert_true("Boot raw zxt4 should decode", zxt4_return.GetType() == InstructionType::ZXT4);
     assert_equal("Boot zxt4 destination", 8, zxt4_return.GetDst());
     assert_equal("Boot zxt4 source", 8, zxt4_return.GetSrc1());
