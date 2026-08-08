@@ -413,11 +413,17 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::ADDP4:
-            // addp4 rDst = rSrc1, rSrc2 (32-bit pointer add)
+            // addp4 rDst = rSrc1, rSrc2
+            //
+            // IA-64 Vol. 3 specifies that the sum is truncated to 32 bits,
+            // then GR[rSrc2]{31:30} is copied into result{62:61}.
             {
-                uint32_t val1 = static_cast<uint32_t>(cpu.GetGR(src1_));
-                uint32_t val2 = static_cast<uint32_t>(cpu.GetGR(src2_));
-                cpu.SetGR(dst_, static_cast<uint64_t>(val1 + val2));
+                const uint64_t source = cpu.GetGR(src1_);
+                const uint64_t base = cpu.GetGR(src2_);
+                const uint64_t low32 = (source + base) & 0xFFFFFFFFULL;
+                const uint64_t regionBits = ((base >> 30) & 0x3ULL) << 61;
+                cpu.SetGR(dst_, low32 | regionBits);
+                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_) || cpu.GetGRNaT(src2_));
             }
             break;
             
@@ -1088,6 +1094,12 @@ std::string InstructionEx::GetDisassembly() const {
                 oss << "0x" << std::hex << immediate_ << std::dec;
             }
             oss << ", r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ADDP4:
+            oss << "addp4 r" << static_cast<int>(dst_) << " = r"
+                << static_cast<int>(src1_) << ", r"
+                << static_cast<int>(src2_);
             break;
             
         case InstructionType::SUB_IMM:

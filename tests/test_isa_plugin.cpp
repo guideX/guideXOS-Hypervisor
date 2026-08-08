@@ -1375,6 +1375,69 @@ void testIA64AddlImm22Boundaries() {
     std::cout << "  ? distributed addl fields, signed limits, and unrelated fields pass\n";
 }
 
+uint64_t makeIA64Addp4Slot(uint8_t destination, uint8_t source, uint8_t base,
+                           uint8_t predicate = 0) {
+    return (static_cast<uint64_t>(predicate & 0x3F)      ) |
+           (static_cast<uint64_t>(destination & 0x7F) << 6) |
+           (static_cast<uint64_t>(source & 0x7F)      << 13) |
+           (static_cast<uint64_t>(base & 0x7F)        << 20) |
+           (static_cast<uint64_t>(0x8)                << 37) |
+           (static_cast<uint64_t>(0x2)                << 29);
+}
+
+void testIA64Addp4MUnitDecodeAndExecution() {
+    std::cout << "Testing IA-64 A1 addp4 in M and I slots...\n";
+
+    InstructionDecoder decoder;
+    constexpr uint64_t raw = 0x1004001e440ULL;
+    const InstructionEx mSlot = decoder.DecodeSlot(raw, UnitType::M_UNIT, 0x118c0);
+    const InstructionEx iSlot = decoder.DecodeSlot(raw, UnitType::I_UNIT, 0x118c0);
+
+    for (const InstructionEx* instruction : {&mSlot, &iSlot}) {
+        assert(instruction->GetType() == InstructionType::ADDP4);
+        assert(instruction->GetPredicate() == 0);
+        assert(instruction->GetDst() == 17);
+        assert(instruction->GetSrc1() == 15);
+        assert(instruction->GetSrc2() == 0);
+        assert(instruction->GetDisassembly() == "addp4 r17 = r15, r0");
+    }
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetGR(15, 0xC000000012345678ULL);
+    mSlot.Execute(cpu, memory);
+    assert(cpu.GetGR(17) == 0x0000000012345678ULL);
+
+    const InstructionEx pointerAdd = decoder.DecodeSlot(
+        makeIA64Addp4Slot(17, 15, 14), UnitType::M_UNIT, 0x118c0);
+    assert(pointerAdd.GetType() == InstructionType::ADDP4);
+    assert(pointerAdd.GetDisassembly() == "addp4 r17 = r15, r14");
+    cpu.SetGR(15, 0x00000000F0000001ULL);
+    cpu.SetGR(14, 0xC000000080000003ULL);
+    pointerAdd.Execute(cpu, memory);
+    assert(cpu.GetGR(17) == 0x4000000070000004ULL);
+
+    cpu.SetGR(15, 0x1000ULL);
+    cpu.SetGR(14, 0x2000ULL);
+    pointerAdd.Execute(cpu, memory);
+    assert(cpu.GetGR(17) == 0x3000ULL);
+
+    cpu.SetGRNaT(15, true);
+    pointerAdd.Execute(cpu, memory);
+    assert(cpu.GetGRNaT(17));
+
+    cpu.SetGR(17, 0xABCULL);
+    cpu.SetGRNaT(17, false);
+    cpu.SetPR(1, false);
+    const InstructionEx predicated = decoder.DecodeSlot(
+        makeIA64Addp4Slot(17, 15, 14, 1), UnitType::M_UNIT, 0x118c0);
+    predicated.Execute(cpu, memory);
+    assert(cpu.GetGR(17) == 0xABCULL);
+    assert(!cpu.GetGRNaT(17));
+
+    std::cout << "  ? raw 0x1004001e440 routes through A decoding in M/I slots and executes architecturally\n";
+}
+
 void testIA64ReturnBranchDecode() {
     std::cout << "Testing IA-64 return branch decode...\n";
 
@@ -3015,6 +3078,9 @@ int main() {
         std::cout << "\n";
 
         testIA64AddlImm22Boundaries();
+        std::cout << "\n";
+
+        testIA64Addp4MUnitDecodeAndExecution();
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughB0TransfersToTargetBundle();

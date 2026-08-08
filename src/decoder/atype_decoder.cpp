@@ -151,6 +151,14 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                     instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
                 }
                 return true;
+
+            case 0x2: // ADDP4
+                // A1 addp4 r1 = r2, r3.  The executor applies the
+                // pointer-specific low-32-bit and region-bit semantics.
+                instr = InstructionEx(InstructionType::ADDP4, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
+                instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+                return true;
                 
             case 0x3: // AND
                 instr = InstructionEx(fmt.has_imm ? InstructionType::AND_IMM : InstructionType::AND,
