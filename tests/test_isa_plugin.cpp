@@ -3033,6 +3033,94 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginSetMemFillsExactRange() {
+    std::cout << "Testing IA-64 plugin SetMem firmware stub...\n";
+
+    Memory memory(0x10000);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x3e40, bundleBytes, sizeof(bundleBytes));
+    uint8_t seed[16];
+    std::memset(seed, 0x3c, sizeof(seed));
+    memory.Write(0x5000, seed, sizeof(seed));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    const uint64_t setMemCode = 0x1fe01a00ULL;
+    const uint64_t returnSentinel = 0x1122334455667788ULL;
+
+    plugin.getCPUState().SetIP(0x3e40);
+    plugin.getCPUState().SetCFM(2);
+    plugin.getCPUState().SetBR(6, setMemCode);
+    plugin.getCPUState().SetGR(32, 0x5004);
+    plugin.getCPUState().SetGR(33, 7);
+    plugin.getCPUState().SetGR(34, 0xa5);
+    plugin.getCPUState().SetGR(8, returnSentinel);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+
+    uint8_t bytes[16] = {};
+    memory.Read(0x5000, bytes, sizeof(bytes));
+    assert(bytes[0] == 0x3c && bytes[1] == 0x3c && bytes[2] == 0x3c && bytes[3] == 0x3c);
+    for (size_t i = 4; i < 11; ++i) {
+        assert(bytes[i] == 0xa5);
+    }
+    assert(bytes[11] == 0x3c && bytes[12] == 0x3c && bytes[13] == 0x3c);
+    assert(plugin.getCPUState().GetIP() == 0x3e50);
+    assert(plugin.getCPUState().GetBR(0) == 0x3e50);
+    assert(plugin.getCPUState().GetGR(8) == returnSentinel);
+
+    plugin.getCPUState().SetIP(0x3e40);
+    plugin.getCPUState().SetBR(6, setMemCode);
+    plugin.getCPUState().SetGR(32, 0xffff00000000ULL);
+    plugin.getCPUState().SetGR(33, 0);
+    plugin.getCPUState().SetGR(34, 0);
+    plugin.getCPUState().SetGR(8, returnSentinel);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    memory.Read(0x5000, bytes, sizeof(bytes));
+    assert(bytes[4] == 0xa5 && bytes[10] == 0xa5);
+    assert(plugin.getCPUState().GetGR(8) == returnSentinel);
+
+    plugin.getCPUState().SetIP(0x3e40);
+    plugin.getCPUState().SetBR(6, setMemCode);
+    plugin.getCPUState().SetGR(32, 0x5004);
+    plugin.getCPUState().SetGR(33, 7);
+    plugin.getCPUState().SetGR(34, 0);
+    plugin.getCPUState().SetGR(8, returnSentinel);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    memory.Read(0x5000, bytes, sizeof(bytes));
+    assert(bytes[0] == 0x3c && bytes[1] == 0x3c && bytes[2] == 0x3c && bytes[3] == 0x3c);
+    for (size_t i = 4; i < 11; ++i) {
+        assert(bytes[i] == 0);
+    }
+    assert(bytes[11] == 0x3c && bytes[12] == 0x3c && bytes[13] == 0x3c);
+    assert(plugin.getCPUState().GetGR(8) == returnSentinel);
+
+    memory.Write(0xfffb, seed, 5);
+    plugin.getCPUState().SetIP(0x3e40);
+    plugin.getCPUState().SetBR(6, setMemCode);
+    plugin.getCPUState().SetGR(32, 0xfffc);
+    plugin.getCPUState().SetGR(33, 4);
+    plugin.getCPUState().SetGR(34, 0x5a);
+    plugin.getCPUState().SetGR(8, returnSentinel);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(memory.read<uint8_t>(0xfffb) == 0x3c);
+    assert(memory.read<uint8_t>(0xfffc) == 0x5a);
+    assert(memory.read<uint8_t>(0xffff) == 0x5a);
+    assert(plugin.getCPUState().GetGR(8) == returnSentinel);
+
+    plugin.getCPUState().SetIP(0x3e40);
+    plugin.getCPUState().SetBR(6, setMemCode);
+    plugin.getCPUState().SetGR(32, 0xfffe);
+    plugin.getCPUState().SetGR(33, 4);
+    plugin.getCPUState().SetGR(34, 0x7e);
+    plugin.getCPUState().SetGR(8, returnSentinel);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(memory.read<uint8_t>(0xfffc) == 0x5a);
+    assert(memory.read<uint8_t>(0xffff) == 0x5a);
+    assert(plugin.getCPUState().GetGR(8) == returnSentinel);
+
+    std::cout << "  ? SetMem fills exactly, preserves r8 for VOID, handles zero-size, boundary, and invalid ranges\n";
+}
+
 void testIA64PluginGetVariableBootVariables() {
     std::cout << "Testing IA-64 plugin GetVariable firmware stub...\n";
 
@@ -3655,6 +3743,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();
+        std::cout << "\n";
+
+        testIA64PluginSetMemFillsExactRange();
         std::cout << "\n";
 
         testIA64PluginGetVariableBootVariables();

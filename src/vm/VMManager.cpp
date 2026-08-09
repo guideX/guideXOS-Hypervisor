@@ -1373,6 +1373,7 @@ bool VMManager::startVM(const std::string& vmId) {
             writeCallableStub(layout.openVolumeStubCodeAddr, 0);
             writeCallableStub(layout.textOutputStringStubCodeAddr, 0);
             writeCallableStub(layout.getVariableStubCodeAddr, static_cast<uint64_t>(-1));
+            writeCallableStub(layout.setMemStubCodeAddr, 0);
             const uint64_t zeroResultStubs[] = {
                 layout.fileOpenStubCodeAddr, layout.fileCloseStubCodeAddr,
                 layout.fileReadStubCodeAddr, layout.fileGetPositionStubCodeAddr,
@@ -1404,6 +1405,7 @@ bool VMManager::startVM(const std::string& vmId) {
             writeDescriptor(layout.exitBootServicesStubDescAddr, layout.exitBootServicesStubCodeAddr);
             writeDescriptor(layout.loadImageStubDescAddr, layout.loadImageStubCodeAddr);
             writeDescriptor(layout.startImageStubDescAddr, layout.startImageStubCodeAddr);
+            writeDescriptor(layout.setMemStubDescAddr, layout.setMemStubCodeAddr);
 
             for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
                 write64(layout.runtimeServicesAddr + offset, layout.unsupportedStubDescAddr);
@@ -1424,6 +1426,7 @@ bool VMManager::startVM(const std::string& vmId) {
             write64(layout.bootServicesAddr + 0xE8, layout.exitBootServicesStubDescAddr);
             write64(layout.bootServicesAddr + 0x100, layout.successStubDescAddr);
             write64(layout.bootServicesAddr + 0x140, layout.locateProtocolStubDescAddr);
+            write64(layout.bootServicesAddr + 0x168, layout.setMemStubDescAddr);
 
             static const uint16_t vendor[] = {
                 'g','u','i','d','e','X','O','S',' ','H','y','p','e','r','v','i','s','o','r',0

@@ -44,6 +44,8 @@ struct EfiHandoffLayout {
     uint64_t loadImageStubDescAddr = 0;
     uint64_t startImageStubCodeAddr = 0;
     uint64_t startImageStubDescAddr = 0;
+    uint64_t setMemStubCodeAddr = 0;
+    uint64_t setMemStubDescAddr = 0;
     uint64_t loadedImageFilePathAddr = 0;
     uint64_t loadedImageLoadOptionsAddr = 0;
     uint64_t getVariableStubCodeAddr = 0;
@@ -110,6 +112,8 @@ constexpr uint64_t kEfiLoadImageStubCodeOffset = 0x1900ULL;
 constexpr uint64_t kEfiLoadImageStubDescOffset = 0x1940ULL;
 constexpr uint64_t kEfiStartImageStubCodeOffset = 0x1980ULL;
 constexpr uint64_t kEfiStartImageStubDescOffset = 0x19C0ULL;
+constexpr uint64_t kEfiSetMemStubCodeOffset = 0x1A00ULL;
+constexpr uint64_t kEfiSetMemStubDescOffset = 0x1A40ULL;
 constexpr uint64_t kEfiGetVariableStubCodeOffset = 0xD80ULL;
 constexpr uint64_t kEfiAllocatePoolStubCodeOffset = 0xE00ULL;
 constexpr uint64_t kEfiHandleProtocolStubCodeOffset = 0xE80ULL;
@@ -195,6 +199,8 @@ inline bool tryComputeEfiHandoffLayout(uint64_t guestMemorySize, EfiHandoffLayou
     layout.loadImageStubDescAddr = base + kEfiLoadImageStubDescOffset;
     layout.startImageStubCodeAddr = base + kEfiStartImageStubCodeOffset;
     layout.startImageStubDescAddr = base + kEfiStartImageStubDescOffset;
+    layout.setMemStubCodeAddr = base + kEfiSetMemStubCodeOffset;
+    layout.setMemStubDescAddr = base + kEfiSetMemStubDescOffset;
     layout.loadedImageFilePathAddr = base + kEfiLoadedImageFilePathOffset;
     layout.loadedImageLoadOptionsAddr = base + kEfiLoadedImageLoadOptionsOffset;
     layout.getVariableStubCodeAddr = base + kEfiGetVariableStubCodeOffset;

@@ -164,6 +164,8 @@ uint64_t EFI_LOAD_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadImage
 uint64_t EFI_LOAD_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadImageStubDescOffset;
 uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiStartImageStubCodeOffset;
 uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiStartImageStubDescOffset;
+uint64_t EFI_SET_MEM_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSetMemStubCodeOffset;
+uint64_t EFI_SET_MEM_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSetMemStubDescOffset;
 uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageFilePathOffset;
 uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageLoadOptionsOffset;
 uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiGetVariableStubCodeOffset;
@@ -394,6 +396,8 @@ void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_LOAD_IMAGE_STUB_DESC_ADDR = base + kEfiLoadImageStubDescOffset;
     EFI_START_IMAGE_STUB_CODE_ADDR = base + kEfiStartImageStubCodeOffset;
     EFI_START_IMAGE_STUB_DESC_ADDR = base + kEfiStartImageStubDescOffset;
+    EFI_SET_MEM_STUB_CODE_ADDR = base + kEfiSetMemStubCodeOffset;
+    EFI_SET_MEM_STUB_DESC_ADDR = base + kEfiSetMemStubDescOffset;
     EFI_LOADED_IMAGE_FILE_PATH_ADDR = base + kEfiLoadedImageFilePathOffset;
     EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = base + kEfiLoadedImageLoadOptionsOffset;
     EFI_GET_VARIABLE_STUB_CODE_ADDR = base + kEfiGetVariableStubCodeOffset;
@@ -548,6 +552,7 @@ std::string describeEfiDescriptor(uint64_t address) {
     if (address == EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR) return "BootServices.ExitBootServices descriptor";
     if (address == EFI_LOAD_IMAGE_STUB_DESC_ADDR) return "BootServices.LoadImage descriptor";
     if (address == EFI_START_IMAGE_STUB_DESC_ADDR) return "BootServices.StartImage descriptor";
+    if (address == EFI_SET_MEM_STUB_DESC_ADDR) return "BootServices.SetMem descriptor";
     return {};
 }
 
@@ -571,6 +576,7 @@ uint64_t efiDescriptorForCodePointer(uint64_t codePointer) {
     if (codePointer == EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR) return EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR;
     if (codePointer == EFI_LOAD_IMAGE_STUB_CODE_ADDR) return EFI_LOAD_IMAGE_STUB_DESC_ADDR;
     if (codePointer == EFI_START_IMAGE_STUB_CODE_ADDR) return EFI_START_IMAGE_STUB_DESC_ADDR;
+    if (codePointer == EFI_SET_MEM_STUB_CODE_ADDR) return EFI_SET_MEM_STUB_DESC_ADDR;
     return 0;
 }
 
@@ -1909,9 +1915,11 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiGetMemoryMapCalls_(0)
     , efiExitBootServicesCalls_(0)
     , efiAllocatePoolCalls_(0)
+    , efiAllocatePagesCalls_(0)
     , efiFreePoolCalls_(0)
     , efiLoadImageCalls_(0)
     , efiStartImageCalls_(0)
+    , efiSetMemCalls_(0)
     , efiFileOpenCalls_(0)
     , efiFileReadCalls_(0)
     , efiFileGetInfoCalls_(0)
@@ -1972,9 +1980,11 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiGetMemoryMapCalls_(0)
     , efiExitBootServicesCalls_(0)
     , efiAllocatePoolCalls_(0)
+    , efiAllocatePagesCalls_(0)
     , efiFreePoolCalls_(0)
     , efiLoadImageCalls_(0)
     , efiStartImageCalls_(0)
+    , efiSetMemCalls_(0)
     , efiFileOpenCalls_(0)
     , efiFileReadCalls_(0)
     , efiFileGetInfoCalls_(0)
@@ -2083,9 +2093,11 @@ void IA64ISAPlugin::reset() {
     efiGetMemoryMapCalls_ = 0;
     efiExitBootServicesCalls_ = 0;
     efiAllocatePoolCalls_ = 0;
+    efiAllocatePagesCalls_ = 0;
     efiFreePoolCalls_ = 0;
     efiLoadImageCalls_ = 0;
     efiStartImageCalls_ = 0;
+    efiSetMemCalls_ = 0;
     efiFileOpenCalls_ = 0;
     efiFileReadCalls_ = 0;
     efiFileGetInfoCalls_ = 0;
@@ -3347,6 +3359,54 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                           EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR, originalBranchTarget,
                                           EFI_STATUS_SUCCESS);
                     } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_SET_MEM_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        ++efiSetMemCalls_;
+                        const uint64_t buffer = readCallerOutputRegister(state_.getCPUState(), 0);
+                        const uint64_t size = readCallerOutputRegister(state_.getCPUState(), 1);
+                        const uint8_t value = static_cast<uint8_t>(
+                            readCallerOutputRegister(state_.getCPUState(), 2));
+                        const uint64_t memorySize = static_cast<uint64_t>(memory.GetTotalSize());
+                        const bool validRange = size == 0 ||
+                            (memorySize != 0 && buffer != 0 && buffer < memorySize &&
+                             size <= memorySize - buffer);
+                        bool writeSucceeded = validRange;
+                        if (validRange && size != 0) {
+                            std::array<uint8_t, 0x1000> fill{};
+                            fill.fill(value);
+                            uint64_t written = 0;
+                            while (written < size) {
+                                const size_t chunk = static_cast<size_t>(
+                                    std::min<uint64_t>(fill.size(), size - written));
+                                try {
+                                    memory.Write(buffer + written, fill.data(), chunk);
+                                } catch (const std::exception& exception) {
+                                    writeSucceeded = false;
+                                    std::cerr << "[EFI-STUB] BootServices.SetMem rejected write"
+                                              << " Buffer=0x" << std::hex << buffer
+                                              << " Size=0x" << size
+                                              << " Value=0x" << static_cast<unsigned>(value)
+                                              << " offset=0x" << written
+                                              << " reason=\"" << exception.what() << "\""
+                                              << std::dec << std::endl;
+                                    break;
+                                }
+                                written += chunk;
+                            }
+                        }
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        std::cout << "[EFI-STUB] BootServices.SetMem Buffer=0x"
+                                  << std::hex << buffer
+                                  << " Size=0x" << size
+                                  << " Value=0x" << static_cast<unsigned>(value)
+                                  << " valid=" << (validRange ? "yes" : "no")
+                                  << " completed=" << (writeSucceeded ? "yes" : "no")
+                                  << " memorySize=0x" << memorySize
+                                  << std::dec << std::endl;
+                        logEfiVoidServiceCall(memory, "BootServices.SetMem", currentIP,
+                                              EFI_SET_MEM_STUB_DESC_ADDR, originalBranchTarget);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_SUCCESS_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         ++efiGenericSuccessCalls_;
@@ -3412,13 +3472,24 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         branchTarget == EFI_UNSUPPORTED_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         ++efiGenericUnsupportedCalls_;
+                        const uint64_t tableSlotCandidate = state_.getCPUState().GetGR(37);
+                        const bool allocatePagesSlot =
+                            tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x28ULL;
+                        if (allocatePagesSlot) {
+                            ++efiAllocatePagesCalls_;
+                        }
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
                         std::cout << "[EFI-STUB] unsupported firmware service target 0x"
                                   << std::hex << originalBranchTarget
+                                  << " slot=0x" << tableSlotCandidate
+                                  << (allocatePagesSlot ? " [BootServices.AllocatePages]" : "")
                                   << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
-                        logEfiServiceCall(memory, "EFI.Unsupported", currentIP,
+                        logEfiServiceCall(memory,
+                                          allocatePagesSlot ? "BootServices.AllocatePages (unsupported)"
+                                                            : "EFI.Unsupported",
+                                          currentIP,
                                           EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
                                           EFI_STATUS_UNSUPPORTED);
                     } else {
@@ -3616,9 +3687,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << ", GetMemoryMap=" << efiGetMemoryMapCalls_
                           << ", ExitBootServices=" << efiExitBootServicesCalls_
                           << ", AllocatePool=" << efiAllocatePoolCalls_
+                          << ", AllocatePages=" << efiAllocatePagesCalls_
                           << ", FreePool=" << efiFreePoolCalls_
                           << ", LoadImage=" << efiLoadImageCalls_
                           << ", StartImage=" << efiStartImageCalls_
+                          << ", SetMem=" << efiSetMemCalls_
                           << ", File.Open=" << efiFileOpenCalls_
                           << ", File.Read=" << efiFileReadCalls_
                           << ", File.GetInfo=" << efiFileGetInfoCalls_
@@ -3801,9 +3874,11 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiGetMemoryMapCalls_ = 0;
     efiExitBootServicesCalls_ = 0;
     efiAllocatePoolCalls_ = 0;
+    efiAllocatePagesCalls_ = 0;
     efiFreePoolCalls_ = 0;
     efiLoadImageCalls_ = 0;
     efiStartImageCalls_ = 0;
+    efiSetMemCalls_ = 0;
     efiFileOpenCalls_ = 0;
     efiFileReadCalls_ = 0;
     efiFileGetInfoCalls_ = 0;
@@ -4341,6 +4416,40 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
               << ",0x" << readCallerOutputRegister(cpu, 4)
               << ",0x" << readCallerOutputRegister(cpu, 5)
               << "] status=0x" << status << " (" << efiStatusName(status) << ")";
+    if (!descriptor.empty()) {
+        std::cout << " descriptorName=\"" << descriptor << "\"";
+    }
+    std::cout << " descriptorBytes=" << readHexBytesPreview(memory, descriptorAddress, 16)
+              << std::dec << std::endl;
+}
+
+void IA64ISAPlugin::logEfiVoidServiceCall(IMemory& memory,
+                                          const char* serviceName,
+                                          uint64_t callerIP,
+                                          uint64_t descriptorAddress,
+                                          uint64_t codePointer) {
+    CPUState& cpu = state_.getCPUState();
+    lastEfiCallName_ = serviceName ? serviceName : "unknown";
+    lastEfiCallIP_ = callerIP;
+    lastDescriptorAddress_ = descriptorAddress;
+    lastDescriptorCode_ = codePointer;
+    lastDescriptorGp_ = cpu.GetGR(1);
+    std::string descriptor = describeEfiDescriptor(descriptorAddress);
+    if (descriptor.empty()) {
+        descriptor = describeEfiTableSlot(descriptorAddress);
+    }
+    std::cout << "[EFI-CALL] service=" << lastEfiCallName_
+              << " callerIP=0x" << std::hex << callerIP
+              << " descriptor=0x" << descriptorAddress
+              << " code=0x" << codePointer
+              << " gp(r1)=0x" << cpu.GetGR(1)
+              << " args=[0x" << readCallerOutputRegister(cpu, 0)
+              << ",0x" << readCallerOutputRegister(cpu, 1)
+              << ",0x" << readCallerOutputRegister(cpu, 2)
+              << ",0x" << readCallerOutputRegister(cpu, 3)
+              << ",0x" << readCallerOutputRegister(cpu, 4)
+              << ",0x" << readCallerOutputRegister(cpu, 5)
+              << "] return=void";
     if (!descriptor.empty()) {
         std::cout << " descriptorName=\"" << descriptor << "\"";
     }

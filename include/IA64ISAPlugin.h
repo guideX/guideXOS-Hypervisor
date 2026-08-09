@@ -218,6 +218,11 @@ private:
                            uint64_t descriptorAddress,
                            uint64_t codePointer,
                            uint64_t status);
+    void logEfiVoidServiceCall(IMemory& memory,
+                               const char* serviceName,
+                               uint64_t callerIP,
+                               uint64_t descriptorAddress,
+                               uint64_t codePointer);
     void recordRecentInstruction(uint64_t ip, size_t slot, const std::string& disasm);
     void recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm);
     void dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, size_t slot, const InstructionEx& instr, uint64_t baseBefore) const;
@@ -292,9 +297,11 @@ private:
     size_t efiGetMemoryMapCalls_;
     size_t efiExitBootServicesCalls_;
     size_t efiAllocatePoolCalls_;
+    size_t efiAllocatePagesCalls_;
     size_t efiFreePoolCalls_;
     size_t efiLoadImageCalls_;
     size_t efiStartImageCalls_;
+    size_t efiSetMemCalls_;
     size_t efiFileOpenCalls_;
     size_t efiFileReadCalls_;
     size_t efiFileGetInfoCalls_;
