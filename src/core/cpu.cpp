@@ -77,6 +77,23 @@ void CPUState::GetFR(size_t index, uint8_t* out) const {
     if (index >= NUM_FLOAT_REGISTERS) {
         throw std::out_of_range("Floating-point register index out of range");
     }
+
+    // IA-64 reserves f0 and f1 as architectural constants.  They are not
+    // ordinary storage locations: f0 reads as +0.0 and f1 reads as +1.0,
+    // while writes to either register are ignored.
+    if (index == 0) {
+        std::memset(out, 0, 16);
+        return;
+    }
+    if (index == 1) {
+        std::memset(out, 0, 16);
+        constexpr uint64_t oneSignificand = 0x8000000000000000ULL;
+        constexpr uint64_t oneExponent = 0xFFFFULL;
+        std::memcpy(out, &oneSignificand, sizeof(oneSignificand));
+        std::memcpy(out + 8, &oneExponent, sizeof(oneExponent));
+        return;
+    }
+
     std::memcpy(out, fr_[index].data(), 16);
 }
 
@@ -84,6 +101,11 @@ void CPUState::SetFR(size_t index, const uint8_t* value) {
     if (index >= NUM_FLOAT_REGISTERS) {
         throw std::out_of_range("Floating-point register index out of range");
     }
+
+    if (index == 0 || index == 1) {
+        return;
+    }
+
     std::memcpy(fr_[index].data(), value, 16);
 }
 

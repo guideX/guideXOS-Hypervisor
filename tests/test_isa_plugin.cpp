@@ -1589,7 +1589,19 @@ void testIA64FnmaF1Regression() {
     assert(fnma.GetSrc3() == 1);
     assert(fnma.GetDisassembly() == "fnma.s1 f11 = f9, f10, f1");
 
-    // Use an exact integer-format result: f1 - (f9 * f10) = 7 - (3 * 2) = 1.
+    // Exact Debian helper instruction: fma.s1 f8 = f14, f1, f0.
+    const InstructionEx helperFma = decoder.DecodeSlot(
+        0x10408e00200ULL, UnitType::F_UNIT, 0x37020);
+    assert(helperFma.GetType() == InstructionType::FMA);
+    assert(helperFma.GetDst() == 8);
+    assert(helperFma.GetSrc1() == 14);
+    assert(helperFma.GetSrc2() == 1);
+    assert(helperFma.GetSrc3() == 0);
+    assert(helperFma.GetDisassembly() == "fma.s1 f8 = f14, f1, f0");
+
+    // f1 is the architectural +1.0 register-format constant.  The exact
+    // Debian instruction therefore computes 1 - (3 * 2) = -5 even after an
+    // attempted write to f1.
     cpu.SetAR(40, 1ULL << 9); // FPSR.sf1: double precision, round-to-nearest.
     cpu.SetPR(6, true);
     setIntegerFormat(9, 3);
@@ -1598,8 +1610,15 @@ void testIA64FnmaF1Regression() {
     fnma.Execute(cpu, memory);
     uint8_t result[16] = {};
     cpu.GetFR(11, result);
-    assert(read64(result) == 0x8000000000000000ULL);
-    assert(read64(result + 8) == 0xFFFFULL);
+    assert(read64(result) == 0xA000000000000000ULL);
+    assert(read64(result + 8) == 0x30001ULL);
+
+    setIntegerFormat(14, 0x224);
+    helperFma.Execute(cpu, memory);
+    uint8_t helperResult[16] = {};
+    cpu.GetFR(8, helperResult);
+    assert(read64(helperResult) == 0x8900000000000000ULL);
+    assert(read64(helperResult + 8) == 0x10008ULL);
 
     // A false qualifying predicate must leave the destination untouched.
     setIntegerFormat(11, 0xA5A5);
@@ -1619,14 +1638,15 @@ void testIA64FnmaF1Regression() {
     cpu.GetFR(11, result);
     assert(std::memcmp(result, natVal, sizeof(natVal)) == 0);
 
-    // Dynamic sf1 precision is observable at the first double-precision tie.
+    // f1 remains +1.0 after another attempted write; 1 - (1 * 1) cancels
+    // exactly to +0.
     setIntegerFormat(9, 1);
     setIntegerFormat(10, 1);
     setIntegerFormat(1, (1ULL << 53) + 2);
     fnma.Execute(cpu, memory);
     cpu.GetFR(11, result);
-    assert(read64(result) == 0x8000000000000000ULL);
-    assert(read64(result + 8) == 0x10034ULL);
+    assert(read64(result) == 0);
+    assert(read64(result + 8) == 0);
 
     std::cout << "  ? raw 0x184509022c6 decodes, predicates, propagates NaTVal, and executes FNMA\n";
 }
@@ -1638,11 +1658,27 @@ void testIA64ReciprocalApproximationRegression() {
     CPUState cpu;
     Memory memory(64 * 1024);
 
+    uint8_t expectedF0[16] = {};
+    uint8_t expectedF1[16] = {};
+    const uint64_t oneSignificand = 0x8000000000000000ULL;
+    const uint64_t oneExponent = 0xFFFFULL;
+    std::memcpy(expectedF1, &oneSignificand, sizeof(oneSignificand));
+    std::memcpy(expectedF1 + 8, &oneExponent, sizeof(oneExponent));
+    uint8_t attemptedWrite[16] = {};
+    std::memset(attemptedWrite, 0xA5, sizeof(attemptedWrite));
+    cpu.SetFR(0, attemptedWrite);
+    cpu.SetFR(1, attemptedWrite);
+    uint8_t actualF0[16] = {};
+    uint8_t actualF1[16] = {};
+    cpu.GetFR(0, actualF0);
+    cpu.GetFR(1, actualF1);
+    assert(std::memcmp(actualF0, expectedF0, sizeof(actualF0)) == 0);
+    assert(std::memcmp(actualF1, expectedF1, sizeof(actualF1)) == 0);
+
     constexpr uint64_t frcpaRaw = 0x630910280ULL;
     constexpr uint64_t frsqrtaRaw = 0x1e40c00280ULL;
     constexpr uint64_t exponentOne = 0x0FFFFULL;
     constexpr uint64_t exponentTwo = 0x10000ULL;
-    constexpr uint64_t oneSignificand = 0x8000000000000000ULL;
 
     auto read64 = [](const uint8_t* bytes) {
         uint64_t value = 0;
