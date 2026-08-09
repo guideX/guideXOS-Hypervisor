@@ -1548,6 +1548,88 @@ void testIA64XmaAndImmediateAddp4Regressions() {
     std::cout << "  ? raw XMA, XMA.H/XMA.HU, and immediate ADDP4 regressions pass\n";
 }
 
+void testIA64FnmaF1Regression() {
+    std::cout << "Testing IA-64 F1 FNMA regression...\n";
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    constexpr uint64_t raw = 0x184509022c6ULL;
+    constexpr uint64_t integerExponent = 0x1003EULL;
+    auto read64 = [](const uint8_t* bytes) {
+        uint64_t value = 0;
+        for (int i = 0; i < 8; ++i) {
+            value |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+        }
+        return value;
+    };
+
+    auto setIntegerFormat = [&](uint8_t reg, uint64_t significand, bool negative = false) {
+        uint8_t bytes[16] = {};
+        for (int i = 0; i < 8; ++i) {
+            bytes[i] = static_cast<uint8_t>(significand >> (i * 8));
+        }
+        uint64_t signAndExponent = integerExponent;
+        if (negative) {
+            signAndExponent |= 1ULL << 17;
+        }
+        for (int i = 0; i < 8; ++i) {
+            bytes[8 + i] = static_cast<uint8_t>(signAndExponent >> (i * 8));
+        }
+        cpu.SetFR(reg, bytes);
+    };
+
+    const InstructionEx fnma = decoder.DecodeSlot(raw, UnitType::F_UNIT, 0x37060);
+    assert(fnma.GetType() == InstructionType::FNMA);
+    assert(fnma.GetPredicate() == 6);
+    assert(fnma.GetDst() == 11);
+    assert(fnma.GetSrc1() == 9);
+    assert(fnma.GetSrc2() == 10);
+    assert(fnma.GetSrc3() == 1);
+    assert(fnma.GetDisassembly() == "fnma.s1 f11 = f9, f10, f1");
+
+    // Use an exact integer-format result: f1 - (f9 * f10) = 7 - (3 * 2) = 1.
+    cpu.SetAR(40, 1ULL << 9); // FPSR.sf1: double precision, round-to-nearest.
+    cpu.SetPR(6, true);
+    setIntegerFormat(9, 3);
+    setIntegerFormat(10, 2);
+    setIntegerFormat(1, 7);
+    fnma.Execute(cpu, memory);
+    uint8_t result[16] = {};
+    cpu.GetFR(11, result);
+    assert(read64(result) == 0x8000000000000000ULL);
+    assert(read64(result + 8) == 0xFFFFULL);
+
+    // A false qualifying predicate must leave the destination untouched.
+    setIntegerFormat(11, 0xA5A5);
+    cpu.SetPR(6, false);
+    fnma.Execute(cpu, memory);
+    cpu.GetFR(11, result);
+    assert(read64(result) == 0xA5A5ULL);
+
+    // NaTVal propagates through all three F1 operands.
+    uint8_t natVal[16] = {};
+    natVal[8] = 0xFE;
+    natVal[9] = 0xFF;
+    natVal[10] = 0x01;
+    cpu.SetFR(9, natVal);
+    cpu.SetPR(6, true);
+    fnma.Execute(cpu, memory);
+    cpu.GetFR(11, result);
+    assert(std::memcmp(result, natVal, sizeof(natVal)) == 0);
+
+    // Dynamic sf1 precision is observable at the first double-precision tie.
+    setIntegerFormat(9, 1);
+    setIntegerFormat(10, 1);
+    setIntegerFormat(1, (1ULL << 53) + 2);
+    fnma.Execute(cpu, memory);
+    cpu.GetFR(11, result);
+    assert(read64(result) == 0x8000000000000000ULL);
+    assert(read64(result + 8) == 0x10034ULL);
+
+    std::cout << "  ? raw 0x184509022c6 decodes, predicates, propagates NaTVal, and executes FNMA\n";
+}
+
 void testIA64ReturnBranchDecode() {
     std::cout << "Testing IA-64 return branch decode...\n";
 
@@ -3194,6 +3276,9 @@ int main() {
         std::cout << "\n";
 
         testIA64XmaAndImmediateAddp4Regressions();
+        std::cout << "\n";
+
+        testIA64FnmaF1Regression();
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughB0TransfersToTargetBundle();

@@ -100,23 +100,26 @@ std::vector<uint8_t> makeFatImageWithBootLoader() {
     std::memcpy(root[0].extension, "   ", 3);
     root[0].attributes = guideXOS::ATTR_DIRECTORY;
     root[0].firstClusterLow = 2;
-    std::memcpy(root[1].filename, "BOOTIA64", 8);
-    std::memcpy(root[1].extension, "EFI", 3);
-    root[1].attributes = guideXOS::ATTR_ARCHIVE;
-    root[1].firstClusterLow = 3;
-    root[1].fileSize = 8;
-    root[2].filename[0] = 0x00;
+    root[1].filename[0] = 0x00;
 
     auto* efiDir = image.data() + 1536;
     auto* efiEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(efiDir);
-    std::memcpy(efiEntry[0].filename, "BOOTIA64", 8);
-    std::memcpy(efiEntry[0].extension, "EFI", 3);
-    efiEntry[0].attributes = guideXOS::ATTR_ARCHIVE;
+    std::memcpy(efiEntry[0].filename, "BOOT     ", 8);
+    std::memcpy(efiEntry[0].extension, "   ", 3);
+    efiEntry[0].attributes = guideXOS::ATTR_DIRECTORY;
     efiEntry[0].firstClusterLow = 3;
-    efiEntry[0].fileSize = 8;
     efiEntry[1].filename[0] = 0x00;
 
-    auto* data = image.data() + 2048;
+    auto* bootDir = image.data() + 2048;
+    auto* bootEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(bootDir);
+    std::memcpy(bootEntry[0].filename, "BOOTIA64", 8);
+    std::memcpy(bootEntry[0].extension, "EFI", 3);
+    bootEntry[0].attributes = guideXOS::ATTR_ARCHIVE;
+    bootEntry[0].firstClusterLow = 4;
+    bootEntry[0].fileSize = 8;
+    bootEntry[1].filename[0] = 0x00;
+
+    auto* data = image.data() + 2560;
     std::memcpy(data, "BOOTIA64", 8);
     return image;
 }
@@ -137,13 +140,13 @@ std::vector<uint8_t> makeIsoWithDirectBootLoader() {
     rootRecord[32] = 1;
 
     auto* rootDir = image.data() + 20 * 2048;
-    rootDir[0] = 34;
+    rootDir[0] = 48;
     write_le32(image, 20 * 2048 + 2, 21);
     write_le32(image, 20 * 2048 + 10, 8);
     rootDir[25] = 0;
-    rootDir[32] = 12;
+    rootDir[32] = 14;
     std::memcpy(rootDir + 33, "BOOTIA64.EFI;1", 14);
-    rootDir[34 + 0] = 0;
+    rootDir[48] = 0;
 
     std::memcpy(image.data() + 21 * 2048, "BOOTIA64", 8);
     return image;
@@ -151,6 +154,19 @@ std::vector<uint8_t> makeIsoWithDirectBootLoader() {
 
 std::vector<uint8_t> makeElToritoImageWithFatBootLoader(uint8_t platformId = 0xEF) {
     std::vector<uint8_t> image(64 * 2048, 0);
+    auto* pvd = image.data() + 16 * 2048;
+    pvd[0] = 1;
+    std::memcpy(pvd + 1, "CD001", 5);
+    pvd[6] = 1;
+    write_le16(image, 16 * 2048 + 128, 2048);
+    write_le32(image, 16 * 2048 + 80, 64);
+    auto* rootRecord = pvd + 156;
+    rootRecord[0] = 34;
+    write_le32(image, 16 * 2048 + 156 + 2, 32);
+    write_le32(image, 16 * 2048 + 156 + 10, 2048);
+    rootRecord[25] = 2;
+    rootRecord[32] = 1;
+
     auto* bootRecord = image.data() + 17 * 2048;
     bootRecord[0] = 0;
     std::memcpy(bootRecord + 1, "CD001", 5);
@@ -161,12 +177,13 @@ std::vector<uint8_t> makeElToritoImageWithFatBootLoader(uint8_t platformId = 0xE
     auto* validation = image.data() + 18 * 2048;
     validation[0] = 1;
     validation[1] = platformId;
-    validation[21] = 0x55;
-    validation[22] = 0xAA;
+    validation[30] = 0x55;
+    validation[31] = 0xAA;
     auto* entry = image.data() + 18 * 2048 + 32;
     entry[0] = 0x88;
     entry[1] = 0;
-    write_le16(image, 18 * 2048 + 34, 1);
+    write_le16(image, 18 * 2048 + 34, 0);
+    write_le16(image, 18 * 2048 + 38, 2);
     write_le32(image, 18 * 2048 + 40, 19);
 
     auto fat = makeFatImageWithBootLoader();

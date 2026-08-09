@@ -9,6 +9,9 @@
 #include <iomanip>
 #include <iostream>
 #include <cstring>
+#include <array>
+#include <algorithm>
+#include <cstdlib>
 
 namespace ia64 {
 
@@ -260,6 +263,383 @@ static void WriteNatVal(uint8_t* bytes) {
     WriteLittleEndian64(bytes + 8, 0x1FFFEULL);
 }
 
+// F1 arithmetic works on the IA-64 register format rather than the host
+// floating-point format.  A small fixed-width integer is sufficient here:
+// the exact product is at most 128 bits and the addend can be aligned with it
+// for every result that can affect a 64-bit register-format significand.
+struct WideInteger {
+    static constexpr size_t kLimbCount = 12;
+    std::array<uint32_t, kLimbCount> limbs{};
+
+    bool IsZero() const {
+        for (uint32_t limb : limbs) {
+            if (limb != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int BitLength() const {
+        for (size_t i = kLimbCount; i-- > 0;) {
+            const uint32_t limb = limbs[i];
+            if (limb == 0) {
+                continue;
+            }
+            int bits = 0;
+            uint32_t value = limb;
+            while (value != 0) {
+                value >>= 1;
+                ++bits;
+            }
+            return static_cast<int>(i * 32 + bits);
+        }
+        return 0;
+    }
+
+    uint64_t Low64() const {
+        return static_cast<uint64_t>(limbs[0]) |
+               (static_cast<uint64_t>(limbs[1]) << 32);
+    }
+
+    bool TestBit(size_t bit) const {
+        const size_t limb = bit / 32;
+        return limb < kLimbCount && ((limbs[limb] >> (bit % 32)) & 1U) != 0;
+    }
+
+    bool AnyBelow(size_t bitCount) const {
+        const size_t fullLimbs = bitCount / 32;
+        for (size_t i = 0; i < std::min(fullLimbs, kLimbCount); ++i) {
+            if (limbs[i] != 0) {
+                return true;
+            }
+        }
+        if (fullLimbs < kLimbCount && (bitCount % 32) != 0) {
+            const uint32_t mask = (1U << (bitCount % 32)) - 1U;
+            return (limbs[fullLimbs] & mask) != 0;
+        }
+        return false;
+    }
+
+    WideInteger ShiftLeft(size_t bits) const {
+        WideInteger result;
+        if (bits >= kLimbCount * 32) {
+            return result;
+        }
+        const size_t limbShift = bits / 32;
+        const size_t bitShift = bits % 32;
+        for (size_t i = 0; i + limbShift < kLimbCount; ++i) {
+            result.limbs[i + limbShift] |= limbs[i] << bitShift;
+            if (bitShift != 0 && i + limbShift + 1 < kLimbCount) {
+                result.limbs[i + limbShift + 1] |= limbs[i] >> (32 - bitShift);
+            }
+        }
+        return result;
+    }
+
+    WideInteger ShiftRight(size_t bits) const {
+        WideInteger result;
+        if (bits >= kLimbCount * 32) {
+            return result;
+        }
+        const size_t limbShift = bits / 32;
+        const size_t bitShift = bits % 32;
+        for (size_t i = 0; i + limbShift < kLimbCount; ++i) {
+            const size_t source = i + limbShift;
+            result.limbs[i] |= limbs[source] >> bitShift;
+            if (bitShift != 0 && source + 1 < kLimbCount) {
+                result.limbs[i] |= limbs[source + 1] << (32 - bitShift);
+            }
+        }
+        return result;
+    }
+
+    static WideInteger FromU64(uint64_t value) {
+        WideInteger result;
+        result.limbs[0] = static_cast<uint32_t>(value);
+        result.limbs[1] = static_cast<uint32_t>(value >> 32);
+        return result;
+    }
+
+    static WideInteger FromUInt128(const UInt128Parts& value) {
+        WideInteger result;
+        result.limbs[0] = static_cast<uint32_t>(value.lo);
+        result.limbs[1] = static_cast<uint32_t>(value.lo >> 32);
+        result.limbs[2] = static_cast<uint32_t>(value.hi);
+        result.limbs[3] = static_cast<uint32_t>(value.hi >> 32);
+        return result;
+    }
+
+    static WideInteger Add(const WideInteger& left, const WideInteger& right) {
+        WideInteger result;
+        uint64_t carry = 0;
+        for (size_t i = 0; i < kLimbCount; ++i) {
+            const uint64_t sum = static_cast<uint64_t>(left.limbs[i]) +
+                                 right.limbs[i] + carry;
+            result.limbs[i] = static_cast<uint32_t>(sum);
+            carry = sum >> 32;
+        }
+        return result;
+    }
+
+    // The caller must provide left >= right.
+    static WideInteger Subtract(const WideInteger& left, const WideInteger& right) {
+        WideInteger result;
+        uint64_t borrow = 0;
+        for (size_t i = 0; i < kLimbCount; ++i) {
+            const uint64_t subtrahend = static_cast<uint64_t>(right.limbs[i]) + borrow;
+            result.limbs[i] = static_cast<uint32_t>(
+                static_cast<uint64_t>(left.limbs[i]) - subtrahend);
+            borrow = static_cast<uint64_t>(left.limbs[i]) < subtrahend ? 1 : 0;
+        }
+        return result;
+    }
+
+    static int Compare(const WideInteger& left, const WideInteger& right) {
+        for (size_t i = kLimbCount; i-- > 0;) {
+            if (left.limbs[i] != right.limbs[i]) {
+                return left.limbs[i] < right.limbs[i] ? -1 : 1;
+            }
+        }
+        return 0;
+    }
+};
+
+struct SignedWideInteger {
+    bool negative = false;
+    WideInteger magnitude;
+};
+
+static SignedWideInteger AddSignedWide(const SignedWideInteger& left,
+                                       const SignedWideInteger& right) {
+    SignedWideInteger result;
+    if (left.negative == right.negative) {
+        result.negative = left.negative;
+        result.magnitude = WideInteger::Add(left.magnitude, right.magnitude);
+        return result;
+    }
+
+    const int comparison = WideInteger::Compare(left.magnitude, right.magnitude);
+    if (comparison == 0) {
+        return result;
+    }
+    if (comparison > 0) {
+        result.negative = left.negative;
+        result.magnitude = WideInteger::Subtract(left.magnitude, right.magnitude);
+    } else {
+        result.negative = right.negative;
+        result.magnitude = WideInteger::Subtract(right.magnitude, left.magnitude);
+    }
+    return result;
+}
+
+struct IA64FloatingValue {
+    uint64_t significand = 0;
+    uint32_t exponent = 0;
+    bool negative = false;
+    bool natVal = false;
+};
+
+static IA64FloatingValue ReadIA64FloatingValue(const uint8_t* bytes) {
+    const uint64_t signAndExponent = ReadLittleEndian64(bytes + 8);
+    IA64FloatingValue value;
+    value.significand = ReadLittleEndian64(bytes);
+    value.exponent = static_cast<uint32_t>(signAndExponent & 0x1FFFFULL);
+    value.negative = (signAndExponent & (1ULL << 17)) != 0;
+    value.natVal = IsNatVal(bytes);
+    return value;
+}
+
+static unsigned FusedArithmeticPrecisionBits(const CPUState& cpu, uint64_t rawBits) {
+    const uint8_t major = static_cast<uint8_t>((rawBits >> 37) & 0x0F);
+    const bool fixedSingle = ((rawBits >> 36) & 1ULL) != 0;
+    if (fixedSingle) {
+        return 24;
+    }
+    if (major == 0x9 || major == 0xB || major == 0xD) {
+        return 53;
+    }
+
+    const uint8_t sf = static_cast<uint8_t>((rawBits >> 34) & 0x03);
+    const uint64_t controls = (cpu.GetAR(40) >> (sf * 7)) & 0x7FULL;
+    switch ((controls >> 2) & 0x03) {
+        case 0: return 24;
+        case 1: return 53;
+        case 2: return 64;
+        default: return 64;
+    }
+}
+
+static bool ShouldRoundUp(const WideInteger& magnitude,
+                          size_t shift,
+                          uint64_t retained,
+                          bool negative,
+                          uint8_t roundingControl) {
+    if (shift == 0) {
+        return false;
+    }
+    const bool discarded = magnitude.AnyBelow(shift);
+    switch (roundingControl & 0x03) {
+        case 1: // round toward zero
+            return false;
+        case 2: // round toward +infinity
+            return !negative && discarded;
+        case 3: // round toward -infinity
+            return negative && discarded;
+        case 0: // round to nearest, ties to even
+        default:
+            if (!magnitude.TestBit(shift - 1)) {
+                return false;
+            }
+            return magnitude.AnyBelow(shift - 1) || ((retained & 1ULL) != 0);
+    }
+}
+
+static void WriteRoundedIA64Value(uint8_t* bytes,
+                                  const SignedWideInteger& exact,
+                                  int64_t exponentBase,
+                                  unsigned precisionBits,
+                                  uint8_t roundingControl) {
+    if (exact.magnitude.IsZero()) {
+        std::memset(bytes, 0, 16);
+        return;
+    }
+
+    const int originalBitLength = exact.magnitude.BitLength();
+    const size_t shift = originalBitLength > static_cast<int>(precisionBits)
+        ? static_cast<size_t>(originalBitLength - static_cast<int>(precisionBits))
+        : 0;
+    uint64_t retained = exact.magnitude.ShiftRight(shift).Low64();
+    if (ShouldRoundUp(exact.magnitude, shift, retained, exact.negative, roundingControl)) {
+        ++retained;
+    }
+
+    int64_t resultBitLength = originalBitLength;
+    if (precisionBits < 64 && retained == (1ULL << precisionBits)) {
+        retained >>= 1;
+        ++resultBitLength;
+    }
+    if (originalBitLength < static_cast<int>(precisionBits)) {
+        retained <<= static_cast<unsigned>(precisionBits - originalBitLength);
+    }
+    const uint64_t significand = precisionBits == 64
+        ? retained
+        : (retained << (64 - precisionBits));
+    int64_t exponent = static_cast<int64_t>(0x1003E) + exponentBase +
+                       resultBitLength - 64;
+    exponent = std::max<int64_t>(0, std::min<int64_t>(0x1FFFF, exponent));
+
+    std::memset(bytes, 0, 16);
+    WriteLittleEndian64(bytes, significand);
+    WriteLittleEndian64(bytes + 8,
+                        static_cast<uint64_t>(exponent) |
+                        (exact.negative ? (1ULL << 17) : 0));
+}
+
+static void ExecuteFusedArithmetic(CPUState& cpu,
+                                   InstructionType type,
+                                   uint64_t rawBits,
+                                   uint8_t destination,
+                                   uint8_t multiplicand,
+                                   uint8_t multiplier,
+                                   uint8_t addend) {
+    uint8_t multiplicandBytes[16] = {};
+    uint8_t multiplierBytes[16] = {};
+    uint8_t addendBytes[16] = {};
+    cpu.GetFR(multiplicand, multiplicandBytes);
+    cpu.GetFR(multiplier, multiplierBytes);
+    if (addend != 0) {
+        cpu.GetFR(addend, addendBytes);
+    }
+
+    const IA64FloatingValue left = ReadIA64FloatingValue(multiplicandBytes);
+    const IA64FloatingValue right = ReadIA64FloatingValue(multiplierBytes);
+    const IA64FloatingValue addendValue = ReadIA64FloatingValue(addendBytes);
+    uint8_t resultBytes[16] = {};
+    if (left.natVal || right.natVal || (addend != 0 && addendValue.natVal)) {
+        WriteNatVal(resultBytes);
+        cpu.SetFR(destination, resultBytes);
+        return;
+    }
+
+    constexpr int64_t kIntegerExponent = 0x1003E;
+    const int64_t productExponent =
+        static_cast<int64_t>(left.exponent) - kIntegerExponent +
+        static_cast<int64_t>(right.exponent) - kIntegerExponent;
+    const int64_t addendExponent = addend == 0
+        ? productExponent
+        : static_cast<int64_t>(addendValue.exponent) - kIntegerExponent;
+    const bool productNegative = (left.negative != right.negative) ==
+                                 (type != InstructionType::FNMA);
+    const bool addendNegative = addend != 0 &&
+                                (addendValue.negative != (type == InstructionType::FMS));
+
+    SignedWideInteger exactProduct;
+    exactProduct.negative = productNegative;
+    exactProduct.magnitude = WideInteger::FromUInt128(
+        MultiplyUnsigned64(left.significand, right.significand));
+    SignedWideInteger exact = exactProduct;
+    if (addend != 0) {
+        if (exactProduct.magnitude.IsZero()) {
+            exact.negative = addendNegative;
+            exact.magnitude = WideInteger::FromU64(addendValue.significand);
+            WriteRoundedIA64Value(resultBytes,
+                                  exact,
+                                  addendExponent,
+                                  FusedArithmeticPrecisionBits(cpu, rawBits),
+                                  static_cast<uint8_t>((cpu.GetAR(40) >>
+                                      (static_cast<uint8_t>((rawBits >> 34) & 0x03) * 7)) & 0x03));
+            cpu.SetFR(destination, resultBytes);
+            return;
+        }
+        if (addendValue.significand == 0) {
+            WriteRoundedIA64Value(resultBytes,
+                                  exactProduct,
+                                  productExponent,
+                                  FusedArithmeticPrecisionBits(cpu, rawBits),
+                                  static_cast<uint8_t>((cpu.GetAR(40) >>
+                                      (static_cast<uint8_t>((rawBits >> 34) & 0x03) * 7)) & 0x03));
+            cpu.SetFR(destination, resultBytes);
+            return;
+        }
+        // An exponent separation larger than the working width cannot affect
+        // the rounded 64-bit result and cannot produce cancellation.
+        if (std::llabs(productExponent - addendExponent) <= 256) {
+            const int64_t commonExponent = std::min(productExponent, addendExponent);
+            exactProduct.magnitude = exactProduct.magnitude.ShiftLeft(
+                static_cast<size_t>(productExponent - commonExponent));
+            SignedWideInteger exactAddend;
+            exactAddend.negative = addendNegative;
+            exactAddend.magnitude = WideInteger::FromU64(addendValue.significand).ShiftLeft(
+                static_cast<size_t>(addendExponent - commonExponent));
+            exact = AddSignedWide(exactProduct, exactAddend);
+            WriteRoundedIA64Value(resultBytes,
+                                  exact,
+                                  commonExponent,
+                                  FusedArithmeticPrecisionBits(cpu, rawBits),
+                                  static_cast<uint8_t>((cpu.GetAR(40) >>
+                                      (static_cast<uint8_t>((rawBits >> 34) & 0x03) * 7)) & 0x03));
+            cpu.SetFR(destination, resultBytes);
+            return;
+        }
+        if (productExponent < addendExponent) {
+            exact = exactProduct;
+        } else {
+            exact.negative = addendNegative;
+            exact.magnitude = WideInteger::FromU64(addendValue.significand);
+        }
+    }
+
+    WriteRoundedIA64Value(resultBytes,
+                          exact,
+                          addend == 0 || productExponent <= addendExponent
+                              ? productExponent : addendExponent,
+                          FusedArithmeticPrecisionBits(cpu, rawBits),
+                          static_cast<uint8_t>((cpu.GetAR(40) >>
+                              (static_cast<uint8_t>((rawBits >> 34) & 0x03) * 7)) & 0x03));
+    cpu.SetFR(destination, resultBytes);
+}
+
 static void ExecuteAddp4(CPUState& cpu,
                          uint8_t destination,
                          uint64_t firstOperand,
@@ -421,6 +801,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.GetFR(src1_, fr);
                 cpu.SetFR(dst_, fr);
             }
+            break;
+
+        case InstructionType::FMA:
+        case InstructionType::FMS:
+        case InstructionType::FNMA:
+            ExecuteFusedArithmetic(cpu, type_, rawBits_, dst_, src1_, src2_, src3_);
             break;
 
         case InstructionType::XMA:
@@ -1177,6 +1563,28 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::SETF_SIG:
             oss << "setf.sig f" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::FMA:
+        case InstructionType::FMS:
+        case InstructionType::FNMA:
+            {
+                const uint8_t major = static_cast<uint8_t>((rawBits_ >> 37) & 0x0F);
+                const bool fixedSingle = ((rawBits_ >> 36) & 1ULL) != 0;
+                const char* mnemonic = type_ == InstructionType::FMA
+                    ? "fma" : (type_ == InstructionType::FMS ? "fms" : "fnma");
+                oss << mnemonic;
+                if (fixedSingle && (major == 0x8 || major == 0xA || major == 0xC)) {
+                    oss << ".s";
+                } else if (!fixedSingle && (major == 0x9 || major == 0xB || major == 0xD)) {
+                    oss << ".d";
+                }
+                oss << ".s" << static_cast<int>((rawBits_ >> 34) & 0x03)
+                    << " f" << static_cast<int>(dst_) << " = f"
+                    << static_cast<int>(src1_) << ", f"
+                    << static_cast<int>(src2_) << ", f"
+                    << static_cast<int>(src3_);
+            }
             break;
 
         case InstructionType::FCVT_FX:

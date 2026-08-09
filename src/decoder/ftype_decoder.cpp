@@ -224,29 +224,30 @@ InstructionEx FTypeDecoder::decode(uint64_t slot) {
     
     // Decode based on opcode
     switch (opcode) {
-        case 0x8:  // FMA/FMS/FNMA family
+        case 0x8:  // fma / fma.s
+        case 0x9:  // fma.d
+        case 0xA:  // fms / fms.s
+        case 0xB:  // fms.d
+        case 0xC:  // fnma / fnma.s
+        case 0xD:  // fnma.d
         {
-            uint8_t x2 = formats::extractBits(slot, 34, 2);
-            if (decodeF1(slot, fmt)) {
-                if (x2 == 0) {
+            const uint8_t x = formats::extractBits(slot, 36, 1);
+            const bool parallelForm = x != 0 &&
+                                      (opcode == 0x9 || opcode == 0xB || opcode == 0xD);
+            if (!parallelForm && decodeF1(slot, fmt)) {
+                if (opcode == 0x8 || opcode == 0x9) {
                     inst.SetType(InstructionType::FMA);
-                } else if (x2 == 1) {
+                } else if (opcode == 0xA || opcode == 0xB) {
                     inst.SetType(InstructionType::FMS);
-                } else if (x2 == 2) {
+                } else {
                     inst.SetType(InstructionType::FNMA);
                 }
-                inst.SetOperands4(fmt.f1, fmt.f2, fmt.f3, fmt.f4);
+                // F1 syntax orders the sources f3, f4, f2.
+                inst.SetOperands4(fmt.f1, fmt.f3, fmt.f4, fmt.f2);
             }
             break;
         }
         
-        case 0x9:  // Fixed multiply-add (legacy/alternate decoder family)
-            if (decodeF2(slot, fmt)) {
-                inst.SetType(InstructionType::XMA);
-                inst.SetOperands4(fmt.f1, fmt.f3, fmt.f4, fmt.f2);
-            }
-            break;
-            
         case 0x4:  // Floating-point compare
             if (decodeF4(slot, fmt)) {
                 inst.SetType(InstructionType::FCMP);
