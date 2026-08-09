@@ -238,6 +238,8 @@ private:
     uint64_t handleEfiFileSetPosition(IMemory& memory);
     uint64_t handleEfiLocateHandle(IMemory& memory);
     uint64_t handleEfiLocateProtocol(IMemory& memory);
+    bool ensureEfiMemoryMap(IMemory& memory);
+    uint64_t handleEfiAllocatePages(IMemory& memory);
     uint64_t handleEfiGetMemoryMap(IMemory& memory);
     
     /**
@@ -298,7 +300,9 @@ private:
     size_t efiExitBootServicesCalls_;
     size_t efiAllocatePoolCalls_;
     size_t efiAllocatePagesCalls_;
+    size_t efiFreePagesCalls_;
     size_t efiFreePoolCalls_;
+    size_t efiCopyMemCalls_;
     size_t efiLoadImageCalls_;
     size_t efiStartImageCalls_;
     size_t efiSetMemCalls_;
@@ -350,6 +354,23 @@ private:
         uint64_t position = 0;
     };
     std::map<uint64_t, EfiFileHandle> efiFileHandles_;
+
+    struct EfiMemoryDescriptor {
+        uint32_t type = 0;
+        uint64_t physicalStart = 0;
+        uint64_t numberOfPages = 0;
+        uint64_t attributes = 0;
+    };
+    struct EfiPageAllocation {
+        uint64_t physicalStart = 0;
+        uint64_t numberOfPages = 0;
+        uint32_t type = 0;
+    };
+    std::vector<EfiMemoryDescriptor> efiMemoryMap_;
+    std::vector<EfiPageAllocation> efiPageAllocations_;
+    uint64_t efiMemoryMapKey_;
+    uint64_t efiMemoryMapMemorySize_;
+    bool efiMemoryMapInitialized_;
     std::vector<uint8_t> efiBootImage_;
     std::unique_ptr<guideXOS::FATParser> efiBootFat_;
     bool efiBootImageFromVmManager_;

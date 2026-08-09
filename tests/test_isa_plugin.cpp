@@ -46,6 +46,46 @@ private:
     std::map<uint64_t, uint8_t> bytes_;
 };
 
+class SizedSparseMemory : public IMemory {
+public:
+    explicit SizedSparseMemory(uint64_t size) : size_(size) {}
+
+    void Read(uint64_t address, uint8_t* dest, size_t size) const override {
+        if (address > size_ || size > size_ - address) {
+            throw std::out_of_range("sparse read outside guest RAM");
+        }
+        for (size_t i = 0; i < size; ++i) {
+            const auto it = bytes_.find(address + i);
+            dest[i] = it == bytes_.end() ? 0 : it->second;
+        }
+    }
+
+    void Write(uint64_t address, const uint8_t* src, size_t size) override {
+        if (address > size_ || size > size_ - address) {
+            throw std::out_of_range("sparse write outside guest RAM");
+        }
+        for (size_t i = 0; i < size; ++i) {
+            bytes_[address + i] = src[i];
+        }
+    }
+
+    void loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) override {
+        Write(address, buffer, size);
+    }
+
+    void loadBuffer(uint64_t address, const std::vector<uint8_t>& buffer) override {
+        Write(address, buffer.data(), buffer.size());
+    }
+
+    size_t GetTotalSize() const override { return static_cast<size_t>(size_); }
+    void Clear() override { bytes_.clear(); }
+    const uint8_t* GetRawData() const override { return nullptr; }
+
+private:
+    uint64_t size_;
+    std::map<uint64_t, uint8_t> bytes_;
+};
+
 class GuardedSparseMemory : public IMemory {
 public:
     explicit GuardedSparseMemory(uint64_t forbiddenReadAddress)
@@ -3033,6 +3073,147 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
+    std::cout << "Testing IA-64 plugin AllocatePages firmware service...\n";
+
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t pageSize = 0x1000ULL;
+    // The 512 MiB layout is dynamic and may already have been configured by
+    // an earlier EFI handoff test in this process.
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t unsupportedCode = handoffBase + 0xf00ULL;
+    constexpr uint64_t allocatePagesSlot = handoffBase + 0x828ULL;
+    constexpr uint64_t getMemoryMapCode = handoffBase + 0x1800ULL;
+    constexpr uint64_t efiSuccess = 0ULL;
+    constexpr uint64_t efiInvalidParameter = 0x8000000000000002ULL;
+    constexpr uint64_t efiNotFound = 0x800000000000000eULL;
+
+    SizedSparseMemory memory(guestMemorySize);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0xa210, bundleBytes, sizeof(bundleBytes));
+    uint8_t syntheticStubBytes[16] = {1};
+    memory.Write(unsupportedCode, syntheticStubBytes, sizeof(syntheticStubBytes));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    auto callAllocatePages = [&](uint64_t type,
+                                  uint64_t memoryType,
+                                  uint64_t pages,
+                                  uint64_t memoryPointer,
+                                  uint64_t input) {
+        if (memoryPointer < guestMemorySize &&
+            memoryPointer <= guestMemorySize - sizeof(uint64_t)) {
+            memory.write<uint64_t>(memoryPointer, input);
+        }
+        plugin.getCPUState().SetIP(0xa210);
+        plugin.getCPUState().SetCFM(2);
+        plugin.getCPUState().SetBR(6, unsupportedCode);
+        plugin.getCPUState().SetGR(32, type);
+        plugin.getCPUState().SetGR(33, memoryType);
+        plugin.getCPUState().SetGR(34, pages);
+        plugin.getCPUState().SetGR(35, memoryPointer);
+        plugin.getCPUState().SetGR(37, allocatePagesSlot);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    auto getMemoryMap = [&]() {
+        constexpr uint64_t sizeAddress = 0x5100;
+        constexpr uint64_t mapAddress = 0x6000;
+        constexpr uint64_t keyAddress = 0x5180;
+        constexpr uint64_t descriptorSizeAddress = 0x5188;
+        constexpr uint64_t descriptorVersionAddress = 0x5190;
+        memory.write<uint64_t>(sizeAddress, 0x2000ULL);
+        plugin.getCPUState().SetIP(0xa210);
+        plugin.getCPUState().SetCFM(2);
+        plugin.getCPUState().SetBR(6, getMemoryMapCode);
+        plugin.getCPUState().SetGR(32, sizeAddress);
+        plugin.getCPUState().SetGR(33, mapAddress);
+        plugin.getCPUState().SetGR(34, keyAddress);
+        plugin.getCPUState().SetGR(35, descriptorSizeAddress);
+        plugin.getCPUState().SetGR(36, descriptorVersionAddress);
+        plugin.getCPUState().SetGR(37, 0);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetGR(8) == efiSuccess);
+        return std::array<uint64_t, 3>{
+            memory.read<uint64_t>(keyAddress),
+            memory.read<uint64_t>(descriptorSizeAddress),
+            memory.read<uint64_t>(sizeAddress)
+        };
+    };
+
+    auto assertNoReservedOverlap = [&](uint64_t base, uint64_t pages) {
+        const uint64_t end = base + pages * pageSize;
+        assert((base & (pageSize - 1ULL)) == 0);
+        assert(end > base && end <= guestMemorySize);
+        assert(end <= handoffBase || base >= 0x20000000ULL);
+        assert(end <= 0x1ffb0000ULL || base >= 0x1fff0000ULL);
+    };
+
+    uint64_t anyOutput = 0;
+    assert(callAllocatePages(0, 2, 3, 0x5000, 0) == efiSuccess);
+    anyOutput = memory.read<uint64_t>(0x5000);
+    assertNoReservedOverlap(anyOutput, 3);
+
+    const auto firstMap = getMemoryMap();
+    assert(firstMap[0] == 2);
+    assert(firstMap[1] == 40);
+    assert(firstMap[2] >= 40);
+
+    bool sawLoaderDataAllocation = false;
+    for (uint64_t offset = 0; offset < firstMap[2]; offset += firstMap[1]) {
+        const uint64_t descriptor = 0x6000 + offset;
+        const uint32_t type = memory.read<uint32_t>(descriptor);
+        const uint64_t start = memory.read<uint64_t>(descriptor + 8);
+        const uint64_t pages = memory.read<uint64_t>(descriptor + 24);
+        if (type == 2 && start == anyOutput && pages == 3) {
+            sawLoaderDataAllocation = true;
+        }
+    }
+    assert(sawLoaderDataAllocation);
+
+    uint64_t secondOutput = 0;
+    assert(callAllocatePages(0, 2, 2, 0x5010, 0) == efiSuccess);
+    secondOutput = memory.read<uint64_t>(0x5010);
+    assertNoReservedOverlap(secondOutput, 2);
+    assert(secondOutput + 2 * pageSize <= anyOutput ||
+           anyOutput + 3 * pageSize <= secondOutput);
+    const uint64_t keyAfterSecond = getMemoryMap()[0];
+    assert(keyAfterSecond > firstMap[0]);
+
+    uint64_t maxOutput = 0;
+    constexpr uint64_t maxAddress = 0x01f1000fULL;
+    assert(callAllocatePages(1, 2, 6, 0x5020, maxAddress) == efiSuccess);
+    maxOutput = memory.read<uint64_t>(0x5020);
+    assertNoReservedOverlap(maxOutput, 6);
+    assert(maxOutput + 6 * pageSize - 1 <= maxAddress);
+
+    constexpr uint64_t exactAddress = 0x02000000ULL;
+    assert(callAllocatePages(2, 4, 2, 0x5030, exactAddress) == efiSuccess);
+    assert(memory.read<uint64_t>(0x5030) == exactAddress);
+    assertNoReservedOverlap(exactAddress, 2);
+
+    // An exact one-page fit at the first conventional page also exercises
+    // the lower boundary without touching low firmware memory.
+    assert(callAllocatePages(1, 2, 1, 0x5040, 0x100fffULL) == efiSuccess);
+    assert(memory.read<uint64_t>(0x5040) == 0x100000ULL);
+
+    const uint64_t keyBeforeFailures = getMemoryMap()[0];
+    assert(callAllocatePages(0, 2, 1, guestMemorySize, 0) == efiInvalidParameter);
+    assert(getMemoryMap()[0] == keyBeforeFailures);
+    assert(callAllocatePages(3, 2, 1, 0x5050, 0) == efiInvalidParameter);
+    assert(callAllocatePages(0, 7, 1, 0x5060, 0) == efiInvalidParameter);
+    assert(callAllocatePages(0, 2, 0, 0x5070, 0) == efiNotFound);
+    assert(callAllocatePages(2, 2, 1, 0x5080, 0x1fe00000ULL) == efiNotFound);
+    assert(callAllocatePages(1, 2, 1, 0x5090, 0xfffULL) == efiNotFound);
+
+    std::cout << "  ? AllocateAny/Max/Address split one shared EFI map, update MapKey, "
+                 "reject invalid pointers/constraints, and preserve reserved ranges\n";
+}
+
 void testIA64PluginSetMemFillsExactRange() {
     std::cout << "Testing IA-64 plugin SetMem firmware stub...\n";
 
@@ -3743,6 +3924,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();
+        std::cout << "\n";
+
+        testIA64PluginAllocatePagesUsesSharedEfiMemoryMap();
         std::cout << "\n";
 
         testIA64PluginSetMemFillsExactRange();

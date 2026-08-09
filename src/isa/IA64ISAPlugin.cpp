@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <utility>
 #include <cstdlib>
+#include <new>
 
 namespace ia64 {
 
@@ -115,8 +116,31 @@ constexpr uint64_t EFI_STATUS_INVALID_PARAMETER = 0x8000000000000002ULL;
 constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
 constexpr uint64_t EFI_STATUS_BUFFER_TOO_SMALL = 0x8000000000000005ULL;
 constexpr uint64_t EFI_STATUS_WRITE_PROTECTED = 0x8000000000000008ULL;
+constexpr uint64_t EFI_STATUS_OUT_OF_RESOURCES = 0x8000000000000009ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_STATUS_NO_MEDIA = 0x800000000000000CULL;
+constexpr uint64_t EFI_PAGE_SIZE = 0x1000ULL;
+constexpr uint32_t EFI_ALLOCATE_ANY_PAGES = 0U;
+constexpr uint32_t EFI_ALLOCATE_MAX_ADDRESS = 1U;
+constexpr uint32_t EFI_ALLOCATE_ADDRESS = 2U;
+constexpr uint32_t EFI_MAX_MEMORY_TYPE = 16U;
+constexpr uint32_t EFI_MEMORY_RESERVED = 0U;
+constexpr uint32_t EFI_MEMORY_LOADER_CODE = 1U;
+constexpr uint32_t EFI_MEMORY_LOADER_DATA = 2U;
+constexpr uint32_t EFI_MEMORY_BOOT_SERVICES_CODE = 3U;
+constexpr uint32_t EFI_MEMORY_BOOT_SERVICES_DATA = 4U;
+constexpr uint32_t EFI_MEMORY_RUNTIME_CODE = 5U;
+constexpr uint32_t EFI_MEMORY_RUNTIME_DATA = 6U;
+constexpr uint32_t EFI_MEMORY_CONVENTIONAL = 7U;
+constexpr uint32_t EFI_MEMORY_UNUSABLE = 8U;
+constexpr uint32_t EFI_MEMORY_ACPI_RECLAIM = 9U;
+constexpr uint32_t EFI_MEMORY_ACPI_NVS = 10U;
+constexpr uint32_t EFI_MEMORY_MMIO = 11U;
+constexpr uint32_t EFI_MEMORY_MMIO_PORT = 12U;
+constexpr uint32_t EFI_MEMORY_PAL_CODE = 13U;
+constexpr uint32_t EFI_MEMORY_PERSISTENT = 14U;
+constexpr uint32_t EFI_MEMORY_UNACCEPTED = 15U;
+constexpr uint64_t EFI_MEMORY_ATTRIBUTES = 0xFULL;
 constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_END = 0x20000000ULL;
 uint64_t EFI_HANDOFF_REGION_BASE = EFI_DEFAULT_HANDOFF_REGION_BASE;
@@ -976,6 +1000,15 @@ bool readGuestU32(IMemory& memory, uint64_t address, uint32_t& value) {
 bool readGuestU64(IMemory& memory, uint64_t address, uint64_t& value) {
     try {
         memory.Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool writeGuestU64(IMemory& memory, uint64_t address, uint64_t value) {
+    try {
+        memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
         return true;
     } catch (const std::exception&) {
         return false;
@@ -1916,7 +1949,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiExitBootServicesCalls_(0)
     , efiAllocatePoolCalls_(0)
     , efiAllocatePagesCalls_(0)
+    , efiFreePagesCalls_(0)
     , efiFreePoolCalls_(0)
+    , efiCopyMemCalls_(0)
     , efiLoadImageCalls_(0)
     , efiStartImageCalls_(0)
     , efiSetMemCalls_(0)
@@ -1944,6 +1979,11 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , lastBranchTargets_()
     , recentInstructionSequenceRepeatCount_(0)
     , efiFileHandles_()
+    , efiMemoryMap_()
+    , efiPageAllocations_()
+    , efiMemoryMapKey_(1)
+    , efiMemoryMapMemorySize_(0)
+    , efiMemoryMapInitialized_(false)
     , efiBootImage_()
     , efiBootFat_(nullptr)
     , efiBootImageFromVmManager_(false)
@@ -1981,7 +2021,9 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiExitBootServicesCalls_(0)
     , efiAllocatePoolCalls_(0)
     , efiAllocatePagesCalls_(0)
+    , efiFreePagesCalls_(0)
     , efiFreePoolCalls_(0)
+    , efiCopyMemCalls_(0)
     , efiLoadImageCalls_(0)
     , efiStartImageCalls_(0)
     , efiSetMemCalls_(0)
@@ -2009,6 +2051,11 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , lastBranchTargets_()
     , recentInstructionSequenceRepeatCount_(0)
     , efiFileHandles_()
+    , efiMemoryMap_()
+    , efiPageAllocations_()
+    , efiMemoryMapKey_(1)
+    , efiMemoryMapMemorySize_(0)
+    , efiMemoryMapInitialized_(false)
     , efiBootImage_()
     , efiBootFat_(nullptr)
     , efiBootImageFromVmManager_(false)
@@ -2024,6 +2071,10 @@ void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
     efiBootImage_ = std::move(bootImage);
     efiBootImageFromVmManager_ = true;
     efiBootFat_.reset();
+    efiMemoryMapInitialized_ = false;
+    efiMemoryMap_.clear();
+    efiPageAllocations_.clear();
+    efiMemoryMapKey_ = 1;
 }
 
 bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
@@ -2036,6 +2087,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
         resetEfiHandoffLayoutGlobals();
         efiHandoffLayoutMemorySize_ = 0;
         efiHandoffLayoutInitialized_ = true;
+        efiMemoryMapInitialized_ = false;
         return true;
     }
 
@@ -2045,6 +2097,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
         efiPoolNext_ = EFI_POOL_BASE;
         efiHandoffLayoutMemorySize_ = memorySize;
         efiHandoffLayoutInitialized_ = true;
+        efiMemoryMapInitialized_ = false;
         std::cerr << "[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; "
                   << "falling back to default fixed layout"
                   << " guestMemorySize=0x" << std::hex << memorySize
@@ -2058,6 +2111,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
     efiPoolNext_ = EFI_POOL_BASE;
     efiHandoffLayoutMemorySize_ = memorySize;
     efiHandoffLayoutInitialized_ = true;
+    efiMemoryMapInitialized_ = false;
     std::cout << "[EFI-MILESTONE] IA-64 EFI handoff layout configured"
               << " guestMemorySize=0x" << std::hex << memorySize
               << " base=0x" << EFI_HANDOFF_REGION_BASE
@@ -2094,7 +2148,9 @@ void IA64ISAPlugin::reset() {
     efiExitBootServicesCalls_ = 0;
     efiAllocatePoolCalls_ = 0;
     efiAllocatePagesCalls_ = 0;
+    efiFreePagesCalls_ = 0;
     efiFreePoolCalls_ = 0;
+    efiCopyMemCalls_ = 0;
     efiLoadImageCalls_ = 0;
     efiStartImageCalls_ = 0;
     efiSetMemCalls_ = 0;
@@ -2122,6 +2178,11 @@ void IA64ISAPlugin::reset() {
     lastBranchTargets_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
+    efiMemoryMap_.clear();
+    efiPageAllocations_.clear();
+    efiMemoryMapKey_ = 1;
+    efiMemoryMapMemorySize_ = 0;
+    efiMemoryMapInitialized_ = false;
     efiBootImage_.clear();
     efiBootFat_.reset();
     efiBootImageFromVmManager_ = false;
@@ -3471,27 +3532,45 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_UNSUPPORTED_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
-                        ++efiGenericUnsupportedCalls_;
                         const uint64_t tableSlotCandidate = state_.getCPUState().GetGR(37);
                         const bool allocatePagesSlot =
                             tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x28ULL;
-                        if (allocatePagesSlot) {
-                            ++efiAllocatePagesCalls_;
-                        }
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
-                        std::cout << "[EFI-STUB] unsupported firmware service target 0x"
-                                  << std::hex << originalBranchTarget
-                                  << " slot=0x" << tableSlotCandidate
-                                  << (allocatePagesSlot ? " [BootServices.AllocatePages]" : "")
-                                  << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
-                        logEfiServiceCall(memory,
-                                          allocatePagesSlot ? "BootServices.AllocatePages (unsupported)"
+                        if (allocatePagesSlot) {
+                            const uint64_t status = handleEfiAllocatePages(memory);
+                            state_.getCPUState().SetGR(8, status);
+                            std::cout << "[EFI-STUB] firmware service target 0x"
+                                      << std::hex << originalBranchTarget
+                                      << " slot=0x" << tableSlotCandidate
+                                      << " [BootServices.AllocatePages] -> status=0x"
+                                      << status << std::dec << std::endl;
+                            logEfiServiceCall(memory, "BootServices.AllocatePages", currentIP,
+                                              EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
+                                              status);
+                        } else {
+                            ++efiGenericUnsupportedCalls_;
+                            if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL) {
+                                ++efiFreePagesCalls_;
+                            }
+                            if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x160ULL) {
+                                ++efiCopyMemCalls_;
+                            }
+                            state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                            const bool freePagesSlot =
+                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL;
+                            std::cout << "[EFI-STUB] unsupported firmware service target 0x"
+                                      << std::hex << originalBranchTarget
+                                      << " slot=0x" << tableSlotCandidate
+                                      << (freePagesSlot ? " [BootServices.FreePages]" : "")
+                                      << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
+                            logEfiServiceCall(memory,
+                                              freePagesSlot ? "BootServices.FreePages (unsupported)"
                                                             : "EFI.Unsupported",
-                                          currentIP,
-                                          EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
-                                          EFI_STATUS_UNSUPPORTED);
+                                              currentIP,
+                                              EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
+                                              EFI_STATUS_UNSUPPORTED);
+                        }
                     } else {
                         const bool traceRegisterConfigCallsite =
                             shouldEmitGpRelativeDataDiag() &&
@@ -3688,7 +3767,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << ", ExitBootServices=" << efiExitBootServicesCalls_
                           << ", AllocatePool=" << efiAllocatePoolCalls_
                           << ", AllocatePages=" << efiAllocatePagesCalls_
+                          << ", FreePages=" << efiFreePagesCalls_
                           << ", FreePool=" << efiFreePoolCalls_
+                          << ", CopyMem=" << efiCopyMemCalls_
                           << ", LoadImage=" << efiLoadImageCalls_
                           << ", StartImage=" << efiStartImageCalls_
                           << ", SetMem=" << efiSetMemCalls_
@@ -3875,7 +3956,9 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiExitBootServicesCalls_ = 0;
     efiAllocatePoolCalls_ = 0;
     efiAllocatePagesCalls_ = 0;
+    efiFreePagesCalls_ = 0;
     efiFreePoolCalls_ = 0;
+    efiCopyMemCalls_ = 0;
     efiLoadImageCalls_ = 0;
     efiStartImageCalls_ = 0;
     efiSetMemCalls_ = 0;
@@ -3903,6 +3986,11 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     lastBranchTargets_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
+    efiMemoryMap_.clear();
+    efiPageAllocations_.clear();
+    efiMemoryMapKey_ = 1;
+    efiMemoryMapMemorySize_ = 0;
+    efiMemoryMapInitialized_ = false;
     efiBootImage_.clear();
     efiBootFat_.reset();
     efiBootImageFromVmManager_ = false;
@@ -4828,6 +4916,362 @@ uint64_t IA64ISAPlugin::handleEfiLocateProtocol(IMemory& memory) {
     return protocolAddress != 0 ? EFI_STATUS_SUCCESS : EFI_STATUS_NOT_FOUND;
 }
 
+bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
+    const uint64_t memorySize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (efiMemoryMapInitialized_ && efiMemoryMapMemorySize_ == memorySize) {
+        return true;
+    }
+
+    efiMemoryMap_.clear();
+    efiPageAllocations_.clear();
+    efiMemoryMapKey_ = 1;
+    efiMemoryMapMemorySize_ = memorySize;
+    efiMemoryMapInitialized_ = true;
+
+    if (memorySize < EFI_PAGE_SIZE) {
+        return false;
+    }
+
+    // The model is page based, so bytes in a partial final page are not
+    // advertised as physical pages.
+    const uint64_t physicalEnd = memorySize & ~(EFI_PAGE_SIZE - 1ULL);
+    const uint64_t conventionalAttributes = EFI_MEMORY_ATTRIBUTES;
+
+    auto appendDescriptor = [&](uint32_t type,
+                                uint64_t physicalStart,
+                                uint64_t numberOfPages,
+                                uint64_t attributes) {
+        if (numberOfPages == 0) {
+            return;
+        }
+        if (!efiMemoryMap_.empty()) {
+            EfiMemoryDescriptor& previous = efiMemoryMap_.back();
+            const uint64_t previousBytes = previous.numberOfPages * EFI_PAGE_SIZE;
+            const uint64_t previousEnd = previous.physicalStart + previousBytes;
+            if (previous.type == type &&
+                previous.attributes == attributes &&
+                previousEnd == physicalStart) {
+                previous.numberOfPages += numberOfPages;
+                return;
+            }
+        }
+        efiMemoryMap_.push_back({type, physicalStart, numberOfPages, attributes});
+    };
+
+    // Start with all page-aligned RAM conventional, then overlay each
+    // firmware-owned range. This keeps the reservation logic generic and
+    // makes later allocations a descriptor split rather than a second map.
+    appendDescriptor(EFI_MEMORY_CONVENTIONAL, 0, physicalEnd / EFI_PAGE_SIZE,
+                     conventionalAttributes);
+
+    auto markRange = [&](uint64_t requestedStart, uint64_t requestedEnd, uint32_t type) {
+        const uint64_t start = std::min(efiAlignDown(requestedStart, EFI_PAGE_SIZE), physicalEnd);
+        const uint64_t end = std::min(efiAlignUp(requestedEnd, EFI_PAGE_SIZE), physicalEnd);
+        if (start >= end) {
+            return;
+        }
+
+        std::vector<EfiMemoryDescriptor> replacement;
+        replacement.reserve(efiMemoryMap_.size() + 2);
+        for (const EfiMemoryDescriptor& descriptor : efiMemoryMap_) {
+            const uint64_t descriptorEnd = descriptor.physicalStart +
+                                           descriptor.numberOfPages * EFI_PAGE_SIZE;
+            if (descriptorEnd <= start || descriptor.physicalStart >= end) {
+                replacement.push_back(descriptor);
+                continue;
+            }
+
+            if (descriptor.physicalStart < start) {
+                replacement.push_back({
+                    descriptor.type,
+                    descriptor.physicalStart,
+                    (start - descriptor.physicalStart) / EFI_PAGE_SIZE,
+                    descriptor.attributes
+                });
+            }
+
+            const uint64_t markedStart = std::max(descriptor.physicalStart, start);
+            const uint64_t markedEnd = std::min(descriptorEnd, end);
+            replacement.push_back({
+                type,
+                markedStart,
+                (markedEnd - markedStart) / EFI_PAGE_SIZE,
+                descriptor.attributes
+            });
+
+            if (markedEnd < descriptorEnd) {
+                replacement.push_back({
+                    descriptor.type,
+                    markedEnd,
+                    (descriptorEnd - markedEnd) / EFI_PAGE_SIZE,
+                    descriptor.attributes
+                });
+            }
+        }
+
+        efiMemoryMap_.clear();
+        for (const EfiMemoryDescriptor& descriptor : replacement) {
+            appendDescriptor(descriptor.type,
+                             descriptor.physicalStart,
+                             descriptor.numberOfPages,
+                             descriptor.attributes);
+        }
+    };
+
+    // Keep the low firmware/loader area out of the allocator even when the
+    // PE image occupies only part of it.
+    markRange(0, std::min<uint64_t>(kEfiLowMemoryFloor, physicalEnd),
+              EFI_MEMORY_RESERVED);
+
+    uint64_t loadedImageBase = 0;
+    uint64_t loadedImageSize = 0;
+    if (readGuestU64(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadedImageBase) &&
+        readGuestU64(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, loadedImageSize) &&
+        loadedImageSize != 0 &&
+        loadedImageBase <= UINT64_MAX - loadedImageSize) {
+        markRange(loadedImageBase, loadedImageBase + loadedImageSize,
+                  EFI_MEMORY_LOADER_CODE);
+    }
+
+    uint64_t bootImageSignature = 0;
+    uint64_t bootImageBase = 0;
+    uint64_t bootImageSize = 0;
+    const bool hasBootImageMetadata =
+        readGuestU64(memory, EFI_BOOT_IMAGE_METADATA_ADDR, bootImageSignature) &&
+        readGuestU64(memory, EFI_BOOT_IMAGE_METADATA_ADDR + 8, bootImageBase) &&
+        readGuestU64(memory, EFI_BOOT_IMAGE_METADATA_ADDR + 16, bootImageSize) &&
+        bootImageSignature == EFI_BOOT_IMAGE_METADATA_SIGNATURE;
+    if (!hasBootImageMetadata && efiBootImageFromVmManager_ && !efiBootImage_.empty()) {
+        bootImageBase = EFI_BOOT_IMAGE_GUEST_BASE;
+        bootImageSize = static_cast<uint64_t>(efiBootImage_.size());
+    }
+    if (bootImageSize != 0 && bootImageBase <= UINT64_MAX - bootImageSize) {
+        markRange(bootImageBase, bootImageBase + bootImageSize,
+                  EFI_MEMORY_BOOT_SERVICES_CODE);
+    }
+
+    // The complete synthetic handoff is firmware-owned. It contains the
+    // SystemTable, BootServices/RuntimeServices tables, descriptors/thunks,
+    // pool, metadata, and protocol structures.
+    markRange(EFI_HANDOFF_REGION_BASE, EFI_HANDOFF_REGION_END,
+              EFI_MEMORY_BOOT_SERVICES_DATA);
+
+    const uint64_t stackTop = efiAlignDown(
+        memorySize > kEfiStackGuard ? memorySize - kEfiStackGuard : 0,
+        16ULL);
+    const uint64_t stackBase = stackTop > kEfiStackSize ? stackTop - kEfiStackSize : 0;
+    markRange(stackBase, stackTop, EFI_MEMORY_LOADER_DATA);
+    markRange(stackTop, memorySize, EFI_MEMORY_RESERVED);
+
+    std::cout << "[EFI-MEMORY-MAP] initialized memory=0x" << std::hex << memorySize
+              << " descriptors=" << std::dec << efiMemoryMap_.size()
+              << " key=" << efiMemoryMapKey_ << std::endl;
+    for (const EfiMemoryDescriptor& descriptor : efiMemoryMap_) {
+        std::cout << "[EFI-MEMORY-MAP] type=" << descriptor.type
+                  << " start=0x" << std::hex << descriptor.physicalStart
+                  << " pages=0x" << descriptor.numberOfPages
+                  << " end=0x" << (descriptor.physicalStart +
+                                     descriptor.numberOfPages * EFI_PAGE_SIZE)
+                  << " attributes=0x" << descriptor.attributes
+                  << std::dec << std::endl;
+    }
+    return true;
+}
+
+uint64_t IA64ISAPlugin::handleEfiAllocatePages(IMemory& memory) {
+    ++efiAllocatePagesCalls_;
+
+    const uint32_t allocationType = static_cast<uint32_t>(
+        readCallerOutputRegister(state_.getCPUState(), 0));
+    const uint32_t memoryType = static_cast<uint32_t>(
+        readCallerOutputRegister(state_.getCPUState(), 1));
+    const uint64_t numberOfPages = readCallerOutputRegister(state_.getCPUState(), 2);
+    const uint64_t memoryAddress = readCallerOutputRegister(state_.getCPUState(), 3);
+
+    uint64_t inputMemory = 0;
+    const bool inputReadable = memoryAddress != 0 &&
+        readGuestU64(memory, memoryAddress, inputMemory);
+    bool boundsKnown = false;
+    const bool inputInBounds = memoryAddress != 0 &&
+        guestRangeWithinReportedMemory(memory, memoryAddress, sizeof(uint64_t), boundsKnown);
+    bool writeKnown = false;
+    const bool inputWritable = memoryAddress != 0 &&
+        guestRangeHasPermission(memory, memoryAddress, sizeof(uint64_t),
+                                MemoryAccessType::WRITE, writeKnown);
+    std::cout << "[EFI-ALLOCATEPAGES] type=" << allocationType
+              << " memoryType=" << memoryType
+              << " pages=" << numberOfPages
+              << " Memory=0x" << std::hex << memoryAddress
+              << " input=0x" << inputMemory
+              << " inputReadable=" << (inputReadable ? "yes" : "no")
+              << " inputAccess="
+              << describeGuestRangeAccess(memory, memoryAddress, sizeof(uint64_t))
+              << std::dec << std::endl;
+
+    if (memoryAddress == 0 || !inputReadable || (boundsKnown && !inputInBounds) ||
+        (writeKnown && !inputWritable)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (allocationType > EFI_ALLOCATE_ADDRESS) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    // Conventional memory is the source pool, not a valid requested type;
+    // Persistent and Unaccepted memory have their own allocation rules.
+    if (memoryType >= EFI_MAX_MEMORY_TYPE ||
+        memoryType == EFI_MEMORY_CONVENTIONAL ||
+        memoryType == EFI_MEMORY_PERSISTENT ||
+        memoryType == EFI_MEMORY_UNACCEPTED) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (numberOfPages == 0 || numberOfPages > UINT64_MAX / EFI_PAGE_SIZE) {
+        return EFI_STATUS_NOT_FOUND;
+    }
+
+    if (!ensureEfiMemoryMap(memory)) {
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    }
+
+    const uint64_t allocationBytes = numberOfPages * EFI_PAGE_SIZE;
+    uint64_t requestedBase = inputMemory;
+    uint64_t selectedBase = 0;
+    size_t selectedDescriptor = efiMemoryMap_.size();
+
+    auto descriptorEnd = [](const EfiMemoryDescriptor& descriptor) {
+        return descriptor.physicalStart + descriptor.numberOfPages * EFI_PAGE_SIZE;
+    };
+    auto alignedDown = [](uint64_t value) {
+        return value & ~(EFI_PAGE_SIZE - 1ULL);
+    };
+
+    if (allocationType == EFI_ALLOCATE_ADDRESS &&
+        (requestedBase & (EFI_PAGE_SIZE - 1ULL)) != 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (allocationType == EFI_ALLOCATE_ADDRESS &&
+        requestedBase > UINT64_MAX - allocationBytes) {
+        return EFI_STATUS_NOT_FOUND;
+    }
+
+    // All policies are deterministic. Any/Max choose the highest fitting
+    // page range; Address requires the exact requested range.
+    for (size_t reverse = efiMemoryMap_.size(); reverse > 0; --reverse) {
+        const size_t index = reverse - 1;
+        const EfiMemoryDescriptor& descriptor = efiMemoryMap_[index];
+        if (descriptor.type != EFI_MEMORY_CONVENTIONAL) {
+            continue;
+        }
+        const uint64_t rangeEnd = descriptorEnd(descriptor);
+        if (allocationType == EFI_ALLOCATE_ADDRESS) {
+            if (requestedBase >= descriptor.physicalStart &&
+                requestedBase <= rangeEnd &&
+                allocationBytes <= rangeEnd - requestedBase) {
+                selectedBase = requestedBase;
+                selectedDescriptor = index;
+                break;
+            }
+            continue;
+        }
+
+        uint64_t allowedEnd = rangeEnd - 1ULL;
+        if (allocationType == EFI_ALLOCATE_MAX_ADDRESS) {
+            allowedEnd = std::min(allowedEnd, inputMemory);
+        }
+        if (allowedEnd < descriptor.physicalStart ||
+            allowedEnd - descriptor.physicalStart + 1ULL < allocationBytes) {
+            continue;
+        }
+        const uint64_t candidate = alignedDown(allowedEnd - allocationBytes + 1ULL);
+        if (candidate < descriptor.physicalStart ||
+            candidate > rangeEnd ||
+            allocationBytes > rangeEnd - candidate) {
+            continue;
+        }
+        selectedBase = candidate;
+        selectedDescriptor = index;
+        break;
+    }
+
+    if (selectedDescriptor == efiMemoryMap_.size()) {
+        return EFI_STATUS_NOT_FOUND;
+    }
+
+    const EfiMemoryDescriptor selected = efiMemoryMap_[selectedDescriptor];
+    const uint64_t selectedEnd = selectedBase + allocationBytes;
+    if (selectedEnd < selectedBase) {
+        return EFI_STATUS_NOT_FOUND;
+    }
+
+    std::vector<EfiMemoryDescriptor> replacement;
+    replacement.reserve(efiMemoryMap_.size() + 2);
+    for (size_t index = 0; index < efiMemoryMap_.size(); ++index) {
+        const EfiMemoryDescriptor& descriptor = efiMemoryMap_[index];
+        if (index != selectedDescriptor) {
+            replacement.push_back(descriptor);
+            continue;
+        }
+        const uint64_t descriptorEndValue = descriptorEnd(descriptor);
+        if (selectedBase > descriptor.physicalStart) {
+            replacement.push_back({
+                descriptor.type,
+                descriptor.physicalStart,
+                (selectedBase - descriptor.physicalStart) / EFI_PAGE_SIZE,
+                descriptor.attributes
+            });
+        }
+        replacement.push_back({memoryType, selectedBase, numberOfPages,
+                               descriptor.attributes});
+        if (selectedEnd < descriptorEndValue) {
+            replacement.push_back({
+                descriptor.type,
+                selectedEnd,
+                (descriptorEndValue - selectedEnd) / EFI_PAGE_SIZE,
+                descriptor.attributes
+            });
+        }
+    }
+
+    try {
+        // Reserve before publishing the guest output. Once these capacities
+        // exist, the descriptor split and allocation bookkeeping below are
+        // non-throwing, keeping the map and MapKey atomic from the caller's
+        // perspective.
+        efiMemoryMap_.reserve(replacement.size());
+        efiPageAllocations_.reserve(efiPageAllocations_.size() + 1);
+        if (!writeGuestU64(memory, memoryAddress, selectedBase)) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        efiMemoryMap_.clear();
+        for (const EfiMemoryDescriptor& descriptor : replacement) {
+            if (!efiMemoryMap_.empty()) {
+                EfiMemoryDescriptor& previous = efiMemoryMap_.back();
+                const uint64_t previousEnd = previous.physicalStart +
+                                             previous.numberOfPages * EFI_PAGE_SIZE;
+                if (previous.type == descriptor.type &&
+                    previous.attributes == descriptor.attributes &&
+                    previousEnd == descriptor.physicalStart) {
+                    previous.numberOfPages += descriptor.numberOfPages;
+                    continue;
+                }
+            }
+            efiMemoryMap_.push_back(descriptor);
+        }
+        efiPageAllocations_.push_back({selectedBase, numberOfPages, memoryType});
+        ++efiMemoryMapKey_;
+    } catch (const std::bad_alloc&) {
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    }
+
+    uint64_t outputMemory = 0;
+    readGuestU64(memory, memoryAddress, outputMemory);
+    std::cout << "[EFI-ALLOCATEPAGES] success base=0x" << std::hex << selectedBase
+              << " end=0x" << (selectedEnd - 1ULL)
+              << " type=" << std::dec << memoryType
+              << " pages=" << numberOfPages
+              << " mapKey=" << efiMemoryMapKey_
+              << " output=0x" << std::hex << outputMemory << std::dec << std::endl;
+    return EFI_STATUS_SUCCESS;
+}
+
 uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
     ++efiGetMemoryMapCalls_;
     const uint64_t memoryMapSizeAddress = readCallerOutputRegister(state_.getCPUState(), 0);
@@ -4838,37 +5282,56 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
     if (memoryMapSizeAddress == 0) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
-    constexpr uint64_t descriptorSize = 48;
+    if (!ensureEfiMemoryMap(memory)) {
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    }
+    // EFI_MEMORY_DESCRIPTOR is 40 bytes: Type + padding, PhysicalStart,
+    // VirtualStart, NumberOfPages, and Attribute.
+    constexpr uint64_t descriptorSize = 40;
     constexpr uint64_t descriptorVersion = 1;
-    constexpr uint64_t requiredSize = descriptorSize * 3;
+    const uint64_t requiredSize = descriptorSize * static_cast<uint64_t>(efiMemoryMap_.size());
     uint64_t provided = 0;
-    memory.Read(memoryMapSizeAddress, reinterpret_cast<uint8_t*>(&provided), sizeof(provided));
-    memory.Write(memoryMapSizeAddress, reinterpret_cast<const uint8_t*>(&requiredSize), sizeof(requiredSize));
-    if (descriptorSizeAddress != 0) {
-        memory.Write(descriptorSizeAddress, reinterpret_cast<const uint8_t*>(&descriptorSize), sizeof(descriptorSize));
+    if (!readGuestU64(memory, memoryMapSizeAddress, provided) ||
+        !writeGuestU64(memory, memoryMapSizeAddress, requiredSize)) {
+        return EFI_STATUS_INVALID_PARAMETER;
     }
-    if (descriptorVersionAddress != 0) {
-        memory.Write(descriptorVersionAddress, reinterpret_cast<const uint8_t*>(&descriptorVersion), sizeof(descriptorVersion));
+    if (descriptorSizeAddress != 0 && !writeGuestU64(memory, descriptorSizeAddress, descriptorSize)) {
+        return EFI_STATUS_INVALID_PARAMETER;
     }
-    if (mapKeyAddress != 0) {
-        const uint64_t mapKey = 1;
-        memory.Write(mapKeyAddress, reinterpret_cast<const uint8_t*>(&mapKey), sizeof(mapKey));
+    if (descriptorVersionAddress != 0 &&
+        !writeGuestU64(memory, descriptorVersionAddress, descriptorVersion)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (mapKeyAddress != 0 && !writeGuestU64(memory, mapKeyAddress, efiMemoryMapKey_)) {
+        return EFI_STATUS_INVALID_PARAMETER;
     }
     if (memoryMapAddress == 0 || provided < requiredSize) {
         return EFI_STATUS_BUFFER_TOO_SMALL;
     }
-    auto writeDescriptor = [&](uint64_t address, uint32_t type, uint64_t physicalStart, uint64_t pages, uint64_t attributes) {
-        memory.Write(address + 0x00, reinterpret_cast<const uint8_t*>(&type), sizeof(type));
-        memory.Write(address + 0x08, reinterpret_cast<const uint8_t*>(&physicalStart), sizeof(physicalStart));
-        memory.Write(address + 0x10, reinterpret_cast<const uint8_t*>(&physicalStart), sizeof(physicalStart));
-        memory.Write(address + 0x18, reinterpret_cast<const uint8_t*>(&pages), sizeof(pages));
-        memory.Write(address + 0x20, reinterpret_cast<const uint8_t*>(&attributes), sizeof(attributes));
+
+    auto writeU32 = [&](uint64_t address, uint32_t value) {
+        memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
     };
-    writeDescriptor(memoryMapAddress, 7, 0x100000ULL, 0x17F00ULL, 0xFULL);
-    writeDescriptor(memoryMapAddress + descriptorSize, 2, EFI_HANDOFF_REGION_BASE, 0x200ULL, 0xFULL);
-    writeDescriptor(memoryMapAddress + descriptorSize * 2, 4, EFI_BOOT_IMAGE_GUEST_BASE, 0x2000ULL, 0xFULL);
-    std::cout << "[EFI-MILESTONE] GetMemoryMap returned descriptors=3 size=0x"
-              << std::hex << requiredSize << " key=1" << std::dec << std::endl;
+    try {
+        for (size_t index = 0; index < efiMemoryMap_.size(); ++index) {
+            const uint64_t address = memoryMapAddress + descriptorSize * index;
+            const EfiMemoryDescriptor& descriptor = efiMemoryMap_[index];
+            writeU32(address + 0x00, descriptor.type);
+            writeU32(address + 0x04, 0);
+            if (!writeGuestU64(memory, address + 0x08, descriptor.physicalStart) ||
+                !writeGuestU64(memory, address + 0x10, 0) ||
+                !writeGuestU64(memory, address + 0x18, descriptor.numberOfPages) ||
+                !writeGuestU64(memory, address + 0x20, descriptor.attributes)) {
+                return EFI_STATUS_INVALID_PARAMETER;
+            }
+        }
+    } catch (const std::exception&) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    std::cout << "[EFI-MILESTONE] GetMemoryMap returned descriptors="
+              << efiMemoryMap_.size() << " size=0x"
+              << std::hex << requiredSize << " key=" << efiMemoryMapKey_
+              << std::dec << std::endl;
     return EFI_STATUS_SUCCESS;
 }
 
