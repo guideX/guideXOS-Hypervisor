@@ -82,6 +82,7 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
             switch (op & 0x0F) {
                 case 0x0: // SHL
                     instr = InstructionEx(InstructionType::SHL, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
                     if (fmt.has_imm) {
                         instr.SetOperands(fmt.r1, fmt.r2, 0);
                         instr.SetImmediate(fmt.count);
@@ -338,6 +339,23 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::I
     }
 static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result) {
         // Shift operations: SHL, SHR, SHRA
+
+        // I7 variable shifts use the dispersed z_a/z_b/v_e/x2a/x2b/x2c
+        // fields.  The exact Gentoo blocker is the variable SHL row from
+        // Table 4-20; it does not use the low four bits of x6 as an opcode.
+        const uint8_t z_a = static_cast<uint8_t>(formats::extractBits(raw, 36, 1));
+        const uint8_t z_b = static_cast<uint8_t>(formats::extractBits(raw, 33, 1));
+        const uint8_t v_e = static_cast<uint8_t>(formats::extractBits(raw, 32, 1));
+        const uint8_t x2a = static_cast<uint8_t>(formats::extractBits(raw, 34, 2));
+        const uint8_t x2b = static_cast<uint8_t>(formats::extractBits(raw, 28, 2));
+        const uint8_t x2c = static_cast<uint8_t>(formats::extractBits(raw, 30, 2));
+
+        if (z_a == 1 && z_b == 1 && v_e == 0 &&
+            x2a == 0 && x2b == 0 && x2c == 1) {
+            result.opcode = 0x70; // SHL, register-count form
+            result.has_imm = false;
+            return true;
+        }
         
         // Check for immediate form (count encoded in instruction)
         if (x2 == 0x3) {

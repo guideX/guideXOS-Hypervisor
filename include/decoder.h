@@ -283,6 +283,7 @@ public:
     void SetOperands(uint8_t dst, uint8_t src1, uint8_t src2 = 0);
     void SetOperands4(uint8_t dst, uint8_t src1, uint8_t src2, uint8_t src3);
     void SetPredicate(uint8_t pred) { predicate_ = pred; }
+    void SetPredicate2(uint8_t pred) { predicate2_ = pred; }
     void SetImmediate(uint64_t imm);
     void SetBranchTarget(uint64_t target);
     void SetType(InstructionType type) { type_ = type; }
@@ -291,6 +292,7 @@ public:
     
     // Accessors for execution
     uint8_t GetPredicate() const { return predicate_; }
+    uint8_t GetPredicate2() const { return predicate2_; }
     uint8_t GetDst() const { return dst_; }
     uint8_t GetSrc1() const { return src1_; }
     uint8_t GetSrc2() const { return src2_; }
@@ -309,6 +311,7 @@ private:
     
     // Simplified operand storage
     uint8_t predicate_;     // Qualifying predicate (qp)
+    uint8_t predicate2_;    // Secondary predicate destination (for F5/F6/F7)
     uint8_t dst_;
     uint8_t src1_;
     uint8_t src2_;

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <map>
 #include <stdexcept>
+#include <cmath>
 
 using namespace ia64;
 
@@ -1630,6 +1631,211 @@ void testIA64FnmaF1Regression() {
     std::cout << "  ? raw 0x184509022c6 decodes, predicates, propagates NaTVal, and executes FNMA\n";
 }
 
+void testIA64ReciprocalApproximationRegression() {
+    std::cout << "Testing IA-64 FRCPA/FRSQRTA regressions...\n";
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(64 * 1024);
+
+    constexpr uint64_t frcpaRaw = 0x630910280ULL;
+    constexpr uint64_t frsqrtaRaw = 0x1e40c00280ULL;
+    constexpr uint64_t exponentOne = 0x0FFFFULL;
+    constexpr uint64_t exponentTwo = 0x10000ULL;
+    constexpr uint64_t oneSignificand = 0x8000000000000000ULL;
+
+    auto read64 = [](const uint8_t* bytes) {
+        uint64_t value = 0;
+        for (int i = 0; i < 8; ++i) {
+            value |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+        }
+        return value;
+    };
+    auto setFp = [&](uint8_t reg, uint64_t significand, uint64_t exponent,
+                     bool negative = false) {
+        uint8_t bytes[16] = {};
+        for (int i = 0; i < 8; ++i) {
+            bytes[i] = static_cast<uint8_t>(significand >> (i * 8));
+            bytes[8 + i] = static_cast<uint8_t>(exponent >> (i * 8));
+        }
+        if (negative) {
+            bytes[10] |= 0x02;
+        }
+        cpu.SetFR(reg, bytes);
+    };
+    auto setNatVal = [&](uint8_t reg) {
+        uint8_t bytes[16] = {};
+        bytes[8] = 0xFE;
+        bytes[9] = 0xFF;
+        bytes[10] = 0x01;
+        cpu.SetFR(reg, bytes);
+    };
+    auto fpValue = [&](uint8_t reg) {
+        uint8_t bytes[16] = {};
+        cpu.GetFR(reg, bytes);
+        const uint64_t significand = read64(bytes);
+        const uint64_t signAndExponent = read64(bytes + 8);
+        const int exponent = static_cast<int>(signAndExponent & 0x1FFFFULL);
+        const bool negative = (signAndExponent & (1ULL << 17)) != 0;
+        const long double magnitude = std::ldexp(
+            static_cast<long double>(significand),
+            exponent == 0 ? -16445 : exponent - 65535 - 63);
+        return negative ? -magnitude : magnitude;
+    };
+
+    const InstructionEx frcpa = decoder.DecodeSlot(
+        frcpaRaw, UnitType::F_UNIT, 0x37040);
+    assert(frcpa.GetType() == InstructionType::FRCPA);
+    assert(frcpa.GetUnit() == UnitType::F_UNIT);
+    assert(frcpa.GetPredicate() == 0);
+    assert(frcpa.GetPredicate2() == 6);
+    assert(frcpa.GetDst() == 10);
+    assert(frcpa.GetSrc1() == 8);
+    assert(frcpa.GetSrc2() == 9);
+    assert(frcpa.GetDisassembly() == "frcpa.s1 f10, p6 = f8, f9");
+
+    const InstructionEx frsqrta = decoder.DecodeSlot(
+        frsqrtaRaw, UnitType::F_UNIT, 0x37040);
+    assert(frsqrta.GetType() == InstructionType::FRSQRTA);
+    assert(frsqrta.GetPredicate() == 0);
+    assert(frsqrta.GetPredicate2() == 8);
+    assert(frsqrta.GetDst() == 10);
+    assert(frsqrta.GetSrc1() == 12);
+    assert(frsqrta.GetDisassembly() == "frsqrta.s3 f10, p8 = f12");
+
+    // Ordinary positive finite input: p8 is the approximation-valid bit and
+    // the result must meet the documented reciprocal-square-root bound.
+    setFp(12, oneSignificand, exponentTwo);
+    setFp(10, 0xA5A5ULL, exponentOne);
+    cpu.SetPR(8, false);
+    frsqrta.Execute(cpu, memory);
+    assert(cpu.GetPR(8));
+    const long double expected = 1.0L / std::sqrt(2.0L);
+    const long double actual = fpValue(10);
+    assert(std::fabs(actual - expected) / expected < 1.0e-12L);
+
+    // False qp clears p2 and leaves the floating-point destination untouched.
+    const InstructionEx falseQp = decoder.DecodeSlot(
+        frsqrtaRaw | 1ULL, UnitType::F_UNIT, 0x37040);
+    assert(falseQp.GetPredicate() == 1);
+    setFp(10, 0x1234ULL, exponentOne);
+    cpu.SetPR(1, false);
+    cpu.SetPR(8, true);
+    const long double beforeFalseQp = fpValue(10);
+    falseQp.Execute(cpu, memory);
+    assert(!cpu.GetPR(8));
+    assert(fpValue(10) == beforeFalseQp);
+
+    // Zero and negative finite input are special IEEE responses, not valid
+    // approximation cases, so p8 must be cleared.
+    setFp(12, 0, 0);
+    cpu.SetPR(8, true);
+    frsqrta.Execute(cpu, memory);
+    assert(!cpu.GetPR(8));
+    uint8_t zeroResult[16] = {};
+    cpu.GetFR(10, zeroResult);
+    assert(read64(zeroResult) == 0x8000000000000000ULL);
+    assert((read64(zeroResult + 8) & 0x1FFFFULL) == 0x1FFFFULL);
+    uint8_t negativeResult[16] = {};
+
+    setFp(12, 0x8000000000000000ULL, 0x1FFFFULL);
+    cpu.SetPR(8, true);
+    frsqrta.Execute(cpu, memory);
+    assert(!cpu.GetPR(8));
+    cpu.GetFR(10, zeroResult);
+    assert(read64(zeroResult) == 0);
+    assert((read64(zeroResult + 8) & 0x1FFFFULL) == 0);
+
+    setFp(12, 0x8000000000000000ULL, 0x1FFFFULL, true);
+    cpu.SetPR(8, true);
+    frsqrta.Execute(cpu, memory);
+    assert(!cpu.GetPR(8));
+    cpu.GetFR(10, negativeResult);
+    assert((read64(negativeResult + 8) & 0x1FFFFULL) == 0x1FFFFULL);
+    assert((read64(negativeResult) & 0xC000000000000000ULL) ==
+           0xC000000000000000ULL);
+
+    setFp(12, oneSignificand, exponentOne, true);
+    cpu.SetPR(8, true);
+    frsqrta.Execute(cpu, memory);
+    assert(!cpu.GetPR(8));
+    cpu.GetFR(10, negativeResult);
+    assert((read64(negativeResult + 8) & 0x1FFFFULL) == 0x1FFFFULL);
+    assert((read64(negativeResult) & 0xC000000000000000ULL) ==
+           0xC000000000000000ULL);
+
+    // NaTVal propagates and cannot authorize approximation.
+    setNatVal(12);
+    cpu.SetPR(8, true);
+    frsqrta.Execute(cpu, memory);
+    assert(!cpu.GetPR(8));
+    uint8_t natResult[16] = {};
+    cpu.GetFR(10, natResult);
+    assert(read64(natResult) == 0);
+    assert((read64(natResult + 8) & 0x3FFFFULL) == 0x1FFFEULL);
+
+    // The exact Debian raw instruction is F6 FRCPA, not F7 FRSQRTA.
+    setFp(8, oneSignificand, exponentOne);
+    setFp(9, oneSignificand, exponentOne);
+    setFp(10, 0x4321ULL, exponentOne);
+    cpu.SetPR(6, false);
+    frcpa.Execute(cpu, memory);
+    assert(cpu.GetPR(6));
+    assert(std::fabs(fpValue(10) - 1.0L) < 1.0e-12L);
+
+    setFp(8, 0, 0);
+    cpu.SetPR(6, true);
+    frcpa.Execute(cpu, memory);
+    assert(!cpu.GetPR(6));
+    cpu.GetFR(10, zeroResult);
+    assert(read64(zeroResult) == 0);
+
+    std::cout << "  ? exact Debian FRCPA and independent FRSQRTA decode/execution regressions pass\n";
+}
+
+void testIA64GentooVariableShiftRegression() {
+    std::cout << "Testing IA-64 Gentoo variable-SHL regression...\n";
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    constexpr uint64_t raw = 0xf240f24400ULL;
+
+    const InstructionEx shl = decoder.DecodeSlot(raw, UnitType::I_UNIT, 0x18040);
+    assert(shl.GetType() == InstructionType::SHL);
+    assert(shl.GetPredicate() == 0);
+    assert(shl.GetDst() == 16);
+    assert(shl.GetSrc1() == 18);
+    assert(shl.GetSrc2() == 15);
+    assert(!shl.HasImmediate());
+    assert(shl.GetDisassembly() == "shl r16 = r18, r15");
+
+    cpu.SetGR(18, 0x123456789ULL);
+    cpu.SetGR(15, 4);
+    shl.Execute(cpu, memory);
+    assert(cpu.GetGR(16) == (0x123456789ULL << 4));
+    assert(!cpu.GetGRNaT(16));
+
+    cpu.SetGR(15, 64);
+    shl.Execute(cpu, memory);
+    assert(cpu.GetGR(16) == 0);
+
+    cpu.SetGR(15, 3);
+    cpu.SetGRNaT(18, true);
+    shl.Execute(cpu, memory);
+    assert(cpu.GetGRNaT(16));
+
+    const InstructionEx falseQp = decoder.DecodeSlot(
+        raw | 1ULL, UnitType::I_UNIT, 0x18040);
+    assert(falseQp.GetPredicate() == 1);
+    cpu.SetPR(1, false);
+    cpu.SetGR(16, 0xfeedfaceULL);
+    falseQp.Execute(cpu, memory);
+    assert(cpu.GetGR(16) == 0xfeedfaceULL);
+
+    std::cout << "  ? raw 0xf240f24400 decodes and executes as variable SHL\n";
+}
+
 void testIA64ReturnBranchDecode() {
     std::cout << "Testing IA-64 return branch decode...\n";
 
@@ -1711,12 +1917,12 @@ void testIA64MoveFromBranchDecode() {
     std::cout << "Testing IA-64 move from branch register decode...\n";
 
     InstructionDecoder decoder;
-    InstructionEx mov = decoder.DecodeSlot(0x198000f80ULL, UnitType::I_UNIT, 0x18e0);
+    InstructionEx mov = decoder.DecodeSlot(0x188000f80ULL, UnitType::I_UNIT, 0x18e0);
 
     assert(mov.GetType() == InstructionType::MOV_FROM_BR);
     assert(mov.GetDst() == 62);
     assert(mov.GetSrc1() == 0);
-    assert(mov.GetRawBits() == 0x198000f80ULL);
+    assert(mov.GetRawBits() == 0x188000f80ULL);
     assert(mov.GetDisassembly() == "mov r62 = b0");
 
     std::cout << "  ? raw boot branch-register move decodes as mov r62 = b0\n";
@@ -3279,6 +3485,12 @@ int main() {
         std::cout << "\n";
 
         testIA64FnmaF1Regression();
+        std::cout << "\n";
+
+        testIA64ReciprocalApproximationRegression();
+        std::cout << "\n";
+
+        testIA64GentooVariableShiftRegression();
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughB0TransfersToTargetBundle();

@@ -12,6 +12,8 @@
 #include <array>
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
+#include <limits>
 
 namespace ia64 {
 
@@ -117,6 +119,7 @@ InstructionEx::InstructionEx()
     , unit_(UnitType::I_UNIT)
     , rawBits_(0)
     , predicate_(0)
+    , predicate2_(0)
     , dst_(0)
     , src1_(0)
     , src2_(0)
@@ -133,6 +136,7 @@ InstructionEx::InstructionEx(InstructionType type, UnitType unit)
     , unit_(unit)
     , rawBits_(0)
     , predicate_(0)
+    , predicate2_(0)
     , dst_(0)
     , src1_(0)
     , src2_(0)
@@ -450,6 +454,226 @@ static IA64FloatingValue ReadIA64FloatingValue(const uint8_t* bytes) {
     return value;
 }
 
+enum class IA64FloatingClass {
+    Zero,
+    Finite,
+    PositiveInfinity,
+    NegativeInfinity,
+    NaN,
+    Unsupported,
+    PseudoZero,
+};
+
+static IA64FloatingClass ClassifyIA64FloatingValue(const IA64FloatingValue& value) {
+    if (value.natVal) {
+        // NaTVal is handled before classification by the approximation
+        // instructions and is not an IEEE value.
+        return IA64FloatingClass::Unsupported;
+    }
+    if (value.exponent == 0x1FFFFU) {
+        if (value.significand == 0x8000000000000000ULL) {
+            return value.negative ? IA64FloatingClass::NegativeInfinity
+                                   : IA64FloatingClass::PositiveInfinity;
+        }
+        return value.significand & 0x8000000000000000ULL
+            ? IA64FloatingClass::NaN
+            : IA64FloatingClass::Unsupported;
+    }
+    if (value.significand == 0) {
+        return value.exponent == 0 ? IA64FloatingClass::Zero
+                                   : IA64FloatingClass::PseudoZero;
+    }
+    return IA64FloatingClass::Finite;
+}
+
+static bool IsIA64Finite(IA64FloatingClass value) {
+    return value == IA64FloatingClass::Finite;
+}
+
+static bool IsIA64ZeroLike(IA64FloatingClass value) {
+    return value == IA64FloatingClass::Zero ||
+           value == IA64FloatingClass::PseudoZero;
+}
+
+static bool IsIA64NaNLike(IA64FloatingClass value) {
+    return value == IA64FloatingClass::NaN ||
+           value == IA64FloatingClass::Unsupported;
+}
+
+static long double IA64ToLongDouble(const IA64FloatingValue& value) {
+    if (value.significand == 0) {
+        return value.negative ? -0.0L : 0.0L;
+    }
+
+    // The register format uses an explicit integer bit and a bias of 65535.
+    // Exponent zero has the double-extended denormal scale from Volume 1,
+    // rather than the normal biased-exponent formula.
+    const int exponent = value.exponent == 0
+        ? -16382 - 63
+        : static_cast<int>(value.exponent) - 65535 - 63;
+    const long double magnitude = std::ldexp(
+        static_cast<long double>(value.significand), exponent);
+    return value.negative ? -magnitude : magnitude;
+}
+
+static void WriteIA64Zero(uint8_t* bytes, bool negative) {
+    std::memset(bytes, 0, 16);
+    WriteLittleEndian64(bytes + 8, negative ? (1ULL << 17) : 0);
+}
+
+static void WriteIA64Infinity(uint8_t* bytes, bool negative) {
+    std::memset(bytes, 0, 16);
+    WriteLittleEndian64(bytes, 0x8000000000000000ULL);
+    WriteLittleEndian64(bytes + 8, 0x1FFFFULL | (negative ? (1ULL << 17) : 0));
+}
+
+static void WriteIA64NaN(uint8_t* bytes) {
+    std::memset(bytes, 0, 16);
+    // Canonical quiet NaN: exponent all ones and significand 1.10...0.
+    WriteLittleEndian64(bytes, 0xC000000000000000ULL);
+    WriteLittleEndian64(bytes + 8, 0x1FFFFULL);
+}
+
+static void WriteIA64Approximation(uint8_t* bytes,
+                                   long double value,
+                                   bool negative) {
+    if (value == 0.0L) {
+        WriteIA64Zero(bytes, negative);
+        return;
+    }
+    if (!std::isfinite(value)) {
+        WriteIA64Infinity(bytes, negative);
+        return;
+    }
+
+    const long double magnitude = std::fabs(value);
+    int exponent = 0;
+    const long double fraction = std::frexp(magnitude, &exponent);
+    const long double scaled = std::ldexp(fraction, 64);
+    const long double highPart = std::floor(scaled / 4294967296.0L);
+    uint64_t high = static_cast<uint64_t>(highPart);
+    uint64_t low = static_cast<uint64_t>(std::floor(
+        scaled - highPart * 4294967296.0L + 0.5L));
+    if (low == 0x100000000ULL) {
+        low = 0;
+        ++high;
+    }
+
+    int64_t biasedExponent = static_cast<int64_t>(65535) + exponent - 1;
+    if (high >= 0x100000000ULL) {
+        // Rounding 1.111... upward produces 1.000... at the next exponent.
+        high = 0x80000000ULL;
+        low = 0;
+        ++biasedExponent;
+    }
+
+    if (biasedExponent >= 0x1FFFF) {
+        WriteIA64Infinity(bytes, negative);
+        return;
+    }
+    if (biasedExponent <= 0) {
+        // This path is outside the normal Debian/Gentoo operands. Preserve a
+        // finite result without manufacturing an unsupported encoding.
+        WriteIA64Zero(bytes, negative);
+        return;
+    }
+
+    std::memset(bytes, 0, 16);
+    WriteLittleEndian64(bytes, (high << 32) | low);
+    WriteLittleEndian64(bytes + 8,
+                        static_cast<uint64_t>(biasedExponent) |
+                        (negative ? (1ULL << 17) : 0));
+}
+
+static void ExecuteReciprocalApproximation(CPUState& cpu,
+                                            InstructionType type,
+                                            uint64_t rawBits,
+                                            uint8_t destination,
+                                            uint8_t source1,
+                                            uint8_t source2,
+                                            uint8_t predicate2) {
+    // sf selects the architectural FPSR status bank. guideXOS currently has
+    // no floating-point exception/status implementation, so the numerical
+    // result is independent of this field; retaining it in rawBits keeps the
+    // decode/disassembly and future FPSR integration correct.
+    (void)rawBits;
+
+    uint8_t source1Bytes[16] = {};
+    uint8_t source2Bytes[16] = {};
+    uint8_t resultBytes[16] = {};
+    cpu.GetFR(source1, source1Bytes);
+    const IA64FloatingValue first = ReadIA64FloatingValue(source1Bytes);
+
+    if (type == InstructionType::FRSQRTA) {
+        if (first.natVal) {
+            WriteNatVal(resultBytes);
+            cpu.SetFR(destination, resultBytes);
+            cpu.SetPR(predicate2, false);
+            return;
+        }
+
+        const IA64FloatingClass classification = ClassifyIA64FloatingValue(first);
+        if (IsIA64ZeroLike(classification)) {
+            WriteIA64Infinity(resultBytes, first.negative);
+            cpu.SetPR(predicate2, false);
+        } else if (classification == IA64FloatingClass::PositiveInfinity) {
+            WriteIA64Zero(resultBytes, false);
+            cpu.SetPR(predicate2, false);
+        } else if (IsIA64Finite(classification) && !first.negative) {
+            const long double input = IA64ToLongDouble(first);
+            WriteIA64Approximation(resultBytes, 1.0L / std::sqrt(input), false);
+            cpu.SetPR(predicate2, true);
+        } else {
+            WriteIA64NaN(resultBytes);
+            cpu.SetPR(predicate2, false);
+        }
+        cpu.SetFR(destination, resultBytes);
+        return;
+    }
+
+    cpu.GetFR(source2, source2Bytes);
+    const IA64FloatingValue second = ReadIA64FloatingValue(source2Bytes);
+    if (first.natVal || second.natVal) {
+        WriteNatVal(resultBytes);
+        cpu.SetFR(destination, resultBytes);
+        cpu.SetPR(predicate2, false);
+        return;
+    }
+
+    const IA64FloatingClass numeratorClass = ClassifyIA64FloatingValue(first);
+    const IA64FloatingClass denominatorClass = ClassifyIA64FloatingValue(second);
+    const bool numeratorZero = IsIA64ZeroLike(numeratorClass);
+    const bool denominatorZero = IsIA64ZeroLike(denominatorClass);
+    const bool numeratorFinite = IsIA64Finite(numeratorClass);
+    const bool denominatorFinite = IsIA64Finite(denominatorClass);
+    const bool numeratorInfinity = numeratorClass == IA64FloatingClass::PositiveInfinity ||
+                                   numeratorClass == IA64FloatingClass::NegativeInfinity;
+    const bool denominatorInfinity = denominatorClass == IA64FloatingClass::PositiveInfinity ||
+                                     denominatorClass == IA64FloatingClass::NegativeInfinity;
+
+    if (IsIA64NaNLike(numeratorClass) || IsIA64NaNLike(denominatorClass) ||
+        (numeratorInfinity && denominatorInfinity) ||
+        (numeratorZero && denominatorZero)) {
+        WriteIA64NaN(resultBytes);
+        cpu.SetPR(predicate2, false);
+    } else if (numeratorInfinity || denominatorZero) {
+        WriteIA64Infinity(resultBytes, first.negative != second.negative);
+        cpu.SetPR(predicate2, false);
+    } else if (denominatorInfinity || numeratorZero) {
+        WriteIA64Zero(resultBytes, first.negative != second.negative);
+        cpu.SetPR(predicate2, false);
+    } else if (numeratorFinite && denominatorFinite) {
+        WriteIA64Approximation(resultBytes,
+                               1.0L / std::fabs(IA64ToLongDouble(second)),
+                               second.negative);
+        cpu.SetPR(predicate2, true);
+    } else {
+        WriteIA64NaN(resultBytes);
+        cpu.SetPR(predicate2, false);
+    }
+    cpu.SetFR(destination, resultBytes);
+}
+
 static unsigned FusedArithmeticPrecisionBits(const CPUState& cpu, uint64_t rawBits) {
     const uint8_t major = static_cast<uint8_t>((rawBits >> 37) & 0x0F);
     const bool fixedSingle = ((rawBits >> 36) & 1ULL) != 0;
@@ -699,6 +923,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetPR(dst_, false);
             cpu.SetPR(src3_, false);
         }
+        if (type_ == InstructionType::FRCPA || type_ == InstructionType::FRSQRTA) {
+            cpu.SetPR(predicate2_, false);
+        }
         // Predicate is false, instruction is nullified
         return;
     }
@@ -807,6 +1034,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::FMS:
         case InstructionType::FNMA:
             ExecuteFusedArithmetic(cpu, type_, rawBits_, dst_, src1_, src2_, src3_);
+            break;
+
+        case InstructionType::FRCPA:
+        case InstructionType::FRSQRTA:
+            ExecuteReciprocalApproximation(cpu, type_, rawBits_, dst_, src1_, src2_, predicate2_);
             break;
 
         case InstructionType::XMA:
@@ -992,7 +1224,13 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             
         case InstructionType::SHL:
             // shl rDst = rSrc1, rSrc2
-            cpu.SetGR(dst_, cpu.GetGR(src1_) << (cpu.GetGR(src2_) & 0x3F));
+            {
+                const uint64_t count = hasImmediate_ ? immediate_ : cpu.GetGR(src2_);
+                const uint64_t result = count > 63 ? 0 : (cpu.GetGR(src1_) << count);
+                cpu.SetGR(dst_, result);
+                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_) ||
+                                      (!hasImmediate_ && cpu.GetGRNaT(src2_)));
+            }
             break;
             
         case InstructionType::SHR:
@@ -1585,6 +1823,21 @@ std::string InstructionEx::GetDisassembly() const {
                     << static_cast<int>(src2_) << ", f"
                     << static_cast<int>(src3_);
             }
+            break;
+
+        case InstructionType::FRCPA:
+            oss << "frcpa.s" << static_cast<int>((rawBits_ >> 34) & 0x03)
+                << " f" << static_cast<int>(dst_)
+                << ", p" << static_cast<int>(predicate2_)
+                << " = f" << static_cast<int>(src1_)
+                << ", f" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::FRSQRTA:
+            oss << "frsqrta.s" << static_cast<int>((rawBits_ >> 34) & 0x03)
+                << " f" << static_cast<int>(dst_)
+                << ", p" << static_cast<int>(predicate2_)
+                << " = f" << static_cast<int>(src1_);
             break;
 
         case InstructionType::FCVT_FX:
@@ -2396,7 +2649,7 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
-            if (major == 0x0 && x3 == 0x0 && (x6 == 0x31 || x6 == 0x33)) {
+            if (major == 0x0 && x3 == 0x0 && x6 == 0x31) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
                 const uint8_t b2 = static_cast<uint8_t>((slotBits >> 13) & 0x7);
                 result = InstructionEx(InstructionType::MOV_FROM_BR, UnitType::I_UNIT);

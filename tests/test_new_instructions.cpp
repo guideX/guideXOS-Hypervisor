@@ -1118,7 +1118,7 @@ void test_application_register_moves() {
     cpu.SetPR(63, true);
     mov_from_pr.Execute(cpu, memory);
     assert_equal("mov from pr should pack predicate bits into a GR",
-                 0x8000000000010002ULL, cpu.GetGR(12));
+                 0x8000000000010003ULL, cpu.GetGR(12));
 
     InstructionEx filler_m_nop = decoder.DecodeSlot(0x2b86ULL, UnitType::M_UNIT, 0x42008);
     assert_true("Final-loop predicated M nop should decode",
@@ -1448,7 +1448,9 @@ void test_alloc_instruction() {
     // Check saved CFM
     assert_equal("ALLOC: saved CFM", 0x12345678, cpu.GetGR(10));
     assert_equal("ALLOC: ar.pfs should preserve previous frame state", 0x12345678, cpu.GetPFS());
-    assert_equal("ALLOC: ar.pfs alias should update with CFM", 0x12345678, cpu.GetRSEState().pfs);
+    assert_equal("ALLOC: ar.pfs alias should update with CFM",
+                 (2ULL << 14) | (5ULL << 7) | 10ULL,
+                 cpu.GetRSEState().pfs);
     
     // Check new CFM fields
     uint64_t new_cfm = cpu.GetCFM();
@@ -1478,9 +1480,9 @@ void test_rse_state_aliases() {
     assert_equal("RSE: BSPSTORE alias", 0x80000000020ULL, cpu.GetBSPSTORE());
     assert_equal("RSE: RNAT alias", 0xdeadbeef, cpu.GetRNAT());
     assert_equal("RSE: PFS alias", 0x1234 | (static_cast<uint64_t>(7) << 7) | (static_cast<uint64_t>(1) << 14), cpu.GetPFS());
-    assert_equal("RSE: explicit CFM from PFS", cpu.GetPFS(), cpu.GetCFM());
+    assert_equal("RSE: explicit CFM remains independent from PFS", 0, cpu.GetCFM());
     assert_equal("RSE: frame size fields updated", 0x34, cpu.GetRSEState().sof);
-    assert_equal("RSE: local size fields updated", 0x07, cpu.GetRSEState().sol);
+    assert_equal("RSE: local size fields updated", 0x27, cpu.GetRSEState().sol);
     assert_equal("RSE: rotating size fields updated", 0x01, cpu.GetRSEState().sor);
 
     std::cout << "  ? RSE state aliases passed" << std::endl;

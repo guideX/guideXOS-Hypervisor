@@ -116,16 +116,16 @@ bool FTypeDecoder::decodeF6(uint64_t slot, formats::FFormat& result) {
     //
     // Bits [0:5]:   qp
     // Bits [6:12]:  f1 (destination FP register)
-    // Bits [13:18]: p2 (destination predicate)
-    // Bits [19:25]: f2 (source FP register 1)
-    // Bits [26:32]: f3 (source FP register 2)
-    // Bits [33:34]: sf (status field)
+    // Bits [13:19]: f2 (source FP register 1)
+    // Bits [20:26]: f3 (source FP register 2)
+    // Bits [27:32]: p2 (destination predicate)
+    // Bits [34:35]: sf (status field)
     
     result.f1 = formats::extractBits(slot, 6, 7);
-    result.p2 = formats::extractBits(slot, 13, 6);
-    result.f2 = formats::extractBits(slot, 19, 7);
-    result.f3 = formats::extractBits(slot, 26, 7);
-    result.sf = formats::extractBits(slot, 33, 2);
+    result.f2 = formats::extractBits(slot, 13, 7);
+    result.f3 = formats::extractBits(slot, 20, 7);
+    result.p2 = formats::extractBits(slot, 27, 6);
+    result.sf = formats::extractBits(slot, 34, 2);
     
     return true;
 }
@@ -137,9 +137,9 @@ bool FTypeDecoder::decodeF7(uint64_t slot, formats::FFormat& result) {
     // Similar to F6 but single source operand
     
     result.f1 = formats::extractBits(slot, 6, 7);
-    result.p2 = formats::extractBits(slot, 13, 6);
+    result.p2 = formats::extractBits(slot, 27, 6);
     result.f3 = formats::extractBits(slot, 20, 7);
-    result.sf = formats::extractBits(slot, 33, 2);
+    result.sf = formats::extractBits(slot, 34, 2);
     
     return true;
 }
@@ -265,20 +265,30 @@ InstructionEx FTypeDecoder::decode(uint64_t slot) {
             }
             break;
             
-        case 0x0:  // FRCPA, FRSQRTA, FPRCPA, FPRSQRTA
+        case 0x0:  // FRCPA / FRSQRTA
         {
-            uint8_t x = formats::extractBits(slot, 33, 1);
-            if (x == 0) {
+            // Table 4-62 uses x=1 for the reciprocal-approximation family;
+            // q selects F6 (frcpa) versus F7 (frsqrta).
+            const uint8_t q = formats::extractBits(slot, 36, 1);
+            const uint8_t x = formats::extractBits(slot, 33, 1);
+            if (x != 1) {
+                break;
+            }
+            if (q == 0) {
                 if (decodeF6(slot, fmt)) {
                     inst.SetType(InstructionType::FRCPA);
                     inst.SetOperands(fmt.f1, fmt.f2, fmt.f3);
+                    inst.SetPredicate2(fmt.p2);
                 }
             } else {
                 if (decodeF7(slot, fmt)) {
                     inst.SetType(InstructionType::FRSQRTA);
                     inst.SetOperands(fmt.f1, fmt.f3, 0);
+                    inst.SetPredicate2(fmt.p2);
                 }
             }
+            inst.SetPredicate(qp);
+            inst.SetRawBits(slot);
             break;
         }
         
