@@ -889,6 +889,19 @@ void test_latest_boot_log_blockers() {
     cloop.Execute(cpu, memory);
     assert_equal("br.cloop should decrement ar.lc when nonzero", 1, cpu.GetAR(65));
 
+    // Gentoo's raw back-edge is major opcode 4, btype=5.  The architecture
+    // defines this as an unpredicated IP-relative br.cloop.
+    InstructionEx gentooCloop = decoder.DecodeSlot(0x8000026140ULL,
+                                                    UnitType::B_UNIT,
+                                                    0x16f80);
+    assert_true("Gentoo raw back-edge should decode as br.cloop",
+                gentooCloop.GetType() == InstructionType::BR_CLOOP);
+    assert_equal("Gentoo counted-loop predicate", 0, gentooCloop.GetPredicate());
+    assert_equal("Gentoo counted-loop target", 0x170b0, gentooCloop.GetBranchTarget());
+    assert_string("Gentoo counted-loop disassembly",
+                  "br.cloop 0x170b0",
+                  gentooCloop.GetDisassembly());
+
     InstructionEx chk_a_clr = decoder.DecodeSlot(0xa00018280ULL, UnitType::M_UNIT, 0xeb30);
     assert_true("Boot raw chk.a.clr should decode",
                 chk_a_clr.GetType() == InstructionType::CHK_A_CLR);

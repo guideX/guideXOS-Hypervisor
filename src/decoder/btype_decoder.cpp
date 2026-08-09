@@ -65,6 +65,7 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         switch (major) {
             case 0x0:   // IP-relative branches
             case 0x4:
+            {
                 if (registerBranch) {
                     const bool decoded = decodeIndirect(raw_instruction, btype, x6, result);
                     if (major == 0x0 && x6 == 0x20) {
@@ -74,7 +75,23 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
                     }
                     return decoded;
                 }
-                return decodeIPRelative(raw_instruction, btype, x6, current_ip, result);
+                const bool decoded = decodeIPRelative(raw_instruction, btype, x6, current_ip, result);
+                if (decoded && major == 0x4) {
+                    // The IA-64 major-4 table uses btype bits 8:6 for the
+                    // counted and while branches.  In particular, btype=5
+                    // is br.cloop, not the alternate br.call encoding used
+                    // by the old generic mapping above.
+                    switch (btype) {
+                        case 0x2: result.type = formats::BFormat::BranchType::WEXIT; break;
+                        case 0x3: result.type = formats::BFormat::BranchType::WTOP; break;
+                        case 0x5: result.type = formats::BFormat::BranchType::CLOOP; break;
+                        case 0x6: result.type = formats::BFormat::BranchType::CEXIT; break;
+                        case 0x7: result.type = formats::BFormat::BranchType::CTOP; break;
+                        default: break;
+                    }
+                }
+                return decoded;
+            }
 
             case 0x5:   // IP-relative br.call
             {
