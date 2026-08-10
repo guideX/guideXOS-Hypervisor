@@ -46,6 +46,11 @@ private:
     std::map<uint64_t, uint8_t> bytes_;
 };
 
+class ReportedEfiSparseMemory : public SparseMemory {
+public:
+    size_t GetTotalSize() const override { return 0x20000000ULL; }
+};
+
 class SizedSparseMemory : public IMemory {
 public:
     explicit SizedSparseMemory(uint64_t size) : size_(size) {}
@@ -304,6 +309,63 @@ public:
         bundle.templateType = TemplateType::MIB;
         bundle.hasStop = false;
         bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
+class FakeSyntheticEfiPlabelReturnDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x1000) {
+            // Model the plabel sequence's branch-register setup before br.call.
+            InstructionEx loadEntry(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+            loadEntry.SetOperands(6, 15, 0);
+            loadEntry.SetRawBits(0x10);
+            bundle.instructions.push_back(loadEntry);
+        } else if (bundleIP == 0x1010) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 6, 0);
+            call.SetRawBits(0x20);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x1020) {
+            // Model the caller's GP restoration after the service returns.
+            InstructionEx restoreGp(InstructionType::MOV_GR, UnitType::I_UNIT);
+            restoreGp.SetOperands(1, 41, 0);
+            restoreGp.SetRawBits(0x30);
+            bundle.instructions.push_back(restoreGp);
+        } else if (bundleIP == 0x1030) {
+            InstructionEx restoreReturnLink(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+            restoreReturnLink.SetOperands(0, 38, 0);
+            restoreReturnLink.SetRawBits(0x40);
+            bundle.instructions.push_back(restoreReturnLink);
+        } else if (bundleIP == 0x1040) {
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x50);
+            bundle.instructions.push_back(ret);
+        }
+
         return bundle;
     }
 
@@ -2621,6 +2683,154 @@ void testIA64PluginIndirectCallThroughFunctionDescriptor() {
     std::cout << "  ? indirect br.call resolves IA-64 function descriptors to code and gp\n";
 }
 
+void testIA64PluginSyntheticEfiPlabelPreservesReturnLink() {
+    std::cout << "Testing IA-64 synthetic EFI plabel return preserves r38...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1010, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1020, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1030, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1040, bundleBytes, sizeof(bundleBytes));
+
+    constexpr uint64_t callerGp = 0x1111111111111111ULL;
+    constexpr uint64_t serviceGp = 0x2222222222222222ULL;
+    constexpr uint64_t outerReturn = 0x3000ULL;
+    constexpr uint64_t serviceDescriptor = 0x1fe00fc0ULL;
+    constexpr uint64_t serviceCode = 0x1fe00f80ULL;
+    memory.Write(serviceDescriptor,
+                 reinterpret_cast<const uint8_t*>(&serviceCode),
+                 sizeof(serviceCode));
+    memory.Write(serviceDescriptor + 8,
+                 reinterpret_cast<const uint8_t*>(&serviceGp),
+                 sizeof(serviceGp));
+
+    FakeSyntheticEfiPlabelReturnDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(1, callerGp);
+    plugin.getCPUState().SetGR(38, outerReturn);
+    plugin.getCPUState().SetGR(41, callerGp);
+    plugin.getCPUState().SetGR(15, serviceDescriptor);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetBR(6) == serviceDescriptor);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(plugin.getCPUState().GetGR(1) == serviceGp);
+    assert(plugin.getCPUState().GetGR(38) == outerReturn);
+    assert(plugin.getCPUState().GetBR(0) == 0x1020);
+    assert(plugin.getCPUState().GetIP() == 0x1020);
+    assert(plugin.getCPUState().GetIP() != serviceGp);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(1) == callerGp);
+    assert(plugin.getCPUState().GetIP() == 0x1030);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetBR(0) == outerReturn);
+    assert(plugin.getCPUState().GetIP() == 0x1040);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == outerReturn);
+    assert(plugin.getCPUState().GetIP() != serviceGp);
+
+    std::cout << "  ? synthetic EFI plabel service returns EFI_SUCCESS and never branches to its GP\n";
+}
+
+void testIA64PluginGetMemoryMapOutputWidths() {
+    std::cout << "Testing IA-64 GetMemoryMap output widths and canaries...\n";
+
+    ReportedEfiSparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1010, bundleBytes, sizeof(bundleBytes));
+
+    constexpr uint64_t serviceDescriptor = 0x1fdb1840ULL;
+    constexpr uint64_t serviceCode = 0x1fdb1800ULL;
+    constexpr uint64_t serviceGp = 0x4444444444444444ULL;
+    memory.Write(serviceDescriptor,
+                 reinterpret_cast<const uint8_t*>(&serviceCode),
+                 sizeof(serviceCode));
+    memory.Write(serviceDescriptor + 8,
+                 reinterpret_cast<const uint8_t*>(&serviceGp),
+                 sizeof(serviceGp));
+
+    constexpr uint64_t memoryMapSizeAddress = 0x8000;
+    constexpr uint64_t memoryMapAddress = 0xa000;
+    constexpr uint64_t mapKeyAddress = 0x8020;
+    constexpr uint64_t descriptorSizeAddress = 0x8040;
+    constexpr uint64_t descriptorVersionAddress = 0x8060;
+    constexpr uint64_t memoryMapSizeInput = 0x400;
+    constexpr uint64_t sizeCanary = 0xaaaaaaaaaaaaaaaaULL;
+    constexpr uint64_t keyCanary = 0xbbbbbbbbbbbbbbbbULL;
+    constexpr uint64_t descriptorSizeCanary = 0xccccccccccccccccULL;
+    constexpr uint64_t descriptorVersionBefore = 0x8877665544332211ULL;
+    constexpr uint64_t descriptorVersionCanary = 0xddddddddddddddddULL;
+    constexpr uint64_t mapCanary = 0xeeeeeeeeeeeeeeeeULL;
+
+    memory.Write(memoryMapSizeAddress,
+                 reinterpret_cast<const uint8_t*>(&memoryMapSizeInput),
+                 sizeof(memoryMapSizeInput));
+    memory.Write(memoryMapSizeAddress + 8,
+                 reinterpret_cast<const uint8_t*>(&sizeCanary),
+                 sizeof(sizeCanary));
+    memory.Write(mapKeyAddress + 8,
+                 reinterpret_cast<const uint8_t*>(&keyCanary),
+                 sizeof(keyCanary));
+    memory.Write(descriptorSizeAddress + 8,
+                 reinterpret_cast<const uint8_t*>(&descriptorSizeCanary),
+                 sizeof(descriptorSizeCanary));
+    memory.Write(descriptorVersionAddress,
+                 reinterpret_cast<const uint8_t*>(&descriptorVersionBefore),
+                 sizeof(descriptorVersionBefore));
+    memory.Write(descriptorVersionAddress + 8,
+                 reinterpret_cast<const uint8_t*>(&descriptorVersionCanary),
+                 sizeof(descriptorVersionCanary));
+    memory.Write(memoryMapAddress + 0x1000,
+                 reinterpret_cast<const uint8_t*>(&mapCanary),
+                 sizeof(mapCanary));
+
+    FakeSyntheticEfiPlabelReturnDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(1, 0x1111111111111111ULL);
+    plugin.getCPUState().SetGR(38, 0x3000ULL);
+    plugin.getCPUState().SetGR(15, serviceDescriptor);
+    plugin.getCPUState().SetGR(32, memoryMapSizeAddress);
+    plugin.getCPUState().SetGR(33, memoryMapAddress);
+    plugin.getCPUState().SetGR(34, mapKeyAddress);
+    plugin.getCPUState().SetGR(35, descriptorSizeAddress);
+    plugin.getCPUState().SetGR(36, descriptorVersionAddress);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+
+    auto readU64 = [&](uint64_t address) {
+        uint64_t value = 0;
+        memory.Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return value;
+    };
+    const uint64_t requiredSize = readU64(memoryMapSizeAddress);
+    assert(requiredSize != 0);
+    assert((requiredSize % 40) == 0);
+    assert(readU64(memoryMapSizeAddress + 8) == sizeCanary);
+    assert(readU64(mapKeyAddress + 8) == keyCanary);
+    assert(readU64(descriptorSizeAddress) == 40);
+    assert(readU64(descriptorSizeAddress + 8) == descriptorSizeCanary);
+    const uint64_t versionBytes = readU64(descriptorVersionAddress);
+    assert((versionBytes & 0xffffffffULL) == 1);
+    assert((versionBytes >> 32) == (descriptorVersionBefore >> 32));
+    assert(readU64(descriptorVersionAddress + 8) == descriptorVersionCanary);
+    assert(readU64(memoryMapAddress + 0x1000) == mapCanary);
+
+    std::cout << "  ? UINTN outputs use 8 bytes and DescriptorVersion preserves its upper canary\n";
+}
+
 void testIA64PluginIndirectCallRejectsInvalidDescriptorGp() {
     std::cout << "Testing IA-64 plugin indirect call ignores invalid descriptor GP...\n";
 
@@ -3883,6 +4093,12 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginIndirectCallThroughFunctionDescriptor();
+        std::cout << "\n";
+
+        testIA64PluginSyntheticEfiPlabelPreservesReturnLink();
+        std::cout << "\n";
+
+        testIA64PluginGetMemoryMapOutputWidths();
         std::cout << "\n";
 
         testIA64PluginIndirectCallRejectsInvalidDescriptorGp();

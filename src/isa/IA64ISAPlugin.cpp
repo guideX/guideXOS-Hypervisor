@@ -997,6 +997,15 @@ bool readGuestU32(IMemory& memory, uint64_t address, uint32_t& value) {
     }
 }
 
+bool writeGuestU32(IMemory& memory, uint64_t address, uint32_t value) {
+    try {
+        memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 bool readGuestU64(IMemory& memory, uint64_t address, uint64_t& value) {
     try {
         memory.Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
@@ -2601,6 +2610,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         uint64_t branchTarget = 0;
         const uint64_t gpBeforeBranch = state_.getCPUState().GetGR(1);
         const uint64_t r8BeforeBranch = state_.getCPUState().GetGR(8);
+        const uint64_t r38BeforeBranch = state_.getCPUState().GetGR(38);
         std::array<uint64_t, 8> branchRegistersBefore{};
         for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
             branchRegistersBefore[i] = state_.getCPUState().GetBR(i);
@@ -3679,6 +3689,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << std::dec << std::endl;
                 branchTarget = resolvedCode;
             }
+        }
+
+        // Descriptor resolution mirrors the callee GP into r38 for ordinary
+        // IA-64 calls. Synthetic EFI services execute and return within this
+        // dispatcher, so the caller-visible r38 must survive the service call.
+        // The caller may use r38 as an outer return link after it restores r1.
+        if (handledFirmwareCallStub &&
+            cachedInstruction_.GetType() == InstructionType::BR_CALL) {
+            state_.getCPUState().SetGR(38, r38BeforeBranch);
         }
         
         // Keep non-branch predicate execution on the instruction-group snapshot,
@@ -5288,7 +5307,7 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
     // EFI_MEMORY_DESCRIPTOR is 40 bytes: Type + padding, PhysicalStart,
     // VirtualStart, NumberOfPages, and Attribute.
     constexpr uint64_t descriptorSize = 40;
-    constexpr uint64_t descriptorVersion = 1;
+    constexpr uint32_t descriptorVersion = 1;
     const uint64_t requiredSize = descriptorSize * static_cast<uint64_t>(efiMemoryMap_.size());
     uint64_t provided = 0;
     if (!readGuestU64(memory, memoryMapSizeAddress, provided) ||
@@ -5299,7 +5318,7 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
     if (descriptorVersionAddress != 0 &&
-        !writeGuestU64(memory, descriptorVersionAddress, descriptorVersion)) {
+        !writeGuestU32(memory, descriptorVersionAddress, descriptorVersion)) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
     if (mapKeyAddress != 0 && !writeGuestU64(memory, mapKeyAddress, efiMemoryMapKey_)) {
