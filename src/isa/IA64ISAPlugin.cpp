@@ -2725,10 +2725,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             ++gpSwitchCount_;
                             state_.getCPUState().SetGR(1, descriptorGp);
                         }
-                        // IA-64 callee prologues copy the caller GP back out of r38.
-                        // Mirror the resolved GP there so the next frame keeps the
-                        // right global pointer even when it re-materializes r1.
-                        state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
+                        // The function-descriptor GP belongs in r1. r38 is an
+                        // ordinary stacked register and may be a live outgoing
+                        // argument for the call being resolved.
                         if (descriptorReadable &&
                             descriptorGp >= memory.GetTotalSize() &&
                             descriptorGp < EFI_HANDOFF_REGION_BASE) {
@@ -3674,9 +3673,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     ++gpSwitchCount_;
                     state_.getCPUState().SetGR(1, resolvedGp);
                 }
-                // Keep the caller GP mirrored in r38 for the next callee frame,
-                // matching the indirect-call and fetch-bundle descriptor paths.
-                state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
                 lastDescriptorAddress_ = branchTarget;
                 lastDescriptorCode_ = resolvedCode;
                 lastDescriptorGp_ = resolvedGp;
@@ -4203,7 +4199,6 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
             if (descriptorGp != 0 && descriptorGp != oldGp) {
                 state_.getCPUState().SetGR(1, descriptorGp);
             }
-            state_.getCPUState().SetGR(38, state_.getCPUState().GetGR(1));
             state_.getCPUState().SetIP(descriptorCode);
             ip = descriptorCode;
             memory.Read(ip, bundleData, 16);

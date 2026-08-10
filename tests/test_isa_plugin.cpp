@@ -376,6 +376,79 @@ public:
     }
 };
 
+class FakeNestedLocateProtocolDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = true;
+        bundle.stopAfterSlot[0] = true;
+
+        if (bundleIP == 0x1000) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 0, 0);
+            call.SetBranchTarget(0x2000);
+            call.SetRawBits(0x10);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x2000) {
+            InstructionEx alloc(InstructionType::ALLOC, UnitType::M_UNIT);
+            alloc.SetOperands(35, 0, 0);
+            alloc.SetImmediate(9 | (static_cast<uint64_t>(6) << 7));
+            alloc.SetRawBits(0x20);
+            bundle.instructions.push_back(alloc);
+        } else if (bundleIP == 0x2010) {
+            InstructionEx copyProtocol(InstructionType::ADD, UnitType::I_UNIT);
+            copyProtocol.SetOperands(38, 32, 0);
+            copyProtocol.SetRawBits(0x30);
+            bundle.instructions.push_back(copyProtocol);
+        } else if (bundleIP == 0x2020) {
+            InstructionEx copyRegistration(InstructionType::ADD, UnitType::I_UNIT);
+            copyRegistration.SetOperands(39, 33, 0);
+            copyRegistration.SetRawBits(0x40);
+            bundle.instructions.push_back(copyRegistration);
+        } else if (bundleIP == 0x2030) {
+            InstructionEx copyInterface(InstructionType::ADD, UnitType::I_UNIT);
+            copyInterface.SetOperands(36, 34, 0);
+            copyInterface.SetRawBits(0x50);
+            bundle.instructions.push_back(copyInterface);
+        } else if (bundleIP == 0x2040) {
+            InstructionEx setInterface(InstructionType::ADD, UnitType::I_UNIT);
+            setInterface.SetOperands(40, 36, 0);
+            setInterface.SetRawBits(0x60);
+            bundle.instructions.push_back(setInterface);
+        } else if (bundleIP == 0x2050) {
+            InstructionEx loadEntry(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+            loadEntry.SetOperands(6, 15, 0);
+            loadEntry.SetRawBits(0x70);
+            bundle.instructions.push_back(loadEntry);
+        } else if (bundleIP == 0x2060) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 6, 0);
+            call.SetRawBits(0x80);
+            bundle.instructions.push_back(call);
+        }
+
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeDirectCallToDescriptorDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -2672,13 +2745,15 @@ void testIA64PluginIndirectCallThroughFunctionDescriptor() {
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1000);
     plugin.getCPUState().SetGR(1, 0x185);
+    constexpr uint64_t callerRegister38 = 0xfeedfacecafebeefULL;
+    plugin.getCPUState().SetGR(38, callerRegister38);
     plugin.getCPUState().SetBR(6, 0x4000);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
     assert(plugin.getCPUState().GetGR(1) == 0x238000);
-    assert(plugin.getCPUState().GetGR(38) == 0x238000);
+    assert(plugin.getCPUState().GetGR(38) == callerRegister38);
 
     std::cout << "  ? indirect br.call resolves IA-64 function descriptors to code and gp\n";
 }
@@ -2739,6 +2814,63 @@ void testIA64PluginSyntheticEfiPlabelPreservesReturnLink() {
     assert(plugin.getCPUState().GetIP() != serviceGp);
 
     std::cout << "  ? synthetic EFI plabel service returns EFI_SUCCESS and never branches to its GP\n";
+}
+
+void testIA64PluginNestedLocateProtocolPreservesProtocolArgument() {
+    std::cout << "Testing IA-64 nested LocateProtocol preserves protocol argument...\n";
+
+    ReportedEfiSparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    for (uint64_t address = 0x1000; address <= 0x2060; address += 0x10) {
+        memory.Write(address, bundleBytes, sizeof(bundleBytes));
+    }
+
+    constexpr uint64_t protocolGuidAddress = 0x3000ULL;
+    constexpr uint64_t interfaceAddress = 0x4000ULL;
+    constexpr uint64_t serviceDescriptor = 0x1fdb17c0ULL;
+    constexpr uint64_t serviceCode = 0x1fdb1780ULL;
+    constexpr uint64_t serviceGp = 0x1fdb0000ULL;
+    constexpr uint8_t loadedImageGuid[16] = {
+        0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
+        0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
+    memory.Write(protocolGuidAddress, loadedImageGuid, sizeof(loadedImageGuid));
+    memory.Write(serviceDescriptor,
+                 reinterpret_cast<const uint8_t*>(&serviceCode), sizeof(serviceCode));
+    memory.Write(serviceDescriptor + 8,
+                 reinterpret_cast<const uint8_t*>(&serviceGp), sizeof(serviceGp));
+
+    FakeNestedLocateProtocolDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetCFM(10 | (static_cast<uint64_t>(6) << 7));
+    plugin.getCPUState().SetGR(1, 0x1111111111111111ULL);
+    plugin.getCPUState().SetGR(38, protocolGuidAddress);
+    plugin.getCPUState().SetGR(39, 0);
+    plugin.getCPUState().SetGR(40, interfaceAddress);
+    plugin.getCPUState().SetGR(41, 0x2222222222222222ULL);
+    plugin.getCPUState().SetGR(15, serviceCode);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
+    assert(plugin.getCPUState().GetBR(0) == 0x1010);
+
+    for (uint64_t expectedIP = 0x2000; expectedIP <= 0x2060; expectedIP += 0x10) {
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == expectedIP + 0x10);
+    }
+
+    uint64_t returnedInterface = 0;
+    memory.Read(interfaceAddress,
+                reinterpret_cast<uint8_t*>(&returnedInterface), sizeof(returnedInterface));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(plugin.getCPUState().GetGR(1) == serviceGp);
+    assert(plugin.getCPUState().GetGR(38) == protocolGuidAddress);
+    assert(plugin.getCPUState().GetBR(0) == 0x2070);
+    assert(plugin.getCPUState().GetIP() == 0x2070);
+    assert(returnedInterface != 0);
+
+    std::cout << "  ? nested EFI LocateProtocol sees the original GUID pointer and writes its interface\n";
 }
 
 void testIA64PluginGetMemoryMapOutputWidths() {
@@ -2874,12 +3006,14 @@ void testIA64PluginDirectCallToFunctionDescriptor() {
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1000);
     plugin.getCPUState().SetGR(1, 0x185);
+    constexpr uint64_t callerRegister38 = 0xfeedfacecafebeefULL;
+    plugin.getCPUState().SetGR(38, callerRegister38);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
     assert(plugin.getCPUState().GetGR(1) == 0x238000);
-    assert(plugin.getCPUState().GetGR(38) == 0x238000);
+    assert(plugin.getCPUState().GetGR(38) == callerRegister38);
 
     std::cout << "  ? direct br.call resolves IA-64 function descriptors to code and gp\n";
 }
@@ -2899,11 +3033,13 @@ void testIA64PluginFetchBundleRedirectsDescriptorToCode() {
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x4000);
     plugin.getCPUState().SetGR(1, 0x185);
+    constexpr uint64_t callerRegister38 = 0xfeedfacecafebeefULL;
+    plugin.getCPUState().SetGR(38, callerRegister38);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.getCPUState().GetGR(1) == 0x238000);
-    assert(plugin.getCPUState().GetGR(38) == 0x238000);
+    assert(plugin.getCPUState().GetGR(38) == callerRegister38);
 
     std::cout << "  ? fetchBundle redirects descriptor bundles to executable code and gp\n";
 }
@@ -4096,6 +4232,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginSyntheticEfiPlabelPreservesReturnLink();
+        std::cout << "\n";
+
+        testIA64PluginNestedLocateProtocolPreservesProtocolArgument();
         std::cout << "\n";
 
         testIA64PluginGetMemoryMapOutputWidths();
