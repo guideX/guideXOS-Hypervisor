@@ -183,6 +183,11 @@ public:
      * even if the live guest memory object is not the source of truth.
      */
     void setBootImageBackingStore(std::vector<uint8_t> bootImage);
+
+    // Queue a host-independent EFI key for focused firmware/input tests.
+    // Production starts with an empty queue until a host input source is wired.
+    void enqueueEfiInputKey(uint16_t scanCode, uint16_t unicodeChar,
+                            uint32_t shiftState = 0, uint8_t toggleState = 0);
     
     /**
      * Get optional components
@@ -238,6 +243,9 @@ private:
     uint64_t handleEfiFileSetPosition(IMemory& memory);
     uint64_t handleEfiLocateHandle(IMemory& memory);
     uint64_t handleEfiLocateProtocol(IMemory& memory);
+    void resetEfiConsoleInput();
+    uint64_t handleEfiReadKeyStroke(IMemory& memory, bool extended);
+    uint64_t handleEfiWaitForEvent(IMemory& memory, bool checkOnly);
     bool ensureEfiMemoryMap(IMemory& memory);
     uint64_t handleEfiAllocatePages(IMemory& memory);
     uint64_t handleEfiGetMemoryMap(IMemory& memory);
@@ -312,6 +320,14 @@ private:
     size_t efiFileCloseCalls_;
     size_t efiFileSetPositionCalls_;
     size_t efiFileGetPositionCalls_;
+    size_t efiReadKeyStrokeCalls_;
+    size_t efiReadKeyStrokeExCalls_;
+    size_t efiReadKeyStrokeNotReadyCalls_;
+    size_t efiReadKeyStrokeSuccessCalls_;
+    size_t efiReadKeyStrokeExNotReadyCalls_;
+    size_t efiReadKeyStrokeExSuccessCalls_;
+    size_t efiWaitForEventCalls_;
+    size_t efiCheckEventCalls_;
     size_t efiFirstSuccessfulFileOpen_;
     uint64_t efiTotalFileBytesRead_;
     size_t descriptorCallCount_;
@@ -354,6 +370,14 @@ private:
         uint64_t position = 0;
     };
     std::map<uint64_t, EfiFileHandle> efiFileHandles_;
+
+    struct EfiInputKey {
+        uint16_t scanCode = 0;
+        uint16_t unicodeChar = 0;
+        uint32_t shiftState = 0;
+        uint8_t toggleState = 0;
+    };
+    std::deque<EfiInputKey> efiInputQueue_;
 
     struct EfiMemoryDescriptor {
         uint32_t type = 0;

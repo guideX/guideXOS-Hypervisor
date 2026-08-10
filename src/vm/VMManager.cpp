@@ -1312,6 +1312,7 @@ bool VMManager::startVM(const std::string& vmId) {
             auto& memory = instance->vm->getMemory();
             constexpr uint64_t imageHandle = 0x1ULL;
             constexpr uint64_t deviceHandle = 0x40ULL;
+            constexpr uint64_t consoleInputHandle = 0x41ULL;
             constexpr uint64_t tableSignature = 0x5453595320494249ULL;
             constexpr uint64_t bootServicesSignature = 0x56524553544F4F42ULL;
             constexpr uint64_t runtimeServicesSignature = 0x56524553544E5552ULL;
@@ -1374,6 +1375,13 @@ bool VMManager::startVM(const std::string& vmId) {
             writeCallableStub(layout.textOutputStringStubCodeAddr, 0);
             writeCallableStub(layout.getVariableStubCodeAddr, static_cast<uint64_t>(-1));
             writeCallableStub(layout.setMemStubCodeAddr, 0);
+            writeCallableStub(layout.inputResetStubCodeAddr, 0);
+            writeCallableStub(layout.inputReadKeyStrokeStubCodeAddr, 0);
+            writeCallableStub(layout.inputReadKeyStrokeExStubCodeAddr, 0);
+            writeCallableStub(layout.inputRegisterKeyNotifyStubCodeAddr, 0);
+            writeCallableStub(layout.inputUnregisterKeyNotifyStubCodeAddr, 0);
+            writeCallableStub(layout.waitForEventStubCodeAddr, 0);
+            writeCallableStub(layout.checkEventStubCodeAddr, 0);
             const uint64_t zeroResultStubs[] = {
                 layout.fileOpenStubCodeAddr, layout.fileCloseStubCodeAddr,
                 layout.fileReadStubCodeAddr, layout.fileGetPositionStubCodeAddr,
@@ -1406,6 +1414,13 @@ bool VMManager::startVM(const std::string& vmId) {
             writeDescriptor(layout.loadImageStubDescAddr, layout.loadImageStubCodeAddr);
             writeDescriptor(layout.startImageStubDescAddr, layout.startImageStubCodeAddr);
             writeDescriptor(layout.setMemStubDescAddr, layout.setMemStubCodeAddr);
+            writeDescriptor(layout.inputResetStubDescAddr, layout.inputResetStubCodeAddr);
+            writeDescriptor(layout.inputReadKeyStrokeStubDescAddr, layout.inputReadKeyStrokeStubCodeAddr);
+            writeDescriptor(layout.inputReadKeyStrokeExStubDescAddr, layout.inputReadKeyStrokeExStubCodeAddr);
+            writeDescriptor(layout.inputRegisterKeyNotifyStubDescAddr, layout.inputRegisterKeyNotifyStubCodeAddr);
+            writeDescriptor(layout.inputUnregisterKeyNotifyStubDescAddr, layout.inputUnregisterKeyNotifyStubCodeAddr);
+            writeDescriptor(layout.waitForEventStubDescAddr, layout.waitForEventStubCodeAddr);
+            writeDescriptor(layout.checkEventStubDescAddr, layout.checkEventStubCodeAddr);
 
             for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
                 write64(layout.runtimeServicesAddr + offset, layout.unsupportedStubDescAddr);
@@ -1427,6 +1442,8 @@ bool VMManager::startVM(const std::string& vmId) {
             write64(layout.bootServicesAddr + 0x100, layout.successStubDescAddr);
             write64(layout.bootServicesAddr + 0x140, layout.locateProtocolStubDescAddr);
             write64(layout.bootServicesAddr + 0x168, layout.setMemStubDescAddr);
+            write64(layout.bootServicesAddr + 0x60, layout.waitForEventStubDescAddr);
+            write64(layout.bootServicesAddr + 0x78, layout.checkEventStubDescAddr);
 
             static const uint16_t vendor[] = {
                 'g','u','i','d','e','X','O','S',' ','H','y','p','e','r','v','i','s','o','r',0
@@ -1460,6 +1477,20 @@ bool VMManager::startVM(const std::string& vmId) {
             write8(endNode + 0x01, 0xFFU);
             write16(endNode + 0x02, 0x04U);
             write16(layout.loadedImageLoadOptionsAddr, 0U);
+
+            // UEFI requires the console input handle to expose both text-input
+            // protocols, even when the synthetic device has no pending key.
+            write64(layout.base + 0x28, consoleInputHandle);
+            write64(layout.base + 0x30, layout.simpleTextInputProtocolAddr);
+            write64(layout.simpleTextInputProtocolAddr + 0x00, layout.inputResetStubDescAddr);
+            write64(layout.simpleTextInputProtocolAddr + 0x08, layout.inputReadKeyStrokeStubDescAddr);
+            write64(layout.simpleTextInputProtocolAddr + 0x10, layout.consoleInputEventAddr);
+            write64(layout.simpleTextInputExProtocolAddr + 0x00, layout.inputResetStubDescAddr);
+            write64(layout.simpleTextInputExProtocolAddr + 0x08, layout.inputReadKeyStrokeExStubDescAddr);
+            write64(layout.simpleTextInputExProtocolAddr + 0x10, layout.consoleInputEventAddr);
+            write64(layout.simpleTextInputExProtocolAddr + 0x18, layout.unsupportedStubDescAddr);
+            write64(layout.simpleTextInputExProtocolAddr + 0x20, layout.inputRegisterKeyNotifyStubDescAddr);
+            write64(layout.simpleTextInputExProtocolAddr + 0x28, layout.inputUnregisterKeyNotifyStubDescAddr);
 
             write64(layout.textOutputProtocolAddr + 0x00, layout.successStubDescAddr);
             write64(layout.textOutputProtocolAddr + 0x08, layout.textOutputStringStubDescAddr);

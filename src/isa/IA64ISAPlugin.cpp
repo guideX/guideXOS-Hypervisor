@@ -119,6 +119,8 @@ constexpr uint64_t EFI_STATUS_WRITE_PROTECTED = 0x8000000000000008ULL;
 constexpr uint64_t EFI_STATUS_OUT_OF_RESOURCES = 0x8000000000000009ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_STATUS_NO_MEDIA = 0x800000000000000CULL;
+constexpr uint64_t EFI_STATUS_NOT_READY = 0x8000000000000006ULL;
+constexpr uint64_t EFI_CONSOLE_INPUT_HANDLE = 0x41ULL;
 constexpr uint64_t EFI_PAGE_SIZE = 0x1000ULL;
 constexpr uint32_t EFI_ALLOCATE_ANY_PAGES = 0U;
 constexpr uint32_t EFI_ALLOCATE_MAX_ADDRESS = 1U;
@@ -190,6 +192,23 @@ uint64_t EFI_START_IMAGE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiStartIma
 uint64_t EFI_START_IMAGE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiStartImageStubDescOffset;
 uint64_t EFI_SET_MEM_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSetMemStubCodeOffset;
 uint64_t EFI_SET_MEM_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSetMemStubDescOffset;
+uint64_t EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSimpleTextInputProtocolOffset;
+uint64_t EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSimpleTextInputExProtocolOffset;
+uint64_t EFI_CONSOLE_INPUT_EVENT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiConsoleInputEventOffset;
+uint64_t EFI_INPUT_RESET_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputResetStubCodeOffset;
+uint64_t EFI_INPUT_RESET_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputResetStubDescOffset;
+uint64_t EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputReadKeyStrokeStubCodeOffset;
+uint64_t EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputReadKeyStrokeStubDescOffset;
+uint64_t EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputReadKeyStrokeExStubCodeOffset;
+uint64_t EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputReadKeyStrokeExStubDescOffset;
+uint64_t EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputRegisterKeyNotifyStubCodeOffset;
+uint64_t EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputRegisterKeyNotifyStubDescOffset;
+uint64_t EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputUnregisterKeyNotifyStubCodeOffset;
+uint64_t EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiInputUnregisterKeyNotifyStubDescOffset;
+uint64_t EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiWaitForEventStubCodeOffset;
+uint64_t EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiWaitForEventStubDescOffset;
+uint64_t EFI_CHECK_EVENT_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiCheckEventStubCodeOffset;
+uint64_t EFI_CHECK_EVENT_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiCheckEventStubDescOffset;
 uint64_t EFI_LOADED_IMAGE_FILE_PATH_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageFilePathOffset;
 uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = EFI_HANDOFF_REGION_BASE + kEfiLoadedImageLoadOptionsOffset;
 uint64_t EFI_GET_VARIABLE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiGetVariableStubCodeOffset;
@@ -300,6 +319,14 @@ constexpr EfiGuid EFI_LOADED_IMAGE_PROTOCOL_GUID = {{
 constexpr EfiGuid EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID = {{
     0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11,
     0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+}};
+constexpr EfiGuid EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID = {{
+    0xC1, 0x77, 0x74, 0x38, 0xC7, 0x69, 0xD2, 0x11,
+    0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+}};
+constexpr EfiGuid EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID = {{
+    0x34, 0x75, 0x9E, 0xDD, 0x62, 0x77, 0x98, 0x46,
+    0x8C, 0x14, 0xF5, 0x85, 0x17, 0xA6, 0x25, 0xAA
 }};
 constexpr EfiGuid EFI_FILE_INFO_GUID = {{
     0x92, 0x6E, 0x57, 0x09, 0x3F, 0x6D, 0xD2, 0x11,
@@ -422,6 +449,23 @@ void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_START_IMAGE_STUB_DESC_ADDR = base + kEfiStartImageStubDescOffset;
     EFI_SET_MEM_STUB_CODE_ADDR = base + kEfiSetMemStubCodeOffset;
     EFI_SET_MEM_STUB_DESC_ADDR = base + kEfiSetMemStubDescOffset;
+    EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR = base + kEfiSimpleTextInputProtocolOffset;
+    EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR = base + kEfiSimpleTextInputExProtocolOffset;
+    EFI_CONSOLE_INPUT_EVENT_ADDR = base + kEfiConsoleInputEventOffset;
+    EFI_INPUT_RESET_STUB_CODE_ADDR = base + kEfiInputResetStubCodeOffset;
+    EFI_INPUT_RESET_STUB_DESC_ADDR = base + kEfiInputResetStubDescOffset;
+    EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR = base + kEfiInputReadKeyStrokeStubCodeOffset;
+    EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR = base + kEfiInputReadKeyStrokeStubDescOffset;
+    EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR = base + kEfiInputReadKeyStrokeExStubCodeOffset;
+    EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR = base + kEfiInputReadKeyStrokeExStubDescOffset;
+    EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR = base + kEfiInputRegisterKeyNotifyStubCodeOffset;
+    EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR = base + kEfiInputRegisterKeyNotifyStubDescOffset;
+    EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR = base + kEfiInputUnregisterKeyNotifyStubCodeOffset;
+    EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR = base + kEfiInputUnregisterKeyNotifyStubDescOffset;
+    EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR = base + kEfiWaitForEventStubCodeOffset;
+    EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR = base + kEfiWaitForEventStubDescOffset;
+    EFI_CHECK_EVENT_STUB_CODE_ADDR = base + kEfiCheckEventStubCodeOffset;
+    EFI_CHECK_EVENT_STUB_DESC_ADDR = base + kEfiCheckEventStubDescOffset;
     EFI_LOADED_IMAGE_FILE_PATH_ADDR = base + kEfiLoadedImageFilePathOffset;
     EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR = base + kEfiLoadedImageLoadOptionsOffset;
     EFI_GET_VARIABLE_STUB_CODE_ADDR = base + kEfiGetVariableStubCodeOffset;
@@ -577,6 +621,13 @@ std::string describeEfiDescriptor(uint64_t address) {
     if (address == EFI_LOAD_IMAGE_STUB_DESC_ADDR) return "BootServices.LoadImage descriptor";
     if (address == EFI_START_IMAGE_STUB_DESC_ADDR) return "BootServices.StartImage descriptor";
     if (address == EFI_SET_MEM_STUB_DESC_ADDR) return "BootServices.SetMem descriptor";
+    if (address == EFI_INPUT_RESET_STUB_DESC_ADDR) return "SimpleTextInput.Reset descriptor";
+    if (address == EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR) return "SimpleTextInput.ReadKeyStroke descriptor";
+    if (address == EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR) return "SimpleTextInputEx.ReadKeyStrokeEx descriptor";
+    if (address == EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR) return "SimpleTextInputEx.RegisterKeyNotify descriptor";
+    if (address == EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR) return "SimpleTextInputEx.UnregisterKeyNotify descriptor";
+    if (address == EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR) return "BootServices.WaitForEvent descriptor";
+    if (address == EFI_CHECK_EVENT_STUB_DESC_ADDR) return "BootServices.CheckEvent descriptor";
     return {};
 }
 
@@ -601,6 +652,13 @@ uint64_t efiDescriptorForCodePointer(uint64_t codePointer) {
     if (codePointer == EFI_LOAD_IMAGE_STUB_CODE_ADDR) return EFI_LOAD_IMAGE_STUB_DESC_ADDR;
     if (codePointer == EFI_START_IMAGE_STUB_CODE_ADDR) return EFI_START_IMAGE_STUB_DESC_ADDR;
     if (codePointer == EFI_SET_MEM_STUB_CODE_ADDR) return EFI_SET_MEM_STUB_DESC_ADDR;
+    if (codePointer == EFI_INPUT_RESET_STUB_CODE_ADDR) return EFI_INPUT_RESET_STUB_DESC_ADDR;
+    if (codePointer == EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR) return EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR;
+    if (codePointer == EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR) return EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR;
+    if (codePointer == EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR) return EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR;
+    if (codePointer == EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR) return EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR;
+    if (codePointer == EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR) return EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR;
+    if (codePointer == EFI_CHECK_EVENT_STUB_CODE_ADDR) return EFI_CHECK_EVENT_STUB_DESC_ADDR;
     return 0;
 }
 
@@ -612,6 +670,8 @@ const char* efiStatusName(uint64_t status) {
         case EFI_STATUS_BUFFER_TOO_SMALL: return "EFI_BUFFER_TOO_SMALL";
         case EFI_STATUS_WRITE_PROTECTED: return "EFI_WRITE_PROTECTED";
         case EFI_STATUS_NO_MEDIA: return "EFI_NO_MEDIA";
+        case EFI_STATUS_NOT_READY: return "EFI_NOT_READY";
+        case EFI_STATUS_OUT_OF_RESOURCES: return "EFI_OUT_OF_RESOURCES";
         case EFI_STATUS_NOT_FOUND: return "EFI_NOT_FOUND";
         default: return "EFI_STATUS_UNKNOWN";
     }
@@ -1970,6 +2030,14 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiFileCloseCalls_(0)
     , efiFileSetPositionCalls_(0)
     , efiFileGetPositionCalls_(0)
+    , efiReadKeyStrokeCalls_(0)
+    , efiReadKeyStrokeExCalls_(0)
+    , efiReadKeyStrokeNotReadyCalls_(0)
+    , efiReadKeyStrokeSuccessCalls_(0)
+    , efiReadKeyStrokeExNotReadyCalls_(0)
+    , efiReadKeyStrokeExSuccessCalls_(0)
+    , efiWaitForEventCalls_(0)
+    , efiCheckEventCalls_(0)
     , efiFirstSuccessfulFileOpen_(0)
     , efiTotalFileBytesRead_(0)
     , descriptorCallCount_(0)
@@ -2042,6 +2110,14 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiFileCloseCalls_(0)
     , efiFileSetPositionCalls_(0)
     , efiFileGetPositionCalls_(0)
+    , efiReadKeyStrokeCalls_(0)
+    , efiReadKeyStrokeExCalls_(0)
+    , efiReadKeyStrokeNotReadyCalls_(0)
+    , efiReadKeyStrokeSuccessCalls_(0)
+    , efiReadKeyStrokeExNotReadyCalls_(0)
+    , efiReadKeyStrokeExSuccessCalls_(0)
+    , efiWaitForEventCalls_(0)
+    , efiCheckEventCalls_(0)
     , efiFirstSuccessfulFileOpen_(0)
     , efiTotalFileBytesRead_(0)
     , descriptorCallCount_(0)
@@ -2084,6 +2160,13 @@ void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
     efiMemoryMapKey_ = 1;
+}
+
+void IA64ISAPlugin::enqueueEfiInputKey(uint16_t scanCode,
+                                       uint16_t unicodeChar,
+                                       uint32_t shiftState,
+                                       uint8_t toggleState) {
+    efiInputQueue_.push_back({scanCode, unicodeChar, shiftState, toggleState});
 }
 
 bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
@@ -2169,6 +2252,14 @@ void IA64ISAPlugin::reset() {
     efiFileCloseCalls_ = 0;
     efiFileSetPositionCalls_ = 0;
     efiFileGetPositionCalls_ = 0;
+    efiReadKeyStrokeCalls_ = 0;
+    efiReadKeyStrokeExCalls_ = 0;
+    efiReadKeyStrokeNotReadyCalls_ = 0;
+    efiReadKeyStrokeSuccessCalls_ = 0;
+    efiReadKeyStrokeExNotReadyCalls_ = 0;
+    efiReadKeyStrokeExSuccessCalls_ = 0;
+    efiWaitForEventCalls_ = 0;
+    efiCheckEventCalls_ = 0;
     efiFirstSuccessfulFileOpen_ = 0;
     efiTotalFileBytesRead_ = 0;
     descriptorCallCount_ = 0;
@@ -2187,6 +2278,7 @@ void IA64ISAPlugin::reset() {
     lastBranchTargets_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
+    efiInputQueue_.clear();
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
     efiMemoryMapKey_ = 1;
@@ -2838,6 +2930,74 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         BootStageTrace::Event("IA64_EA00_CALL", ea00.str());
                     }
                     if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_INPUT_RESET_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        resetEfiConsoleInput();
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                        logEfiServiceCall(memory, "SimpleTextInput.Reset", currentIP,
+                                          EFI_INPUT_RESET_STUB_DESC_ADDR, originalBranchTarget,
+                                          EFI_STATUS_SUCCESS);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t status = handleEfiReadKeyStroke(memory, false);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, status);
+                        logEfiServiceCall(memory, "SimpleTextInput.ReadKeyStroke", currentIP,
+                                          EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR, originalBranchTarget,
+                                          status);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t status = handleEfiReadKeyStroke(memory, true);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, status);
+                        logEfiServiceCall(memory, "SimpleTextInputEx.ReadKeyStrokeEx", currentIP,
+                                          EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR, originalBranchTarget,
+                                          status);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_OUT_OF_RESOURCES);
+                        logEfiServiceCall(memory, "SimpleTextInputEx.RegisterKeyNotify", currentIP,
+                                          EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR, originalBranchTarget,
+                                          EFI_STATUS_OUT_OF_RESOURCES);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_INVALID_PARAMETER);
+                        logEfiServiceCall(memory, "SimpleTextInputEx.UnregisterKeyNotify", currentIP,
+                                          EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR, originalBranchTarget,
+                                          EFI_STATUS_INVALID_PARAMETER);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t status = handleEfiWaitForEvent(memory, false);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, status);
+                        logEfiServiceCall(memory, "BootServices.WaitForEvent", currentIP,
+                                          EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR, originalBranchTarget,
+                                          status);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_CHECK_EVENT_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t status = handleEfiWaitForEvent(memory, true);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, status);
+                        logEfiServiceCall(memory, "BootServices.CheckEvent", currentIP,
+                                          EFI_CHECK_EVENT_STUB_DESC_ADDR, originalBranchTarget,
+                                          status);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_ALLOCATE_POOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         const uint64_t size = readCallerOutputRegister(state_.getCPUState(), 1);
@@ -3023,6 +3183,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
                             protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
                             protocolName = "SimpleFileSystemProtocol";
+                        } else if (handle == EFI_CONSOLE_INPUT_HANDLE &&
+                                   hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID) {
+                            protocolAddress = EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR;
+                            protocolName = "SimpleTextInputProtocol";
+                        } else if (handle == EFI_CONSOLE_INPUT_HANDLE &&
+                                   hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID) {
+                            protocolAddress = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR;
+                            protocolName = "SimpleTextInputExProtocol";
                         } else if (zeroGuid) {
                             if (currentIP == 0x2EFD0ULL || currentIP == 0x1A50ULL) {
                                 protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
@@ -3794,6 +3962,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                           << ", File.Close=" << efiFileCloseCalls_
                           << ", File.SetPosition=" << efiFileSetPositionCalls_
                           << ", File.GetPosition=" << efiFileGetPositionCalls_
+                          << ", ReadKeyStroke=" << efiReadKeyStrokeCalls_
+                          << " (EFI_NOT_READY=" << efiReadKeyStrokeNotReadyCalls_
+                          << ", EFI_SUCCESS=" << efiReadKeyStrokeSuccessCalls_ << ")"
+                          << ", ReadKeyStrokeEx=" << efiReadKeyStrokeExCalls_
+                          << " (EFI_NOT_READY=" << efiReadKeyStrokeExNotReadyCalls_
+                          << ", EFI_SUCCESS=" << efiReadKeyStrokeExSuccessCalls_ << ")"
+                          << ", WaitForEvent=" << efiWaitForEventCalls_
+                          << ", CheckEvent=" << efiCheckEventCalls_
                           << ", totalFileBytesRead=0x" << std::hex << efiTotalFileBytesRead_ << std::dec
                           << ", descriptorCalls=" << descriptorCallCount_
                           << ", gpSwitches=" << gpSwitchCount_
@@ -3983,6 +4159,14 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiFileCloseCalls_ = 0;
     efiFileSetPositionCalls_ = 0;
     efiFileGetPositionCalls_ = 0;
+    efiReadKeyStrokeCalls_ = 0;
+    efiReadKeyStrokeExCalls_ = 0;
+    efiReadKeyStrokeNotReadyCalls_ = 0;
+    efiReadKeyStrokeSuccessCalls_ = 0;
+    efiReadKeyStrokeExNotReadyCalls_ = 0;
+    efiReadKeyStrokeExSuccessCalls_ = 0;
+    efiWaitForEventCalls_ = 0;
+    efiCheckEventCalls_ = 0;
     efiFirstSuccessfulFileOpen_ = 0;
     efiTotalFileBytesRead_ = 0;
     descriptorCallCount_ = 0;
@@ -4001,6 +4185,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     lastBranchTargets_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
+    efiInputQueue_.clear();
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
     efiMemoryMapKey_ = 1;
@@ -4480,7 +4665,11 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
     if (descriptor.empty()) {
         descriptor = describeEfiTableSlot(descriptorAddress);
     }
-    {
+    const bool quietConsoleInputCall =
+        lastEfiCallName_.find("SimpleTextInput") == 0 ||
+        lastEfiCallName_ == "BootServices.WaitForEvent" ||
+        lastEfiCallName_ == "BootServices.CheckEvent";
+    if (!quietConsoleInputCall) {
         std::ostringstream ctx;
         ctx << "service=\"" << lastEfiCallName_ << "\""
             << " callerIP=" << BootStageTrace::Hex(callerIP)
@@ -4505,6 +4694,9 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
         } else if (lastEfiCallName_ == "BootServices.ExitBootServices") {
             BootStageTrace::Stage(170, "ExitBootServices attempted", ctx.str());
         }
+    }
+    if (quietConsoleInputCall) {
+        return;
     }
     std::cout << "[EFI-CALL] service=" << lastEfiCallName_
               << " callerIP=0x" << std::hex << callerIP
@@ -4892,6 +5084,91 @@ uint64_t IA64ISAPlugin::handleEfiFileSetPosition(IMemory& memory) {
     return EFI_STATUS_SUCCESS;
 }
 
+void IA64ISAPlugin::resetEfiConsoleInput() {
+    efiInputQueue_.clear();
+}
+
+uint64_t IA64ISAPlugin::handleEfiReadKeyStroke(IMemory& memory, bool extended) {
+    if (extended) {
+        ++efiReadKeyStrokeExCalls_;
+    } else {
+        ++efiReadKeyStrokeCalls_;
+    }
+
+    const uint64_t keyDataOut = readCallerOutputRegister(state_.getCPUState(), 1);
+    if (keyDataOut == 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (efiInputQueue_.empty()) {
+        if (extended) {
+            ++efiReadKeyStrokeExNotReadyCalls_;
+        } else {
+            ++efiReadKeyStrokeNotReadyCalls_;
+        }
+        return EFI_STATUS_NOT_READY;
+    }
+
+    const EfiInputKey key = efiInputQueue_.front();
+    efiInputQueue_.pop_front();
+    try {
+        memory.Write(keyDataOut + 0,
+                     reinterpret_cast<const uint8_t*>(&key.scanCode), sizeof(key.scanCode));
+        memory.Write(keyDataOut + 2,
+                     reinterpret_cast<const uint8_t*>(&key.unicodeChar), sizeof(key.unicodeChar));
+        if (extended) {
+            memory.Write(keyDataOut + 4,
+                         reinterpret_cast<const uint8_t*>(&key.shiftState), sizeof(key.shiftState));
+            memory.Write(keyDataOut + 8, &key.toggleState, sizeof(key.toggleState));
+            const uint8_t padding[3] = {0, 0, 0};
+            memory.Write(keyDataOut + 9, padding, sizeof(padding));
+            ++efiReadKeyStrokeExSuccessCalls_;
+        } else {
+            ++efiReadKeyStrokeSuccessCalls_;
+        }
+    } catch (const std::exception&) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    return EFI_STATUS_SUCCESS;
+}
+
+uint64_t IA64ISAPlugin::handleEfiWaitForEvent(IMemory& memory, bool checkOnly) {
+    if (checkOnly) {
+        ++efiCheckEventCalls_;
+    } else {
+        ++efiWaitForEventCalls_;
+    }
+
+    const uint64_t numberOfEvents = readCallerOutputRegister(state_.getCPUState(), 0);
+    const uint64_t events = readCallerOutputRegister(state_.getCPUState(), 1);
+    const uint64_t indexOut = readCallerOutputRegister(state_.getCPUState(), 2);
+    if (numberOfEvents == 0 || events == 0 || indexOut == 0 || numberOfEvents > 64) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    for (uint64_t index = 0; index < numberOfEvents; ++index) {
+        uint64_t event = 0;
+        if (!readGuestU64(memory, events + index * sizeof(uint64_t), event)) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        if (event != EFI_CONSOLE_INPUT_EVENT_ADDR) {
+            continue;
+        }
+        if (efiInputQueue_.empty()) {
+            // The emulator has no blocking host-event primitive. EFI_NOT_READY
+            // provides a coherent polling result without inventing a signal.
+            return EFI_STATUS_NOT_READY;
+        }
+        try {
+            memory.Write(indexOut,
+                         reinterpret_cast<const uint8_t*>(&index), sizeof(index));
+        } catch (const std::exception&) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        return EFI_STATUS_SUCCESS;
+    }
+    return EFI_STATUS_UNSUPPORTED;
+}
+
 uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
     ++efiLocateHandleCalls_;
     const uint64_t bufferSizeAddress = readCallerOutputRegister(state_.getCPUState(), 2);
@@ -4925,6 +5202,10 @@ uint64_t IA64ISAPlugin::handleEfiLocateProtocol(IMemory& memory) {
         protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
     } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
         protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
+    } else if (hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID) {
+        protocolAddress = EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR;
+    } else if (hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID) {
+        protocolAddress = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR;
     }
     memory.Write(interfaceOut, reinterpret_cast<const uint8_t*>(&protocolAddress), sizeof(protocolAddress));
     return protocolAddress != 0 ? EFI_STATUS_SUCCESS : EFI_STATUS_NOT_FOUND;

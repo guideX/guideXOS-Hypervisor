@@ -1,5 +1,6 @@
 #include "IISA.h"
 #include "IA64ISAPlugin.h"
+#include "IA64EfiHandoffLayout.h"
 #include "ExampleISAPlugin.h"
 #include "ISAPluginRegistry.h"
 #include "FATParser.h"
@@ -3086,6 +3087,164 @@ void testIA64PluginNullFirmwareCallReturnsSuccess() {
     std::cout << "  ? null indirect br.call returns EFI_SUCCESS instead of entering IP zero\n";
 }
 
+void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
+    std::cout << "Testing IA-64 EFI ConsoleIn protocol relationships and plabel dispatch...\n";
+
+    constexpr uint64_t handoffBase = 0x1fe00000ULL;
+    constexpr uint64_t systemTable = 0x7000ULL;
+    constexpr uint64_t consoleInputHandle = 0x41ULL;
+    constexpr uint64_t inputProtocol = handoffBase + kEfiSimpleTextInputProtocolOffset;
+    constexpr uint64_t inputExProtocol = handoffBase + kEfiSimpleTextInputExProtocolOffset;
+    constexpr uint64_t resetDescriptor = handoffBase + kEfiInputResetStubDescOffset;
+    constexpr uint64_t resetCode = handoffBase + kEfiInputResetStubCodeOffset;
+    constexpr uint64_t readDescriptor = handoffBase + kEfiInputReadKeyStrokeStubDescOffset;
+    constexpr uint64_t readCode = handoffBase + kEfiInputReadKeyStrokeStubCodeOffset;
+    constexpr uint64_t readExDescriptor = handoffBase + kEfiInputReadKeyStrokeExStubDescOffset;
+    constexpr uint64_t readExCode = handoffBase + kEfiInputReadKeyStrokeExStubCodeOffset;
+    constexpr uint64_t handleProtocolCode = handoffBase + kEfiHandleProtocolStubCodeOffset;
+    constexpr uint64_t gp = handoffBase;
+
+    auto write64 = [](IMemory& memory, uint64_t address, uint64_t value) {
+        memory.Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+    };
+    auto writeDescriptor = [&](IMemory& memory, uint64_t address, uint64_t code) {
+        write64(memory, address, code);
+        write64(memory, address + 8, gp);
+    };
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+    write64(memory, systemTable + 0x28, consoleInputHandle);
+    write64(memory, systemTable + 0x30, inputProtocol);
+    write64(memory, inputProtocol + 0x00, resetDescriptor);
+    write64(memory, inputProtocol + 0x08, readDescriptor);
+    write64(memory, inputProtocol + 0x10, handoffBase + kEfiConsoleInputEventOffset);
+    write64(memory, inputExProtocol + 0x00, resetDescriptor);
+    write64(memory, inputExProtocol + 0x08, readExDescriptor);
+    write64(memory, inputExProtocol + 0x10, handoffBase + kEfiConsoleInputEventOffset);
+    writeDescriptor(memory, resetDescriptor, resetCode);
+    writeDescriptor(memory, readDescriptor, readCode);
+    writeDescriptor(memory, readExDescriptor, readExCode);
+
+    const uint64_t consoleInHandle = [&]() {
+        uint64_t value = 0;
+        memory.Read(systemTable + 0x28, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return value;
+    }();
+    const uint64_t conIn = [&]() {
+        uint64_t value = 0;
+        memory.Read(systemTable + 0x30, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return value;
+    }();
+    const uint64_t readKeyDescriptor = [&]() {
+        uint64_t value = 0;
+        memory.Read(conIn + 0x08, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        return value;
+    }();
+    assert(consoleInHandle != 0);
+    assert(consoleInHandle == consoleInputHandle);
+    assert(conIn == inputProtocol);
+    assert(readKeyDescriptor == readDescriptor);
+
+    FakeIndirectSelfCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+    plugin.getCPUState().SetBR(0, readKeyDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+    const uint32_t keyCanary = 0xA5A5A5A5U;
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(&keyCanary), sizeof(keyCanary));
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    uint32_t keyAfterEmpty = 0;
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(&keyAfterEmpty), sizeof(keyAfterEmpty));
+    assert(plugin.getCPUState().GetGR(8) == 0x8000000000000006ULL);
+    assert(keyAfterEmpty == keyCanary);
+
+    plugin.enqueueEfiInputKey(0x001E, static_cast<uint16_t>('a'));
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, readKeyDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    uint16_t scanCode = 0;
+    uint16_t unicodeChar = 0;
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(&scanCode), sizeof(scanCode));
+    memory.Read(0x6002, reinterpret_cast<uint8_t*>(&unicodeChar), sizeof(unicodeChar));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(scanCode == 0x001E);
+    assert(unicodeChar == static_cast<uint16_t>('a'));
+
+    plugin.enqueueEfiInputKey(0, static_cast<uint16_t>('b'), 0x04U, 0x01U);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, readExDescriptor);
+    plugin.getCPUState().SetGR(35, inputExProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    uint32_t shiftState = 0;
+    uint8_t toggleState = 0;
+    memory.Read(0x6002, reinterpret_cast<uint8_t*>(&unicodeChar), sizeof(unicodeChar));
+    memory.Read(0x6004, reinterpret_cast<uint8_t*>(&shiftState), sizeof(shiftState));
+    memory.Read(0x6008, &toggleState, sizeof(toggleState));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(unicodeChar == static_cast<uint16_t>('b'));
+    assert(shiftState == 0x04U);
+    assert(toggleState == 0x01U);
+
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, resetDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+
+    const uint8_t simpleInputGuid[16] = {
+        0xC1, 0x77, 0x74, 0x38, 0xC7, 0x69, 0xD2, 0x11,
+        0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
+    const uint8_t simpleInputExGuid[16] = {
+        0x34, 0x75, 0x9E, 0xDD, 0x62, 0x77, 0x98, 0x46,
+        0x8C, 0x14, 0xF5, 0x85, 0x17, 0xA6, 0x25, 0xAA
+    };
+    const uint8_t consoleControlGuid[16] = {
+        0x82, 0x77, 0x2F, 0xF4, 0x2E, 0x01, 0x12, 0x4C,
+        0x99, 0x56, 0x49, 0xF9, 0x43, 0x04, 0xF7, 0x21
+    };
+    auto handleProtocol = [&](const uint8_t* guid) {
+        SparseMemory hpMemory;
+        hpMemory.Write(0x1a50, bundleBytes, sizeof(bundleBytes));
+        hpMemory.Write(0x3000, guid, 16);
+        FakeIndirectSelfCallDecoder hpDecoder;
+        IA64ISAPlugin hpPlugin(hpDecoder);
+        hpPlugin.getCPUState().SetIP(0x1a50);
+        hpPlugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+        hpPlugin.getCPUState().SetBR(0, handleProtocolCode);
+        hpPlugin.getCPUState().SetGR(35, consoleInputHandle);
+        hpPlugin.getCPUState().SetGR(36, 0x3000);
+        hpPlugin.getCPUState().SetGR(37, 0x4000);
+        hpPlugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(hpPlugin.step(hpMemory) == ISAExecutionResult::CONTINUE);
+        uint64_t interfaceValue = 0;
+        hpMemory.Read(0x4000, reinterpret_cast<uint8_t*>(&interfaceValue), sizeof(interfaceValue));
+        return std::pair<uint64_t, uint64_t>(hpPlugin.getCPUState().GetGR(8), interfaceValue);
+    };
+    const auto simpleInputResult = handleProtocol(simpleInputGuid);
+    const auto simpleInputExResult = handleProtocol(simpleInputExGuid);
+    const auto consoleControlResult = handleProtocol(consoleControlGuid);
+    assert(simpleInputResult.first == 0);
+    assert(simpleInputResult.second == inputProtocol);
+    assert(simpleInputExResult.first == 0);
+    assert(simpleInputExResult.second == inputExProtocol);
+    assert(consoleControlResult.first == 0x800000000000000EULL);
+    assert(consoleControlResult.second == 0);
+
+    std::cout << "  ? SystemTable->ConIn->ReadKeyStroke uses a real IA-64 plabel"
+              << ", empty input is EFI_NOT_READY, both input protocols register,"
+              << " and ConsoleControl remains EFI_NOT_FOUND\n";
+}
+
 void testIA64PluginHandleProtocolReturnsLoadedImage() {
     std::cout << "Testing IA-64 plugin HandleProtocol firmware stub...\n";
 
@@ -4253,6 +4412,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginNullFirmwareCallReturnsSuccess();
+        std::cout << "\n";
+
+        testIA64PluginConsoleInputProtocolsAndPlabelDispatch();
         std::cout << "\n";
 
         testIA64PluginHandleProtocolReturnsLoadedImage();
