@@ -5252,16 +5252,13 @@ uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
     const uint64_t requiredSize = static_cast<uint64_t>(matchingCount) * sizeof(uint64_t);
+    if (!writeGuestU64(memory, bufferSizeAddress, requiredSize)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
     if (providedSize < requiredSize) {
-        if (!writeGuestU64(memory, bufferSizeAddress, requiredSize)) {
-            return EFI_STATUS_INVALID_PARAMETER;
-        }
         return EFI_STATUS_BUFFER_TOO_SMALL;
     }
     if (bufferAddress == 0) {
-        return EFI_STATUS_INVALID_PARAMETER;
-    }
-    if (!writeGuestU64(memory, bufferSizeAddress, requiredSize)) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
     for (size_t index = 0; index < matchingCount; ++index) {
