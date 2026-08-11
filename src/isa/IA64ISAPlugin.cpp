@@ -121,6 +121,11 @@ constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
 constexpr uint64_t EFI_STATUS_NO_MEDIA = 0x800000000000000CULL;
 constexpr uint64_t EFI_STATUS_NOT_READY = 0x8000000000000006ULL;
 constexpr uint64_t EFI_CONSOLE_INPUT_HANDLE = 0x41ULL;
+constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;
+constexpr uint64_t EFI_IMAGE_DEVICE_HANDLE = 0x40ULL;
+constexpr uint64_t EFI_LOCATE_SEARCH_ALL_HANDLES = 0ULL;
+constexpr uint64_t EFI_LOCATE_SEARCH_BY_REGISTER_NOTIFY = 1ULL;
+constexpr uint64_t EFI_LOCATE_SEARCH_BY_PROTOCOL = 2ULL;
 constexpr uint64_t EFI_PAGE_SIZE = 0x1000ULL;
 constexpr uint32_t EFI_ALLOCATE_ANY_PAGES = 0U;
 constexpr uint32_t EFI_ALLOCATE_MAX_ADDRESS = 1U;
@@ -336,6 +341,24 @@ constexpr EfiGuid EFI_FILE_SYSTEM_INFO_GUID = {{
     0x93, 0x6E, 0x57, 0x09, 0x3F, 0x6D, 0xD2, 0x11,
     0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
 }};
+
+struct EfiProtocolAttachment {
+    uint64_t handle;
+    const EfiGuid* protocol;
+    uint64_t interfaceAddress;
+};
+
+std::array<EfiProtocolAttachment, 4> currentEfiProtocolAttachments() {
+    return {{
+        {EFI_IMAGE_HANDLE, &EFI_LOADED_IMAGE_PROTOCOL_GUID, EFI_LOADED_IMAGE_PROTOCOL_ADDR},
+        {EFI_IMAGE_DEVICE_HANDLE, &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
+         EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR},
+        {EFI_CONSOLE_INPUT_HANDLE, &EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID,
+         EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR},
+        {EFI_CONSOLE_INPUT_HANDLE, &EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID,
+         EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR},
+    }};
+}
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
@@ -5171,20 +5194,82 @@ uint64_t IA64ISAPlugin::handleEfiWaitForEvent(IMemory& memory, bool checkOnly) {
 
 uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
     ++efiLocateHandleCalls_;
-    const uint64_t bufferSizeAddress = readCallerOutputRegister(state_.getCPUState(), 2);
-    const uint64_t bufferAddress = readCallerOutputRegister(state_.getCPUState(), 3);
-    const uint64_t required = sizeof(uint64_t) * 2;
+    const uint64_t searchType = readCallerOutputRegister(state_.getCPUState(), 0);
+    const uint64_t protocolGuidAddress = readCallerOutputRegister(state_.getCPUState(), 1);
+    const uint64_t searchKey = readCallerOutputRegister(state_.getCPUState(), 2);
+    const uint64_t bufferSizeAddress = readCallerOutputRegister(state_.getCPUState(), 3);
+    const uint64_t bufferAddress = readCallerOutputRegister(state_.getCPUState(), 4);
+
+    if (searchType != EFI_LOCATE_SEARCH_ALL_HANDLES &&
+        searchType != EFI_LOCATE_SEARCH_BY_REGISTER_NOTIFY &&
+        searchType != EFI_LOCATE_SEARCH_BY_PROTOCOL) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (searchType == EFI_LOCATE_SEARCH_BY_REGISTER_NOTIFY && searchKey == 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (searchType == EFI_LOCATE_SEARCH_BY_PROTOCOL && protocolGuidAddress == 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    std::array<uint64_t, 4> matchingHandles{};
+    size_t matchingCount = 0;
+    const auto attachments = currentEfiProtocolAttachments();
+    if (searchType == EFI_LOCATE_SEARCH_ALL_HANDLES) {
+        for (const EfiProtocolAttachment& attachment : attachments) {
+            bool alreadyPresent = false;
+            for (size_t index = 0; index < matchingCount; ++index) {
+                if (matchingHandles[index] == attachment.handle) {
+                    alreadyPresent = true;
+                    break;
+                }
+            }
+            if (!alreadyPresent) {
+                matchingHandles[matchingCount++] = attachment.handle;
+            }
+        }
+    } else if (searchType == EFI_LOCATE_SEARCH_BY_PROTOCOL) {
+        EfiGuid requestedGuid{};
+        if (!readEfiGuid(memory, protocolGuidAddress, requestedGuid)) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        for (const EfiProtocolAttachment& attachment : attachments) {
+            if (*attachment.protocol == requestedGuid) {
+                matchingHandles[matchingCount++] = attachment.handle;
+            }
+        }
+    }
+
+    if (matchingCount == 0) {
+        return EFI_STATUS_NOT_FOUND;
+    }
     if (bufferSizeAddress == 0) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
-    uint64_t provided = 0;
-    memory.Read(bufferSizeAddress, reinterpret_cast<uint8_t*>(&provided), sizeof(provided));
-    memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&required), sizeof(required));
-    if (bufferAddress == 0 || provided < required) {
+
+    uint64_t providedSize = 0;
+    if (!readGuestU64(memory, bufferSizeAddress, providedSize)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    const uint64_t requiredSize = static_cast<uint64_t>(matchingCount) * sizeof(uint64_t);
+    if (providedSize < requiredSize) {
+        if (!writeGuestU64(memory, bufferSizeAddress, requiredSize)) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
         return EFI_STATUS_BUFFER_TOO_SMALL;
     }
-    const uint64_t handles[] = { 0x1ULL, 0x40ULL };
-    memory.Write(bufferAddress, reinterpret_cast<const uint8_t*>(handles), sizeof(handles));
+    if (bufferAddress == 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (!writeGuestU64(memory, bufferSizeAddress, requiredSize)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    for (size_t index = 0; index < matchingCount; ++index) {
+        if (!writeGuestU64(memory, bufferAddress + index * sizeof(uint64_t),
+                           matchingHandles[index])) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+    }
     return EFI_STATUS_SUCCESS;
 }
 

@@ -3451,41 +3451,120 @@ void testIA64PluginOpenVolumeUsesVmManagerBootImageHandoff() {
 }
 
 void testIA64PluginLocateHandleReturnsHandleList() {
-    std::cout << "Testing IA-64 plugin BootServices LocateHandle stub...\n";
+    std::cout << "Testing IA-64 plugin BootServices LocateHandle semantics...\n";
 
     SparseMemory memory;
     uint8_t bundleBytes[16] = {};
     memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
 
-    uint64_t bufferSize = 16;
-    uint64_t handles[2] = {};
-    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
-    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(handles), sizeof(handles));
+    const uint8_t simpleFileSystemGuid[16] = {
+        0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11,
+        0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
+    };
+    const uint8_t unknownGuid[16] = {
+        0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44,
+        0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xFE, 0xED
+    };
+    memory.Write(0x3000, simpleFileSystemGuid, sizeof(simpleFileSystemGuid));
+    memory.Write(0x3010, unknownGuid, sizeof(unknownGuid));
 
     FakeIndirectCallDecoder decoder;
     IA64ISAPlugin plugin(decoder);
-    plugin.getCPUState().SetIP(0x30e40);
-    plugin.getCPUState().SetCFM(5);
-    plugin.getCPUState().SetBR(6, 0x1fe01700ULL);
-    plugin.getCPUState().SetGR(32, 0);
-    plugin.getCPUState().SetGR(33, 0);
-    plugin.getCPUState().SetGR(34, 0x5000);
-    plugin.getCPUState().SetGR(35, 0x6000);
-    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
 
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    const auto invoke = [&](uint64_t searchType,
+                            uint64_t protocol,
+                            uint64_t searchKey,
+                            uint64_t bufferSizeAddress,
+                            uint64_t bufferAddress) {
+        plugin.getCPUState().SetIP(0x30e40);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fe01700ULL);
+        plugin.getCPUState().SetGR(32, searchType);
+        plugin.getCPUState().SetGR(33, protocol);
+        plugin.getCPUState().SetGR(34, searchKey);
+        plugin.getCPUState().SetGR(35, bufferSizeAddress);
+        plugin.getCPUState().SetGR(36, bufferAddress);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == 0x30e50);
+        assert(plugin.getCPUState().GetBR(0) == 0x30e50);
+        return plugin.getCPUState().GetGR(8);
+    };
 
-    uint64_t returnedSize = 0;
-    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&returnedSize), sizeof(returnedSize));
-    memory.Read(0x6000, reinterpret_cast<uint8_t*>(handles), sizeof(handles));
-    assert(plugin.getCPUState().GetIP() == 0x30e50);
-    assert(plugin.getCPUState().GetBR(0) == 0x30e50);
-    assert(plugin.getCPUState().GetGR(8) == 0);
-    assert(returnedSize == 16);
-    assert(handles[0] == 0x1ULL);
-    assert(handles[1] == 0x40ULL);
+    const uint64_t canary = 0xC0FFEE1234567890ULL;
+    uint64_t bufferSize = 0;
+    uint64_t bufferCanaryBefore = canary;
+    uint64_t bufferCanaryAfter = canary;
+    memory.Write(0x4ff8, reinterpret_cast<const uint8_t*>(&bufferCanaryBefore), sizeof(canary));
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    memory.Write(0x5008, reinterpret_cast<const uint8_t*>(&bufferCanaryAfter), sizeof(canary));
 
-    std::cout << "  ? LocateHandle writes a minimal handle list and returns EFI_SUCCESS\n";
+    uint64_t status = invoke(2, 0x3000, 0, 0x5000, 0);
+    assert(status == 0x8000000000000005ULL);
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&bufferSize), sizeof(bufferSize));
+    assert(bufferSize == sizeof(uint64_t));
+    memory.Read(0x4ff8, reinterpret_cast<uint8_t*>(&bufferCanaryBefore), sizeof(canary));
+    memory.Read(0x5008, reinterpret_cast<uint8_t*>(&bufferCanaryAfter), sizeof(canary));
+    assert(bufferCanaryBefore == canary);
+    assert(bufferCanaryAfter == canary);
+
+    uint64_t returnedHandle = 0;
+    bufferSize = sizeof(returnedHandle);
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    memory.Write(0x5ff8, reinterpret_cast<const uint8_t*>(&bufferCanaryBefore), sizeof(canary));
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(&returnedHandle), sizeof(returnedHandle));
+    memory.Write(0x6008, reinterpret_cast<const uint8_t*>(&bufferCanaryAfter), sizeof(canary));
+    status = invoke(2, 0x3000, 0, 0x5000, 0x6000);
+    assert(status == 0);
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(&returnedHandle), sizeof(returnedHandle));
+    assert(returnedHandle == 0x40ULL);
+    memory.Read(0x5ff8, reinterpret_cast<uint8_t*>(&bufferCanaryBefore), sizeof(canary));
+    memory.Read(0x6008, reinterpret_cast<uint8_t*>(&bufferCanaryAfter), sizeof(canary));
+    assert(bufferCanaryBefore == canary);
+    assert(bufferCanaryAfter == canary);
+
+    uint64_t allHandles[3] = {};
+    bufferSize = 0;
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    status = invoke(0, 0, 0, 0x5000, 0);
+    assert(status == 0x8000000000000005ULL);
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&bufferSize), sizeof(bufferSize));
+    assert(bufferSize == sizeof(allHandles));
+    bufferSize = sizeof(allHandles);
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(allHandles), sizeof(allHandles));
+    status = invoke(0, 0, 0, 0x5000, 0x6000);
+    assert(status == 0);
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(allHandles), sizeof(allHandles));
+    assert(allHandles[0] == 0x1ULL);
+    assert(allHandles[1] == 0x40ULL);
+    assert(allHandles[2] == 0x41ULL);
+
+    bufferSize = 0x1234;
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    status = invoke(2, 0x3010, 0, 0x5000, 0);
+    assert(status == 0x800000000000000EULL);
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&bufferSize), sizeof(bufferSize));
+    assert(bufferSize == 0x1234);
+
+    status = invoke(2, 0, 0, 0x5000, 0);
+    assert(status == 0x8000000000000002ULL);
+    status = invoke(3, 0x3000, 0, 0x5000, 0);
+    assert(status == 0x8000000000000002ULL);
+
+    bufferSize = sizeof(uint32_t);
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    status = invoke(2, 0x3000, 0, 0x5000, 0x6000);
+    assert(status == 0x8000000000000005ULL);
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&bufferSize), sizeof(bufferSize));
+    assert(bufferSize == sizeof(uint64_t));
+
+    bufferSize = sizeof(uint64_t);
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    status = invoke(2, 0x3000, 0, 0x5000, 0);
+    assert(status == 0x8000000000000002ULL);
+
+    std::cout << "  ? LocateHandle decodes all five ABI arguments and implements probe/retry, NOT_FOUND, and validation semantics\n";
 }
 
 void testIA64PluginFileProtocolOpenNoMediaIsSafe() {
