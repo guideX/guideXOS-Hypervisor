@@ -1965,8 +1965,13 @@ std::string InstructionEx::GetDisassembly() const {
             break;
             
         case InstructionType::SHL:
-            oss << "shl r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
-                << ", r" << static_cast<int>(src2_);
+            oss << "shl r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
+                << ", ";
+            if (hasImmediate_) {
+                oss << static_cast<int64_t>(immediate_);
+            } else {
+                oss << "r" << static_cast<int>(src2_);
+            }
             break;
             
         case InstructionType::SHR:

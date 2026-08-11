@@ -340,6 +340,19 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::I
 static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result) {
         // Shift operations: SHL, SHR, SHRA
 
+        // The fixed-count SHL form is the I7 encoding with x6=0x14.  It is
+        // the architectural immediate form of SHL (the manual describes it
+        // as a pseudo-op of DEP.Z), and its count is the six-bit field in
+        // bits 20:25.  Do not route it through the variable-shift x2 tests:
+        // the live Debian ELILO instruction has x2=2 and would otherwise be
+        // decoded as an unknown I-unit slot.
+        if (x6 == 0x14) {
+            result.opcode = 0x70; // SHL
+            result.has_imm = true;
+            result.count = formats::extractBits(raw, 20, 6);
+            return true;
+        }
+
         // I7 variable shifts use the dispersed z_a/z_b/v_e/x2a/x2b/x2c
         // fields.  The exact Gentoo blocker is the variable SHL row from
         // Table 4-20; it does not use the low four bits of x6 as an opcode.

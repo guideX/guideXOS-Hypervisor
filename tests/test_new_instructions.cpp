@@ -776,6 +776,25 @@ void test_latest_boot_log_blockers() {
     shladd_scale40.Execute(cpu, memory);
     assert_equal("Boot shladd scale-40 should compute base + index * 40", 0x1118, cpu.GetGR(16));
 
+    // Exact Debian DVD/netinst ELILO blocker: I7 fixed-count SHL.
+    InstructionEx shl_fixed = decoder.DecodeSlot(0xeca0042840ULL, UnitType::I_UNIT, 0x27e80);
+    assert_true("Debian fixed-count SHL should decode",
+                shl_fixed.GetType() == InstructionType::SHL);
+    assert_equal("Debian fixed-count SHL destination", 33, shl_fixed.GetDst());
+    assert_equal("Debian fixed-count SHL source", 33, shl_fixed.GetSrc1());
+    assert_true("Debian fixed-count SHL should carry an immediate",
+                shl_fixed.HasImmediate());
+    assert_equal("Debian fixed-count SHL count", 0, shl_fixed.GetImmediate());
+    assert_string("Debian fixed-count SHL disassembly",
+                  "shl r33 = r33, 0",
+                  shl_fixed.GetDisassembly());
+
+    cpu.SetGR(33, 0x123456789abcdef0ULL);
+    shl_fixed.Execute(cpu, memory);
+    assert_equal("Debian fixed-count SHL should preserve count-zero source",
+                 0x123456789abcdef0ULL,
+                 cpu.GetGR(33));
+
     InstructionEx zxt4_return = decoder.DecodeSlot(0x90800200ULL, UnitType::I_UNIT, 0x34b10);
     assert_true("Boot raw zxt4 should decode", zxt4_return.GetType() == InstructionType::ZXT4);
     assert_equal("Boot zxt4 destination", 8, zxt4_return.GetDst());
