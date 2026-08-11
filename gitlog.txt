@@ -1,0 +1,8 @@
+d5ab2e0 (HEAD -> main) Fix EFI LocateHandle and reach SimpleFS OpenVolume
+8ef5fba Completed. Missing ConIn was proven causal for the 0x204c0 fault, and a generic console-input implementation was added. No commit was created.
+1574d05 Implemented and validated the proven generic fix. No commit created.
+bf96b87 Completed the checkpoint audit without speculative EFI changes.
+74cb113 Implemented and verified the generic fix. No commit was created.
+4a28ac4 Implemented the generic EFI AllocatePages milestone without committing.
+eee30ee Implemented and verified the SetMem
+fa1a57e Debug baseline: all three tests passed. The stale Release test_vmmanager failure was due to NDEBUG disabling assertions.

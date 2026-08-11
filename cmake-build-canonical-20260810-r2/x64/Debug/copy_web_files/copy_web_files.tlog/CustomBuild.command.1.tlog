@@ -1,0 +1,20 @@
+^D:\DEV\GUIDEXOS_HYPERVISOR\CMAKE-BUILD-CANONICAL-20260810-R2\CMAKEFILES\2A24D4B295A6070CB857A15480634985\COPY_WEB_FILES.RULE
+setlocal
+C:\mingw64\bin\cmake.exe -E copy_directory D:/dev/guideXOS_Hypervisor/web D:/dev/guideXOS_Hypervisor/cmake-build-canonical-20260810-r2/bin/web
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\DEV\GUIDEXOS_HYPERVISOR\CMAKELISTS.TXT
+setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/cmake-build-canonical-20260810-r2 --check-stamp-file D:/dev/guideXOS_Hypervisor/cmake-build-canonical-20260810-r2/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
