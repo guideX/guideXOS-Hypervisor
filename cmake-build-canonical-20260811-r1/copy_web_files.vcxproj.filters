@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\guideXOS_Hypervisor\cmake-build-canonical-20260811-r1\CMakeFiles\0f8d1d4853202a4d1ec222f3fba2baed\copy_web_files.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\dev\guideXOS_Hypervisor\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\dev\guideXOS_Hypervisor\cmake-build-canonical-20260811-r1\CMakeFiles\copy_web_files" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{98BE6D80-F5F4-3120-9C25-61C1085C0F18}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
