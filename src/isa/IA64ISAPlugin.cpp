@@ -5956,7 +5956,6 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const size_t storeSize = storeSizeForInstruction(instr.GetType());
         const uint64_t storeAddress = storeSize != 0 ? cpu.GetGR(instr.GetDst()) : 0;
         if (loadSize == sizeof(uint64_t) && instr.GetType() == InstructionType::LD8 &&
-            instr.GetDst() == 8 &&
             ((loadAddress >= EFI_RUNTIME_SERVICES_ADDR + 0x18ULL &&
               loadAddress < EFI_RUNTIME_SERVICES_ADDR + 0x88ULL) ||
              (loadAddress >= EFI_BOOT_SERVICES_ADDR + 0x18ULL &&

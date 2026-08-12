@@ -320,6 +320,45 @@ public:
     }
 };
 
+class FakeEfiFieldLoadCallDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        if (bundleIP == 0x5000ULL) {
+            InstructionEx load(InstructionType::LD8, UnitType::M_UNIT);
+            load.SetOperands(14, 40, 0);
+            load.SetImmediate(0);
+            load.SetRawBits(0x5000ULL);
+            bundle.instructions.push_back(load);
+        } else {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 6, 0);
+            call.SetRawBits(0x5010ULL);
+            bundle.instructions.push_back(call);
+        }
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeEfiProtocolRegistryDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -4007,6 +4046,51 @@ void testIA64PluginTplPairSemantics() {
                  "and implement 4 -> 8 -> 16 -> 8 -> 4\n";
 }
 
+void testIA64PluginTplDispatchUsesLoadedField() {
+    std::cout << "Testing IA-64 plugin TPL dispatch from a loaded Boot Services field...\n";
+
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t bootServicesBase = handoffBase + 0x800ULL;
+    constexpr uint64_t restoreTplField = bootServicesBase + 0x20ULL;
+    constexpr uint64_t unsupportedCode = handoffBase + kEfiUnsupportedStubCodeOffset;
+    constexpr uint64_t unsupportedDescriptor = handoffBase + kEfiUnsupportedStubDescOffset;
+    constexpr uint64_t canaryR8 = 0x1122334455667788ULL;
+
+    SizedSparseMemory memory(0x20000000ULL);
+    uint8_t bundleBytes[16] = {};
+    uint8_t syntheticStubBytes[16] = {1};
+    memory.Write(0x5000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x5010, bundleBytes, sizeof(bundleBytes));
+    memory.Write(unsupportedCode, syntheticStubBytes, sizeof(syntheticStubBytes));
+
+    const uint64_t descriptor = unsupportedDescriptor;
+    memory.Write(restoreTplField, reinterpret_cast<const uint8_t*>(&descriptor), sizeof(descriptor));
+    const uint64_t descriptorCode = unsupportedCode;
+    const uint64_t descriptorGp = 0x238000ULL;
+    memory.Write(unsupportedDescriptor, reinterpret_cast<const uint8_t*>(&descriptorCode), sizeof(descriptorCode));
+    memory.Write(unsupportedDescriptor + 8,
+                 reinterpret_cast<const uint8_t*>(&descriptorGp), sizeof(descriptorGp));
+
+    FakeEfiFieldLoadCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetCFM(2);
+    plugin.getCPUState().SetGR(40, restoreTplField);
+    plugin.getCPUState().SetIP(0x5000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(14) == unsupportedDescriptor);
+
+    plugin.getCPUState().SetIP(0x5010);
+    plugin.getCPUState().SetBR(6, unsupportedCode);
+    plugin.getCPUState().SetGR(32, 4);
+    plugin.getCPUState().SetGR(37, 0x1234ULL);
+    plugin.getCPUState().SetGR(8, canaryR8);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == canaryR8);
+
+    std::cout << "  ? RestoreTPL dispatch follows the loaded EFI_BOOT_SERVICES+0x20 field, "
+                 "not an IP or argument-register guess, and preserves VOID r8\n";
+}
+
 void testIA64PluginSetMemFillsExactRange() {
     std::cout << "Testing IA-64 plugin SetMem firmware stub...\n";
 
@@ -4737,6 +4821,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginTplPairSemantics();
+        std::cout << "\n";
+
+        testIA64PluginTplDispatchUsesLoadedField();
         std::cout << "\n";
 
         testIA64PluginSetMemFillsExactRange();
