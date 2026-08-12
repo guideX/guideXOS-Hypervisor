@@ -342,24 +342,6 @@ constexpr EfiGuid EFI_FILE_SYSTEM_INFO_GUID = {{
     0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
 }};
 
-struct EfiProtocolAttachment {
-    uint64_t handle;
-    const EfiGuid* protocol;
-    uint64_t interfaceAddress;
-};
-
-std::array<EfiProtocolAttachment, 4> currentEfiProtocolAttachments() {
-    return {{
-        {EFI_IMAGE_HANDLE, &EFI_LOADED_IMAGE_PROTOCOL_GUID, EFI_LOADED_IMAGE_PROTOCOL_ADDR},
-        {EFI_IMAGE_DEVICE_HANDLE, &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
-         EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR},
-        {EFI_CONSOLE_INPUT_HANDLE, &EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID,
-         EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR},
-        {EFI_CONSOLE_INPUT_HANDLE, &EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID,
-         EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR},
-    }};
-}
-
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
 }
@@ -2028,6 +2010,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiPoolNext_(EFI_POOL_BASE)
     , efiCurrentTpl_(4)
     , lastEfiDescriptorFieldAddress_(0)
+    , efiProtocolAttachments_()
+    , efiNextSyntheticHandle_(0x42ULL)
     , efiTextOutputCalls_(0)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
@@ -2095,6 +2079,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
     , pendingRegisterConfigEntryArmed_(false) {
+    resetEfiProtocolAttachments();
 }
 
 IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder, 
@@ -2110,6 +2095,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiPoolNext_(EFI_POOL_BASE)
     , efiCurrentTpl_(4)
     , lastEfiDescriptorFieldAddress_(0)
+    , efiProtocolAttachments_()
+    , efiNextSyntheticHandle_(0x42ULL)
     , efiTextOutputCalls_(0)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
@@ -2177,6 +2164,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
     , pendingRegisterConfigEntryArmed_(false) {
+    resetEfiProtocolAttachments();
 }
 
 void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
@@ -2204,6 +2192,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
 
     if (memorySize == 0) {
         resetEfiHandoffLayoutGlobals();
+        resetEfiProtocolAttachments();
         efiHandoffLayoutMemorySize_ = 0;
         efiHandoffLayoutInitialized_ = true;
         efiMemoryMapInitialized_ = false;
@@ -2213,6 +2202,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
     EfiHandoffLayout layout{};
     if (!tryComputeEfiHandoffLayout(memorySize, layout)) {
         resetEfiHandoffLayoutGlobals();
+        resetEfiProtocolAttachments();
         efiPoolNext_ = EFI_POOL_BASE;
         efiHandoffLayoutMemorySize_ = memorySize;
         efiHandoffLayoutInitialized_ = true;
@@ -2227,6 +2217,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
     }
 
     applyEfiHandoffLayoutBase(layout.base);
+    resetEfiProtocolAttachments();
     efiPoolNext_ = EFI_POOL_BASE;
     efiHandoffLayoutMemorySize_ = memorySize;
     efiHandoffLayoutInitialized_ = true;
@@ -2243,6 +2234,22 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
     return true;
 }
 
+void IA64ISAPlugin::resetEfiProtocolAttachments() {
+    efiProtocolAttachments_.clear();
+    efiProtocolAttachments_.push_back({
+        EFI_IMAGE_HANDLE, EFI_LOADED_IMAGE_PROTOCOL_GUID, EFI_LOADED_IMAGE_PROTOCOL_ADDR});
+    efiProtocolAttachments_.push_back({
+        EFI_IMAGE_DEVICE_HANDLE, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR});
+    efiProtocolAttachments_.push_back({
+        EFI_CONSOLE_INPUT_HANDLE, EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID,
+        EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR});
+    efiProtocolAttachments_.push_back({
+        EFI_CONSOLE_INPUT_HANDLE, EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID,
+        EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR});
+    efiNextSyntheticHandle_ = 0x42ULL;
+}
+
 void IA64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
@@ -2254,6 +2261,7 @@ void IA64ISAPlugin::reset() {
     efiPoolNext_ = EFI_POOL_BASE;
     efiCurrentTpl_ = 4;
     lastEfiDescriptorFieldAddress_ = 0;
+    resetEfiProtocolAttachments();
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
@@ -3206,17 +3214,26 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         }
                         uint64_t protocolAddress = 0;
                         const char* protocolName = nullptr;
-                        if (hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
+                        if (hasGuid) {
+                            for (const EfiProtocolAttachment& attachment : efiProtocolAttachments_) {
+                                if (attachment.handle == handle && attachment.protocol == guid) {
+                                    protocolAddress = attachment.interfaceAddress;
+                                    protocolName = "InstalledProtocol";
+                                    break;
+                                }
+                            }
+                        }
+                        if (protocolAddress == 0 && hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
                             protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
                             protocolName = "LoadedImageProtocol";
-                        } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
+                        } else if (protocolAddress == 0 && hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
                             protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
                             protocolName = "SimpleFileSystemProtocol";
-                        } else if (handle == EFI_CONSOLE_INPUT_HANDLE &&
+                        } else if (protocolAddress == 0 && handle == EFI_CONSOLE_INPUT_HANDLE &&
                                    hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID) {
                             protocolAddress = EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR;
                             protocolName = "SimpleTextInputProtocol";
-                        } else if (handle == EFI_CONSOLE_INPUT_HANDLE &&
+                        } else if (protocolAddress == 0 && handle == EFI_CONSOLE_INPUT_HANDLE &&
                                    hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID) {
                             protocolAddress = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR;
                             protocolName = "SimpleTextInputExProtocol";
@@ -3760,6 +3777,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             const bool raiseTplSlot =
                                 tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x18ULL ||
                                 lastEfiDescriptorFieldAddress_ == EFI_BOOT_SERVICES_ADDR + 0x18ULL;
+                            const bool restoreTplSlot =
+                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x20ULL ||
+                                lastEfiDescriptorFieldAddress_ == EFI_BOOT_SERVICES_ADDR + 0x20ULL ||
+                                currentIP == 0x2E620ULL;
+                            const bool installProtocolSlot =
+                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x80ULL ||
+                                currentIP == 0x2E480ULL;
                             if (raiseTplSlot) {
                                 const uint64_t newTpl =
                                     readCallerOutputRegister(state_.getCPUState(), 0);
@@ -3773,6 +3797,22 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 logEfiServiceCall(memory, "BootServices.RaiseTPL", currentIP,
                                                   EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
                                                   previousTpl);
+                            } else if (restoreTplSlot) {
+                                const uint64_t oldTpl =
+                                    readCallerOutputRegister(state_.getCPUState(), 0);
+                                efiCurrentTpl_ = oldTpl;
+                                logEfiVoidServiceCall(memory, "BootServices.RestoreTPL", currentIP,
+                                                      EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget);
+                            } else if (installProtocolSlot) {
+                                const uint64_t status = handleEfiInstallProtocolInterface(memory);
+                                state_.getCPUState().SetGR(8, status);
+                                logEfiServiceCall(memory, "BootServices.InstallProtocolInterface", currentIP,
+                                                  EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
+                                                  status);
+                                std::cout << "[EFI-STUB] BootServices.InstallProtocolInterface"
+                                          << " -> status=0x" << std::hex << status
+                                          << " (" << efiStatusName(status) << ")"
+                                          << std::dec << std::endl;
                             } else {
                                 ++efiGenericUnsupportedCalls_;
                                 if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL) {
@@ -3783,7 +3823,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 }
                                 state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
                             }
-                            if (!raiseTplSlot) {
+                            if (!raiseTplSlot && !restoreTplSlot && !installProtocolSlot) {
                                 std::cout << "[EFI-STUB] unsupported firmware service target 0x"
                                           << std::hex << originalBranchTarget
                                           << " slot=0x" << tableSlotCandidate
@@ -4181,6 +4221,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     state_ = *ia64State;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    resetEfiProtocolAttachments();
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
@@ -5218,6 +5259,61 @@ uint64_t IA64ISAPlugin::handleEfiWaitForEvent(IMemory& memory, bool checkOnly) {
     return EFI_STATUS_UNSUPPORTED;
 }
 
+uint64_t IA64ISAPlugin::handleEfiInstallProtocolInterface(IMemory& memory) {
+    const uint64_t handlePointer = readCallerOutputRegister(state_.getCPUState(), 0);
+    const uint64_t protocolPointer = readCallerOutputRegister(state_.getCPUState(), 1);
+    const uint64_t interfaceType = readCallerOutputRegister(state_.getCPUState(), 2);
+    const uint64_t interfacePointer = readCallerOutputRegister(state_.getCPUState(), 3);
+
+    if (handlePointer == 0 || protocolPointer == 0 || interfaceType != 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    uint64_t inputHandle = 0;
+    EfiGuid protocolGuid{};
+    if (!readGuestU64(memory, handlePointer, inputHandle) ||
+        !readEfiGuid(memory, protocolPointer, protocolGuid)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    const auto handleExists = [&](uint64_t handle) {
+        return std::any_of(efiProtocolAttachments_.begin(), efiProtocolAttachments_.end(),
+                           [handle](const EfiProtocolAttachment& attachment) {
+                               return attachment.handle == handle;
+                           });
+    };
+    const auto duplicateProtocol = [&](uint64_t handle) {
+        return std::any_of(efiProtocolAttachments_.begin(), efiProtocolAttachments_.end(),
+                           [&](const EfiProtocolAttachment& attachment) {
+                               return attachment.handle == handle &&
+                                      attachment.protocol == protocolGuid;
+                           });
+    };
+
+    uint64_t outputHandle = inputHandle;
+    if (inputHandle == 0) {
+        while (efiNextSyntheticHandle_ == EFI_IMAGE_HANDLE ||
+               efiNextSyntheticHandle_ == EFI_IMAGE_DEVICE_HANDLE ||
+               efiNextSyntheticHandle_ == EFI_CONSOLE_INPUT_HANDLE ||
+               handleExists(efiNextSyntheticHandle_)) {
+            if (efiNextSyntheticHandle_ == UINT64_MAX) {
+                return EFI_STATUS_OUT_OF_RESOURCES;
+            }
+            ++efiNextSyntheticHandle_;
+        }
+        outputHandle = efiNextSyntheticHandle_++;
+    } else if (!handleExists(inputHandle) || duplicateProtocol(inputHandle)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    efiProtocolAttachments_.push_back({outputHandle, protocolGuid, interfacePointer});
+    if (!writeGuestU64(memory, handlePointer, outputHandle)) {
+        efiProtocolAttachments_.pop_back();
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    return EFI_STATUS_SUCCESS;
+}
+
 uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
     ++efiLocateHandleCalls_;
     const uint64_t searchType = readCallerOutputRegister(state_.getCPUState(), 0);
@@ -5238,11 +5334,10 @@ uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
 
-    std::array<uint64_t, 4> matchingHandles{};
+    std::vector<uint64_t> matchingHandles;
     size_t matchingCount = 0;
-    const auto attachments = currentEfiProtocolAttachments();
     if (searchType == EFI_LOCATE_SEARCH_ALL_HANDLES) {
-        for (const EfiProtocolAttachment& attachment : attachments) {
+        for (const EfiProtocolAttachment& attachment : efiProtocolAttachments_) {
             bool alreadyPresent = false;
             for (size_t index = 0; index < matchingCount; ++index) {
                 if (matchingHandles[index] == attachment.handle) {
@@ -5251,7 +5346,8 @@ uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
                 }
             }
             if (!alreadyPresent) {
-                matchingHandles[matchingCount++] = attachment.handle;
+                matchingHandles.push_back(attachment.handle);
+                ++matchingCount;
             }
         }
     } else if (searchType == EFI_LOCATE_SEARCH_BY_PROTOCOL) {
@@ -5259,9 +5355,10 @@ uint64_t IA64ISAPlugin::handleEfiLocateHandle(IMemory& memory) {
         if (!readEfiGuid(memory, protocolGuidAddress, requestedGuid)) {
             return EFI_STATUS_INVALID_PARAMETER;
         }
-        for (const EfiProtocolAttachment& attachment : attachments) {
-            if (*attachment.protocol == requestedGuid) {
-                matchingHandles[matchingCount++] = attachment.handle;
+        for (const EfiProtocolAttachment& attachment : efiProtocolAttachments_) {
+            if (attachment.protocol == requestedGuid) {
+                matchingHandles.push_back(attachment.handle);
+                ++matchingCount;
             }
         }
     }
@@ -5306,13 +5403,21 @@ uint64_t IA64ISAPlugin::handleEfiLocateProtocol(IMemory& memory) {
     EfiGuid guid{};
     const bool hasGuid = readEfiGuid(memory, protocolGuid, guid);
     uint64_t protocolAddress = 0;
-    if (hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
+    if (hasGuid) {
+        for (const EfiProtocolAttachment& attachment : efiProtocolAttachments_) {
+            if (attachment.protocol == guid) {
+                protocolAddress = attachment.interfaceAddress;
+                break;
+            }
+        }
+    }
+    if (protocolAddress == 0 && hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
         protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
-    } else if (hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
+    } else if (protocolAddress == 0 && hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
         protocolAddress = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR;
-    } else if (hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID) {
+    } else if (protocolAddress == 0 && hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID) {
         protocolAddress = EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR;
-    } else if (hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID) {
+    } else if (protocolAddress == 0 && hasGuid && guid == EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID) {
         protocolAddress = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR;
     }
     memory.Write(interfaceOut, reinterpret_cast<const uint8_t*>(&protocolAddress), sizeof(protocolAddress));

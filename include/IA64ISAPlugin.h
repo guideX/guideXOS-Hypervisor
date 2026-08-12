@@ -241,6 +241,7 @@ private:
     uint64_t handleEfiFileClose(IMemory& memory);
     uint64_t handleEfiFileGetPosition(IMemory& memory);
     uint64_t handleEfiFileSetPosition(IMemory& memory);
+    uint64_t handleEfiInstallProtocolInterface(IMemory& memory);
     uint64_t handleEfiLocateHandle(IMemory& memory);
     uint64_t handleEfiLocateProtocol(IMemory& memory);
     void resetEfiConsoleInput();
@@ -249,6 +250,7 @@ private:
     bool ensureEfiMemoryMap(IMemory& memory);
     uint64_t handleEfiAllocatePages(IMemory& memory);
     uint64_t handleEfiGetMemoryMap(IMemory& memory);
+    void resetEfiProtocolAttachments();
     
     /**
      * Execute a single IA-64 instruction
@@ -295,6 +297,13 @@ private:
     uint64_t efiPoolNext_;
     uint64_t efiCurrentTpl_;
     uint64_t lastEfiDescriptorFieldAddress_;
+    struct EfiProtocolAttachment {
+        uint64_t handle;
+        std::array<uint8_t, 16> protocol;
+        uint64_t interfaceAddress;
+    };
+    std::vector<EfiProtocolAttachment> efiProtocolAttachments_;
+    uint64_t efiNextSyntheticHandle_;
     size_t efiTextOutputCalls_;
     size_t efiTextOutputMirrored_;
     size_t efiTextOutputFramebuffer_;

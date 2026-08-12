@@ -320,6 +320,37 @@ public:
     }
 };
 
+class FakeEfiProtocolRegistryDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+        InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+        call.SetOperands(0, bundleIP == 0x1a50ULL ? 0 : 6, 0);
+        call.SetRawBits(0x200000c000ULL);
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        bundle.instructions.push_back(call);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeSyntheticEfiPlabelReturnDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -3567,6 +3598,115 @@ void testIA64PluginLocateHandleReturnsHandleList() {
     std::cout << "  ? LocateHandle decodes all five ABI arguments and implements probe/retry, NOT_FOUND, and validation semantics\n";
 }
 
+void testIA64PluginInstallProtocolInterfaceSharesRegistry() {
+    std::cout << "Testing IA-64 plugin InstallProtocolInterface shared registry semantics...\n";
+
+    SizedSparseMemory memory(0x20000000ULL);
+    uint8_t bundleBytes[16] = {};
+    uint8_t syntheticStubBytes[16] = {1};
+    memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1a50, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1fdb0f00ULL, syntheticStubBytes, sizeof(syntheticStubBytes));
+
+    const uint8_t testGuid[16] = {
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
+    };
+    const uint8_t secondGuid[16] = {
+        0x20, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
+    };
+    memory.Write(0x3000, testGuid, sizeof(testGuid));
+    memory.Write(0x3010, secondGuid, sizeof(secondGuid));
+
+    FakeEfiProtocolRegistryDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    const auto install = [&](uint64_t handlePointer,
+                             uint64_t protocolPointer,
+                             uint64_t interfaceType,
+                             uint64_t interfacePointer) {
+        plugin.getCPUState().SetIP(0x30e40);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fdb0f00ULL);
+        plugin.getCPUState().SetGR(32, handlePointer);
+        plugin.getCPUState().SetGR(33, protocolPointer);
+        plugin.getCPUState().SetGR(34, interfaceType);
+        plugin.getCPUState().SetGR(35, interfacePointer);
+        plugin.getCPUState().SetGR(37, 0x1fdb0880ULL);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == 0x30e50);
+        assert(plugin.getCPUState().GetBR(0) == 0x30e50);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    uint64_t handle = 0;
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&handle), sizeof(handle));
+    assert(install(0x5000, 0x3000, 0, 0x6000) == 0);
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&handle), sizeof(handle));
+    assert(handle == 0x42);
+    assert(handle != 0x1 && handle != 0x40 && handle != 0x41);
+
+    plugin.getCPUState().SetIP(0x1a50);
+    plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+    plugin.getCPUState().SetBR(0, 0x1fdb0e80ULL);
+    plugin.getCPUState().SetGR(35, handle);
+    plugin.getCPUState().SetGR(36, 0x3000);
+    plugin.getCPUState().SetGR(37, 0x7000);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    uint64_t interfaceValue = 0;
+    memory.Read(0x7000, reinterpret_cast<uint8_t*>(&interfaceValue), sizeof(interfaceValue));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(interfaceValue == 0x6000);
+
+    const auto locate = [&](uint64_t bufferSizeAddress, uint64_t bufferAddress) {
+        plugin.getCPUState().SetIP(0x30e40);
+        plugin.getCPUState().SetCFM(5);
+        plugin.getCPUState().SetBR(6, 0x1fdb1700ULL);
+        plugin.getCPUState().SetGR(32, 2);
+        plugin.getCPUState().SetGR(33, 0x3000);
+        plugin.getCPUState().SetGR(34, 0);
+        plugin.getCPUState().SetGR(35, bufferSizeAddress);
+        plugin.getCPUState().SetGR(36, bufferAddress);
+        plugin.getCPUState().SetGR(37, 0);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == 0x30e50);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    uint64_t bufferSize = 0;
+    memory.Write(0x5008, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    assert(locate(0x5008, 0) == 0x8000000000000005ULL);
+    memory.Read(0x5008, reinterpret_cast<uint8_t*>(&bufferSize), sizeof(bufferSize));
+    assert(bufferSize == sizeof(uint64_t));
+    bufferSize = sizeof(uint64_t);
+    memory.Write(0x5008, reinterpret_cast<const uint8_t*>(&bufferSize), sizeof(bufferSize));
+    uint64_t locatedHandle = 0;
+    memory.Write(0x7010, reinterpret_cast<const uint8_t*>(&locatedHandle), sizeof(locatedHandle));
+    assert(locate(0x5008, 0x7010) == 0);
+    memory.Read(0x7010, reinterpret_cast<uint8_t*>(&locatedHandle), sizeof(locatedHandle));
+    assert(locatedHandle == handle);
+
+    assert(install(0x5000, 0x3010, 0, 0x6010) == 0);
+    assert(install(0x5000, 0x3000, 0, 0x6000) == 0x8000000000000002ULL);
+    handle = 0x40;
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&handle), sizeof(handle));
+    assert(install(0x5000, 0x3010, 0, 0x6010) == 0);
+
+    assert(install(0, 0x3000, 0, 0x6000) == 0x8000000000000002ULL);
+    assert(install(0x5000, 0, 0, 0x6000) == 0x8000000000000002ULL);
+    assert(install(0x5000, 0x3000, 1, 0x6000) == 0x8000000000000002ULL);
+    handle = 0x99;
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&handle), sizeof(handle));
+    assert(install(0x5000, 0x3010, 0, 0x6010) == 0x8000000000000002ULL);
+
+    std::cout << "  ? InstallProtocolInterface creates 0x42, HandleProtocol and LocateHandle share it, "
+                 "and duplicate/invalid registrations return EFI_INVALID_PARAMETER\n";
+}
+
 void testIA64PluginFileProtocolOpenNoMediaIsSafe() {
     std::cout << "Testing IA-64 plugin FileProtocol Open without backing media...\n";
 
@@ -3798,14 +3938,13 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
                  "reject invalid pointers/constraints, and preserve reserved ranges\n";
 }
 
-void testIA64PluginRaiseTplReturnsPreviousTpl() {
-    std::cout << "Testing IA-64 plugin BootServices RaiseTPL service...\n";
+void testIA64PluginTplPairSemantics() {
+    std::cout << "Testing IA-64 plugin BootServices TPL pair semantics...\n";
 
     constexpr uint64_t handoffBase = 0x1fdb0000ULL;
     constexpr uint64_t unsupportedCode = handoffBase + kEfiUnsupportedStubCodeOffset;
     constexpr uint64_t raiseTplSlot = handoffBase + 0x818ULL;
-    constexpr uint64_t tplNotify = 16ULL;
-    constexpr uint64_t tplApplication = 4ULL;
+    constexpr uint64_t restoreTplSlot = handoffBase + 0x820ULL;
 
     SizedSparseMemory memory(0x20000000ULL);
     uint8_t bundleBytes[16] = {};
@@ -3815,18 +3954,57 @@ void testIA64PluginRaiseTplReturnsPreviousTpl() {
 
     FakeIndirectCallDecoder decoder;
     IA64ISAPlugin plugin(decoder);
-    plugin.getCPUState().SetIP(0xa210);
     plugin.getCPUState().SetCFM(2);
-    plugin.getCPUState().SetBR(6, unsupportedCode);
-    plugin.getCPUState().SetGR(32, tplNotify);
-    plugin.getCPUState().SetGR(37, raiseTplSlot);
+    auto callTplService = [&](uint64_t fieldAddress, uint64_t argument) {
+        plugin.getCPUState().SetIP(0xa210);
+        plugin.getCPUState().SetBR(6, unsupportedCode);
+        plugin.getCPUState().SetGR(32, argument);
+        plugin.getCPUState().SetGR(37, fieldAddress);
+        return plugin.step(memory);
+    };
 
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetIP() == 0xa220);
-    assert(plugin.getCPUState().GetBR(0) == 0xa220);
-    assert(plugin.getCPUState().GetGR(8) == tplApplication);
+    assert(callTplService(raiseTplSlot, 8) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 4);
+    assert(callTplService(raiseTplSlot, 16) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 8);
 
-    std::cout << "  ? RaiseTPL returns TPL_APPLICATION for a first TPL_NOTIFY raise\n";
+    const uint64_t canaryR8 = 0x1122334455667788ULL;
+    const uint64_t canaryR9 = 0x8877665544332211ULL;
+    const uint64_t canaryR10 = 0x0123456789abcdefULL;
+    const uint64_t canaryPfs = plugin.getCPUState().GetPFS();
+    const uint64_t canaryPsr = plugin.getCPUState().GetPSR();
+    plugin.getCPUState().SetGR(8, canaryR8);
+    plugin.getCPUState().SetGR(9, canaryR9);
+    plugin.getCPUState().SetGR(10, canaryR10);
+    for (size_t branch = 1; branch < 8; ++branch) {
+        plugin.getCPUState().SetBR(branch, 0x70000000ULL + branch);
+    }
+
+    assert(callTplService(restoreTplSlot, 8) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == canaryR8);
+    assert(plugin.getCPUState().GetGR(9) == canaryR9);
+    assert(plugin.getCPUState().GetGR(10) == canaryR10);
+    assert(plugin.getCPUState().GetPFS() == canaryPfs);
+    assert(plugin.getCPUState().GetPSR() == canaryPsr);
+    for (size_t branch = 1; branch < 8; ++branch) {
+        if (branch != 6) {
+            assert(plugin.getCPUState().GetBR(branch) == 0x70000000ULL + branch);
+        }
+    }
+
+    // The next raise proves RestoreTPL set the current TPL back to 8.
+    assert(callTplService(raiseTplSlot, 16) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 8);
+    plugin.getCPUState().SetGR(8, canaryR8);
+    assert(callTplService(restoreTplSlot, 4) == ISAExecutionResult::CONTINUE);
+
+    // The final raise proves the complete nested sequence 4 -> 8 -> 16 -> 8 -> 4.
+    assert(plugin.getCPUState().GetGR(8) == canaryR8);
+    assert(callTplService(raiseTplSlot, 8) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 4);
+
+    std::cout << "  ? RaiseTPL/RestoreTPL preserve VOID return registers, isolate unrelated state, "
+                 "and implement 4 -> 8 -> 16 -> 8 -> 4\n";
 }
 
 void testIA64PluginSetMemFillsExactRange() {
@@ -4544,6 +4722,8 @@ int main() {
 
         testIA64PluginLocateHandleReturnsHandleList();
         std::cout << "\n";
+        testIA64PluginInstallProtocolInterfaceSharesRegistry();
+        std::cout << "\n";
         testIA64PluginFileProtocolOpenNoMediaIsSafe();
         std::cout << "\n";
 
@@ -4556,7 +4736,7 @@ int main() {
         testIA64PluginAllocatePagesUsesSharedEfiMemoryMap();
         std::cout << "\n";
 
-        testIA64PluginRaiseTplReturnsPreviousTpl();
+        testIA64PluginTplPairSemantics();
         std::cout << "\n";
 
         testIA64PluginSetMemFillsExactRange();
