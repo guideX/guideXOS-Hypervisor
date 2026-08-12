@@ -293,6 +293,8 @@ private:
     bool hasCachedInstruction_;
     std::vector<uint64_t> pendingCallInputs_;
     uint64_t efiPoolNext_;
+    uint64_t efiCurrentTpl_;
+    uint64_t lastEfiDescriptorFieldAddress_;
     size_t efiTextOutputCalls_;
     size_t efiTextOutputMirrored_;
     size_t efiTextOutputFramebuffer_;

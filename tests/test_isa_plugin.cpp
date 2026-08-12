@@ -3798,6 +3798,37 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
                  "reject invalid pointers/constraints, and preserve reserved ranges\n";
 }
 
+void testIA64PluginRaiseTplReturnsPreviousTpl() {
+    std::cout << "Testing IA-64 plugin BootServices RaiseTPL service...\n";
+
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t unsupportedCode = handoffBase + kEfiUnsupportedStubCodeOffset;
+    constexpr uint64_t raiseTplSlot = handoffBase + 0x818ULL;
+    constexpr uint64_t tplNotify = 16ULL;
+    constexpr uint64_t tplApplication = 4ULL;
+
+    SizedSparseMemory memory(0x20000000ULL);
+    uint8_t bundleBytes[16] = {};
+    uint8_t syntheticStubBytes[16] = {1};
+    memory.Write(0xa210, bundleBytes, sizeof(bundleBytes));
+    memory.Write(unsupportedCode, syntheticStubBytes, sizeof(syntheticStubBytes));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0xa210);
+    plugin.getCPUState().SetCFM(2);
+    plugin.getCPUState().SetBR(6, unsupportedCode);
+    plugin.getCPUState().SetGR(32, tplNotify);
+    plugin.getCPUState().SetGR(37, raiseTplSlot);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0xa220);
+    assert(plugin.getCPUState().GetBR(0) == 0xa220);
+    assert(plugin.getCPUState().GetGR(8) == tplApplication);
+
+    std::cout << "  ? RaiseTPL returns TPL_APPLICATION for a first TPL_NOTIFY raise\n";
+}
+
 void testIA64PluginSetMemFillsExactRange() {
     std::cout << "Testing IA-64 plugin SetMem firmware stub...\n";
 
@@ -4523,6 +4554,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginAllocatePagesUsesSharedEfiMemoryMap();
+        std::cout << "\n";
+
+        testIA64PluginRaiseTplReturnsPreviousTpl();
         std::cout << "\n";
 
         testIA64PluginSetMemFillsExactRange();

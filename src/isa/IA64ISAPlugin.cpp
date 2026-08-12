@@ -2026,6 +2026,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
     , efiPoolNext_(EFI_POOL_BASE)
+    , efiCurrentTpl_(4)
+    , lastEfiDescriptorFieldAddress_(0)
     , efiTextOutputCalls_(0)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
@@ -2106,6 +2108,8 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
     , efiPoolNext_(EFI_POOL_BASE)
+    , efiCurrentTpl_(4)
+    , lastEfiDescriptorFieldAddress_(0)
     , efiTextOutputCalls_(0)
     , efiTextOutputMirrored_(0)
     , efiTextOutputFramebuffer_(0)
@@ -2248,6 +2252,8 @@ void IA64ISAPlugin::reset() {
     recentInstructionSequenceRepeatCount_ = 0;
     resetEfiHandoffLayoutGlobals();
     efiPoolNext_ = EFI_POOL_BASE;
+    efiCurrentTpl_ = 4;
+    lastEfiDescriptorFieldAddress_ = 0;
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
     efiTextOutputFramebuffer_ = 0;
@@ -3749,27 +3755,47 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                               EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
                                               status);
                         } else {
-                            ++efiGenericUnsupportedCalls_;
-                            if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL) {
-                                ++efiFreePagesCalls_;
-                            }
-                            if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x160ULL) {
-                                ++efiCopyMemCalls_;
-                            }
-                            state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
                             const bool freePagesSlot =
                                 tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL;
-                            std::cout << "[EFI-STUB] unsupported firmware service target 0x"
-                                      << std::hex << originalBranchTarget
-                                      << " slot=0x" << tableSlotCandidate
-                                      << (freePagesSlot ? " [BootServices.FreePages]" : "")
-                                      << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
-                            logEfiServiceCall(memory,
-                                              freePagesSlot ? "BootServices.FreePages (unsupported)"
-                                                            : "EFI.Unsupported",
-                                              currentIP,
-                                              EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
-                                              EFI_STATUS_UNSUPPORTED);
+                            const bool raiseTplSlot =
+                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x18ULL ||
+                                lastEfiDescriptorFieldAddress_ == EFI_BOOT_SERVICES_ADDR + 0x18ULL;
+                            if (raiseTplSlot) {
+                                const uint64_t newTpl =
+                                    readCallerOutputRegister(state_.getCPUState(), 0);
+                                const uint64_t previousTpl = efiCurrentTpl_;
+                                efiCurrentTpl_ = newTpl;
+                                state_.getCPUState().SetGR(8, previousTpl);
+                                std::cout << "[EFI-STUB] BootServices.RaiseTPL NewTpl=0x"
+                                          << std::hex << newTpl
+                                          << " PreviousTpl=0x" << previousTpl
+                                          << std::dec << std::endl;
+                                logEfiServiceCall(memory, "BootServices.RaiseTPL", currentIP,
+                                                  EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
+                                                  previousTpl);
+                            } else {
+                                ++efiGenericUnsupportedCalls_;
+                                if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL) {
+                                    ++efiFreePagesCalls_;
+                                }
+                                if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x160ULL) {
+                                    ++efiCopyMemCalls_;
+                                }
+                                state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                            }
+                            if (!raiseTplSlot) {
+                                std::cout << "[EFI-STUB] unsupported firmware service target 0x"
+                                          << std::hex << originalBranchTarget
+                                          << " slot=0x" << tableSlotCandidate
+                                          << (freePagesSlot ? " [BootServices.FreePages]" : "")
+                                          << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
+                                logEfiServiceCall(memory,
+                                                  freePagesSlot ? "BootServices.FreePages (unsupported)"
+                                                                : "EFI.Unsupported",
+                                                  currentIP,
+                                                  EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
+                                                  EFI_STATUS_UNSUPPORTED);
+                            }
                         }
                     } else {
                         const bool traceRegisterConfigCallsite =
@@ -5824,6 +5850,14 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const uint64_t loadAddress = loadSize != 0 ? cpu.GetGR(instr.GetSrc1()) : 0;
         const size_t storeSize = storeSizeForInstruction(instr.GetType());
         const uint64_t storeAddress = storeSize != 0 ? cpu.GetGR(instr.GetDst()) : 0;
+        if (loadSize == sizeof(uint64_t) && instr.GetType() == InstructionType::LD8 &&
+            instr.GetDst() == 8 &&
+            ((loadAddress >= EFI_RUNTIME_SERVICES_ADDR + 0x18ULL &&
+              loadAddress < EFI_RUNTIME_SERVICES_ADDR + 0x88ULL) ||
+             (loadAddress >= EFI_BOOT_SERVICES_ADDR + 0x18ULL &&
+              loadAddress < EFI_BOOT_SERVICES_ADDR + 0x180ULL))) {
+            lastEfiDescriptorFieldAddress_ = loadAddress;
+        }
         const bool traceBootLocalLoad =
             loadSize != 0 &&
             rangesOverlap(loadAddress, loadSize, 0x5E000ULL, 0x80ULL);
