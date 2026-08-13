@@ -1262,12 +1262,87 @@ void test_subtract_operations() {
 
     cpu.SetGR(19, 9);
     InstructionEx sub_imm(InstructionType::SUB_IMM, UnitType::I_UNIT);
-    sub_imm.SetOperands(19, 19, 0);
+    sub_imm.SetOperands(19, 0, 19);
     sub_imm.SetImmediate(3);
     sub_imm.Execute(cpu, memory);
-    assert_equal("SUB immediate", 6, cpu.GetGR(19));
+    assert_equal("SUB immediate", static_cast<uint64_t>(-6), cpu.GetGR(19));
 
     std::cout << "  ? Subtract operations passed" << std::endl;
+}
+
+void test_ia64_immediate_sub_raw_encoding() {
+    std::cout << "Testing IA-64 A3 immediate SUB raw encoding..." << std::endl;
+
+    InstructionDecoder decoder;
+    Memory memory(1024 * 1024);
+
+    const uint64_t rawSub = 0x10129110407ULL;
+    InstructionEx actual = decoder.DecodeSlot(rawSub, UnitType::I_UNIT, 0x2c1e0);
+    assert_true("raw immediate SUB should decode",
+                actual.GetType() == InstructionType::SUB_IMM);
+    assert_equal("raw immediate SUB predicate", 7, actual.GetPredicate());
+    assert_equal("raw immediate SUB destination", 16, actual.GetDst());
+    assert_equal("raw immediate SUB source r3", 17, actual.GetSrc2());
+    assert_equal("raw immediate SUB immediate", 8, actual.GetImmediate());
+    assert_string("raw immediate SUB disassembly",
+                  "sub r16 = 8, r17",
+                  actual.GetDisassembly());
+
+    CPUState cpu;
+    cpu.SetPR(7, true);
+    cpu.SetGR(17, 0x32);
+    actual.Execute(cpu, memory);
+    assert_equal("raw immediate SUB result is imm minus r3",
+                 static_cast<uint64_t>(-0x2a), cpu.GetGR(16));
+
+    cpu.SetGR(16, 0x1122334455667788ULL);
+    cpu.SetPR(7, false);
+    actual.Execute(cpu, memory);
+    assert_equal("raw immediate SUB respects predicate",
+                 0x1122334455667788ULL, cpu.GetGR(16));
+
+    auto makeRaw = [](uint8_t qp, uint8_t dst, uint8_t src, int immediate) {
+        const uint8_t encoded = static_cast<uint8_t>(immediate);
+        uint64_t raw = static_cast<uint64_t>(qp & 0x3f) |
+                       (static_cast<uint64_t>(dst & 0x7f) << 6) |
+                       (static_cast<uint64_t>(encoded & 0x7f) << 13) |
+                       (static_cast<uint64_t>(src & 0x7f) << 20) |
+                       (1ULL << 27) | (9ULL << 29) | (8ULL << 37);
+        raw |= static_cast<uint64_t>((encoded >> 7) & 0x1) << 36;
+        return raw;
+    };
+
+    auto executeBoundary = [&](const char* name,
+                                uint8_t dst,
+                                uint8_t src,
+                                int immediate,
+                                uint64_t sourceValue,
+                                uint64_t expected) {
+        InstructionEx instruction = decoder.DecodeSlot(
+            makeRaw(0, dst, src, immediate), UnitType::I_UNIT, 0);
+        assert_true(name, instruction.GetType() == InstructionType::SUB_IMM);
+        assert_equal("immediate SUB boundary source", src, instruction.GetSrc2());
+        assert_equal("immediate SUB boundary sign extension",
+                     static_cast<uint64_t>(static_cast<int64_t>(immediate)),
+                     instruction.GetImmediate());
+        cpu.SetGR(src, sourceValue);
+        cpu.SetGR(dst, 0);
+        instruction.Execute(cpu, memory);
+        assert_equal(name, expected, cpu.GetGR(dst));
+    };
+
+    executeBoundary("immediate SUB zero / 0-minus-x", 5, 6, 0, 5,
+                     static_cast<uint64_t>(-5));
+    executeBoundary("immediate SUB maximum positive immediate", 7, 8, 127, 1, 126);
+    executeBoundary("immediate SUB minimum negative immediate", 9, 10, -128, 0,
+                    static_cast<uint64_t>(-128));
+
+    InstructionEx writeR0 = decoder.DecodeSlot(makeRaw(0, 0, 11, 1), UnitType::I_UNIT, 0);
+    cpu.SetGR(11, 9);
+    writeR0.Execute(cpu, memory);
+    assert_equal("immediate SUB destination r0 remains zero", 0, cpu.GetGR(0));
+
+    std::cout << "  ? IA-64 A3 immediate SUB raw encoding passed" << std::endl;
 }
 
 // Test shift operations
@@ -1673,6 +1748,7 @@ int main() {
         test_test_instructions();
         test_bitwise_operations();
         test_subtract_operations();
+        test_ia64_immediate_sub_raw_encoding();
         test_shift_operations();
         test_extract_deposit();
         test_memory_operations();

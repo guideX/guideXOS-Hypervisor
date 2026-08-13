@@ -1208,9 +1208,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::SUB_IMM:
-            // sub rDst = rSrc1, imm14
+            // IA-64 A3: sub rDst = imm8, rSrc2
             if (hasImmediate_) {
-                cpu.SetGR(dst_, cpu.GetGR(src1_) - immediate_);
+                cpu.SetGR(dst_, immediate_ - cpu.GetGR(src2_));
             }
             break;
             
@@ -1986,8 +1986,9 @@ std::string InstructionEx::GetDisassembly() const {
             break;
             
         case InstructionType::SUB_IMM:
-            oss << "sub r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
-                << ", " << static_cast<int64_t>(immediate_);
+            oss << "sub r" << static_cast<int>(dst_) << " = "
+                << static_cast<int64_t>(immediate_) << ", r"
+                << static_cast<int>(src2_);
             break;
             
         case InstructionType::MOVL:
