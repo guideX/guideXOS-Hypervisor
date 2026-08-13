@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/dev/guideXOS_Hypervisor/.codex_tmp/build-loop-fs/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

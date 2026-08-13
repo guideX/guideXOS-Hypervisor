@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="cab71fbf-7d8c-3b29-aa6c-7e7a4f0bc8b2" DefaultStartup="true">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="boot_trace_example.vcxproj"/>
+		<BuildDependency Project="copy_web_files.vcxproj"/>
+		<BuildDependency Project="debug_harness.vcxproj"/>
+		<BuildDependency Project="ia64_iso_matrix.vcxproj"/>
+		<BuildDependency Project="ia64emu.vcxproj"/>
+		<BuildDependency Project="ia64emu_tests.vcxproj"/>
+		<BuildDependency Project="kernel_validation_example.vcxproj"/>
+		<BuildDependency Project="test_bootstrap.vcxproj"/>
+		<BuildDependency Project="test_cpu_execution.vcxproj"/>
+		<BuildDependency Project="test_debugger.vcxproj"/>
+		<BuildDependency Project="test_elf_validation.vcxproj"/>
+		<BuildDependency Project="test_fuzzer.vcxproj"/>
+		<BuildDependency Project="test_io_devices.vcxproj"/>
+		<BuildDependency Project="test_isa_plugin.vcxproj"/>
+		<BuildDependency Project="test_mov_imm.vcxproj"/>
+		<BuildDependency Project="test_new_instructions.vcxproj"/>
+		<BuildDependency Project="test_profiler.vcxproj"/>
+		<BuildDependency Project="test_riscv_decoder.vcxproj"/>
+		<BuildDependency Project="test_riscv_fetch_decode.vcxproj"/>
+		<BuildDependency Project="test_riscv_minimal_execution.vcxproj"/>
+		<BuildDependency Project="test_syscall_dispatcher.vcxproj"/>
+		<BuildDependency Project="test_vm_isolation.vcxproj"/>
+		<BuildDependency Project="test_vmmanager.vcxproj"/>
+		<BuildDependency Project="test_watchpoint.vcxproj"/>
+		<BuildDependency Project="virtual_devices_example.vcxproj"/>
+		<BuildDependency Project="virtual_disk_example.vcxproj"/>
+		<BuildDependency Project="webui_example.vcxproj"/>
+	</Project>
+	<Project Path="INSTALL.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="ecf2b7c8-9b3e-34d7-b225-5fe6386c6466">
+		<BuildDependency Project="ALL_BUILD.vcxproj"/>
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="RUN_TESTS.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="6fec371a-a601-345c-bbf1-8c159cb26f1b">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="76f18c6c-1f50-3383-91d3-bbbc002fcfec"/>
+	<Project Path="boot_trace_example.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3cd2f0bc-2be6-3c1c-a65d-d1d89a785a15">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="copy_web_files.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="602edde7-da6c-3d23-8bae-eb14e87b7a69">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="debug_harness.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="12fa4acc-a0d3-3175-b1e0-3acaf33165a3">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="ia64_iso_matrix.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="2a5a036c-51b0-3631-a301-cf8a775c848c">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="ia64emu.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e8a537ea-766b-3cd7-a392-d79ad35c84be">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="ia64emu_tests.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="7f04ebb3-b358-34fb-b450-2b3781aebeee">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="kernel_validation_example.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c74e09fc-40dd-3fa4-9779-279cfa3d5dbd">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_bootstrap.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5aa9af30-f1b6-3f29-85ba-962221534a8f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_cpu_execution.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d7b7df73-cbb0-3c01-9cbf-e6c0f23f0b84">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_debugger.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="6ea4857a-61f1-3c47-b05d-af126cac7b7f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_elf_validation.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="234cf5c9-fcf0-3a48-8117-2df686a2b043">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_fuzzer.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f45b7f7d-920d-36b7-8e1a-5416d135b7b4">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_io_devices.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="708b4597-8438-32ba-88c1-6d3d4ad47f32">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_isa_plugin.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d6fb3b78-9674-3cac-9ebd-55f7de87581f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_mov_imm.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="366490e1-7c0f-35a6-9bc7-ef8c1452b40e">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_new_instructions.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="bba0ba3e-ce9f-3a9b-81a2-f5e016ef47d8">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_profiler.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="7fdc1531-d51f-3f26-a187-2808e4648146">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_riscv_decoder.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f3684211-450b-3a6a-81e2-7ff3fe83d3e9">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_riscv_fetch_decode.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="9155b67d-a4d5-34e9-bf77-59b6489bedb1">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_riscv_minimal_execution.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3cf4a494-4b53-3d49-bcc8-6a32b60c3966">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_syscall_dispatcher.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="8e71aa5a-1909-3137-b69b-6a1cb8fc4117">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_vm_isolation.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="59f4e4ee-2d8e-3766-8081-5cead998e2f2">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_vmmanager.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="dee3b854-e269-3508-b533-7792c47a5880">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="test_watchpoint.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f473de56-957f-331e-89a2-af1fa4dc28c5">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="virtual_devices_example.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="4bb84188-e5e5-3668-a369-e8b016481921">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="virtual_disk_example.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d9e1ec63-4ae6-3986-850c-710ec01ac238">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="webui_example.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e769a0c6-d8cc-3a19-a9d1-6619be21c270">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="copy_web_files.vcxproj"/>
+	</Project>
+</Solution>

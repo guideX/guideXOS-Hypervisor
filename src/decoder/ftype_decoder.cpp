@@ -153,12 +153,12 @@ bool FTypeDecoder::decodeF8(uint64_t slot, formats::FFormat& result) {
     // Bits [6:12]:  f1
     // Bits [13:19]: f2
     // Bits [20:26]: f3
-    // Bits [33:34]: sf
+    // Bits [34:35]: sf
     
     result.f1 = formats::extractBits(slot, 6, 7);
     result.f2 = formats::extractBits(slot, 13, 7);
     result.f3 = formats::extractBits(slot, 20, 7);
-    result.sf = formats::extractBits(slot, 33, 2);
+    result.sf = formats::extractBits(slot, 34, 2);
     
     return true;
 }
@@ -188,11 +188,11 @@ bool FTypeDecoder::decodeF10(uint64_t slot, formats::FFormat& result) {
     // Bits [0:5]:   qp
     // Bits [6:12]:  f1
     // Bits [13:19]: f2
-    // Bits [33:34]: sf
+    // Bits [34:35]: sf
     
     result.f1 = formats::extractBits(slot, 6, 7);
     result.f2 = formats::extractBits(slot, 13, 7);
-    result.sf = formats::extractBits(slot, 33, 2);
+    result.sf = formats::extractBits(slot, 34, 2);
     
     return true;
 }
@@ -265,8 +265,25 @@ InstructionEx FTypeDecoder::decode(uint64_t slot) {
             }
             break;
             
-        case 0x0:  // FRCPA / FRSQRTA
+        case 0x0:  // FCVT / FRCPA / FRSQRTA
         {
+            // The FCVT family uses the major-0 F-format with a six-bit
+            // sub-opcode in bits 27:32.  In particular, the Debian ELILO
+            // integer-modulus helper uses 0x1b:
+            //   fcvt.fxu.trunc.s1 f10 = f10
+            const uint8_t conversionOpcode = formats::extractBits(slot, 27, 6);
+            const uint8_t conversionX = formats::extractBits(slot, 36, 1);
+            if (conversionX == 0 &&
+                (conversionOpcode == 0x1B || conversionOpcode == 0x1A)) {
+                if (decodeF10(slot, fmt)) {
+                    inst.SetType(conversionOpcode == 0x1B
+                                     ? InstructionType::FCVT_FXU
+                                     : InstructionType::FCVT_FX);
+                    inst.SetOperands(fmt.f1, fmt.f2, 0);
+                }
+                break;
+            }
+
             // Table 4-62 uses x=1 for the reciprocal-approximation family;
             // q selects F6 (frcpa) versus F7 (frsqrta).
             const uint8_t q = formats::extractBits(slot, 36, 1);

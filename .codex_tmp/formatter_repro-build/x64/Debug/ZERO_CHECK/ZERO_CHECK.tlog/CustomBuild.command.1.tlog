@@ -1,0 +1,10 @@
+^D:\DEV\GUIDEXOS_HYPERVISOR\.CODEX_TMP\FORMATTER_REPRO-BUILD\CMAKEFILES\CB8C88F755FC7E1DD7C1A675CADAC3A3\GENERATE.STAMP.RULE
+setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor/.codex_tmp/formatter_repro -BD:/dev/guideXOS_Hypervisor/.codex_tmp/formatter_repro-build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/dev/guideXOS_Hypervisor/.codex_tmp/formatter_repro-build/formatter_repro.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

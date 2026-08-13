@@ -1,0 +1,15 @@
+D:\dev\guideXOS_Hypervisor\tests\test_new_instructions.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\test_new_instructions.obj
+D:\dev\guideXOS_Hypervisor\src\core\cpu.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\cpu.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\atype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\atype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\itype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\itype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\mtype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\mtype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\btype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\btype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\ftype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\ftype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\lx_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\lx_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\xtype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\xtype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\riscv_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\riscv_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\memory\memory.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\memory.obj
+D:\dev\guideXOS_Hypervisor\src\mmu\mmu.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\mmu.obj
+D:\dev\guideXOS_Hypervisor\src\storage\ISO9660Parser.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\ISO9660Parser.obj
+D:\dev\guideXOS_Hypervisor\src\storage\FATParser.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-fs\test_new_instructions.dir\Debug\FATParser.obj

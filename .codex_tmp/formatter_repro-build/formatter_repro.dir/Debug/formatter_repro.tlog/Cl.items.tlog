@@ -1,0 +1,13 @@
+D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro\formatter_repro.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\formatter_repro.obj
+D:\dev\guideXOS_Hypervisor\src\core\cpu.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\cpu.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\atype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\atype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\itype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\itype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\mtype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\mtype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\btype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\btype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\ftype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\ftype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\lx_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\lx_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\xtype_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\xtype_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\decoder\riscv_decoder.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\riscv_decoder.obj
+D:\dev\guideXOS_Hypervisor\src\memory\memory.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\memory.obj
+D:\dev\guideXOS_Hypervisor\src\mmu\mmu.cpp;D:\dev\guideXOS_Hypervisor\.codex_tmp\formatter_repro-build\formatter_repro.dir\Debug\mmu.obj

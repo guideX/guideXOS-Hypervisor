@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-loop\CMakeFiles\2cbe7936a4d1d23552d06cf6a983332d\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{C9567733-1780-326B-A429-52715E0C3235}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

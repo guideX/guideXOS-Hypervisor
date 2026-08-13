@@ -1,0 +1,10 @@
+^D:\DEV\GUIDEXOS_HYPERVISOR\.CODEX_TMP\BUILD-LOOP\CMAKEFILES\2CBE7936A4D1D23552D06CF6A983332D\GENERATE.STAMP.RULE
+setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/.codex_tmp/build-loop --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/dev/guideXOS_Hypervisor/.codex_tmp/build-loop/IA64Emulator.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

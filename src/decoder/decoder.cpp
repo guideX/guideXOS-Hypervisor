@@ -674,6 +674,47 @@ static void ExecuteReciprocalApproximation(CPUState& cpu,
     cpu.SetFR(destination, resultBytes);
 }
 
+static void ExecuteUnsignedFixedTruncate(CPUState& cpu,
+                                          uint8_t destination,
+                                          uint8_t source) {
+    uint8_t sourceBytes[16] = {};
+    uint8_t resultBytes[16] = {};
+    cpu.GetFR(source, sourceBytes);
+    const IA64FloatingValue value = ReadIA64FloatingValue(sourceBytes);
+
+    if (value.natVal) {
+        WriteNatVal(resultBytes);
+        cpu.SetFR(destination, resultBytes);
+        return;
+    }
+
+    // The ELILO helper converts a positive, finite quotient into IA-64's
+    // integer format before feeding it to XMA.L.  For a normal register-format
+    // value, changing the exponent from E to the integer-format exponent
+    // 0x1003E is an exact power-of-two shift of the significand.
+    if (value.negative ||
+        !IsIA64Finite(ClassifyIA64FloatingValue(value))) {
+        cpu.SetFR(destination, sourceBytes);
+        return;
+    }
+
+    constexpr int64_t kIntegerExponent = 0x1003E;
+    const int64_t shift = static_cast<int64_t>(value.exponent) -
+                          kIntegerExponent;
+    uint64_t integerValue = 0;
+    if (shift >= 64) {
+        integerValue = 0;
+    } else if (shift >= 0) {
+        integerValue = value.significand << static_cast<unsigned>(shift);
+    } else if (shift > -64) {
+        integerValue = value.significand >> static_cast<unsigned>(-shift);
+    }
+
+    WriteLittleEndian64(resultBytes, integerValue);
+    WriteLittleEndian64(resultBytes + 8, kIntegerExponent);
+    cpu.SetFR(destination, resultBytes);
+}
+
 static unsigned FusedArithmeticPrecisionBits(const CPUState& cpu, uint64_t rawBits) {
     const uint8_t major = static_cast<uint8_t>((rawBits >> 37) & 0x0F);
     const bool fixedSingle = ((rawBits >> 36) & 1ULL) != 0;
@@ -1021,8 +1062,23 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
-        case InstructionType::FCVT_FX:
         case InstructionType::FCVT_FXU:
+            {
+                const uint8_t conversionOpcode =
+                    static_cast<uint8_t>((rawBits_ >> 27) & 0x3F);
+                if (type_ == InstructionType::FCVT_FXU &&
+                    conversionOpcode == 0x1B) {
+                    ExecuteUnsignedFixedTruncate(cpu, dst_, src1_);
+                    break;
+                }
+
+                uint8_t fr[16] = {};
+                cpu.GetFR(src1_, fr);
+                cpu.SetFR(dst_, fr);
+            }
+            break;
+
+        case InstructionType::FCVT_FX:
             {
                 uint8_t fr[16] = {};
                 cpu.GetFR(src1_, fr);
@@ -1841,11 +1897,25 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::FCVT_FX:
-            oss << "fcvt.fx f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            oss << "fcvt.fx";
+            if (((rawBits_ >> 27) & 0x3F) == 0x1A) {
+                oss << ".trunc";
+            }
+            if (rawBits_ != 0) {
+                oss << ".s" << static_cast<int>((rawBits_ >> 34) & 0x03);
+            }
+            oss << " f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
 
         case InstructionType::FCVT_FXU:
-            oss << "fcvt.fxu f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            oss << "fcvt.fxu";
+            if (((rawBits_ >> 27) & 0x3F) == 0x1B) {
+                oss << ".trunc";
+            }
+            if (rawBits_ != 0) {
+                oss << ".s" << static_cast<int>((rawBits_ >> 34) & 0x03);
+            }
+            oss << " f" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
 
         case InstructionType::FCVT_XF:

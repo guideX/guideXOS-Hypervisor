@@ -1554,6 +1554,76 @@ void test_cmp4_instructions() {
     std::cout << "  ? CMP4 instructions passed" << std::endl;
 }
 
+void test_ia64_unsigned_fixed_truncate_modulus_sequence() {
+    std::cout << "Testing IA-64 FCVT.FXU.TRUNC modulus sequence..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    const InstructionEx convert = decoder.DecodeSlot(
+        0x4d8014280ULL, UnitType::F_UNIT, 0x370e0);
+    assert_true("raw FCVT.FXU.TRUNC should decode",
+                convert.GetType() == InstructionType::FCVT_FXU);
+    assert_equal("FCVT.FXU.TRUNC destination FP register", 10, convert.GetDst());
+    assert_equal("FCVT.FXU.TRUNC source FP register", 10, convert.GetSrc1());
+    assert_string("FCVT.FXU.TRUNC disassembly",
+                  "fcvt.fxu.trunc.s1 f10 = f10",
+                  convert.GetDisassembly());
+
+    auto setFloatingValue = [&cpu](uint8_t reg, uint64_t significand,
+                                   uint64_t signAndExponent) {
+        uint8_t bytes[16] = {};
+        for (int i = 0; i < 8; ++i) {
+            bytes[i] = static_cast<uint8_t>((significand >> (i * 8)) & 0xff);
+            bytes[8 + i] = static_cast<uint8_t>((signAndExponent >> (i * 8)) & 0xff);
+        }
+        cpu.SetFR(reg, bytes);
+    };
+
+    // 52.5 in register format: 0xd2 * 2^(0x10004 - 0x1003e) = 52.5.
+    setFloatingValue(10, 0xd200000000000000ULL, 0x10004ULL);
+    convert.Execute(cpu, memory);
+
+    uint8_t converted[16] = {};
+    cpu.GetFR(10, converted);
+    uint64_t convertedSignificand = 0;
+    uint64_t convertedSignAndExponent = 0;
+    for (int i = 0; i < 8; ++i) {
+        convertedSignificand |= static_cast<uint64_t>(converted[i]) << (i * 8);
+        convertedSignAndExponent |= static_cast<uint64_t>(converted[8 + i]) << (i * 8);
+    }
+    assert_equal("FCVT.FXU.TRUNC should discard the fractional part", 0x34,
+                 convertedSignificand);
+    assert_equal("FCVT.FXU.TRUNC should produce integer-format exponent",
+                 0x1003E, convertedSignAndExponent);
+
+    const InstructionEx xma = decoder.DecodeSlot(
+        0x1d048a1c280ULL, UnitType::F_UNIT, 0x370f0);
+    assert_true("raw XMA.L modulus step should decode",
+                xma.GetType() == InstructionType::XMA);
+    assert_string("XMA.L modulus-step disassembly",
+                  "xma.l f10 = f10, f9, f14",
+                  xma.GetDisassembly());
+
+    setFloatingValue(9, 0xfffffffffffffff6ULL, 0x1003EULL); // -10
+    setFloatingValue(14, 525, 0x1003EULL);                  // original dividend
+    xma.Execute(cpu, memory);
+    cpu.GetFR(10, converted);
+    convertedSignificand = 0;
+    convertedSignAndExponent = 0;
+    for (int i = 0; i < 8; ++i) {
+        convertedSignificand |= static_cast<uint64_t>(converted[i]) << (i * 8);
+        convertedSignAndExponent |= static_cast<uint64_t>(converted[8 + i]) << (i * 8);
+    }
+    assert_equal("XMA.L modulus step should compute dividend minus quotient*divisor",
+                 5, convertedSignificand);
+    assert_equal("XMA.L modulus step should retain integer-format exponent",
+                 0x1003E, convertedSignAndExponent);
+
+    std::cout << "  ? IA-64 FCVT.FXU.TRUNC modulus sequence passed" << std::endl;
+}
+
 void test_ia64_unknown_slot_formatter() {
     std::cout << "Testing IA-64 unknown-slot formatter..." << std::endl;
 
@@ -1611,6 +1681,7 @@ int main() {
         test_rse_state_aliases();
         test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();
+        test_ia64_unsigned_fixed_truncate_modulus_sequence();
         test_ia64_unknown_slot_formatter();
         
         std::cout << std::endl;
