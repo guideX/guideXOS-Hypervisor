@@ -3850,6 +3850,24 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         }
                         saveCallFrame(currentIP + 16);
                         captureCallOutputRegisters();
+                        // A real br.call performs the register-stack rename
+                        // before control reaches the callee: the caller's
+                        // output area becomes callee r32+, and the callee's
+                        // initial frame consists only of that output area.
+                        // The legacy bridge above copies those values into
+                        // the logical r32+ view; publish the corresponding
+                        // PFS/CFM transition as well so the callee's alloc
+                        // sees the caller CFM in ar.pfs and the correct
+                        // output-area frame size.
+                        const uint64_t callerCfm = state_.getCPUState().GetCFM();
+                        const size_t callerOutputCount =
+                            static_cast<size_t>(state_.getCPUState().GetSOF()) >
+                                static_cast<size_t>(state_.getCPUState().GetSOL())
+                            ? static_cast<size_t>(state_.getCPUState().GetSOF()) -
+                                  static_cast<size_t>(state_.getCPUState().GetSOL())
+                            : 0;
+                        state_.getCPUState().SetPFS(callerCfm);
+                        state_.getCPUState().SetCFM(static_cast<uint64_t>(callerOutputCount));
                         if (traceRegisterConfigCallsite) {
                             const CPUState& callCpu = state_.getCPUState();
                             std::ostringstream trace;

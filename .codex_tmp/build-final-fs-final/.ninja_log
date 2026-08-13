@@ -1,0 +1,18 @@
+# ninja log v7
+31	796	8083014688167905	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/atype_decoder.cpp.obj	c12cb4a5240a65a4
+21	833	8083014688062576	CMakeFiles/test_new_instructions.dir/Debug/src/core/cpu.cpp.obj	30253ec8d65c23e9
+834	1466	8083014696192692	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/mtype_decoder.cpp.obj	a2c32bbd5ce72633
+798	1565	8083014695835184	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/itype_decoder.cpp.obj	394f39d9b2a2dd15
+16	1997	8083014688012260	CMakeFiles/test_new_instructions.dir/Debug/tests/test_new_instructions.cpp.obj	a5ed50ee3257b865
+26	2152	8083014688108176	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/decoder.cpp.obj	4371428a6cd48e27
+1466	2185	8083014702520823	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/btype_decoder.cpp.obj	d00b05fb853748fd
+1565	2305	8083014703508763	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/ftype_decoder.cpp.obj	4439c7dbf9308b
+1997	2859	8083014707781279	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/lx_decoder.cpp.obj	ad6d6b7fd9d02732
+2152	2907	8083014709381730	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/xtype_decoder.cpp.obj	2382043d193d4fce
+2185	3328	8083014709709767	CMakeFiles/test_new_instructions.dir/Debug/src/decoder/riscv_decoder.cpp.obj	cec081691ef5e70c
+3328	4932	8083014721137579	CMakeFiles/test_new_instructions.dir/Debug/src/storage/FATParser.cpp.obj	6fedb6b9ba8d188
+2859	4993	8083014716443867	CMakeFiles/test_new_instructions.dir/Debug/src/mmu/mmu.cpp.obj	88ef252a880ace94
+4993	5824	8083014737783850	CMakeFiles/test_isa_plugin.dir/Debug/src/core/cpu.cpp.obj	11671fbc7f98b9d2
+2305	6923	8083014710912501	CMakeFiles/test_new_instructions.dir/Debug/src/memory/memory.cpp.obj	b2d6f9a01ca7705b
+5824	8530	8083014746097460	CMakeFiles/test_isa_plugin.dir/Debug/src/core/cpu_core.cpp.obj	73724e5db1352fa5
+4932	8934	8083014737172376	CMakeFiles/test_isa_plugin.dir/Debug/tests/test_isa_plugin.cpp.obj	7dcaa9d3f8f3a985

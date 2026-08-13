@@ -2517,10 +2517,13 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
+    assert(plugin.getCPUState().GetCFM() == 2);
+    assert(plugin.getCPUState().GetPFS() == (6 | (static_cast<uint64_t>(4) << 7)));
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(32) == 0x12345678);
     assert(plugin.getCPUState().GetGR(33) == 0xabcdef00);
+    assert(plugin.getCPUState().GetGR(60) == (6 | (static_cast<uint64_t>(4) << 7)));
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(36) == 0);

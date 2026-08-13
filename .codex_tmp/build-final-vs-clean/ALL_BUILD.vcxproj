@@ -1,0 +1,192 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5D5A9BD1-87C6-3C13-B6AF-E470A8D6D3AC}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>D:\dev\guideXOS_Hypervisor\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\guideXOS_Hypervisor\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/dev/guideXOS_Hypervisor/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\mingw64\bin\cmake.exe -SD:/dev/guideXOS_Hypervisor -BD:/dev/guideXOS_Hypervisor/.codex_tmp/build-final-vs-clean --check-stamp-file D:/dev/guideXOS_Hypervisor/.codex_tmp/build-final-vs-clean/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXCompilerABI.cpp;C:\mingw64\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeCompilerIdDetection.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerABI.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerId.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineCompilerSupport.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeDetermineSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeFindBinUtils.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseImplicitLinkInfo.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeParseLibraryArchitecture.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeRCCompiler.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystem.cmake.in;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCXXCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestCompilerCommon.cmake;C:\mingw64\share\cmake-4.3\Modules\CMakeTestRCCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TI-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\mingw64\share\cmake-4.3\Modules\CompilerId\VS-10.vcxproj.in;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\mingw64\share\cmake-4.3\Modules\Internal\FeatureTesting.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Determine-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\mingw64\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\CMakeFiles\4.3.1\CMakeCXXCompiler.cmake;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\CMakeFiles\4.3.1\CMakeRCCompiler.cmake;D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\CMakeFiles\4.3.1\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\ZERO_CHECK.vcxproj">
+      <Project>{CF6F08FA-8FD6-3BD4-A01A-4B8B4847A44B}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\boot_trace_example.vcxproj">
+      <Project>{782D314E-DDDA-3508-A694-486E4C14DE21}</Project>
+      <Name>boot_trace_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\copy_web_files.vcxproj">
+      <Project>{4EF6CB5B-CEEE-3200-ACC9-49F287F88332}</Project>
+      <Name>copy_web_files</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\debug_harness.vcxproj">
+      <Project>{47CCC6C6-A706-3B24-8953-28FA198B48F0}</Project>
+      <Name>debug_harness</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\ia64_iso_matrix.vcxproj">
+      <Project>{4941C7C0-D335-335E-BCEB-8B658C5549FA}</Project>
+      <Name>ia64_iso_matrix</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\ia64emu.vcxproj">
+      <Project>{0DE11ED8-D891-3A12-BAB7-13E2C6B385D5}</Project>
+      <Name>ia64emu</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\ia64emu_tests.vcxproj">
+      <Project>{B3809289-B17B-36C3-85E8-F50D230E2F4C}</Project>
+      <Name>ia64emu_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\kernel_validation_example.vcxproj">
+      <Project>{52B50892-60A2-323F-B9FE-F0B157BD151D}</Project>
+      <Name>kernel_validation_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_bootstrap.vcxproj">
+      <Project>{16567A06-3A98-3E81-A01B-995C1D01098D}</Project>
+      <Name>test_bootstrap</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_cpu_execution.vcxproj">
+      <Project>{E45BB426-773F-3985-8BD6-5CB81759E79C}</Project>
+      <Name>test_cpu_execution</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_debugger.vcxproj">
+      <Project>{5791C6ED-0D86-378A-9C10-939BCBA42BFB}</Project>
+      <Name>test_debugger</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_elf_validation.vcxproj">
+      <Project>{F552C7EB-0DFC-331B-878A-EC301D110860}</Project>
+      <Name>test_elf_validation</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_fuzzer.vcxproj">
+      <Project>{A6683B19-4066-3111-BAF1-C4D26C32955B}</Project>
+      <Name>test_fuzzer</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_io_devices.vcxproj">
+      <Project>{728B5D06-FE8E-3299-93F0-40CCF1281207}</Project>
+      <Name>test_io_devices</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_isa_plugin.vcxproj">
+      <Project>{9A397C17-23E5-3F39-8E51-3BC5A3A580EC}</Project>
+      <Name>test_isa_plugin</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_mov_imm.vcxproj">
+      <Project>{40C4B4DC-C330-36B2-A44E-DABE71EDFCDD}</Project>
+      <Name>test_mov_imm</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_new_instructions.vcxproj">
+      <Project>{FA8D0035-1521-3B43-A5B8-90E44660A9A6}</Project>
+      <Name>test_new_instructions</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_profiler.vcxproj">
+      <Project>{A4A4941E-BA39-35ED-BE18-E074FC4BCA09}</Project>
+      <Name>test_profiler</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_riscv_decoder.vcxproj">
+      <Project>{94071D7F-00A4-3D5D-BFD1-596745F6AE20}</Project>
+      <Name>test_riscv_decoder</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_riscv_fetch_decode.vcxproj">
+      <Project>{9F6FE0CF-C336-3DF3-8EA7-B471985B7BE5}</Project>
+      <Name>test_riscv_fetch_decode</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_riscv_minimal_execution.vcxproj">
+      <Project>{4DD3AE48-5E14-366C-B629-4F237ACDFAF7}</Project>
+      <Name>test_riscv_minimal_execution</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_syscall_dispatcher.vcxproj">
+      <Project>{7D16E89D-797F-3C5B-B98C-E399EEA8CD6A}</Project>
+      <Name>test_syscall_dispatcher</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_vm_isolation.vcxproj">
+      <Project>{1EB6DAD8-D2EC-3D7D-A957-556458CA8B83}</Project>
+      <Name>test_vm_isolation</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_vmmanager.vcxproj">
+      <Project>{DE61693E-79C0-3552-8587-782F2104DC8D}</Project>
+      <Name>test_vmmanager</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\test_watchpoint.vcxproj">
+      <Project>{EB3BDF6F-F286-3C2F-A93A-9B0CAD28902B}</Project>
+      <Name>test_watchpoint</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\virtual_devices_example.vcxproj">
+      <Project>{EE6CDAC9-1BCD-36AA-A26B-7C3C179053D8}</Project>
+      <Name>virtual_devices_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\virtual_disk_example.vcxproj">
+      <Project>{D6A23728-3645-350F-96E3-CB15A315697A}</Project>
+      <Name>virtual_disk_example</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\dev\guideXOS_Hypervisor\.codex_tmp\build-final-vs-clean\webui_example.vcxproj">
+      <Project>{2F04C86C-76F0-3EAF-952E-78EB846C4AB5}</Project>
+      <Name>webui_example</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

@@ -1,0 +1,11 @@
+{
+	"Configs" : 
+	[
+		"Debug"
+	],
+	"InstallScripts" : 
+	[
+		"D:/dev/guideXOS_Hypervisor/.codex_tmp/build-final-fs-final/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
