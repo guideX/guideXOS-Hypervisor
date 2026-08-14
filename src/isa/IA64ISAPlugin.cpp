@@ -4555,7 +4555,17 @@ void IA64ISAPlugin::captureCallOutputRegisters() {
     for (size_t i = 0; i < outputCount && firstOutput + i < NUM_GENERAL_REGISTERS; ++i) {
         const uint64_t value = state_.getCPUState().GetGR(firstOutput + i);
         pendingCallInputs_.push_back(value);
-        state_.getCPUState().SetGR(32 + i, value);
+    }
+
+    // A call exposes only the caller's output area to the callee.  The
+    // remaining stacked-register view must not retain values from the caller
+    // frame.  Model the architecturally undefined newly visible registers as
+    // zero so an out-of-frame read cannot consume stale caller state.
+    for (size_t i = 0; i < NUM_GENERAL_REGISTERS - NUM_STATIC_GR; ++i) {
+        state_.getCPUState().SetGR(NUM_STATIC_GR + i, 0);
+    }
+    for (size_t i = 0; i < pendingCallInputs_.size(); ++i) {
+        state_.getCPUState().SetGR(NUM_STATIC_GR + i, pendingCallInputs_[i]);
     }
 }
 

@@ -16,3 +16,4 @@
 2305	6923	8083014710912501	CMakeFiles/test_new_instructions.dir/Debug/src/memory/memory.cpp.obj	b2d6f9a01ca7705b
 5824	8530	8083014746097460	CMakeFiles/test_isa_plugin.dir/Debug/src/core/cpu_core.cpp.obj	73724e5db1352fa5
 4932	8934	8083014737172376	CMakeFiles/test_isa_plugin.dir/Debug/tests/test_isa_plugin.cpp.obj	7dcaa9d3f8f3a985
+42	7381	8083282827136365	CMakeFiles/test_isa_plugin.dir/Debug/src/isa/IA64ISAPlugin.cpp.obj	ea6084db83dcf656

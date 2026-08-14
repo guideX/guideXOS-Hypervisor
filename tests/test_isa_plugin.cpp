@@ -985,6 +985,11 @@ public:
             alloc.SetRawBits(0x20);
             bundle.instructions.push_back(alloc);
 
+            InstructionEx saveOuterReturn(InstructionType::MOV_FROM_BR, UnitType::I_UNIT);
+            saveOuterReturn.SetOperands(38, 0, 0);
+            saveOuterReturn.SetRawBits(0x200);
+            bundle.instructions.push_back(saveOuterReturn);
+
             InstructionEx nestedCall(InstructionType::BR_CALL, UnitType::B_UNIT);
             nestedCall.SetOperands(0, 0, 0);
             nestedCall.SetBranchTarget(0x3000);
@@ -998,7 +1003,7 @@ public:
             bundle.instructions.push_back(alloc);
 
             InstructionEx restoreOuterReturn(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
-            restoreOuterReturn.SetOperands(0, 40, 0);
+            restoreOuterReturn.SetOperands(0, 32, 0);
             restoreOuterReturn.SetRawBits(0x31);
             bundle.instructions.push_back(restoreOuterReturn);
 
@@ -2513,12 +2518,14 @@ void testIA64PluginCallOutputInputs() {
     plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(4) << 7));
     plugin.getCPUState().SetGR(36, 0x12345678);
     plugin.getCPUState().SetGR(37, 0xabcdef00);
+    plugin.getCPUState().SetGR(55, 0x380f8);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
     assert(plugin.getCPUState().GetCFM() == 2);
     assert(plugin.getCPUState().GetPFS() == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(plugin.getCPUState().GetGR(55) == 0);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(32) == 0x12345678);
@@ -2533,6 +2540,7 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.getCPUState().GetCFM() == (6 | (static_cast<uint64_t>(4) << 7)));
     assert(plugin.getCPUState().GetGR(36) == 0x12345678);
     assert(plugin.getCPUState().GetGR(37) == 0xabcdef00);
+    assert(plugin.getCPUState().GetGR(55) == 0x380f8);
 
     std::cout << "  ? plugin br.call passes inputs and br.ret restores caller frame\n";
 }
@@ -2548,13 +2556,15 @@ void testIA64PluginCallFrameRestoreSkipsStaleFrames() {
     plugin.getCPUState().SetIP(0x1000);
     plugin.getCPUState().SetCFM(initialCfm);
     plugin.getCPUState().SetGR(36, 0x12345678);
-    plugin.getCPUState().SetGR(40, 0x1010);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetCFM() == (8 | (static_cast<uint64_t>(6) << 7)));
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x3000);
