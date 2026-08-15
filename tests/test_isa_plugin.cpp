@@ -770,6 +770,55 @@ public:
     }
 };
 
+class FakeImmediateCountedLoopDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = bundleIP == 0x1000 ? TemplateType::MII : TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x1000) {
+            InstructionEx mov = decoder_.DecodeSlot(0x5411e000ULL, UnitType::I_UNIT, bundleIP);
+            bundle.instructions.push_back(mov);
+            return bundle;
+        }
+
+        InstructionEx increment(InstructionType::ADD_IMM, UnitType::I_UNIT);
+        increment.SetOperands(8, 8, 0);
+        increment.SetImmediate(1);
+
+        InstructionEx nop(InstructionType::NOP, UnitType::I_UNIT);
+
+        InstructionEx branch(InstructionType::BR_CLOOP, UnitType::B_UNIT);
+        branch.SetBranchTarget(0x1010);
+
+        bundle.instructions.push_back(increment);
+        bundle.instructions.push_back(nop);
+        bundle.instructions.push_back(branch);
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+
+private:
+    InstructionDecoder decoder_;
+};
+
 class FakeCallCountedLoopDecoder : public IDecoder {
 public:
     explicit FakeCallCountedLoopDecoder(int64_t targetDelta = -0x20)
@@ -2219,11 +2268,13 @@ void testIA64MoveToAppRegisterDecode() {
     std::cout << "Testing IA-64 move to application register decode...\n";
 
     InstructionDecoder decoder;
-    InstructionEx mov = decoder.DecodeSlot(0x5411c000ULL, UnitType::I_UNIT, 0x6860);
+    // x6=0x2a is the distinct register-source form mov ar3 = r2.
+    InstructionEx mov = decoder.DecodeSlot(0x15411c000ULL, UnitType::I_UNIT, 0x6860);
 
     assert(mov.GetType() == InstructionType::MOV_TO_AR);
     assert(mov.GetDst() == 65);
     assert(mov.GetSrc1() == 14);
+    assert(!mov.HasImmediate());
     assert(mov.GetDisassembly() == "mov ar.lc = r14");
 
     CPUState cpu;
@@ -2234,7 +2285,105 @@ void testIA64MoveToAppRegisterDecode() {
     assert(cpu.GetCFM() == 0x1122000000000000ULL);
     assert(cpu.GetAR(65) == 0x1122334455667788ULL);
 
-    std::cout << "  ? raw boot mov.i ar.lc = r14 decodes and updates ar.lc\n";
+    std::cout << "  ? register-source mov ar.lc = r14 decodes and updates ar.lc\n";
+}
+
+static uint64_t encodeIA64MovToArImmediate(int value, uint8_t ar = 65,
+                                            uint8_t predicate = 0) {
+    assert(value >= -128 && value <= 127);
+    const uint8_t encoded = static_cast<uint8_t>(value);
+    return (static_cast<uint64_t>(predicate) & 0x3F) |
+           (static_cast<uint64_t>(0x0A) << 27) |
+           ((static_cast<uint64_t>(encoded) & 0x7F) << 13) |
+           ((static_cast<uint64_t>(encoded >> 7) & 0x1) << 36) |
+           ((static_cast<uint64_t>(ar) & 0x7F) << 20);
+}
+
+void testIA64ImmediateMoveToAppRegisterDecode() {
+    std::cout << "Testing IA-64 immediate move to application register decode...\n";
+
+    const uint8_t authenticBundle[16] = {
+        0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0xe0, 0x00,
+        0x00, 0x00, 0x42, 0x00, 0xf0, 0x08, 0x2a, 0x00
+    };
+    InstructionDecoder decoder;
+    Bundle bundle = decoder.DecodeBundleAt(authenticBundle, 0x61a0);
+
+    assert(bundle.templateType == TemplateType::MMI_STOP);
+    assert(bundle.instructions.size() == 3);
+    assert(bundle.instructions[0].GetRawBits() == 0x00008000000ULL);
+    assert(bundle.instructions[1].GetRawBits() == 0x10800000380ULL);
+    assert(bundle.instructions[2].GetRawBits() == 0x0005411e000ULL);
+
+    const InstructionEx& mov = bundle.instructions[2];
+    assert(mov.GetType() == InstructionType::MOV_TO_AR);
+    assert(mov.GetDst() == 65);
+    assert(mov.GetPredicate() == 0);
+    assert(mov.HasImmediate());
+    assert(static_cast<int64_t>(mov.GetImmediate()) == 15);
+    assert(mov.GetDisassembly() == "mov.i ar.lc = 15");
+
+    const int values[] = {0, 1, 15, 31, 127, -128, -1};
+    for (const int value : values) {
+        const InstructionEx candidate = decoder.DecodeSlot(
+            encodeIA64MovToArImmediate(value), UnitType::I_UNIT, 0x61ac);
+        assert(candidate.GetType() == InstructionType::MOV_TO_AR);
+        assert(candidate.GetDst() == 65);
+        assert(candidate.HasImmediate());
+        assert(static_cast<int64_t>(candidate.GetImmediate()) == value);
+    }
+
+    const InstructionEx predicated = decoder.DecodeSlot(
+        encodeIA64MovToArImmediate(15, 65, 1), UnitType::I_UNIT, 0x61ac);
+    assert(predicated.GetPredicate() == 1);
+
+    CPUState cpu;
+    Memory memory(64 * 1024);
+    cpu.SetAR(65, 99);
+    cpu.SetPR(1, false);
+    predicated.Execute(cpu, memory);
+    assert(cpu.GetAR(65) == 99);
+    cpu.SetPR(1, true);
+    predicated.Execute(cpu, memory);
+    assert(cpu.GetAR(65) == 15);
+
+    mov.Execute(cpu, memory);
+    assert(cpu.GetAR(65) == 15);
+
+    std::cout << "  ? authentic MMI_STOP slot 2 decodes as mov.i ar.lc = 15\n";
+    std::cout << "  ? signed IMM8 values 0, 1, 15, 31, 127, -128, -1 decode correctly\n";
+    std::cout << "  ? predicate qp is preserved and gates immediate execution\n";
+    std::cout << "  ? immediate execution sets ar.lc to 15\n";
+}
+
+void testIA64ImmediateMoveCountedLoopExecution() {
+    std::cout << "Testing IA-64 immediate ar.lc plus br.cloop execution...\n";
+
+    Memory memory(64 * 1024);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x1010, bundleBytes, sizeof(bundleBytes));
+
+    FakeImmediateCountedLoopDecoder decoder;
+    auto ia64 = createIA64ISA(decoder);
+    auto& state = dynamic_cast<IA64ISAState&>(ia64->getState());
+    state.getCPUState().SetIP(0x1000);
+
+    assert(ia64->step(memory) == ISAExecutionResult::CONTINUE);
+    assert(state.getCPUState().GetAR(65) == 15);
+    assert(ia64->getPC() == 0x1010);
+
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        assert(ia64->step(memory) == ISAExecutionResult::CONTINUE);
+        assert(ia64->step(memory) == ISAExecutionResult::CONTINUE);
+        assert(ia64->step(memory) == ISAExecutionResult::CONTINUE);
+    }
+
+    assert(state.getCPUState().GetAR(65) == 0);
+    assert(state.getCPUState().GetGR(8) == 16);
+    assert(ia64->getPC() == 0x1020);
+
+    std::cout << "  ? ar.lc=15 executes the loop body 16 times and br.cloop falls through at zero\n";
 }
 
 void testIA64MoveToRotatingPredicateDecode() {
@@ -4653,6 +4802,8 @@ int main() {
         std::cout << "\n";
 
         testIA64CountedLoopBranchExecution();
+        testIA64ImmediateMoveToAppRegisterDecode();
+        testIA64ImmediateMoveCountedLoopExecution();
         std::cout << "\n";
 
         testIA64CallDecodedCountedLoopExecution();

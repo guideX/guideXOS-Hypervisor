@@ -1027,9 +1027,10 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::MOV_TO_AR:
-            // mov arDst = rSrc1.  ar.pfs restores the previous frame marker.
+            // mov arDst = rSrc1 or mov.i arDst = imm8.
+            // ar.pfs restores the previous frame marker.
             {
-                const uint64_t value = cpu.GetGR(src1_);
+                const uint64_t value = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 cpu.SetAR(dst_, value);
                 if (dst_ == 64) {
                     cpu.SetCFM(value);
@@ -1821,7 +1822,7 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::MOV_TO_AR:
-            oss << "mov ar.";
+            oss << (hasImmediate_ ? "mov.i ar." : "mov ar.");
             if (dst_ == 64) {
                 oss << "pfs";
             } else if (dst_ == 65) {
@@ -1829,7 +1830,11 @@ std::string InstructionEx::GetDisassembly() const {
             } else {
                 oss << static_cast<int>(dst_);
             }
-            oss << " = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << " = " << static_cast<int64_t>(immediate_);
+            } else {
+                oss << " = r" << static_cast<int>(src1_);
+            }
             break;
 
         case InstructionType::MOV_FROM_PR:
@@ -2759,7 +2764,24 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
-            if (major == 0x0 && x3 == 0x0 && (x6 == 0x0A || x6 == 0x2A || x6 == 0x32)) {
+            if (major == 0x0 && x3 == 0x0 && x6 == 0x0A) {
+                // mov.i ar3 = imm8: IMM8 is split between slot bits 13-19
+                // and bit 36, and is a signed two's-complement immediate.
+                const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                const uint8_t immLow7 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint8_t immSign = static_cast<uint8_t>((slotBits >> 36) & 0x1);
+                const uint8_t imm8 = static_cast<uint8_t>(immLow7 | (immSign << 7));
+
+                result = InstructionEx(InstructionType::MOV_TO_AR, UnitType::I_UNIT);
+                result.SetOperands(ar3, 0, 0);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetImmediate(static_cast<uint64_t>(static_cast<int64_t>(
+                    SignExtend(imm8, 8))));
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            if (major == 0x0 && x3 == 0x0 && (x6 == 0x2A || x6 == 0x32)) {
                 const uint8_t r1 = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
                 const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
                 const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
