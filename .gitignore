@@ -1,27 +1,22 @@
-/.codex_tmp
-/.vs
-/build-mingw
-/build-riscv
-/cmake-build
-/cmake-build-canonical-20260810
-/cmake-build-canonical-20260810-r2
-/cmake-build-canonical-20260810-r3
-/cmake-build-canonical-20260810-r4
-/cmake-build-canonical-20260810-r6
-/cmake-build-canonical-20260811-r1
-/cmake-build-diag
-/cmake-build-investigate
-/cmake-build-refresh
-/cmake-build-vs18
+/.codex_tmp/
+/.vs/
+
+/build-mingw/
+/build-riscv/
+/build/bin/
+/cmake-build*/
+/x64/
+
+/guideXOS Hypervisor GUI/bin/
+/guideXOS Hypervisor GUI/obj/
+
+/iso/
+/logs/
+*.log
+
+/tools/codex_ia64_dump.exe
+
 /guideXOS.9378ceba
 /guideXOS.B8F4A8E1
-/build/bin
-/guideXOS Hypervisor GUI/bin
-/guideXOS Hypervisor GUI/obj
 /guideXOS.C9D5E6F2
-/iso
-/logs
 /test_elf.6D6B7A41
-/tools/codex_ia64_dump.exe
-/x64
-*.log
