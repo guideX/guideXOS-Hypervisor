@@ -2184,6 +2184,36 @@ void IA64ISAPlugin::enqueueEfiInputKey(uint16_t scanCode,
     efiInputQueue_.push_back({scanCode, unicodeChar, shiftState, toggleState});
 }
 
+IA64ISAPlugin::EfiTraceSummary IA64ISAPlugin::getEfiTraceSummary() const {
+    EfiTraceSummary summary;
+    summary.textOutputCalls = efiTextOutputCalls_;
+    summary.openVolumeCalls = efiOpenVolumeCalls_;
+    summary.fileOpenCalls = efiFileOpenCalls_;
+    summary.fileReadCalls = efiFileReadCalls_;
+    summary.fileGetInfoCalls = efiFileGetInfoCalls_;
+    summary.fileCloseCalls = efiFileCloseCalls_;
+    summary.fileGetPositionCalls = efiFileGetPositionCalls_;
+    summary.fileSetPositionCalls = efiFileSetPositionCalls_;
+    summary.loadImageCalls = efiLoadImageCalls_;
+    summary.startImageCalls = efiStartImageCalls_;
+    summary.exitBootServicesCalls = efiExitBootServicesCalls_;
+    summary.readKeyStrokeCalls = efiReadKeyStrokeCalls_;
+    summary.readKeyStrokeNotReadyCalls = efiReadKeyStrokeNotReadyCalls_;
+    summary.readKeyStrokeSuccessCalls = efiReadKeyStrokeSuccessCalls_;
+    summary.waitForEventCalls = efiWaitForEventCalls_;
+    summary.checkEventCalls = efiCheckEventCalls_;
+    summary.totalFileBytesRead = efiTotalFileBytesRead_;
+    for (const auto& [handleAddress, handle] : efiFileHandles_) {
+        (void)handleAddress;
+        if (!handle.isDirectory) {
+            summary.openFilePaths.push_back(handle.path);
+            summary.openFilePositions.push_back(handle.position);
+            summary.openFileSizes.push_back(handle.data.size());
+        }
+    }
+    return summary;
+}
+
 bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
     const uint64_t memorySize = static_cast<uint64_t>(memory.GetTotalSize());
     if (efiHandoffLayoutInitialized_ && memorySize == efiHandoffLayoutMemorySize_) {
@@ -5246,6 +5276,11 @@ uint64_t IA64ISAPlugin::handleEfiReadKeyStroke(IMemory& memory, bool extended) {
     } catch (const std::exception&) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
+    std::cerr << "[EFI-INPUT] ReadKeyStroke delivered scan=0x" << std::hex
+              << key.scanCode << " unicode=0x" << key.unicodeChar
+              << " callerIP=0x" << state_.getCPUState().GetIP()
+              << " extended=" << std::boolalpha << extended << std::noboolalpha
+              << std::dec << std::endl;
     return EFI_STATUS_SUCCESS;
 }
 

@@ -188,6 +188,31 @@ public:
     // Production starts with an empty queue until a host input source is wired.
     void enqueueEfiInputKey(uint16_t scanCode, uint16_t unicodeChar,
                             uint32_t shiftState = 0, uint8_t toggleState = 0);
+
+    struct EfiTraceSummary {
+        size_t textOutputCalls = 0;
+        size_t openVolumeCalls = 0;
+        size_t fileOpenCalls = 0;
+        size_t fileReadCalls = 0;
+        size_t fileGetInfoCalls = 0;
+        size_t fileCloseCalls = 0;
+        size_t fileGetPositionCalls = 0;
+        size_t fileSetPositionCalls = 0;
+        size_t loadImageCalls = 0;
+        size_t startImageCalls = 0;
+        size_t exitBootServicesCalls = 0;
+        size_t readKeyStrokeCalls = 0;
+        size_t readKeyStrokeNotReadyCalls = 0;
+        size_t readKeyStrokeSuccessCalls = 0;
+        size_t waitForEventCalls = 0;
+        size_t checkEventCalls = 0;
+        uint64_t totalFileBytesRead = 0;
+        std::vector<std::string> openFilePaths;
+        std::vector<uint64_t> openFilePositions;
+        std::vector<uint64_t> openFileSizes;
+    };
+
+    EfiTraceSummary getEfiTraceSummary() const;
     
     /**
      * Get optional components

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
+#include <cstdlib>
 #include <sstream>
 
 namespace ia64 {
@@ -22,6 +23,14 @@ struct CountedLoopTraceState {
 };
 
 CountedLoopTraceState g_cpuCountedLoopTrace;
+
+bool instructionTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("GUIDEXOS_CPU_INSTRUCTION_TRACE");
+        return value == nullptr || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
@@ -279,7 +288,7 @@ servicePendingInterrupt();
 
     if (suppressCountedLoopTrace) {
         ++g_cpuCountedLoopTrace.suppressed;
-    } else {
+    } else if (instructionTraceEnabled()) {
         std::cout << "[IP=0x" << std::hex << state_.GetIP() << std::dec
                   << ", Slot=" << currentSlot_ << "] "
                   << instr.GetDisassembly() << std::endl;

@@ -3438,6 +3438,25 @@ void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
     assert(shiftState == 0x04U);
     assert(toggleState == 0x01U);
 
+    plugin.enqueueEfiInputKey(0, 0x000D);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, readKeyDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(&scanCode), sizeof(scanCode));
+    memory.Read(0x6002, reinterpret_cast<uint8_t*>(&unicodeChar), sizeof(unicodeChar));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(scanCode == 0);
+    assert(unicodeChar == 0x000D);
+
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, readKeyDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0x8000000000000006ULL);
+
     plugin.getCPUState().SetIP(0x30e40);
     plugin.getCPUState().SetBR(0, resetDescriptor);
     plugin.getCPUState().SetGR(35, inputProtocol);
@@ -3485,8 +3504,8 @@ void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
     assert(consoleControlResult.second == 0);
 
     std::cout << "  ? SystemTable->ConIn->ReadKeyStroke uses a real IA-64 plabel"
-              << ", empty input is EFI_NOT_READY, both input protocols register,"
-              << " and ConsoleControl remains EFI_NOT_FOUND\n";
+              << ", empty input is EFI_NOT_READY, Enter is delivered as CR,"
+              << " both input protocols register, and ConsoleControl remains EFI_NOT_FOUND\n";
 }
 
 void testIA64PluginHandleProtocolReturnsLoadedImage() {
