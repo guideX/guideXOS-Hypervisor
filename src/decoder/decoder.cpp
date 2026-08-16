@@ -1675,6 +1675,16 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // ALAT tracking is not modeled yet. Treat the advanced-load check as
             // satisfied so userland can continue past compiler-generated checks.
             break;
+
+        case InstructionType::FLUSHRS:
+            // The architectural operation spills the dirty register-stack
+            // partition until AR.BSPSTORE reaches AR.BSP.  This emulator does
+            // not model backing-store register slots or RSE spill NaT words,
+            // but it does model the architectural pointers.  Keeping the
+            // pointers coherent preserves the observable post-flush state and
+            // lets subsequent mov-to-AR.BSPSTORE/loadrs code see the result.
+            cpu.SetBSPSTORE(cpu.GetBSP());
+            break;
             
         // ===== BRANCH OPERATIONS =====
             
@@ -2215,6 +2225,10 @@ std::string InstructionEx::GetDisassembly() const {
             if (hasBranchTarget_) {
                 oss << ", 0x" << std::hex << branchTarget_ << std::dec;
             }
+            break;
+
+        case InstructionType::FLUSHRS:
+            oss << "flushrs";
             break;
             
         case InstructionType::ST1:

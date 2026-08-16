@@ -108,7 +108,8 @@ struct MFormat {
         EXCHANGE,
         FETCHADD,
         SETF,
-        GETF
+        GETF,
+        FLUSHRS
     } operation;
     
     // Access size

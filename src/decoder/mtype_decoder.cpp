@@ -43,6 +43,8 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         uint8_t m = formats::extractBits(raw_instruction, 36, 1);   // Memory ordering
         uint8_t x = formats::extractBits(raw_instruction, 27, 1);   // Extended form
         uint8_t x6 = formats::extractBits(raw_instruction, 30, 6);  // Extended opcode
+        uint8_t x4 = formats::extractBits(raw_instruction, 27, 4);  // M0 x4 field
+        uint8_t x2 = formats::extractBits(raw_instruction, 31, 2);  // M0 x2 field
         uint8_t hint = formats::extractBits(raw_instruction, 28, 2); // Locality hint
         
         // Build full opcode
@@ -52,6 +54,16 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         result.hint = hint;
         
         const uint8_t x6row = x6 >> 2;
+
+        // M0 flushrs is an unpredicated RSE control instruction.  Binutils
+        // describes its fixed encoding as x3=0, x4=0xc, x2=0, and major=0.
+        // The adjacent x4=0xa encoding is loadrs; do not classify either
+        // instruction as a load merely because it shares the M0 major opcode.
+        if (major == 0x0 && x3 == 0x0 && m == 0 &&
+            x4 == 0x0c && x2 == 0x0 && result.qp == 0) {
+            result.operation = formats::MFormat::MemOp::FLUSHRS;
+            return true;
+        }
 
         // Decode based on major opcode and the M-unit table row. Major opcode 4
         // contains normal loads and stores; major opcode 5 contains the same
@@ -206,6 +218,11 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::SETF_SIG, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r2, 0);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {
+            instr = InstructionEx(InstructionType::FLUSHRS, UnitType::M_UNIT);
+            instr.SetPredicate(0);
             return true;
         }
         

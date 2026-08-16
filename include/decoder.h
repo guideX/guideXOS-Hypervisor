@@ -169,6 +169,7 @@ enum class InstructionType {
     LD8_S,      // Load 8 byte speculative
     CHK_A_NC,   // Advanced load check, no clear
     CHK_A_CLR,  // Advanced load check, clear ALAT entry
+    FLUSHRS,    // Flush dirty register-stack state to the backing store
     
     // Branch operations (B-type)
     BR_COND,    // Conditional branch

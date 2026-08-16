@@ -1664,6 +1664,62 @@ void test_rse_state_aliases() {
     std::cout << "  ? RSE state aliases passed" << std::endl;
 }
 
+void test_ia64_flushrs() {
+    std::cout << "Testing IA-64 M0 flushrs decoding and execution..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact authentic ELILO encoding at IP 0x28640.  Historical Binutils
+    // identifies this M0 syllable as flushrs: major=0, x3=0, x4=0xc, x2=0.
+    const uint64_t rawFlushrs = 0x60000000ULL;
+    const InstructionEx flushrs = decoder.DecodeSlot(
+        rawFlushrs, UnitType::M_UNIT, 0x28640);
+    assert_true("authentic flushrs should decode",
+                flushrs.GetType() == InstructionType::FLUSHRS);
+    assert_equal("flushrs predicate", 0, flushrs.GetPredicate());
+    assert_true("flushrs has no immediate", !flushrs.HasImmediate());
+    assert_string("flushrs disassembly", "flushrs", flushrs.GetDisassembly());
+
+    cpu.SetRSC(0x3);
+    cpu.SetBSP(0x1000);
+    cpu.SetBSPSTORE(0x0f80);
+    cpu.SetRNAT(0x55);
+    cpu.SetCFM(0x183);
+    flushrs.Execute(cpu, memory);
+
+    assert_equal("flushrs should advance BSPSTORE to BSP",
+                 0x1000, cpu.GetBSPSTORE());
+    assert_equal("flushrs should preserve BSP", 0x1000, cpu.GetBSP());
+    assert_equal("flushrs should preserve RSC", 0x3, cpu.GetRSC());
+    assert_equal("flushrs should preserve RNAT", 0x55, cpu.GetRNAT());
+    assert_equal("flushrs should preserve CFM", 0x183, cpu.GetCFM());
+
+    // The encoding is NO_PRED in Binutils.  A nonzero qp field is therefore
+    // not another flushrs variant and must remain unsupported.
+    const InstructionEx invalidPredicated = decoder.DecodeSlot(
+        rawFlushrs | 1ULL, UnitType::M_UNIT, 0x28640);
+    assert_true("predicated flushrs encoding should remain unknown",
+                invalidPredicated.GetType() == InstructionType::UNKNOWN);
+
+    const InstructionEx adjacentLoadrs = decoder.DecodeSlot(
+        0x50000000ULL, UnitType::M_UNIT, 0x28640);
+    assert_true("adjacent loadrs encoding should not alias flushrs",
+                adjacentLoadrs.GetType() == InstructionType::UNKNOWN);
+
+    cpu.SetBSP(0x2000);
+    cpu.SetBSPSTORE(0x1800);
+    cpu.SetPR(1, false);
+    InstructionEx manuallyPredicated = flushrs;
+    manuallyPredicated.SetPredicate(1);
+    manuallyPredicated.Execute(cpu, memory);
+    assert_equal("false predicate should nullify flushrs",
+                 0x1800, cpu.GetBSPSTORE());
+
+    std::cout << "  ? IA-64 flushrs decoding and execution passed" << std::endl;
+}
+
 void test_alloc_invalid_frame_size_fails_safe() {
     std::cout << "Testing ALLOC invalid frame sizes..." << std::endl;
 
@@ -1837,6 +1893,7 @@ int main() {
         test_predicated_execution();
         test_alloc_instruction();
         test_rse_state_aliases();
+        test_ia64_flushrs();
         test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();
         test_ia64_unsigned_fixed_truncate_modulus_sequence();
