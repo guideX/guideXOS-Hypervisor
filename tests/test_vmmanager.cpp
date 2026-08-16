@@ -164,6 +164,42 @@ void testEfiHandoffLayout64MiB() {
               << std::dec << "\n";
 }
 
+void testEfiConsoleInputHandoffAbi() {
+    std::cout << "Testing EFI System Table console-input handoff ABI regression...\n";
+
+    constexpr uint64_t guestMemorySize = 64ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t consoleInputHandle = 0x41ULL;
+    constexpr uint64_t descriptorGp = 0x238000ULL;
+    Memory memory(static_cast<size_t>(guestMemorySize));
+    EfiHandoffLayout layout{};
+    assert(tryComputeEfiHandoffLayout(guestMemorySize, layout));
+
+    // EFI_SYSTEM_TABLE.ConIn is at +0x30, immediately after ConsoleInHandle.
+    // This is the field consumed by authentic ELILO before it dereferences the
+    // SimpleTextInput ReadKeyStroke plabel.
+    memory.write<uint64_t>(layout.base + 0x28, consoleInputHandle);
+    memory.write<uint64_t>(layout.base + 0x30, layout.simpleTextInputProtocolAddr);
+    assert(memory.read<uint64_t>(layout.base + 0x28) == consoleInputHandle);
+    assert(memory.read<uint64_t>(layout.base + 0x30) == layout.simpleTextInputProtocolAddr);
+
+    // Verify the protocol-to-plabel chain and the IA-64 descriptor's GP word
+    // at the same offsets used by the boot-image handoff.
+    memory.write<uint64_t>(layout.inputReadKeyStrokeStubDescAddr + 0x00,
+                           layout.inputReadKeyStrokeStubCodeAddr);
+    memory.write<uint64_t>(layout.inputReadKeyStrokeStubDescAddr + 0x08, descriptorGp);
+    memory.write<uint64_t>(layout.simpleTextInputProtocolAddr + 0x08,
+                           layout.inputReadKeyStrokeStubDescAddr);
+    assert(memory.read<uint64_t>(layout.simpleTextInputProtocolAddr + 0x08) ==
+           layout.inputReadKeyStrokeStubDescAddr);
+    assert(memory.read<uint64_t>(layout.inputReadKeyStrokeStubDescAddr + 0x00) ==
+           layout.inputReadKeyStrokeStubCodeAddr);
+    assert(memory.read<uint64_t>(layout.inputReadKeyStrokeStubDescAddr + 0x08) == descriptorGp);
+
+    std::cout << "  ? ConIn=0x" << std::hex << memory.read<uint64_t>(layout.base + 0x30)
+              << " ReadKeyStroke descriptor=0x" << memory.read<uint64_t>(layout.simpleTextInputProtocolAddr + 0x08)
+              << std::dec << "\n";
+}
+
 void testBootImageFilePathDiagnostics() {
     std::cout << "Testing VMManager EFI boot handoff diagnostics...\n";
 
@@ -640,6 +676,7 @@ int main(int argc, char** argv) {
     
     try {
         if (bootOnly) {
+            testEfiConsoleInputHandoffAbi();
             testBootImageFilePathDiagnostics();
             std::cout << "\n=== Boot-only test passed! ===\n";
             return 0;
@@ -682,6 +719,9 @@ int main(int argc, char** argv) {
         std::cout << "\n";
 
         testEfiHandoffLayout64MiB();
+        std::cout << "\n";
+
+        testEfiConsoleInputHandoffAbi();
         std::cout << "\n";
 
         testBootImageFilePathDiagnostics();

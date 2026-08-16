@@ -2126,6 +2126,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                 const uint64_t EFI_STUB_ADDR = layout.base;
                                                                 constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;   // dummy non-null handle
                                                                 constexpr uint64_t EFI_IMAGE_DEVICE_HANDLE = 0x40ULL; // boot media handle advertised by LocateHandle/SimpleFS
+                                                                constexpr uint64_t EFI_CONSOLE_INPUT_HANDLE = 0x41ULL;
 
                                                                 // Write a minimal EFI System Table plus service-table
                                                                 // headers. This is only enough for userland EFI code
@@ -2147,6 +2148,23 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     const uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = layout.textOutputModeAddr;
                                                                     const uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = layout.textOutputStringStubCodeAddr;
                                                                     const uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = layout.textOutputStringStubDescAddr;
+                                                                    const uint64_t EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR = layout.simpleTextInputProtocolAddr;
+                                                                    const uint64_t EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR = layout.simpleTextInputExProtocolAddr;
+                                                                    const uint64_t EFI_CONSOLE_INPUT_EVENT_ADDR = layout.consoleInputEventAddr;
+                                                                    const uint64_t EFI_INPUT_RESET_STUB_CODE_ADDR = layout.inputResetStubCodeAddr;
+                                                                    const uint64_t EFI_INPUT_RESET_STUB_DESC_ADDR = layout.inputResetStubDescAddr;
+                                                                    const uint64_t EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR = layout.inputReadKeyStrokeStubCodeAddr;
+                                                                    const uint64_t EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR = layout.inputReadKeyStrokeStubDescAddr;
+                                                                    const uint64_t EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR = layout.inputReadKeyStrokeExStubCodeAddr;
+                                                                    const uint64_t EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR = layout.inputReadKeyStrokeExStubDescAddr;
+                                                                    const uint64_t EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR = layout.inputRegisterKeyNotifyStubCodeAddr;
+                                                                    const uint64_t EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR = layout.inputRegisterKeyNotifyStubDescAddr;
+                                                                    const uint64_t EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR = layout.inputUnregisterKeyNotifyStubCodeAddr;
+                                                                    const uint64_t EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR = layout.inputUnregisterKeyNotifyStubDescAddr;
+                                                                    const uint64_t EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR = layout.waitForEventStubCodeAddr;
+                                                                    const uint64_t EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR = layout.waitForEventStubDescAddr;
+                                                                    const uint64_t EFI_CHECK_EVENT_STUB_CODE_ADDR = layout.checkEventStubCodeAddr;
+                                                                    const uint64_t EFI_CHECK_EVENT_STUB_DESC_ADDR = layout.checkEventStubDescAddr;
                                                                     const uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = layout.fileOpenStubCodeAddr;
                                                                     const uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = layout.fileOpenStubDescAddr;
                                                                     const uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = layout.fileCloseStubCodeAddr;
@@ -2234,6 +2252,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write32(EFI_STUB_ADDR + 0x20, 1U);
 
                                                                     // 64-bit EFI_SYSTEM_TABLE layout.
+                                                                    write64(EFI_STUB_ADDR + 0x28, EFI_CONSOLE_INPUT_HANDLE);
+                                                                    write64(EFI_STUB_ADDR + 0x30, EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x38, EFI_IMAGE_HANDLE);
                                                                     write64(EFI_STUB_ADDR + 0x40, EFI_TEXT_OUTPUT_PROTOCOL_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x48, EFI_IMAGE_HANDLE);
@@ -2291,6 +2311,48 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                    BR_RET_B0);
                                                                     WriteIa64Bundle(instance,
                                                                                    EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_INPUT_RESET_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
+                                                                                   EFI_CHECK_EVENT_STUB_CODE_ADDR,
                                                                                    0x10,
                                                                                    ADD_R8_R0_ZERO,
                                                                                    NOP_I,
@@ -2362,6 +2424,38 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     writeDescriptor(EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR, EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR);
                                                                     writeDescriptor(EFI_LOAD_IMAGE_STUB_DESC_ADDR, EFI_LOAD_IMAGE_STUB_CODE_ADDR);
                                                                     writeDescriptor(EFI_START_IMAGE_STUB_DESC_ADDR, EFI_START_IMAGE_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_INPUT_RESET_STUB_DESC_ADDR, EFI_INPUT_RESET_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR,
+                                                                                   EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR,
+                                                                                   EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR,
+                                                                                   EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR,
+                                                                                   EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR,
+                                                                                   EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR);
+                                                                    writeDescriptor(EFI_CHECK_EVENT_STUB_DESC_ADDR,
+                                                                                   EFI_CHECK_EVENT_STUB_CODE_ADDR);
+
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR + 0x00,
+                                                                            EFI_INPUT_RESET_STUB_DESC_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR + 0x08,
+                                                                            EFI_INPUT_READ_KEY_STROKE_STUB_DESC_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR + 0x10,
+                                                                            EFI_CONSOLE_INPUT_EVENT_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR + 0x00,
+                                                                            EFI_INPUT_RESET_STUB_DESC_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR + 0x08,
+                                                                            EFI_INPUT_READ_KEY_STROKE_EX_STUB_DESC_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR + 0x10,
+                                                                            EFI_CONSOLE_INPUT_EVENT_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR + 0x18,
+                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR + 0x20,
+                                                                            EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_DESC_ADDR);
+                                                                    write64(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR + 0x28,
+                                                                            EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_DESC_ADDR);
 
                                                                     for (uint64_t offset = 0x18; offset < 0x88; offset += 8) {
                                                                         write64(EFI_RUNTIME_SERVICES_ADDR + offset,
@@ -2393,6 +2487,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0xE8, EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x100, EFI_SUCCESS_STUB_DESC_ADDR);
                                                                     write64(EFI_BOOT_SERVICES_ADDR + 0x140, EFI_LOCATE_PROTOCOL_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x60, EFI_WAIT_FOR_EVENT_STUB_DESC_ADDR);
+                                                                    write64(EFI_BOOT_SERVICES_ADDR + 0x78, EFI_CHECK_EVENT_STUB_DESC_ADDR);
 
                                                                     const uint64_t memorySizeForBootImage =
                                                                         static_cast<uint64_t>(instance->vm->getMemory().GetTotalSize());
