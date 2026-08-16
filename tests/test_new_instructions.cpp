@@ -847,6 +847,28 @@ void test_latest_boot_log_blockers() {
                  0x123456789abcdef0ULL,
                  cpu.GetGR(33));
 
+    // IA-64 major-5 DEP.Z alias used by the authentic ELILO descriptor-index
+    // calculation.  Historical Binutils decodes this as shl r20=r19,32;
+    // treating it as EXTR corrupts the second fops descriptor after the
+    // configuration file is closed.
+    InstructionEx shl_major5 = decoder.DecodeSlot(0xa6f9f26500ULL, UnitType::I_UNIT, 0x5940);
+    assert_true("Major-5 fixed-count SHL should decode",
+                shl_major5.GetType() == InstructionType::SHL);
+    assert_equal("Major-5 fixed-count SHL destination", 20, shl_major5.GetDst());
+    assert_equal("Major-5 fixed-count SHL source", 19, shl_major5.GetSrc1());
+    assert_true("Major-5 fixed-count SHL should carry an immediate",
+                shl_major5.HasImmediate());
+    assert_equal("Major-5 fixed-count SHL count", 32, shl_major5.GetImmediate());
+    assert_string("Major-5 fixed-count SHL disassembly",
+                  "shl r20 = r19, 32",
+                  shl_major5.GetDisassembly());
+
+    cpu.SetGR(19, 0x12345678ULL);
+    shl_major5.Execute(cpu, memory);
+    assert_equal("Major-5 fixed-count SHL should shift by 32",
+                 0x1234567800000000ULL,
+                 cpu.GetGR(20));
+
     InstructionEx zxt4_return = decoder.DecodeSlot(0x90800200ULL, UnitType::I_UNIT, 0x34b10);
     assert_true("Boot raw zxt4 should decode", zxt4_return.GetType() == InstructionType::ZXT4);
     assert_equal("Boot zxt4 destination", 8, zxt4_return.GetDst());
