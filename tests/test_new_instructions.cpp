@@ -1084,10 +1084,18 @@ void test_application_register_moves() {
                   "mov ar.pfs = r38",
                   mov_to_pfs.GetDisassembly());
 
+    cpu.SetCFM(0x2200);
     cpu.SetGR(38, 0x12345);
     mov_to_pfs.Execute(cpu, memory);
-    assert_equal("mov-to-ar.pfs should update CFM", 0x12345, cpu.GetCFM());
+    assert_equal("mov-to-ar.pfs should not change CFM", 0x2200, cpu.GetCFM());
     assert_equal("mov-to-ar.pfs should update AR storage", 0x12345, cpu.GetAR(64));
+
+    InstructionEx mov_from_pfs(InstructionType::MOV_FROM_AR, UnitType::I_UNIT);
+    mov_from_pfs.SetOperands(37, 64, 0);
+    cpu.SetAR(64, 0x45678);
+    mov_from_pfs.Execute(cpu, memory);
+    assert_equal("mov-from-ar.pfs should read AR.PFS", 0x45678, cpu.GetGR(37));
+    assert_equal("mov-from-ar.pfs should leave CFM independent", 0x2200, cpu.GetCFM());
 
     InstructionEx mov_to_pfs_i = decoder.DecodeSlot(0x15404a000ULL, UnitType::I_UNIT, 0x35400);
     assert_true("Boot raw mov-to-ar.pfs should decode in I-unit",

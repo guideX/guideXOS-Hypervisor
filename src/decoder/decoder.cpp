@@ -1022,19 +1022,17 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::MOV_FROM_AR:
-            // mov rDst = arSrc1.  Keep ar.pfs tied to the CFM shadow used by alloc.
-            cpu.SetGR(dst_, src1_ == 64 ? cpu.GetCFM() : cpu.GetAR(src1_));
+            // mov rDst = arSrc1.  ar.pfs is a separate application register;
+            // it is not an alias for the current frame marker.
+            cpu.SetGR(dst_, cpu.GetAR(src1_));
             break;
 
         case InstructionType::MOV_TO_AR:
             // mov arDst = rSrc1 or mov.i arDst = imm8.
-            // ar.pfs restores the previous frame marker.
+            // ar.pfs is written independently of the current frame marker.
             {
                 const uint64_t value = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
                 cpu.SetAR(dst_, value);
-                if (dst_ == 64) {
-                    cpu.SetCFM(value);
-                }
             }
             break;
 
