@@ -246,6 +246,57 @@ std::string FATParser::getDOSName(const FATDirectoryEntry& entry) {
     return name;
 }
 
+std::string FATParser::getLongName(const FATDirectoryEntry& entry) {
+    const auto* raw = reinterpret_cast<const uint8_t*>(&entry);
+    std::u16string codeUnits;
+    static constexpr size_t kOffsets[] = {
+        1, 3, 5, 7, 9,
+        14, 16, 18, 20, 22, 24,
+        28, 30,
+    };
+
+    for (const size_t offset : kOffsets) {
+        const uint16_t codeUnit = static_cast<uint16_t>(raw[offset]) |
+                                  (static_cast<uint16_t>(raw[offset + 1]) << 8);
+        if (codeUnit == 0x0000) {
+            break;
+        }
+        if (codeUnit != 0xFFFF) {
+            codeUnits.push_back(static_cast<char16_t>(codeUnit));
+        }
+    }
+
+    std::string result;
+    for (size_t index = 0; index < codeUnits.size(); ++index) {
+        uint32_t codePoint = codeUnits[index];
+        if (codePoint >= 0xD800 && codePoint <= 0xDBFF && index + 1 < codeUnits.size()) {
+            const uint32_t low = codeUnits[index + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                codePoint = 0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
+                ++index;
+            }
+        }
+
+        if (codePoint <= 0x7F) {
+            result.push_back(static_cast<char>(codePoint));
+        } else if (codePoint <= 0x7FF) {
+            result.push_back(static_cast<char>(0xC0 | (codePoint >> 6)));
+            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        } else if (codePoint <= 0xFFFF) {
+            result.push_back(static_cast<char>(0xE0 | (codePoint >> 12)));
+            result.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        } else {
+            result.push_back(static_cast<char>(0xF0 | (codePoint >> 18)));
+            result.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+        }
+    }
+
+    return result;
+}
+
 bool FATParser::matchDOSName(const std::string& dosName, const std::string& searchName) {
     // Case-insensitive comparison
     if (dosName.length() != searchName.length()) {
@@ -261,9 +312,39 @@ bool FATParser::matchDOSName(const std::string& dosName, const std::string& sear
     return true;
 }
 
-bool FATParser::readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryEntry>& entries) {
+bool FATParser::readDirectoryEntries(uint32_t cluster,
+                                     std::vector<DirectoryEntryInfo>& entries) {
     entries.clear();
-    
+
+    auto appendEntries = [&](const FATDirectoryEntry* dirEntries,
+                             uint32_t entryCount) {
+        std::vector<std::string> longNameParts;
+        for (uint32_t i = 0; i < entryCount; ++i) {
+            const FATDirectoryEntry& entry = dirEntries[i];
+            if (isEndOfDirectoryMarker(entry)) {
+                return true;
+            }
+            if (entry.filename[0] == static_cast<char>(0xE5)) {
+                longNameParts.clear();
+                continue;
+            }
+            if (entry.attributes == ATTR_LONG_NAME) {
+                // FAT stores the last LFN fragment first. Insert each new
+                // fragment at the front to restore the Unicode filename.
+                longNameParts.insert(longNameParts.begin(), getLongName(entry));
+                continue;
+            }
+
+            std::string longName;
+            for (const auto& part : longNameParts) {
+                longName += part;
+            }
+            entries.push_back({entry, std::move(longName)});
+            longNameParts.clear();
+        }
+        return false;
+    };
+
     // Handle root directory (cluster 0 means root for FAT12/16)
     if (cluster == 0 && fatType_ != FATType::FAT32) {
         uint32_t rootOffset = rootDirSector_ * bootSector_.bytesPerSector;
@@ -273,23 +354,8 @@ bool FATParser::readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryE
             return false;
         }
         
-        const FATDirectoryEntry* dirEntries = 
-            reinterpret_cast<const FATDirectoryEntry*>(imageData_ + rootOffset);
-        
-        for (uint32_t i = 0; i < bootSector_.rootEntryCount; i++) {
-            if (isEndOfDirectoryMarker(dirEntries[i])) {
-                break; // End of directory
-            }
-            if (dirEntries[i].filename[0] == 0xE5) {
-                continue; // Deleted entry
-            }
-            if (dirEntries[i].attributes == ATTR_LONG_NAME) {
-                continue; // Skip long filename entries
-            }
-            
-            entries.push_back(dirEntries[i]);
-        }
-        
+        const auto* dirEntries = reinterpret_cast<const FATDirectoryEntry*>(imageData_ + rootOffset);
+        appendEntries(dirEntries, bootSector_.rootEntryCount);
         return true;
     }
     
@@ -305,25 +371,14 @@ bool FATParser::readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryE
             return false;
         }
         
-        const FATDirectoryEntry* dirEntries = 
-            reinterpret_cast<const FATDirectoryEntry*>(imageData_ + offset);
-        
+        const auto* dirEntries = reinterpret_cast<const FATDirectoryEntry*>(imageData_ + offset);
+
         uint32_t entriesPerCluster = bytesPerCluster / sizeof(FATDirectoryEntry);
-        
-        for (uint32_t i = 0; i < entriesPerCluster; i++) {
-            if (isEndOfDirectoryMarker(dirEntries[i])) {
-                return true; // End of directory
-            }
-            if (dirEntries[i].filename[0] == 0xE5) {
-                continue; // Deleted entry
-            }
-            if (dirEntries[i].attributes == ATTR_LONG_NAME) {
-                continue; // Skip long filename entries
-            }
-            
-            entries.push_back(dirEntries[i]);
+
+        if (appendEntries(dirEntries, entriesPerCluster)) {
+            return true;
         }
-        
+
         currentCluster = getNextCluster(currentCluster);
     }
     
@@ -332,17 +387,22 @@ bool FATParser::readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryE
 
 bool FATParser::findFileInDirectory(const std::string& name, uint32_t dirCluster, 
                                     FATFileInfo& fileInfo) {
-    std::vector<FATDirectoryEntry> entries;
+    std::vector<DirectoryEntryInfo> entries;
     
     if (!readDirectoryEntries(dirCluster, entries)) {
         return false;
     }
     
-    for (const auto& entry : entries) {
-        std::string dosName = getDOSName(entry);
+    for (const auto& entryInfo : entries) {
+        const FATDirectoryEntry& entry = entryInfo.entry;
+        const std::string dosName = getDOSName(entry);
+        const std::string& lookupName = entryInfo.longName.empty()
+            ? dosName
+            : entryInfo.longName;
         
-        if (matchDOSName(dosName, normalizeSearchComponent(name))) {
-            fileInfo.name = dosName;
+        if (matchDOSName(lookupName, normalizeSearchComponent(name)) ||
+            matchDOSName(dosName, normalizeSearchComponent(name))) {
+            fileInfo.name = lookupName;
             fileInfo.isDirectory = (entry.attributes & ATTR_DIRECTORY) != 0;
             fileInfo.size = entry.fileSize;
             fileInfo.firstCluster = entry.firstClusterLow | 
@@ -450,19 +510,22 @@ bool FATParser::listDirectory(const std::string& path, std::vector<FATFileInfo>&
         dirCluster = dirInfo.firstCluster;
     }
     
-    std::vector<FATDirectoryEntry> dirEntries;
+    std::vector<DirectoryEntryInfo> dirEntries;
     if (!readDirectoryEntries(dirCluster, dirEntries)) {
         return false;
     }
     
-    for (const auto& entry : dirEntries) {
+    for (const auto& entryInfo : dirEntries) {
+        const FATDirectoryEntry& entry = entryInfo.entry;
         // Skip . and .. entries
         if (entry.filename[0] == '.') {
             continue;
         }
         
         FATFileInfo fileInfo;
-        fileInfo.name = getDOSName(entry);
+        fileInfo.name = entryInfo.longName.empty()
+            ? getDOSName(entry)
+            : entryInfo.longName;
         fileInfo.isDirectory = (entry.attributes & ATTR_DIRECTORY) != 0;
         fileInfo.size = entry.fileSize;
         fileInfo.firstCluster = entry.firstClusterLow | 

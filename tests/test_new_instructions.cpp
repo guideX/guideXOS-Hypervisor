@@ -124,6 +124,30 @@ std::vector<uint8_t> makeFatImageWithBootLoader() {
     return image;
 }
 
+void write_lfn_ascii_entry(uint8_t* entry, const char* name) {
+    std::memset(entry, 0xFF, 32);
+    entry[0] = 0x41; // Last (and only) long-name fragment.
+    entry[11] = guideXOS::ATTR_LONG_NAME;
+    entry[12] = 0;
+    entry[13] = 0;
+    entry[26] = 0;
+    entry[27] = 0;
+
+    const size_t length = std::strlen(name);
+    const size_t offsets[] = {
+        1, 3, 5, 7, 9,
+        14, 16, 18, 20, 22, 24,
+        28, 30,
+    };
+    for (size_t index = 0; index < sizeof(offsets) / sizeof(offsets[0]); ++index) {
+        const uint16_t codeUnit = index < length
+            ? static_cast<uint8_t>(name[index])
+            : (index == length ? 0 : 0xFFFF);
+        entry[offsets[index]] = static_cast<uint8_t>(codeUnit & 0xFF);
+        entry[offsets[index] + 1] = static_cast<uint8_t>(codeUnit >> 8);
+    }
+}
+
 std::vector<uint8_t> makeIsoWithDirectBootLoader() {
     std::vector<uint8_t> image(32 * 2048, 0);
     auto* pvd = image.data() + 16 * 2048;
@@ -220,6 +244,34 @@ void test_fat_boot_media_lookup() {
     std::vector<uint8_t> data;
     assert_true("FAT file should read", fat.readFile(info, data));
     assert_true("FAT data should match", data.size() == 8 && std::memcmp(data.data(), "BOOTIA64", 8) == 0);
+
+    auto longNameImage = makeFatImageWithBootLoader();
+    auto* longNameBootDir = longNameImage.data() + 2048;
+    std::memmove(longNameBootDir + 64, longNameBootDir, sizeof(guideXOS::FATDirectoryEntry));
+    std::memset(longNameBootDir + 32, 0, sizeof(guideXOS::FATDirectoryEntry));
+    write_lfn_ascii_entry(longNameBootDir, "elilo.conf");
+    auto* longNameEntry = reinterpret_cast<guideXOS::FATDirectoryEntry*>(longNameBootDir + 32);
+    std::memcpy(longNameEntry->filename, "ELILO~1 ", 8);
+    std::memcpy(longNameEntry->extension, "CON", 3);
+    longNameEntry->attributes = guideXOS::ATTR_ARCHIVE;
+    longNameEntry->firstClusterLow = 5;
+    longNameEntry->fileSize = 4;
+    longNameBootDir[96] = 0;
+    std::memcpy(longNameImage.data() + 3072, "CONF", 4);
+
+    guideXOS::FATParser longNameFat;
+    assert_true("FAT long-name image should parse",
+                longNameFat.parse(longNameImage.data(), longNameImage.size()));
+    guideXOS::FATFileInfo longNameInfo{};
+    assert_true("FAT long filename should resolve",
+                longNameFat.findFile("/EFI/BOOT/elilo.conf", longNameInfo));
+    assert_true("FAT long filename should preserve its name",
+                longNameInfo.name == "elilo.conf");
+    std::vector<uint8_t> longNameData;
+    assert_true("FAT long filename should read",
+                longNameFat.readFile(longNameInfo, longNameData));
+    assert_true("FAT long filename data should match",
+                longNameData.size() == 4 && std::memcmp(longNameData.data(), "CONF", 4) == 0);
 
     std::cout << "  ? FAT boot-media lookup passed" << std::endl;
 }

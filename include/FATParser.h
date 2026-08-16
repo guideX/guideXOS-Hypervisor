@@ -94,6 +94,11 @@ public:
     uint32_t getBytesPerCluster() const;
     
 private:
+    struct DirectoryEntryInfo {
+        FATDirectoryEntry entry{};
+        std::string longName;
+    };
+
     bool parseBootSector();
     bool parseFAT();
     bool parseRootDirectory();
@@ -103,9 +108,10 @@ private:
     
     bool findFileInDirectory(const std::string& name, uint32_t dirCluster, 
                             FATFileInfo& fileInfo);
-    bool readDirectoryEntries(uint32_t cluster, std::vector<FATDirectoryEntry>& entries);
-    
+    bool readDirectoryEntries(uint32_t cluster, std::vector<DirectoryEntryInfo>& entries);
+
     std::string getDOSName(const FATDirectoryEntry& entry);
+    std::string getLongName(const FATDirectoryEntry& entry);
     bool matchDOSName(const std::string& dosName, const std::string& searchName);
 
     static std::string normalizeSearchComponent(const std::string& value);
