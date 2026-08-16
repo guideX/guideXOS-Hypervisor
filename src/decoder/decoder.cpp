@@ -20,21 +20,21 @@ namespace ia64 {
 const char* DescribeIA64Template(TemplateType templateType) {
     switch (templateType) {
         case TemplateType::MII: return "MII";
-        case TemplateType::MII_STOP: return "MII_STOP";
-        case TemplateType::MI_I: return "MI_I";
-        case TemplateType::MI_I_STOP: return "MI_I_STOP";
+        case TemplateType::MII_STOP: return "MII;";
+        case TemplateType::MI_I: return "MI;I";
+        case TemplateType::MI_I_STOP: return "MI;I;";
         case TemplateType::MLX: return "MLX";
         case TemplateType::MLX_STOP: return "MLX_STOP";
         case TemplateType::MMI: return "MMI";
-        case TemplateType::MMI_STOP: return "MMI_STOP";
-        case TemplateType::M_MI: return "M_MI";
-        case TemplateType::M_MI_STOP: return "M_MI_STOP";
+        case TemplateType::MMI_STOP: return "MMI;";
+        case TemplateType::M_MI: return "M;MI";
+        case TemplateType::M_MI_STOP: return "M;MI;";
         case TemplateType::MFI: return "MFI";
-        case TemplateType::MFI_STOP: return "MFI_STOP";
+        case TemplateType::MFI_STOP: return "MFI;";
         case TemplateType::MMF: return "MMF";
         case TemplateType::MMF_STOP: return "MMF_STOP";
         case TemplateType::MIB: return "MIB";
-        case TemplateType::MIB_STOP: return "MIB_STOP";
+        case TemplateType::MIB_STOP: return "MIB;";
         case TemplateType::MBB: return "MBB";
         case TemplateType::MBB_STOP: return "MBB_STOP";
         case TemplateType::BBB: return "BBB";

@@ -2403,14 +2403,26 @@ void testIA64MoveToRotatingPredicateDecode() {
     assert(bundle.templateType == TemplateType::MII_STOP);
     assert(bundle.hasStop);
     assert(!bundle.stopAfterSlot[0]);
-    assert(bundle.stopAfterSlot[1]);
-    assert(!bundle.stopAfterSlot[2]);
+    assert(!bundle.stopAfterSlot[1]);
+    assert(bundle.stopAfterSlot[2]);
     assert(bundle.instructions.size() == 3);
     assert(bundle.instructions[0].GetDisassembly() == "add r2 = r32, 0");
     assert(bundle.instructions[1].GetDisassembly() == "extr r16 = r34, 3, 61");
     assert(bundle.instructions[0].GetRawBits() == slot0Raw);
     assert(bundle.instructions[1].GetRawBits() == slot1Raw);
     assert(bundle.instructions[2].GetRawBits() == slot2Raw);
+
+    // 0x03 is the MII encoding with both the internal stop after slot 1
+    // and the final stop after slot 2.  This is the encoding used by the
+    // ELILO localfs_open return sequence.
+    uint8_t splitGroupBundle[16];
+    std::memcpy(splitGroupBundle, bundleBytes, sizeof(splitGroupBundle));
+    splitGroupBundle[0] = 0x03;
+    Bundle splitGroup = decoder.DecodeBundleAt(splitGroupBundle, 0x27ff0);
+    assert(splitGroup.templateType == TemplateType::MI_I_STOP);
+    assert(!splitGroup.stopAfterSlot[0]);
+    assert(splitGroup.stopAfterSlot[1]);
+    assert(splitGroup.stopAfterSlot[2]);
 
     InstructionEx extr = decoder.DecodeSlot(slot1Raw, UnitType::I_UNIT, 0x27ff0);
     assert(extr.GetType() == InstructionType::EXTR);

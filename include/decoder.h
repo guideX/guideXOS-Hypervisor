@@ -328,7 +328,7 @@ private:
 // NOTE: This is a simplified representation. Real IA-64 bundles require:
 // - Proper handling of dispersed immediate forms (slot 1+2 combined)
 // - MLX template handling (L+X slots form 64-bit immediate)
-// - Stop bits between slots (indicated by template LSB)
+// - Stop bits and group boundaries encoded by the five-bit template field
 // TODO: Implement full EPIC parallel execution semantics
 struct InstructionBundle {
     uint8_t template_field;    // 5-bit template (stored in uint8_t)
@@ -365,7 +365,7 @@ public:
     InstructionEx DecodeSlot(uint64_t slotBits, UnitType unitType, uint64_t ip) const;
     
 private:
-    // Helper to extract template from bundle (bits 0-4)
+    // Helper to extract the IA-64 five-bit template field (bits 0-4)
     TemplateType ExtractTemplate(const uint8_t* bundleData) const;
     
     // Helper to extract 41-bit instruction slots

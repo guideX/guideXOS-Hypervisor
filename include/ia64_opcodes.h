@@ -25,13 +25,15 @@ struct TemplateInfo {
     bool stop_after_2;   // Stop bit after slot 2
 };
 
-// All 32 IA-64 bundle templates
+// All 32 encodings of the IA-64 five-bit template field.  The low bit is
+// the stop bit after slot 2; the upper four bits select the execution-unit
+// template and, for some templates, an additional group boundary.
 static const TemplateInfo TEMPLATES[32] = {
     // MII bundles
     {0x00, "MII",  0, 1, 1, false, false, false},  // M I I
-    {0x01, "MI;I", 0, 1, 1, false, true, false},   // M I; I (stop after slot 1)
-    {0x02, "MI;I", 0, 1, 1, false, true, true},    // M I; I; (stop after both)
-    {0x03, "MII;", 0, 1, 1, false, false, true},   // M I I; (stop after slot 2)
+    {0x01, "MII;", 0, 1, 1, false, false, true},   // M I I;
+    {0x02, "MI;I", 0, 1, 1, false, true, false},   // M I; I
+    {0x03, "MI;I;",0, 1, 1, false, true, true},    // M I; I;
     
     // MLX bundles (for MOVL)
     {0x04, "MLX",  0, 4, 5, false, false, false},  // M L X
@@ -43,19 +45,19 @@ static const TemplateInfo TEMPLATES[32] = {
     
     // MMI bundles
     {0x08, "MMI",  0, 0, 1, false, false, false},  // M M I
-    {0x09, "MM;I", 0, 0, 1, false, true, false},   // M M; I
+    {0x09, "MMI;", 0, 0, 1, false, false, true},   // M M I;
     {0x0A, "M;MI", 0, 0, 1, true, false, false},   // M; M I
-    {0x0B, "M;M;I",0, 0, 1, true, true, false},    // M; M; I
+    {0x0B, "M;MI;",0, 0, 1, true, false, true},    // M; M I;
     
     // MFI bundles
     {0x0C, "MFI",  0, 2, 1, false, false, false},  // M F I
-    {0x0D, "MF;I", 0, 2, 1, false, true, false},   // M F; I
+    {0x0D, "MFI;", 0, 2, 1, false, false, true},   // M F I;
     {0x0E, "MMF",  0, 0, 2, false, false, false},  // M M F
     {0x0F, "MMF;", 0, 0, 2, false, false, true},   // M M F;
     
     // MIB bundles
     {0x10, "MIB",  0, 1, 3, false, false, false},  // M I B
-    {0x11, "MI;B", 0, 1, 3, false, true, false},   // M I; B
+    {0x11, "MIB;", 0, 1, 3, false, false, true},   // M I B;
     {0x12, "MBB",  0, 3, 3, false, false, false},  // M B B
     {0x13, "MBB;", 0, 3, 3, false, false, true},   // M B B;
     
