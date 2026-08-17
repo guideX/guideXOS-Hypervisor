@@ -114,7 +114,10 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                         instr.SetOperands(fmt.r1, fmt.r2, 0);
                         instr.SetImmediate(fmt.count);
                     } else {
-                        instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
+                        // IA-64's variable SHR operands are encoded as
+                        // {destination, source, count} = {r1, r3, r2},
+                        // unlike SHL's {r1, r2, r3} ordering.
+                        instr.SetOperands(fmt.r1, fmt.r3, fmt.r2);
                     }
                     return true;
                     
@@ -383,6 +386,19 @@ static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& 
         if (z_a == 1 && z_b == 1 && v_e == 0 &&
             x2a == 0 && x2b == 0 && x2c == 1) {
             result.opcode = 0x70; // SHL, register-count form
+            result.has_imm = false;
+            return true;
+        }
+
+        // IA-64 variable logical SHR (Binutils: OpZaZbVeX2aX2bX2c
+        // (7,1,1,0,0,0,0)).  Its architectural operand order is
+        // {r1, r3, r2}; toInstruction() reverses the two source fields for
+        // this opcode.  Without this case the zero-initialized opcode falls
+        // through to the wrong shift form, which corrupts authentic ELILO's
+        // Huffman table-code calculation.
+        if (z_a == 1 && z_b == 1 && v_e == 0 &&
+            x2a == 0 && x2b == 0 && x2c == 0) {
+            result.opcode = 0x71; // SHR.U / logical SHR
             result.has_imm = false;
             return true;
         }

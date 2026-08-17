@@ -99,6 +99,7 @@ enum class InstructionType {
     
     // Arithmetic operations (A-type)
     ADD,
+    ADD_P1,     // Three-input addition: r1 = r2 + r3 + 1
     ADD_IMM,    // Add immediate (14-bit)
     ADDL,       // Add dispersed signed immediate (22-bit, A5)
     SUB,

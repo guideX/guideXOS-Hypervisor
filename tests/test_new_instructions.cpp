@@ -869,6 +869,62 @@ void test_latest_boot_log_blockers() {
                  0x1234567800000000ULL,
                  cpu.GetGR(20));
 
+    // Exact authentic ELILO huft_build instruction at 0x21f00.  Historical
+    // Binutils decodes this raw slot as "shr.u r14=r25,r23".  The encoded
+    // source/count fields are reversed relative to SHL.
+    InstructionEx debianShr = decoder.DecodeSlot(0xf20192e380ULL,
+                                                  UnitType::I_UNIT,
+                                                  0x21f00);
+    assert_true("Authentic ELILO variable SHR should decode",
+                debianShr.GetType() == InstructionType::SHR);
+    assert_equal("Authentic ELILO SHR destination", 14, debianShr.GetDst());
+    assert_equal("Authentic ELILO SHR source", 25, debianShr.GetSrc1());
+    assert_equal("Authentic ELILO SHR count", 23, debianShr.GetSrc2());
+    assert_string("Authentic ELILO SHR disassembly",
+                  "shr r14 = r25, r23",
+                  debianShr.GetDisassembly());
+
+    cpu.SetGR(25, 2);
+    cpu.SetGR(23, 0);
+    debianShr.Execute(cpu, memory);
+    assert_equal("Authentic ELILO SHR count-zero result", 2, cpu.GetGR(14));
+
+    cpu.SetGR(25, 0x8000000000000000ULL);
+    cpu.SetGR(23, 63);
+    debianShr.Execute(cpu, memory);
+    assert_equal("Authentic ELILO SHR logical sign-bit result", 1,
+                 cpu.GetGR(14));
+
+    // Exact authentic ELILO repeat-index update at 0x25730/0x259d0.
+    // Historical Binutils decodes this A1 slot as "add r40=r40,r16,1".
+    const uint64_t rawAddP1 = 0x10009050a00ULL;
+    InstructionEx debianAddP1 = decoder.DecodeSlot(rawAddP1,
+                                                    UnitType::I_UNIT,
+                                                    0x25730);
+    assert_true("Authentic ELILO three-input ADD should decode",
+                debianAddP1.GetType() == InstructionType::ADD_P1);
+    assert_equal("Authentic ELILO ADD destination", 40, debianAddP1.GetDst());
+    assert_equal("Authentic ELILO ADD source 1", 40, debianAddP1.GetSrc1());
+    assert_equal("Authentic ELILO ADD source 2", 16, debianAddP1.GetSrc2());
+    assert_string("Authentic ELILO ADD disassembly",
+                  "add r40 = r40, r16, 1",
+                  debianAddP1.GetDisassembly());
+
+    cpu.SetGR(40, 93);
+    cpu.SetGR(16, 2);
+    debianAddP1.Execute(cpu, memory);
+    assert_equal("Authentic ELILO ADD plus-one result", 96, cpu.GetGR(40));
+
+    InstructionEx ordinaryAdd = decoder.DecodeSlot(rawAddP1 & ~(1ULL << 27),
+                                                     UnitType::I_UNIT,
+                                                     0x25730);
+    assert_true("Ordinary A1 ADD should remain distinct",
+                ordinaryAdd.GetType() == InstructionType::ADD);
+    cpu.SetGR(40, 93);
+    cpu.SetGR(16, 2);
+    ordinaryAdd.Execute(cpu, memory);
+    assert_equal("Ordinary A1 ADD result", 95, cpu.GetGR(40));
+
     InstructionEx zxt4_return = decoder.DecodeSlot(0x90800200ULL, UnitType::I_UNIT, 0x34b10);
     assert_true("Boot raw zxt4 should decode", zxt4_return.GetType() == InstructionType::ZXT4);
     assert_equal("Boot zxt4 destination", 8, zxt4_return.GetDst());

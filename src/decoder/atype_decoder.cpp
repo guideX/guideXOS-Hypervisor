@@ -129,7 +129,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
     if ((op & 0xF0) == 0x80) {
         switch (op & 0x0F) {
             case 0x0: // ADD
-                instr = InstructionEx(fmt.has_imm ? InstructionType::ADD_IMM : InstructionType::ADD, 
+                instr = InstructionEx(fmt.has_imm ? InstructionType::ADD_IMM :
+                                          (fmt.add_one ? InstructionType::ADD_P1 : InstructionType::ADD),
                                      UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
@@ -283,6 +284,14 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
 // Helper function implementations
 static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b, 
                               uint8_t x4, uint8_t ve, formats::AFormat& result) {
+    // A1 register-form addition has two encodings.  x2b=0 is ordinary
+    // addition; x2b=1 is the three-input form add r1 = r2, r3, 1.
+    if (x2a == 0x0 && ve == 0 && x4 == 0x0 && x2b <= 0x1) {
+        result.opcode = 0x80;
+        result.add_one = (x2b == 0x1);
+        return true;
+    }
+
     // A1 register-form subtraction has two encodings.  x2b=0 is the
     // three-input form sub r1 = r2, r3, 1; x2b=1 is ordinary subtraction.
     // The completer is architectural and must survive decoding because the

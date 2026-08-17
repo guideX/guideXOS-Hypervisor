@@ -1186,6 +1186,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // add rDst = rSrc1, rSrc2
             cpu.SetGR(dst_, cpu.GetGR(src1_) + cpu.GetGR(src2_));
             break;
+
+        case InstructionType::ADD_P1:
+            // IA-64 three-input addition: add rDst = rSrc1, rSrc2, 1.
+            cpu.SetGR(dst_, cpu.GetGR(src1_) + cpu.GetGR(src2_) + 1);
+            break;
             
         case InstructionType::ADD_IMM:
             // add rDst = rSrc1, imm14
@@ -1980,6 +1985,12 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::ADD:
             oss << "add r" << static_cast<int>(dst_) << " = r" 
                 << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::ADD_P1:
+            oss << "add r" << static_cast<int>(dst_) << " = r"
+                << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_)
+                << ", 1";
             break;
             
         case InstructionType::SUB:
