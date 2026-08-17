@@ -912,10 +912,10 @@ void test_latest_boot_log_blockers() {
     InstructionEx or_imm = decoder.DecodeSlot(0x10170e0e440ULL, UnitType::M_UNIT, 0x32590);
     assert_true("Boot raw OR immediate should decode", or_imm.GetType() == InstructionType::OR_IMM);
     assert_equal("Boot OR immediate destination", 17, or_imm.GetDst());
-    assert_equal("Boot OR immediate source", 14, or_imm.GetSrc1());
+    assert_equal("Boot OR immediate source", 14, or_imm.GetSrc2());
     assert_equal("Boot OR immediate value", 7, or_imm.GetImmediate());
     assert_string("Boot OR immediate disassembly",
-                  "or r17 = r14, 7",
+                  "or r17 = 7, r14",
                   or_imm.GetDisassembly());
 
     cpu.SetGR(14, 0x12340);
@@ -1325,6 +1325,114 @@ void test_bitwise_operations() {
     assert_equal("ANDCM", 0xF000, cpu.GetGR(6));
     
     std::cout << "  ? Bitwise operations passed" << std::endl;
+}
+
+void test_ia64_immediate_andcm() {
+    std::cout << "Testing IA-64 A3 immediate ANDCM encoding and execution..." << std::endl;
+
+    InstructionDecoder decoder;
+    Memory memory(1024 * 1024);
+
+    // Binutils opcodes/ia64-opc-a.c uses:
+    //   OpX2aVeX4X2b(8, 0, 0, 0xb, 1), {R1, IMM8, R3}
+    // IMM8 is signed, with imm7a in bits 13:19 and s in bit 36.
+    auto makeRaw = [](uint8_t qp, uint8_t dst, uint8_t src, int immediate) {
+        assert_true("ANDCM immediate must fit signed 8-bit field",
+                    immediate >= -128 && immediate <= 127);
+        const uint8_t encoded = static_cast<uint8_t>(immediate);
+        uint64_t raw = static_cast<uint64_t>(qp & 0x3f) |
+                       (static_cast<uint64_t>(dst & 0x7f) << 6) |
+                       (static_cast<uint64_t>(encoded & 0x7f) << 13) |
+                       (static_cast<uint64_t>(src & 0x7f) << 20) |
+                       (1ULL << 27) | (0xbULL << 29) | (8ULL << 37);
+        raw |= static_cast<uint64_t>((encoded >> 7) & 0x1) << 36;
+        return raw;
+    };
+
+    // Authentic Debian /linux instruction at IP 0x25620, slot 1.  Binutils
+    // disassembles this raw slot as: andcm r9=-1,r32.
+    const uint64_t authenticRaw = 0x1116a0fe240ULL;
+    InstructionEx authentic = decoder.DecodeSlot(authenticRaw, UnitType::I_UNIT, 0x25620);
+    assert_true("authentic immediate ANDCM should decode",
+                authentic.GetType() == InstructionType::ANDCM_IMM);
+    assert_equal("authentic ANDCM destination", 9, authentic.GetDst());
+    assert_equal("authentic ANDCM source register", 32, authentic.GetSrc2());
+    assert_equal("authentic ANDCM predicate", 0, authentic.GetPredicate());
+    assert_equal("authentic ANDCM immediate", static_cast<uint64_t>(-1),
+                 authentic.GetImmediate());
+    assert_string("authentic ANDCM disassembly",
+                  "andcm r9 = -1, r32", authentic.GetDisassembly());
+
+    CPUState cpu;
+    cpu.SetGR(9, 0x0123456789abcdefULL);
+    cpu.SetGR(32, 0);
+    authentic.Execute(cpu, memory);
+    assert_equal("authentic ANDCM result", 0xffffffffffffffffULL, cpu.GetGR(9));
+
+    // These raw slots are the assembled fixtures from
+    // .codex_tmp/andcm-immediate-fixtures.s, cross-checked with:
+    //   .codex_tmp/ia64_toolchains/build-binutils/binutils/.libs/objdump.exe -d -Mintel .codex_tmp/andcm-immediate-fixtures.o
+    struct Fixture {
+        uint64_t raw;
+        uint8_t dst;
+        uint8_t src;
+        int immediate;
+        const char* disassembly;
+    };
+    const Fixture fixtures[] = {
+        {0x1016a100280ULL, 10, 33, 0, "andcm r10 = 0, r33"},
+        {0x1016a2022c0ULL, 11, 34, 1, "andcm r11 = 1, r34"},
+        {0x1016a3fe300ULL, 12, 35, 127, "andcm r12 = 127, r35"},
+        {0x1116a400340ULL, 13, 36, -128, "andcm r13 = -128, r36"},
+        {0x1116a5fc386ULL, 14, 37, -2, "andcm r14 = -2, r37"},
+    };
+    for (const Fixture& fixture : fixtures) {
+        InstructionEx instruction = decoder.DecodeSlot(
+            fixture.raw, UnitType::I_UNIT, 0);
+        assert_true("assembled immediate ANDCM should decode",
+                    instruction.GetType() == InstructionType::ANDCM_IMM);
+        assert_equal("assembled ANDCM destination", fixture.dst, instruction.GetDst());
+        assert_equal("assembled ANDCM source register", fixture.src, instruction.GetSrc2());
+        assert_equal("assembled ANDCM immediate",
+                     static_cast<uint64_t>(static_cast<int64_t>(fixture.immediate)),
+                     instruction.GetImmediate());
+        assert_string("assembled ANDCM disassembly",
+                      fixture.disassembly, instruction.GetDisassembly());
+    }
+
+    // A non-commutative check: imm & ~source differs from source & ~imm.
+    InstructionEx nontrivial = decoder.DecodeSlot(
+        makeRaw(0, 20, 21, 0x55), UnitType::I_UNIT, 0);
+    cpu.SetGR(21, 0xaa);
+    nontrivial.Execute(cpu, memory);
+    assert_equal("ANDCM immediate operand order", 0x55, cpu.GetGR(20));
+
+    // A false qualifying predicate suppresses the write.
+    InstructionEx predicated = decoder.DecodeSlot(
+        makeRaw(6, 22, 23, -1), UnitType::I_UNIT, 0);
+    cpu.SetGR(22, 0xfeedfacecafebeefULL);
+    cpu.SetGR(23, 0);
+    cpu.SetPR(6, false);
+    predicated.Execute(cpu, memory);
+    assert_equal("ANDCM immediate false predicate preserves destination",
+                 0xfeedfacecafebeefULL, cpu.GetGR(22));
+
+    // The nearby x2b=0 encoding is AND immediate, not ANDCM immediate.
+    InstructionEx adjacentAnd = decoder.DecodeSlot(
+        0x101621fe280ULL, UnitType::I_UNIT, 0);
+    assert_true("adjacent AND immediate remains distinct",
+                adjacentAnd.GetType() == InstructionType::AND_IMM);
+    assert_string("adjacent AND immediate disassembly",
+                  "and r10 = 127, r33", adjacentAnd.GetDisassembly());
+
+    // Writes to r0 remain architecturally suppressed.
+    InstructionEx writeR0 = decoder.DecodeSlot(
+        makeRaw(0, 0, 24, 1), UnitType::I_UNIT, 0);
+    cpu.SetGR(24, 0);
+    writeR0.Execute(cpu, memory);
+    assert_equal("ANDCM immediate destination r0 remains zero", 0, cpu.GetGR(0));
+
+    std::cout << "  ? IA-64 A3 immediate ANDCM encoding and execution passed" << std::endl;
 }
 
 // Test subtract operations
@@ -1991,6 +2099,7 @@ int main() {
         test_application_register_moves();
         test_test_instructions();
         test_bitwise_operations();
+        test_ia64_immediate_andcm();
         test_subtract_operations();
         test_ia64_immediate_sub_raw_encoding();
         test_ia64_sub_minus_one_raw_encoding();

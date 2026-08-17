@@ -1238,9 +1238,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::AND_IMM:
-            // and rDst = rSrc1, imm
+            // A3: and rDst = imm, rSrc2
             if (hasImmediate_) {
-                cpu.SetGR(dst_, cpu.GetGR(src1_) & immediate_);
+                cpu.SetGR(dst_, immediate_ & cpu.GetGR(src2_));
             }
             break;
             
@@ -1250,9 +1250,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::OR_IMM:
-            // or rDst = rSrc1, imm
+            // A3: or rDst = imm, rSrc2
             if (hasImmediate_) {
-                cpu.SetGR(dst_, cpu.GetGR(src1_) | immediate_);
+                cpu.SetGR(dst_, immediate_ | cpu.GetGR(src2_));
             }
             break;
             
@@ -1262,9 +1262,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::XOR_IMM:
-            // xor rDst = rSrc1, imm
+            // A3: xor rDst = imm, rSrc2
             if (hasImmediate_) {
-                cpu.SetGR(dst_, cpu.GetGR(src1_) ^ immediate_);
+                cpu.SetGR(dst_, immediate_ ^ cpu.GetGR(src2_));
             }
             break;
             
@@ -1274,9 +1274,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
             
         case InstructionType::ANDCM_IMM:
-            // andcm rDst = rSrc1, imm
+            // A3: andcm rDst = imm, rSrc2
             if (hasImmediate_) {
-                cpu.SetGR(dst_, cpu.GetGR(src1_) & ~immediate_);
+                cpu.SetGR(dst_, immediate_ & ~cpu.GetGR(src2_));
             }
             break;
             
@@ -2035,8 +2035,9 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::AND_IMM:
-            oss << "and r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
-                << ", " << static_cast<int64_t>(immediate_);
+            oss << "and r" << static_cast<int>(dst_) << " = "
+                << static_cast<int64_t>(immediate_) << ", r"
+                << static_cast<int>(src2_);
             break;
             
         case InstructionType::OR:
@@ -2045,8 +2046,9 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::OR_IMM:
-            oss << "or r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
-                << ", " << static_cast<int64_t>(immediate_);
+            oss << "or r" << static_cast<int>(dst_) << " = "
+                << static_cast<int64_t>(immediate_) << ", r"
+                << static_cast<int>(src2_);
             break;
             
         case InstructionType::XOR:
@@ -2055,8 +2057,9 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::XOR_IMM:
-            oss << "xor r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
-                << ", " << static_cast<int64_t>(immediate_);
+            oss << "xor r" << static_cast<int>(dst_) << " = "
+                << static_cast<int64_t>(immediate_) << ", r"
+                << static_cast<int>(src2_);
             break;
 
         case InstructionType::ANDCM:
@@ -2065,8 +2068,9 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::ANDCM_IMM:
-            oss << "andcm r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
-                << ", " << static_cast<int64_t>(immediate_);
+            oss << "andcm r" << static_cast<int>(dst_) << " = "
+                << static_cast<int64_t>(immediate_) << ", r"
+                << static_cast<int>(src2_);
             break;
             
         case InstructionType::SHL:

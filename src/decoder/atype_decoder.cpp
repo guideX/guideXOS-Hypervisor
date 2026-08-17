@@ -183,7 +183,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                                      UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
-                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    // A3 is written as operation r1 = imm8, r3.
+                    instr.SetOperands(fmt.r1, 0, fmt.r2);
                     instr.SetImmediate(fmt.imm);
                 } else {
                     instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
@@ -195,7 +196,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                                      UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
-                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    // A3 is written as operation r1 = imm8, r3.
+                    instr.SetOperands(fmt.r1, 0, fmt.r2);
                     instr.SetImmediate(fmt.imm);
                 } else {
                     instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
@@ -207,7 +209,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                                      UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
-                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    // A3 is written as operation r1 = imm8, r3.
+                    instr.SetOperands(fmt.r1, 0, fmt.r2);
                     instr.SetImmediate(fmt.imm);
                 } else {
                     instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
@@ -219,7 +222,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                                      UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
-                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    // A3 is written as operation r1 = imm8, r3.
+                    instr.SetOperands(fmt.r1, 0, fmt.r2);
                     instr.SetImmediate(fmt.imm);
                 } else {
                     instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
@@ -334,6 +338,9 @@ static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b,
         switch (x2b) {
             case 0x0:
                 result.opcode = 0x83; // AND immediate
+                return true;
+            case 0x1:
+                result.opcode = 0x84; // ANDCM immediate
                 return true;
             case 0x2:
                 result.opcode = 0x85; // OR immediate
