@@ -1720,6 +1720,77 @@ void test_ia64_flushrs() {
     std::cout << "  ? IA-64 flushrs decoding and execution passed" << std::endl;
 }
 
+void test_ia64_invala() {
+    std::cout << "Testing IA-64 M0 invala decoding and ALAT invalidation..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact authentic ELILO encoding at IP 0x28810.  Historical Binutils
+    // identifies this M24 complete-form syllable as invala:
+    // major=0, x3=0, x4=0, x2=1.
+    const uint64_t rawInvala = 0x80000000ULL;
+    const InstructionEx invala = decoder.DecodeSlot(
+        rawInvala, UnitType::M_UNIT, 0x28810);
+    assert_true("authentic invala should decode",
+                invala.GetType() == InstructionType::INVALA);
+    assert_equal("invala predicate", 0, invala.GetPredicate());
+    assert_true("invala has no immediate", !invala.HasImmediate());
+    assert_string("invala disassembly", "invala", invala.GetDisassembly());
+
+    // M24 is predicatable.  The same opcode with qp=1 must remain invala,
+    // unlike the NO_PRED flushrs encoding.
+    const InstructionEx predicatedInvala = decoder.DecodeSlot(
+        rawInvala | 1ULL, UnitType::M_UNIT, 0x28810);
+    assert_true("predicated invala should decode",
+                predicatedInvala.GetType() == InstructionType::INVALA);
+    assert_equal("predicated invala qp", 1, predicatedInvala.GetPredicate());
+
+    const InstructionEx flushrs = decoder.DecodeSlot(
+        0x60000000ULL, UnitType::M_UNIT, 0x28640);
+    const InstructionEx loadrs = decoder.DecodeSlot(
+        0x50000000ULL, UnitType::M_UNIT, 0x28640);
+    assert_true("invala must not alias flushrs",
+                invala.GetType() != flushrs.GetType());
+    assert_true("adjacent loadrs encoding should remain unsupported",
+                loadrs.GetType() == InstructionType::UNKNOWN);
+
+    // Use nontrivial RSE and stacked-register state to make sure the ALAT
+    // invalidation is not incorrectly implemented as an RSE reset.
+    cpu.SetRSC(0x3);
+    cpu.SetBSP(0x1000);
+    cpu.SetBSPSTORE(0x0f80);
+    cpu.SetRNAT(0x300905a4dULL);
+    cpu.SetPFS(0x3);
+    cpu.SetCFM(0x183);
+    cpu.SetGR(32, 0x1122334455667788ULL);
+    cpu.SetGRNaT(32, true);
+    cpu.SetPR(1, false);
+    invala.Execute(cpu, memory);
+
+    // invala has no RSE side effects; all modeled state must be preserved.
+    assert_equal("invala preserves RSC", 0x3, cpu.GetRSC());
+    assert_equal("invala preserves BSP", 0x1000, cpu.GetBSP());
+    assert_equal("invala preserves BSPSTORE", 0x0f80, cpu.GetBSPSTORE());
+    assert_equal("invala preserves RNAT", 0x300905a4dULL, cpu.GetRNAT());
+    assert_equal("invala preserves PFS", 0x3, cpu.GetPFS());
+    assert_equal("invala preserves CFM", 0x183, cpu.GetCFM());
+    assert_equal("invala preserves stacked register", 0x1122334455667788ULL,
+                 cpu.GetGR(32));
+    assert_true("invala preserves stacked-register NaT", cpu.GetGRNaT(32));
+
+    // A false qualifying predicate nullifies invala and likewise leaves the
+    // RSE state untouched.
+    InstructionEx manuallyPredicated = invala;
+    manuallyPredicated.SetPredicate(1);
+    manuallyPredicated.Execute(cpu, memory);
+    assert_equal("false predicate should nullify invala",
+                 0x0f80, cpu.GetBSPSTORE());
+
+    std::cout << "  ? IA-64 invala decoding and execution passed" << std::endl;
+}
+
 void test_alloc_invalid_frame_size_fails_safe() {
     std::cout << "Testing ALLOC invalid frame sizes..." << std::endl;
 
@@ -1894,6 +1965,7 @@ int main() {
         test_alloc_instruction();
         test_rse_state_aliases();
         test_ia64_flushrs();
+        test_ia64_invala();
         test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();
         test_ia64_unsigned_fixed_truncate_modulus_sequence();

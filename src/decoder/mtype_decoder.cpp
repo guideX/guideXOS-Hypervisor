@@ -55,6 +55,15 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         
         const uint8_t x6row = x6 >> 2;
 
+        // M0 invala is the predicatable complete-form ALAT invalidation.
+        // Binutils describes its fixed encoding as x3=0, x4=0, x2=1, and
+        // major=0.  The operand fields are unused by the complete form.
+        if (major == 0x0 && x3 == 0x0 && m == 0 &&
+            x4 == 0x0 && x2 == 0x1) {
+            result.operation = formats::MFormat::MemOp::INVALA;
+            return true;
+        }
+
         // M0 flushrs is an unpredicated RSE control instruction.  Binutils
         // describes its fixed encoding as x3=0, x4=0xc, x2=0, and major=0.
         // The adjacent x4=0xa encoding is loadrs; do not classify either
@@ -218,6 +227,12 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::SETF_SIG, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r2, 0);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::INVALA) {
+            instr = InstructionEx(InstructionType::INVALA, UnitType::M_UNIT);
+            // Unlike flushrs, the complete invala form is predicatable.
+            instr.SetPredicate(fmt.qp);
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {

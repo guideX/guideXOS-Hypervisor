@@ -1685,6 +1685,16 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // lets subsequent mov-to-AR.BSPSTORE/loadrs code see the result.
             cpu.SetBSPSTORE(cpu.GetBSP());
             break;
+
+        case InstructionType::INVALA:
+            // invala invalidates the ALAT, not the register stack.  guideXOS
+            // currently has no ALAT entry store (advanced-load checks are
+            // modeled as satisfied), so there is no separate architectural
+            // value to clear here.  In particular, preserve RSC, BSP,
+            // BSPSTORE, RNAT, CFM, and the stacked-register/NaT state: those
+            // are changed by RSE operations and frame restoration, not by
+            // invala itself.
+            break;
             
         // ===== BRANCH OPERATIONS =====
             
@@ -2229,6 +2239,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::FLUSHRS:
             oss << "flushrs";
+            break;
+
+        case InstructionType::INVALA:
+            oss << "invala";
             break;
             
         case InstructionType::ST1:

@@ -109,6 +109,7 @@ struct MFormat {
         FETCHADD,
         SETF,
         GETF,
+        INVALA,
         FLUSHRS
     } operation;
     
