@@ -141,7 +141,8 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
                 return true;
                 
             case 0x1: // SUB
-                instr = InstructionEx(fmt.has_imm ? InstructionType::SUB_IMM : InstructionType::SUB,
+                instr = InstructionEx(fmt.has_imm ? InstructionType::SUB_IMM :
+                                          (fmt.sub_one ? InstructionType::SUB_M1 : InstructionType::SUB),
                                      UnitType::I_UNIT);
                 instr.SetPredicate(fmt.qp);
                 if (fmt.has_imm) {
@@ -278,6 +279,16 @@ bool ATypeDecoder::toInstruction(const formats::AFormat& fmt, InstructionEx& ins
 // Helper function implementations
 static bool decodeIntegerALU(uint64_t raw, uint8_t x2a, uint8_t x2b, 
                               uint8_t x4, uint8_t ve, formats::AFormat& result) {
+    // A1 register-form subtraction has two encodings.  x2b=0 is the
+    // three-input form sub r1 = r2, r3, 1; x2b=1 is ordinary subtraction.
+    // The completer is architectural and must survive decoding because the
+    // two instructions have different arithmetic results.
+    if (x2a == 0x0 && ve == 0 && x4 == 0x1 && x2b <= 0x1) {
+        result.opcode = 0x81;
+        result.sub_one = (x2b == 0x0);
+        return true;
+    }
+
     // A3 immediate subtraction: sub r1 = imm8, r3.  The immediate uses
     // imm7a in bits 13:19 and its sign in bit 36; r3 remains in bits 20:26.
     if (x2a == 0x0 && ve == 0 && x4 == 0x9 && x2b == 0x1) {

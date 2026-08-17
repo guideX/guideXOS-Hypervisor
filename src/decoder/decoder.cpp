@@ -1205,6 +1205,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // sub rDst = rSrc1, rSrc2
             cpu.SetGR(dst_, cpu.GetGR(src1_) - cpu.GetGR(src2_));
             break;
+
+        case InstructionType::SUB_M1:
+            // IA-64 three-input subtraction: sub rDst = rSrc1, rSrc2, 1.
+            cpu.SetGR(dst_, cpu.GetGR(src1_) - cpu.GetGR(src2_) - 1);
+            break;
             
         case InstructionType::SUB_IMM:
             // IA-64 A3: sub rDst = imm8, rSrc2
@@ -1980,6 +1985,12 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::SUB:
             oss << "sub r" << static_cast<int>(dst_) << " = r" 
                 << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::SUB_M1:
+            oss << "sub r" << static_cast<int>(dst_) << " = r"
+                << static_cast<int>(src1_) << ", r" << static_cast<int>(src2_)
+                << ", 1";
             break;
             
         case InstructionType::ADD_IMM:

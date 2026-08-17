@@ -1427,6 +1427,41 @@ void test_ia64_immediate_sub_raw_encoding() {
     std::cout << "  ? IA-64 A3 immediate SUB raw encoding passed" << std::endl;
 }
 
+void test_ia64_sub_minus_one_raw_encoding() {
+    std::cout << "Testing IA-64 A1 three-input SUB raw encoding..." << std::endl;
+
+    InstructionDecoder decoder;
+    Memory memory(1024 * 1024);
+
+    // Authentic gzip huft_build instruction at IP 0x219e0, slot 2.
+    const uint64_t rawSubM1 = 0x10020e20640ULL;
+    InstructionEx subM1 = decoder.DecodeSlot(rawSubM1, UnitType::I_UNIT, 0x219e0);
+    assert_true("raw SUB ...,1 should decode",
+                subM1.GetType() == InstructionType::SUB_M1);
+    assert_equal("raw SUB ...,1 destination", 25, subM1.GetDst());
+    assert_equal("raw SUB ...,1 source 1", 16, subM1.GetSrc1());
+    assert_equal("raw SUB ...,1 source 2", 14, subM1.GetSrc2());
+    assert_string("raw SUB ...,1 disassembly",
+                  "sub r25 = r16, r14, 1",
+                  subM1.GetDisassembly());
+
+    CPUState cpu;
+    cpu.SetGR(16, 7);
+    cpu.SetGR(14, 2);
+    subM1.Execute(cpu, memory);
+    assert_equal("raw SUB ...,1 result", 4, cpu.GetGR(25));
+
+    const uint64_t rawSub = rawSubM1 | (1ULL << 27);
+    InstructionEx plainSub = decoder.DecodeSlot(rawSub, UnitType::I_UNIT, 0x219e0);
+    assert_true("ordinary raw SUB should remain distinct",
+                plainSub.GetType() == InstructionType::SUB);
+    cpu.SetGR(25, 0);
+    plainSub.Execute(cpu, memory);
+    assert_equal("ordinary raw SUB result", 5, cpu.GetGR(25));
+
+    std::cout << "  ? IA-64 A1 three-input SUB raw encoding passed" << std::endl;
+}
+
 // Test shift operations
 void test_shift_operations() {
     std::cout << "Testing shift operations..." << std::endl;
@@ -1958,6 +1993,7 @@ int main() {
         test_bitwise_operations();
         test_subtract_operations();
         test_ia64_immediate_sub_raw_encoding();
+        test_ia64_sub_minus_one_raw_encoding();
         test_shift_operations();
         test_extract_deposit();
         test_memory_operations();

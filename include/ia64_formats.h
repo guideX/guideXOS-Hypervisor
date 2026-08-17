@@ -37,6 +37,7 @@ struct AFormat {
     // For immediate forms
     uint64_t imm;       // extracted immediate value
     bool has_imm;
+    bool sub_one;       // register-form sub ...,1 completer
     
     // For compare operations
     uint8_t p1;         // destination predicate 1
@@ -46,7 +47,7 @@ struct AFormat {
     uint8_t tb;         // compare relation selector for register forms
     uint8_t c;          // compare completer/control bit
     
-    AFormat() : qp(0), r1(0), r2(0), r3(0), opcode(0), imm(0), has_imm(false),
+    AFormat() : qp(0), r1(0), r2(0), r3(0), opcode(0), imm(0), has_imm(false), sub_one(false),
                 p1(0), p2(0), x2(0), ta(0), tb(0), c(0) {}
 };
 

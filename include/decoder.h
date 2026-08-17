@@ -102,6 +102,7 @@ enum class InstructionType {
     ADD_IMM,    // Add immediate (14-bit)
     ADDL,       // Add dispersed signed immediate (22-bit, A5)
     SUB,
+    SUB_M1,     // Three-input subtraction: r1 = r2 - r3 - 1
     SUB_IMM,
     ADDP4,      // Add pointer (32-bit)
     
