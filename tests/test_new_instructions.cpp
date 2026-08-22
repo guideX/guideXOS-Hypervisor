@@ -22,6 +22,18 @@ void assert_string(const char* name, const std::string& expected, const std::str
 
 namespace {
 
+uint64_t build_mov_to_pr_slot(uint8_t sourceRegister,
+                              uint64_t mask17,
+                              uint8_t qualifyingPredicate = 0) {
+    const uint64_t encodedImm16 = (mask17 & 0x1FFFFULL) >> 1;
+    return (3ULL << 33) |
+           (static_cast<uint64_t>(sourceRegister) << 13) |
+           ((encodedImm16 & 0x7FULL) << 6) |
+           (((encodedImm16 >> 7) & 0xFFULL) << 24) |
+           (((encodedImm16 >> 15) & 0x1ULL) << 36) |
+           (qualifyingPredicate & 0x3FULL);
+}
+
 class MemoryStorageDevice : public IStorageDevice {
 public:
     explicit MemoryStorageDevice(std::vector<uint8_t> data, uint32_t blockSize = 2048)
@@ -1231,6 +1243,66 @@ void test_application_register_moves() {
     assert_true("Boot raw mov-to-ar.pfs should decode in I-unit",
                 mov_to_pfs_i.GetType() == InstructionType::MOV_TO_AR);
     assert_equal("mov-to-ar.pfs I-unit source register", 37, mov_to_pfs_i.GetSrc1());
+
+    InstructionEx authentic_mov_to_pr = decoder.DecodeSlot(
+        0x60002c700ULL, UnitType::I_UNIT, 0x2f0c0);
+    assert_true("Authentic memcpy_long mov-to-predicate should decode",
+                authentic_mov_to_pr.GetType() == InstructionType::MOV_TO_PR);
+    assert_equal("Authentic mov-to-predicate source register", 22,
+                 authentic_mov_to_pr.GetSrc1());
+    assert_equal("Authentic mov-to-predicate mask", 0x38,
+                 authentic_mov_to_pr.GetImmediate());
+    assert_string("Authentic mov-to-predicate disassembly",
+                  "mov pr = r22, 0x38",
+                  authentic_mov_to_pr.GetDisassembly());
+
+    cpu.SetGR(22, 0);
+    cpu.SetPR(3, false);
+    cpu.SetPR(4, false);
+    cpu.SetPR(5, true);
+    authentic_mov_to_pr.Execute(cpu, memory);
+    assert_true("Authentic mov-to-predicate should keep PR0 true", cpu.GetPR(0));
+    assert_true("Authentic mov-to-predicate should clear PR3", !cpu.GetPR(3));
+    assert_true("Authentic mov-to-predicate should clear PR4", !cpu.GetPR(4));
+    assert_true("Authentic mov-to-predicate should clear PR5", !cpu.GetPR(5));
+
+    InstructionEx zero_mask_mov_to_pr = decoder.DecodeSlot(
+        build_mov_to_pr_slot(0, 0), UnitType::I_UNIT, 0x2f0c0);
+    assert_true("Zero-mask mov-to-predicate should decode",
+                zero_mask_mov_to_pr.GetType() == InstructionType::MOV_TO_PR);
+    assert_equal("Zero-mask mov-to-predicate immediate", 0,
+                 zero_mask_mov_to_pr.GetImmediate());
+
+    InstructionEx patterned_mov_to_pr = decoder.DecodeSlot(
+        build_mov_to_pr_slot(37, 0x1234), UnitType::I_UNIT, 0x2f0c0);
+    assert_equal("Patterned mov-to-predicate source register", 37,
+                 patterned_mov_to_pr.GetSrc1());
+    assert_equal("Patterned mov-to-predicate mask", 0x1234,
+                 patterned_mov_to_pr.GetImmediate());
+
+    InstructionEx sign_boundary_mov_to_pr = decoder.DecodeSlot(
+        build_mov_to_pr_slot(63, 0x1fffe), UnitType::I_UNIT, 0x2f0c0);
+    assert_equal("Sign-boundary mov-to-predicate source register", 63,
+                 sign_boundary_mov_to_pr.GetSrc1());
+    assert_equal("Sign-boundary mov-to-predicate mask",
+                 0xfffffffffffffffeULL,
+                 sign_boundary_mov_to_pr.GetImmediate());
+
+    InstructionEx predicated_mov_to_pr = decoder.DecodeSlot(
+        build_mov_to_pr_slot(22, 0x38, 1), UnitType::I_UNIT, 0x2f0c0);
+    cpu.SetGR(22, (1ULL << 3) | (1ULL << 4) | (1ULL << 5));
+    cpu.SetPR(1, false);
+    cpu.SetPR(3, false);
+    cpu.SetPR(4, false);
+    cpu.SetPR(5, false);
+    predicated_mov_to_pr.Execute(cpu, memory);
+    assert_true("False-qualified mov-to-predicate should not write PR3",
+                !cpu.GetPR(3));
+    cpu.SetPR(1, true);
+    predicated_mov_to_pr.Execute(cpu, memory);
+    assert_true("True-qualified mov-to-predicate should write PR3", cpu.GetPR(3));
+    assert_true("True-qualified mov-to-predicate should write PR4", cpu.GetPR(4));
+    assert_true("True-qualified mov-to-predicate should write PR5", cpu.GetPR(5));
 
     InstructionEx mov_to_pr = decoder.DecodeSlot(0x16ff04bfc0ULL, UnitType::I_UNIT, 0x2f0c0);
     assert_true("Boot raw mov-to-predicate should decode",

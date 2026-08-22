@@ -2758,7 +2758,11 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
-            if (major == 0x0 && x3 == 0x3 && x6 == 0x1F) {
+            // I23: mov pr = r2, mask17.  Binutils encodes this family with
+            // major=0 and x3=3; x6 is not a fixed sub-opcode because the
+            // dispersed mask immediate occupies those bits.  Requiring a
+            // particular x6 value only recognizes one coincidental mask.
+            if (major == 0x0 && x3 == 0x3) {
                 const uint8_t mask7a = static_cast<uint8_t>((slotBits >> 6) & 0x7F);
                 const uint8_t r2 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
                 const uint16_t mask8c = static_cast<uint16_t>((slotBits >> 24) & 0xFF);
