@@ -1790,14 +1790,14 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
     // Serialize CPUState registers
     // General registers (128 * 8 bytes)
     for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
-        uint64_t val = cpuState_.GetGR(i);
+        uint64_t val = cpuState_.GetGRPhysical(i);
         std::memcpy(buffer + offset, &val, sizeof(uint64_t));
         offset += sizeof(uint64_t);
     }
     
     // Predicate registers (64 * 1 byte, padded)
     for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
-        uint8_t val = cpuState_.GetPR(i) ? 1 : 0;
+        uint8_t val = cpuState_.GetPRPhysical(i) ? 1 : 0;
         buffer[offset++] = val;
     }
     
@@ -1865,14 +1865,14 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
     for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
         uint64_t val;
         std::memcpy(&val, buffer + offset, sizeof(uint64_t));
-        cpuState_.SetGR(i, val);
+        cpuState_.SetGRPhysical(i, val);
         offset += sizeof(uint64_t);
     }
     
     // Predicate registers
     for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
         uint8_t val = buffer[offset++];
-        cpuState_.SetPR(i, val != 0);
+        cpuState_.SetPRPhysical(i, val != 0);
     }
     
     // Branch registers
@@ -2766,6 +2766,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         // Check for branch instructions
         bool isBranch = false;
         bool handledFirmwareCallStub = false;
+        bool moduloLoopStateExecuted = false;
+        ModuloLoopResult moduloLoopResult{};
         uint64_t branchTarget = 0;
         const uint64_t gpBeforeBranch = state_.getCPUState().GetGR(1);
         const uint64_t r8BeforeBranch = state_.getCPUState().GetGR(8);
@@ -2796,11 +2798,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             cachedInstruction_.HasBranchTarget() &&
             branchTargetValue <= currentIP &&
             (currentIP - branchTargetValue) <= 0x100;
+        const bool moduloLoopBranch =
+            cachedInstruction_.GetType() == InstructionType::BR_CTOP ||
+            cachedInstruction_.GetType() == InstructionType::BR_CEXIT;
         const bool branchInstruction =
             cachedInstruction_.GetType() == InstructionType::BR_COND ||
             cachedInstruction_.GetType() == InstructionType::BR_CALL ||
             cachedInstruction_.GetType() == InstructionType::BR_RET ||
-            cachedInstruction_.GetType() == InstructionType::BR_CLOOP;
+            cachedInstruction_.GetType() == InstructionType::BR_CLOOP ||
+            moduloLoopBranch;
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
                 if (livePredicateTrue) {
@@ -3960,9 +3966,64 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     isBranch = true;
                 }
                 break;
+
+            case InstructionType::BR_CTOP:
+                {
+                    moduloLoopResult = state_.getCPUState().ExecuteBrCTop();
+                    moduloLoopStateExecuted = true;
+                    if (moduloLoopResult.branchTaken && cachedInstruction_.HasBranchTarget()) {
+                        branchTarget = cachedInstruction_.GetBranchTarget();
+                        isBranch = true;
+                    }
+                }
+                break;
+
+            case InstructionType::BR_CEXIT:
+                {
+                    moduloLoopResult = state_.getCPUState().ExecuteBrCExit();
+                    moduloLoopStateExecuted = true;
+                    if (moduloLoopResult.branchTaken && cachedInstruction_.HasBranchTarget()) {
+                        branchTarget = cachedInstruction_.GetBranchTarget();
+                        isBranch = true;
+                    }
+                }
+                break;
                 
             default:
                 break;
+        }
+
+        if (moduloLoopStateExecuted) {
+            static uint64_t moduloLoopTraceCount = 0;
+            const uint64_t traceIndex = moduloLoopTraceCount++;
+            if (traceIndex < 128 || (traceIndex % 4096) == 0) {
+                std::ostringstream trace;
+                trace << "ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " template=" << static_cast<unsigned>(state_.currentBundle_.templateType)
+                      << " raw41=" << BootStageTrace::Hex(cachedInstruction_.GetRawBits())
+                      << " qp=p" << static_cast<unsigned>(cachedInstruction_.GetPredicate())
+                      << " iteration=" << traceIndex
+                      << " lc=" << BootStageTrace::Hex(moduloLoopResult.lcBefore)
+                      << "->" << BootStageTrace::Hex(moduloLoopResult.lcAfter)
+                      << " ec=" << BootStageTrace::Hex(moduloLoopResult.ecBefore)
+                      << "->" << BootStageTrace::Hex(moduloLoopResult.ecAfter)
+                      << " rrb.gr=" << BootStageTrace::Hex((moduloLoopResult.cfmBefore >> 18) & 0x7F)
+                      << "->" << BootStageTrace::Hex((moduloLoopResult.cfmAfter >> 18) & 0x7F)
+                      << " rrb.fr=" << BootStageTrace::Hex((moduloLoopResult.cfmBefore >> 25) & 0x7F)
+                      << "->" << BootStageTrace::Hex((moduloLoopResult.cfmAfter >> 25) & 0x7F)
+                      << " rrb.pr=" << BootStageTrace::Hex((moduloLoopResult.cfmBefore >> 32) & 0x3F)
+                      << "->" << BootStageTrace::Hex((moduloLoopResult.cfmAfter >> 32) & 0x3F)
+                      << " pr63=" << (moduloLoopResult.pr63Before ? 1 : 0)
+                      << "->" << (moduloLoopResult.pr63After ? 1 : 0)
+                      << " pr.mask=" << BootStageTrace::Hex(moduloLoopResult.prMaskBefore)
+                      << "->" << BootStageTrace::Hex(moduloLoopResult.prMaskAfter)
+                      << " rotated=" << (moduloLoopResult.rotated ? 1 : 0)
+                      << " branch=" << (moduloLoopResult.branchTaken ? "taken" : "fallthrough")
+                      << " target=" << BootStageTrace::Hex(branchTarget);
+                std::cout << "[IA64-BRCTOP] " << trace.str() << std::endl;
+                BootStageTrace::Event("IA64_BRCTOP", trace.str());
+            }
         }
 
         // Direct calls/branches can also land on IA-64 function descriptors.
@@ -4003,9 +4064,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         
         // Keep non-branch predicate execution on the instruction-group snapshot,
         // while branches use the current predicate state for boot-critical flow.
-        if ((branchInstruction && livePredicateTrue) ||
+        if (moduloLoopBranch ||
+            (branchInstruction && livePredicateTrue) ||
             (!branchInstruction && snapshotPredicateTrue)) {
-            if (callLooksLikeCountedLoop) {
+            if (moduloLoopStateExecuted) {
+                // br.ctop/br.cexit already performed the complete modulo-loop
+                // state transition while forming the branch decision.
+            } else if (callLooksLikeCountedLoop) {
                 if (state_.getCPUState().GetAR(65) != 0) {
                     state_.getCPUState().SetAR(65, state_.getCPUState().GetAR(65) - 1);
                 }
@@ -4031,6 +4096,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     branchKind = "conditional";
                 } else if (cachedInstruction_.GetType() == InstructionType::BR_CLOOP) {
                     branchKind = "counted-loop";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_CTOP) {
+                    branchKind = "modulo-counted-top";
+                } else if (cachedInstruction_.GetType() == InstructionType::BR_CEXIT) {
+                    branchKind = "modulo-counted-exit";
                 }
                 std::ostringstream ctx;
                 ctx << "kind=" << branchKind
@@ -4401,9 +4470,7 @@ uint64_t IA64ISAPlugin::readGR(size_t index) const {
         throw std::out_of_range("General register index out of range");
     }
     
-    // Apply rotation for stacked registers (GR32-GR127)
-    size_t physical = applyRegisterRotation(index, 'G');
-    return state_.getCPUState().GetGR(physical);
+    return state_.getCPUState().GetGR(index);
 }
 
 void IA64ISAPlugin::writeGR(size_t index, uint64_t value) {
@@ -4416,8 +4483,7 @@ void IA64ISAPlugin::writeGR(size_t index, uint64_t value) {
         return;
     }
     
-    size_t physical = applyRegisterRotation(index, 'G');
-    state_.getCPUState().SetGR(physical, value);
+    state_.getCPUState().SetGR(index, value);
 }
 
 bool IA64ISAPlugin::readPR(size_t index) const {
@@ -4425,8 +4491,7 @@ bool IA64ISAPlugin::readPR(size_t index) const {
         throw std::out_of_range("Predicate register index out of range");
     }
     
-    size_t physical = applyRegisterRotation(index, 'P');
-    return state_.getCPUState().GetPR(physical);
+    return state_.getCPUState().GetPR(index);
 }
 
 void IA64ISAPlugin::writePR(size_t index, bool value) {
@@ -4439,8 +4504,7 @@ void IA64ISAPlugin::writePR(size_t index, bool value) {
         return;
     }
     
-    size_t physical = applyRegisterRotation(index, 'P');
-    state_.getCPUState().SetPR(physical, value);
+    state_.getCPUState().SetPR(index, value);
 }
 
 uint64_t IA64ISAPlugin::readBR(size_t index) const {
@@ -4641,10 +4705,13 @@ void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
     const CallFrameSnapshot frame = callFrameStack_[matchIndex];
     callFrameStack_.erase(callFrameStack_.begin() + matchIndex, callFrameStack_.end());
 
+    state_.getCPUState().SetCFM(frame.cfm);
+    // The snapshot contains logical stacked-register values from the caller
+    // frame.  Restore that frame's CFM before writing them so the active RRB
+    // mapping addresses the caller's physical backing registers.
     for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
         state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
     }
-    state_.getCPUState().SetCFM(frame.cfm);
 }
 
 void IA64ISAPlugin::rememberBranchTarget(uint64_t target) {
@@ -6417,7 +6484,10 @@ size_t IA64ISAPlugin::applyRegisterRotation(size_t logicalReg, char regType) con
                 return logicalReg;
             } else {
                 uint8_t rrb = getGRRotationBase();
-                size_t rotatingSize = 96;
+                size_t rotatingSize = static_cast<size_t>(state_.getCPUState().GetSOR()) * 8;
+                if (rotatingSize == 0 || logicalReg >= 32 + rotatingSize) {
+                    return logicalReg;
+                }
                 size_t offset = (logicalReg - 32 + rrb) % rotatingSize;
                 return 32 + offset;
             }
@@ -6452,8 +6522,7 @@ bool IA64ISAPlugin::checkPredicate(size_t predicateReg) const {
         throw std::out_of_range("Predicate register out of range");
     }
     
-    size_t physical = applyRegisterRotation(predicateReg, 'P');
-    return state_.getCPUState().GetPR(physical);
+    return state_.getCPUState().GetPR(predicateReg);
 }
 
 void IA64ISAPlugin::servicePendingInterrupt(IMemory& memory) {

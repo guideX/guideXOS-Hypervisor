@@ -2210,6 +2210,146 @@ void test_ia64_unknown_slot_formatter() {
     std::cout << "  ? IA-64 unknown-slot formatter passed" << std::endl;
 }
 
+void test_ia64_br_ctop_state_machine() {
+    std::cout << "Testing IA-64 br.ctop state machine..." << std::endl;
+
+    InstructionDecoder decoder;
+    InstructionEx ctop = decoder.DecodeSlot(0x95ffffe1c0ULL,
+                                            UnitType::B_UNIT,
+                                            0x28290);
+    assert_true("Authentic br.ctop should decode",
+                ctop.GetType() == InstructionType::BR_CTOP);
+    assert_equal("Authentic br.ctop must be unpredicated", 0, ctop.GetPredicate());
+    assert_equal("Authentic br.ctop target", 0x28280, ctop.GetBranchTarget());
+    assert_string("Authentic br.ctop disassembly",
+                  "br.ctop 0x28280",
+                  ctop.GetDisassembly());
+
+    CPUState cpu;
+    Memory memory(4096);
+    cpu.SetCFM(0x111a3ULL);
+
+    // Prolog/kernel phase: LC is decremented, EC is preserved, PR63 is
+    // written before one rotation, and the top branch is taken.
+    cpu.SetAR(65, 2);
+    cpu.SetAR(66, 4);
+    const ModuloLoopResult kernel = cpu.ExecuteBrCTop();
+    assert_true("br.ctop LC>0 should branch", kernel.branchTaken);
+    assert_true("br.ctop LC>0 should rotate", kernel.rotated);
+    assert_equal("br.ctop LC>0 decrements LC", 1, cpu.GetAR(65));
+    assert_equal("br.ctop LC>0 preserves EC", 4, cpu.GetAR(66));
+    assert_equal("br.ctop LC>0 decrements RRB.GR", 31, cpu.GetRRB_GR());
+    assert_equal("br.ctop LC>0 decrements RRB.FR", 95, cpu.GetRRB_FR());
+    assert_equal("br.ctop LC>0 decrements RRB.PR", 47, cpu.GetRRB_PR());
+    assert_true("br.ctop PR63 physical bit is set", cpu.GetPRPhysical(63));
+    assert_true("br.ctop rotation exposes PR63 as logical PR16",
+                cpu.GetPR(16) == cpu.GetPRPhysical(63));
+
+    // First epilog phase: EC is decremented and the top branch remains taken.
+    cpu.SetAR(65, 0);
+    cpu.SetAR(66, 3);
+    const ModuloLoopResult epilog = cpu.ExecuteBrCTop();
+    assert_true("br.ctop EC>1 should branch", epilog.branchTaken);
+    assert_true("br.ctop EC>1 should rotate", epilog.rotated);
+    assert_equal("br.ctop EC>1 leaves LC zero", 0, cpu.GetAR(65));
+    assert_equal("br.ctop EC>1 decrements EC", 2, cpu.GetAR(66));
+
+    // Final epilog stage: EC reaches zero, the final stage rotates, and the
+    // top branch falls through.
+    cpu.SetAR(66, 1);
+    const uint64_t cfmBeforeFinal = cpu.GetCFM();
+    const ModuloLoopResult finalStage = cpu.ExecuteBrCTop();
+    assert_true("br.ctop EC==1 should fall through", !finalStage.branchTaken);
+    assert_true("br.ctop EC==1 should rotate", finalStage.rotated);
+    assert_equal("br.ctop EC==1 decrements EC to zero", 0, cpu.GetAR(66));
+    assert_true("br.ctop EC==1 changes RRBs", cpu.GetCFM() != cfmBeforeFinal);
+
+    // Fully drained: PR63 is cleared but LC, EC, and all RRBs remain stable.
+    const uint64_t cfmBeforeDrained = cpu.GetCFM();
+    const ModuloLoopResult drained = cpu.ExecuteBrCTop();
+    assert_true("br.ctop LC=EC=0 should fall through", !drained.branchTaken);
+    assert_true("br.ctop LC=EC=0 should not rotate", !drained.rotated);
+    assert_equal("br.ctop drained LC remains zero", 0, cpu.GetAR(65));
+    assert_equal("br.ctop drained EC remains zero", 0, cpu.GetAR(66));
+    assert_equal("br.ctop drained CFM remains stable", cfmBeforeDrained, cpu.GetCFM());
+
+    // br.cexit has the same LC/EC/rotation state transition but the opposite
+    // branch sense: it exits on the drained phases and falls through while a
+    // kernel or epilog stage still has work to execute.
+    CPUState cexitCpu;
+    cexitCpu.SetCFM(0x111a3ULL);
+    cexitCpu.SetAR(65, 1);
+    cexitCpu.SetAR(66, 2);
+    const ModuloLoopResult cexitKernel = cexitCpu.ExecuteBrCExit();
+    assert_true("br.cexit LC>0 should fall through", !cexitKernel.branchTaken);
+    assert_equal("br.cexit LC>0 decrements LC", 0, cexitCpu.GetAR(65));
+    assert_equal("br.cexit LC>0 preserves EC", 2, cexitCpu.GetAR(66));
+    cexitCpu.SetAR(66, 1);
+    const ModuloLoopResult cexitFinal = cexitCpu.ExecuteBrCExit();
+    assert_true("br.cexit EC==1 should branch", cexitFinal.branchTaken);
+    assert_equal("br.cexit EC==1 drains EC", 0, cexitCpu.GetAR(66));
+    const ModuloLoopResult cexitDrained = cexitCpu.ExecuteBrCExit();
+    assert_true("br.cexit LC=EC=0 should branch", cexitDrained.branchTaken);
+    assert_true("br.cexit drained stage should not rotate", !cexitDrained.rotated);
+
+    std::cout << "  ? IA-64 br.ctop state machine passed" << std::endl;
+}
+
+void test_ia64_rotating_register_mapping() {
+    std::cout << "Testing IA-64 rotating register mapping..." << std::endl;
+
+    CPUState cpu;
+    cpu.SetCFM(0x111a3ULL); // 32 rotating GRs, all RRBs initially zero.
+    for (size_t i = 0; i < 32; ++i) {
+        cpu.SetGRPhysical(32 + i, 0x1000 + i);
+    }
+    for (size_t i = 0; i < 48; ++i) {
+        cpu.SetPRPhysical(16 + i, (i & 1) != 0);
+    }
+    for (size_t i = 0; i < 96; ++i) {
+        uint8_t value[16] = {};
+        value[0] = static_cast<uint8_t>(i);
+        cpu.SetFRPhysical(32 + i, value);
+    }
+    cpu.SetGR(31, 0x3131);
+    cpu.SetGRPhysical(64, 0x6464);
+
+    assert_equal("logical GR32 initially maps to physical GR32",
+                 0x1000, cpu.GetGR(32));
+    assert_true("logical PR17 initially maps to physical PR17",
+                cpu.GetPR(17));
+    uint8_t initialFR[16] = {};
+    cpu.GetFR(32, initialFR);
+    assert_equal("logical FR32 initially maps to physical FR32", 0, initialFR[0]);
+
+    cpu.RotateRegisters();
+    assert_equal("first rotation sets RRB.PR to 47", 47, cpu.GetRRB_PR());
+    assert_true("physical PR63 retains its patterned value", cpu.GetPRPhysical(63));
+    assert_equal("rotated logical GR32 maps through RRB.GR",
+                 0x101f, cpu.GetGR(32));
+    assert_equal("GR outside SOR remains static", 0x6464, cpu.GetGR(64));
+    assert_equal("static GR31 remains static", 0x3131, cpu.GetGR(31));
+    assert_true("rotated logical PR16 maps through RRB.PR", cpu.GetPR(16));
+    uint8_t rotatedFR[16] = {};
+    cpu.GetFR(32, rotatedFR);
+    assert_equal("rotated logical FR32 wraps to physical FR127", 95, rotatedFR[0]);
+
+    for (size_t i = 0; i < 31; ++i) {
+        cpu.RotateRegisters();
+    }
+    assert_equal("RRB.GR wraps after the configured GR region", 0, cpu.GetRRB_GR());
+    assert_equal("RRB.FR tracks its independent 96-register phase", 64, cpu.GetRRB_FR());
+    assert_equal("RRB.PR wraps after 48 rotations", 16, cpu.GetRRB_PR());
+    for (size_t i = 0; i < 64; ++i) {
+        cpu.RotateRegisters();
+    }
+    assert_equal("RRB.FR wraps after 96 rotations", 0, cpu.GetRRB_FR());
+    assert_equal("RRB.PR wraps after 48 rotations", 0, cpu.GetRRB_PR());
+    assert_true("PR0 remains hardwired true", cpu.GetPR(0));
+
+    std::cout << "  ? IA-64 rotating register mapping passed" << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "IA-64 Instruction Set Tests" << std::endl;
@@ -2243,6 +2383,8 @@ int main() {
         test_cmp4_instructions();
         test_ia64_unsigned_fixed_truncate_modulus_sequence();
         test_ia64_unknown_slot_formatter();
+        test_ia64_br_ctop_state_machine();
+        test_ia64_rotating_register_mapping();
         
         std::cout << std::endl;
         std::cout << "========================================" << std::endl;

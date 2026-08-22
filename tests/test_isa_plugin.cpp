@@ -2455,10 +2455,13 @@ void testIA64MoveToRotatingPredicateDecode() {
     cpu.SetPR(18, true);
     cpu.SetPR(63, true);
     mov_pr_rot.Execute(cpu, memory);
-    assert(cpu.GetPR(16));
+    // mov pr.rot writes the unrotated PR16-PR63 view.  With RRB.PR=1,
+    // logical PR16 names physical PR17 and logical PR63 names physical PR16.
+    assert(cpu.GetPRUnrotated(16));
+    assert(!cpu.GetPR(16));
     assert(!cpu.GetPR(17));
     assert(!cpu.GetPR(18));
-    assert(!cpu.GetPR(63));
+    assert(cpu.GetPR(63));
 
     InstructionEx f_nop = decoder.DecodeSlot(0x8000000ULL, UnitType::F_UNIT, 0x28070);
     assert(f_nop.GetType() == InstructionType::NOP);

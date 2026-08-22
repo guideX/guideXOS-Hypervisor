@@ -959,7 +959,11 @@ static const char* CompareCompleterSuffix(CompareCompleter completer) {
 
 void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate) const {
     // Check qualifying predicate
-    if (!ignorePredicate && !CheckPredicate(cpu, predicate_)) {
+    const bool isCountedLoopBranch =
+        type_ == InstructionType::BR_CLOOP ||
+        type_ == InstructionType::BR_CTOP ||
+        type_ == InstructionType::BR_CEXIT;
+    if (!ignorePredicate && !isCountedLoopBranch && !CheckPredicate(cpu, predicate_)) {
         if (compareCompleter_ == CompareCompleter::UNC && IsCompareInstruction(type_)) {
             cpu.SetPR(dst_, false);
             cpu.SetPR(src3_, false);
@@ -1133,7 +1137,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 uint64_t value = 1;
                 for (uint8_t i = 1; i < 64; ++i) {
-                    if (cpu.GetPR(i)) {
+                    if (cpu.GetPRUnrotated(i)) {
                         value |= (1ULL << i);
                     }
                 }
@@ -1151,7 +1155,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 const uint64_t mask = hasImmediate_ ? immediate_ : ~0ULL;
                 for (uint8_t i = 1; i < 64; ++i) {
                     if ((mask >> i) & 0x1ULL) {
-                        cpu.SetPR(i, ((value >> i) & 0x1ULL) != 0);
+                        cpu.SetPRUnrotated(i, ((value >> i) & 0x1ULL) != 0);
                     }
                 }
             }
@@ -1161,7 +1165,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 const uint64_t value = immediate_;
                 for (uint8_t i = 16; i < 64; ++i) {
-                    cpu.SetPR(i, ((value >> i) & 0x1ULL) != 0);
+                    cpu.SetPRUnrotated(i, ((value >> i) & 0x1ULL) != 0);
                 }
             }
             break;
@@ -1723,6 +1727,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             if (cpu.GetAR(65) != 0) {
                 cpu.SetAR(65, cpu.GetAR(65) - 1);
             }
+            break;
+
+        case InstructionType::BR_CTOP:
+            cpu.ExecuteBrCTop();
+            break;
+
+        case InstructionType::BR_CEXIT:
+            cpu.ExecuteBrCExit();
             break;
             
         // ===== REGISTER STACK OPERATIONS =====
@@ -2325,6 +2337,20 @@ std::string InstructionEx::GetDisassembly() const {
                 oss << "br.cloop 0x" << std::hex << branchTarget_ << std::dec;
             } else {
                 oss << "br.cloop";
+            }
+            break;
+
+        case InstructionType::BR_CTOP:
+            oss << "br.ctop";
+            if (hasBranchTarget_) {
+                oss << " 0x" << std::hex << branchTarget_ << std::dec;
+            }
+            break;
+
+        case InstructionType::BR_CEXIT:
+            oss << "br.cexit";
+            if (hasBranchTarget_) {
+                oss << " 0x" << std::hex << branchTarget_ << std::dec;
             }
             break;
             

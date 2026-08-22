@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <array>
+#include <cstddef>
+#include <stdexcept>
 #include <string>
 
 namespace ia64 {
@@ -70,7 +72,8 @@ struct RSEState {
  * CPUState - IA-64 Architectural State
  * 
  * This class encapsulates all architectural registers and state for the IA-64 CPU.
- * It provides low-level access to physical registers without handling rotation.
+ * Register access uses the architectural logical register numbers.  The raw
+ * physical accessors below are reserved for state persistence and diagnostics.
  * 
  * Register Rotation Model:
  * ========================
@@ -89,8 +92,24 @@ struct RSEState {
  * - Zero-overhead procedure calls (alloc instruction rotates the frame)
  * - Software-pipelined loops (br.ctop instruction rotates predicates/registers)
  * 
- * Note: The CPU class handles rotation; CPUState just stores physical registers.
+ * The backing arrays remain physical registers; the CFM RRB fields provide the
+ * logical-to-physical mapping used by the architectural accessors.
  */
+struct ModuloLoopResult {
+    uint64_t lcBefore = 0;
+    uint64_t lcAfter = 0;
+    uint64_t ecBefore = 0;
+    uint64_t ecAfter = 0;
+    uint64_t cfmBefore = 0;
+    uint64_t cfmAfter = 0;
+    bool pr63Before = false;
+    bool pr63After = false;
+    uint64_t prMaskBefore = 0;
+    uint64_t prMaskAfter = 0;
+    bool branchTaken = false;
+    bool rotated = false;
+};
+
 class CPUState {
 public:
     CPUState();
@@ -102,13 +121,28 @@ public:
     bool GetGRNaT(size_t index) const;
     void SetGRNaT(size_t index, bool value);
 
+    // Raw physical register access used by serialization and diagnostics.
+    uint64_t GetGRPhysical(size_t index) const;
+    void SetGRPhysical(size_t index, uint64_t value);
+    bool GetGRNaTPhysical(size_t index) const;
+    void SetGRNaTPhysical(size_t index, bool value);
+
     // Floating-point register access (80-bit, stored as 16 bytes for alignment)
     void GetFR(size_t index, uint8_t* out) const;
     void SetFR(size_t index, const uint8_t* value);
+    void GetFRPhysical(size_t index, uint8_t* out) const;
+    void SetFRPhysical(size_t index, const uint8_t* value);
 
     // Predicate register access (1-bit each, stored as bool)
     bool GetPR(size_t index) const;
     void SetPR(size_t index, bool value);
+
+    // mov pr and mov pr.rot use the unrotated predicate view, regardless of
+    // the current CFM.RRB.PR value.
+    bool GetPRUnrotated(size_t index) const;
+    void SetPRUnrotated(size_t index, bool value);
+    bool GetPRPhysical(size_t index) const;
+    void SetPRPhysical(size_t index, bool value);
 
     // Branch register access (64-bit)
     uint64_t GetBR(size_t index) const;
@@ -160,6 +194,12 @@ public:
     uint8_t GetRRB_FR() const { return (cfm_ >> 25) & 0x7F; }
     uint8_t GetRRB_PR() const { return (cfm_ >> 32) & 0x3F; }
 
+    // Advance one modulo-scheduled-loop stage.  br.ctop and br.cexit share
+    // the LC/EC/PR63/RRB state transition; they differ only in branch sense.
+    ModuloLoopResult ExecuteBrCTop();
+    ModuloLoopResult ExecuteBrCExit();
+    void RotateRegisters();
+
     // Processor status register (PSR)
     uint64_t GetPSR() const { return psr_; }
     void SetPSR(uint64_t value) { psr_ = value; }
@@ -173,6 +213,10 @@ public:
     void Dump() const;
 
 private:
+    size_t MapGR(size_t logical) const;
+    size_t MapFR(size_t logical) const;
+    size_t MapPR(size_t logical) const;
+
     // General registers (64-bit)
     std::array<uint64_t, NUM_GENERAL_REGISTERS> gr_;
     std::array<bool, NUM_GENERAL_REGISTERS> gr_nat_;

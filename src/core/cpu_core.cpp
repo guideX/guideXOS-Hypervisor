@@ -345,9 +345,14 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         
         // Check for branch instructions - handle before normal execution
         bool isBranch = false;
+        bool moduloLoopStateExecuted = false;
         uint64_t branchTarget = 0;
         const uint8_t predicate = instr.GetPredicate();
-        const bool predicateTrue = (predicate == 0) || state_.GetPR(predicate);
+        const bool isModuloLoopBranch =
+            instr.GetType() == InstructionType::BR_CTOP ||
+            instr.GetType() == InstructionType::BR_CEXIT;
+        const bool predicateTrue = isModuloLoopBranch ||
+                                   (predicate == 0) || state_.GetPR(predicate);
         const uint64_t currentIP = state_.GetIP();
         const uint64_t branchTargetValue = instr.HasBranchTarget() ? instr.GetBranchTarget() : 0;
         const bool callLooksLikeCountedLoop =
@@ -396,6 +401,28 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                     isBranch = true;
                 }
                 break;
+
+            case InstructionType::BR_CTOP:
+                {
+                    const ModuloLoopResult result = state_.ExecuteBrCTop();
+                    moduloLoopStateExecuted = true;
+                    if (result.branchTaken && instr.HasBranchTarget()) {
+                        branchTarget = instr.GetBranchTarget();
+                        isBranch = true;
+                    }
+                }
+                break;
+
+            case InstructionType::BR_CEXIT:
+                {
+                    const ModuloLoopResult result = state_.ExecuteBrCExit();
+                    moduloLoopStateExecuted = true;
+                    if (result.branchTaken && instr.HasBranchTarget()) {
+                        branchTarget = instr.GetBranchTarget();
+                        isBranch = true;
+                    }
+                }
+                break;
                 
             default:
                 break;
@@ -404,7 +431,10 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         // Normal instruction execution
         // InstructionEx already has Execute() method that handles execution
         // It also handles predication internally if needed
-        if (callLooksLikeCountedLoop) {
+        if (moduloLoopStateExecuted) {
+            // br.ctop/br.cexit update LC, EC, PR63, and the RRBs while the
+            // branch decision is being formed above.
+        } else if (callLooksLikeCountedLoop) {
             if (predicateTrue && state_.GetAR(65) != 0) {
                 state_.SetAR(65, state_.GetAR(65) - 1);
             }
@@ -576,7 +606,10 @@ size_t CPU::applyRegisterRotation(size_t logicalReg, char regType) const {
             } else {
                 // Apply GR rotation base (extracted from CFM)
                 uint8_t rrb = getGRRotationBase();
-                size_t rotatingSize = 96;  // GR32-GR127
+                size_t rotatingSize = static_cast<size_t>(state_.GetSOR()) * 8;
+                if (rotatingSize == 0 || logicalReg >= 32 + rotatingSize) {
+                    return logicalReg;
+                }
                 size_t offset = (logicalReg - 32 + rrb) % rotatingSize;
                 return 32 + offset;
             }
@@ -611,11 +644,8 @@ bool CPU::checkPredicate(size_t predicateReg) const {
         throw std::out_of_range("Predicate register out of range");
     }
     
-    // Apply rotation to predicate register number
-    size_t physical = applyRegisterRotation(predicateReg, 'P');
-    
-    // Return the predicate value
-    return state_.GetPR(physical);
+    // CPUState owns the architectural logical-to-physical mapping.
+    return state_.GetPR(predicateReg);
 }
 
 void CPU::queueInterrupt(uint8_t vector) {
@@ -696,15 +726,12 @@ uint64_t CPU::readGR(size_t index) const {
         }
     }
 
-    // Apply rotation for stacked registers
-    size_t physical = applyRegisterRotation(index, 'G');
-    
     // Profile register read
     if (isProfilingEnabled()) {
-        const_cast<Profiler*>(profiler_)->recordGeneralRegisterRead(physical);
+        const_cast<Profiler*>(profiler_)->recordGeneralRegisterRead(index);
     }
     
-    return state_.GetGR(physical);
+    return state_.GetGR(index);
 }
 
 void CPU::writeGR(size_t index, uint64_t value) {
@@ -715,14 +742,12 @@ void CPU::writeGR(size_t index, uint64_t value) {
         }
     }
 
-    size_t physical = applyRegisterRotation(index, 'G');
-    
     // Profile register write
     if (isProfilingEnabled()) {
-        profiler_->recordGeneralRegisterWrite(physical);
+        profiler_->recordGeneralRegisterWrite(index);
     }
     
-    state_.SetGR(physical, value);
+    state_.SetGR(index, value);
 }
 
 bool CPU::readPR(size_t index) const {
@@ -732,14 +757,12 @@ bool CPU::readPR(size_t index) const {
         }
     }
 
-    size_t physical = applyRegisterRotation(index, 'P');
-    
     // Profile register read
     if (isProfilingEnabled()) {
-        const_cast<Profiler*>(profiler_)->recordPredicateRegisterRead(physical);
+        const_cast<Profiler*>(profiler_)->recordPredicateRegisterRead(index);
     }
     
-    return state_.GetPR(physical);
+    return state_.GetPR(index);
 }
 
 void CPU::writePR(size_t index, bool value) {
@@ -750,14 +773,12 @@ void CPU::writePR(size_t index, bool value) {
         }
     }
 
-    size_t physical = applyRegisterRotation(index, 'P');
-    
     // Profile register write
     if (isProfilingEnabled()) {
-        profiler_->recordPredicateRegisterWrite(physical);
+        profiler_->recordPredicateRegisterWrite(index);
     }
     
-    state_.SetPR(physical, value);
+    state_.SetPR(index, value);
 }
 
 uint64_t CPU::readBR(size_t index) const {

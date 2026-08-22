@@ -118,8 +118,6 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
     
 // BTypeDecoder::toInstruction implementation
 bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& instr) {
-        instr.SetPredicate(fmt.qp);
-        
         // Determine instruction type based on branch type
         InstructionType type;
         
@@ -165,7 +163,14 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
         }
         
         instr = InstructionEx(type, UnitType::B_UNIT);
-        instr.SetPredicate(fmt.qp);
+        // Counted and modulo-scheduled branches are architecturally
+        // unpredicated.  Binutils emits no qualifying predicate for them;
+        // keep any raw qp bits from becoming an emulator-side qualifier.
+        const bool unpredicatedCountedBranch =
+            fmt.type == formats::BFormat::BranchType::CLOOP ||
+            fmt.type == formats::BFormat::BranchType::CTOP ||
+            fmt.type == formats::BFormat::BranchType::CEXIT;
+        instr.SetPredicate(unpredicatedCountedBranch ? 0 : fmt.qp);
         
         // Set operands based on branch type
         if (fmt.type == formats::BFormat::BranchType::RET) {
