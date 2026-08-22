@@ -488,6 +488,59 @@ void resetEfiHandoffLayoutGlobals() {
     applyEfiHandoffLayoutBase(EFI_DEFAULT_HANDOFF_REGION_BASE);
 }
 
+enum class EfiBootServiceKind {
+    Unknown,
+    RaiseTPL,
+    RestoreTPL,
+    AllocatePages,
+    FreePages,
+    GetMemoryMap,
+    AllocatePool,
+    FreePool,
+    InstallProtocolInterface,
+    CopyMem,
+};
+
+bool isEfiBootServicesFieldAddress(uint64_t address) {
+    return address >= EFI_BOOT_SERVICES_ADDR + 0x18ULL &&
+           address < EFI_BOOT_SERVICES_ADDR + 0x180ULL &&
+           ((address - EFI_BOOT_SERVICES_ADDR) & 7ULL) == 0;
+}
+
+EfiBootServiceKind efiBootServiceKindForField(uint64_t address) {
+    if (!isEfiBootServicesFieldAddress(address)) {
+        return EfiBootServiceKind::Unknown;
+    }
+    switch (address - EFI_BOOT_SERVICES_ADDR) {
+        case 0x18: return EfiBootServiceKind::RaiseTPL;
+        case 0x20: return EfiBootServiceKind::RestoreTPL;
+        case 0x28: return EfiBootServiceKind::AllocatePages;
+        case 0x30: return EfiBootServiceKind::FreePages;
+        case 0x38: return EfiBootServiceKind::GetMemoryMap;
+        case 0x40: return EfiBootServiceKind::AllocatePool;
+        case 0x48: return EfiBootServiceKind::FreePool;
+        case 0x80: return EfiBootServiceKind::InstallProtocolInterface;
+        case 0x160: return EfiBootServiceKind::CopyMem;
+        default: return EfiBootServiceKind::Unknown;
+    }
+}
+
+const char* efiBootServiceKindName(EfiBootServiceKind kind) {
+    switch (kind) {
+        case EfiBootServiceKind::RaiseTPL: return "RaiseTPL";
+        case EfiBootServiceKind::RestoreTPL: return "RestoreTPL";
+        case EfiBootServiceKind::AllocatePages: return "AllocatePages";
+        case EfiBootServiceKind::FreePages: return "FreePages";
+        case EfiBootServiceKind::GetMemoryMap: return "GetMemoryMap";
+        case EfiBootServiceKind::AllocatePool: return "AllocatePool";
+        case EfiBootServiceKind::FreePool: return "FreePool";
+        case EfiBootServiceKind::InstallProtocolInterface:
+            return "InstallProtocolInterface";
+        case EfiBootServiceKind::CopyMem: return "CopyMem";
+        default: return nullptr;
+    }
+}
+
 std::string describeEfiTableSlot(uint64_t address) {
     static constexpr EfiSlotName runtimeServices[] = {
         {0x18, "GetTime"}, {0x20, "SetTime"}, {0x28, "GetWakeupTime"},
@@ -3792,8 +3845,27 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         branchTarget == EFI_UNSUPPORTED_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         const uint64_t tableSlotCandidate = state_.getCPUState().GetGR(37);
+                        // A synthetic handoff may reuse one generic
+                        // unsupported plabel for several Boot Services
+                        // fields.  The authentic IA-64 ABI does not pass the
+                        // table field as an argument: GR37 is only the
+                        // caller's sixth output argument.  Prefer the field
+                        // address observed when the descriptor was loaded,
+                        // and retain the old explicit field value as a test
+                        // and legacy-call fallback.
+                        const uint64_t loadedFieldCandidate =
+                            isEfiBootServicesFieldAddress(lastEfiDescriptorFieldAddress_)
+                                ? lastEfiDescriptorFieldAddress_
+                                : 0;
+                        const uint64_t dispatchField = loadedFieldCandidate != 0
+                            ? loadedFieldCandidate
+                            : (isEfiBootServicesFieldAddress(tableSlotCandidate)
+                                   ? tableSlotCandidate
+                                   : 0);
+                        const EfiBootServiceKind dispatchKind =
+                            efiBootServiceKindForField(dispatchField);
                         const bool allocatePagesSlot =
-                            tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x28ULL;
+                            dispatchKind == EfiBootServiceKind::AllocatePages;
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         if (allocatePagesSlot) {
@@ -3801,7 +3873,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             state_.getCPUState().SetGR(8, status);
                             std::cout << "[EFI-STUB] firmware service target 0x"
                                       << std::hex << originalBranchTarget
-                                      << " slot=0x" << tableSlotCandidate
+                                      << " slot=0x" << dispatchField
                                       << " [BootServices.AllocatePages] -> status=0x"
                                       << status << std::dec << std::endl;
                             logEfiServiceCall(memory, "BootServices.AllocatePages", currentIP,
@@ -3809,16 +3881,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                               status);
                         } else {
                             const bool freePagesSlot =
-                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL;
+                                dispatchKind == EfiBootServiceKind::FreePages;
                             const bool raiseTplSlot =
-                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x18ULL ||
-                                lastEfiDescriptorFieldAddress_ == EFI_BOOT_SERVICES_ADDR + 0x18ULL;
+                                dispatchKind == EfiBootServiceKind::RaiseTPL;
                             const bool restoreTplSlot =
-                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x20ULL ||
-                                lastEfiDescriptorFieldAddress_ == EFI_BOOT_SERVICES_ADDR + 0x20ULL ||
+                                dispatchKind == EfiBootServiceKind::RestoreTPL ||
                                 currentIP == 0x2E620ULL;
                             const bool installProtocolSlot =
-                                tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x80ULL ||
+                                dispatchKind == EfiBootServiceKind::InstallProtocolInterface ||
                                 currentIP == 0x2E480ULL;
                             if (raiseTplSlot) {
                                 const uint64_t newTpl =
@@ -3851,23 +3921,26 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                           << std::dec << std::endl;
                             } else {
                                 ++efiGenericUnsupportedCalls_;
-                                if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x30ULL) {
+                                if (dispatchKind == EfiBootServiceKind::FreePages) {
                                     ++efiFreePagesCalls_;
                                 }
-                                if (tableSlotCandidate == EFI_BOOT_SERVICES_ADDR + 0x160ULL) {
+                                if (dispatchKind == EfiBootServiceKind::CopyMem) {
                                     ++efiCopyMemCalls_;
                                 }
                                 state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
                             }
                             if (!raiseTplSlot && !restoreTplSlot && !installProtocolSlot) {
+                                const char* serviceName =
+                                    efiBootServiceKindName(dispatchKind);
+                                const std::string serviceLogName = serviceName != nullptr
+                                    ? std::string("BootServices.") + serviceName + " (unsupported)"
+                                    : "EFI.Unsupported";
                                 std::cout << "[EFI-STUB] unsupported firmware service target 0x"
                                           << std::hex << originalBranchTarget
-                                          << " slot=0x" << tableSlotCandidate
+                                          << " slot=0x" << dispatchField
                                           << (freePagesSlot ? " [BootServices.FreePages]" : "")
                                           << " -> EFI_UNSUPPORTED" << std::dec << std::endl;
-                                logEfiServiceCall(memory,
-                                                  freePagesSlot ? "BootServices.FreePages (unsupported)"
-                                                                : "EFI.Unsupported",
+                                logEfiServiceCall(memory, serviceLogName.c_str(),
                                                   currentIP,
                                                   EFI_UNSUPPORTED_STUB_DESC_ADDR, originalBranchTarget,
                                                   EFI_STATUS_UNSUPPORTED);

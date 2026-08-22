@@ -359,6 +359,62 @@ public:
     }
 };
 
+class FakeEfiPlabelFieldCallDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+        if (bundleIP == 0x5000ULL) {
+            InstructionEx loadField(InstructionType::LD8, UnitType::M_UNIT);
+            loadField.SetOperands(14, 40, 0);
+            loadField.SetImmediate(0);
+            loadField.SetRawBits(0x5000ULL);
+            bundle.instructions.push_back(loadField);
+        } else if (bundleIP == 0x5010ULL) {
+            InstructionEx loadCode(InstructionType::LD8, UnitType::M_UNIT);
+            loadCode.SetOperands(15, 14, 0);
+            loadCode.SetImmediate(0);
+            loadCode.SetRawBits(0x5010ULL);
+            bundle.instructions.push_back(loadCode);
+        } else if (bundleIP == 0x5020ULL) {
+            InstructionEx moveToBranch(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+            moveToBranch.SetOperands(6, 15, 0);
+            moveToBranch.SetRawBits(0x5020ULL);
+            bundle.instructions.push_back(moveToBranch);
+        } else if (bundleIP == 0x5030ULL) {
+            InstructionEx loadGp(InstructionType::LD8, UnitType::M_UNIT);
+            loadGp.SetOperands(1, 14, 0);
+            loadGp.SetImmediate(8);
+            loadGp.SetRawBits(0x5030ULL);
+            bundle.instructions.push_back(loadGp);
+        } else {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 6, 0);
+            call.SetRawBits(0x5040ULL);
+            bundle.instructions.push_back(call);
+        }
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeEfiProtocolRegistryDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -4032,6 +4088,110 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
 }
 
+void testIA64PluginEfiBootServicesPlabelDispatch() {
+    std::cout << "Testing IA-64 EFI Boot Services table -> plabel -> stub dispatch...\n";
+
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t bootServices = handoffBase + 0x800ULL;
+    constexpr uint64_t unsupportedCode = handoffBase + 0xf00ULL;
+    constexpr uint64_t unsupportedDescriptor = handoffBase + 0xf40ULL;
+    constexpr uint64_t getMemoryMapCode = handoffBase + 0x1800ULL;
+    constexpr uint64_t getMemoryMapDescriptor = handoffBase + 0x1840ULL;
+    constexpr uint64_t allocatePoolCode = handoffBase + 0xe00ULL;
+    constexpr uint64_t allocatePoolDescriptor = handoffBase + 0xe40ULL;
+    constexpr uint64_t successCode = handoffBase + 0xf80ULL;
+    constexpr uint64_t successDescriptor = handoffBase + 0xfc0ULL;
+    constexpr uint64_t descriptorGp = 0x238000ULL;
+    constexpr uint64_t efiSuccess = 0ULL;
+    constexpr uint64_t efiUnsupported = 0x8000000000000003ULL;
+
+    SizedSparseMemory memory(guestMemorySize);
+    uint8_t zeroBundle[16] = {};
+    memory.Write(0x5000, zeroBundle, sizeof(zeroBundle));
+    memory.Write(0x5010, zeroBundle, sizeof(zeroBundle));
+    memory.Write(0x5020, zeroBundle, sizeof(zeroBundle));
+    memory.Write(0x5030, zeroBundle, sizeof(zeroBundle));
+    memory.Write(0x5040, zeroBundle, sizeof(zeroBundle));
+    uint8_t syntheticStub[16] = {1};
+    memory.Write(unsupportedCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(getMemoryMapCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(allocatePoolCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(successCode, syntheticStub, sizeof(syntheticStub));
+
+    FakeEfiPlabelFieldCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    const auto writeDescriptor = [&](uint64_t descriptor, uint64_t code) {
+        memory.write<uint64_t>(descriptor, code);
+        memory.write<uint64_t>(descriptor + 8, descriptorGp);
+    };
+    writeDescriptor(unsupportedDescriptor, unsupportedCode);
+    writeDescriptor(getMemoryMapDescriptor, getMemoryMapCode);
+    writeDescriptor(allocatePoolDescriptor, allocatePoolCode);
+    writeDescriptor(successDescriptor, successCode);
+
+    const auto invoke = [&](uint64_t fieldOffset,
+                            uint64_t descriptor,
+                            uint64_t expectedCode,
+                            uint64_t arg0,
+                            uint64_t arg1,
+                            uint64_t arg2,
+                            uint64_t arg3,
+                            uint64_t arg4,
+                            uint64_t arg5) {
+        const uint64_t field = bootServices + fieldOffset;
+        memory.write<uint64_t>(field, descriptor);
+        plugin.getCPUState().SetIP(0x5000);
+        plugin.getCPUState().SetCFM(2);
+        plugin.getCPUState().SetGR(40, field);
+        plugin.getCPUState().SetGR(32, arg0);
+        plugin.getCPUState().SetGR(33, arg1);
+        plugin.getCPUState().SetGR(34, arg2);
+        plugin.getCPUState().SetGR(35, arg3);
+        plugin.getCPUState().SetGR(36, arg4);
+        plugin.getCPUState().SetGR(37, arg5);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        for (size_t step = 0; step < 5; ++step) {
+            assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        }
+        assert(plugin.getCPUState().GetIP() == 0x5050);
+        assert(plugin.getCPUState().GetBR(0) == 0x5050);
+        assert(plugin.getCPUState().GetGR(1) == descriptorGp);
+        assert(memory.read<uint64_t>(field) == descriptor);
+        assert(memory.read<uint64_t>(descriptor) == expectedCode);
+        assert(memory.read<uint64_t>(descriptor + 8) == descriptorGp);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    memory.write<uint64_t>(0x6000, 0x02000000ULL);
+    assert(invoke(0x28, unsupportedDescriptor, unsupportedCode, 2, 2, 1, 0x6000, 0, 0) ==
+           efiSuccess);
+    assert(memory.read<uint64_t>(0x6000) == 0x02000000ULL);
+
+    assert(invoke(0x30, unsupportedDescriptor, unsupportedCode, 0x02000000ULL, 1, 0, 0, 0, 0) ==
+           efiUnsupported);
+
+    memory.write<uint64_t>(0x6100, 0x2000ULL);
+    memory.write<uint64_t>(0x6120, 0);
+    memory.write<uint64_t>(0x6130, 0);
+    memory.write<uint64_t>(0x6140, 0);
+    assert(invoke(0x38, getMemoryMapDescriptor, getMemoryMapCode, 0x6100, 0x7000, 0x6120,
+                  0x6130, 0x6140, 0) == efiSuccess);
+    assert(memory.read<uint64_t>(0x6130) == 40);
+    assert(memory.read<uint32_t>(0x6140) == 1);
+
+    assert(invoke(0x40, allocatePoolDescriptor, allocatePoolCode, 0, 0x20, 0x6200, 0, 0, 0) ==
+           efiSuccess);
+    assert(memory.read<uint64_t>(0x6200) != 0);
+
+    assert(invoke(0x48, successDescriptor, successCode, 0x1fe02000ULL, 0, 0, 0, 0, 0) ==
+           efiSuccess);
+
+    std::cout << "  ? AllocatePages, FreePages, GetMemoryMap, AllocatePool, and FreePool preserve "
+                 "the historical field offsets and dispatch through IA-64 [code, GP] plabels\n";
+}
+
 void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
     std::cout << "Testing IA-64 plugin AllocatePages firmware service...\n";
 
@@ -5013,6 +5173,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();
+        std::cout << "\n";
+
+        testIA64PluginEfiBootServicesPlabelDispatch();
         std::cout << "\n";
 
         testIA64PluginAllocatePagesUsesSharedEfiMemoryMap();
