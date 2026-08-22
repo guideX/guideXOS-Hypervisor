@@ -270,6 +270,17 @@ else()
     target_compile_options(test_new_instructions PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Historical GNU-EFI descriptor ABI and generic ELILO-style placement tests
+add_executable(test_efi_memory_map
+    tests/test_efi_memory_map.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_efi_memory_map PRIVATE /W4)
+else()
+    target_compile_options(test_efi_memory_map PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # RISC-V RV64I decoder smoke tests
 add_executable(test_riscv_decoder
     tests/test_riscv_decoder.cpp
@@ -558,6 +569,7 @@ add_dependencies(webui_example copy_web_files)
 enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
 add_test(NAME NewInstructionTests COMMAND test_new_instructions)
+add_test(NAME EfiMemoryMapTests COMMAND test_efi_memory_map)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)
@@ -594,4 +606,3 @@ else()
 endif()
 
 # Add to the test suite
-

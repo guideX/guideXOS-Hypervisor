@@ -57,7 +57,7 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
             case 0x0:   // Mixed I-type operations
                 return decodeMixedI(raw_instruction, x, x2, x3, x6, result);
                 
-            case 0x5:   // Deposit/extract operations
+            case 0x5: { // Deposit/extract operations
                 // I7 fixed-count SHL is encoded in the major-5 space as the
                 // architectural DEP.Z alias used by IA-64 assemblers.  Its
                 // count is the complement-position field (63 - cpos), while
@@ -65,8 +65,10 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                 // form must be recognized before the major-5 deposit/extract
                 // decoder, otherwise authentic ELILO instructions such as
                 // "shl r20=r19,32" are misread as EXTR.
+                const uint8_t major5_x2_field =
+                    formats::extractBits(raw_instruction, 28, 2);
                 if (formats::extractBits(raw_instruction, 27, 1) == 1 &&
-                    formats::extractBits(raw_instruction, 28, 2) == 3 &&
+                    (major5_x2_field == 1 || major5_x2_field == 3) &&
                     major5_x == 1 && major5_x2 == 1 &&
                     formats::extractBits(raw_instruction, 36, 1) == 0) {
                     result.opcode = 0x70; // SHL
@@ -79,6 +81,7 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                     return true;
                 }
                 return decodeDepositExtract(raw_instruction, major5_x, major5_x2, result);
+            }
                 
             case 0x7:   // Shift operations
                 return decodeShift(raw_instruction, x2, x6, result);

@@ -881,6 +881,34 @@ void test_latest_boot_log_blockers() {
                  0x1234567800000000ULL,
                  cpu.GetGR(20));
 
+    // Exact authentic Debian find_kernel_memory instruction at 0x98d0.
+    // Historical Binutils decodes this major-5 I7 form as
+    // "shl r10=r24,12".  Decoding it as EXTR makes the apparent
+    // conventional descriptor end look too small and causes ELILO to reject
+    // the descriptor even though the EFI map is valid.
+    InstructionEx shlMemoryMapEnd = decoder.DecodeSlot(0xa79b330280ULL,
+                                                        UnitType::I_UNIT,
+                                                        0x98d0);
+    assert_true("ELILO memory-map SHL should decode",
+                shlMemoryMapEnd.GetType() == InstructionType::SHL);
+    assert_equal("ELILO memory-map SHL destination", 10,
+                 shlMemoryMapEnd.GetDst());
+    assert_equal("ELILO memory-map SHL source", 24,
+                 shlMemoryMapEnd.GetSrc1());
+    assert_true("ELILO memory-map SHL should carry an immediate",
+                shlMemoryMapEnd.HasImmediate());
+    assert_equal("ELILO memory-map SHL count", 12,
+                 shlMemoryMapEnd.GetImmediate());
+    assert_string("ELILO memory-map SHL disassembly",
+                  "shl r10 = r24, 12",
+                  shlMemoryMapEnd.GetDisassembly());
+
+    cpu.SetGR(24, 0x17f00);
+    shlMemoryMapEnd.Execute(cpu, memory);
+    assert_equal("ELILO memory-map SHL should compute pages byte length",
+                 0x17f00000ULL,
+                 cpu.GetGR(10));
+
     // Exact authentic ELILO huft_build instruction at 0x21f00.  Historical
     // Binutils decodes this raw slot as "shr.u r14=r25,r23".  The encoded
     // source/count fields are reversed relative to SHL.
