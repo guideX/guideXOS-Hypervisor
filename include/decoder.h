@@ -172,6 +172,9 @@ enum class InstructionType {
     CHK_A_NC,   // Advanced load check, no clear
     CHK_A_CLR,  // Advanced load check, clear ALAT entry
     INVALA,     // Invalidate all ALAT entries
+    FC,         // Flush/invalidate one data-cache line
+    SYNC_I,     // Synchronize prior cache flushes with instruction fetch
+    SRLZ_I,     // Serialize the instruction stream
     FLUSHRS,    // Flush dirty register-stack state to the backing store
     
     // Branch operations (B-type)

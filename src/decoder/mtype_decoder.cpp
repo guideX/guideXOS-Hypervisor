@@ -55,6 +55,27 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         
         const uint8_t x6row = x6 >> 2;
 
+        // M28 fc is encoded with the architectural x6 field in bits 27:32.
+        // Its operand is r3 (bits 20:26); the r1/r2 fields are unused by this
+        // form.  Keep this exact match ahead of the major-1 alloc decoder so
+        // the live ELILO encoding 0x2182000000 is not mistaken for unknown.
+        const uint8_t m28_x6 = formats::extractBits(raw_instruction, 27, 6);
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x30) {
+            result.operation = formats::MFormat::MemOp::FC;
+            return true;
+        }
+
+        // M24 cache/instruction-stream ordering forms.  The architectural
+        // x6 field is 0x33 for sync.i and 0x31 for srlz.i.
+        if (major == 0x0 && x3 == 0x0 && m == 0 && m28_x6 == 0x33) {
+            result.operation = formats::MFormat::MemOp::SYNC_I;
+            return true;
+        }
+        if (major == 0x0 && x3 == 0x0 && m == 0 && m28_x6 == 0x31) {
+            result.operation = formats::MFormat::MemOp::SRLZ_I;
+            return true;
+        }
+
         // M0 invala is the predicatable complete-form ALAT invalidation.
         // Binutils describes its fixed encoding as x3=0, x4=0, x2=1, and
         // major=0.  The operand fields are unused by the complete form.
@@ -232,6 +253,22 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         else if (fmt.operation == formats::MFormat::MemOp::INVALA) {
             instr = InstructionEx(InstructionType::INVALA, UnitType::M_UNIT);
             // Unlike flushrs, the complete invala form is predicatable.
+            instr.SetPredicate(fmt.qp);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::FC) {
+            instr = InstructionEx(InstructionType::FC, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(0, fmt.r3, 0);  // fc r3
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::SYNC_I) {
+            instr = InstructionEx(InstructionType::SYNC_I, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::SRLZ_I) {
+            instr = InstructionEx(InstructionType::SRLZ_I, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             return true;
         }

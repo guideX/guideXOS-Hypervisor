@@ -112,6 +112,9 @@ struct MFormat {
         SETF,
         GETF,
         INVALA,
+        FC,
+        SYNC_I,
+        SRLZ_I,
         FLUSHRS
     } operation;
     

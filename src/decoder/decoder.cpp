@@ -1709,6 +1709,33 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // are changed by RSE operations and frame restoration, not by
             // invala itself.
             break;
+
+        case InstructionType::FC:
+            // IA-64 fc invalidates the cache line containing GR[r3], writing
+            // back a dirty line first.  guideXOS currently has one coherent
+            // backing-memory view and no emulated data/instruction caches or
+            // write buffers, so the cache hierarchy operation has no data
+            // mutation to perform.  Still validate the effective address
+            // through the existing MMU model: at CPL 0 the architecture skips
+            // access-right checks, while higher CPLs use one-byte read rights.
+            if (const auto* concreteMemory = dynamic_cast<const Memory*>(&memory)) {
+                const uint64_t address = cpu.GetGR(src1_);
+                concreteMemory->GetMMU().TranslateAddress(address);
+                const uint64_t cpl = (cpu.GetPSR() >> 32) & 0x3;
+                if (cpl != 0) {
+                    concreteMemory->GetMMU().CheckPermissionOrThrow(
+                        address, MemoryAccessType::READ);
+                }
+            }
+            break;
+
+        case InstructionType::SYNC_I:
+        case InstructionType::SRLZ_I:
+            // sync.i/srlz.i order the cache-coherency and instruction-stream
+            // effects that guideXOS models with the same coherent backing
+            // memory.  There is no separate cache or fetch stream state to
+            // mutate, so these serialization points are deliberate no-ops.
+            break;
             
         // ===== BRANCH OPERATIONS =====
             
@@ -2281,6 +2308,18 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::INVALA:
             oss << "invala";
+            break;
+
+        case InstructionType::FC:
+            oss << "fc r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::SYNC_I:
+            oss << "sync.i";
+            break;
+
+        case InstructionType::SRLZ_I:
+            oss << "srlz.i";
             break;
             
         case InstructionType::ST1:

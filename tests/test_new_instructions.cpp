@@ -510,6 +510,61 @@ void test_latest_boot_log_blockers() {
     CPUState cpu;
     Memory memory(1024 * 1024);
 
+    InstructionEx fc = decoder.DecodeSlot(0x2182000000ULL, UnitType::M_UNIT, 0x1e100);
+    assert_true("ELILO raw fc should decode", fc.GetType() == InstructionType::FC);
+    assert_equal("ELILO fc qualifying predicate", 0, fc.GetPredicate());
+    assert_equal("ELILO fc source register", 32, fc.GetSrc1());
+    assert_equal("ELILO fc has no destination register", 0, fc.GetDst());
+    assert_equal("ELILO fc has no second source register", 0, fc.GetSrc2());
+    assert_string("ELILO fc disassembly", "fc r32", fc.GetDisassembly());
+
+    cpu.SetAR(65, 0x1234);
+    cpu.SetAR(66, 0x5678);
+    cpu.SetCFM(0xabcde);
+    cpu.SetIP(0x1e100);
+    cpu.SetGR(32, 0x4006);
+    cpu.SetGR(20, 0x1122334455667788ULL);
+    fc.Execute(cpu, memory);
+    assert_equal("fc must preserve its address register", 0x4006, cpu.GetGR(32));
+    assert_equal("fc must preserve unrelated GR state", 0x1122334455667788ULL, cpu.GetGR(20));
+    assert_equal("fc must preserve ar.lc", 0x1234, cpu.GetAR(65));
+    assert_equal("fc must preserve ar.ec", 0x5678, cpu.GetAR(66));
+    assert_equal("fc must preserve CFM", 0xabcde, cpu.GetCFM());
+    assert_equal("fc must preserve IP", 0x1e100, cpu.GetIP());
+
+    InstructionEx falseFc = fc;
+    falseFc.SetPredicate(1);
+    cpu.SetPR(1, false);
+    cpu.SetGR(32, 0x5007);
+    falseFc.Execute(cpu, memory);
+    assert_equal("false-predicated fc must preserve its address register", 0x5007, cpu.GetGR(32));
+    cpu.SetPR(1, true);
+
+    CPUState userCpu;
+    Memory unmappedMemory(0x2000);
+    userCpu.SetPSR(3ULL << 32);
+    userCpu.SetGR(32, 0x1000);
+    unmappedMemory.GetMMU().ClearPageTable();
+    bool fcFaulted = false;
+    try {
+        fc.Execute(userCpu, unmappedMemory);
+    } catch (const std::exception&) {
+        fcFaulted = true;
+    }
+    assert_true("user-mode fc must validate its translated read address", fcFaulted);
+
+    InstructionEx syncI = decoder.DecodeSlot(0x198000000ULL, UnitType::M_UNIT, 0x1e120);
+    assert_true("ELILO raw sync.i should decode", syncI.GetType() == InstructionType::SYNC_I);
+    assert_equal("sync.i qualifying predicate", 0, syncI.GetPredicate());
+    assert_string("sync.i disassembly", "sync.i", syncI.GetDisassembly());
+    syncI.Execute(cpu, memory);
+
+    InstructionEx srlzI = decoder.DecodeSlot(0x188000000ULL, UnitType::M_UNIT, 0x1e120);
+    assert_true("ELILO raw srlz.i should decode", srlzI.GetType() == InstructionType::SRLZ_I);
+    assert_equal("srlz.i qualifying predicate", 0, srlzI.GetPredicate());
+    assert_string("srlz.i disassembly", "srlz.i", srlzI.GetDisassembly());
+    srlzI.Execute(cpu, memory);
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);
