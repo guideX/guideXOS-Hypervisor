@@ -909,6 +909,55 @@ void test_latest_boot_log_blockers() {
                  0x17f00000ULL,
                  cpu.GetGR(10));
 
+    // Exact authentic ELILO memcpy_long prologue instructions at 0x28146 and
+    // 0x2814c.  These are the fixed-count SHLs that align the source words
+    // before the first bulk copy.  Decoding either one as EXTR makes the
+    // source word assembly lose the byte-alignment shift and propagates a
+    // zero into the decompressed output.
+    InstructionEx memcpySourceShift = decoder.DecodeSlot(0xa7e3c28500ULL,
+                                                          UnitType::I_UNIT,
+                                                          0x28140);
+    assert_true("ELILO memcpy source SHL should decode",
+                memcpySourceShift.GetType() == InstructionType::SHL);
+    assert_equal("ELILO memcpy source SHL destination", 20,
+                 memcpySourceShift.GetDst());
+    assert_equal("ELILO memcpy source SHL source", 20,
+                 memcpySourceShift.GetSrc1());
+    assert_true("ELILO memcpy source SHL should carry an immediate",
+                memcpySourceShift.HasImmediate());
+    assert_equal("ELILO memcpy source SHL count", 3,
+                 memcpySourceShift.GetImmediate());
+    assert_string("ELILO memcpy source SHL disassembly",
+                  "shl r20 = r20, 3",
+                  memcpySourceShift.GetDisassembly());
+    cpu.SetGR(20, 1);
+    memcpySourceShift.Execute(cpu, memory);
+    assert_equal("ELILO memcpy source SHL should shift by three",
+                 8,
+                 cpu.GetGR(20));
+
+    InstructionEx memcpyDestinationShift = decoder.DecodeSlot(0xa7e3c2c580ULL,
+                                                               UnitType::I_UNIT,
+                                                               0x28140);
+    assert_true("ELILO memcpy destination SHL should decode",
+                memcpyDestinationShift.GetType() == InstructionType::SHL);
+    assert_equal("ELILO memcpy destination SHL destination", 22,
+                 memcpyDestinationShift.GetDst());
+    assert_equal("ELILO memcpy destination SHL source", 22,
+                 memcpyDestinationShift.GetSrc1());
+    assert_true("ELILO memcpy destination SHL should carry an immediate",
+                memcpyDestinationShift.HasImmediate());
+    assert_equal("ELILO memcpy destination SHL count", 3,
+                 memcpyDestinationShift.GetImmediate());
+    assert_string("ELILO memcpy destination SHL disassembly",
+                  "shl r22 = r22, 3",
+                  memcpyDestinationShift.GetDisassembly());
+    cpu.SetGR(22, 1);
+    memcpyDestinationShift.Execute(cpu, memory);
+    assert_equal("ELILO memcpy destination SHL should shift by three",
+                 8,
+                 cpu.GetGR(22));
+
     // Exact authentic ELILO huft_build instruction at 0x21f00.  Historical
     // Binutils decodes this raw slot as "shr.u r14=r25,r23".  The encoded
     // source/count fields are reversed relative to SHL.

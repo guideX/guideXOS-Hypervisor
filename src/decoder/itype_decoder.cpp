@@ -67,8 +67,12 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                 // "shl r20=r19,32" are misread as EXTR.
                 const uint8_t major5_x2_field =
                     formats::extractBits(raw_instruction, 28, 2);
-                if (formats::extractBits(raw_instruction, 27, 1) == 1 &&
-                    (major5_x2_field == 1 || major5_x2_field == 3) &&
+                const bool major5FixedShlAlias =
+                    (formats::extractBits(raw_instruction, 27, 1) == 1 &&
+                     (major5_x2_field == 1 || major5_x2_field == 3)) ||
+                    (formats::extractBits(raw_instruction, 27, 1) == 0 &&
+                     major5_x2_field == 2);
+                if (major5FixedShlAlias &&
                     major5_x == 1 && major5_x2 == 1 &&
                     formats::extractBits(raw_instruction, 36, 1) == 0) {
                     result.opcode = 0x70; // SHL
