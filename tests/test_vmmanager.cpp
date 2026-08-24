@@ -154,8 +154,6 @@ void testEfiHandoffLayout64MiB() {
     assert(layout.loadedImageFilePathAddr < guestMemorySize);
     assert(layout.loadedImageLoadOptionsAddr < guestMemorySize);
     assert(layout.bootImageMetadataAddr < guestMemorySize);
-    assert(layout.poolBase < guestMemorySize);
-    assert(layout.poolEnd <= guestMemorySize);
 
     std::cout << "  ? 64 MiB layout base: 0x" << std::hex << layout.base
               << " loadedImage=0x" << layout.loadedImageProtocolAddr

@@ -1294,8 +1294,6 @@ bool VMManager::startVM(const std::string& vmId) {
                           << " filePath=0x" << efiLayout.loadedImageFilePathAddr
                           << " loadOptions=0x" << efiLayout.loadedImageLoadOptionsAddr
                           << " bootImageMetadata=0x" << efiLayout.bootImageMetadataAddr
-                          << " poolBase=0x" << efiLayout.poolBase
-                          << " poolEnd=0x" << efiLayout.poolEnd
                           << " guestMemorySize=0x" << guestMemorySize;
                 LOG_INFO(layoutLog.str());
             }

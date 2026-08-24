@@ -75,8 +75,6 @@ struct EfiHandoffLayout {
     uint64_t unsupportedStubDescAddr = 0;
     uint64_t successStubCodeAddr = 0;
     uint64_t successStubDescAddr = 0;
-    uint64_t poolBase = 0;
-    uint64_t poolEnd = 0;
 };
 
 constexpr uint64_t kEfiPageSize = 0x1000ULL;
@@ -153,8 +151,6 @@ constexpr uint64_t kEfiAllocatePoolStubCodeOffset = 0xE00ULL;
 constexpr uint64_t kEfiHandleProtocolStubCodeOffset = 0xE80ULL;
 constexpr uint64_t kEfiUnsupportedStubCodeOffset = 0xF00ULL;
 constexpr uint64_t kEfiSuccessStubCodeOffset = 0xF80ULL;
-constexpr uint64_t kEfiPoolBaseOffset = 0x2000ULL;
-constexpr uint64_t kEfiPoolEndOffset = 0x80000ULL;
 
 inline uint64_t efiAlignDown(uint64_t value, uint64_t alignment) {
     return alignment == 0 ? value : (value & ~(alignment - 1ULL));
@@ -264,8 +260,6 @@ inline bool tryComputeEfiHandoffLayout(uint64_t guestMemorySize, EfiHandoffLayou
     layout.unsupportedStubDescAddr = base + kEfiUnsupportedStubDescOffset;
     layout.successStubCodeAddr = base + kEfiSuccessStubCodeOffset;
     layout.successStubDescAddr = base + kEfiSuccessStubDescOffset;
-    layout.poolBase = base + kEfiPoolBaseOffset;
-    layout.poolEnd = base + kEfiPoolEndOffset;
     return true;
 }
 

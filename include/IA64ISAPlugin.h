@@ -272,7 +272,11 @@ private:
     bool ensureEfiHandoffLayout(IMemory& memory);
     bool ensureEfiBootFat(IMemory& memory);
     void installFileProtocolTable(IMemory& memory, uint64_t protocolAddress);
-    uint64_t allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment = 16);
+    uint64_t allocateEfiPool(IMemory& memory,
+                             uint64_t size,
+                             uint32_t memoryType,
+                             uint64_t alignment = 16);
+    uint64_t handleEfiFreePool(IMemory& memory);
     uint64_t handleEfiFileOpen(IMemory& memory);
     uint64_t handleEfiFileRead(IMemory& memory);
     uint64_t handleEfiFileGetInfo(IMemory& memory);
@@ -286,6 +290,9 @@ private:
     uint64_t handleEfiReadKeyStroke(IMemory& memory, bool extended);
     uint64_t handleEfiWaitForEvent(IMemory& memory, bool checkOnly);
     bool ensureEfiMemoryMap(IMemory& memory);
+    bool replaceEfiMemoryMapRange(uint64_t physicalStart,
+                                  uint64_t numberOfPages,
+                                  uint32_t type);
     uint64_t handleEfiAllocatePages(IMemory& memory);
     uint64_t handleEfiGetMemoryMap(IMemory& memory);
     void resetEfiProtocolAttachments();
@@ -332,7 +339,6 @@ private:
     InstructionEx cachedInstruction_;
     bool hasCachedInstruction_;
     std::vector<uint64_t> pendingCallInputs_;
-    uint64_t efiPoolNext_;
     uint64_t efiCurrentTpl_;
     uint64_t lastEfiDescriptorFieldAddress_;
     struct EfiProtocolAttachment {
@@ -442,8 +448,14 @@ private:
         uint64_t numberOfPages = 0;
         uint32_t type = 0;
     };
+    struct EfiPoolAllocation {
+        uint64_t physicalStart = 0;
+        uint64_t numberOfPages = 0;
+        uint32_t type = 0;
+    };
     std::vector<EfiMemoryDescriptor> efiMemoryMap_;
     std::vector<EfiPageAllocation> efiPageAllocations_;
+    std::vector<EfiPoolAllocation> efiPoolAllocations_;
     uint64_t efiMemoryMapKey_;
     uint64_t efiMemoryMapMemorySize_;
     bool efiMemoryMapInitialized_;

@@ -4184,7 +4184,7 @@ void testIA64PluginTextOutputStringReturnsSuccess() {
 void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     std::cout << "Testing IA-64 plugin AllocatePool firmware stub...\n";
 
-    SparseMemory memory;
+    ReportedEfiSparseMemory memory;
     uint8_t bundleBytes[16] = {};
     memory.Write(0xa210, bundleBytes, sizeof(bundleBytes));
 
@@ -4193,6 +4193,7 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     plugin.getCPUState().SetIP(0xa210);
     plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
     plugin.getCPUState().SetBR(6, 0x1fe00e00ULL);
+    plugin.getCPUState().SetGR(35, 2);
     plugin.getCPUState().SetGR(36, 0x30);
     plugin.getCPUState().SetGR(37, 0x5000);
     plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
@@ -4206,10 +4207,94 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     assert(plugin.getCPUState().GetIP() == 0xa220);
     assert(plugin.getCPUState().GetBR(0) == 0xa220);
     assert(plugin.getCPUState().GetGR(8) == 0);
-    assert(buffer == 0x1fe02000ULL);
+    assert(buffer >= 0x100000ULL);
+    assert(buffer < 0x1fdb0000ULL);
+    assert((buffer & 0xfffULL) == 0);
     assert(firstBytes == 0);
 
     std::cout << "  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS\n";
+}
+
+void testIA64PluginEfiPoolAllocationLifecycle() {
+    std::cout << "Testing IA-64 EFI pool allocation backing, reuse, and exhaustion...\n";
+
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t allocateCode = 0x1fdb0e00ULL;
+    constexpr uint64_t freeCode = 0x1fdb0f80ULL;
+    constexpr uint64_t efiSuccess = 0ULL;
+    constexpr uint64_t efiOutOfResources = 0x8000000000000009ULL;
+    constexpr uint64_t efiInvalidParameter = 0x8000000000000002ULL;
+
+    SizedSparseMemory memory(guestMemorySize);
+    uint8_t bundle[16] = {};
+    memory.Write(0x5200, bundle, sizeof(bundle));
+    memory.Write(allocateCode, bundle, sizeof(bundle));
+    memory.Write(freeCode, bundle, sizeof(bundle));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    const auto invokeAllocatePool = [&](uint32_t memoryType,
+                                        uint64_t size,
+                                        uint64_t bufferOut) {
+        plugin.getCPUState().SetIP(0x5200);
+        plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+        plugin.getCPUState().SetBR(6, allocateCode);
+        plugin.getCPUState().SetGR(35, memoryType);
+        plugin.getCPUState().SetGR(36, size);
+        plugin.getCPUState().SetGR(37, bufferOut);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    const auto invokeFreePool = [&](uint64_t buffer) {
+        plugin.getCPUState().SetIP(0x5200);
+        plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+        plugin.getCPUState().SetBR(6, freeCode);
+        plugin.getCPUState().SetGR(35, buffer);
+        plugin.getCPUState().SetGR(9, 0x1fdb0848ULL);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    assert(invokeAllocatePool(2, 0x1000, 0x6000) == efiSuccess);
+    const uint64_t first = memory.read<uint64_t>(0x6000);
+    assert(first >= 0x100000ULL && first < 0x1fdb0000ULL);
+    assert((first & 0xfffULL) == 0);
+    memory.write<uint64_t>(first, 0x1122334455667788ULL);
+    assert(memory.read<uint64_t>(first) == 0x1122334455667788ULL);
+
+    assert(invokeAllocatePool(2, 0x2000, 0x6008) == efiSuccess);
+    const uint64_t second = memory.read<uint64_t>(0x6008);
+    assert(second >= 0x100000ULL && second < 0x1fdb0000ULL);
+    assert((second & 0xfffULL) == 0);
+    assert(first != second);
+    assert(second + 0x2000 <= first || first + 0x1000 <= second);
+    assert(memory.read<uint64_t>(first) == 0x1122334455667788ULL);
+
+    assert(invokeFreePool(first) == efiSuccess);
+    assert(invokeAllocatePool(2, 0x1000, 0x6010) == efiSuccess);
+    const uint64_t reused = memory.read<uint64_t>(0x6010);
+    assert(reused == first);
+    assert(memory.read<uint64_t>(reused) == 0);
+
+    assert(invokeAllocatePool(0, 0x1000, 0x6018) == efiInvalidParameter);
+    assert(memory.read<uint64_t>(0x6018) == 0);
+    assert(invokeAllocatePool(2, guestMemorySize, 0x6018) == efiOutOfResources);
+    assert(memory.read<uint64_t>(0x6018) == 0);
+    assert(memory.read<uint64_t>(second) == 0);
+    assert(invokeFreePool(0x12345000ULL) == efiInvalidParameter);
+    assert(invokeFreePool(second) == efiSuccess);
+    assert(invokeAllocatePool(2, 0x2010, 0x6020) == efiSuccess);
+    const uint64_t formerFailureRequest = memory.read<uint64_t>(0x6020);
+    assert(formerFailureRequest >= 0x100000ULL && formerFailureRequest < 0x1fdb0000ULL);
+    assert((formerFailureRequest & 0xfffULL) == 0);
+    assert(invokeFreePool(formerFailureRequest) == efiSuccess);
+
+    std::cout << "  ? AllocatePool uses page-backed conventional memory, FreePool reuses it, "
+                 "and genuine exhaustion remains EFI_OUT_OF_RESOURCES\n";
 }
 
 void testIA64PluginEfiBootServicesPlabelDispatch() {
@@ -4305,11 +4390,12 @@ void testIA64PluginEfiBootServicesPlabelDispatch() {
     assert(memory.read<uint64_t>(0x6130) == 40);
     assert(memory.read<uint32_t>(0x6140) == 1);
 
-    assert(invoke(0x40, allocatePoolDescriptor, allocatePoolCode, 0, 0x20, 0x6200, 0, 0, 0) ==
+    assert(invoke(0x40, allocatePoolDescriptor, allocatePoolCode, 2, 0x20, 0x6200, 0, 0, 0) ==
            efiSuccess);
-    assert(memory.read<uint64_t>(0x6200) != 0);
+    const uint64_t allocatedPool = memory.read<uint64_t>(0x6200);
+    assert(allocatedPool != 0);
 
-    assert(invoke(0x48, successDescriptor, successCode, 0x1fe02000ULL, 0, 0, 0, 0, 0) ==
+    assert(invoke(0x48, successDescriptor, successCode, allocatedPool, 0, 0, 0, 0, 0) ==
            efiSuccess);
 
     std::cout << "  ? AllocatePages, FreePages, GetMemoryMap, AllocatePool, and FreePool preserve "
@@ -5099,7 +5185,7 @@ void testSharedMemory() {
 int main() {
     std::cout.setf(std::ios::unitbuf);
     std::cout << "=== ISA Plugin Architecture Tests ===\n\n";
-    
+
     try {
         testISAStateSerialization();
         std::cout << "\n";
@@ -5298,6 +5384,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginAllocatePoolReturnsScratchBuffer();
+        std::cout << "\n";
+
+        testIA64PluginEfiPoolAllocationLifecycle();
         std::cout << "\n";
 
         testIA64PluginEfiBootServicesPlabelDispatch();

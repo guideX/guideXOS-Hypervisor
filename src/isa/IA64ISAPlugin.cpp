@@ -16,6 +16,7 @@
 #include <utility>
 #include <cstdlib>
 #include <new>
+#include <limits>
 
 namespace ia64 {
 
@@ -132,6 +133,13 @@ constexpr uint32_t EFI_MEMORY_PAL_CODE = 13U;
 constexpr uint32_t EFI_MEMORY_PERSISTENT = 14U;
 constexpr uint32_t EFI_MEMORY_UNACCEPTED = 15U;
 constexpr uint64_t EFI_MEMORY_ATTRIBUTES = 0xFULL;
+
+bool isValidEfiPoolType(uint32_t type) {
+    return type == EFI_MEMORY_LOADER_DATA ||
+           type == EFI_MEMORY_BOOT_SERVICES_DATA ||
+           type == EFI_MEMORY_RUNTIME_DATA;
+}
+
 constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_END = 0x20000000ULL;
 uint64_t EFI_HANDOFF_REGION_BASE = EFI_DEFAULT_HANDOFF_REGION_BASE;
@@ -205,8 +213,6 @@ uint64_t EFI_ALLOCATE_POOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiAlloca
 uint64_t EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiHandleProtocolStubCodeOffset;
 uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiUnsupportedStubCodeOffset;
 uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSuccessStubCodeOffset;
-uint64_t EFI_POOL_BASE = EFI_HANDOFF_REGION_BASE + kEfiPoolBaseOffset;
-uint64_t EFI_POOL_END = EFI_HANDOFF_REGION_BASE + kEfiPoolEndOffset;
 uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR;
 uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = EFI_HANDOFF_REGION_BASE + 0x193010ULL;
 constexpr bool IA64_STRICT_RECOVERY = false;
@@ -462,8 +468,6 @@ void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR = base + kEfiHandleProtocolStubCodeOffset;
     EFI_UNSUPPORTED_STUB_CODE_ADDR = base + kEfiUnsupportedStubCodeOffset;
     EFI_SUCCESS_STUB_CODE_ADDR = base + kEfiSuccessStubCodeOffset;
-    EFI_POOL_BASE = base + kEfiPoolBaseOffset;
-    EFI_POOL_END = base + kEfiPoolEndOffset;
     EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR;
     EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = base + 0x193010ULL;
 }
@@ -2044,7 +2048,6 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , cachedInstruction_()
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
-    , efiPoolNext_(EFI_POOL_BASE)
     , efiCurrentTpl_(4)
     , lastEfiDescriptorFieldAddress_(0)
     , efiProtocolAttachments_()
@@ -2104,6 +2107,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiFileHandles_()
     , efiMemoryMap_()
     , efiPageAllocations_()
+    , efiPoolAllocations_()
     , efiMemoryMapKey_(1)
     , efiMemoryMapMemorySize_(0)
     , efiMemoryMapInitialized_(false)
@@ -2130,7 +2134,6 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , cachedInstruction_()
     , hasCachedInstruction_(false)
     , pendingCallInputs_()
-    , efiPoolNext_(EFI_POOL_BASE)
     , efiCurrentTpl_(4)
     , lastEfiDescriptorFieldAddress_(0)
     , efiProtocolAttachments_()
@@ -2190,6 +2193,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiFileHandles_()
     , efiMemoryMap_()
     , efiPageAllocations_()
+    , efiPoolAllocations_()
     , efiMemoryMapKey_(1)
     , efiMemoryMapMemorySize_(0)
     , efiMemoryMapInitialized_(false)
@@ -2213,6 +2217,7 @@ void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
     efiMemoryMapInitialized_ = false;
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
+    efiPoolAllocations_.clear();
     efiMemoryMapKey_ = 1;
 }
 
@@ -2313,6 +2318,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
         efiHandoffLayoutMemorySize_ = 0;
         efiHandoffLayoutInitialized_ = true;
         efiMemoryMapInitialized_ = false;
+        efiPoolAllocations_.clear();
         return true;
     }
 
@@ -2320,10 +2326,10 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
     if (!tryComputeEfiHandoffLayout(memorySize, layout)) {
         resetEfiHandoffLayoutGlobals();
         resetEfiProtocolAttachments();
-        efiPoolNext_ = EFI_POOL_BASE;
         efiHandoffLayoutMemorySize_ = memorySize;
         efiHandoffLayoutInitialized_ = true;
         efiMemoryMapInitialized_ = false;
+        efiPoolAllocations_.clear();
         std::cerr << "[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; "
                   << "falling back to default fixed layout"
                   << " guestMemorySize=0x" << std::hex << memorySize
@@ -2335,7 +2341,6 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
 
     applyEfiHandoffLayoutBase(layout.base);
     resetEfiProtocolAttachments();
-    efiPoolNext_ = EFI_POOL_BASE;
     efiHandoffLayoutMemorySize_ = memorySize;
     efiHandoffLayoutInitialized_ = true;
     efiMemoryMapInitialized_ = false;
@@ -2345,8 +2350,6 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
               << " end=0x" << EFI_HANDOFF_REGION_END
               << " loadedImage=0x" << EFI_LOADED_IMAGE_PROTOCOL_ADDR
               << " filePath=0x" << EFI_LOADED_IMAGE_FILE_PATH_ADDR
-              << " poolBase=0x" << EFI_POOL_BASE
-              << " poolEnd=0x" << EFI_POOL_END
               << std::dec << std::endl;
     return true;
 }
@@ -2378,7 +2381,6 @@ void IA64ISAPlugin::reset() {
     placementFileBackedBytes_ = 0;
     placementEvents_.clear();
     resetEfiHandoffLayoutGlobals();
-    efiPoolNext_ = EFI_POOL_BASE;
     efiCurrentTpl_ = 4;
     lastEfiDescriptorFieldAddress_ = 0;
     resetEfiProtocolAttachments();
@@ -2438,6 +2440,7 @@ void IA64ISAPlugin::reset() {
     efiInputQueue_.clear();
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
+    efiPoolAllocations_.clear();
     efiMemoryMapKey_ = 1;
     efiMemoryMapMemorySize_ = 0;
     efiMemoryMapInitialized_ = false;
@@ -3041,8 +3044,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << " region=";
                             if (descriptorAddress >= EFI_HANDOFF_REGION_BASE && descriptorAddress < EFI_HANDOFF_REGION_END) {
                                 std::cout << "efi-table";
-                            } else if (descriptorAddress >= EFI_POOL_BASE && descriptorAddress < EFI_POOL_END) {
-                                std::cout << "pool";
                             } else if (descriptorAddress >= 0x100000ULL && descriptorAddress < 0x200000ULL) {
                                 std::cout << "mirrored-section";
                             } else if (descriptorAddress < memory.GetTotalSize()) {
@@ -3178,23 +3179,35 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_ALLOCATE_POOL_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
+                        const uint32_t memoryType = static_cast<uint32_t>(
+                            readCallerOutputRegister(state_.getCPUState(), 0));
                         const uint64_t size = readCallerOutputRegister(state_.getCPUState(), 1);
                         const uint64_t bufferOut = readCallerOutputRegister(state_.getCPUState(), 2);
                         ++efiAllocatePoolCalls_;
-                        const uint64_t allocation = allocateEfiPool(memory, size);
-                        if (allocation != 0 && bufferOut != 0) {
+                        const bool validOutput = bufferOut != 0;
+                        const uint64_t allocation = isValidEfiPoolType(memoryType) && validOutput
+                            ? allocateEfiPool(memory, size, memoryType)
+                            : 0;
+                        const uint64_t status = !isValidEfiPoolType(memoryType)
+                            ? EFI_STATUS_INVALID_PARAMETER
+                            : !validOutput
+                                ? EFI_STATUS_INVALID_PARAMETER
+                            : (allocation != 0 && bufferOut != 0
+                                   ? EFI_STATUS_SUCCESS
+                                   : EFI_STATUS_OUT_OF_RESOURCES);
+                        if (status == EFI_STATUS_SUCCESS) {
                             memory.Write(bufferOut,
                                          reinterpret_cast<const uint8_t*>(&allocation),
                                          sizeof(allocation));
-                            state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
+                            state_.getCPUState().SetGR(8, status);
                             std::cout << "[EFI-STUB] BootServices.AllocatePool size=0x"
                                       << std::hex << size << " -> 0x" << allocation
                                       << " via out=0x" << bufferOut << std::dec << std::endl;
                         } else {
-                            state_.getCPUState().SetGR(8, EFI_STATUS_OUT_OF_RESOURCES);
+                            state_.getCPUState().SetGR(8, status);
                             std::cout << "[EFI-STUB] BootServices.AllocatePool failed size=0x"
                                       << std::hex << size << " out=0x" << bufferOut
-                                      << " next=0x" << efiPoolNext_ << std::dec << std::endl;
+                                      << std::dec << std::endl;
                         }
                         logEfiServiceCall(memory, "BootServices.AllocatePool", currentIP,
                                           EFI_ALLOCATE_POOL_STUB_DESC_ADDR, originalBranchTarget,
@@ -3834,6 +3847,19 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_SUCCESS_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
+                        const bool freePoolCall =
+                            efiBootServiceKindForField(lastEfiDescriptorFieldAddress_) ==
+                                EfiBootServiceKind::FreePool ||
+                            state_.getCPUState().GetGR(9) == EFI_BOOT_SERVICES_ADDR + 0x48;
+                        if (freePoolCall) {
+                            const uint64_t status = handleEfiFreePool(memory);
+                            branchTarget = currentIP + 16;
+                            state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                            state_.getCPUState().SetGR(8, status);
+                            logEfiServiceCall(memory, "BootServices.FreePool", currentIP,
+                                              EFI_SUCCESS_STUB_DESC_ADDR, originalBranchTarget,
+                                              status);
+                        } else {
                         ++efiGenericSuccessCalls_;
                         const CPUState& cpu = state_.getCPUState();
                         // `r8` is the EFI return status here, not a descriptor pointer.
@@ -3870,12 +3896,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             std::cout << " [" << description << "]";
                         }
                         std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
-                        if (slotCandidate == EFI_BOOT_SERVICES_ADDR + 0x48) {
-                            ++efiFreePoolCalls_;
-                        }
                         logEfiServiceCall(memory, "EFI.GenericSuccess", currentIP,
                                           descriptorCandidate, originalBranchTarget,
                                           EFI_STATUS_SUCCESS);
+                        }
                     } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
                         handledFirmwareCallStub = true;
                         branchTarget = currentIP + 16;
@@ -4520,6 +4544,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiInputQueue_.clear();
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
+    efiPoolAllocations_.clear();
     efiMemoryMapKey_ = 1;
     efiMemoryMapMemorySize_ = 0;
     efiMemoryMapInitialized_ = false;
@@ -4988,16 +5013,111 @@ void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, siz
     BootStageTrace::EventOnce("FIRST_FAULT_REGISTER_HISTORY", history.str());
 }
 
-uint64_t IA64ISAPlugin::allocateEfiPool(IMemory& memory, uint64_t size, uint64_t alignment) {
-    const uint64_t allocation = alignUp(efiPoolNext_, alignment == 0 ? 16 : alignment);
-    const uint64_t alignedSize = alignUp(size, 16);
-    if (size == 0 || allocation > EFI_POOL_END || alignedSize > (EFI_POOL_END - allocation)) {
+uint64_t IA64ISAPlugin::allocateEfiPool(IMemory& memory,
+                                        uint64_t size,
+                                        uint32_t memoryType,
+                                        uint64_t alignment) {
+    if (size == 0 || !isValidEfiPoolType(memoryType)) {
         return 0;
     }
-    std::vector<uint8_t> zero(static_cast<size_t>(alignedSize), 0);
-    memory.Write(allocation, zero.data(), zero.size());
-    efiPoolNext_ = allocation + alignedSize;
+    const uint64_t requestedAlignment = alignment == 0 ? 16 : alignment;
+    if ((requestedAlignment & (requestedAlignment - 1ULL)) != 0 ||
+        requestedAlignment > EFI_PAGE_SIZE ||
+        size > UINT64_MAX - (EFI_PAGE_SIZE - 1ULL)) {
+        return 0;
+    }
+    if (!ensureEfiMemoryMap(memory)) {
+        return 0;
+    }
+
+    const uint64_t numberOfPages =
+        (size + EFI_PAGE_SIZE - 1ULL) / EFI_PAGE_SIZE;
+    if (numberOfPages == 0 || numberOfPages > UINT64_MAX / EFI_PAGE_SIZE ||
+        numberOfPages > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) /
+                            EFI_PAGE_SIZE) {
+        return 0;
+    }
+    const uint64_t allocationBytes = numberOfPages * EFI_PAGE_SIZE;
+
+    size_t selectedDescriptor = efiMemoryMap_.size();
+    uint64_t allocation = 0;
+    for (size_t reverse = efiMemoryMap_.size(); reverse > 0; --reverse) {
+        const size_t index = reverse - 1;
+        const EfiMemoryDescriptor& descriptor = efiMemoryMap_[index];
+        if (descriptor.type != EFI_MEMORY_CONVENTIONAL ||
+            descriptor.numberOfPages < numberOfPages) {
+            continue;
+        }
+        const uint64_t descriptorEnd = descriptor.physicalStart +
+                                       descriptor.numberOfPages * EFI_PAGE_SIZE;
+        allocation = descriptorEnd - allocationBytes;
+        if ((allocation & (requestedAlignment - 1ULL)) != 0) {
+            allocation &= ~(requestedAlignment - 1ULL);
+            if (allocation < descriptor.physicalStart ||
+                allocationBytes > descriptorEnd - allocation) {
+                continue;
+            }
+        }
+        selectedDescriptor = index;
+        break;
+    }
+    if (selectedDescriptor == efiMemoryMap_.size()) {
+        return 0;
+    }
+
+    try {
+        efiPoolAllocations_.reserve(efiPoolAllocations_.size() + 1);
+        std::vector<uint8_t> zero(static_cast<size_t>(allocationBytes), 0);
+        memory.Write(allocation, zero.data(), zero.size());
+    } catch (const std::bad_alloc&) {
+        return 0;
+    } catch (const std::exception&) {
+        return 0;
+    }
+
+    if (!replaceEfiMemoryMapRange(allocation, numberOfPages, memoryType)) {
+        return 0;
+    }
+    efiPoolAllocations_.push_back({allocation, numberOfPages, memoryType});
+    ++efiMemoryMapKey_;
+    std::cout << "[EFI-POOL] AllocatePool type=" << memoryType
+              << " size=0x" << std::hex << size
+              << " pages=0x" << numberOfPages
+              << " base=0x" << allocation
+              << " end=0x" << (allocation + allocationBytes)
+              << " mapKey=" << std::dec << efiMemoryMapKey_ << std::endl;
     return allocation;
+}
+
+uint64_t IA64ISAPlugin::handleEfiFreePool(IMemory& memory) {
+    ++efiFreePoolCalls_;
+    const uint64_t buffer = readCallerOutputRegister(state_.getCPUState(), 0);
+    if (buffer == 0 || !ensureEfiMemoryMap(memory)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    const auto allocation = std::find_if(
+        efiPoolAllocations_.begin(), efiPoolAllocations_.end(),
+        [buffer](const EfiPoolAllocation& entry) {
+            return entry.physicalStart == buffer;
+        });
+    if (allocation == efiPoolAllocations_.end()) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (!replaceEfiMemoryMapRange(allocation->physicalStart,
+                                  allocation->numberOfPages,
+                                  EFI_MEMORY_CONVENTIONAL)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    const uint64_t freedBytes = allocation->numberOfPages * EFI_PAGE_SIZE;
+    std::cout << "[EFI-POOL] FreePool base=0x" << std::hex
+              << allocation->physicalStart << " end=0x"
+              << (allocation->physicalStart + freedBytes)
+              << " mapKey=" << std::dec << (efiMemoryMapKey_ + 1ULL)
+              << std::endl;
+    efiPoolAllocations_.erase(allocation);
+    ++efiMemoryMapKey_;
+    return EFI_STATUS_SUCCESS;
 }
 
 void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
@@ -5263,7 +5383,8 @@ uint64_t IA64ISAPlugin::handleEfiFileOpen(IMemory& memory) {
         return EFI_STATUS_NOT_FOUND;
     }
 
-    const uint64_t handleAddress = allocateEfiPool(memory, 0x60);
+    const uint64_t handleAddress = allocateEfiPool(
+        memory, 0x60, EFI_MEMORY_BOOT_SERVICES_DATA);
     if (handleAddress == 0) {
         return EFI_STATUS_INVALID_PARAMETER;
     }
@@ -5698,6 +5819,7 @@ bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
 
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
+    efiPoolAllocations_.clear();
     efiMemoryMapKey_ = 1;
     efiMemoryMapMemorySize_ = memorySize;
     efiMemoryMapInitialized_ = true;
@@ -5826,7 +5948,8 @@ bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
 
     // The complete synthetic handoff is firmware-owned. It contains the
     // SystemTable, BootServices/RuntimeServices tables, descriptors/thunks,
-    // pool, metadata, and protocol structures.
+    // metadata, and protocol structures. Pool allocations come from the
+    // remaining conventional-memory descriptors below this region.
     markRange(EFI_HANDOFF_REGION_BASE, EFI_HANDOFF_REGION_END,
               EFI_MEMORY_BOOT_SERVICES_DATA);
 
@@ -5848,6 +5971,83 @@ bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
                                      descriptor.numberOfPages * EFI_PAGE_SIZE)
                   << " attributes=0x" << descriptor.attributes
                   << std::dec << std::endl;
+    }
+    return true;
+}
+
+bool IA64ISAPlugin::replaceEfiMemoryMapRange(uint64_t physicalStart,
+                                             uint64_t numberOfPages,
+                                             uint32_t type) {
+    if (numberOfPages == 0 || numberOfPages > UINT64_MAX / EFI_PAGE_SIZE ||
+        physicalStart > UINT64_MAX - numberOfPages * EFI_PAGE_SIZE) {
+        return false;
+    }
+    const uint64_t rangeEnd = physicalStart + numberOfPages * EFI_PAGE_SIZE;
+    std::vector<EfiMemoryDescriptor> replacement;
+    replacement.reserve(efiMemoryMap_.size() + 2);
+    uint64_t coveredPages = 0;
+
+    for (const EfiMemoryDescriptor& descriptor : efiMemoryMap_) {
+        const uint64_t descriptorBytes = descriptor.numberOfPages * EFI_PAGE_SIZE;
+        const uint64_t descriptorEnd = descriptor.physicalStart + descriptorBytes;
+        if (descriptorEnd <= physicalStart || descriptor.physicalStart >= rangeEnd) {
+            replacement.push_back(descriptor);
+            continue;
+        }
+
+        const uint64_t markedStart = std::max(descriptor.physicalStart, physicalStart);
+        const uint64_t markedEnd = std::min(descriptorEnd, rangeEnd);
+        coveredPages += (markedEnd - markedStart) / EFI_PAGE_SIZE;
+
+        if (descriptor.physicalStart < markedStart) {
+            replacement.push_back({
+                descriptor.type,
+                descriptor.physicalStart,
+                (markedStart - descriptor.physicalStart) / EFI_PAGE_SIZE,
+                descriptor.attributes
+            });
+        }
+        replacement.push_back({
+            type,
+            markedStart,
+            (markedEnd - markedStart) / EFI_PAGE_SIZE,
+            descriptor.attributes
+        });
+        if (markedEnd < descriptorEnd) {
+            replacement.push_back({
+                descriptor.type,
+                markedEnd,
+                (descriptorEnd - markedEnd) / EFI_PAGE_SIZE,
+                descriptor.attributes
+            });
+        }
+    }
+
+    if (coveredPages != numberOfPages) {
+        return false;
+    }
+
+    try {
+        efiMemoryMap_.reserve(replacement.size());
+        std::vector<EfiMemoryDescriptor> merged;
+        merged.reserve(replacement.size());
+        for (const EfiMemoryDescriptor& descriptor : replacement) {
+            if (!merged.empty()) {
+                EfiMemoryDescriptor& previous = merged.back();
+                const uint64_t previousEnd = previous.physicalStart +
+                                             previous.numberOfPages * EFI_PAGE_SIZE;
+                if (previous.type == descriptor.type &&
+                    previous.attributes == descriptor.attributes &&
+                    previousEnd == descriptor.physicalStart) {
+                    previous.numberOfPages += descriptor.numberOfPages;
+                    continue;
+                }
+            }
+            merged.push_back(descriptor);
+        }
+        efiMemoryMap_.swap(merged);
+    } catch (const std::bad_alloc&) {
+        return false;
     }
     return true;
 }
