@@ -2221,6 +2221,43 @@ void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
     efiMemoryMapKey_ = 1;
 }
 
+bool IA64ISAPlugin::reserveEfiMemoryRange(uint64_t physicalStart,
+                                          uint64_t size,
+                                          uint32_t memoryType) {
+    constexpr uint64_t pageSize = EFI_PAGE_SIZE;
+    if (size == 0 || physicalStart > UINT64_MAX - size) {
+        return false;
+    }
+
+    const uint64_t alignedStart = physicalStart & ~(pageSize - 1ULL);
+    const uint64_t requestedEnd = physicalStart + size;
+    if (requestedEnd > UINT64_MAX - (pageSize - 1ULL)) {
+        return false;
+    }
+    const uint64_t alignedEnd = (requestedEnd + pageSize - 1ULL) & ~(pageSize - 1ULL);
+    if (alignedStart >= alignedEnd) {
+        return false;
+    }
+
+    // Reservations are registered while the firmware layout is being built,
+    // before EFI exposes or mutates the first memory map. Refusing a late
+    // registration avoids silently invalidating an already-issued MapKey.
+    if (efiMemoryMapInitialized_) {
+        return false;
+    }
+
+    const uint64_t numberOfPages = (alignedEnd - alignedStart) / pageSize;
+    for (const EfiMemoryReservation& reservation : efiMemoryReservations_) {
+        if (reservation.type == memoryType &&
+            reservation.physicalStart == alignedStart &&
+            reservation.numberOfPages == numberOfPages) {
+            return true;
+        }
+    }
+    efiMemoryReservations_.push_back({memoryType, alignedStart, numberOfPages});
+    return true;
+}
+
 void IA64ISAPlugin::enqueueEfiInputKey(uint16_t scanCode,
                                        uint16_t unicodeChar,
                                        uint32_t shiftState,
@@ -2439,6 +2476,7 @@ void IA64ISAPlugin::reset() {
     efiFileHandles_.clear();
     efiInputQueue_.clear();
     efiMemoryMap_.clear();
+    efiMemoryReservations_.clear();
     efiPageAllocations_.clear();
     efiPoolAllocations_.clear();
     efiMemoryMapKey_ = 1;
@@ -5944,6 +5982,12 @@ bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
     if (bootImageSize != 0 && bootImageBase <= UINT64_MAX - bootImageSize) {
         markRange(bootImageBase, bootImageBase + bootImageSize,
                   EFI_MEMORY_BOOT_SERVICES_CODE);
+    }
+
+    for (const EfiMemoryReservation& reservation : efiMemoryReservations_) {
+        const uint64_t reservationEnd = reservation.physicalStart +
+                                         reservation.numberOfPages * EFI_PAGE_SIZE;
+        markRange(reservation.physicalStart, reservationEnd, reservation.type);
     }
 
     // The complete synthetic handoff is firmware-owned. It contains the

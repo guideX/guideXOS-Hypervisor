@@ -2064,6 +2064,14 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                         peInfo.globalPointer >= imageBuffer.size()) {
                                                                         const uint64_t ia64EfiImageAliasBase =
                                                                             guideXOS::ComputeIa64EfiAliasBase(peInfo);
+                                                                    IA64ISAPlugin* ia64Plugin = getActiveIa64Plugin(instance);
+                                                                    if (ia64Plugin &&
+                                                                        !ia64Plugin->reserveEfiMemoryRange(
+                                                                            ia64EfiImageAliasBase,
+                                                                            imageBuffer.size(),
+                                                                            0U)) {
+                                                                        LOG_ERROR("[EFI-MILESTONE] Failed to register IA-64 EFI compatibility mirror reservation");
+                                                                    }
                                                                     size_t mirroredSections = 0;
                                                                     size_t mirroredBytes = 0;
                                                                     for (const auto& section : peInfo.sections) {

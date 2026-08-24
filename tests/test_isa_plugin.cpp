@@ -4297,6 +4297,115 @@ void testIA64PluginEfiPoolAllocationLifecycle() {
                  "and genuine exhaustion remains EFI_OUT_OF_RESOURCES\n";
 }
 
+void testIA64PluginEfiMirrorReservation() {
+    std::cout << "Testing IA-64 EFI compatibility-mirror reservation...\n";
+
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t mirrorStart = 0x200000ULL;
+    constexpr uint64_t mirrorSize = 0x5e000ULL;
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t allocateCode = handoffBase + 0xe00ULL;
+    constexpr uint64_t unsupportedCode = handoffBase + 0xf00ULL;
+    constexpr uint64_t getMemoryMapCode = handoffBase + 0x1800ULL;
+    constexpr uint64_t allocatePagesSlot = handoffBase + 0x828ULL;
+    constexpr uint64_t efiSuccess = 0ULL;
+    constexpr uint64_t efiNotFound = 0x800000000000000eULL;
+
+    SizedSparseMemory memory(guestMemorySize);
+    uint8_t bundle[16] = {};
+    memory.Write(0x5200, bundle, sizeof(bundle));
+    memory.Write(allocateCode, bundle, sizeof(bundle));
+    uint8_t syntheticStub[16] = {1};
+    memory.Write(unsupportedCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(getMemoryMapCode, bundle, sizeof(bundle));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    assert(plugin.reserveEfiMemoryRange(mirrorStart, mirrorSize, 0U));
+
+    const auto invokePool = [&](uint64_t size, uint64_t bufferOut) {
+        plugin.getCPUState().SetIP(0x5200);
+        plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+        plugin.getCPUState().SetBR(6, allocateCode);
+        plugin.getCPUState().SetGR(35, 2);
+        plugin.getCPUState().SetGR(36, size);
+        plugin.getCPUState().SetGR(37, bufferOut);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    const auto invokeAllocatePages = [&](uint64_t address) {
+        memory.write<uint64_t>(0x5000, address);
+        plugin.getCPUState().SetIP(0x5200);
+        plugin.getCPUState().SetCFM(2);
+        plugin.getCPUState().SetBR(6, unsupportedCode);
+        plugin.getCPUState().SetGR(32, 2);
+        plugin.getCPUState().SetGR(33, 2);
+        plugin.getCPUState().SetGR(34, 1);
+        plugin.getCPUState().SetGR(35, 0x5000);
+        plugin.getCPUState().SetGR(37, allocatePagesSlot);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    const auto getMemoryMap = [&]() {
+        constexpr uint64_t sizeAddress = 0x5100;
+        constexpr uint64_t mapAddress = 0x6000;
+        constexpr uint64_t keyAddress = 0x5180;
+        constexpr uint64_t descriptorSizeAddress = 0x5188;
+        constexpr uint64_t descriptorVersionAddress = 0x5190;
+        memory.write<uint64_t>(sizeAddress, 0x4000ULL);
+        plugin.getCPUState().SetIP(0x5200);
+        plugin.getCPUState().SetCFM(2);
+        plugin.getCPUState().SetBR(6, getMemoryMapCode);
+        plugin.getCPUState().SetGR(32, sizeAddress);
+        plugin.getCPUState().SetGR(33, mapAddress);
+        plugin.getCPUState().SetGR(34, keyAddress);
+        plugin.getCPUState().SetGR(35, descriptorSizeAddress);
+        plugin.getCPUState().SetGR(36, descriptorVersionAddress);
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetGR(8) == efiSuccess);
+        return memory.read<uint64_t>(sizeAddress);
+    };
+
+    const uint64_t poolStatus = invokePool(0x2010, 0x6020);
+    assert(poolStatus == efiSuccess);
+    const uint64_t poolAddress = memory.read<uint64_t>(0x6020);
+    assert(poolAddress < mirrorStart || poolAddress >= mirrorStart + mirrorSize);
+
+    assert(invokeAllocatePages(mirrorStart) == efiNotFound);
+    const uint64_t mapBytes = getMemoryMap();
+    assert(mapBytes >= 40);
+    bool sawBefore = false;
+    bool sawMirror = false;
+    bool sawAfter = false;
+    for (uint64_t offset = 0; offset < mapBytes; offset += 40) {
+        const uint64_t descriptor = 0x6000 + offset;
+        const uint32_t type = memory.read<uint32_t>(descriptor);
+        const uint64_t start = memory.read<uint64_t>(descriptor + 8);
+        const uint64_t pages = memory.read<uint64_t>(descriptor + 24);
+        const uint64_t end = start + pages * 0x1000ULL;
+        const uint64_t attributes = memory.read<uint64_t>(descriptor + 0x20);
+        if (type == 7U && start == 0x100000ULL && end == mirrorStart) {
+            sawBefore = true;
+        }
+        if (type == 0U && start == mirrorStart && end == mirrorStart + mirrorSize &&
+            attributes == 0xFULL) {
+            sawMirror = true;
+        }
+        if (type == 7U && start == mirrorStart + mirrorSize) {
+            sawAfter = true;
+        }
+    }
+    assert(sawBefore && sawMirror && sawAfter);
+
+    std::cout << "  ? mirror is page-aligned, serialized as EFI_MEMORY_RESERVED, "
+                 "and excluded from AllocatePool/AllocatePages\n";
+}
+
 void testIA64PluginEfiBootServicesPlabelDispatch() {
     std::cout << "Testing IA-64 EFI Boot Services table -> plabel -> stub dispatch...\n";
 
@@ -5387,6 +5496,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginEfiPoolAllocationLifecycle();
+        std::cout << "\n";
+
+        testIA64PluginEfiMirrorReservation();
         std::cout << "\n";
 
         testIA64PluginEfiBootServicesPlabelDispatch();

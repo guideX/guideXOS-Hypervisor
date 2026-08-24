@@ -185,6 +185,15 @@ public:
      */
     void setBootImageBackingStore(std::vector<uint8_t> bootImage);
 
+    /**
+     * Register a page-aligned guest range that must remain unavailable to EFI
+     * page and pool allocation. The reservation is folded into the EFI
+     * memory-map descriptors before the first map is exposed.
+     */
+    bool reserveEfiMemoryRange(uint64_t physicalStart,
+                               uint64_t size,
+                               uint32_t memoryType);
+
     // Queue a host-independent EFI key for focused firmware/input tests.
     // Production starts with an empty queue until a host input source is wired.
     void enqueueEfiInputKey(uint16_t scanCode, uint16_t unicodeChar,
@@ -443,6 +452,11 @@ private:
         uint64_t numberOfPages = 0;
         uint64_t attributes = 0;
     };
+    struct EfiMemoryReservation {
+        uint32_t type = 0;
+        uint64_t physicalStart = 0;
+        uint64_t numberOfPages = 0;
+    };
     struct EfiPageAllocation {
         uint64_t physicalStart = 0;
         uint64_t numberOfPages = 0;
@@ -454,6 +468,7 @@ private:
         uint32_t type = 0;
     };
     std::vector<EfiMemoryDescriptor> efiMemoryMap_;
+    std::vector<EfiMemoryReservation> efiMemoryReservations_;
     std::vector<EfiPageAllocation> efiPageAllocations_;
     std::vector<EfiPoolAllocation> efiPoolAllocations_;
     uint64_t efiMemoryMapKey_;
