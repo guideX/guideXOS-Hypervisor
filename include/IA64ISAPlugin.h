@@ -190,6 +190,16 @@ public:
                             uint32_t shiftState = 0, uint8_t toggleState = 0);
 
     struct EfiTraceSummary {
+        struct PlacementEvent {
+            uint64_t step = 0;
+            uint64_t destination = 0;
+            uint64_t source = 0;
+            uint64_t length = 0;
+            uint64_t cumulativeFileBackedBytes = 0;
+            uint64_t elfOffset = 0;
+            int segmentIndex = -1;
+        };
+
         size_t textOutputCalls = 0;
         size_t openVolumeCalls = 0;
         size_t fileOpenCalls = 0;
@@ -210,6 +220,7 @@ public:
         std::vector<std::string> openFilePaths;
         std::vector<uint64_t> openFilePositions;
         std::vector<uint64_t> openFileSizes;
+        std::vector<PlacementEvent> placementEvents;
     };
 
     EfiTraceSummary getEfiTraceSummary() const;
@@ -255,6 +266,7 @@ private:
                                uint64_t codePointer);
     void recordRecentInstruction(uint64_t ip, size_t slot, const std::string& disasm);
     void recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm);
+    void recordPlacementTelemetry(const CPUState& cpu);
     void dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, size_t slot, const InstructionEx& instr, uint64_t baseBefore) const;
     bool ensureEfiHandoffLayout(IMemory& memory);
     bool ensureEfiBootFat(IMemory& memory);
@@ -395,6 +407,9 @@ private:
     std::deque<RecentInstructionTrace> recentInstructions_;
     std::deque<RecentRegisterWriteTrace> recentTrackedRegisterWrites_;
     size_t recentInstructionSequenceRepeatCount_;
+    uint64_t placementStepCount_ = 0;
+    uint64_t placementFileBackedBytes_ = 0;
+    std::vector<EfiTraceSummary::PlacementEvent> placementEvents_;
 
     struct EfiFileHandle {
         uint64_t protocolAddress = 0;

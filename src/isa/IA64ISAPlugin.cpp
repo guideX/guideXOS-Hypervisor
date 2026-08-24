@@ -30,69 +30,53 @@ struct CountedLoopTraceState {
 
 CountedLoopTraceState g_countedLoopTrace;
 
-bool shouldEmitBootPathTrace() {
-    static const bool enabled = []() {
-        const char* raw = nullptr;
+bool environmentFlagEnabled(const char* name) {
+    const char* raw = nullptr;
 #ifdef _MSC_VER
-        char* rawBuffer = nullptr;
-        size_t rawLength = 0;
-        if (_dupenv_s(&rawBuffer, &rawLength, "GUIDEXOS_IA64_BOOT_PATH_TRACE") != 0) {
-            return false;
-        }
-        raw = rawBuffer;
+    char* rawBuffer = nullptr;
+    size_t rawLength = 0;
+    if (_dupenv_s(&rawBuffer, &rawLength, name) != 0) {
+        return false;
+    }
+    raw = rawBuffer;
 #else
-        raw = std::getenv("GUIDEXOS_IA64_BOOT_PATH_TRACE");
+    raw = std::getenv(name);
 #endif
-        if (!raw || *raw == '\0') {
-#ifdef _MSC_VER
-            std::free(const_cast<char*>(raw));
-#endif
-            return false;
-        }
-        std::string value(raw);
+    if (!raw || *raw == '\0') {
 #ifdef _MSC_VER
         std::free(const_cast<char*>(raw));
 #endif
-        std::transform(value.begin(), value.end(), value.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return value != "0" &&
-               value != "false" &&
-               value != "off" &&
-               value != "no";
-    }();
+        return false;
+    }
+    std::string value(raw);
+#ifdef _MSC_VER
+    std::free(const_cast<char*>(raw));
+#endif
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value != "0" &&
+           value != "false" &&
+           value != "off" &&
+           value != "no";
+}
+
+bool shouldEmitInstructionTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_INSTRUCTION_TRACE");
+    return enabled;
+}
+
+bool shouldEmitPlacementTelemetry() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_PLACEMENT_TRACE");
+    return enabled;
+}
+
+bool shouldEmitBootPathTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_BOOT_PATH_TRACE");
     return enabled;
 }
 
 bool shouldEmitGpRelativeDataDiag() {
-    static const bool enabled = []() {
-        const char* raw = nullptr;
-#ifdef _MSC_VER
-        char* rawBuffer = nullptr;
-        size_t rawLength = 0;
-        if (_dupenv_s(&rawBuffer, &rawLength, "GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS") != 0) {
-            return false;
-        }
-        raw = rawBuffer;
-#else
-        raw = std::getenv("GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS");
-#endif
-        if (!raw || *raw == '\0') {
-#ifdef _MSC_VER
-            std::free(const_cast<char*>(raw));
-#endif
-            return false;
-        }
-        std::string value(raw);
-#ifdef _MSC_VER
-        std::free(const_cast<char*>(raw));
-#endif
-        std::transform(value.begin(), value.end(), value.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return value != "0" &&
-               value != "false" &&
-               value != "off" &&
-               value != "no";
-    }();
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS");
     return enabled;
 }
 
@@ -2237,6 +2221,53 @@ void IA64ISAPlugin::enqueueEfiInputKey(uint16_t scanCode,
     efiInputQueue_.push_back({scanCode, unicodeChar, shiftState, toggleState});
 }
 
+void IA64ISAPlugin::recordPlacementTelemetry(const CPUState& cpu) {
+    const uint64_t destination = cpu.GetGR(45);
+    const uint64_t source = cpu.GetGR(46);
+    const uint64_t length = cpu.GetGR(47);
+
+    struct LoadSegment {
+        uint64_t physicalBase;
+        uint64_t physicalEnd;
+        uint64_t elfBase;
+        int index;
+    };
+    static constexpr LoadSegment segments[] = {
+        {0x04000000ULL, 0x04b48eb0ULL, 0x0010000ULL, 0},
+        {0x04b80000ULL, 0x04b83440ULL, 0x0b60000ULL, 1},
+        {0x04bc0000ULL, 0x04cbdbc0ULL, 0x0b70000ULL, 2},
+    };
+
+    EfiTraceSummary::PlacementEvent event;
+    event.step = placementStepCount_;
+    event.destination = destination;
+    event.source = source;
+    event.length = length;
+    event.cumulativeFileBackedBytes = placementFileBackedBytes_ + length;
+    for (const auto& segment : segments) {
+        if (destination >= segment.physicalBase && destination < segment.physicalEnd) {
+            event.segmentIndex = segment.index;
+            event.elfOffset = segment.elfBase + (destination - segment.physicalBase);
+            break;
+        }
+    }
+
+    placementFileBackedBytes_ = event.cumulativeFileBackedBytes;
+    placementEvents_.push_back(event);
+    std::cerr << "[IA64-PLACEMENT] step=" << event.step
+              << " destination=0x" << std::hex << event.destination
+              << " source=0x" << event.source
+              << " length=0x" << event.length
+              << " cumulative=0x" << event.cumulativeFileBackedBytes;
+    if (event.segmentIndex >= 0) {
+        std::cerr << " segment=" << std::dec << event.segmentIndex
+                  << " elfOffset=0x" << std::hex << event.elfOffset;
+    } else {
+        std::cerr << " segment=unknown";
+    }
+    std::cerr << std::dec << std::endl;
+}
+
 IA64ISAPlugin::EfiTraceSummary IA64ISAPlugin::getEfiTraceSummary() const {
     EfiTraceSummary summary;
     summary.textOutputCalls = efiTextOutputCalls_;
@@ -2264,6 +2295,7 @@ IA64ISAPlugin::EfiTraceSummary IA64ISAPlugin::getEfiTraceSummary() const {
             summary.openFileSizes.push_back(handle.data.size());
         }
     }
+    summary.placementEvents = placementEvents_;
     return summary;
 }
 
@@ -2340,6 +2372,9 @@ void IA64ISAPlugin::reset() {
     recentInstructions_.clear();
     recentTrackedRegisterWrites_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
+    placementStepCount_ = 0;
+    placementFileBackedBytes_ = 0;
+    placementEvents_.clear();
     resetEfiHandoffLayoutGlobals();
     efiPoolNext_ = EFI_POOL_BASE;
     efiCurrentTpl_ = 4;
@@ -2446,7 +2481,9 @@ ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
         result.valid = true;
         result.instructionAddress = state_.getCPUState().GetIP();
         result.instructionLength = 16;  // IA-64 bundles are 16 bytes (we advance by bundle)
-        result.disassembly = instr.GetDisassembly();
+        if (shouldEmitInstructionTrace() || isProfilingEnabled()) {
+            result.disassembly = instr.GetDisassembly();
+        }
         result.internalData = &cachedInstruction_;
         {
             std::ostringstream ctx;
@@ -2491,6 +2528,16 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         return ISAExecutionResult::EXCEPTION;
     }
 
+    const bool instructionTrace = shouldEmitInstructionTrace();
+    if (shouldEmitPlacementTelemetry()) {
+        ++placementStepCount_;
+        const uint64_t callSite = decodeResult.instructionAddress +
+                                  static_cast<uint64_t>(state_.currentSlot_) * 6ULL;
+        if (callSite == 0x23fbcULL) {
+            recordPlacementTelemetry(state_.getCPUState());
+        }
+    }
+
     try {
         // Profile instruction execution
         if (isProfilingEnabled()) {
@@ -2512,15 +2559,17 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             decodeResult.instructionAddress <= g_countedLoopTrace.end &&
             state_.getCPUState().GetAR(65) > 1;
 
-        if (suppressCountedLoopTrace) {
-            ++g_countedLoopTrace.suppressed;
-        } else {
-            std::cout << "[IP=0x" << std::hex << decodeResult.instructionAddress << std::dec
-                      << ", Slot=" << state_.currentSlot_ << "] "
-                      << decodeResult.disassembly << std::endl;
+        if (instructionTrace) {
+            if (suppressCountedLoopTrace) {
+                ++g_countedLoopTrace.suppressed;
+            } else {
+                std::cout << "[IP=0x" << std::hex << decodeResult.instructionAddress << std::dec
+                          << ", Slot=" << state_.currentSlot_ << "] "
+                          << decodeResult.disassembly << std::endl;
+            }
         }
 
-        if (decodeResult.instructionAddress == 0x36CC0ULL) {
+        if (instructionTrace && decodeResult.instructionAddress == 0x36CC0ULL) {
             const uint8_t templateField = static_cast<uint8_t>(state_.currentBundle_.templateType);
             std::cout << "[IA64-BUNDLE] ip=" << formatHex(decodeResult.instructionAddress)
                       << " template=" << formatHex(static_cast<uint64_t>(templateField))
@@ -6050,15 +6099,19 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
     try {
         CPUState& cpu = state_.getCPUState();
         const uint64_t currentIP = cpu.GetIP();
+        const bool instructionTrace = shouldEmitInstructionTrace();
+        const bool bootPathTrace = shouldEmitBootPathTrace();
         const bool traceScanLoop =
-            currentIP >= 0x36D90ULL && currentIP <= 0x36F10ULL;
+            bootPathTrace && currentIP >= 0x36D90ULL && currentIP <= 0x36F10ULL;
         static uint64_t scanLoopTraceCount = 0;
         const bool emitScanLoopTrace =
             traceScanLoop && (scanLoopTraceCount < 64 || (scanLoopTraceCount % 256) == 0);
         if (emitScanLoopTrace) {
             logScanLoopState("pre", cpu, state_.currentSlot_, instr);
         }
-        recordRecentInstruction(cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
+        if (instructionTrace || bootPathTrace) {
+            recordRecentInstruction(cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
+        }
         const bool traceBootStringPath =
             shouldEmitBootPathTrace() &&
             (currentIP == 0x1DD0ULL ||
@@ -6400,7 +6453,8 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         } else if (traceScanLoop) {
             ++scanLoopTraceCount;
         }
-        if (instr.GetDst() == 16 || instr.GetDst() == 17) {
+        if ((instructionTrace || bootPathTrace) &&
+            (instr.GetDst() == 16 || instr.GetDst() == 17)) {
             recordTrackedRegisterWrite(instr.GetDst(), state_.getCPUState().GetGR(instr.GetDst()),
                                        cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
         }
@@ -6420,7 +6474,7 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                 postSimpleFsTraceActive_ = false;
             }
         }
-        if (isAdvancedLoadCheckInstruction(instr.GetType())) {
+        if (instructionTrace && isAdvancedLoadCheckInstruction(instr.GetType())) {
             std::cout << "[ALAT-STUB] " << instr.GetDisassembly()
                       << " treated as success; ALAT tracking is not implemented"
                       << std::endl;

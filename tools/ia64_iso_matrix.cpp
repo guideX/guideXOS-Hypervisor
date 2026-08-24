@@ -6,7 +6,11 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -17,6 +21,9 @@ struct Options {
     uint64_t cycles = 2'000'000;
     uint64_t memoryMiB = 512;
     uint64_t keyAfterCycles = 300'000;
+    bool placementTelemetry = false;
+    bool instructionTrace = false;
+    std::string oraclePath;
     struct InputKey {
         uint16_t scanCode = 0;
         uint16_t unicodeChar = 0;
@@ -113,6 +120,12 @@ bool parseOptions(int argc, char** argv, Options& options) {
                 return false;
             }
             options.keys.push_back(key);
+        } else if (argument == "--placement-telemetry") {
+            options.placementTelemetry = true;
+        } else if (argument == "--instruction-trace") {
+            options.instructionTrace = true;
+        } else if (argument == "--verify-oracle" && i + 1 < argc) {
+            options.oraclePath = argv[++i];
         } else if (argument == "--help" || argument == "-h") {
             return false;
         } else {
@@ -124,10 +137,76 @@ bool parseOptions(int argc, char** argv, Options& options) {
 
 void printUsage() {
     std::cout << "Usage: ia64_iso_matrix <iso-path> [--cycles N] [--memory-mib N] "
-                 "[--key NAME]... [--key-after-cycles N]\n"
+                 "[--key NAME]... [--key-after-cycles N] [--placement-telemetry] "
+                 "[--verify-oracle PATH] [--instruction-trace]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
                  "--key-after-cycles 300000\n"
               << "Keys: enter, linefeed, up, down, left, right, backspace, escape, or one character\n";
+}
+
+bool setEnvironmentFlag(const char* name) {
+#ifdef _WIN32
+    return _putenv_s(name, "1") == 0;
+#else
+    return setenv(name, "1", 1) == 0;
+#endif
+}
+
+void verifyPlacementOracle(const ia64::VirtualMachine& vm,
+                           const ia64::IA64ISAPlugin::EfiTraceSummary& summary,
+                           const std::string& oraclePath) {
+    std::ifstream oracleFile(oraclePath, std::ios::binary);
+    if (!oracleFile) {
+        std::cerr << "[IA64-MATRIX] oracle-open-failed path=\"" << oraclePath << "\"\n";
+        return;
+    }
+    const std::vector<uint8_t> oracle(
+        (std::istreambuf_iterator<char>(oracleFile)), std::istreambuf_iterator<char>());
+    const uint8_t* guestMemory = vm.getMemory().GetRawData();
+    if (guestMemory == nullptr) {
+        std::cerr << "[IA64-MATRIX] oracle-check-unavailable raw guest memory is unavailable\n";
+        return;
+    }
+
+    size_t verifiedEvents = 0;
+    size_t mismatches = 0;
+    size_t invalidRanges = 0;
+    uint64_t verifiedBytes = 0;
+    size_t mismatchReports = 0;
+    for (const auto& event : summary.placementEvents) {
+        const bool guestRangeValid =
+            event.destination <= vm.getMemory().GetTotalSize() &&
+            event.length <= vm.getMemory().GetTotalSize() - event.destination;
+        const bool oracleRangeValid =
+            event.elfOffset <= oracle.size() &&
+            event.length <= oracle.size() - event.elfOffset &&
+            event.length <= std::numeric_limits<size_t>::max();
+        if (event.segmentIndex < 0 || !guestRangeValid || !oracleRangeValid) {
+            ++invalidRanges;
+            continue;
+        }
+        const size_t length = static_cast<size_t>(event.length);
+        if (std::memcmp(guestMemory + event.destination,
+                        oracle.data() + event.elfOffset,
+                        length) != 0) {
+            ++mismatches;
+            if (mismatchReports++ < 8) {
+                std::cerr << "[IA64-MATRIX] oracle-mismatch step=" << event.step
+                          << " destination=0x" << std::hex << event.destination
+                          << " elfOffset=0x" << event.elfOffset
+                          << " length=0x" << event.length << std::dec << "\n";
+            }
+            continue;
+        }
+        ++verifiedEvents;
+        verifiedBytes += event.length;
+    }
+    std::cerr << "[IA64-MATRIX] oracle-check path=\"" << oraclePath << "\""
+              << " placementEvents=" << summary.placementEvents.size()
+              << " verifiedEvents=" << verifiedEvents
+              << " verifiedBytes=0x" << std::hex << verifiedBytes << std::dec
+              << " mismatches=" << mismatches
+              << " invalidRanges=" << invalidRanges << std::endl;
 }
 
 } // namespace
@@ -137,6 +216,18 @@ int main(int argc, char** argv) {
     if (!parseOptions(argc, argv, options)) {
         printUsage();
         return argc >= 2 ? 2 : 0;
+    }
+
+    if (options.placementTelemetry || !options.oraclePath.empty()) {
+        const bool set = setEnvironmentFlag("GUIDEXOS_IA64_PLACEMENT_TRACE");
+        if (!set || std::getenv("GUIDEXOS_IA64_PLACEMENT_TRACE") == nullptr) {
+            std::cerr << "[IA64-MATRIX] placement-telemetry=unavailable\n";
+        } else {
+            std::cerr << "[IA64-MATRIX] placement-telemetry=enabled\n";
+        }
+    }
+    if (options.instructionTrace) {
+        setEnvironmentFlag("GUIDEXOS_IA64_INSTRUCTION_TRACE");
     }
 
     if (std::getenv("GUIDEXOS_MATRIX_QUIET") != nullptr) {
@@ -256,12 +347,23 @@ int main(int argc, char** argv) {
                           << "\" position=0x" << std::hex << summary.openFilePositions[i]
                           << " size=0x" << summary.openFileSizes[i] << std::dec << std::endl;
             }
+            if (!options.oraclePath.empty() && vm != nullptr) {
+                verifyPlacementOracle(*vm, summary, options.oraclePath);
+            }
         }
 
         std::cout << "[IA64-MATRIX] vmId=" << vmId
                   << " cyclesExecuted=" << executed
                   << " usageCycles=" << usage.cyclesExecuted
                   << " state=" << ia64::vmStateToString(metadata.currentState)
+                  << " error=\"" << metadata.lastError << "\""
+                  << std::endl;
+        std::cerr << "[IA64-MATRIX] vmId=" << vmId
+                  << " cyclesExecuted=" << executed
+                  << " usageCycles=" << usage.cyclesExecuted
+                  << " state=" << ia64::vmStateToString(metadata.currentState)
+                  << " internalState="
+                  << (vm == nullptr ? std::string("unknown") : ia64::vmStateToString(vm->getState()))
                   << " error=\"" << metadata.lastError << "\""
                   << std::endl;
         return 0;
