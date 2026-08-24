@@ -2113,6 +2113,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiHandoffLayoutMemorySize_(0)
     , efiHandoffLayoutInitialized_(false)
     , callFrameStack_()
+    , completedCallFrames_()
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
     , pendingRegisterConfigEntryArmed_(false) {
@@ -2198,6 +2199,7 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiHandoffLayoutMemorySize_(0)
     , efiHandoffLayoutInitialized_(false)
     , callFrameStack_()
+    , completedCallFrames_()
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
     , pendingRegisterConfigEntryArmed_(false) {
@@ -2445,6 +2447,7 @@ void IA64ISAPlugin::reset() {
     efiHandoffLayoutMemorySize_ = 0;
     efiHandoffLayoutInitialized_ = false;
     callFrameStack_.clear();
+    completedCallFrames_.clear();
     pendingRegisterConfigEntryTarget_ = 0;
     pendingRegisterConfigEntryCallsite_ = 0;
     pendingRegisterConfigEntryArmed_ = false;
@@ -3188,7 +3191,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                       << std::hex << size << " -> 0x" << allocation
                                       << " via out=0x" << bufferOut << std::dec << std::endl;
                         } else {
-                            state_.getCPUState().SetGR(8, static_cast<uint64_t>(-1));
+                            state_.getCPUState().SetGR(8, EFI_STATUS_OUT_OF_RESOURCES);
                             std::cout << "[EFI-STUB] BootServices.AllocatePool failed size=0x"
                                       << std::hex << size << " out=0x" << bufferOut
                                       << " next=0x" << efiPoolNext_ << std::dec << std::endl;
@@ -4524,6 +4527,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiBootFat_.reset();
     efiBootImageFromVmManager_ = false;
     callFrameStack_.clear();
+    completedCallFrames_.clear();
 }
 
 std::vector<uint8_t> IA64ISAPlugin::serialize_state() const {
@@ -4808,10 +4812,6 @@ void IA64ISAPlugin::saveCallFrame(uint64_t returnAddress) {
 }
 
 void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
-    if (callFrameStack_.empty()) {
-        return;
-    }
-
     size_t matchIndex = callFrameStack_.size();
     while (matchIndex > 0) {
         --matchIndex;
@@ -4819,20 +4819,34 @@ void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
             break;
         }
     }
-    if (matchIndex >= callFrameStack_.size() ||
-        callFrameStack_[matchIndex].returnAddress != branchTarget) {
+    if (matchIndex < callFrameStack_.size() &&
+        callFrameStack_[matchIndex].returnAddress == branchTarget) {
+        const CallFrameSnapshot frame = callFrameStack_[matchIndex];
+        completedCallFrames_[frame.returnAddress] = frame;
+        callFrameStack_.erase(callFrameStack_.begin() + matchIndex, callFrameStack_.end());
+
+        state_.getCPUState().SetCFM(frame.cfm);
+        // The snapshot contains logical stacked-register values from the caller
+        // frame.  Restore that frame's CFM before writing them so the active RRB
+        // mapping addresses the caller's physical backing registers.
+        for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
+            state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
+        }
         return;
     }
 
-    const CallFrameSnapshot frame = callFrameStack_[matchIndex];
-    callFrameStack_.erase(callFrameStack_.begin() + matchIndex, callFrameStack_.end());
+    // setjmp returns normally once, so its active call frame is removed.  A
+    // later longjmp re-enters the saved continuation without an active frame;
+    // recover the most recent completed snapshot for that return address.
+    const auto completedFrame = completedCallFrames_.find(branchTarget);
+    if (completedFrame != completedCallFrames_.end()) {
+        const CallFrameSnapshot& frame = completedFrame->second;
 
-    state_.getCPUState().SetCFM(frame.cfm);
-    // The snapshot contains logical stacked-register values from the caller
-    // frame.  Restore that frame's CFM before writing them so the active RRB
-    // mapping addresses the caller's physical backing registers.
-    for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
-        state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
+        state_.getCPUState().SetCFM(frame.cfm);
+        for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
+            state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
+        }
+        return;
     }
 }
 

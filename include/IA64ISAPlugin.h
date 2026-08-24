@@ -12,6 +12,7 @@
 #include <deque>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ia64 {
@@ -458,6 +459,11 @@ private:
         uint64_t returnAddress;
     };
     std::vector<CallFrameSnapshot> callFrameStack_;
+    // A non-local return (for example IA-64 setjmp/longjmp) can target a
+    // call site whose ordinary return already removed its active frame.
+    // Retain the latest completed snapshot for each return address so the
+    // return can restore the caller's stacked-register view as the RSE would.
+    std::unordered_map<uint64_t, CallFrameSnapshot> completedCallFrames_;
 
     // Narrow diagnostics for register_config_options only.
     uint64_t pendingRegisterConfigEntryTarget_;

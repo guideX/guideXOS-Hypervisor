@@ -1128,6 +1128,80 @@ public:
     }
 };
 
+class FakeCompletedCallFrameDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x1000) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 0, 0);
+            call.SetBranchTarget(0x2000);
+            call.SetRawBits(0x10);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x2000) {
+            InstructionEx alloc(InstructionType::ALLOC, UnitType::M_UNIT);
+            alloc.SetOperands(50, 0, 0);
+            alloc.SetImmediate(8 | (static_cast<uint64_t>(6) << 7));
+            alloc.SetRawBits(0x20);
+            bundle.instructions.push_back(alloc);
+
+            InstructionEx clobberLocal(InstructionType::MOV_GR, UnitType::I_UNIT);
+            clobberLocal.SetOperands(35, 0, 0);
+            clobberLocal.SetRawBits(0x21);
+            bundle.instructions.push_back(clobberLocal);
+
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x22);
+            bundle.instructions.push_back(ret);
+        } else if (bundleIP == 0x1010) {
+            InstructionEx branch(InstructionType::BR_COND, UnitType::B_UNIT);
+            branch.SetOperands(0, 0, 0);
+            branch.SetBranchTarget(0x3000);
+            branch.SetRawBits(0x30);
+            bundle.instructions.push_back(branch);
+        } else if (bundleIP == 0x3000) {
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x31);
+            bundle.instructions.push_back(ret);
+        } else if (bundleIP >= 0x4000 && bundleIP < 0x52d0) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 0, 0);
+            call.SetBranchTarget(0x6000);
+            call.SetRawBits(0x40);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x6000 || bundleIP == 0x7000) {
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x41);
+            bundle.instructions.push_back(ret);
+        }
+
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeEfiThunkReturnDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -2801,6 +2875,56 @@ void testIA64PluginCallFrameRestoreSkipsStaleFrames() {
     assert(plugin.getCPUState().GetGR(36) == 0x12345678);
 
     std::cout << "  ? returning to an older saved address restores the matching caller frame\n";
+}
+
+void testIA64PluginNonLocalReturnRestoresCompletedFrame() {
+    std::cout << "Testing IA-64 plugin non-local return restores a completed caller frame...\n";
+
+    Memory memory(64 * 1024);
+    FakeCompletedCallFrameDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    const uint64_t initialCfm = 6 | (static_cast<uint64_t>(4) << 7);
+    constexpr uint64_t savedLocal = 0x123456789abcdef0ULL;
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetCFM(initialCfm);
+    plugin.getCPUState().SetGR(35, savedLocal);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetCFM() == initialCfm);
+    assert(plugin.getCPUState().GetGR(35) == savedLocal);
+
+    plugin.getCPUState().SetGR(35, 0);
+    plugin.getCPUState().SetBR(0, 0x1010);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x3000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetCFM() == initialCfm);
+    assert(plugin.getCPUState().GetGR(35) == savedLocal);
+
+    // Age the completed-frame table past the old bounded-history limit.  The
+    // saved setjmp continuation must remain recoverable by return address.
+    plugin.getCPUState().SetIP(0x4000);
+    for (size_t i = 0; i < 301; ++i) {
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == 0x6000);
+        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == 0x4010 + i * 0x10);
+    }
+
+    plugin.getCPUState().SetIP(0x7000);
+    plugin.getCPUState().SetGR(35, 0);
+    plugin.getCPUState().SetBR(0, 0x1010);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetCFM() == initialCfm);
+    assert(plugin.getCPUState().GetGR(35) == savedLocal);
+
+    std::cout << "  ? a later non-local return restores the saved stacked-register frame\n";
 }
 
 void testIA64PluginIndirectBranchExecution() {
@@ -5088,6 +5212,7 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginCallFrameRestoreSkipsStaleFrames();
+        testIA64PluginNonLocalReturnRestoresCompletedFrame();
         std::cout << "\n";
 
         testIA64PluginIndirectBranchExecution();
