@@ -285,6 +285,12 @@ private:
                              uint64_t size,
                              uint32_t memoryType,
                              uint64_t alignment = 16);
+    uint64_t allocateEfiImagePages(IMemory& memory,
+                                   uint64_t numberOfPages,
+                                   uint32_t memoryType);
+    bool releaseEfiImagePages(uint64_t physicalStart,
+                              uint64_t numberOfPages);
+    uint64_t handleEfiLoadImage(IMemory& memory);
     uint64_t handleEfiFreePool(IMemory& memory);
     uint64_t handleEfiFileOpen(IMemory& memory);
     uint64_t handleEfiFileRead(IMemory& memory);
@@ -467,10 +473,22 @@ private:
         uint64_t numberOfPages = 0;
         uint32_t type = 0;
     };
+    struct EfiLoadedImage {
+        uint64_t handle = 0;
+        uint64_t protocolAddress = 0;
+        uint64_t parentHandle = 0;
+        uint64_t deviceHandle = 0;
+        uint64_t imageBase = 0;
+        uint64_t imageSize = 0;
+        uint64_t entryPoint = 0;
+        uint64_t globalPointer = 0;
+        uint64_t filePath = 0;
+    };
     std::vector<EfiMemoryDescriptor> efiMemoryMap_;
     std::vector<EfiMemoryReservation> efiMemoryReservations_;
     std::vector<EfiPageAllocation> efiPageAllocations_;
     std::vector<EfiPoolAllocation> efiPoolAllocations_;
+    std::map<uint64_t, EfiLoadedImage> efiLoadedImages_;
     uint64_t efiMemoryMapKey_;
     uint64_t efiMemoryMapMemorySize_;
     bool efiMemoryMapInitialized_;

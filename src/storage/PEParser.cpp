@@ -417,12 +417,20 @@ bool PEParser::loadImage(std::vector<uint8_t>& imageBuffer, uint64_t& loadAddres
         BootStageTrace::Stage(70, "IA-64 image sections mapped", ctx.str());
     }
     
-    // STEP 4: Set load address and entry point
+    // STEP 4: Set load address and entry point.  Existing callers pass zero
+    // to request the PE preferred base.  EFI LoadImage passes the guest base
+    // selected by the firmware allocator, so preserve that explicit address
+    // and calculate all image-relative entry values from it.
     LOG_INFO("");
     LOG_INFO("Step 4: Setting load address and entry point...");
-    
-    loadAddress = imageInfo_.imageBase;
-    entryPoint = imageInfo_.entryPoint;
+
+    const uint64_t requestedLoadAddress = loadAddress;
+    const uint64_t entryPointRVAFromImageBase =
+        imageInfo_.entryPoint - imageInfo_.imageBase;
+    loadAddress = requestedLoadAddress != 0
+        ? requestedLoadAddress
+        : imageInfo_.imageBase;
+    entryPoint = loadAddress + entryPointRVAFromImageBase;
     
     oss.str("");
     oss << "  Load address (ImageBase): 0x" << std::hex << loadAddress << std::dec;

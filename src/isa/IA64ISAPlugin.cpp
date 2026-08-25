@@ -2,6 +2,7 @@
 #include "IA64EfiHandoffLayout.h"
 #include "SyscallDispatcher.h"
 #include "Profiler.h"
+#include "PEParser.h"
 #include "memory.h"
 #include "BootStageTrace.h"
 #include <iostream>
@@ -2393,6 +2394,7 @@ bool IA64ISAPlugin::ensureEfiHandoffLayout(IMemory& memory) {
 
 void IA64ISAPlugin::resetEfiProtocolAttachments() {
     efiProtocolAttachments_.clear();
+    efiLoadedImages_.clear();
     efiProtocolAttachments_.push_back({
         EFI_IMAGE_HANDLE, EFI_LOADED_IMAGE_PROTOCOL_GUID, EFI_LOADED_IMAGE_PROTOCOL_ADDR});
     efiProtocolAttachments_.push_back({
@@ -3415,7 +3417,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                 }
                             }
                         }
-                        if (protocolAddress == 0 && hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
+                        if (protocolAddress == 0 && handle == EFI_IMAGE_HANDLE &&
+                            hasGuid && guid == EFI_LOADED_IMAGE_PROTOCOL_GUID) {
                             protocolAddress = EFI_LOADED_IMAGE_PROTOCOL_ADDR;
                             protocolName = "LoadedImageProtocol";
                         } else if (protocolAddress == 0 && hasGuid && guid == EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID) {
@@ -3782,10 +3785,13 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         }
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                        const uint64_t status = loadImage
+                            ? handleEfiLoadImage(memory)
+                            : EFI_STATUS_UNSUPPORTED;
+                        state_.getCPUState().SetGR(8, status);
                         logEfiServiceCall(memory, loadImage ? "BootServices.LoadImage" : "BootServices.StartImage", currentIP,
                                           loadImage ? EFI_LOAD_IMAGE_STUB_DESC_ADDR : EFI_START_IMAGE_STUB_DESC_ADDR,
-                                          originalBranchTarget, EFI_STATUS_UNSUPPORTED);
+                                          originalBranchTarget, status);
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
@@ -5125,6 +5131,347 @@ uint64_t IA64ISAPlugin::allocateEfiPool(IMemory& memory,
               << " end=0x" << (allocation + allocationBytes)
               << " mapKey=" << std::dec << efiMemoryMapKey_ << std::endl;
     return allocation;
+}
+
+uint64_t IA64ISAPlugin::allocateEfiImagePages(IMemory& memory,
+                                              uint64_t numberOfPages,
+                                              uint32_t memoryType) {
+    if (numberOfPages == 0 || numberOfPages > UINT64_MAX / EFI_PAGE_SIZE ||
+        memoryType >= EFI_MAX_MEMORY_TYPE ||
+        memoryType == EFI_MEMORY_CONVENTIONAL ||
+        memoryType == EFI_MEMORY_PERSISTENT ||
+        memoryType == EFI_MEMORY_UNACCEPTED ||
+        !ensureEfiMemoryMap(memory)) {
+        return 0;
+    }
+
+    const uint64_t allocationBytes = numberOfPages * EFI_PAGE_SIZE;
+    for (size_t reverse = efiMemoryMap_.size(); reverse > 0; --reverse) {
+        const size_t index = reverse - 1;
+        const EfiMemoryDescriptor& descriptor = efiMemoryMap_[index];
+        if (descriptor.type != EFI_MEMORY_CONVENTIONAL ||
+            descriptor.numberOfPages < numberOfPages) {
+            continue;
+        }
+
+        const uint64_t descriptorEnd = descriptor.physicalStart +
+            descriptor.numberOfPages * EFI_PAGE_SIZE;
+        const uint64_t allocation = descriptorEnd - allocationBytes;
+        if (!replaceEfiMemoryMapRange(allocation, numberOfPages, memoryType)) {
+            return 0;
+        }
+        try {
+            efiPageAllocations_.reserve(efiPageAllocations_.size() + 1);
+            efiPageAllocations_.push_back({allocation, numberOfPages, memoryType});
+        } catch (const std::bad_alloc&) {
+            // Restore the map if bookkeeping could not be published.
+            replaceEfiMemoryMapRange(allocation, numberOfPages,
+                                     EFI_MEMORY_CONVENTIONAL);
+            return 0;
+        }
+        ++efiMemoryMapKey_;
+        return allocation;
+    }
+    return 0;
+}
+
+bool IA64ISAPlugin::releaseEfiImagePages(uint64_t physicalStart,
+                                         uint64_t numberOfPages) {
+    const auto allocation = std::find_if(
+        efiPageAllocations_.begin(), efiPageAllocations_.end(),
+        [physicalStart, numberOfPages](const EfiPageAllocation& entry) {
+            return entry.physicalStart == physicalStart &&
+                   entry.numberOfPages == numberOfPages;
+        });
+    if (allocation == efiPageAllocations_.end() ||
+        !replaceEfiMemoryMapRange(physicalStart, numberOfPages,
+                                  EFI_MEMORY_CONVENTIONAL)) {
+        return false;
+    }
+    efiPageAllocations_.erase(allocation);
+    ++efiMemoryMapKey_;
+    return true;
+}
+
+uint64_t IA64ISAPlugin::handleEfiLoadImage(IMemory& memory) {
+    const CPUState& cpu = state_.getCPUState();
+    const uint64_t bootPolicy = readCallerOutputRegister(cpu, 0);
+    const uint64_t parentHandle = readCallerOutputRegister(cpu, 1);
+    const uint64_t devicePath = readCallerOutputRegister(cpu, 2);
+    const uint64_t sourceBuffer = readCallerOutputRegister(cpu, 3);
+    const uint64_t sourceSize = readCallerOutputRegister(cpu, 4);
+    const uint64_t imageHandleOut = readCallerOutputRegister(cpu, 5);
+
+    (void)bootPolicy; // EFI_BOOLEAN is accepted as any nonzero value.
+
+    const bool parentKnown = parentHandle == EFI_IMAGE_HANDLE ||
+        efiLoadedImages_.find(parentHandle) != efiLoadedImages_.end();
+    bool outputBoundsKnown = false;
+    if (!parentKnown || imageHandleOut == 0 ||
+        !guestRangeWithinReportedMemory(memory, imageHandleOut,
+                                        sizeof(uint64_t), outputBoundsKnown) ||
+        (outputBoundsKnown && imageHandleOut + sizeof(uint64_t) >
+                              static_cast<uint64_t>(memory.GetTotalSize()))) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    if (sourceBuffer == 0 && sourceSize != 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (sourceBuffer != 0 && sourceSize == 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (devicePath == 0 && sourceBuffer == 0) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    std::vector<uint8_t> devicePathBytes;
+    std::string devicePathText;
+    if (devicePath != 0) {
+        uint64_t nodeAddress = devicePath;
+        bool foundEnd = false;
+        bool foundFilePath = false;
+        for (size_t nodeIndex = 0; nodeIndex < 256; ++nodeIndex) {
+            uint8_t header[4] = {};
+            if (!guestRangeWithinReportedMemory(memory, nodeAddress, sizeof(header),
+                                                outputBoundsKnown) ||
+                !readGuestU8(memory, nodeAddress, header[0]) ||
+                !readGuestU8(memory, nodeAddress + 1, header[1]) ||
+                !readGuestU8(memory, nodeAddress + 2, header[2]) ||
+                !readGuestU8(memory, nodeAddress + 3, header[3])) {
+                return EFI_STATUS_INVALID_PARAMETER;
+            }
+            const uint16_t nodeLength = static_cast<uint16_t>(header[2]) |
+                                         (static_cast<uint16_t>(header[3]) << 8);
+            if (nodeLength < 4 || nodeLength > 0x1000) {
+                return EFI_STATUS_INVALID_PARAMETER;
+            }
+            if (!guestRangeWithinReportedMemory(memory, nodeAddress, nodeLength,
+                                                outputBoundsKnown) ||
+                (nodeAddress > UINT64_MAX - nodeLength)) {
+                return EFI_STATUS_INVALID_PARAMETER;
+            }
+
+            std::vector<uint8_t> node(nodeLength, 0);
+            try {
+                memory.Read(nodeAddress, node.data(), node.size());
+                devicePathBytes.insert(devicePathBytes.end(), node.begin(), node.end());
+            } catch (const std::exception&) {
+                return EFI_STATUS_INVALID_PARAMETER;
+            }
+
+            if (header[0] == 0x7F && header[1] == 0xFF) {
+                if (nodeLength != 4) {
+                    return EFI_STATUS_INVALID_PARAMETER;
+                }
+                foundEnd = true;
+                break;
+            }
+            if (header[0] == 0x04 && header[1] == 0x04) {
+                if (((nodeLength - 4) & 1U) != 0) {
+                    return EFI_STATUS_INVALID_PARAMETER;
+                }
+                std::string path;
+                for (size_t offset = 4; offset + 1 < node.size(); offset += 2) {
+                    const uint16_t codeUnit = static_cast<uint16_t>(node[offset]) |
+                                              (static_cast<uint16_t>(node[offset + 1]) << 8);
+                    if (codeUnit == 0) {
+                        break;
+                    }
+                    path.push_back(codeUnit <= 0x7F ? static_cast<char>(codeUnit) : '?');
+                }
+                devicePathText = std::move(path);
+                foundFilePath = true;
+            }
+            nodeAddress += nodeLength;
+        }
+        if (!foundEnd || !foundFilePath || devicePathBytes.empty()) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    std::vector<uint8_t> sourceBytes;
+    std::string resolvedPath;
+    if (sourceBuffer != 0) {
+        if (sourceSize > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        bool sourceBoundsKnown = false;
+        if (!guestRangeWithinReportedMemory(memory, sourceBuffer, sourceSize,
+                                            sourceBoundsKnown) ||
+            (sourceBoundsKnown && sourceBuffer + sourceSize >
+                                  static_cast<uint64_t>(memory.GetTotalSize()))) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        sourceBytes.resize(static_cast<size_t>(sourceSize));
+        try {
+            memory.Read(sourceBuffer, sourceBytes.data(), sourceBytes.size());
+        } catch (const std::exception&) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+    } else {
+        resolvedPath = normalizeEfiPath(devicePathText);
+        if (!ensureEfiBootFat(memory)) {
+            return EFI_STATUS_NO_MEDIA;
+        }
+        guideXOS::FATFileInfo fileInfo{};
+        if (!efiBootFat_->findFile(resolvedPath, fileInfo) || fileInfo.isDirectory ||
+            !efiBootFat_->readFile(fileInfo, sourceBytes)) {
+            std::cout << "[EFI-LOADIMAGE] path=\\" << devicePathText
+                      << " normalized=\\" << resolvedPath
+                      << " -> EFI_NOT_FOUND" << std::endl;
+            return EFI_STATUS_NOT_FOUND;
+        }
+    }
+
+    guideXOS::PEParser parser;
+    try {
+        if (sourceBytes.empty() || !parser.parse(sourceBytes.data(), sourceBytes.size())) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+    } catch (const std::bad_alloc&) {
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    } catch (const std::exception&) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    if (!parser.isIA64() || !parser.isEFI()) {
+        return EFI_STATUS_UNSUPPORTED;
+    }
+
+    const guideXOS::PEImageInfo parsedInfo = parser.getImageInfo();
+    if (parsedInfo.sizeOfImage == 0 ||
+        parsedInfo.sizeOfImage > UINT64_MAX - (EFI_PAGE_SIZE - 1ULL)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    const uint64_t numberOfPages =
+        (static_cast<uint64_t>(parsedInfo.sizeOfImage) + EFI_PAGE_SIZE - 1ULL) /
+        EFI_PAGE_SIZE;
+    const uint64_t imageBase = allocateEfiImagePages(
+        memory, numberOfPages, EFI_MEMORY_LOADER_CODE);
+    if (imageBase == 0) {
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    }
+
+    auto releasePool = [&](uint64_t address) {
+        const auto allocation = std::find_if(
+            efiPoolAllocations_.begin(), efiPoolAllocations_.end(),
+            [address](const EfiPoolAllocation& entry) {
+                return entry.physicalStart == address;
+            });
+        if (allocation != efiPoolAllocations_.end() &&
+            replaceEfiMemoryMapRange(allocation->physicalStart,
+                                     allocation->numberOfPages,
+                                     EFI_MEMORY_CONVENTIONAL)) {
+            efiPoolAllocations_.erase(allocation);
+            ++efiMemoryMapKey_;
+        }
+    };
+
+    std::vector<uint8_t> imageBytes;
+    uint64_t loadAddress = imageBase;
+    uint64_t entryPoint = 0;
+    try {
+        if (!parser.loadImage(imageBytes, loadAddress, entryPoint) ||
+            imageBytes.empty() || imageBytes.size() > numberOfPages * EFI_PAGE_SIZE ||
+            entryPoint < imageBase ||
+            entryPoint >= imageBase + imageBytes.size()) {
+            releaseEfiImagePages(imageBase, numberOfPages);
+            return imageBytes.size() > numberOfPages * EFI_PAGE_SIZE
+                ? EFI_STATUS_OUT_OF_RESOURCES
+                : EFI_STATUS_INVALID_PARAMETER;
+        }
+        std::vector<uint8_t> zero(static_cast<size_t>(numberOfPages * EFI_PAGE_SIZE), 0);
+        memory.Write(imageBase, zero.data(), zero.size());
+        memory.Write(imageBase, imageBytes.data(), imageBytes.size());
+    } catch (const std::bad_alloc&) {
+        releaseEfiImagePages(imageBase, numberOfPages);
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    } catch (const std::exception&) {
+        releaseEfiImagePages(imageBase, numberOfPages);
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    const uint64_t protocolAddress = allocateEfiPool(
+        memory, 0x60, EFI_MEMORY_BOOT_SERVICES_DATA);
+    if (protocolAddress == 0) {
+        releaseEfiImagePages(imageBase, numberOfPages);
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    }
+
+    uint64_t childHandle = efiNextSyntheticHandle_;
+    while (childHandle == 0 || childHandle == EFI_IMAGE_HANDLE ||
+           std::any_of(efiProtocolAttachments_.begin(), efiProtocolAttachments_.end(),
+                       [childHandle](const EfiProtocolAttachment& attachment) {
+                           return attachment.handle == childHandle;
+                       })) {
+        ++childHandle;
+    }
+    efiNextSyntheticHandle_ = childHandle + 1;
+
+    auto rollback = [&]() {
+        efiLoadedImages_.erase(childHandle);
+        efiProtocolAttachments_.erase(
+            std::remove_if(efiProtocolAttachments_.begin(), efiProtocolAttachments_.end(),
+                           [childHandle](const EfiProtocolAttachment& attachment) {
+                               return attachment.handle == childHandle;
+                           }),
+            efiProtocolAttachments_.end());
+        releasePool(protocolAddress);
+        releaseEfiImagePages(imageBase, numberOfPages);
+    };
+
+    try {
+        auto write64 = [&](uint64_t offset, uint64_t value) {
+            return writeGuestU64(memory, protocolAddress + offset, value);
+        };
+        auto write32 = [&](uint64_t offset, uint32_t value) {
+            return writeGuestU32(memory, protocolAddress + offset, value);
+        };
+        if (!write32(0x00, 0x1000U) ||
+            !write64(0x08, parentHandle) ||
+            !write64(0x10, EFI_HANDOFF_REGION_BASE) ||
+            !write64(0x18, EFI_IMAGE_DEVICE_HANDLE) ||
+            !write64(0x20, devicePath != 0 ? devicePath : 0) ||
+            !write32(0x30, 0U) ||
+            !write64(0x38, 0) ||
+            !write64(0x40, imageBase) ||
+            !write64(0x48, static_cast<uint64_t>(imageBytes.size())) ||
+            !write32(0x50, EFI_MEMORY_LOADER_CODE) ||
+            !write32(0x54, EFI_MEMORY_LOADER_DATA) ||
+            !write64(0x58, 0)) {
+            rollback();
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+
+        efiProtocolAttachments_.reserve(efiProtocolAttachments_.size() + 1);
+        efiLoadedImages_.emplace(childHandle, EfiLoadedImage{
+            childHandle, protocolAddress, parentHandle, EFI_IMAGE_DEVICE_HANDLE,
+            imageBase, static_cast<uint64_t>(imageBytes.size()), entryPoint,
+            parser.getImageInfo().hasGlobalPointer
+                ? parser.getImageInfo().globalPointer : 0,
+            devicePath});
+        efiProtocolAttachments_.push_back({
+            childHandle, EFI_LOADED_IMAGE_PROTOCOL_GUID, protocolAddress});
+        if (!writeGuestU64(memory, imageHandleOut, childHandle)) {
+            rollback();
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+    } catch (const std::bad_alloc&) {
+        rollback();
+        return EFI_STATUS_OUT_OF_RESOURCES;
+    } catch (const std::exception&) {
+        rollback();
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+
+    std::cout << "[EFI-LOADIMAGE] path="
+              << (resolvedPath.empty() ? "<source-buffer>" : resolvedPath)
+              << " handle=0x" << std::hex << childHandle
+              << " image=0x" << imageBase
+              << "-0x" << (imageBase + imageBytes.size())
+              << " entry=0x" << entryPoint
+              << " status=EFI_SUCCESS" << std::dec << std::endl;
+    return EFI_STATUS_SUCCESS;
 }
 
 uint64_t IA64ISAPlugin::handleEfiFreePool(IMemory& memory) {

@@ -4,6 +4,7 @@
 #include "ExampleISAPlugin.h"
 #include "ISAPluginRegistry.h"
 #include "FATParser.h"
+#include "PEParser.h"
 #include "memory.h"
 #include "decoder.h"
 #include "cpu.h"
@@ -13,6 +14,7 @@
 #include <map>
 #include <stdexcept>
 #include <cmath>
+#include <array>
 
 using namespace ia64;
 
@@ -193,6 +195,90 @@ std::vector<uint8_t> makeFatImageWithBootLoader() {
 
     auto* data = image.data() + 2560;
     std::memcpy(data, "BOOTIA64", 8);
+    return image;
+}
+
+std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
+    std::vector<uint8_t> image(0x800, 0);
+
+    guideXOS::DOSHeader dos{};
+    dos.e_magic = 0x5A4D;
+    dos.e_lfanew = 0x80;
+    std::memcpy(image.data(), &dos, sizeof(dos));
+
+    guideXOS::PEHeader pe{};
+    pe.signature = 0x00004550;
+    std::memcpy(image.data() + 0x80, &pe, sizeof(pe));
+
+    guideXOS::COFFHeader coff{};
+    coff.machine = guideXOS::IMAGE_FILE_MACHINE_IA64;
+    coff.numberOfSections = 3;
+    coff.sizeOfOptionalHeader = sizeof(guideXOS::PEOptionalHeader64);
+    coff.characteristics = 0x2022;
+    std::memcpy(image.data() + 0x84, &coff, sizeof(coff));
+
+    guideXOS::PEOptionalHeader64 optional{};
+    optional.magic = 0x20B;
+    optional.addressOfEntryPoint = 0x2000;
+    optional.baseOfCode = 0x1000;
+    optional.imageBase = 0;
+    optional.sectionAlignment = 0x1000;
+    optional.fileAlignment = 0x200;
+    optional.majorOperatingSystemVersion = 1;
+    optional.majorSubsystemVersion = 1;
+    optional.sizeOfImage = 0x4000;
+    optional.sizeOfHeaders = 0x200;
+    optional.subsystem = guideXOS::IMAGE_SUBSYSTEM_EFI_APPLICATION;
+    std::memcpy(image.data() + 0x98, &optional, sizeof(optional));
+
+    const auto writeSection = [&](size_t offset,
+                                  const char* name,
+                                  uint32_t virtualAddress,
+                                  uint32_t rawOffset,
+                                  uint32_t characteristics) {
+        guideXOS::PESectionHeader section{};
+        std::memcpy(section.name, name, std::min<size_t>(8, std::strlen(name)));
+        section.virtualSize = 0x1000;
+        section.virtualAddress = virtualAddress;
+        section.sizeOfRawData = 0x200;
+        section.pointerToRawData = rawOffset;
+        section.characteristics = characteristics;
+        std::memcpy(image.data() + offset, &section, sizeof(section));
+    };
+    writeSection(0x108, ".text", 0x1000, 0x200,
+                 guideXOS::IMAGE_SCN_CNT_CODE |
+                 guideXOS::IMAGE_SCN_MEM_EXECUTE |
+                 guideXOS::IMAGE_SCN_MEM_READ);
+    writeSection(0x130, ".data", 0x2000, 0x400,
+                 guideXOS::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                 guideXOS::IMAGE_SCN_MEM_READ |
+                 guideXOS::IMAGE_SCN_MEM_WRITE);
+    writeSection(0x158, ".rela", 0x3000, 0x600,
+                 guideXOS::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                 guideXOS::IMAGE_SCN_MEM_READ);
+
+    for (size_t index = 0; index < 0x200; ++index) {
+        image[0x200 + index] = static_cast<uint8_t>(0xA0U + (index & 0x1FU));
+    }
+    const uint64_t descriptorCodeRva = 0x1000;
+    const uint64_t descriptorGpRva = 0x1234;
+    std::memcpy(image.data() + 0x400, &descriptorCodeRva, sizeof(descriptorCodeRva));
+    std::memcpy(image.data() + 0x408, &descriptorGpRva, sizeof(descriptorGpRva));
+    const uint64_t relocationInitialValue = 0;
+    std::memcpy(image.data() + 0x420, &relocationInitialValue,
+                sizeof(relocationInitialValue));
+
+    guideXOS::ELFRelaEntry relocation{};
+    relocation.info = guideXOS::R_IA64_DIR64LSB;
+    relocation.offset = 0x2000;
+    relocation.addend = 0x1000;
+    std::memcpy(image.data() + 0x600, &relocation, sizeof(relocation));
+    relocation.offset = 0x2008;
+    relocation.addend = 0x1234;
+    std::memcpy(image.data() + 0x618, &relocation, sizeof(relocation));
+    relocation.offset = 0x2020;
+    relocation.addend = 0x123;
+    std::memcpy(image.data() + 0x630, &relocation, sizeof(relocation));
     return image;
 }
 
@@ -4406,6 +4492,181 @@ void testIA64PluginEfiMirrorReservation() {
                  "and excluded from AllocatePool/AllocatePages\n";
 }
 
+void testIA64PluginLoadImage() {
+    std::cout << "Testing IA-64 EFI LoadImage source-buffer semantics...\n";
+
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t loadImageCode = handoffBase + kEfiLoadImageStubCodeOffset;
+    constexpr uint64_t handleProtocolCode = handoffBase + kEfiHandleProtocolStubCodeOffset;
+    constexpr uint64_t getMemoryMapCode = handoffBase + kEfiGetMemoryMapStubCodeOffset;
+    constexpr uint64_t mirrorStart = 0x200000ULL;
+    constexpr uint64_t mirrorSize = 0x5e000ULL;
+    constexpr uint64_t efiSuccess = 0ULL;
+    constexpr uint64_t efiInvalidParameter = 0x8000000000000002ULL;
+    constexpr uint64_t efiUnsupported = 0x8000000000000003ULL;
+    constexpr uint64_t efiOutOfResources = 0x8000000000000009ULL;
+
+    const std::vector<uint8_t> image = makeSyntheticIa64EfiLoadImage();
+    SizedSparseMemory memory(guestMemorySize);
+    uint8_t bundle[16] = {};
+    memory.Write(0x5200, bundle, sizeof(bundle));
+    uint8_t syntheticStub[16] = {1};
+    memory.Write(loadImageCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(handleProtocolCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(getMemoryMapCode, syntheticStub, sizeof(syntheticStub));
+    memory.Write(0x8000, image.data(), image.size());
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    assert(plugin.reserveEfiMemoryRange(mirrorStart, mirrorSize, 0U));
+
+    const auto invokeLoad = [&](IA64ISAPlugin& target,
+                                IMemory& targetMemory,
+                                uint64_t parentHandle,
+                                uint64_t devicePath,
+                                uint64_t sourceBuffer,
+                                uint64_t sourceSize,
+                                uint64_t outputAddress) {
+        target.getCPUState().SetIP(0x5200);
+        target.getCPUState().SetCFM(6 | (static_cast<uint64_t>(6) << 7));
+        target.getCPUState().SetBR(6, loadImageCode);
+        target.getCPUState().SetGR(38, 0); // BootPolicy
+        target.getCPUState().SetGR(39, parentHandle);
+        target.getCPUState().SetGR(40, devicePath);
+        target.getCPUState().SetGR(41, sourceBuffer);
+        target.getCPUState().SetGR(42, sourceSize);
+        target.getCPUState().SetGR(43, outputAddress);
+        target.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        assert(target.step(targetMemory) == ISAExecutionResult::CONTINUE);
+        return target.getCPUState().GetGR(8);
+    };
+
+    const uint64_t status = invokeLoad(plugin, memory, 1, 0, 0x8000, image.size(), 0x9000);
+    assert(status == efiSuccess);
+    assert(plugin.getCPUState().GetIP() == 0x5210);
+    const uint64_t childHandle = memory.read<uint64_t>(0x9000);
+    assert(childHandle >= 0x42);
+
+    // HandleProtocol must resolve the newly created child handle to its own
+    // Loaded Image protocol, not the parent image's static protocol.
+    const uint8_t loadedImageGuid[16] = {
+        0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11,
+        0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B};
+    memory.Write(0x9100, loadedImageGuid, sizeof(loadedImageGuid));
+    plugin.getCPUState().SetIP(0x5200);
+    plugin.getCPUState().SetCFM(3 | (static_cast<uint64_t>(3) << 7));
+    plugin.getCPUState().SetBR(6, handleProtocolCode);
+    plugin.getCPUState().SetGR(35, childHandle);
+    plugin.getCPUState().SetGR(36, 0x9100);
+    plugin.getCPUState().SetGR(37, 0x9200);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == efiSuccess);
+    const uint64_t protocol = memory.read<uint64_t>(0x9200);
+    assert(protocol != 0 && protocol != handoffBase + kEfiLoadedImageProtocolOffset);
+    assert(memory.read<uint32_t>(protocol + 0x00) == 0x1000U);
+    assert(memory.read<uint64_t>(protocol + 0x08) == 1);
+    assert(memory.read<uint64_t>(protocol + 0x10) == handoffBase);
+    assert(memory.read<uint64_t>(protocol + 0x18) == 0x40);
+    assert(memory.read<uint64_t>(protocol + 0x20) == 0);
+    const uint64_t imageBase = memory.read<uint64_t>(protocol + 0x40);
+    const uint64_t imageSize = memory.read<uint64_t>(protocol + 0x48);
+    assert(imageBase != 0 && imageSize == 0x4000);
+    assert(memory.read<uint32_t>(protocol + 0x50) == 1U);
+    assert(memory.read<uint32_t>(protocol + 0x54) == 2U);
+    assert(memory.read<uint64_t>(protocol + 0x58) == 0);
+    assert(imageBase + imageSize <= guestMemorySize);
+    assert(imageBase + imageSize <= mirrorStart || imageBase >= mirrorStart + mirrorSize);
+
+    // The mapped bytes and the IA-64 function descriptor must be relocated
+    // to the selected guest base.  LoadImage itself leaves the CPU at its
+    // caller return address, so the child entry was not executed.
+    assert(memory.read<uint8_t>(imageBase + 0x1000) == 0xA0);
+    assert(memory.read<uint64_t>(imageBase + 0x2020) == imageBase + 0x123);
+    assert(memory.read<uint64_t>(imageBase + 0x2000) == imageBase + 0x1000);
+    assert(memory.read<uint64_t>(imageBase + 0x2008) == imageBase + 0x1234);
+
+    // GetMemoryMap exposes the image allocation as loader code and advances
+    // the map key for both the page allocation and Loaded Image protocol pool.
+    memory.write<uint64_t>(0x9300, 0x10000);
+    plugin.getCPUState().SetIP(0x5200);
+    plugin.getCPUState().SetCFM(5 | (static_cast<uint64_t>(5) << 7));
+    plugin.getCPUState().SetBR(6, getMemoryMapCode);
+    plugin.getCPUState().SetGR(37, 0x9300);
+    plugin.getCPUState().SetGR(38, 0x9400);
+    plugin.getCPUState().SetGR(39, 0x9310);
+    plugin.getCPUState().SetGR(40, 0x9318);
+    plugin.getCPUState().SetGR(41, 0x9320);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == efiSuccess);
+    assert(memory.read<uint64_t>(0x9310) >= 3);
+    bool sawImageDescriptor = false;
+    for (uint64_t offset = 0; offset < memory.read<uint64_t>(0x9300); offset += 40) {
+        const uint64_t descriptor = 0x9400 + offset;
+        if (memory.read<uint32_t>(descriptor) == 1U &&
+            memory.read<uint64_t>(descriptor + 8) == imageBase &&
+            memory.read<uint64_t>(descriptor + 24) == 4) {
+            sawImageDescriptor = true;
+        }
+    }
+    assert(sawImageDescriptor);
+
+    // Invalid parent, malformed device path, malformed PE, and an
+    // unsupported machine fail before creating an image or mutating output.
+    const uint64_t canary = 0x1122334455667788ULL;
+    assert(invokeLoad(plugin, memory, 0x40, 0, 0x8000, image.size(), 0x9008) ==
+           efiInvalidParameter);
+    assert(invokeLoad(plugin, memory, 1, 0, 0x8000, image.size(), 0) ==
+           efiInvalidParameter);
+    memory.write<uint64_t>(0x9008, canary);
+    assert(invokeLoad(plugin, memory, 0x999, 0, 0x8000, image.size(), 0x9008) ==
+           efiInvalidParameter);
+    assert(memory.read<uint64_t>(0x9008) == canary);
+
+    const uint8_t malformedPath[] = {0x04, 0x04, 0x03, 0x00};
+    memory.Write(0xA000, malformedPath, sizeof(malformedPath));
+    memory.write<uint64_t>(0x9008, canary);
+    assert(invokeLoad(plugin, memory, 1, 0xA000, 0, 0, 0x9008) ==
+           efiInvalidParameter);
+    assert(memory.read<uint64_t>(0x9008) == canary);
+
+    const uint8_t malformedImage[] = {0x4D, 0x5A, 0x00, 0x00};
+    memory.Write(0xB000, malformedImage, sizeof(malformedImage));
+    memory.write<uint64_t>(0x9008, canary);
+    assert(invokeLoad(plugin, memory, 1, 0, 0xB000, sizeof(malformedImage), 0x9008) ==
+           efiInvalidParameter);
+    assert(memory.read<uint64_t>(0x9008) == canary);
+
+    std::vector<uint8_t> unsupportedImage = image;
+    writeLe16(unsupportedImage, 0x84, guideXOS::IMAGE_FILE_MACHINE_AMD64);
+    memory.Write(0xC000, unsupportedImage.data(), unsupportedImage.size());
+    memory.write<uint64_t>(0x9008, canary);
+    assert(invokeLoad(plugin, memory, 1, 0, 0xC000, unsupportedImage.size(), 0x9008) ==
+           efiUnsupported);
+    assert(memory.read<uint64_t>(0x9008) == canary);
+
+    // Reserve all remaining usable RAM in a fresh small guest.  A valid
+    // image then fails with genuine EFI_OUT_OF_RESOURCES and leaves its
+    // output handle untouched.
+    SizedSparseMemory exhaustedMemory(guestMemorySize);
+    exhaustedMemory.Write(0x5200, bundle, sizeof(bundle));
+    exhaustedMemory.Write(loadImageCode, syntheticStub, sizeof(syntheticStub));
+    exhaustedMemory.Write(0x8000, image.data(), image.size());
+    IA64ISAPlugin exhaustedPlugin(decoder);
+    assert(exhaustedPlugin.reserveEfiMemoryRange(
+        0x100000, handoffBase - 0x100000, 0U));
+    exhaustedMemory.write<uint64_t>(0x9000, canary);
+    assert(invokeLoad(exhaustedPlugin, exhaustedMemory, 1, 0, 0x8000,
+                      image.size(), 0x9000) == efiOutOfResources);
+    assert(exhaustedMemory.read<uint64_t>(0x9000) == canary);
+
+    std::cout << "  ? LoadImage maps sections/relocations, resolves IA-64 entry/GP, "
+                 "creates coherent child metadata without execution, rejects invalid "
+                 "inputs, and reports genuine allocation exhaustion\n";
+}
+
 void testIA64PluginEfiBootServicesPlabelDispatch() {
     std::cout << "Testing IA-64 EFI Boot Services table -> plabel -> stub dispatch...\n";
 
@@ -5291,11 +5552,16 @@ void testSharedMemory() {
     std::cout << "    Read:  0x" << std::hex << readValue << std::dec << "\n";
 }
 
-int main() {
+int main(int argc, char** argv) {
     std::cout.setf(std::ios::unitbuf);
     std::cout << "=== ISA Plugin Architecture Tests ===\n\n";
 
     try {
+        if (argc > 1 && std::string(argv[1]) == "loadimage") {
+            testIA64PluginLoadImage();
+            return 0;
+        }
+
         testISAStateSerialization();
         std::cout << "\n";
         
@@ -5496,6 +5762,9 @@ int main() {
         std::cout << "\n";
 
         testIA64PluginEfiPoolAllocationLifecycle();
+        std::cout << "\n";
+
+        testIA64PluginLoadImage();
         std::cout << "\n";
 
         testIA64PluginEfiMirrorReservation();
