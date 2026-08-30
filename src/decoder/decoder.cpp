@@ -1399,8 +1399,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             if (hasImmediate_) {
                 const uint8_t bit = static_cast<uint8_t>((cpu.GetGR(src1_) >> (immediate_ & 0x3F)) & 0x1);
                 const bool condition = (type_ == InstructionType::TBIT_Z) ? (bit == 0) : (bit != 0);
-                cpu.SetPR(dst_, condition);
-                cpu.SetPR(src3_, !condition);
+                if (compareCompleter_ == CompareCompleter::OR_ANDCM) {
+                    writeComparePredicates(condition);
+                } else {
+                    cpu.SetPR(dst_, condition);
+                    cpu.SetPR(src3_, !condition);
+                }
             }
             break;
 
@@ -2229,12 +2233,14 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::TBIT_Z:
-            oss << "tbit.z p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+            oss << "tbit.z" << CompareCompleterSuffix(compareCompleter_)
+                << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
                 << " = r" << static_cast<int>(src1_) << ", " << static_cast<int>(immediate_ & 0x3F);
             break;
 
         case InstructionType::TBIT_NZ:
-            oss << "tbit.nz p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+            oss << "tbit.nz" << CompareCompleterSuffix(compareCompleter_)
+                << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
                 << " = r" << static_cast<int>(src1_) << ", " << static_cast<int>(immediate_ & 0x3F);
             break;
 

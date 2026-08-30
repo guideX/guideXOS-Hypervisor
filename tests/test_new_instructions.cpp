@@ -1572,6 +1572,40 @@ void test_test_instructions() {
     assert_equal("TNAT.Z source decode", 11, decoded_tnat.GetSrc1());
     assert_equal("TNAT.Z p2 decode", 12, decoded_tnat.GetSrc3());
 
+    // Exact Debian ELILO instruction at bundle-relative IP 0x9ea0.
+    // Binutils disassembles raw 0xb230e001c0 as:
+    //   (p0) tbit.z.or.andcm p7,p6=r14,0
+    const uint64_t eliloParallelTbit = 0xb230e001c0ULL;
+    InstructionEx decoded_parallel_tbit = decoder.DecodeSlot(
+        eliloParallelTbit, UnitType::I_UNIT, 0x9ea6);
+    assert_true("ELILO parallel TBIT should decode",
+                decoded_parallel_tbit.GetType() == InstructionType::TBIT_Z);
+    assert_equal("ELILO parallel TBIT qualifying predicate", 0,
+                 decoded_parallel_tbit.GetPredicate());
+    assert_equal("ELILO parallel TBIT p1", 7, decoded_parallel_tbit.GetDst());
+    assert_equal("ELILO parallel TBIT source", 14, decoded_parallel_tbit.GetSrc1());
+    assert_equal("ELILO parallel TBIT p2", 6, decoded_parallel_tbit.GetSrc3());
+    assert_equal("ELILO parallel TBIT position", 0,
+                 decoded_parallel_tbit.GetImmediate());
+    assert_true("ELILO parallel TBIT completer",
+                decoded_parallel_tbit.GetCompareCompleter() ==
+                    CompareCompleter::OR_ANDCM);
+    assert_string("ELILO parallel TBIT disassembly",
+                  "tbit.z.or.andcm p7, p6 = r14, 0",
+                  decoded_parallel_tbit.GetDisassembly());
+
+    cpu.SetGR(14, 0x1);
+    cpu.SetPR(7, false);
+    cpu.SetPR(6, true);
+    decoded_parallel_tbit.Execute(cpu, memory);
+    assert_true("ELILO parallel TBIT false result preserves p7", !cpu.GetPR(7));
+    assert_true("ELILO parallel TBIT false result preserves p6", cpu.GetPR(6));
+
+    cpu.SetGR(14, 0x0);
+    decoded_parallel_tbit.Execute(cpu, memory);
+    assert_true("ELILO parallel TBIT true result sets p7", cpu.GetPR(7));
+    assert_true("ELILO parallel TBIT true result clears p6", !cpu.GetPR(6));
+
     std::cout << "  ? Test instructions passed" << std::endl;
 }
 
