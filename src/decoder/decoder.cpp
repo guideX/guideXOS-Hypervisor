@@ -1484,8 +1484,13 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             {
                 const bool nat = cpu.GetGRNaT(src1_);
                 const bool condition = (type_ == InstructionType::TNAT_Z) ? !nat : nat;
-                cpu.SetPR(dst_, condition);
-                cpu.SetPR(src3_, !condition);
+                if (compareCompleter_ == CompareCompleter::NORMAL ||
+                    compareCompleter_ == CompareCompleter::UNC) {
+                    cpu.SetPR(dst_, condition);
+                    cpu.SetPR(src3_, !condition);
+                } else {
+                    writeComparePredicates(condition);
+                }
             }
             break;
             
@@ -2400,12 +2405,14 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::TNAT_Z:
-            oss << "tnat.z p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+            oss << "tnat.z" << CompareCompleterSuffix(compareCompleter_)
+                << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
                 << " = r" << static_cast<int>(src1_);
             break;
 
         case InstructionType::TNAT_NZ:
-            oss << "tnat.nz p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
+            oss << "tnat.nz" << CompareCompleterSuffix(compareCompleter_)
+                << " p" << static_cast<int>(dst_) << ", p" << static_cast<int>(src3_)
                 << " = r" << static_cast<int>(src1_);
             break;
             

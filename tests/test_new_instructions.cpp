@@ -1801,6 +1801,43 @@ void test_test_instructions() {
     assert_equal("TNAT.Z source decode", 11, decoded_tnat.GetSrc1());
     assert_equal("TNAT.Z p2 decode", 12, decoded_tnat.GetSrc3());
 
+    // Exact Linux kernel instruction at physical IP 0x43e8be0.
+    // Binutils disassembles raw 0xb0017031c0 as:
+    //   tnat.nz.and p7,p0=r23
+    const uint64_t authenticParallelTnat = 0xb0017031c0ULL;
+    InstructionEx decoded_parallel_tnat = decoder.DecodeSlot(
+        authenticParallelTnat, UnitType::I_UNIT, 0x43e8be0);
+    assert_true("Authentic parallel TNAT should decode",
+                decoded_parallel_tnat.GetType() == InstructionType::TNAT_NZ);
+    assert_equal("Authentic parallel TNAT qualifying predicate", 0,
+                 decoded_parallel_tnat.GetPredicate());
+    assert_equal("Authentic parallel TNAT p1", 7,
+                 decoded_parallel_tnat.GetDst());
+    assert_equal("Authentic parallel TNAT source", 23,
+                 decoded_parallel_tnat.GetSrc1());
+    assert_equal("Authentic parallel TNAT p2", 0,
+                 decoded_parallel_tnat.GetSrc3());
+    assert_true("Authentic parallel TNAT completer",
+                decoded_parallel_tnat.GetCompareCompleter() ==
+                    CompareCompleter::AND);
+    assert_string("Authentic parallel TNAT disassembly",
+                  "tnat.nz.and p7, p0 = r23",
+                  decoded_parallel_tnat.GetDisassembly());
+
+    cpu.SetPR(7, true);
+    cpu.SetPR(0, true);
+    cpu.SetGRNaT(23, true);
+    decoded_parallel_tnat.Execute(cpu, memory);
+    assert_true("TNAT.NZ.AND true preserves p7", cpu.GetPR(7));
+    assert_true("TNAT.NZ.AND true preserves hardwired p0", cpu.GetPR(0));
+
+    cpu.SetPR(7, true);
+    cpu.SetPR(0, true);
+    cpu.SetGRNaT(23, false);
+    decoded_parallel_tnat.Execute(cpu, memory);
+    assert_true("TNAT.NZ.AND false clears p7", !cpu.GetPR(7));
+    assert_true("TNAT.NZ.AND false preserves hardwired p0", cpu.GetPR(0));
+
     // Exact Debian ELILO instruction at bundle-relative IP 0x9ea0.
     // Binutils disassembles raw 0xb230e001c0 as:
     //   (p0) tbit.z.or.andcm p7,p6=r14,0

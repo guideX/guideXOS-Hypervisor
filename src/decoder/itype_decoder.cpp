@@ -176,6 +176,13 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                     instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
                     return true;
 
+                case 0x7: // TNAT.NZ.AND (authentic kernel encoding)
+                    instr = InstructionEx(InstructionType::TNAT_NZ, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
+                    instr.SetCompareCompleter(CompareCompleter::AND);
+                    return true;
+
                 case 0xD: // TBIT.Z.OR.ANDCM (parallel compare type)
                     instr = InstructionEx(InstructionType::TBIT_Z, UnitType::I_UNIT);
                     instr.SetPredicate(fmt.qp);
@@ -285,12 +292,14 @@ static bool decodeTest(uint64_t raw, formats::IFormat& result) {
         result.r2 = static_cast<uint8_t>(formats::extractBits(raw, 27, 6));
         result.r3 = static_cast<uint8_t>(formats::extractBits(raw, 20, 7));
         result.pos = static_cast<uint8_t>(formats::extractBits(raw, 14, 6));
-        // The authentic ELILO blocker is tbit.z.or.andcm (table index 0x0C).
-        // Keep the other parallel test encodings distinguished as unsupported
-        // until their individual relation semantics are implemented.
+        // The authentic ELILO parallel test instructions use the same
+        // table-indexed encoding as the plain forms. Keep unsupported
+        // parallel encodings distinguished until their individual relation
+        // semantics are implemented.
         result.opcode = plainTbitZ ? 0x52 :
                         (plainTnatZ ? 0x54 :
-                         (tableIndex == 0x0C ? 0x5D : 0x5E));
+                         (tableIndex == 0x0C ? 0x5D :
+                          (tableIndex == 0x07 ? 0x57 : 0x5E)));
         return true;
     }
 
