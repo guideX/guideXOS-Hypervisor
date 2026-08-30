@@ -76,6 +76,19 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M44 reset-system-mask.  IMMU24 is dispersed across bits 6:26,
+        // 31:32, and 36; the raw ELILO/Linux entry instruction is rsm 0x6000.
+        if (major == 0x0 && x3 == 0x0 && x4 == 0x7) {
+            const uint64_t imm24 =
+                formats::extractBits(raw_instruction, 6, 21) |
+                (static_cast<uint64_t>(formats::extractBits(raw_instruction, 31, 2)) << 21) |
+                (static_cast<uint64_t>(formats::extractBits(raw_instruction, 36, 1)) << 23);
+            result.operation = formats::MFormat::MemOp::RSM;
+            result.has_imm = true;
+            result.imm24 = static_cast<uint32_t>(imm24);
+            return true;
+        }
+
         // M0 invala is the predicatable complete-form ALAT invalidation.
         // Binutils describes its fixed encoding as x3=0, x4=0, x2=1, and
         // major=0.  The operand fields are unused by the complete form.
@@ -270,6 +283,12 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         else if (fmt.operation == formats::MFormat::MemOp::SRLZ_I) {
             instr = InstructionEx(InstructionType::SRLZ_I, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::RSM) {
+            instr = InstructionEx(InstructionType::RSM, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetImmediate(fmt.imm24);
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {

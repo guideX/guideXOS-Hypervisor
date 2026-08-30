@@ -115,6 +115,7 @@ struct MFormat {
         FC,
         SYNC_I,
         SRLZ_I,
+        RSM,
         FLUSHRS
     } operation;
     
@@ -138,11 +139,14 @@ struct MFormat {
     int16_t imm9;
     bool has_imm;
     bool reg_update;
+
+    // M44 system-mask immediate (24-bit unsigned)
+    uint32_t imm24;
     
     MFormat() : qp(0), r1(0), r2(0), r3(0), opcode(0), m(0), x(0), hint(0),
                 operation(MemOp::LOAD), size(Size::SIZE_8),
                 speculative(false), advanced(false), acquire(false), release(false),
-                imm9(0), has_imm(false), reg_update(false) {}
+                imm9(0), has_imm(false), reg_update(false), imm24(0) {}
 };
 
 // ============================================================================

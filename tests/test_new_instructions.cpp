@@ -565,6 +565,22 @@ void test_latest_boot_log_blockers() {
     assert_string("srlz.i disassembly", "srlz.i", srlzI.GetDisassembly());
     srlzI.Execute(cpu, memory);
 
+    // Exact Linux entry instruction at guest address 0x047f7b80.
+    // Binutils disassembles raw 0x38180000 as: rsm 0x6000.
+    InstructionEx rsm = decoder.DecodeSlot(0x38180000ULL, UnitType::M_UNIT, 0x047f7b80);
+    assert_true("Linux entry rsm should decode", rsm.GetType() == InstructionType::RSM);
+    assert_equal("Linux entry rsm qualifying predicate", 0, rsm.GetPredicate());
+    assert_equal("Linux entry rsm immediate", 0x6000, rsm.GetImmediate());
+    assert_string("Linux entry rsm disassembly", "rsm 0x6000", rsm.GetDisassembly());
+
+    cpu.SetPSR((1ULL << 13) | (1ULL << 14) | (1ULL << 17) | (1ULL << 27) |
+               (1ULL << 32));
+    rsm.Execute(cpu, memory);
+    assert_true("Linux entry rsm should clear PSR.IC", (cpu.GetPSR() & (1ULL << 13)) == 0);
+    assert_true("Linux entry rsm should clear PSR.I", (cpu.GetPSR() & (1ULL << 14)) == 0);
+    assert_true("Linux entry rsm should preserve PSR.DT", (cpu.GetPSR() & (1ULL << 17)) != 0);
+    assert_true("Linux entry rsm should preserve upper PSR", (cpu.GetPSR() & (1ULL << 32)) != 0);
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);
