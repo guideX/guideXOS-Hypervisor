@@ -148,6 +148,34 @@ InstructionEx::InstructionEx(InstructionType type, UnitType unit)
     , compareCompleter_(CompareCompleter::NORMAL)
 {}
 
+namespace {
+
+// The authentic Debian IA-64 kernel is linked in the region-5 direct map.
+// The replay keeps its physical image at 0x04000000, while the kernel's
+// canonical data pointers use 0xa000000100000000 plus the same offset.  The
+// generic Memory object is intentionally flat, so translate only this exact
+// kernel mapping at the IA-64 instruction boundary and leave the register
+// value itself virtual for subsequent guest instructions.
+uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
+    constexpr uint64_t kKernelVirtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t kKernelPhysicalBase = 0x04000000ULL;
+    constexpr uint64_t kKernelVirtualSpan = 0x01000000ULL;
+
+    if (address < kKernelVirtualBase) {
+        return address;
+    }
+
+    const uint64_t offset = address - kKernelVirtualBase;
+    if (offset >= kKernelVirtualSpan ||
+        static_cast<uint64_t>(size) > kKernelVirtualSpan - offset) {
+        return address;
+    }
+
+    return kKernelPhysicalBase + offset;
+}
+
+}
+
 void InstructionEx::SetOperands(uint8_t dst, uint8_t src1, uint8_t src2) {
     dst_ = dst;
     src1_ = src1;
@@ -1630,14 +1658,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD1:
         case InstructionType::LD1_S:
             {
-                uint64_t addr = cpu.GetGR(src1_);
+                const uint64_t baseAddress = cpu.GetGR(src1_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 1);
                 uint8_t value = 0;
                 memory.Read(addr, &value, 1);
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
-                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
                 } else if (src2_ != 0) {
-                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
+                    cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -1645,14 +1674,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD2:
         case InstructionType::LD2_S:
             {
-                uint64_t addr = cpu.GetGR(src1_);
+                const uint64_t baseAddress = cpu.GetGR(src1_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 2);
                 uint16_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 2);
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
-                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
                 } else if (src2_ != 0) {
-                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
+                    cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -1660,14 +1690,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD4:
         case InstructionType::LD4_S:
             {
-                uint64_t addr = cpu.GetGR(src1_);
+                const uint64_t baseAddress = cpu.GetGR(src1_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 4);
                 uint32_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 4);
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
-                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
                 } else if (src2_ != 0) {
-                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
+                    cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -1675,58 +1706,63 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD8:
         case InstructionType::LD8_S:
             {
-                uint64_t addr = cpu.GetGR(src1_);
+                const uint64_t baseAddress = cpu.GetGR(src1_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 8);
                 uint64_t value = 0;
                 memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 8);
                 cpu.SetGR(dst_, value);
                 if (hasImmediate_) {
-                    cpu.SetGR(src1_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
                 } else if (src2_ != 0) {
-                    cpu.SetGR(src1_, addr + cpu.GetGR(src2_));
+                    cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
                 }
             }
             break;
             
         case InstructionType::ST1:
             {
-                uint64_t addr = cpu.GetGR(dst_);
+                const uint64_t baseAddress = cpu.GetGR(dst_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 1);
                 uint8_t value = static_cast<uint8_t>(cpu.GetGR(src1_));
                 memory.Write(addr, &value, 1);
                 if (hasImmediate_) {
-                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
             }
             break;
             
         case InstructionType::ST2:
             {
-                uint64_t addr = cpu.GetGR(dst_);
+                const uint64_t baseAddress = cpu.GetGR(dst_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 2);
                 uint16_t value = static_cast<uint16_t>(cpu.GetGR(src1_));
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 2);
                 if (hasImmediate_) {
-                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
             }
             break;
             
         case InstructionType::ST4:
             {
-                uint64_t addr = cpu.GetGR(dst_);
+                const uint64_t baseAddress = cpu.GetGR(dst_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 4);
                 uint32_t value = static_cast<uint32_t>(cpu.GetGR(src1_));
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 4);
                 if (hasImmediate_) {
-                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
             }
             break;
             
         case InstructionType::ST8:
             {
-                uint64_t addr = cpu.GetGR(dst_);
+                const uint64_t baseAddress = cpu.GetGR(dst_);
+                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 8);
                 uint64_t value = cpu.GetGR(src1_);
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 8);
                 if (hasImmediate_) {
-                    cpu.SetGR(dst_, addr + static_cast<int64_t>(immediate_));
+                    cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
             }
             break;

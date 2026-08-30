@@ -595,6 +595,22 @@ void test_latest_boot_log_blockers() {
     assert_equal("rfi should restore IIP as a bundle address",
                  0xa0000001007f7e50ULL & ~0xFULL, rfiCpu.GetIP());
 
+    // The authentic kernel's first post-rfi data reference uses its canonical
+    // region-5 direct-map address.  The flat replay image places that same
+    // object at physical 0x04cbc1d0.
+    const uint64_t kernelVirtualData = 0xa000000100cbc1d0ULL;
+    const uint64_t kernelPhysicalData = 0x04cbc1d0ULL;
+    const uint64_t kernelDataValue = 0xa000000100cd55b0ULL;
+    Memory kernelMemory(0x05000000);
+    kernelMemory.write<uint64_t>(kernelPhysicalData, kernelDataValue);
+    InstructionEx kernelLoad(InstructionType::LD8, UnitType::M_UNIT);
+    kernelLoad.SetOperands(16, 2);
+    CPUState kernelCpu;
+    kernelCpu.SetGR(2, kernelVirtualData);
+    kernelLoad.Execute(kernelCpu, kernelMemory);
+    assert_equal("kernel direct-map load should translate canonical address",
+                 kernelDataValue, kernelCpu.GetGR(16));
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);
