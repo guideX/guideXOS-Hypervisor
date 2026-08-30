@@ -154,6 +154,14 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M25 loadrs is the adjacent no-predicate M0 form with x4=0xa and
+        // x2=0.  Keep it distinct from flushrs (x4=0xc).
+        if (major == 0x0 && x3 == 0x0 && m == 0 &&
+            x4 == 0x0a && x2 == 0x0 && result.qp == 0) {
+            result.operation = formats::MFormat::MemOp::LOADRS;
+            return true;
+        }
+
         // Decode based on major opcode and the M-unit table row. Major opcode 4
         // contains normal loads and stores; major opcode 5 contains the same
         // split for immediate-update forms.
@@ -381,6 +389,11 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         }
         else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {
             instr = InstructionEx(InstructionType::FLUSHRS, UnitType::M_UNIT);
+            instr.SetPredicate(0);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::LOADRS) {
+            instr = InstructionEx(InstructionType::LOADRS, UnitType::M_UNIT);
             instr.SetPredicate(0);
             return true;
         }

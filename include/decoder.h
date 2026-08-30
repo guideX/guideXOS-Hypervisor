@@ -185,6 +185,7 @@ enum class InstructionType {
     RSM,        // Reset selected PSR system-mask bits
     RFI,        // Return from interruption
     FLUSHRS,    // Flush dirty register-stack state to the backing store
+    LOADRS,     // Load/invalidate register-stack state from the backing store
     
     // Branch operations (B-type)
     BR_COND,    // Conditional branch

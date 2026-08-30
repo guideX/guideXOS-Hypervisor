@@ -1783,6 +1783,13 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetBSPSTORE(cpu.GetBSP());
             break;
 
+        case InstructionType::LOADRS:
+            // With RSC.loadrs=0, loadrs invalidates stacked registers outside
+            // the current frame.  This CPU model has no backing-store load or
+            // per-register validity state, so there is no further observable
+            // state transition to perform here.
+            break;
+
         case InstructionType::INVALA:
             // invala invalidates the ALAT, not the register stack.  guideXOS
             // currently has no ALAT entry store (advanced-load checks are
@@ -2458,6 +2465,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::FLUSHRS:
             oss << "flushrs";
+            break;
+
+        case InstructionType::LOADRS:
+            oss << "loadrs";
             break;
 
         case InstructionType::INVALA:

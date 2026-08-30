@@ -2411,8 +2411,14 @@ void test_ia64_flushrs() {
 
     const InstructionEx adjacentLoadrs = decoder.DecodeSlot(
         0x50000000ULL, UnitType::M_UNIT, 0x28640);
-    assert_true("adjacent loadrs encoding should not alias flushrs",
-                adjacentLoadrs.GetType() == InstructionType::UNKNOWN);
+    assert_true("adjacent loadrs encoding should decode",
+                adjacentLoadrs.GetType() == InstructionType::LOADRS);
+    assert_equal("loadrs predicate", 0, adjacentLoadrs.GetPredicate());
+    assert_string("loadrs disassembly", "loadrs", adjacentLoadrs.GetDisassembly());
+    cpu.SetRSC(0);
+    cpu.SetCFM(0x183);
+    adjacentLoadrs.Execute(cpu, memory);
+    assert_equal("loadrs with zero count should preserve RSC", 0, cpu.GetRSC());
 
     cpu.SetBSP(0x2000);
     cpu.SetBSPSTORE(0x1800);
@@ -2459,8 +2465,8 @@ void test_ia64_invala() {
         0x50000000ULL, UnitType::M_UNIT, 0x28640);
     assert_true("invala must not alias flushrs",
                 invala.GetType() != flushrs.GetType());
-    assert_true("adjacent loadrs encoding should remain unsupported",
-                loadrs.GetType() == InstructionType::UNKNOWN);
+    assert_true("adjacent loadrs encoding should remain distinct from flushrs",
+                loadrs.GetType() == InstructionType::LOADRS);
 
     // Use nontrivial RSE and stacked-register state to make sure the ALAT
     // invalidation is not incorrectly implemented as an RSE reset.
