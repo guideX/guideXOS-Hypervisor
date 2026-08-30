@@ -1013,6 +1013,31 @@ void test_latest_boot_log_blockers() {
                  8,
                  cpu.GetGR(22));
 
+    // Exact authentic ELILO memcpy_long alignment dispatch at 0x281e6.
+    // This I7 fixed-count SHL is encoded in the major-5 DEP.Z alias space;
+    // decoding it as EXTR leaves the loop target at COPY(0,1) instead of the
+    // required COPY(16,0) path.
+    InstructionEx memcpyLoopDispatchShift = decoder.DecodeSlot(
+        0xa7cb924480ULL, UnitType::I_UNIT, 0x281e0);
+    assert_true("ELILO memcpy loop-dispatch SHL should decode",
+                memcpyLoopDispatchShift.GetType() == InstructionType::SHL);
+    assert_equal("ELILO memcpy loop-dispatch SHL destination", 18,
+                 memcpyLoopDispatchShift.GetDst());
+    assert_equal("ELILO memcpy loop-dispatch SHL source", 18,
+                 memcpyLoopDispatchShift.GetSrc1());
+    assert_true("ELILO memcpy loop-dispatch SHL should carry an immediate",
+                memcpyLoopDispatchShift.HasImmediate());
+    assert_equal("ELILO memcpy loop-dispatch SHL count", 6,
+                 memcpyLoopDispatchShift.GetImmediate());
+    assert_string("ELILO memcpy loop-dispatch SHL disassembly",
+                  "shl r18 = r18, 6",
+                  memcpyLoopDispatchShift.GetDisassembly());
+    cpu.SetGR(18, 2);
+    memcpyLoopDispatchShift.Execute(cpu, memory);
+    assert_equal("ELILO memcpy loop-dispatch SHL should select 16-byte path",
+                 0x80,
+                 cpu.GetGR(18));
+
     // Exact authentic ELILO huft_build instruction at 0x21f00.  Historical
     // Binutils decodes this raw slot as "shr.u r14=r25,r23".  The encoded
     // source/count fields are reversed relative to SHL.

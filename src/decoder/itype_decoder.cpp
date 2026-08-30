@@ -65,20 +65,20 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                 // form must be recognized before the major-5 deposit/extract
                 // decoder, otherwise authentic ELILO instructions such as
                 // "shl r20=r19,32" are misread as EXTR.
-                const uint8_t major5_x2_field =
-                    formats::extractBits(raw_instruction, 28, 2);
+                const uint8_t cpos =
+                    static_cast<uint8_t>(formats::extractBits(raw_instruction, 20, 6));
+                const uint8_t encodedLen =
+                    static_cast<uint8_t>(formats::extractBits(raw_instruction, 27, 6));
                 const bool major5FixedShlAlias =
-                    (formats::extractBits(raw_instruction, 27, 1) == 1 &&
-                     (major5_x2_field == 1 || major5_x2_field == 3)) ||
-                    (formats::extractBits(raw_instruction, 27, 1) == 0 &&
-                     major5_x2_field == 2);
-                if (major5FixedShlAlias &&
                     major5_x == 1 && major5_x2 == 1 &&
-                    formats::extractBits(raw_instruction, 36, 1) == 0) {
+                    formats::extractBits(raw_instruction, 26, 1) == 0 &&
+                    // The SHL pseudo-op is DEP.Z with len == 64-count;
+                    // cpos is 63-count and len is encoded as len-1.
+                    encodedLen == cpos;
+                if (major5FixedShlAlias) {
                     result.opcode = 0x70; // SHL
                     result.has_imm = true;
-                    result.count = static_cast<uint8_t>(
-                        0x3F - formats::extractBits(raw_instruction, 20, 6));
+                    result.count = static_cast<uint8_t>(0x3F - cpos);
                     return true;
                 }
                 if (decodeTest(raw_instruction, result)) {
