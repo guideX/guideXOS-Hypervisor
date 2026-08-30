@@ -1694,7 +1694,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                     } else {
                                         // Load PE image properly
                                         std::vector<uint8_t> imageBuffer;
-                                        uint64_t loadAddress, entryPoint;
+                                        uint64_t loadAddress = 0, entryPoint = 0;
                                         
                                         if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
                                             LOG_INFO("? PE image prepared for loading");
@@ -1775,7 +1775,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                     } else {
                                         // Load PE image properly
                                         std::vector<uint8_t> imageBuffer;
-                                        uint64_t loadAddress, entryPoint;
+                                        uint64_t loadAddress = 0, entryPoint = 0;
                                         
                                         if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
                                             LOG_INFO("? PE image prepared for loading");
@@ -2033,7 +2033,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                     } else {
                                                         // Load PE image properly
                                                         std::vector<uint8_t> imageBuffer;
-                                                        uint64_t loadAddress, entryPoint;
+                                                        uint64_t loadAddress = 0, entryPoint = 0;
                                                         
                                                         if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
                                                             LOG_INFO("? PE image prepared for loading");
