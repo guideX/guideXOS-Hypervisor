@@ -116,6 +116,7 @@ struct MFormat {
         SYNC_I,
         SRLZ_I,
         RSM,
+        RFI,
         FLUSHRS,
         MOV_FROM_RR,
         MOV_TO_RR,
@@ -171,6 +172,7 @@ struct BFormat {
         COND,           // Conditional
         CALL,           // Call
         RET,            // Return
+        RFI,            // Return from interruption
         IA,             // Branch to IA-32
         CLOOP,          // Counted loop
         CTOP,           // Counted top

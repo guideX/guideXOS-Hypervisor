@@ -48,6 +48,16 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
 
+        // B8 is the unpredicated return-from-interruption instruction.  It
+        // restores the interrupted context from CR.IPSR/CR.IIP rather than
+        // forming a branch target from the encoded branch fields.
+        if (major == 0x0 && x6 == 0x08) {
+            result.type = formats::BFormat::BranchType::RFI;
+            result.indirect = false;
+            result.has_target = false;
+            return true;
+        }
+
         // Keep the bootloader's raw br.ret b0 encoding on the IP-relative path
         // so the return special-case below can classify it as BR_RET instead of
         // letting it fall into the indirect-call decoder.
@@ -133,6 +143,10 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
             case formats::BFormat::BranchType::RET:
                 type = InstructionType::BR_RET;
                 break;
+
+            case formats::BFormat::BranchType::RFI:
+                type = InstructionType::RFI;
+                break;
                 
             case formats::BFormat::BranchType::IA:
                 type = InstructionType::BR_IA;
@@ -169,7 +183,8 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
         const bool unpredicatedCountedBranch =
             fmt.type == formats::BFormat::BranchType::CLOOP ||
             fmt.type == formats::BFormat::BranchType::CTOP ||
-            fmt.type == formats::BFormat::BranchType::CEXIT;
+            fmt.type == formats::BFormat::BranchType::CEXIT ||
+            fmt.type == formats::BFormat::BranchType::RFI;
         instr.SetPredicate(unpredicatedCountedBranch ? 0 : fmt.qp);
         
         // Set operands based on branch type

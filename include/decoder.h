@@ -182,6 +182,7 @@ enum class InstructionType {
     SYNC_I,     // Synchronize prior cache flushes with instruction fetch
     SRLZ_I,     // Serialize the instruction stream
     RSM,        // Reset selected PSR system-mask bits
+    RFI,        // Return from interruption
     FLUSHRS,    // Flush dirty register-stack state to the backing store
     
     // Branch operations (B-type)

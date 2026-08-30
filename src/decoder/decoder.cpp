@@ -1797,6 +1797,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                            ((psr & kPsrSystemMask) & ~clearMask));
             }
             break;
+
+        case InstructionType::RFI:
+            // rfi restores the processor status and bundle address saved by
+            // the interruption machinery.  The IA-64 plugin maps the restored
+            // virtual IP into this emulator's flat guest address space before
+            // fetching the target bundle.
+            cpu.SetPSR(cpu.GetCR(16));
+            cpu.SetIP(cpu.GetCR(19) & ~0xFULL);
+            break;
             
         // ===== BRANCH OPERATIONS =====
             
@@ -1993,6 +2002,10 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::ITR_D:
             oss << "itr.d dtr[r" << static_cast<int>(dst_) << "] = r"
                 << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::RFI:
+            oss << "rfi";
             break;
 
         case InstructionType::MOV_FROM_PR:

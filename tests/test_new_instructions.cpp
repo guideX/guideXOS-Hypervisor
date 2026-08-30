@@ -581,6 +581,20 @@ void test_latest_boot_log_blockers() {
     assert_true("Linux entry rsm should preserve PSR.DT", (cpu.GetPSR() & (1ULL << 17)) != 0);
     assert_true("Linux entry rsm should preserve upper PSR", (cpu.GetPSR() & (1ULL << 32)) != 0);
 
+    // Exact Linux entry return-from-interruption instruction at 0x047f7e4c.
+    // Retained Binutils 2.19.1 identifies raw 0x40000000 as unpredicated rfi.
+    InstructionEx rfi = decoder.DecodeSlot(0x40000000ULL, UnitType::B_UNIT, 0x047f7e40);
+    assert_true("Linux entry rfi should decode", rfi.GetType() == InstructionType::RFI);
+    assert_equal("Linux entry rfi qualifying predicate", 0, rfi.GetPredicate());
+    assert_string("Linux entry rfi disassembly", "rfi", rfi.GetDisassembly());
+    CPUState rfiCpu;
+    rfiCpu.SetCR(16, 0x1010084a2008ULL);
+    rfiCpu.SetCR(19, 0xa0000001007f7e50ULL);
+    rfi.Execute(rfiCpu, memory);
+    assert_equal("rfi should restore IPSR into PSR", 0x1010084a2008ULL, rfiCpu.GetPSR());
+    assert_equal("rfi should restore IIP as a bundle address",
+                 0xa0000001007f7e50ULL & ~0xFULL, rfiCpu.GetIP());
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);

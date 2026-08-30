@@ -339,6 +339,18 @@ uint64_t normalizeBranchEntryIP(uint64_t target) {
     return target & ~0xFULL;
 }
 
+uint64_t normalizeRfiEntryIP(uint64_t target) {
+    constexpr uint64_t kIa64KernelVirtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t kIa64KernelPhysicalBase = 0x04000000ULL;
+    constexpr uint64_t kIa64KernelVirtualSpan = 0x01000000ULL;
+    const uint64_t bundleTarget = target & ~0xFULL;
+    if (bundleTarget >= kIa64KernelVirtualBase &&
+        bundleTarget - kIa64KernelVirtualBase < kIa64KernelVirtualSpan) {
+        return kIa64KernelPhysicalBase + (bundleTarget - kIa64KernelVirtualBase);
+    }
+    return bundleTarget;
+}
+
 bool tryResolveIa64FunctionDescriptor(IMemory& memory,
                                       uint64_t target,
                                       uint64_t& codePointer,
@@ -2917,6 +2929,30 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             
             hasCachedInstruction_ = false;
             return ISAExecutionResult::SYSCALL;
+        }
+
+        if (cachedInstruction_.GetType() == InstructionType::RFI) {
+            CPUState& cpu = state_.getCPUState();
+            const uint64_t interruptedIP = cpu.GetIP();
+            const uint64_t restoredIP = cpu.GetCR(19);
+            const uint64_t restoredPSR = cpu.GetCR(16);
+            executeInstruction(memory, cachedInstruction_, true);
+            const uint64_t normalizedIP = normalizeRfiEntryIP(cpu.GetIP());
+            const size_t restoredSlot = static_cast<size_t>((restoredPSR >> 41) & 0x3ULL);
+            cpu.SetIP(normalizedIP);
+            state_.currentSlot_ = restoredSlot;
+            state_.bundleValid_ = false;
+            capturePredicateGroupSnapshot();
+            std::ostringstream rfiTrace;
+            rfiTrace << "callerIP=" << BootStageTrace::Hex(interruptedIP)
+                     << " rawIIP=" << BootStageTrace::Hex(restoredIP)
+                     << " normalizedIP=" << BootStageTrace::Hex(normalizedIP)
+                     << " restoredPSR=" << BootStageTrace::Hex(restoredPSR)
+                     << " restoredSlot=" << restoredSlot
+                     << " cfm=" << BootStageTrace::Hex(cpu.GetCFM());
+            BootStageTrace::Event("IA64_RFI", rfiTrace.str());
+            hasCachedInstruction_ = false;
+            return ISAExecutionResult::CONTINUE;
         }
         
         // Check for branch instructions
