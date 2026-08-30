@@ -1463,6 +1463,69 @@ void test_ia64_control_register_moves() {
     std::cout << "  ? IA-64 indirect control-register moves passed" << std::endl;
 }
 
+void test_ia64_translation_register_inserts() {
+    std::cout << "Testing IA-64 translation-register inserts..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact Linux kernel entry instructions at guest addresses 0x047f7df6
+    // and 0x047f7e00.  Retained Binutils 2.19.1 disassembles these raw slots
+    // as itr.i itr[r16]=r18 and itr.d dtr[r16]=r18.
+    const uint64_t rawItrI = 0x2079024000ULL;
+    const InstructionEx itrI = decoder.DecodeSlot(
+        rawItrI, UnitType::M_UNIT, 0x047f7df0);
+    assert_true("Linux entry itr.i should decode",
+                itrI.GetType() == InstructionType::ITR_I);
+    assert_equal("itr.i selector register", 16, itrI.GetDst());
+    assert_equal("itr.i physical-address register", 18, itrI.GetSrc1());
+    assert_equal("itr.i qualifying predicate", 0, itrI.GetPredicate());
+    assert_string("itr.i disassembly",
+                  "itr.i itr[r16] = r18",
+                  itrI.GetDisassembly());
+
+    const uint64_t rawItrD = 0x2071024000ULL;
+    const InstructionEx itrD = decoder.DecodeSlot(
+        rawItrD, UnitType::M_UNIT, 0x047f7e00);
+    assert_true("Linux entry itr.d should decode",
+                itrD.GetType() == InstructionType::ITR_D);
+    assert_equal("itr.d selector register", 16, itrD.GetDst());
+    assert_equal("itr.d physical-address register", 18, itrD.GetSrc1());
+    assert_string("itr.d disassembly",
+                  "itr.d dtr[r16] = r18",
+                  itrD.GetDisassembly());
+
+    cpu.SetGR(16, 0);
+    cpu.SetGR(18, 0x12345000ULL);
+    cpu.SetCR(21, 0x68ULL);
+    cpu.SetRR(5, 0xfeedfaceULL);
+    cpu.SetCR(22, (5ULL << 61) | 0x1000ULL);
+    itrI.Execute(cpu, memory);
+    assert_true("itr.i should mark the selected ITR valid",
+                cpu.GetITR(0).valid);
+    assert_equal("itr.i should retain the physical-address operand",
+                 0x12345000ULL, cpu.GetITR(0).physicalAddress);
+    assert_equal("itr.i should retain CR.IFA",
+                 (5ULL << 61) | 0x1000ULL,
+                 cpu.GetITR(0).virtualAddress);
+    assert_equal("itr.i should retain CR.ITIR",
+                 0x68ULL, cpu.GetITR(0).itir);
+    assert_equal("itr.i should retain the selected RR",
+                 0xfeedfaceULL, cpu.GetITR(0).regionValue);
+
+    itrD.Execute(cpu, memory);
+    assert_true("itr.d should mark the selected DTR valid",
+                cpu.GetDTR(0).valid);
+    assert_equal("itr.d should retain the physical-address operand",
+                 0x12345000ULL, cpu.GetDTR(0).physicalAddress);
+    assert_equal("itr.d should retain CR.IFA",
+                 (5ULL << 61) | 0x1000ULL,
+                 cpu.GetDTR(0).virtualAddress);
+
+    std::cout << "  ? IA-64 translation-register inserts passed" << std::endl;
+}
+
 void test_memory_bounds_throw() {
     std::cout << "Testing memory bounds diagnostics..." << std::endl;
 
@@ -2674,6 +2737,7 @@ int main() {
         test_latest_boot_log_blockers();
         test_ia64_region_register_moves();
         test_ia64_control_register_moves();
+        test_ia64_translation_register_inserts();
         test_iso_boot_media_direct_path();
         test_fat_boot_media_lookup();
         test_el_torito_fat_boot_media_lookup();

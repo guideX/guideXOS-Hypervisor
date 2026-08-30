@@ -1064,6 +1064,25 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetCR(dst_, cpu.GetGR(src1_));
             break;
 
+        case InstructionType::ITR_I:
+        case InstructionType::ITR_D:
+            {
+                const uint64_t virtualAddress = cpu.GetCR(22);
+                const uint64_t regionIndex = (virtualAddress >> 61) & 0x7ULL;
+                const uint64_t regionValue = cpu.GetRR(regionIndex);
+                const uint64_t selector = cpu.GetGR(dst_) & 0xFFULL;
+                const uint64_t physicalAddress = cpu.GetGR(src1_);
+                const uint64_t itir = cpu.GetCR(21);
+                if (type_ == InstructionType::ITR_I) {
+                    cpu.SetITR(selector, physicalAddress, virtualAddress,
+                               itir, regionValue);
+                } else {
+                    cpu.SetDTR(selector, physicalAddress, virtualAddress,
+                               itir, regionValue);
+                }
+            }
+            break;
+
         case InstructionType::GETF_SIG:
             {
                 uint8_t fr[16] = {};
@@ -1963,6 +1982,16 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::MOV_TO_CR:
             oss << "mov cr[r" << static_cast<int>(dst_) << "] = r"
+                << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ITR_I:
+            oss << "itr.i itr[r" << static_cast<int>(dst_) << "] = r"
+                << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ITR_D:
+            oss << "itr.d dtr[r" << static_cast<int>(dst_) << "] = r"
                 << static_cast<int>(src1_);
             break;
 

@@ -48,6 +48,8 @@ constexpr size_t NUM_REGION_REGISTERS = 8;
 // IA-64 control registers are selected by the cr3 field of indirect moves.
 constexpr size_t NUM_CONTROL_REGISTERS = 128;
 
+constexpr size_t NUM_TRANSLATION_REGISTERS = 256;
+
 // Application registers (AR0-AR127)
 // - Various control and state registers
 // - Examples: AR.RSC (RSE config), AR.BSP (backing store pointer)
@@ -74,6 +76,21 @@ struct RSEState {
         , sof(0)
         , sol(0)
         , sor(0) {}
+};
+
+struct TranslationRegisterState {
+    uint64_t physicalAddress;
+    uint64_t virtualAddress;
+    uint64_t itir;
+    uint64_t regionValue;
+    bool valid;
+
+    TranslationRegisterState()
+        : physicalAddress(0)
+        , virtualAddress(0)
+        , itir(0)
+        , regionValue(0)
+        , valid(false) {}
 };
 
 /**
@@ -164,6 +181,14 @@ public:
     uint64_t GetCR(size_t index) const;
     void SetCR(size_t index, uint64_t value);
 
+    // Translation-register state populated by itr.i and itr.d.
+    const TranslationRegisterState& GetITR(size_t index) const;
+    const TranslationRegisterState& GetDTR(size_t index) const;
+    void SetITR(size_t index, uint64_t physicalAddress, uint64_t virtualAddress,
+                uint64_t itir, uint64_t regionValue);
+    void SetDTR(size_t index, uint64_t physicalAddress, uint64_t virtualAddress,
+                uint64_t itir, uint64_t regionValue);
+
     // Application register access
     uint64_t GetAR(size_t index) const;
     void SetAR(size_t index, uint64_t value);
@@ -251,6 +276,12 @@ private:
 
     // Control registers (64-bit)
     std::array<uint64_t, NUM_CONTROL_REGISTERS> cr_;
+
+    // Instruction/data translation registers.  The IA-64 selector is an
+    // eight-bit field; the implementation may reserve entries, but retaining
+    // the full selector space lets the decoder preserve architectural state.
+    std::array<TranslationRegisterState, NUM_TRANSLATION_REGISTERS> itr_;
+    std::array<TranslationRegisterState, NUM_TRANSLATION_REGISTERS> dtr_;
 
     // Application registers (64-bit)
     std::array<uint64_t, NUM_APPLICATION_REGISTERS> ar_;

@@ -31,6 +31,10 @@ void CPUState::Reset() {
 
     // Clear control registers
     cr_.fill(0);
+
+    // Clear translation-register state
+    itr_.fill(TranslationRegisterState());
+    dtr_.fill(TranslationRegisterState());
     
     // Clear application registers
     ar_.fill(0);
@@ -376,6 +380,46 @@ void CPUState::SetCR(size_t index, uint64_t value) {
         throw std::out_of_range("Control register index out of range");
     }
     cr_[index] = value;
+}
+
+const TranslationRegisterState& CPUState::GetITR(size_t index) const {
+    if (index >= NUM_TRANSLATION_REGISTERS) {
+        throw std::out_of_range("Instruction translation register index out of range");
+    }
+    return itr_[index];
+}
+
+const TranslationRegisterState& CPUState::GetDTR(size_t index) const {
+    if (index >= NUM_TRANSLATION_REGISTERS) {
+        throw std::out_of_range("Data translation register index out of range");
+    }
+    return dtr_[index];
+}
+
+void CPUState::SetITR(size_t index, uint64_t physicalAddress,
+                      uint64_t virtualAddress, uint64_t itir,
+                      uint64_t regionValue) {
+    if (index >= NUM_TRANSLATION_REGISTERS) {
+        throw std::out_of_range("Instruction translation register index out of range");
+    }
+    itr_[index].physicalAddress = physicalAddress;
+    itr_[index].virtualAddress = virtualAddress;
+    itr_[index].itir = itir;
+    itr_[index].regionValue = regionValue;
+    itr_[index].valid = true;
+}
+
+void CPUState::SetDTR(size_t index, uint64_t physicalAddress,
+                      uint64_t virtualAddress, uint64_t itir,
+                      uint64_t regionValue) {
+    if (index >= NUM_TRANSLATION_REGISTERS) {
+        throw std::out_of_range("Data translation register index out of range");
+    }
+    dtr_[index].physicalAddress = physicalAddress;
+    dtr_[index].virtualAddress = virtualAddress;
+    dtr_[index].itir = itir;
+    dtr_[index].regionValue = regionValue;
+    dtr_[index].valid = true;
 }
 
 uint64_t CPUState::GetAR(size_t index) const {

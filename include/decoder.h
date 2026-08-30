@@ -92,6 +92,8 @@ enum class InstructionType {
     MOV_TO_RR,  // Move from general register to region register
     MOV_FROM_CR,// Move from control register to general register
     MOV_TO_CR,  // Move from general register to control register
+    ITR_I,      // Insert instruction translation register
+    ITR_D,      // Insert data translation register
     MOV_FROM_PR,// Move predicate registers to general register
     MOV_FROM_IP,// Move instruction pointer to general register
     MOV_TO_PR,      // Move general register to predicate registers

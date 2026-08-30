@@ -86,6 +86,19 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M42 inserts an instruction or data translation register.  The
+        // retained Binutils table assigns x6=0x0f to itr.i and x6=0x0e to
+        // itr.d; both use r3 as the low-byte TR selector and r2 as the
+        // physical-address operand.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x0f) {
+            result.operation = formats::MFormat::MemOp::ITR_I;
+            return true;
+        }
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x0e) {
+            result.operation = formats::MFormat::MemOp::ITR_D;
+            return true;
+        }
+
         if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x30) {
             result.operation = formats::MFormat::MemOp::FC;
             return true;
@@ -339,6 +352,18 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::MOV_TO_CR, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r3, fmt.r2, 0);  // mov cr3 = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::ITR_I) {
+            instr = InstructionEx(InstructionType::ITR_I, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r3, fmt.r2, 0);  // itr.i itr[r3] = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::ITR_D) {
+            instr = InstructionEx(InstructionType::ITR_D, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r3, fmt.r2, 0);  // itr.d dtr[r3] = r2
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {
