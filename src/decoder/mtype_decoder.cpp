@@ -104,6 +104,13 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M46 translates a virtual address to its physical address.  The
+        // retained Binutils table encodes tpa as major=1, x3=0, x6=0x1e.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x1e) {
+            result.operation = formats::MFormat::MemOp::TPA;
+            return true;
+        }
+
         // M24 cache/instruction-stream ordering forms.  The architectural
         // x6 field is 0x33 for sync.i and 0x31 for srlz.i.
         if (major == 0x0 && x3 == 0x0 && m == 0 && m28_x6 == 0x33) {
@@ -312,6 +319,12 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::FC, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(0, fmt.r3, 0);  // fc r3
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::TPA) {
+            instr = InstructionEx(InstructionType::TPA, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // tpa r1 = r3
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::SYNC_I) {

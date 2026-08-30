@@ -1812,6 +1812,15 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::TPA:
+            // The authentic kernel uses tpa on its region-5 direct-map
+            // pointers during entry.  The flat replay image has that mapping
+            // at 0x04000000, so use the same narrow translation as memory
+            // references and retain the architectural physical result in r1.
+            cpu.SetGR(dst_, normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 1));
+            cpu.SetGRNaT(dst_, false);
+            break;
+
         case InstructionType::SYNC_I:
         case InstructionType::SRLZ_I:
             // sync.i/srlz.i order the cache-coherency and instruction-stream
@@ -2454,6 +2463,11 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::FC:
             oss << "fc r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::TPA:
+            oss << "tpa r" << static_cast<int>(dst_)
+                << " = r" << static_cast<int>(src1_);
             break;
 
         case InstructionType::SYNC_I:

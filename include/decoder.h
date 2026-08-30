@@ -179,6 +179,7 @@ enum class InstructionType {
     CHK_A_CLR,  // Advanced load check, clear ALAT entry
     INVALA,     // Invalidate all ALAT entries
     FC,         // Flush/invalidate one data-cache line
+    TPA,        // Translate virtual address to physical address
     SYNC_I,     // Synchronize prior cache flushes with instruction fetch
     SRLZ_I,     // Serialize the instruction stream
     RSM,        // Reset selected PSR system-mask bits

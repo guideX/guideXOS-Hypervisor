@@ -611,6 +611,21 @@ void test_latest_boot_log_blockers() {
     assert_equal("kernel direct-map load should translate canonical address",
                  kernelDataValue, kernelCpu.GetGR(16));
 
+    // Exact Linux entry translation instruction at 0x047f8150.  Retained
+    // Binutils 2.19.1 identifies raw 0x20f02000c0 as tpa r3=r2.
+    InstructionEx tpa = decoder.DecodeSlot(0x20f02000c0ULL, UnitType::M_UNIT, 0x047f8150);
+    assert_true("Linux entry tpa should decode", tpa.GetType() == InstructionType::TPA);
+    assert_equal("Linux entry tpa qualifying predicate", 0, tpa.GetPredicate());
+    assert_equal("Linux entry tpa destination register", 3, tpa.GetDst());
+    assert_equal("Linux entry tpa source register", 2, tpa.GetSrc1());
+    assert_string("Linux entry tpa disassembly", "tpa r3 = r2", tpa.GetDisassembly());
+    CPUState tpaCpu;
+    tpaCpu.SetGR(2, 0xa0000001009fe510ULL);
+    tpa.Execute(tpaCpu, kernelMemory);
+    assert_equal("tpa should translate the kernel direct-map pointer",
+                 0x049fe510ULL, tpaCpu.GetGR(3));
+    assert_true("tpa result should not be NaT", !tpaCpu.GetGRNaT(3));
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);

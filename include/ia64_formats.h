@@ -118,6 +118,7 @@ struct MFormat {
         RSM,
         RFI,
         FLUSHRS,
+        TPA,
         MOV_FROM_RR,
         MOV_TO_RR,
         MOV_FROM_CR,
