@@ -1040,6 +1040,30 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::MOV_FROM_RR:
+            // mov rDst = rr[rSrc1]; the region-register index is GR bits
+            // 63:61, not the low byte used by other indirect register files.
+            cpu.SetGR(dst_, cpu.GetRR((cpu.GetGR(src1_) >> 61) & 0x7ULL));
+            break;
+
+        case InstructionType::MOV_TO_RR:
+            // mov rr[rDst] = rSrc1; the destination selector is likewise
+            // taken from GR bits 63:61.
+            cpu.SetRR((cpu.GetGR(dst_) >> 61) & 0x7ULL, cpu.GetGR(src1_));
+            break;
+
+        case InstructionType::MOV_FROM_CR:
+            // mov rDst = cr[rSrc1]; cr3 is the indirect control-register
+            // selector.  The control-register privilege checks are outside
+            // this emulator's current architectural privilege model.
+            cpu.SetGR(dst_, cpu.GetCR(src1_));
+            break;
+
+        case InstructionType::MOV_TO_CR:
+            // mov cr[rDst] = rSrc1.
+            cpu.SetCR(dst_, cpu.GetGR(src1_));
+            break;
+
         case InstructionType::GETF_SIG:
             {
                 uint8_t fr[16] = {};
@@ -1920,6 +1944,26 @@ std::string InstructionEx::GetDisassembly() const {
             } else {
                 oss << " = r" << static_cast<int>(src1_);
             }
+            break;
+
+        case InstructionType::MOV_FROM_RR:
+            oss << "mov r" << static_cast<int>(dst_) << " = rr[r"
+                << static_cast<int>(src1_) << "]";
+            break;
+
+        case InstructionType::MOV_TO_RR:
+            oss << "mov rr[r" << static_cast<int>(dst_) << "] = r"
+                << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::MOV_FROM_CR:
+            oss << "mov r" << static_cast<int>(dst_) << " = cr[r"
+                << static_cast<int>(src1_) << "]";
+            break;
+
+        case InstructionType::MOV_TO_CR:
+            oss << "mov cr[r" << static_cast<int>(dst_) << "] = r"
+                << static_cast<int>(src1_);
             break;
 
         case InstructionType::MOV_FROM_PR:

@@ -40,6 +40,14 @@ constexpr size_t NUM_STATIC_PR = 16;
 // - Not subject to rotation
 constexpr size_t NUM_BRANCH_REGISTERS = 8;
 
+// IA-64 has 8 region registers (RR0-RR7)
+// - Select the virtual-address region's protection and translation mode
+// - The indirect move instructions index them with GR bits 63:61
+constexpr size_t NUM_REGION_REGISTERS = 8;
+
+// IA-64 control registers are selected by the cr3 field of indirect moves.
+constexpr size_t NUM_CONTROL_REGISTERS = 128;
+
 // Application registers (AR0-AR127)
 // - Various control and state registers
 // - Examples: AR.RSC (RSE config), AR.BSP (backing store pointer)
@@ -148,6 +156,14 @@ public:
     uint64_t GetBR(size_t index) const;
     void SetBR(size_t index, uint64_t value);
 
+    // Region register access (64-bit)
+    uint64_t GetRR(size_t index) const;
+    void SetRR(size_t index, uint64_t value);
+
+    // Control register access (64-bit)
+    uint64_t GetCR(size_t index) const;
+    void SetCR(size_t index, uint64_t value);
+
     // Application register access
     uint64_t GetAR(size_t index) const;
     void SetAR(size_t index, uint64_t value);
@@ -229,6 +245,12 @@ private:
 
     // Branch registers (64-bit)
     std::array<uint64_t, NUM_BRANCH_REGISTERS> br_;
+
+    // Region registers (64-bit)
+    std::array<uint64_t, NUM_REGION_REGISTERS> rr_;
+
+    // Control registers (64-bit)
+    std::array<uint64_t, NUM_CONTROL_REGISTERS> cr_;
 
     // Application registers (64-bit)
     std::array<uint64_t, NUM_APPLICATION_REGISTERS> ar_;

@@ -60,6 +60,32 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         // form.  Keep this exact match ahead of the major-1 alloc decoder so
         // the live ELILO encoding 0x2182000000 is not mistaken for unknown.
         const uint8_t m28_x6 = formats::extractBits(raw_instruction, 27, 6);
+
+        // M15 indirect region-register moves share major opcode 1 with
+        // alloc.  The architecture selects the region register from GR[r3]
+        // bits 63:61; x6=0x00 is the to-form and x6=0x10 is the from-form.
+        // Recognize these before the alloc fallback so Linux's first kernel
+        // entry bundle is not reported as an unknown M-unit instruction.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x00) {
+            result.operation = formats::MFormat::MemOp::MOV_TO_RR;
+            return true;
+        }
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x10) {
+            result.operation = formats::MFormat::MemOp::MOV_FROM_RR;
+            return true;
+        }
+
+        // M32/M33 indirect control-register moves use the same cr3 selector
+        // field.  x6=0x2c is the to-form and x6=0x24 is the from-form.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x2c) {
+            result.operation = formats::MFormat::MemOp::MOV_TO_CR;
+            return true;
+        }
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x24) {
+            result.operation = formats::MFormat::MemOp::MOV_FROM_CR;
+            return true;
+        }
+
         if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x30) {
             result.operation = formats::MFormat::MemOp::FC;
             return true;
@@ -289,6 +315,30 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::RSM, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetImmediate(fmt.imm24);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_FROM_RR) {
+            instr = InstructionEx(InstructionType::MOV_FROM_RR, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // mov r1 = rr[r3]
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_TO_RR) {
+            instr = InstructionEx(InstructionType::MOV_TO_RR, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r3, fmt.r2, 0);  // mov rr[r3] = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_FROM_CR) {
+            instr = InstructionEx(InstructionType::MOV_FROM_CR, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // mov r1 = cr3
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_TO_CR) {
+            instr = InstructionEx(InstructionType::MOV_TO_CR, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r3, fmt.r2, 0);  // mov cr3 = r2
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {

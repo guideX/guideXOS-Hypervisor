@@ -1358,6 +1358,111 @@ void test_latest_boot_log_blockers() {
     std::cout << "  ? Latest boot-log raw instructions passed" << std::endl;
 }
 
+void test_ia64_region_register_moves() {
+    std::cout << "Testing IA-64 indirect region-register moves..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact Linux kernel entry instruction at guest address 0x047f7bb0.
+    // Retained Binutils 2.19.1 disassembles raw 0x2080200200 as
+    // "mov r8=rr[r2]" in the MMI bundle following the entry rsm/srlz.i.
+    const uint64_t rawFromRR = 0x2080200200ULL;
+    const InstructionEx fromRR = decoder.DecodeSlot(
+        rawFromRR, UnitType::M_UNIT, 0x047f7bb0);
+    assert_true("Linux entry mov-from-RR should decode",
+                fromRR.GetType() == InstructionType::MOV_FROM_RR);
+    assert_equal("mov-from-RR destination register", 8, fromRR.GetDst());
+    assert_equal("mov-from-RR selector register", 2, fromRR.GetSrc1());
+    assert_equal("mov-from-RR qualifying predicate", 0, fromRR.GetPredicate());
+    assert_string("mov-from-RR disassembly",
+                  "mov r8 = rr[r2]",
+                  fromRR.GetDisassembly());
+
+    cpu.SetGR(2, 3ULL << 61);
+    cpu.SetRR(3, 0x123456789abcdef0ULL);
+    fromRR.Execute(cpu, memory);
+    assert_equal("mov-from-RR should select with GR bits 63:61",
+                 0x123456789abcdef0ULL,
+                 cpu.GetGR(8));
+
+    // Exact adjacent Linux instruction at guest address 0x047f7cb6.
+    // Its raw slot is 0x2000220000 and Binutils disassembles it as
+    // "mov rr[r2]=r16".
+    const uint64_t rawToRR = 0x2000220000ULL;
+    const InstructionEx toRR = decoder.DecodeSlot(
+        rawToRR, UnitType::M_UNIT, 0x047f7cb0);
+    assert_true("Linux entry mov-to-RR should decode",
+                toRR.GetType() == InstructionType::MOV_TO_RR);
+    assert_equal("mov-to-RR selector register", 2, toRR.GetDst());
+    assert_equal("mov-to-RR source register", 16, toRR.GetSrc1());
+    assert_equal("mov-to-RR qualifying predicate", 0, toRR.GetPredicate());
+    assert_string("mov-to-RR disassembly",
+                  "mov rr[r2] = r16",
+                  toRR.GetDisassembly());
+
+    cpu.SetGR(2, 5ULL << 61);
+    cpu.SetGR(16, 0xfedcba9876543210ULL);
+    toRR.Execute(cpu, memory);
+    assert_equal("mov-to-RR should select with GR bits 63:61",
+                 0xfedcba9876543210ULL,
+                 cpu.GetRR(5));
+
+    std::cout << "  ? IA-64 indirect region-register moves passed" << std::endl;
+}
+
+void test_ia64_control_register_moves() {
+    std::cout << "Testing IA-64 indirect control-register moves..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact Linux kernel entry instruction at guest address 0x047f7db0.
+    // Retained Binutils 2.19.1 disassembles raw 0x2161524000 as
+    // "mov cr.itir=r18"; cr.itir is indirect selector 21.
+    const uint64_t rawToCR = 0x2161524000ULL;
+    const InstructionEx toCR = decoder.DecodeSlot(
+        rawToCR, UnitType::M_UNIT, 0x047f7db0);
+    assert_true("Linux entry mov-to-CR should decode",
+                toCR.GetType() == InstructionType::MOV_TO_CR);
+    assert_equal("mov-to-CR selector", 21, toCR.GetDst());
+    assert_equal("mov-to-CR source register", 18, toCR.GetSrc1());
+    assert_equal("mov-to-CR qualifying predicate", 0, toCR.GetPredicate());
+    assert_string("mov-to-CR disassembly",
+                  "mov cr[r21] = r18",
+                  toCR.GetDisassembly());
+
+    cpu.SetGR(18, 0x123456789abcdef0ULL);
+    toCR.Execute(cpu, memory);
+    assert_equal("mov-to-CR should copy the source value",
+                 0x123456789abcdef0ULL,
+                 cpu.GetCR(21));
+
+    // The from-form uses x6=0x24 and the same cr3 selector field.  This raw
+    // encoding is the exact inverse form of the Linux M32 instruction above,
+    // with r9 as the general-register destination.
+    const uint64_t rawFromCR = 0x2121524240ULL;
+    const InstructionEx fromCR = decoder.DecodeSlot(
+        rawFromCR, UnitType::M_UNIT, 0x047f7db0);
+    assert_true("indirect mov-from-CR should decode",
+                fromCR.GetType() == InstructionType::MOV_FROM_CR);
+    assert_equal("mov-from-CR destination register", 9, fromCR.GetDst());
+    assert_equal("mov-from-CR selector", 21, fromCR.GetSrc1());
+    assert_string("mov-from-CR disassembly",
+                  "mov r9 = cr[r21]",
+                  fromCR.GetDisassembly());
+
+    cpu.SetCR(21, 0xfedcba9876543210ULL);
+    fromCR.Execute(cpu, memory);
+    assert_equal("mov-from-CR should copy the selected control register",
+                 0xfedcba9876543210ULL,
+                 cpu.GetGR(9));
+
+    std::cout << "  ? IA-64 indirect control-register moves passed" << std::endl;
+}
+
 void test_memory_bounds_throw() {
     std::cout << "Testing memory bounds diagnostics..." << std::endl;
 
@@ -2567,6 +2672,8 @@ int main() {
         test_compare_instructions();
         test_compare_ne_decoder();
         test_latest_boot_log_blockers();
+        test_ia64_region_register_moves();
+        test_ia64_control_register_moves();
         test_iso_boot_media_direct_path();
         test_fat_boot_media_lookup();
         test_el_torito_fat_boot_media_lookup();

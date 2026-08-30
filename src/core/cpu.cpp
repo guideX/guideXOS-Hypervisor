@@ -25,6 +25,12 @@ void CPUState::Reset() {
     
     // Clear branch registers
     br_.fill(0);
+
+    // Clear region registers
+    rr_.fill(0);
+
+    // Clear control registers
+    cr_.fill(0);
     
     // Clear application registers
     ar_.fill(0);
@@ -342,6 +348,34 @@ void CPUState::SetBR(size_t index, uint64_t value) {
         throw std::out_of_range("Branch register index out of range");
     }
     br_[index] = value;
+}
+
+uint64_t CPUState::GetRR(size_t index) const {
+    if (index >= NUM_REGION_REGISTERS) {
+        throw std::out_of_range("Region register index out of range");
+    }
+    return rr_[index];
+}
+
+void CPUState::SetRR(size_t index, uint64_t value) {
+    if (index >= NUM_REGION_REGISTERS) {
+        throw std::out_of_range("Region register index out of range");
+    }
+    rr_[index] = value;
+}
+
+uint64_t CPUState::GetCR(size_t index) const {
+    if (index >= NUM_CONTROL_REGISTERS) {
+        throw std::out_of_range("Control register index out of range");
+    }
+    return cr_[index];
+}
+
+void CPUState::SetCR(size_t index, uint64_t value) {
+    if (index >= NUM_CONTROL_REGISTERS) {
+        throw std::out_of_range("Control register index out of range");
+    }
+    cr_[index] = value;
 }
 
 uint64_t CPUState::GetAR(size_t index) const {

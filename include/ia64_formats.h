@@ -116,7 +116,11 @@ struct MFormat {
         SYNC_I,
         SRLZ_I,
         RSM,
-        FLUSHRS
+        FLUSHRS,
+        MOV_FROM_RR,
+        MOV_TO_RR,
+        MOV_FROM_CR,
+        MOV_TO_CR
     } operation;
     
     // Access size
