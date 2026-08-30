@@ -2362,6 +2362,21 @@ void test_ia64_flushrs() {
     CPUState cpu;
     Memory memory(1024 * 1024);
 
+    // Exact Linux entry instruction immediately before loadrs.  Retained
+    // Binutils identifies raw 0x141000000 as mov.m ar.rsc=0.
+    const uint64_t rawMovRsc = 0x141000000ULL;
+    const InstructionEx movRsc = decoder.DecodeSlot(
+        rawMovRsc, UnitType::M_UNIT, 0x047f81f0);
+    assert_true("authentic mov.m ar.rsc should decode",
+                movRsc.GetType() == InstructionType::MOV_TO_AR);
+    assert_equal("mov.m ar.rsc predicate", 0, movRsc.GetPredicate());
+    assert_equal("mov.m ar.rsc destination", 16, movRsc.GetDst());
+    assert_equal("mov.m ar.rsc immediate", 0, movRsc.GetImmediate());
+    assert_string("mov.m ar.rsc disassembly", "mov.m ar.rsc = 0", movRsc.GetDisassembly());
+    cpu.SetRSC(0x3);
+    movRsc.Execute(cpu, memory);
+    assert_equal("mov.m ar.rsc should update AR.RSC", 0, cpu.GetRSC());
+
     // Exact authentic ELILO encoding at IP 0x28640.  Historical Binutils
     // identifies this M0 syllable as flushrs: major=0, x3=0, x4=0xc, x2=0.
     const uint64_t rawFlushrs = 0x60000000ULL;

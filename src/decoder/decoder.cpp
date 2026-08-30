@@ -2004,11 +2004,14 @@ std::string InstructionEx::GetDisassembly() const {
             break;
 
         case InstructionType::MOV_TO_AR:
-            oss << (hasImmediate_ ? "mov.i ar." : "mov ar.");
+            oss << (hasImmediate_ ? (unit_ == UnitType::M_UNIT ? "mov.m ar." : "mov.i ar.")
+                                  : "mov ar.");
             if (dst_ == 64) {
                 oss << "pfs";
             } else if (dst_ == 65) {
                 oss << "lc";
+            } else if (dst_ == 16) {
+                oss << "rsc";
             } else {
                 oss << static_cast<int>(dst_);
             }
@@ -2879,6 +2882,25 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
     switch (unitType) {
         case UnitType::M_UNIT:
             if (decodeAlloc()) {
+                return result;
+            }
+
+            // M15 mov.m ar3=imm8 uses the M0 x4=8, x2=2 encoding.  The
+            // immediate is split across bits 13:19 and bit 36; recognize it
+            // before the ordinary M0 nop/system forms.
+            if (major == 0x0 && x3 == 0x0 &&
+                ((slotBits >> 27) & 0x0F) == 0x8 &&
+                ((slotBits >> 31) & 0x03) == 0x2) {
+                const uint8_t ar3 = static_cast<uint8_t>((slotBits >> 20) & 0x7F);
+                const uint8_t immLow7 = static_cast<uint8_t>((slotBits >> 13) & 0x7F);
+                const uint8_t immSign = static_cast<uint8_t>((slotBits >> 36) & 0x1);
+                const uint8_t imm8 = static_cast<uint8_t>(immLow7 | (immSign << 7));
+                result = InstructionEx(InstructionType::MOV_TO_AR, UnitType::M_UNIT);
+                result.SetOperands(ar3, 0, 0);
+                result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
+                result.SetImmediate(static_cast<uint64_t>(static_cast<int64_t>(
+                    SignExtend(imm8, 8))));
+                result.SetRawBits(slotBits);
                 return result;
             }
 
