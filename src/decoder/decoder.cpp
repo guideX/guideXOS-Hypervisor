@@ -1059,6 +1059,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetGR(dst_, cpu.GetAR(src1_));
             break;
 
+        case InstructionType::MOV_FROM_PSR:
+            // mov rDst = psr
+            cpu.SetGR(dst_, cpu.GetPSR());
+            break;
+
         case InstructionType::MOV_TO_AR:
             // mov arDst = rSrc1 or mov.i arDst = imm8.
             // ar.pfs is written independently of the current frame marker.
@@ -2013,6 +2018,10 @@ std::string InstructionEx::GetDisassembly() const {
             } else {
                 oss << static_cast<int>(src1_);
             }
+            break;
+
+        case InstructionType::MOV_FROM_PSR:
+            oss << "mov r" << static_cast<int>(dst_) << " = psr";
             break;
 
         case InstructionType::MOV_TO_AR:

@@ -86,6 +86,14 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M15 moves the processor status register to a general register.
+        // Binutils identifies x6=0x25 as "mov r1=psr"; this is distinct
+        // from the indirect application/control-register move forms above.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x25) {
+            result.operation = formats::MFormat::MemOp::MOV_FROM_PSR;
+            return true;
+        }
+
         // M42 inserts an instruction or data translation register.  The
         // retained Binutils table assigns x6=0x0f to itr.i and x6=0x0e to
         // itr.d; both use r3 as the low-byte TR selector and r2 as the
@@ -367,6 +375,12 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::MOV_FROM_CR, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r3, 0);  // mov r1 = cr3
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_FROM_PSR) {
+            instr = InstructionEx(InstructionType::MOV_FROM_PSR, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, 0, 0);  // mov r1 = psr
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::MOV_TO_CR) {

@@ -125,7 +125,8 @@ struct MFormat {
         MOV_FROM_CR,
         MOV_TO_CR,
         ITR_I,
-        ITR_D
+        ITR_D,
+        MOV_FROM_PSR
     } operation;
     
     // Access size

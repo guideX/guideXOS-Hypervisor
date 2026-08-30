@@ -1505,6 +1505,25 @@ void test_ia64_control_register_moves() {
                  0xfedcba9876543210ULL,
                  cpu.GetGR(9));
 
+    // Exact Linux kernel instruction at physical IP 0x408ac60.
+    // Retained Binutils disassembles raw 0x2128000bc0 as "mov r47=psr".
+    const uint64_t rawFromPsr = 0x2128000bc0ULL;
+    const InstructionEx fromPsr = decoder.DecodeSlot(
+        rawFromPsr, UnitType::M_UNIT, 0x0408ac60);
+    assert_true("Linux mov-from-PSR should decode",
+                fromPsr.GetType() == InstructionType::MOV_FROM_PSR);
+    assert_equal("mov-from-PSR destination register", 47, fromPsr.GetDst());
+    assert_equal("mov-from-PSR qualifying predicate", 0, fromPsr.GetPredicate());
+    assert_string("mov-from-PSR disassembly",
+                  "mov r47 = psr",
+                  fromPsr.GetDisassembly());
+
+    cpu.SetPSR(0x1010084a2008ULL);
+    fromPsr.Execute(cpu, memory);
+    assert_equal("mov-from-PSR should copy the processor status register",
+                 0x1010084a2008ULL,
+                 cpu.GetGR(47));
+
     std::cout << "  ? IA-64 indirect control-register moves passed" << std::endl;
 }
 
