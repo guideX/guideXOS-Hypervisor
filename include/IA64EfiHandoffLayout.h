@@ -20,6 +20,8 @@ struct EfiHandoffLayout {
     uint64_t textOutputModeAddr = 0;
     uint64_t textOutputStringStubCodeAddr = 0;
     uint64_t textOutputStringStubDescAddr = 0;
+    uint64_t textOutputQueryModeStubCodeAddr = 0;
+    uint64_t textOutputQueryModeStubDescAddr = 0;
     uint64_t fileOpenStubCodeAddr = 0;
     uint64_t fileOpenStubDescAddr = 0;
     uint64_t fileCloseStubCodeAddr = 0;
@@ -101,6 +103,8 @@ constexpr uint64_t kEfiTextOutputProtocolOffset = 0x1200ULL;
 constexpr uint64_t kEfiTextOutputModeOffset = 0x1260ULL;
 constexpr uint64_t kEfiTextOutputStringStubCodeOffset = 0x1280ULL;
 constexpr uint64_t kEfiTextOutputStringStubDescOffset = 0x12C0ULL;
+constexpr uint64_t kEfiTextOutputQueryModeStubCodeOffset = 0x1F00ULL;
+constexpr uint64_t kEfiTextOutputQueryModeStubDescOffset = 0x1F40ULL;
 constexpr uint64_t kEfiLoadedImageFilePathOffset = 0x1300ULL;
 constexpr uint64_t kEfiLoadedImageLoadOptionsOffset = 0x1340ULL;
 constexpr uint64_t kEfiFileOpenStubCodeOffset = 0x1400ULL;
@@ -205,6 +209,8 @@ inline bool tryComputeEfiHandoffLayout(uint64_t guestMemorySize, EfiHandoffLayou
     layout.textOutputModeAddr = base + kEfiTextOutputModeOffset;
     layout.textOutputStringStubCodeAddr = base + kEfiTextOutputStringStubCodeOffset;
     layout.textOutputStringStubDescAddr = base + kEfiTextOutputStringStubDescOffset;
+    layout.textOutputQueryModeStubCodeAddr = base + kEfiTextOutputQueryModeStubCodeOffset;
+    layout.textOutputQueryModeStubDescAddr = base + kEfiTextOutputQueryModeStubDescOffset;
     layout.fileOpenStubCodeAddr = base + kEfiFileOpenStubCodeOffset;
     layout.fileOpenStubDescAddr = base + kEfiFileOpenStubDescOffset;
     layout.fileCloseStubCodeAddr = base + kEfiFileCloseStubCodeOffset;

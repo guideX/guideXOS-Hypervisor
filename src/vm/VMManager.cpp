@@ -2154,6 +2154,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     const uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = layout.textOutputModeAddr;
                                                                     const uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = layout.textOutputStringStubCodeAddr;
                                                                     const uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = layout.textOutputStringStubDescAddr;
+                                                                    const uint64_t EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR = layout.textOutputQueryModeStubCodeAddr;
+                                                                    const uint64_t EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR = layout.textOutputQueryModeStubDescAddr;
                                                                     const uint64_t EFI_SIMPLE_TEXT_INPUT_PROTOCOL_ADDR = layout.simpleTextInputProtocolAddr;
                                                                     const uint64_t EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_ADDR = layout.simpleTextInputExProtocolAddr;
                                                                     const uint64_t EFI_CONSOLE_INPUT_EVENT_ADDR = layout.consoleInputEventAddr;
@@ -2322,6 +2324,12 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                    NOP_I,
                                                                                    BR_RET_B0);
                                                                     WriteIa64Bundle(instance,
+                                                                                   EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR,
+                                                                                   0x10,
+                                                                                   ADD_R8_R0_ZERO,
+                                                                                   NOP_I,
+                                                                                   BR_RET_B0);
+                                                                    WriteIa64Bundle(instance,
                                                                                    EFI_INPUT_RESET_STUB_CODE_ADDR,
                                                                                    0x10,
                                                                                    ADD_R8_R0_ZERO,
@@ -2412,6 +2420,10 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR,
                                                                             EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR);
                                                                     write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR + 8,
+                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                    write64(EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR,
+                                                                            EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR);
+                                                                    write64(EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR + 8,
                                                                             peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
                                                                     auto writeDescriptor = [&](uint64_t descriptorAddress, uint64_t codeAddress) {
                                                                         write64(descriptorAddress, codeAddress);
@@ -2665,7 +2677,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x10,
                                                                             EFI_SUCCESS_STUB_DESC_ADDR); // TestString
                                                                     write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x18,
-                                                                            EFI_UNSUPPORTED_STUB_DESC_ADDR); // QueryMode
+                                                                            EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR); // QueryMode
                                                                     write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x20,
                                                                             EFI_SUCCESS_STUB_DESC_ADDR); // SetMode
                                                                     write64(EFI_TEXT_OUTPUT_PROTOCOL_ADDR + 0x28,

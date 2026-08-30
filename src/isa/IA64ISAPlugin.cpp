@@ -164,6 +164,8 @@ uint64_t EFI_TEXT_OUTPUT_PROTOCOL_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutpu
 uint64_t EFI_TEXT_OUTPUT_MODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputModeOffset;
 uint64_t EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputStringStubCodeOffset;
 uint64_t EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputStringStubDescOffset;
+uint64_t EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputQueryModeStubCodeOffset;
+uint64_t EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiTextOutputQueryModeStubDescOffset;
 uint64_t EFI_FILE_OPEN_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileOpenStubCodeOffset;
 uint64_t EFI_FILE_OPEN_STUB_DESC_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileOpenStubDescOffset;
 uint64_t EFI_FILE_CLOSE_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFileCloseStubCodeOffset;
@@ -419,6 +421,8 @@ void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_TEXT_OUTPUT_MODE_ADDR = base + kEfiTextOutputModeOffset;
     EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR = base + kEfiTextOutputStringStubCodeOffset;
     EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR = base + kEfiTextOutputStringStubDescOffset;
+    EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR = base + kEfiTextOutputQueryModeStubCodeOffset;
+    EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR = base + kEfiTextOutputQueryModeStubDescOffset;
     EFI_FILE_OPEN_STUB_CODE_ADDR = base + kEfiFileOpenStubCodeOffset;
     EFI_FILE_OPEN_STUB_DESC_ADDR = base + kEfiFileOpenStubDescOffset;
     EFI_FILE_CLOSE_STUB_CODE_ADDR = base + kEfiFileCloseStubCodeOffset;
@@ -655,6 +659,9 @@ std::string describeEfiDescriptor(uint64_t address) {
     if (address == EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR) {
         return "SimpleTextOut.OutputString descriptor";
     }
+    if (address == EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR) {
+        return "SimpleTextOut.QueryMode descriptor";
+    }
     if (address == EFI_FILE_OPEN_STUB_DESC_ADDR) return "FileProtocol.Open descriptor";
     if (address == EFI_FILE_CLOSE_STUB_DESC_ADDR) return "FileProtocol.Close descriptor";
     if (address == EFI_FILE_READ_STUB_DESC_ADDR) return "FileProtocol.Read descriptor";
@@ -686,6 +693,7 @@ uint64_t efiDescriptorForCodePointer(uint64_t codePointer) {
     if (codePointer == EFI_UNSUPPORTED_STUB_CODE_ADDR) return EFI_UNSUPPORTED_STUB_DESC_ADDR;
     if (codePointer == EFI_SUCCESS_STUB_CODE_ADDR) return EFI_SUCCESS_STUB_DESC_ADDR;
     if (codePointer == EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR) return EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR;
+    if (codePointer == EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR) return EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR;
     if (codePointer == EFI_FILE_OPEN_STUB_CODE_ADDR) return EFI_FILE_OPEN_STUB_DESC_ADDR;
     if (codePointer == EFI_FILE_CLOSE_STUB_CODE_ADDR) return EFI_FILE_CLOSE_STUB_DESC_ADDR;
     if (codePointer == EFI_FILE_READ_STUB_CODE_ADDR) return EFI_FILE_READ_STUB_DESC_ADDR;
@@ -3840,6 +3848,42 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         logEfiServiceCall(memory, "SimpleTextOut.OutputString", currentIP,
                                           EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR, originalBranchTarget,
                                           EFI_STATUS_SUCCESS);
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                        branchTarget == EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t thisProtocol = readCallerOutputRegister(state_.getCPUState(), 0);
+                        const uint64_t modeNumber = readCallerOutputRegister(state_.getCPUState(), 1);
+                        const uint64_t columnsAddress = readCallerOutputRegister(state_.getCPUState(), 2);
+                        const uint64_t rowsAddress = readCallerOutputRegister(state_.getCPUState(), 3);
+                        constexpr uint64_t kTextModeColumns = 80;
+                        constexpr uint64_t kTextModeRows = 25;
+                        const uint64_t memorySize = static_cast<uint64_t>(memory.GetTotalSize());
+                        const auto validOutput = [memorySize](uint64_t address) {
+                            return address != 0 && address <= memorySize &&
+                                   sizeof(uint64_t) <= memorySize - address;
+                        };
+                        uint64_t status = EFI_STATUS_SUCCESS;
+                        if (thisProtocol != EFI_TEXT_OUTPUT_PROTOCOL_ADDR || modeNumber != 0 ||
+                            !validOutput(columnsAddress) || !validOutput(rowsAddress)) {
+                            status = modeNumber == 0 ? EFI_STATUS_INVALID_PARAMETER : EFI_STATUS_UNSUPPORTED;
+                        } else {
+                            try {
+                                memory.Write(columnsAddress,
+                                             reinterpret_cast<const uint8_t*>(&kTextModeColumns),
+                                             sizeof(kTextModeColumns));
+                                memory.Write(rowsAddress,
+                                             reinterpret_cast<const uint8_t*>(&kTextModeRows),
+                                             sizeof(kTextModeRows));
+                            } catch (const std::exception&) {
+                                status = EFI_STATUS_INVALID_PARAMETER;
+                            }
+                        }
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, status);
+                        logEfiServiceCall(memory, "SimpleTextOut.QueryMode", currentIP,
+                                          EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR,
+                                          originalBranchTarget, status);
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_SET_MEM_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;

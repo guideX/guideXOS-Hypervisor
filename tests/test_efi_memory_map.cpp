@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "IA64EfiHandoffLayout.h"
+
 namespace {
 
 constexpr uint32_t kEfiConventionalMemory = 7;
@@ -177,12 +179,27 @@ void testGenericEliloSearchAndMapInvariants() {
             "ELILO-style search must reject a range beyond descriptor end");
 }
 
+void testTextOutputQueryModeLayout() {
+    ia64::EfiHandoffLayout layout{};
+    require(ia64::tryComputeEfiHandoffLayout(512ULL * 1024ULL * 1024ULL, layout),
+            "512 MiB EFI handoff layout must be computable");
+    require(layout.textOutputQueryModeStubCodeAddr != 0 &&
+                layout.textOutputQueryModeStubDescAddr != 0,
+            "QueryMode stub addresses must be populated");
+    require(layout.textOutputQueryModeStubCodeAddr != layout.textOutputQueryModeStubDescAddr,
+            "QueryMode code and descriptor must be distinct");
+    require(layout.textOutputQueryModeStubCodeAddr >= layout.base &&
+                layout.textOutputQueryModeStubDescAddr < layout.end,
+            "QueryMode stub must remain inside the EFI handoff region");
+}
+
 } // namespace
 
 int main() {
     try {
         testHistoricalDescriptorAbiAndStride();
         testGenericEliloSearchAndMapInvariants();
+        testTextOutputQueryModeLayout();
         std::cout << "EFI memory-map tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {
