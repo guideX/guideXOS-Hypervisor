@@ -1500,7 +1500,7 @@ void test_ia64_translation_register_inserts() {
     cpu.SetGR(18, 0x12345000ULL);
     cpu.SetCR(21, 0x68ULL);
     cpu.SetRR(5, 0xfeedfaceULL);
-    cpu.SetCR(22, (5ULL << 61) | 0x1000ULL);
+    cpu.SetCR(20, (5ULL << 61) | 0x1000ULL);
     itrI.Execute(cpu, memory);
     assert_true("itr.i should mark the selected ITR valid",
                 cpu.GetITR(0).valid);

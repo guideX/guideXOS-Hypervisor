@@ -1067,7 +1067,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::ITR_I:
         case InstructionType::ITR_D:
             {
-                const uint64_t virtualAddress = cpu.GetCR(22);
+                const uint64_t virtualAddress = cpu.GetCR(20);
                 const uint64_t regionIndex = (virtualAddress >> 61) & 0x7ULL;
                 const uint64_t regionValue = cpu.GetRR(regionIndex);
                 const uint64_t selector = cpu.GetGR(dst_) & 0xFFULL;
