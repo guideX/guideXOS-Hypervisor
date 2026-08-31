@@ -57,6 +57,18 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
             case 0x0:   // Mixed I-type operations
                 return decodeMixedI(raw_instruction, x, x2, x3, x6, result);
                 
+            case 0x4: // Register-source DEP uses the I2 major-4 encoding.
+                // Binutils names this form Op(4) with operands
+                // {R1, R2, R3, CPOS6c, LEN4}.  CPOS6c is the complement of
+                // bits 31:36, while LEN4 is bits 27:30 plus one.  Reuse the
+                // existing DEP execution path, which expects an architectural
+                // position and the encoded length-minus-one in its immediate.
+                result.opcode = 0x50; // DEP
+                result.pos = static_cast<uint8_t>(
+                    0x3F - formats::extractBits(raw_instruction, 31, 6));
+                result.len = formats::extractBits(raw_instruction, 27, 4);
+                return true;
+
             case 0x5: { // Deposit/extract operations
                 // I7 fixed-count SHL is encoded in the major-5 space as the
                 // architectural DEP.Z alias used by IA-64 assemblers.  Its

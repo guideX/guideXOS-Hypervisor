@@ -565,6 +565,25 @@ void test_latest_boot_log_blockers() {
     assert_equal("Linux canonical fc must preserve its address register",
                  0xA00000010004D4F1ULL, kernelFcCpu.GetGR(34));
 
+    InstructionEx linuxDep = decoder.DecodeSlot(0x8112C1CB00ULL, UnitType::I_UNIT, 0x4a08dc0);
+    assert_true("Linux raw register dep should decode", linuxDep.GetType() == InstructionType::DEP);
+    assert_equal("Linux dep destination register", 44, linuxDep.GetDst());
+    assert_equal("Linux dep source register", 14, linuxDep.GetSrc1());
+    assert_equal("Linux dep merge register", 44, linuxDep.GetSrc2());
+    assert_equal("Linux dep position", 61, linuxDep.GetImmediate() & 0x3F);
+    assert_equal("Linux dep encoded length", 2,
+                 (linuxDep.GetImmediate() >> 6) & 0x3F);
+    assert_string("Linux register dep disassembly",
+                  "dep r44 = r14, r44, 61, 3",
+                  linuxDep.GetDisassembly());
+
+    CPUState linuxDepCpu;
+    linuxDepCpu.SetGR(14, 5);
+    linuxDepCpu.SetGR(44, 0x123456789ABCDEF0ULL);
+    linuxDep.Execute(linuxDepCpu, kernelFcMemory);
+    assert_equal("Linux register dep should merge the high three bits",
+                 0xB23456789ABCDEF0ULL, linuxDepCpu.GetGR(44));
+
     InstructionEx syncI = decoder.DecodeSlot(0x198000000ULL, UnitType::M_UNIT, 0x1e120);
     assert_true("ELILO raw sync.i should decode", syncI.GetType() == InstructionType::SYNC_I);
     assert_equal("sync.i qualifying predicate", 0, syncI.GetPredicate());
