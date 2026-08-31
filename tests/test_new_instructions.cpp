@@ -626,6 +626,33 @@ void test_latest_boot_log_blockers() {
                  0x049fe510ULL, tpaCpu.GetGR(3));
     assert_true("tpa result should not be NaT", !tpaCpu.GetGRNaT(3));
 
+    // Exact Linux instruction at physical IP 0x048296a0.  Retained Binutils
+    // 2.19.1 identifies raw 0x848a0060c0 as fetchadd4.acq r3=[r32],1.
+    InstructionEx fetchadd = decoder.DecodeSlot(0x848a0060c0ULL,
+                                                UnitType::M_UNIT,
+                                                0x048296a0);
+    assert_true("Linux fetchadd4.acq should decode",
+                fetchadd.GetType() == InstructionType::FETCHADD4_ACQ);
+    assert_equal("Linux fetchadd destination register", 3, fetchadd.GetDst());
+    assert_equal("Linux fetchadd address register", 32, fetchadd.GetSrc1());
+    assert_equal("Linux fetchadd increment", 1, fetchadd.GetImmediate());
+    assert_string("Linux fetchadd disassembly",
+                  "fetchadd4.acq r3 = [r32], 1",
+                  fetchadd.GetDisassembly());
+
+    const uint64_t fetchaddVirtualAddress = 0xa000000100004000ULL;
+    const uint64_t fetchaddPhysicalAddress = 0x04004000ULL;
+    kernelMemory.write<uint32_t>(fetchaddPhysicalAddress, 0x12345678U);
+    CPUState fetchaddCpu;
+    fetchaddCpu.SetGR(32, fetchaddVirtualAddress);
+    fetchadd.Execute(fetchaddCpu, kernelMemory);
+    assert_equal("fetchadd should return the old zero-extended value",
+                 0x12345678ULL, fetchaddCpu.GetGR(3));
+    assert_equal("fetchadd should add one to the memory value",
+                 0x12345679ULL,
+                 kernelMemory.read<uint32_t>(fetchaddPhysicalAddress));
+    assert_true("fetchadd result should not be NaT", !fetchaddCpu.GetGRNaT(3));
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);

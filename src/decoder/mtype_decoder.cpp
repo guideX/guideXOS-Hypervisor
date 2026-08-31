@@ -186,6 +186,29 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                     return true;
                 }
 
+                // M17 fetchadd4.acq uses the same major opcode as ordinary
+                // loads/stores.  The retained Binutils table identifies the
+                // exact form as major=4, m=0, x=1, x6=0x12.  INC3 occupies
+                // bits 13:15 and encodes the signed set {-16,-8,-4,-1,
+                // 1,4,8,16}; the authentic instruction uses field 3 => +1.
+                if (x == 1 && m == 0 && x6 == 0x12) {
+                    const uint8_t i2b = formats::extractBits(raw_instruction, 13, 3);
+                    if (i2b > 3) {
+                        return false;
+                    }
+
+                    const int32_t magnitude =
+                        i2b == 3 ? 1 : (1 << (4 - i2b));
+                    result.operation = formats::MFormat::MemOp::FETCHADD;
+                    result.size = formats::MFormat::Size::SIZE_4;
+                    result.has_imm = true;
+                    result.imm9 = static_cast<int16_t>(
+                        formats::extractBits(raw_instruction, 36, 1)
+                            ? -magnitude
+                            : magnitude);
+                    return true;
+                }
+
                 if (x == 0 && m == 0 && x6row <= 0xA) {
                     decodeLoad(x6, m, result);
                     return true;
@@ -311,6 +334,17 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
                 instr.SetImmediate(fmt.imm9);
             }
             
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::FETCHADD) {
+            if (fmt.size != formats::MFormat::Size::SIZE_4 || !fmt.has_imm) {
+                return false;
+            }
+
+            instr = InstructionEx(InstructionType::FETCHADD4_ACQ, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // r1 = [r3], inc3
+            instr.SetImmediate(fmt.imm9);
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::GETF) {
