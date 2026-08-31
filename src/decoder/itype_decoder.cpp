@@ -373,14 +373,12 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::I
         }
         
         // OpX2X(5,3,1): dep r1 = imm1, r3, cpos6b, len6.
-        // cpos6b is a complement position, so convert it to the real bit
-        // position before execution. For example, cpos=0,len=31 means pos=32
-        // and width=32, which clears/sets the upper 32 bits.
+        // CPOS6b is encoded as 63 - pos, and IMM1 is bit 36.  Keep the
+        // decoded position in architectural form for execution.
         if (x2 == 0x3 && x == 0x1) {
-            uint8_t cpos = result.pos;
-            result.pos = static_cast<uint8_t>(63 - cpos - result.len);
+            result.pos = static_cast<uint8_t>(0x3F - result.pos);
             result.has_imm = true;
-            result.imm = formats::extractBits(raw, 13, 1);
+            result.imm = formats::extractBits(raw, 36, 1);
             result.opcode = 0x5F;
         }
         

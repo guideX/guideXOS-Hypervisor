@@ -653,6 +653,30 @@ void test_latest_boot_log_blockers() {
                  kernelMemory.read<uint32_t>(fetchaddPhysicalAddress));
     assert_true("fetchadd result should not be NaT", !fetchaddCpu.GetGRNaT(3));
 
+    // Exact Linux instruction at physical IP 0x043e8b56.  Retained Binutils
+    // 2.19.1 identifies raw 0xae120fc4c0 as dep r19=0,r32,0,3.  The CPOS6b
+    // field is encoded as 63-position and IMM1 is in bit 36.
+    InstructionEx depImmediate = decoder.DecodeSlot(0xae120fc4c0ULL,
+                                                     UnitType::I_UNIT,
+                                                     0x043e8b56);
+    assert_true("Linux dep immediate should decode",
+                depImmediate.GetType() == InstructionType::DEP);
+    assert_equal("Linux dep destination register", 19, depImmediate.GetDst());
+    assert_equal("Linux dep base register", 32, depImmediate.GetSrc2());
+    assert_equal("Linux dep position", 0, depImmediate.GetImmediate() & 0x3F);
+    assert_equal("Linux dep encoded length", 2,
+                 (depImmediate.GetImmediate() >> 6) & 0x3F);
+    assert_string("Linux dep disassembly",
+                  "dep r19 = 0, r32, 0, 3",
+                  depImmediate.GetDisassembly());
+
+    CPUState depCpu;
+    depCpu.SetGR(19, 0xdeadbeefdeadbeefULL);
+    depCpu.SetGR(32, 0xa0000001009674a0ULL);
+    depImmediate.Execute(depCpu, kernelMemory);
+    assert_equal("Linux dep should preserve the source address except field",
+                 0xa0000001009674a0ULL, depCpu.GetGR(19));
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);
