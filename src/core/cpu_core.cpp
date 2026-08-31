@@ -213,6 +213,7 @@ if (isaPlugin_) {
         
     switch (result) {
         case ISAExecutionResult::CONTINUE:
+            getState().AdvanceITC();
             return true;
         case ISAExecutionResult::HALT:
             halted_ = true;
@@ -222,14 +223,17 @@ if (isaPlugin_) {
             return false;
         case ISAExecutionResult::INTERRUPT:
             // Interrupt was handled, continue
+            getState().AdvanceITC();
             return true;
         case ISAExecutionResult::SYSCALL:
             // Syscall was handled, continue
+            getState().AdvanceITC();
             return true;
         case ISAExecutionResult::BREAKPOINT:
             // Breakpoint hit, pause execution
             return false;
         default:
+            getState().AdvanceITC();
             return true;
     }
 }
@@ -296,6 +300,8 @@ servicePendingInterrupt();
     
     // Execute the instruction
     executeInstruction(instr);
+
+    state_.AdvanceITC();
 
     if (!bundleValid_) {
         return true;

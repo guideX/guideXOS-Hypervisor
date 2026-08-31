@@ -460,6 +460,10 @@ void CPUState::SetAR(size_t index, uint64_t value) {
     }
 }
 
+void CPUState::AdvanceITC(uint64_t ticks) {
+    ar_[44] += ticks;
+}
+
 void CPUState::Dump() const {
     std::cout << "CPU State Dump:\n";
     std::cout << "---------------\n";

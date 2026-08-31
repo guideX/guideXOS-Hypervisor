@@ -193,6 +193,11 @@ public:
     uint64_t GetAR(size_t index) const;
     void SetAR(size_t index, uint64_t value);
 
+    // Advance the modeled IA-64 interval time counter.  The CPU core calls
+    // this once for each successfully executed instruction; AR.ITC itself is
+    // still exposed through the normal application-register read path.
+    void AdvanceITC(uint64_t ticks = 1);
+
     // Explicit RSE accessors
     uint64_t GetRSC() const { return GetAR(16); }
     uint64_t GetBSP() const { return GetAR(17); }

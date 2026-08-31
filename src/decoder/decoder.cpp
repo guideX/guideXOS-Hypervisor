@@ -160,6 +160,12 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
     constexpr uint64_t kKernelVirtualBase = 0xA000000100000000ULL;
     constexpr uint64_t kKernelPhysicalBase = 0x04000000ULL;
     constexpr uint64_t kKernelVirtualSpan = 0x01000000ULL;
+    // The authentic Debian IA-64 image has a second PT_LOAD for the UP
+    // per-CPU section.  The flat replay loads it at this physical address,
+    // while Linux references it through its region-7 canonical address.
+    constexpr uint64_t kPerCpuVirtualBase = 0xFFFFFFFFFFFC0000ULL;
+    constexpr uint64_t kPerCpuPhysicalBase = 0x04B80000ULL;
+    constexpr uint64_t kPerCpuVirtualSpan = 0x0000000000003440ULL;
 
     if (address < kKernelVirtualBase) {
         return address;
@@ -168,6 +174,12 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
     const uint64_t offset = address - kKernelVirtualBase;
     if (offset >= kKernelVirtualSpan ||
         static_cast<uint64_t>(size) > kKernelVirtualSpan - offset) {
+        const uint64_t perCpuOffset = address - kPerCpuVirtualBase;
+        if (address >= kPerCpuVirtualBase &&
+            perCpuOffset < kPerCpuVirtualSpan &&
+            static_cast<uint64_t>(size) <= kPerCpuVirtualSpan - perCpuOffset) {
+            return kPerCpuPhysicalBase + perCpuOffset;
+        }
         return address;
     }
 
@@ -2069,6 +2081,8 @@ std::string InstructionEx::GetDisassembly() const {
                 oss << "pfs";
             } else if (src1_ == 65) {
                 oss << "lc";
+            } else if (src1_ == 44) {
+                oss << "itc";
             } else {
                 oss << static_cast<int>(src1_);
             }

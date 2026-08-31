@@ -728,6 +728,49 @@ void test_latest_boot_log_blockers() {
                  0x049fe510ULL, tpaCpu.GetGR(3));
     assert_true("tpa result should not be NaT", !tpaCpu.GetGRNaT(3));
 
+    // Exact Linux timekeeping instruction at physical IP 0x04039200.
+    // Retained Binutils 2.19.1 identifies raw 0x2112c00380 as
+    // mov.m r14=ar.itc.  The CPU core advances AR.ITC once per successful
+    // instruction, so consecutive architectural reads must be monotonic.
+    InstructionEx readItc = decoder.DecodeSlot(0x2112c00380ULL,
+                                                UnitType::M_UNIT,
+                                                0x04039200);
+    assert_true("Linux ar.itc read should decode",
+                readItc.GetType() == InstructionType::MOV_FROM_AR);
+    assert_equal("Linux ar.itc destination register", 14, readItc.GetDst());
+    assert_equal("Linux ar.itc application register", 44, readItc.GetSrc1());
+    assert_string("Linux ar.itc disassembly", "mov r14 = ar.itc",
+                  readItc.GetDisassembly());
+    CPUState itcCpu;
+    itcCpu.SetAR(44, 100);
+    readItc.Execute(itcCpu, kernelMemory);
+    assert_equal("ar.itc read should return the current counter", 100,
+                 itcCpu.GetGR(14));
+    itcCpu.AdvanceITC();
+    readItc.Execute(itcCpu, kernelMemory);
+    assert_equal("ar.itc should advance between CPU steps", 101,
+                 itcCpu.GetGR(14));
+
+    // The same Linux image's per-CPU PT_LOAD is mapped at physical
+    // 0x04b80000.  The timing helper reads offset 0x478 through its
+    // canonical region-7 address.
+    const uint64_t perCpuVirtualAddress = 0xfffffffffffc0478ULL;
+    const uint64_t perCpuPhysicalAddress = 0x04b80478ULL;
+    kernelMemory.write<uint64_t>(perCpuPhysicalAddress, 0x1122334455667788ULL);
+    CPUState perCpuLoadCpu;
+    perCpuLoadCpu.SetGR(2, perCpuVirtualAddress);
+    InstructionEx perCpuLoad(InstructionType::LD8, UnitType::M_UNIT);
+    perCpuLoad.SetOperands(15, 2);
+    perCpuLoad.Execute(perCpuLoadCpu, kernelMemory);
+    assert_equal("kernel per-CPU load should translate region-7 address",
+                 0x1122334455667788ULL, perCpuLoadCpu.GetGR(15));
+
+    CPUState perCpuTpaCpu;
+    perCpuTpaCpu.SetGR(2, perCpuVirtualAddress);
+    tpa.Execute(perCpuTpaCpu, kernelMemory);
+    assert_equal("tpa should translate the per-CPU pointer",
+                 perCpuPhysicalAddress, perCpuTpaCpu.GetGR(3));
+
     // Exact Linux instruction at physical IP 0x048296a0.  Retained Binutils
     // 2.19.1 identifies raw 0x848a0060c0 as fetchadd4.acq r3=[r32],1.
     InstructionEx fetchadd = decoder.DecodeSlot(0x848a0060c0ULL,
