@@ -129,6 +129,11 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             result.operation = formats::MFormat::MemOp::SRLZ_I;
             return true;
         }
+        if (major == 0x0 && x3 == 0x0 && m == 0 &&
+            x4 == 0x0 && x2 == 0x3) {
+            result.operation = formats::MFormat::MemOp::SRLZ_D;
+            return true;
+        }
 
         // M44 system-mask operations.  IMMU24 is dispersed across bits 6:26,
         // 31:32, and 36.  x4=0x6 is ssm and x4=0x7 is rsm.
@@ -386,6 +391,11 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         }
         else if (fmt.operation == formats::MFormat::MemOp::SRLZ_I) {
             instr = InstructionEx(InstructionType::SRLZ_I, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::SRLZ_D) {
+            instr = InstructionEx(InstructionType::SRLZ_D, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             return true;
         }

@@ -1855,6 +1855,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
 
         case InstructionType::SYNC_I:
         case InstructionType::SRLZ_I:
+        case InstructionType::SRLZ_D:
             // sync.i/srlz.i order the cache-coherency and instruction-stream
             // effects that guideXOS models with the same coherent backing
             // memory.  There is no separate cache or fetch stream state to
@@ -2546,6 +2547,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::SRLZ_I:
             oss << "srlz.i";
+            break;
+
+        case InstructionType::SRLZ_D:
+            oss << "srlz.d";
             break;
 
         case InstructionType::SSM:

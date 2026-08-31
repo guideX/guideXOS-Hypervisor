@@ -565,6 +565,20 @@ void test_latest_boot_log_blockers() {
     assert_string("srlz.i disassembly", "srlz.i", srlzI.GetDisassembly());
     srlzI.Execute(cpu, memory);
 
+    // Exact Linux entry instruction at guest address 0x040d3ba6.
+    // Retained Binutils 2.19.1 identifies raw 0x180000006 as (p06) srlz.d.
+    InstructionEx srlzD = decoder.DecodeSlot(0x180000006ULL, UnitType::M_UNIT, 0x040d3ba0);
+    assert_true("Linux entry srlz.d should decode", srlzD.GetType() == InstructionType::SRLZ_D);
+    assert_equal("Linux entry srlz.d qualifying predicate", 6, srlzD.GetPredicate());
+    assert_string("Linux entry srlz.d disassembly", "srlz.d", srlzD.GetDisassembly());
+    CPUState srlzDCpu;
+    srlzDCpu.SetPR(6, true);
+    srlzDCpu.SetPSR(0x1234000000000000ULL | 0x4000ULL);
+    srlzDCpu.SetIP(0x040d3ba0);
+    srlzD.Execute(srlzDCpu, memory);
+    assert_equal("srlz.d should preserve PSR", 0x1234000000004000ULL, srlzDCpu.GetPSR());
+    assert_equal("srlz.d should preserve IP", 0x040d3ba0ULL, srlzDCpu.GetIP());
+
     // Exact Linux entry instruction at guest address 0x047f7b80.
     // Binutils disassembles raw 0x38180000 as: rsm 0x6000.
     InstructionEx rsm = decoder.DecodeSlot(0x38180000ULL, UnitType::M_UNIT, 0x047f7b80);

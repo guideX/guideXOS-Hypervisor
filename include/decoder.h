@@ -184,6 +184,7 @@ enum class InstructionType {
     TPA,        // Translate virtual address to physical address
     SYNC_I,     // Synchronize prior cache flushes with instruction fetch
     SRLZ_I,     // Serialize the instruction stream
+    SRLZ_D,     // Serialize prior data accesses
     SSM,        // Set selected PSR system-mask bits
     RSM,        // Reset selected PSR system-mask bits
     RFI,        // Return from interruption
