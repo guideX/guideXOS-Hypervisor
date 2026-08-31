@@ -170,6 +170,7 @@ enum class InstructionType {
     LD8,        // Load 8 bytes
     CMPXCHG4_ACQ, // Compare-and-exchange 4 bytes with acquire semantics
     FETCHADD4_ACQ, // Fetch-and-add 4 bytes with acquire semantics
+    FETCHADD4_REL, // Fetch-and-add 4 bytes with release semantics
     ST1,        // Store 1 byte
     ST2,        // Store 2 bytes
     ST4,        // Store 4 bytes

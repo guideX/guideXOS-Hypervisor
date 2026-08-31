@@ -1746,6 +1746,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::FETCHADD4_ACQ:
+        case InstructionType::FETCHADD4_REL:
             {
                 const uint64_t address =
                     normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 4);
@@ -2526,6 +2527,12 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::FETCHADD4_ACQ:
             oss << "fetchadd4.acq r" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "], "
+                << static_cast<int64_t>(immediate_);
+            break;
+
+        case InstructionType::FETCHADD4_REL:
+            oss << "fetchadd4.rel r" << static_cast<int>(dst_)
                 << " = [r" << static_cast<int>(src1_) << "], "
                 << static_cast<int64_t>(immediate_);
             break;

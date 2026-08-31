@@ -755,6 +755,38 @@ void test_latest_boot_log_blockers() {
                  kernelMemory.read<uint32_t>(fetchaddPhysicalAddress));
     assert_true("fetchadd result should not be NaT", !fetchaddCpu.GetGRNaT(3));
 
+    // Exact Linux kernel instruction at physical IP 0x048274e0.  Retained
+    // Binutils 2.19.1 identifies raw 0x858a006380 as fetchadd4.rel
+    // r14=[r32],1.
+    InstructionEx fetchaddRel = decoder.DecodeSlot(0x858a006380ULL,
+                                                   UnitType::M_UNIT,
+                                                   0x048274e0);
+    assert_true("Linux fetchadd4.rel should decode",
+                fetchaddRel.GetType() == InstructionType::FETCHADD4_REL);
+    assert_equal("Linux release fetchadd destination register", 14,
+                 fetchaddRel.GetDst());
+    assert_equal("Linux release fetchadd address register", 32,
+                 fetchaddRel.GetSrc1());
+    assert_equal("Linux release fetchadd increment", 1,
+                 fetchaddRel.GetImmediate());
+    assert_string("Linux release fetchadd disassembly",
+                  "fetchadd4.rel r14 = [r32], 1",
+                  fetchaddRel.GetDisassembly());
+
+    const uint64_t fetchaddRelVirtualAddress = 0xa000000100004100ULL;
+    const uint64_t fetchaddRelPhysicalAddress = 0x04004100ULL;
+    kernelMemory.write<uint32_t>(fetchaddRelPhysicalAddress, 0xABCDEF01U);
+    CPUState fetchaddRelCpu;
+    fetchaddRelCpu.SetGR(32, fetchaddRelVirtualAddress);
+    fetchaddRel.Execute(fetchaddRelCpu, kernelMemory);
+    assert_equal("release fetchadd should return the old zero-extended value",
+                 0xABCDEF01ULL, fetchaddRelCpu.GetGR(14));
+    assert_equal("release fetchadd should add one to the memory value",
+                 0xABCDEF02ULL,
+                 kernelMemory.read<uint32_t>(fetchaddRelPhysicalAddress));
+    assert_true("release fetchadd result should not be NaT",
+                !fetchaddRelCpu.GetGRNaT(14));
+
     // Exact Linux instruction at physical IP 0x043e8b56.  Retained Binutils
     // 2.19.1 identifies raw 0xae120fc4c0 as dep r19=0,r32,0,3.  The CPOS6b
     // field is encoded as 63-position and IMM1 is in bit 36.
