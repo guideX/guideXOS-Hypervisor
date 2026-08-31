@@ -581,6 +581,27 @@ void test_latest_boot_log_blockers() {
     assert_true("Linux entry rsm should preserve PSR.DT", (cpu.GetPSR() & (1ULL << 17)) != 0);
     assert_true("Linux entry rsm should preserve upper PSR", (cpu.GetPSR() & (1ULL << 32)) != 0);
 
+    // Exact Linux entry instruction at guest address 0x040d3b96.
+    // Retained Binutils 2.19.1 identifies raw 0x30100006 as (p06) ssm 0x4000.
+    InstructionEx ssm = decoder.DecodeSlot(0x30100006ULL, UnitType::M_UNIT, 0x040d3b90);
+    assert_true("Linux entry ssm should decode", ssm.GetType() == InstructionType::SSM);
+    assert_equal("Linux entry ssm qualifying predicate", 6, ssm.GetPredicate());
+    assert_equal("Linux entry ssm immediate", 0x4000, ssm.GetImmediate());
+    assert_string("Linux entry ssm disassembly", "ssm 0x4000", ssm.GetDisassembly());
+
+    CPUState ssmCpu;
+    ssmCpu.SetPSR((1ULL << 13) | (1ULL << 27) | (1ULL << 32));
+    ssmCpu.SetPR(6, true);
+    ssm.Execute(ssmCpu, memory);
+    assert_true("Linux entry ssm should set PSR.IC", (ssmCpu.GetPSR() & (1ULL << 13)) != 0);
+    assert_true("Linux entry ssm should set PSR 0x4000", (ssmCpu.GetPSR() & 0x4000) != 0);
+    assert_true("Linux entry ssm should preserve upper PSR", (ssmCpu.GetPSR() & (1ULL << 32)) != 0);
+
+    ssmCpu.SetPSR(0);
+    ssmCpu.SetPR(6, false);
+    ssm.Execute(ssmCpu, memory);
+    assert_equal("false-predicated ssm should preserve PSR", 0, ssmCpu.GetPSR());
+
     // Exact Linux entry return-from-interruption instruction at 0x047f7e4c.
     // Retained Binutils 2.19.1 identifies raw 0x40000000 as unpredicated rfi.
     InstructionEx rfi = decoder.DecodeSlot(0x40000000ULL, UnitType::B_UNIT, 0x047f7e40);

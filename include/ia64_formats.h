@@ -115,6 +115,7 @@ struct MFormat {
         FC,
         SYNC_I,
         SRLZ_I,
+        SSM,
         RSM,
         RFI,
         FLUSHRS,

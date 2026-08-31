@@ -1861,6 +1861,20 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // mutate, so these serialization points are deliberate no-ops.
             break;
 
+        case InstructionType::SSM:
+            // ssm sets the selected bits in the PSR system mask (bits 0:23)
+            // while preserving the rest of PSR.  The privilege and reserved
+            // field checks are outside this minimal architectural state model;
+            // the bit transition itself is required by the Linux entry path.
+            {
+                constexpr uint64_t kPsrSystemMask = 0xFFFFFFULL;
+                const uint64_t psr = cpu.GetPSR();
+                const uint64_t setMask = immediate_ & kPsrSystemMask;
+                cpu.SetPSR((psr & ~kPsrSystemMask) |
+                           ((psr & kPsrSystemMask) | setMask));
+            }
+            break;
+
         case InstructionType::RSM:
             // rsm clears the selected bits in the PSR system mask (bits 0:23)
             // while preserving the rest of PSR.  The privilege and reserved
@@ -2532,6 +2546,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::SRLZ_I:
             oss << "srlz.i";
+            break;
+
+        case InstructionType::SSM:
+            oss << "ssm 0x" << std::hex << immediate_ << std::dec;
             break;
 
         case InstructionType::RSM:
