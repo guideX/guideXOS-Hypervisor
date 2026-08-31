@@ -553,6 +553,18 @@ void test_latest_boot_log_blockers() {
     }
     assert_true("user-mode fc must validate its translated read address", fcFaulted);
 
+    InstructionEx linuxFc = decoder.DecodeSlot(0x2182200000ULL, UnitType::M_UNIT, 0x4a062b0);
+    assert_true("Linux raw fc should decode", linuxFc.GetType() == InstructionType::FC);
+    assert_equal("Linux fc source register", 34, linuxFc.GetSrc1());
+    assert_string("Linux fc disassembly", "fc r34", linuxFc.GetDisassembly());
+
+    Memory kernelFcMemory(128 * 1024 * 1024);
+    CPUState kernelFcCpu;
+    kernelFcCpu.SetGR(34, 0xA00000010004D4F1ULL);
+    linuxFc.Execute(kernelFcCpu, kernelFcMemory);
+    assert_equal("Linux canonical fc must preserve its address register",
+                 0xA00000010004D4F1ULL, kernelFcCpu.GetGR(34));
+
     InstructionEx syncI = decoder.DecodeSlot(0x198000000ULL, UnitType::M_UNIT, 0x1e120);
     assert_true("ELILO raw sync.i should decode", syncI.GetType() == InstructionType::SYNC_I);
     assert_equal("sync.i qualifying predicate", 0, syncI.GetPredicate());

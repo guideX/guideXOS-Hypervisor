@@ -1851,11 +1851,13 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // access-right checks, while higher CPLs use one-byte read rights.
             if (const auto* concreteMemory = dynamic_cast<const Memory*>(&memory)) {
                 const uint64_t address = cpu.GetGR(src1_);
-                concreteMemory->GetMMU().TranslateAddress(address);
+                const uint64_t translatedAddress =
+                    normalizeIa64KernelDataAddress(address, 1);
+                concreteMemory->GetMMU().TranslateAddress(translatedAddress);
                 const uint64_t cpl = (cpu.GetPSR() >> 32) & 0x3;
                 if (cpl != 0) {
                     concreteMemory->GetMMU().CheckPermissionOrThrow(
-                        address, MemoryAccessType::READ);
+                        translatedAddress, MemoryAccessType::READ);
                 }
             }
             break;
