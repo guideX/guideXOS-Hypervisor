@@ -1729,6 +1729,22 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::CMPXCHG4_ACQ:
+            {
+                const uint64_t address =
+                    normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 4);
+                uint32_t oldValue = 0;
+                memory.Read(address, reinterpret_cast<uint8_t*>(&oldValue), 4);
+                if (oldValue == static_cast<uint32_t>(cpu.GetAR(32))) {
+                    const uint32_t newValue = static_cast<uint32_t>(cpu.GetGR(src2_));
+                    memory.Write(address,
+                                 reinterpret_cast<const uint8_t*>(&newValue), 4);
+                }
+                cpu.SetGR(dst_, static_cast<uint64_t>(oldValue));
+                cpu.SetGRNaT(dst_, false);
+            }
+            break;
+
         case InstructionType::FETCHADD4_ACQ:
             {
                 const uint64_t address =
@@ -2498,6 +2514,12 @@ std::string InstructionEx::GetDisassembly() const {
             } else if (src2_ != 0) {
                 oss << ", r" << static_cast<int>(src2_);
             }
+            break;
+
+        case InstructionType::CMPXCHG4_ACQ:
+            oss << "cmpxchg4.acq r" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "], r"
+                << static_cast<int>(src2_) << ", ar.ccv";
             break;
 
         case InstructionType::FETCHADD4_ACQ:

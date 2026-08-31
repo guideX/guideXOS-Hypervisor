@@ -579,6 +579,42 @@ void test_latest_boot_log_blockers() {
     assert_equal("srlz.d should preserve PSR", 0x1234000000004000ULL, srlzDCpu.GetPSR());
     assert_equal("srlz.d should preserve IP", 0x040d3ba0ULL, srlzDCpu.GetIP());
 
+    // Exact Linux instruction at physical IP 0x041069d0. Retained Binutils
+    // 2.19.1 identifies raw 0x8088e14440 as cmpxchg4.acq r17=[r14],r10,ar.ccv.
+    InstructionEx cmpxchg = decoder.DecodeSlot(0x8088e14440ULL,
+                                                UnitType::M_UNIT,
+                                                0x041069d0);
+    assert_true("Linux cmpxchg4.acq should decode",
+                cmpxchg.GetType() == InstructionType::CMPXCHG4_ACQ);
+    assert_equal("Linux cmpxchg destination register", 17, cmpxchg.GetDst());
+    assert_equal("Linux cmpxchg address register", 14, cmpxchg.GetSrc1());
+    assert_equal("Linux cmpxchg store register", 10, cmpxchg.GetSrc2());
+    assert_equal("Linux cmpxchg qualifying predicate", 0, cmpxchg.GetPredicate());
+    assert_string("Linux cmpxchg disassembly",
+                  "cmpxchg4.acq r17 = [r14], r10, ar.ccv",
+                  cmpxchg.GetDisassembly());
+
+    Memory cmpxchgMemory(0x2000);
+    const uint64_t cmpxchgAddress = 0x400;
+    cmpxchgMemory.write<uint32_t>(cmpxchgAddress, 0x11223344U);
+    CPUState cmpxchgCpu;
+    cmpxchgCpu.SetGR(14, cmpxchgAddress);
+    cmpxchgCpu.SetGR(10, 0xAABBCCDDU);
+    cmpxchgCpu.SetAR(32, 0x11223344U);
+    cmpxchg.Execute(cmpxchgCpu, cmpxchgMemory);
+    assert_equal("cmpxchg should return the old 32-bit value",
+                 0x11223344U, cmpxchgCpu.GetGR(17));
+    assert_equal("cmpxchg should store on equal compare value",
+                 0xAABBCCDDU, cmpxchgMemory.read<uint32_t>(cmpxchgAddress));
+
+    cmpxchgMemory.write<uint32_t>(cmpxchgAddress, 0x55667788U);
+    cmpxchgCpu.SetAR(32, 0x01020304U);
+    cmpxchg.Execute(cmpxchgCpu, cmpxchgMemory);
+    assert_equal("cmpxchg should return the failed compare value",
+                 0x55667788U, cmpxchgCpu.GetGR(17));
+    assert_equal("cmpxchg should not store on a failed compare",
+                 0x55667788U, cmpxchgMemory.read<uint32_t>(cmpxchgAddress));
+
     // Exact Linux entry instruction at guest address 0x047f7b80.
     // Binutils disassembles raw 0x38180000 as: rsm 0x6000.
     InstructionEx rsm = decoder.DecodeSlot(0x38180000ULL, UnitType::M_UNIT, 0x047f7b80);

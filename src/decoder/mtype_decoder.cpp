@@ -193,6 +193,15 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                     return true;
                 }
 
+                // M16 cmpxchg4.acq uses the exact retained Binutils form
+                // major=4, x=1, m=0, x6a=0x02. Its operands are
+                // r1=[r3] compare result, r2 store value, and AR.CCV.
+                if (x == 1 && m == 0 && x6 == 0x02) {
+                    result.operation = formats::MFormat::MemOp::EXCHANGE;
+                    result.size = formats::MFormat::Size::SIZE_4;
+                    return true;
+                }
+
                 // M17 fetchadd4.acq uses the same major opcode as ordinary
                 // loads/stores.  The retained Binutils table identifies the
                 // exact form as major=4, m=0, x=1, x6=0x12.  INC3 occupies
@@ -352,6 +361,16 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r3, 0);  // r1 = [r3], inc3
             instr.SetImmediate(fmt.imm9);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::EXCHANGE) {
+            if (fmt.size != formats::MFormat::Size::SIZE_4) {
+                return false;
+            }
+
+            instr = InstructionEx(InstructionType::CMPXCHG4_ACQ, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, fmt.r2);  // r1=[r3], r2
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::GETF) {
