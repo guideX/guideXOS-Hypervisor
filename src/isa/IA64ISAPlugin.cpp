@@ -335,11 +335,7 @@ constexpr EfiGuid EFI_FILE_SYSTEM_INFO_GUID = {{
     0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B
 }};
 
-uint64_t normalizeBranchEntryIP(uint64_t target) {
-    return target & ~0xFULL;
-}
-
-uint64_t normalizeRfiEntryIP(uint64_t target) {
+uint64_t normalizeKernelEntryIP(uint64_t target) {
     constexpr uint64_t kIa64KernelVirtualBase = 0xA000000100000000ULL;
     constexpr uint64_t kIa64KernelPhysicalBase = 0x04000000ULL;
     constexpr uint64_t kIa64KernelVirtualSpan = 0x01000000ULL;
@@ -349,6 +345,14 @@ uint64_t normalizeRfiEntryIP(uint64_t target) {
         return kIa64KernelPhysicalBase + (bundleTarget - kIa64KernelVirtualBase);
     }
     return bundleTarget;
+}
+
+uint64_t normalizeBranchEntryIP(uint64_t target) {
+    return normalizeKernelEntryIP(target);
+}
+
+uint64_t normalizeRfiEntryIP(uint64_t target) {
+    return normalizeKernelEntryIP(target);
 }
 
 bool tryResolveIa64FunctionDescriptor(IMemory& memory,

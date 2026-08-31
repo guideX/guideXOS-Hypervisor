@@ -342,6 +342,9 @@ public:
 
 class FakeIndirectBranchDecoder : public IDecoder {
 public:
+    explicit FakeIndirectBranchDecoder(uint64_t target = 0x2408)
+        : target_(target) {}
+
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
         (void)bundleData;
         return InstructionBundle();
@@ -357,6 +360,7 @@ public:
 
         InstructionEx branch(InstructionType::BR_COND, UnitType::B_UNIT);
         branch.SetOperands(0, 6, 0);
+        branch.SetBranchTarget(target_);
         branch.SetRawBits(0x200000c000ULL);
 
         Bundle bundle;
@@ -371,6 +375,9 @@ public:
         instr.SetRawBits(rawBits);
         return instr;
     }
+
+private:
+    uint64_t target_;
 };
 
 class FakeIndirectCallDecoder : public IDecoder {
@@ -3032,6 +3039,27 @@ void testIA64PluginIndirectBranchExecution() {
     std::cout << "  ? plugin br.cond b6 enters at the target bundle boundary\n";
 }
 
+void testIA64PluginCanonicalKernelBranchExecution() {
+    std::cout << "Testing IA-64 plugin canonical kernel branch translation...\n";
+
+    constexpr uint64_t canonicalTarget = 0xa0000001003e64a0ULL;
+    constexpr uint64_t physicalTarget = 0x043e64a0ULL;
+    Memory memory(0x05000000);
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x1000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(physicalTarget, bundleBytes, sizeof(bundleBytes));
+
+    FakeIndirectBranchDecoder decoder(canonicalTarget);
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetBR(6, canonicalTarget);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == physicalTarget);
+
+    std::cout << "  ? canonical region-5 kernel branch enters its flat physical bundle\n";
+}
+
 void testIA64PluginEfiServiceThunkLinksReturn() {
     std::cout << "Testing IA-64 plugin EFI service thunk return link...\n";
 
@@ -5677,6 +5705,9 @@ int main(int argc, char** argv) {
         std::cout << "\n";
 
         testIA64PluginIndirectBranchExecution();
+        std::cout << "\n";
+
+        testIA64PluginCanonicalKernelBranchExecution();
         std::cout << "\n";
 
         testIA64PluginEfiServiceThunkLinksReturn();
