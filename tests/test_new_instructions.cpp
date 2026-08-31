@@ -1966,6 +1966,40 @@ void test_test_instructions() {
     assert_equal("TBIT.Z p2 decode", 10, decoded_tbit.GetSrc3());
     assert_equal("TBIT.Z position decode", 5, decoded_tbit.GetImmediate());
 
+    // Exact Linux kernel instruction at bundle IP 0x43e8780, slot 2.
+    // Binutils disassembles raw 0xa05950d309 as:
+    //   (p9) tbit.z.unc p12,p11=r21,3
+    const uint64_t authenticLinuxTbitZUnc = 0xa05950d309ULL;
+    InstructionEx decoded_linux_tbit_unc = decoder.DecodeSlot(
+        authenticLinuxTbitZUnc, UnitType::I_UNIT, 0x43e8780);
+    assert_true("Authentic Linux TBIT.Z.UNC should decode",
+                decoded_linux_tbit_unc.GetType() == InstructionType::TBIT_Z);
+    assert_equal("Authentic Linux TBIT.Z.UNC qualifying predicate", 9,
+                 decoded_linux_tbit_unc.GetPredicate());
+    assert_equal("Authentic Linux TBIT.Z.UNC p1", 12,
+                 decoded_linux_tbit_unc.GetDst());
+    assert_equal("Authentic Linux TBIT.Z.UNC source", 21,
+                 decoded_linux_tbit_unc.GetSrc1());
+    assert_equal("Authentic Linux TBIT.Z.UNC p2", 11,
+                 decoded_linux_tbit_unc.GetSrc3());
+    assert_equal("Authentic Linux TBIT.Z.UNC position", 3,
+                 decoded_linux_tbit_unc.GetImmediate());
+    assert_true("Authentic Linux TBIT.Z.UNC completer",
+                decoded_linux_tbit_unc.GetCompareCompleter() ==
+                    CompareCompleter::UNC);
+    assert_string("Authentic Linux TBIT.Z.UNC disassembly",
+                  "tbit.z.unc p12, p11 = r21, 3",
+                  decoded_linux_tbit_unc.GetDisassembly());
+
+    CPUState linuxTbitUncCpu;
+    linuxTbitUncCpu.SetPR(9, true);
+    linuxTbitUncCpu.SetGR(21, 0);
+    decoded_linux_tbit_unc.Execute(linuxTbitUncCpu, memory);
+    assert_true("Authentic Linux TBIT.Z.UNC sets p12 for zero bit",
+                linuxTbitUncCpu.GetPR(12));
+    assert_true("Authentic Linux TBIT.Z.UNC clears p11 for zero bit",
+                !linuxTbitUncCpu.GetPR(11));
+
     InstructionEx decoded_tnat = decoder.DecodeSlot(build_tnat_z_slot(0, 11, 12, 11),
                                                     UnitType::I_UNIT, 0);
     assert_true("TNAT.Z slot should decode", decoded_tnat.GetType() == InstructionType::TNAT_Z);

@@ -18,7 +18,7 @@ namespace decoder {
  * - Move to/from application registers
  * - Multimedia operations
  * 
- * Major opcodes: 0, 5, 7
+ * Major opcodes: 0, 4, 5, 7
  */
 
 // Forward declarations of helper functions
@@ -169,6 +169,14 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                     instr.SetImmediate(fmt.pos);
                     return true;
 
+                case 0x8: // TBIT.Z.UNC
+                    instr = InstructionEx(InstructionType::TBIT_Z, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
+                    instr.SetImmediate(fmt.pos);
+                    instr.SetCompareCompleter(CompareCompleter::UNC);
+                    return true;
+
                 case 0x3: // TBIT.NZ
                     instr = InstructionEx(InstructionType::TBIT_NZ, UnitType::I_UNIT);
                     instr.SetPredicate(fmt.qp);
@@ -298,6 +306,7 @@ static bool decodeTest(uint64_t raw, formats::IFormat& result) {
                                  (bit13 ? 0x01 : 0));
 
         const bool plainTbitZ = tableIndex == 0x00 || tableIndex == 0x10;
+        const bool tbitZUnc = tableIndex == 0x02;
         const bool plainTnatZ = tableIndex == 0x01;
 
         result.r1 = static_cast<uint8_t>(formats::extractBits(raw, 6, 6));
@@ -308,7 +317,7 @@ static bool decodeTest(uint64_t raw, formats::IFormat& result) {
         // table-indexed encoding as the plain forms. Keep unsupported
         // parallel encodings distinguished until their individual relation
         // semantics are implemented.
-        result.opcode = plainTbitZ ? 0x52 :
+        result.opcode = (plainTbitZ || tbitZUnc) ? (tbitZUnc ? 0x58 : 0x52) :
                         (plainTnatZ ? 0x54 :
                          (tableIndex == 0x0C ? 0x5D :
                           (tableIndex == 0x07 ? 0x57 : 0x5E)));
