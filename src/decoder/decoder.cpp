@@ -1897,6 +1897,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::BR_RET:
             break;
 
+        case InstructionType::BRP:
+            // brp only supplies branch prediction information.  The
+            // architecture gives it no functional machine-state effect.
+            break;
+
         case InstructionType::BR_CLOOP:
             if (cpu.GetAR(65) != 0) {
                 cpu.SetAR(65, cpu.GetAR(65) - 1);
@@ -2582,6 +2587,20 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "br.ret b" << static_cast<int>(src1_);
             break;
 
+        case InstructionType::BRP:
+            {
+                static constexpr const char* kBranchPredictionHints[] = {
+                    "sptk", "loop", "dptk", "exit"
+                };
+                const uint8_t whb = static_cast<uint8_t>((rawBits_ >> 3) & 0x3);
+                const bool imp = ((rawBits_ >> 35) & 0x1) != 0;
+                oss << "brp." << kBranchPredictionHints[whb];
+                if (imp) {
+                    oss << ".imp";
+                }
+            }
+            break;
+
         case InstructionType::BR_CLOOP:
             if (hasBranchTarget_) {
                 oss << "br.cloop 0x" << std::hex << branchTarget_ << std::dec;
@@ -3189,6 +3208,15 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
             if (major == 0x2 && x3 == 0x0 && x6 == 0x00 &&
                 ((slotBits >> 6) & 0x1FFFFF) == 0) {
                 result = InstructionEx(InstructionType::NOP, UnitType::B_UNIT);
+                result.SetRawBits(slotBits);
+                return result;
+            }
+
+            // B7 branch-predict hints are architecturally no-ops.  They are
+            // not covered by the functional branch decoder, whose formats
+            // are limited to branch control transfers.
+            if (major == 0x7) {
+                result = InstructionEx(InstructionType::BRP, UnitType::B_UNIT);
                 result.SetRawBits(slotBits);
                 return result;
             }

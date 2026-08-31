@@ -2539,6 +2539,34 @@ void test_ia64_flushrs() {
     std::cout << "  ? IA-64 flushrs decoding and execution passed" << std::endl;
 }
 
+void test_ia64_brp_hint() {
+    std::cout << "Testing IA-64 B7 branch-predict hint decoding and execution..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact Linux kernel syllable at physical IP 0x440d80c.  Retained
+    // Binutils identifies raw 0xe800000048 as brp.loop.imp.  BRP has no
+    // qualifying predicate and no architectural state effect.
+    const uint64_t rawBrp = 0xe800000048ULL;
+    const InstructionEx brp = decoder.DecodeSlot(rawBrp, UnitType::B_UNIT, 0x440d80c);
+    assert_true("authentic brp.loop.imp should decode",
+                brp.GetType() == InstructionType::BRP);
+    assert_equal("brp raw bits", rawBrp, brp.GetRawBits());
+    assert_string("brp disassembly", "brp.loop.imp", brp.GetDisassembly());
+
+    cpu.SetIP(0x440d80c);
+    cpu.SetGR(32, 0x1122334455667788ULL);
+    cpu.SetBR(6, 0x123450ULL);
+    brp.Execute(cpu, memory);
+    assert_equal("brp should preserve IP", 0x440d80c, cpu.GetIP());
+    assert_equal("brp should preserve GR state", 0x1122334455667788ULL, cpu.GetGR(32));
+    assert_equal("brp should preserve branch-register state", 0x123450ULL, cpu.GetBR(6));
+
+    std::cout << "  ? B7 branch-predict hint passed" << std::endl;
+}
+
 void test_ia64_invala() {
     std::cout << "Testing IA-64 M0 invala decoding and ALAT invalidation..." << std::endl;
 
@@ -2929,6 +2957,7 @@ int main() {
         test_alloc_instruction();
         test_rse_state_aliases();
         test_ia64_flushrs();
+        test_ia64_brp_hint();
         test_ia64_invala();
         test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();

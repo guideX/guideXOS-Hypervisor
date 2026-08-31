@@ -199,6 +199,7 @@ enum class InstructionType {
     BR_CEXIT,   // Counted exit branch
     BR_WTOP,    // While top-of-loop branch
     BR_WEXIT,   // While exit branch
+    BRP,        // Branch prediction hint (architectural no-op)
     
     // Register stack (I-type)
     ALLOC,      // Allocate register stack frame
