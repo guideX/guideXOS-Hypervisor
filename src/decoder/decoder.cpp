@@ -150,12 +150,14 @@ InstructionEx::InstructionEx(InstructionType type, UnitType unit)
 
 namespace {
 
-// The authentic Debian IA-64 kernel is linked in the region-5 direct map.
+// The authentic Debian IA-64 kernel is linked in the region-5 direct map and
+// consumes EFI handoff structures through the region-7 direct map.
 // The replay keeps its physical image at 0x04000000, while the kernel's
-// canonical data pointers use 0xa000000100000000 plus the same offset.  The
-// generic Memory object is intentionally flat, so translate only this exact
-// kernel mapping at the IA-64 instruction boundary and leave the register
-// value itself virtual for subsequent guest instructions.
+// canonical data pointers use 0xa000000100000000 plus the same offset and
+// __va() pointers use 0xe000000000000000 plus the physical address. The
+// generic Memory object is intentionally flat, so translate these direct-map
+// aliases at the IA-64 instruction boundary and leave the register value
+// itself virtual for subsequent guest instructions.
 uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
     constexpr uint64_t kKernelVirtualBase = 0xA000000100000000ULL;
     constexpr uint64_t kKernelPhysicalBase = 0x04000000ULL;
@@ -166,6 +168,23 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
     constexpr uint64_t kPerCpuVirtualBase = 0xFFFFFFFFFFFC0000ULL;
     constexpr uint64_t kPerCpuPhysicalBase = 0x04B80000ULL;
     constexpr uint64_t kPerCpuVirtualSpan = 0x0000000000003440ULL;
+    constexpr uint64_t kRegion7VirtualBase = 0xE000000000000000ULL;
+
+    if (address >= kPerCpuVirtualBase) {
+        const uint64_t perCpuOffset = address - kPerCpuVirtualBase;
+        if (perCpuOffset < kPerCpuVirtualSpan &&
+            static_cast<uint64_t>(size) <= kPerCpuVirtualSpan - perCpuOffset) {
+            return kPerCpuPhysicalBase + perCpuOffset;
+        }
+    }
+
+    if (address >= kRegion7VirtualBase) {
+        const uint64_t physicalAddress = address - kRegion7VirtualBase;
+        if (static_cast<uint64_t>(size) <=
+            std::numeric_limits<uint64_t>::max() - physicalAddress) {
+            return physicalAddress;
+        }
+    }
 
     if (address < kKernelVirtualBase) {
         return address;
@@ -174,12 +193,6 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
     const uint64_t offset = address - kKernelVirtualBase;
     if (offset >= kKernelVirtualSpan ||
         static_cast<uint64_t>(size) > kKernelVirtualSpan - offset) {
-        const uint64_t perCpuOffset = address - kPerCpuVirtualBase;
-        if (address >= kPerCpuVirtualBase &&
-            perCpuOffset < kPerCpuVirtualSpan &&
-            static_cast<uint64_t>(size) <= kPerCpuVirtualSpan - perCpuOffset) {
-            return kPerCpuPhysicalBase + perCpuOffset;
-        }
         return address;
     }
 

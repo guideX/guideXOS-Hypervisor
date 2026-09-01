@@ -703,7 +703,7 @@ void test_latest_boot_log_blockers() {
     const uint64_t kernelVirtualData = 0xa000000100cbc1d0ULL;
     const uint64_t kernelPhysicalData = 0x04cbc1d0ULL;
     const uint64_t kernelDataValue = 0xa000000100cd55b0ULL;
-    Memory kernelMemory(0x05000000);
+    Memory kernelMemory(0x20000000);
     kernelMemory.write<uint64_t>(kernelPhysicalData, kernelDataValue);
     InstructionEx kernelLoad(InstructionType::LD8, UnitType::M_UNIT);
     kernelLoad.SetOperands(16, 2);
@@ -764,6 +764,20 @@ void test_latest_boot_log_blockers() {
     perCpuLoad.Execute(perCpuLoadCpu, kernelMemory);
     assert_equal("kernel per-CPU load should translate region-7 address",
                  0x1122334455667788ULL, perCpuLoadCpu.GetGR(15));
+
+    // EFI boot parameters are passed through IA-64's region-7 __va() alias.
+    // The flat replay image keeps that object at its physical address.
+    const uint64_t region7VirtualAddress = 0xe00000001fd93008ULL;
+    const uint64_t region7PhysicalAddress = 0x1fd93008ULL;
+    const uint64_t region7Value = 0x5453595320494249ULL;
+    kernelMemory.write<uint64_t>(region7PhysicalAddress, region7Value);
+    CPUState region7LoadCpu;
+    region7LoadCpu.SetGR(2, region7VirtualAddress);
+    InstructionEx region7Load(InstructionType::LD8, UnitType::M_UNIT);
+    region7Load.SetOperands(14, 2);
+    region7Load.Execute(region7LoadCpu, kernelMemory);
+    assert_equal("EFI region-7 load should translate __va address",
+                 region7Value, region7LoadCpu.GetGR(14));
 
     CPUState perCpuTpaCpu;
     perCpuTpaCpu.SetGR(2, perCpuVirtualAddress);
