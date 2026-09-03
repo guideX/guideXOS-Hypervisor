@@ -1295,6 +1295,58 @@ public:
     }
 };
 
+class FakeCanonicalCallFrameReturnDecoder : public IDecoder {
+public:
+    InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
+        (void)bundleData;
+        return InstructionBundle();
+    }
+
+    Bundle DecodeBundle(const uint8_t* bundleData) const override {
+        return DecodeBundleAt(bundleData, 0);
+    }
+
+    Bundle DecodeBundleAt(const uint8_t* bundleData, uint64_t bundleIP) const override {
+        (void)bundleData;
+
+        Bundle bundle;
+        bundle.templateType = TemplateType::MIB;
+        bundle.hasStop = false;
+
+        if (bundleIP == 0x04001000) {
+            InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+            call.SetOperands(0, 0, 0);
+            call.SetBranchTarget(0x04002000);
+            call.SetRawBits(0x10);
+            bundle.instructions.push_back(call);
+        } else if (bundleIP == 0x04002000) {
+            InstructionEx alloc(InstructionType::ALLOC, UnitType::M_UNIT);
+            alloc.SetOperands(50, 0, 0);
+            alloc.SetImmediate(8 | (static_cast<uint64_t>(6) << 7));
+            alloc.SetRawBits(0x20);
+            bundle.instructions.push_back(alloc);
+
+            InstructionEx setCanonicalReturn(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+            setCanonicalReturn.SetOperands(0, 8, 0);
+            setCanonicalReturn.SetRawBits(0x21);
+            bundle.instructions.push_back(setCanonicalReturn);
+        } else if (bundleIP == 0x04002010) {
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x30);
+            bundle.instructions.push_back(ret);
+        }
+
+        return bundle;
+    }
+
+    InstructionEx DecodeInstruction(uint64_t rawBits, UnitType unit) const override {
+        InstructionEx instr(InstructionType::UNKNOWN, unit);
+        instr.SetRawBits(rawBits);
+        return instr;
+    }
+};
+
 class FakeEfiThunkReturnDecoder : public IDecoder {
 public:
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
@@ -2968,6 +3020,40 @@ void testIA64PluginCallFrameRestoreSkipsStaleFrames() {
     assert(plugin.getCPUState().GetGR(36) == 0x12345678);
 
     std::cout << "  ? returning to an older saved address restores the matching caller frame\n";
+}
+
+void testIA64PluginCanonicalReturnRestoresCallFrame() {
+    std::cout << "Testing IA-64 canonical return restores a flat call frame...\n";
+
+    SparseMemory memory;
+    uint8_t bundleBytes[16] = {};
+    memory.Write(0x04001000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x04002000, bundleBytes, sizeof(bundleBytes));
+    memory.Write(0x04002010, bundleBytes, sizeof(bundleBytes));
+    FakeCanonicalCallFrameReturnDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+
+    const uint64_t initialCfm = 6 | (static_cast<uint64_t>(4) << 7);
+    constexpr uint64_t savedLocal = 0x123456789abcdef0ULL;
+    constexpr uint64_t canonicalReturn = 0xa000000100001010ULL;
+    plugin.getCPUState().SetIP(0x04001000);
+    plugin.getCPUState().SetCFM(initialCfm);
+    plugin.getCPUState().SetGR(36, savedLocal);
+    plugin.getCPUState().SetGR(8, canonicalReturn);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x04002000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetCFM() == (8 | (static_cast<uint64_t>(6) << 7)));
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x04002010);
+    assert(plugin.getCPUState().GetBR(0) == canonicalReturn);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x04001010);
+    assert(plugin.getCPUState().GetCFM() == initialCfm);
+    assert(plugin.getCPUState().GetGR(36) == savedLocal);
+
+    std::cout << "  ? canonical IA-64 return aliases restore the saved flat call frame\n";
 }
 
 void testIA64PluginNonLocalReturnRestoresCompletedFrame() {
@@ -5701,6 +5787,7 @@ int main(int argc, char** argv) {
         std::cout << "\n";
 
         testIA64PluginCallFrameRestoreSkipsStaleFrames();
+        testIA64PluginCanonicalReturnRestoresCallFrame();
         testIA64PluginNonLocalReturnRestoresCompletedFrame();
         std::cout << "\n";
 

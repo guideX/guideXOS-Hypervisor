@@ -4472,7 +4472,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 return ISAExecutionResult::HALT;
             }
             if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
-                restoreCallFrame(branchTarget);
+                // IA-64 virtual-mode helpers can return through the canonical
+                // kernel alias even when the call frame was entered through
+                // the flat replay address.  Call-frame keys are stored at the
+                // normalized bundle address, so normalize the return before
+                // looking up the saved frame.
+                restoreCallFrame(normalizeBranchEntryIP(branchTarget));
             }
             const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             rememberBranchTarget(branchEntryIP);
