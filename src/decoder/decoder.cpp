@@ -1417,6 +1417,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::POPCNT:
+            // popcnt rDst = rSrc1: count all one bits in the 64-bit source.
+            cpu.SetGR(dst_, static_cast<uint64_t>(__builtin_popcountll(cpu.GetGR(src1_))));
+            break;
+
         case InstructionType::SHRP:
             // shrp rDst = rSrc1, rSrc2, count: low 64 bits of (rSrc1:rSrc2) >> count.
             if (hasImmediate_) {
@@ -2390,6 +2395,11 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::SHR:
             oss << "shr r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_) 
                 << ", r" << static_cast<int>(src2_);
+            break;
+
+        case InstructionType::POPCNT:
+            oss << "popcnt r" << static_cast<int>(dst_) << " = r"
+                << static_cast<int>(src1_);
             break;
 
         case InstructionType::SHRP:

@@ -149,6 +149,12 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                         instr.SetOperands(fmt.r1, fmt.r2, fmt.r3);
                     }
                     return true;
+
+                case 0x3: // POPCNT
+                    instr = InstructionEx(InstructionType::POPCNT, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands(fmt.r1, fmt.r3, 0);
+                    return true;
             }
         }
         
@@ -430,6 +436,16 @@ static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& 
         const uint8_t x2a = static_cast<uint8_t>(formats::extractBits(raw, 34, 2));
         const uint8_t x2b = static_cast<uint8_t>(formats::extractBits(raw, 28, 2));
         const uint8_t x2c = static_cast<uint8_t>(formats::extractBits(raw, 30, 2));
+
+        // IA-64 popcnt is an I-unit OpZaZbVeX2aX2bX2c form.  It uses the
+        // register-source fields {r1, r3}; recognize it before the generic
+        // shift forms so authentic bitmap scans do not become UNKNOWN slots.
+        if (z_a == 0 && z_b == 1 && v_e == 0 &&
+            x2a == 1 && x2b == 1 && x2c == 2) {
+            result.opcode = 0x73; // POPCNT
+            result.has_imm = false;
+            return true;
+        }
 
         if (z_a == 1 && z_b == 1 && v_e == 0 &&
             x2a == 0 && x2b == 0 && x2c == 1) {

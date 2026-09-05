@@ -2492,6 +2492,38 @@ void test_shift_operations() {
     std::cout << "  ? Shift operations passed" << std::endl;
 }
 
+void test_popcnt_instruction() {
+    std::cout << "Testing POPCNT..." << std::endl;
+
+    InstructionDecoder decoder;
+    Memory memory(1024 * 1024);
+    CPUState cpu;
+
+    // IA-64 OpZaZbVeX2aX2bX2c(7,0,1,0,1,1,2), popcnt r8=r14.
+    const uint64_t rawPopcnt =
+        (7ULL << 37) | (1ULL << 33) | (1ULL << 34) |
+        (1ULL << 28) | (2ULL << 30) | (8ULL << 6) | (14ULL << 20);
+    InstructionEx popcnt = decoder.DecodeSlot(rawPopcnt, UnitType::I_UNIT, 0x3f1310);
+    assert_true("POPCNT raw encoding should decode",
+                popcnt.GetType() == InstructionType::POPCNT);
+    assert_equal("POPCNT destination", 8, popcnt.GetDst());
+    assert_equal("POPCNT source", 14, popcnt.GetSrc1());
+    assert_string("POPCNT disassembly", "popcnt r8 = r14", popcnt.GetDisassembly());
+
+    cpu.SetGR(14, 0x00000000FFFFFFFFULL);
+    popcnt.Execute(cpu, memory);
+    assert_equal("POPCNT should count all set low bits", 32, cpu.GetGR(8));
+
+    cpu.SetPR(1, false);
+    cpu.SetGR(8, 0xfeedfaceULL);
+    popcnt.SetPredicate(1);
+    popcnt.Execute(cpu, memory);
+    assert_equal("False-predicated POPCNT should preserve destination",
+                 0xfeedfaceULL, cpu.GetGR(8));
+
+    std::cout << "  ? POPCNT passed" << std::endl;
+}
+
 // Test extract/deposit operations
 void test_extract_deposit() {
     std::cout << "Testing extract/deposit operations..." << std::endl;
@@ -3176,6 +3208,7 @@ int main() {
         test_ia64_immediate_sub_raw_encoding();
         test_ia64_sub_minus_one_raw_encoding();
         test_shift_operations();
+        test_popcnt_instruction();
         test_extract_deposit();
         test_memory_operations();
         test_predicated_execution();
