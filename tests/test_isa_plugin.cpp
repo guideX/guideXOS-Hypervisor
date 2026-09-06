@@ -3672,6 +3672,36 @@ void testIA64PluginFetchBundleRedirectsDescriptorToCode() {
     std::cout << "  ? fetchBundle redirects descriptor bundles to executable code and gp\n";
 }
 
+void testIA64PluginFetchBundlePreservesSyntheticFirmwareBundle() {
+    std::cout << "Testing IA-64 plugin fetch preserves synthetic firmware bundles...\n";
+
+    constexpr uint64_t handoffBase = 0x1FE00000ULL;
+    constexpr uint64_t palProcedure = handoffBase + kEfiPalProcedureCodeOffset;
+    // This is the same compact template-0x10 PAL return bundle emitted by
+    // VMManager: nop.m, nop.i, br.ret b0.  Its first little-endian word is
+    // 0x10, which is not a function-descriptor code pointer.
+    constexpr uint64_t bundleWord0 = 0x10ULL;
+    constexpr uint64_t bundleWord1 = 0x0084000080000000ULL;
+
+    ReportedEfiSparseMemory memory;
+    memory.Write(palProcedure, reinterpret_cast<const uint8_t*>(&bundleWord0),
+                 sizeof(bundleWord0));
+    memory.Write(palProcedure + 8,
+                 reinterpret_cast<const uint8_t*>(&bundleWord1),
+                 sizeof(bundleWord1));
+
+    InstructionDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(palProcedure);
+    plugin.getCPUState().SetBR(0, 0x1000);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == palProcedure);
+    assert(plugin.getCurrentSlot() == 1);
+
+    std::cout << "  ? executable synthetic EFI bundles are not probed as descriptors\n";
+}
+
 void testIA64PluginZeroFilledFirmwareCallReturnsSuccess() {
     std::cout << "Testing IA-64 plugin zero-filled firmware call handling...\n";
 
@@ -5840,6 +5870,9 @@ int main(int argc, char** argv) {
         std::cout << "\n";
 
         testIA64PluginFetchBundleRedirectsDescriptorToCode();
+        std::cout << "\n";
+
+        testIA64PluginFetchBundlePreservesSyntheticFirmwareBundle();
         std::cout << "\n";
 
         testIA64PluginZeroFilledFirmwareCallReturnsSuccess();

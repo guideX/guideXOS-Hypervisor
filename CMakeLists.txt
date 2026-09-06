@@ -453,6 +453,10 @@ add_executable(test_isa_plugin
     ${HEADERS}
 )
 
+if(WIN32)
+    target_link_libraries(test_isa_plugin PRIVATE ws2_32)
+endif()
+
 if(MSVC)
     target_compile_options(test_isa_plugin PRIVATE /W4)
 else()

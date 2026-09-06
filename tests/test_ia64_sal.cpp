@@ -88,6 +88,49 @@ int main() {
     require(dispatchPalCall(0xDEAD).status == kSalNotImplemented,
             "unknown PAL calls return an unsupported status");
 
+    const SalCallResult cacheSummary =
+        dispatchPalCall(kPalCacheSummary, 0, 0, 0);
+    require(cacheSummary.status == kSalSuccess &&
+                cacheSummary.v0 == 1 && cacheSummary.v1 == 1 &&
+                cacheSummary.v2 == 0,
+            "PAL_CACHE_SUMMARY advertises one cache level and one unique cache");
+    require(dispatchPalCall(kPalCacheSummary, 1, 0, 0).status ==
+                kSalInvalidArgument,
+            "PAL_CACHE_SUMMARY rejects nonzero reserved arguments");
+
+    const SalCallResult cacheInfo =
+        dispatchPalCall(kPalCacheInfo, kPalCacheLevelL0, kPalCacheTypeData, 0);
+    require(cacheInfo.status == kSalSuccess,
+            "PAL_CACHE_INFO accepts the advertised unified L0 cache");
+
+    // Decode the raw PAL words independently using the Linux IA-64 field
+    // positions.  This test deliberately does not use a C++ bitfield overlay.
+    const uint64_t pcci1 = cacheInfo.v0;
+    const uint64_t pcci2 = cacheInfo.v1;
+    require(((pcci1 >> 0) & 0x1) == 1 &&
+                ((pcci1 >> 1) & 0x3) == 1 &&
+                ((pcci1 >> 8) & 0xFF) == 4 &&
+                ((pcci1 >> 16) & 0xFF) == 6 &&
+                ((pcci1 >> 24) & 0xFF) == 6,
+            "PAL_CACHE_INFO encodes unified, write-back, 4-way, 64-byte fields");
+    require((pcci2 & 0xFFFFFFFFULL) == 16ULL * 1024ULL &&
+                ((pcci2 >> 32) & 0xFF) == 0 &&
+                ((pcci2 >> 40) & 0xFF) == 6 &&
+                ((pcci2 >> 48) & 0xFF) == 47 &&
+                cacheInfo.v2 == 0,
+            "PAL_CACHE_INFO encodes size, alias boundary, and tag fields");
+    require(dispatchPalCall(kPalCacheInfo, kPalCacheLevelL0,
+                            kPalCacheTypeInstruction, 0).status ==
+                kSalInvalidArgument,
+            "PAL_CACHE_INFO rejects a nonexistent split instruction cache");
+    require(dispatchPalCall(kPalCacheInfo, 1, kPalCacheTypeData, 0).status ==
+                kSalInvalidArgument,
+            "PAL_CACHE_INFO rejects a nonexistent cache level");
+    require(dispatchPalCall(kPalCacheInfo, kPalCacheLevelL0,
+                            kPalCacheTypeData, 1).status ==
+                kSalInvalidArgument,
+            "PAL_CACHE_INFO rejects a nonzero reserved argument");
+
     std::cout << "IA-64 SAL tests passed checksum=0x" << std::hex
               << static_cast<unsigned>(validation.checksum) << std::dec << std::endl;
     return EXIT_SUCCESS;

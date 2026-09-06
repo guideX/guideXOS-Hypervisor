@@ -88,6 +88,13 @@ bool shouldEmitA5dTrace() {
     return enabled;
 }
 
+bool shouldEmitPalTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_PAL_TRACE");
+    return enabled;
+}
+
+uint64_t gPalDispatchCount = 0;
+
 bool isA5dTraceIP(uint64_t ip) {
     // The replay executes the kernel image at its flat physical placement.
     // Keep the helper range containing POPCNT, and include the A5D function
@@ -3048,6 +3055,75 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         const uint64_t branchRegisterValue = isBranchRegisterTargetInstruction(cachedInstruction_.GetType())
             ? state_.getCPUState().GetBR(cachedInstruction_.GetSrc1())
             : 0;
+        const auto emitPalTrace = [&](const char* phase,
+                                      uint64_t target,
+                                      uint64_t normalizedTarget) {
+            if (!shouldEmitPalTrace()) {
+                return;
+            }
+            static uint64_t palTraceCount = 0;
+            if (palTraceCount >= 256) {
+                return;
+            }
+            ++palTraceCount;
+            const CPUState& traceCPU = state_.getCPUState();
+            const char* branchKind = "other";
+            if (cachedInstruction_.GetType() == InstructionType::BR_COND) {
+                branchKind = "br.cond";
+            } else if (cachedInstruction_.GetType() == InstructionType::BR_CALL) {
+                branchKind = "br.call";
+            } else if (cachedInstruction_.GetType() == InstructionType::BR_RET) {
+                branchKind = "br.ret";
+            }
+            std::ostringstream trace;
+            trace << "phase=" << phase
+                  << " cycle=" << traceCPU.GetAR(44)
+                  << " ip=" << BootStageTrace::Hex(currentIP)
+                  << " slot=" << state_.currentSlot_
+                  << " kind=" << branchKind
+                  << " template=" << static_cast<unsigned>(state_.currentBundle_.templateType)
+                  << " raw41=" << BootStageTrace::Hex(cachedInstruction_.GetRawBits())
+                  << " disasm=\"" << decodeResult.disassembly << "\""
+                  << " pred=p" << static_cast<unsigned>(predicate)
+                  << " predTrue=" << (livePredicateTrue ? 1 : 0)
+                  << " targetSource="
+                  << (cachedInstruction_.HasBranchTarget() ? "encoded" : "branch-register")
+                  << " target=" << BootStageTrace::Hex(target)
+                  << " normalized=" << BootStageTrace::Hex(normalizedTarget)
+                  << " branchReg=" << static_cast<unsigned>(cachedInstruction_.GetSrc1())
+                  << " branchRegValue=" << BootStageTrace::Hex(branchRegisterValue)
+                  << " b0Before=" << BootStageTrace::Hex(branchRegistersBefore[0])
+                  << " b0=" << BootStageTrace::Hex(traceCPU.GetBR(0))
+                  << " b1=" << BootStageTrace::Hex(traceCPU.GetBR(1))
+                  << " b2=" << BootStageTrace::Hex(traceCPU.GetBR(2))
+                  << " b3=" << BootStageTrace::Hex(traceCPU.GetBR(3))
+                  << " b4=" << BootStageTrace::Hex(traceCPU.GetBR(4))
+                  << " b5=" << BootStageTrace::Hex(traceCPU.GetBR(5))
+                  << " b6=" << BootStageTrace::Hex(traceCPU.GetBR(6))
+                  << " b7=" << BootStageTrace::Hex(traceCPU.GetBR(7))
+                  << " r1=" << BootStageTrace::Hex(traceCPU.GetGR(1))
+                  << " r8=" << BootStageTrace::Hex(traceCPU.GetGR(8))
+                  << " r9=" << BootStageTrace::Hex(traceCPU.GetGR(9))
+                  << " r10=" << BootStageTrace::Hex(traceCPU.GetGR(10))
+                  << " r11=" << BootStageTrace::Hex(traceCPU.GetGR(11))
+                  << " r12=" << BootStageTrace::Hex(traceCPU.GetGR(12))
+                  << " r14=" << BootStageTrace::Hex(traceCPU.GetGR(14))
+                  << " r28=" << BootStageTrace::Hex(traceCPU.GetGR(28))
+                  << " r29=" << BootStageTrace::Hex(traceCPU.GetGR(29))
+                  << " r30=" << BootStageTrace::Hex(traceCPU.GetGR(30))
+                  << " r31=" << BootStageTrace::Hex(traceCPU.GetGR(31))
+                  << " r33=" << BootStageTrace::Hex(traceCPU.GetGR(33))
+                  << " gp=" << BootStageTrace::Hex(traceCPU.GetGR(1))
+                  << " cfm=" << BootStageTrace::Hex(traceCPU.GetCFM())
+                  << " pfs=" << BootStageTrace::Hex(traceCPU.GetPFS())
+                  << " bsp=" << BootStageTrace::Hex(traceCPU.GetBSP())
+                  << " bspstore=" << BootStageTrace::Hex(traceCPU.GetBSPSTORE())
+                  << " rnat=" << BootStageTrace::Hex(traceCPU.GetRNAT())
+                  << " palEntry=" << BootStageTrace::Hex(EFI_PAL_PROCEDURE_CODE_ADDR)
+                  << " handoffBase=" << BootStageTrace::Hex(EFI_HANDOFF_REGION_BASE);
+            std::cout << "[IA64-PAL-TRACE] " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_PAL_TRACE", trace.str());
+        };
         // Some boot code reaches a counted loop form through the conservative
         // br.call decoder. Treat a short backward br.call b5 as ar.lc-driven.
         const bool callLooksLikeCountedLoop =
@@ -3102,11 +3178,16 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         : branchRegisterValue;
                     if (normalizeBranchEntryIP(branchTarget) == EFI_PAL_PROCEDURE_CODE_ADDR) {
                         CPUState& cpu = state_.getCPUState();
+                        const uint64_t b0AtEntry = cpu.GetBR(0);
                         const uint64_t function = cpu.GetGR(28);
                         const uint64_t arg1 = cpu.GetGR(29);
                         const uint64_t arg2 = cpu.GetGR(30);
                         const uint64_t arg3 = cpu.GetGR(31);
-                        const sal::SalCallResult result = sal::dispatchPalCall(function);
+                        emitPalTrace("pal-entry", branchTarget,
+                                     normalizeBranchEntryIP(branchTarget));
+                        ++gPalDispatchCount;
+                        const sal::SalCallResult result =
+                            sal::dispatchPalCall(function, arg1, arg2, arg3);
                         const int64_t status = result.status;
                         const uint64_t v0 = result.v0;
                         const uint64_t v1 = result.v1;
@@ -3116,6 +3197,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         cpu.SetGR(10, v1);
                         cpu.SetGR(11, v2);
                         branchTarget = cpu.GetBR(0);
+                        emitPalTrace("pal-call", branchTarget,
+                                     normalizeBranchEntryIP(branchTarget));
                         handledFirmwareCallStub = true;
                         isBranch = true;
                         std::cout << "[IA64-PAL] function=0x" << std::hex << function
@@ -3125,7 +3208,20 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                   << " v1=0x" << v1 << " v2=0x" << v2
                                   << " return=0x" << branchTarget << std::dec << std::endl;
                         std::ostringstream palTrace;
-                        palTrace << "function=" << BootStageTrace::Hex(function)
+                        palTrace << "callsiteIP=" << BootStageTrace::Hex(currentIP)
+                                 << " slot=" << state_.currentSlot_
+                                 << " raw41=" << BootStageTrace::Hex(cachedInstruction_.GetRawBits())
+                                 << " disasm=\"" << decodeResult.disassembly << "\""
+                                 << " b0Before=" << BootStageTrace::Hex(b0AtEntry)
+                                 << " b0AtEntry=" << BootStageTrace::Hex(b0AtEntry)
+                                 << " b0AtExit=" << BootStageTrace::Hex(cpu.GetBR(0))
+                                 << " gp=" << BootStageTrace::Hex(cpu.GetGR(1))
+                                 << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+                                 << " pfs=" << BootStageTrace::Hex(cpu.GetPFS())
+                                 << " bsp=" << BootStageTrace::Hex(cpu.GetBSP())
+                                 << " bspstore=" << BootStageTrace::Hex(cpu.GetBSPSTORE())
+                                 << " rnat=" << BootStageTrace::Hex(cpu.GetRNAT())
+                                 << " function=" << BootStageTrace::Hex(function)
                                  << " args=[" << BootStageTrace::Hex(arg1) << ","
                                  << BootStageTrace::Hex(arg2) << ","
                                  << BootStageTrace::Hex(arg3) << "] status=" << status
@@ -4679,6 +4775,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 hasCachedInstruction_ = false;
                 return ISAExecutionResult::HALT;
             }
+            const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
+            if (branchEntryIP == 0x10) {
+                emitPalTrace("target-0x10", branchTarget, branchEntryIP);
+            }
             if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
                 // IA-64 virtual-mode helpers can return through the canonical
                 // kernel alias even when the call frame was entered through
@@ -4687,7 +4787,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 // looking up the saved frame.
                 restoreCallFrame(normalizeBranchEntryIP(branchTarget));
             }
-            const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             rememberBranchTarget(branchEntryIP);
             if (traceA5d) {
                 const CPUState& traceCPU = state_.getCPUState();
@@ -4837,12 +4936,80 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
     servicePendingInterrupt(memory);
     
     // Decode and execute
+    const uint64_t ipBeforeDecode = state_.getCPUState().GetIP();
+    const size_t slotBeforeDecode = state_.currentSlot_;
     auto decodeResult = decode(memory);
+    const uint64_t ipAfterDecode = state_.getCPUState().GetIP();
+    static uint64_t decodeTraceGeneration = 0;
+    static uint64_t decodeTraceCount = 0;
+    if (decodeTraceGeneration != gPalDispatchCount) {
+        decodeTraceGeneration = gPalDispatchCount;
+        decodeTraceCount = 0;
+    }
+    if (shouldEmitPalTrace() && gPalDispatchCount != 0 && ipAfterDecode != ipBeforeDecode) {
+        if (decodeTraceCount < 256) {
+            ++decodeTraceCount;
+            std::ostringstream trace;
+            trace << "phase=decode-ip-change"
+                  << " cycle=" << state_.getCPUState().GetAR(44)
+                  << " before=" << BootStageTrace::Hex(ipBeforeDecode)
+                  << " after=" << BootStageTrace::Hex(ipAfterDecode)
+                  << " slotBefore=" << slotBeforeDecode
+                  << " slotAfter=" << state_.currentSlot_
+                  << " valid=" << (decodeResult.valid ? 1 : 0)
+                  << " raw41=" << BootStageTrace::Hex(
+                         decodeResult.valid ? cachedInstruction_.GetRawBits() : 0)
+                  << " disasm=\"" << decodeResult.disassembly << "\" "
+                  << cpuSummary(state_.getCPUState());
+            std::cout << "[IA64-PAL-TRACE] " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_PAL_TRACE", trace.str());
+        }
+    }
     if (!decodeResult.valid) {
         return ISAExecutionResult::EXCEPTION;
     }
     
-    return execute(memory, decodeResult);
+    const size_t slotBeforeExecute = state_.currentSlot_;
+    const InstructionType typeBeforeExecute = cachedInstruction_.GetType();
+    const uint64_t rawBeforeExecute = cachedInstruction_.GetRawBits();
+    const uint64_t encodedTargetBeforeExecute = cachedInstruction_.HasBranchTarget()
+        ? cachedInstruction_.GetBranchTarget()
+        : 0;
+    const uint64_t branchRegisterBeforeExecute =
+        isBranchRegisterTargetInstruction(typeBeforeExecute)
+            ? state_.getCPUState().GetBR(cachedInstruction_.GetSrc1())
+            : 0;
+    const ISAExecutionResult result = execute(memory, decodeResult);
+    const uint64_t ipAfterExecute = state_.getCPUState().GetIP();
+    static uint64_t executeTraceGeneration = 0;
+    static uint64_t executeTraceCount = 0;
+    if (executeTraceGeneration != gPalDispatchCount) {
+        executeTraceGeneration = gPalDispatchCount;
+        executeTraceCount = 0;
+    }
+    if (shouldEmitPalTrace() && gPalDispatchCount != 0 && ipAfterExecute != ipAfterDecode) {
+        if (executeTraceCount < 256) {
+            ++executeTraceCount;
+            std::ostringstream trace;
+            trace << "phase=execute-ip-change"
+                  << " cycle=" << state_.getCPUState().GetAR(44)
+                  << " before=" << BootStageTrace::Hex(ipAfterDecode)
+                  << " after=" << BootStageTrace::Hex(ipAfterExecute)
+                  << " slot=" << slotBeforeExecute
+                  << " type=" << static_cast<int>(typeBeforeExecute)
+                  << " raw41=" << BootStageTrace::Hex(rawBeforeExecute)
+                  << " encodedTarget=" << BootStageTrace::Hex(encodedTargetBeforeExecute)
+                  << " branchReg=" << static_cast<unsigned>(cachedInstruction_.GetSrc1())
+                  << " branchRegValue=" << BootStageTrace::Hex(branchRegisterBeforeExecute)
+                  << " disasm=\"" << (decodeResult.disassembly.empty()
+                                          ? cachedInstruction_.GetDisassembly()
+                                          : decodeResult.disassembly) << "\" "
+                  << cpuSummary(state_.getCPUState());
+            std::cout << "[IA64-PAL-TRACE] " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_PAL_TRACE", trace.str());
+        }
+    }
+    return result;
 }
 
 void IA64ISAPlugin::setState(const ISAState& state) {
@@ -5631,6 +5798,18 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         efiMemoryMapInitialized_ = restoredMemoryMapInitialized; efiBootImage_ = restoredBootImage;
         efiBootFat_.reset(); efiBootImageFromVmManager_ = restoredBootImageFromManager;
         efiHandoffLayoutMemorySize_ = restoredHandoffLayoutSize; efiHandoffLayoutInitialized_ = restoredHandoffLayoutInitialized;
+        // The checkpoint stores the layout's memory-size decision, while the
+        // derived handoff addresses are process-global.  Rebuild those
+        // globals before the next instruction can compare a guest branch
+        // target with the PAL/SAL entry points.
+        if (efiHandoffLayoutInitialized_) {
+            EfiHandoffLayout restoredLayout{};
+            if (tryComputeEfiHandoffLayout(efiHandoffLayoutMemorySize_, restoredLayout)) {
+                applyEfiHandoffLayoutBase(restoredLayout.base);
+            } else {
+                resetEfiHandoffLayoutGlobals();
+            }
+        }
         pendingRegisterConfigEntryTarget_ = restoredRegisterConfigTarget;
         pendingRegisterConfigEntryCallsite_ = restoredRegisterConfigCallsite;
         pendingRegisterConfigEntryArmed_ = restoredRegisterConfigArmed;
@@ -5818,7 +5997,19 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
 
         uint64_t descriptorCode = 0;
         uint64_t descriptorGp = 0;
-        if (tryResolveIa64FunctionDescriptor(memory, ip, descriptorCode, descriptorGp) &&
+        // IA-64 function descriptors are resolved by indirect call/branch
+        // handling.  The synthetic EFI handoff region also contains real
+        // executable bundles, so probing a bundle address as a descriptor
+        // would reinterpret its first instruction bits as an IP.  In
+        // particular, the PAL stub begins with a zero-immediate instruction
+        // whose low word is 0x10; treating that bundle as a descriptor sends
+        // the architectural IP to 0x10 before the stub can execute.
+        const uint64_t normalizedBundleIP = normalizeBranchEntryIP(ip);
+        const bool isSyntheticEfiBundle =
+            normalizedBundleIP >= EFI_HANDOFF_REGION_BASE &&
+            normalizedBundleIP < EFI_HANDOFF_REGION_END;
+        if (!isSyntheticEfiBundle &&
+            tryResolveIa64FunctionDescriptor(memory, ip, descriptorCode, descriptorGp) &&
             descriptorCode != ip) {
             const uint64_t oldGp = state_.getCPUState().GetGR(1);
             if (descriptorGp != 0 && descriptorGp != oldGp) {

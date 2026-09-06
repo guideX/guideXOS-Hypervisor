@@ -31,6 +31,14 @@ constexpr uint64_t kSalFreqBaseRealtimeClock = 2;
 
 constexpr uint64_t kPalFreqBase = 13;
 constexpr uint64_t kPalFreqRatios = 14;
+constexpr uint64_t kPalCacheInfo = 2;
+constexpr uint64_t kPalCacheSummary = 4;
+constexpr uint64_t kPalLogicalToPhysical = 42;
+
+constexpr uint64_t kPalCacheLevelL0 = 0;
+constexpr uint64_t kPalCacheTypeInstruction = 1;
+constexpr uint64_t kPalCacheTypeData = 2;
+constexpr uint64_t kPalCacheTypeInstructionData = 3;
 
 constexpr int64_t kSalSuccess = 0;
 constexpr int64_t kSalNotImplemented = -1;
@@ -78,7 +86,10 @@ SalSystemTable buildSalSystemTable(const SalEntryPoint& entryPoint);
 
 SalCallResult dispatchSalCall(uint64_t function, uint64_t arg1);
 
-SalCallResult dispatchPalCall(uint64_t function);
+SalCallResult dispatchPalCall(uint64_t function,
+                              uint64_t arg1 = 0,
+                              uint64_t arg2 = 0,
+                              uint64_t arg3 = 0);
 
 bool validateSalSystemTable(std::span<const uint8_t> bytes,
                             SalValidation* validation = nullptr);

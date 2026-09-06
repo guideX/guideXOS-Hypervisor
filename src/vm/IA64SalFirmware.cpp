@@ -119,7 +119,10 @@ SalCallResult dispatchSalCall(uint64_t function, uint64_t arg1) {
     return result;
 }
 
-SalCallResult dispatchPalCall(uint64_t function) {
+SalCallResult dispatchPalCall(uint64_t function,
+                              uint64_t arg1,
+                              uint64_t arg2,
+                              uint64_t arg3) {
     SalCallResult result{};
     if (function == kPalFreqRatios) {
         constexpr uint64_t identityRatio = (1ULL << 32) | 1ULL;
@@ -130,6 +133,53 @@ SalCallResult dispatchPalCall(uint64_t function) {
     } else if (function == kPalFreqBase) {
         result.status = kSalSuccess;
         result.v0 = 1;
+    } else if (function == kPalCacheSummary) {
+        if (arg1 != 0 || arg2 != 0 || arg3 != 0) {
+            result.status = kSalInvalidArgument;
+        } else {
+            // guideXOS presents one deliberately simple processor-controlled
+            // cache: a single unified L0 cache.  The summary values are the
+            // number of levels and the number of unique caches, respectively.
+            result.status = kSalSuccess;
+            result.v0 = 1;
+            result.v1 = 1;
+            result.v2 = 0;
+        }
+    } else if (function == kPalCacheInfo) {
+        if (arg1 != kPalCacheLevelL0 || arg2 != kPalCacheTypeData ||
+            arg3 != 0) {
+            result.status = kSalInvalidArgument;
+        } else {
+            // PAL_CACHE_INFO returns two architected 64-bit words.  Encode
+            // the IA-64 PAL fields by position instead of using C++
+            // bitfields, whose layout is not a guest ABI.
+            constexpr uint64_t unified = 1ULL;
+            constexpr uint64_t writeBack = 1ULL;
+            constexpr uint64_t associativity = 4ULL;
+            constexpr uint64_t lineSizeShift = 6ULL;
+            constexpr uint64_t strideShift = 6ULL;
+            constexpr uint64_t cacheSize = 16ULL * 1024ULL;
+            constexpr uint64_t aliasBoundary = 0ULL;
+            constexpr uint64_t tagLeastSignificantBit = 6ULL;
+            constexpr uint64_t tagMostSignificantBit = 47ULL;
+
+            constexpr uint64_t pcci1 =
+                (unified << 0) |
+                (writeBack << 1) |
+                (associativity << 8) |
+                (lineSizeShift << 16) |
+                (strideShift << 24);
+            constexpr uint64_t pcci2 =
+                (cacheSize << 0) |
+                (aliasBoundary << 32) |
+                (tagLeastSignificantBit << 40) |
+                (tagMostSignificantBit << 48);
+
+            result.status = kSalSuccess;
+            result.v0 = pcci1;
+            result.v1 = pcci2;
+            result.v2 = 0;
+        }
     }
     return result;
 }
