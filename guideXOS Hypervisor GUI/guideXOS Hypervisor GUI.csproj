@@ -8,6 +8,11 @@
   <ImplicitUsings>:enable</ImplicitUsings>
   <UseWPF>true</UseWPF>
   <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  <ApplicationIcon>nexgen.ico</ApplicationIcon>
 </PropertyGroup>
+
+<ItemGroup>
+  <Content Include="nexgen.ico" />
+</ItemGroup>
 
 </Project>
