@@ -128,7 +128,9 @@ struct MFormat {
         MOV_TO_CR,
         ITR_I,
         ITR_D,
-        MOV_FROM_PSR
+        MOV_FROM_PSR,
+        MOV_TO_PSR,
+        MOV_FROM_CPUID
     } operation;
     
     // Access size

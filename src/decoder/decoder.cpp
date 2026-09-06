@@ -6,6 +6,7 @@
 #include "cpu_state.h"
 #include "memory.h"
 #include <sstream>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <cstring>
@@ -150,6 +151,11 @@ InstructionEx::InstructionEx(InstructionType type, UnitType unit)
 
 namespace {
 
+bool suppressVerboseRseDiagnostics() {
+    static const bool suppressed = std::getenv("GUIDEXOS_SUPPRESS_VERBOSE_TRACE") != nullptr;
+    return suppressed;
+}
+
 // The authentic Debian IA-64 kernel is linked in the region-5 direct map and
 // consumes EFI handoff structures through the region-7 direct map.
 // The replay keeps its physical image at 0x04000000, while the kernel's
@@ -168,6 +174,11 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
     constexpr uint64_t kPerCpuVirtualBase = 0xFFFFFFFFFFFC0000ULL;
     constexpr uint64_t kPerCpuPhysicalBase = 0x04B80000ULL;
     constexpr uint64_t kPerCpuVirtualSpan = 0x0000000000003440ULL;
+    // Linux also uses the region-6 uncached direct-map alias for early
+    // post-EFI data accesses.  In this flat replay it aliases physical RAM
+    // starting at zero; keep the architectural pointer virtual in GRs.
+    constexpr uint64_t kRegion6VirtualBase = 0xC000000100000000ULL;
+    constexpr uint64_t kRegion6VirtualSpan = 0x20000000ULL;
     constexpr uint64_t kRegion7VirtualBase = 0xE000000000000000ULL;
 
     if (address >= kPerCpuVirtualBase) {
@@ -182,6 +193,14 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
         const uint64_t physicalAddress = address - kRegion7VirtualBase;
         if (static_cast<uint64_t>(size) <=
             std::numeric_limits<uint64_t>::max() - physicalAddress) {
+            return physicalAddress;
+        }
+    }
+
+    if (address >= kRegion6VirtualBase) {
+        const uint64_t physicalAddress = address - kRegion6VirtualBase;
+        if (physicalAddress < kRegion6VirtualSpan &&
+            static_cast<uint64_t>(size) <= kRegion6VirtualSpan - physicalAddress) {
             return physicalAddress;
         }
     }
@@ -1087,6 +1106,19 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::MOV_FROM_PSR:
             // mov rDst = psr
             cpu.SetGR(dst_, cpu.GetPSR());
+            break;
+
+        case InstructionType::MOV_TO_PSR:
+            // mov psr.l = rSrc1.  IA-64 copies only GR[src1]{31:0}; the
+            // upper PSR bits are unaffected by this form.
+            cpu.SetPSR((cpu.GetPSR() & ~0xFFFFFFFFULL) |
+                       (cpu.GetGR(src1_) & 0xFFFFFFFFULL));
+            break;
+
+        case InstructionType::MOV_FROM_CPUID:
+            // mov rDst = cpuid[rSrc1].  CPUID is selected by GR[rSrc1]{7:0}
+            // and is read-only to the guest.
+            cpu.SetGR(dst_, cpu.GetCPUID(cpu.GetGR(src1_) & 0xFFULL));
             break;
 
         case InstructionType::MOV_TO_AR:
@@ -1998,15 +2030,17 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetAR(64, old_cfm);
                 cpu.SetCFM(sof | (static_cast<uint64_t>(sol) << 7) |
                            (static_cast<uint64_t>(sor) << 14));
-                std::cout << "[IA64-RSE] alloc ip=0x" << std::hex << cpu.GetIP()
-                          << " dst=r" << std::dec << static_cast<int>(dst_)
-                          << " oldCFM=0x" << std::hex << old_cfm
-                          << " oldPFS=0x" << old_pfs
-                          << " sof=" << std::dec << static_cast<unsigned>(sof)
-                          << " sol=" << static_cast<unsigned>(sol)
-                          << " sor=" << static_cast<unsigned>(sor)
-                          << " newCFM=0x" << std::hex << cpu.GetCFM()
-                          << std::dec << std::endl;
+                if (!suppressVerboseRseDiagnostics()) {
+                    std::cout << "[IA64-RSE] alloc ip=0x" << std::hex << cpu.GetIP()
+                              << " dst=r" << std::dec << static_cast<int>(dst_)
+                              << " oldCFM=0x" << std::hex << old_cfm
+                              << " oldPFS=0x" << old_pfs
+                              << " sof=" << std::dec << static_cast<unsigned>(sof)
+                              << " sol=" << static_cast<unsigned>(sol)
+                              << " sor=" << static_cast<unsigned>(sor)
+                              << " newCFM=0x" << std::hex << cpu.GetCFM()
+                              << std::dec << std::endl;
+                }
             }
             break;
         
@@ -2108,6 +2142,15 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::MOV_FROM_PSR:
             oss << "mov r" << static_cast<int>(dst_) << " = psr";
+            break;
+
+        case InstructionType::MOV_TO_PSR:
+            oss << "mov psr.l = r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::MOV_FROM_CPUID:
+            oss << "mov r" << static_cast<int>(dst_) << " = cpuid[r"
+                << static_cast<int>(src1_) << "]";
             break;
 
         case InstructionType::MOV_TO_AR:

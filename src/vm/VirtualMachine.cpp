@@ -13,6 +13,7 @@
 #include "IA64ISAPlugin.h"
 #include "VMSnapshot.h"
 #include "VMSnapshotManager.h"
+#include "VMCheckpoint.h"
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -1645,6 +1646,18 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot) {
     }
     
     return true;
+}
+
+bool VirtualMachine::writeDiagnosticCheckpoint(const std::string& path,
+                                               const std::string& guestIdentity,
+                                               std::string* error) const {
+    return VMCheckpointCodec::write(*this, path, guestIdentity, error);
+}
+
+bool VirtualMachine::readDiagnosticCheckpoint(const std::string& path,
+                                              const std::string& expectedGuestIdentity,
+                                              std::string* error) {
+    return VMCheckpointCodec::read(*this, path, expectedGuestIdentity, error);
 }
 
 // ============================================================================

@@ -50,6 +50,11 @@ constexpr size_t NUM_CONTROL_REGISTERS = 128;
 
 constexpr size_t NUM_TRANSLATION_REGISTERS = 256;
 
+// IA-64 exposes a fixed architectural CPUID region (registers 0..4) and an
+// implementation-defined variable region beyond it.  The diagnostic machine
+// models the fixed region; the values are read-only architectural state.
+constexpr size_t NUM_CPUID_REGISTERS = 5;
+
 // Application registers (AR0-AR127)
 // - Various control and state registers
 // - Examples: AR.RSC (RSE config), AR.BSP (backing store pointer)
@@ -181,9 +186,16 @@ public:
     uint64_t GetCR(size_t index) const;
     void SetCR(size_t index, uint64_t value);
 
+    // Processor identification registers are read-only to guest code.  The
+    // checkpoint-only setter is used to preserve the modeled machine profile.
+    uint64_t GetCPUID(size_t index) const;
+    void SetCPUIDForCheckpoint(size_t index, uint64_t value);
+
     // Translation-register state populated by itr.i and itr.d.
     const TranslationRegisterState& GetITR(size_t index) const;
     const TranslationRegisterState& GetDTR(size_t index) const;
+    void SetITRStateForCheckpoint(size_t index, const TranslationRegisterState& state);
+    void SetDTRStateForCheckpoint(size_t index, const TranslationRegisterState& state);
     void SetITR(size_t index, uint64_t physicalAddress, uint64_t virtualAddress,
                 uint64_t itir, uint64_t regionValue);
     void SetDTR(size_t index, uint64_t physicalAddress, uint64_t virtualAddress,
@@ -251,6 +263,7 @@ public:
     void SetPSR(uint64_t value) { psr_ = value; }
 
     const RSEState& GetRSEState() const { return rse_; }
+    void SetRSEStateForCheckpoint(const RSEState& state) { rse_ = state; }
 
     // Reset CPU to initial state
     void Reset();
@@ -281,6 +294,11 @@ private:
 
     // Control registers (64-bit)
     std::array<uint64_t, NUM_CONTROL_REGISTERS> cr_;
+
+    // Read-only processor identification registers.  This fixed profile is
+    // part of the IA-64 machine configuration and is serialized by the
+    // diagnostic checkpoint format.
+    std::array<uint64_t, NUM_CPUID_REGISTERS> cpuid_;
 
     // Instruction/data translation registers.  The IA-64 selector is an
     // eight-bit field; the implementation may reserve entries, but retaining

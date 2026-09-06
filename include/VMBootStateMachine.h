@@ -378,6 +378,11 @@ public:
      * Clear transition history
      */
     void clearHistory();
+
+    // Restore the non-callback state needed by a deterministic VM checkpoint.
+    // Host timestamps, callbacks, and validation closures are intentionally
+    // not part of guest execution state.
+    void restoreCheckpointState(VMBootState currentState, VMBootState previousState);
     
     /**
      * Get diagnostic information

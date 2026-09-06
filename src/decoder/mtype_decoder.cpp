@@ -94,6 +94,21 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M35 moves a general-register value to PSR.l.  The architectural
+        // x6 field for the to-form is 0x2d; its source operand is r2.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x2d) {
+            result.operation = formats::MFormat::MemOp::MOV_TO_PSR;
+            return true;
+        }
+
+        // M15 indirect processor-identification-register read.  CPUID is an
+        // unprivileged from-form move; the selector is the low eight bits of
+        // GR[r3].
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x17) {
+            result.operation = formats::MFormat::MemOp::MOV_FROM_CPUID;
+            return true;
+        }
+
         // M42 inserts an instruction or data translation register.  The
         // retained Binutils table assigns x6=0x0f to itr.i and x6=0x0e to
         // itr.d; both use r3 as the low-byte TR selector and r2 as the
@@ -456,6 +471,18 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::MOV_FROM_PSR, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, 0, 0);  // mov r1 = psr
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_TO_PSR) {
+            instr = InstructionEx(InstructionType::MOV_TO_PSR, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(0, fmt.r2, 0);  // mov psr.l = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_FROM_CPUID) {
+            instr = InstructionEx(InstructionType::MOV_FROM_CPUID, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // mov r1 = cpuid[r3]
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::MOV_TO_CR) {

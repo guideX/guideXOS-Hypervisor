@@ -8,6 +8,8 @@
 
 namespace ia64 {
 
+struct FramebufferDeviceState;
+
 /**
  * @brief Simple framebuffer device for graphical output
  * 
@@ -53,6 +55,10 @@ public:
 
     // Reset device
     void Reset();
+
+    // Full diagnostic checkpoint support.
+    FramebufferDeviceState createSnapshot() const;
+    bool restoreSnapshot(const FramebufferDeviceState& snapshot);
 
 private:
     uint64_t baseAddress_;

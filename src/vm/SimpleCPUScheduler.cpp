@@ -216,6 +216,29 @@ void SimpleCPUScheduler::setQuantumSize(uint64_t bundleCount) {
     quantumSize_ = bundleCount;
 }
 
+SimpleCPUSchedulerState SimpleCPUScheduler::createSnapshot() const {
+    SimpleCPUSchedulerState snapshot;
+    snapshot.lastCPUIndex = lastCPUIndex_;
+    snapshot.numCPUs = numCPUs_;
+    snapshot.quantumSize = quantumSize_;
+    snapshot.cpuBundleCounters = cpuBundleCounters_;
+    return snapshot;
+}
+
+bool SimpleCPUScheduler::restoreSnapshot(const SimpleCPUSchedulerState& snapshot) {
+    if (snapshot.numCPUs < 0 || snapshot.lastCPUIndex < -1 ||
+        snapshot.lastCPUIndex >= snapshot.numCPUs ||
+        snapshot.cpuBundleCounters.size() != static_cast<size_t>(snapshot.numCPUs) ||
+        snapshot.quantumSize == 0) {
+        return false;
+    }
+    lastCPUIndex_ = snapshot.lastCPUIndex;
+    numCPUs_ = snapshot.numCPUs;
+    quantumSize_ = snapshot.quantumSize;
+    cpuBundleCounters_ = snapshot.cpuBundleCounters;
+    return true;
+}
+
 // ============================================================================
 // Private Helper Methods
 // ============================================================================

@@ -626,7 +626,21 @@ public:
      */
     bool restoreVMSnapshot(const VMStateSnapshot& snapshot);
 
+    /**
+     * Write/read the optional, full-state on-disk diagnostic checkpoint.
+     * The checkpoint can only be written at the post-ExitBootServices kernel
+     * handoff boundary exposed by IA64ISAPlugin.
+     */
+    bool writeDiagnosticCheckpoint(const std::string& path,
+                                   const std::string& guestIdentity,
+                                   std::string* error = nullptr) const;
+    bool readDiagnosticCheckpoint(const std::string& path,
+                                  const std::string& expectedGuestIdentity,
+                                  std::string* error = nullptr);
+    uint64_t getCyclesExecuted() const { return cyclesExecuted_; }
+
 private:
+    friend class VMCheckpointCodec;
     // ========================================================================
     // Subsystems (owned by VM)
     // ========================================================================

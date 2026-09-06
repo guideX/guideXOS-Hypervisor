@@ -88,6 +88,8 @@ enum class InstructionType {
     MOV_TO_BR,  // Move from general register to branch register
     MOV_FROM_AR,// Move from application register to general register
     MOV_FROM_PSR,// Move from processor status register to general register
+    MOV_TO_PSR, // Move the low 32 bits of a general register to PSR.l
+    MOV_FROM_CPUID, // Move from processor identification register to GR
     MOV_TO_AR,  // Move from general register to application register
     MOV_FROM_RR,// Move from region register to general register
     MOV_TO_RR,  // Move from general register to region register

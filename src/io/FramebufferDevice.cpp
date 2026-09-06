@@ -1,4 +1,5 @@
 #include "FramebufferDevice.h"
+#include "VMSnapshot.h"
 #include "BootStageTrace.h"
 #include <cstring>
 #include <algorithm>
@@ -189,6 +190,29 @@ void FramebufferDevice::DrawText(size_t x, size_t y, const char* text, uint32_t 
 
 void FramebufferDevice::Reset() {
     Clear(0xFF000000);
+}
+
+FramebufferDeviceState FramebufferDevice::createSnapshot() const {
+    FramebufferDeviceState snapshot;
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot.baseAddress = baseAddress_;
+    snapshot.width = width_;
+    snapshot.height = height_;
+    snapshot.pitch = pitch_;
+    snapshot.framebuffer = framebuffer_;
+    return snapshot;
+}
+
+bool FramebufferDevice::restoreSnapshot(const FramebufferDeviceState& snapshot) {
+    if (snapshot.width != width_ || snapshot.height != height_ ||
+        snapshot.pitch != pitch_ || snapshot.framebuffer.size() != bufferSize_) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    baseAddress_ = snapshot.baseAddress;
+    framebuffer_ = snapshot.framebuffer;
+    return true;
 }
 
 } // namespace ia64

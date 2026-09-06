@@ -133,6 +133,11 @@ ConsoleDeviceState VirtualConsole::createSnapshot() const {
     state.currentBuffer = buffer_;
     state.outputLines = getAllOutputLines();
     state.totalBytesWritten = getTotalBytesWritten();
+    if (outputBuffer_) {
+        state.completeLines = outputBuffer_->getCompleteLines();
+        state.currentLine = outputBuffer_->getCurrentLine();
+        state.maxLines = outputBuffer_->getMaxLines();
+    }
     return state;
 }
 
@@ -141,12 +146,21 @@ void VirtualConsole::restoreSnapshot(const ConsoleDeviceState& snapshot) {
     buffer_ = snapshot.currentBuffer;
     
     if (outputBuffer_) {
-        outputBuffer_->clear();
-        for (const auto& line : snapshot.outputLines) {
-            for (char c : line) {
-                outputBuffer_->appendChar(c);
+        if (!snapshot.completeLines.empty() || !snapshot.currentLine.empty() ||
+            snapshot.maxLines != 10000 || snapshot.totalBytesWritten == 0) {
+            outputBuffer_->restoreExactState(snapshot.completeLines,
+                                             snapshot.currentLine,
+                                             snapshot.maxLines,
+                                             snapshot.totalBytesWritten);
+        } else {
+            // Backward-compatible restore for legacy in-memory snapshots.
+            outputBuffer_->clear();
+            for (const auto& line : snapshot.outputLines) {
+                for (char c : line) {
+                    outputBuffer_->appendChar(c);
+                }
+                outputBuffer_->appendChar('\n');
             }
-            outputBuffer_->appendChar('\n');
         }
     }
 }

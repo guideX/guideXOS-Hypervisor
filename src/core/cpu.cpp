@@ -32,6 +32,16 @@ void CPUState::Reset() {
     // Clear control registers
     cr_.fill(0);
 
+    // Diagnostic IA-64 processor profile.  CPUID[0:1] contain the vendor
+    // string "GenuineIntel" in the architectural byte order; CPUID[2] is a
+    // disabled serial number, CPUID[3] advertises fixed registers 0..4, and
+    // CPUID[4].lb advertises the long-branch capability implemented here.
+    cpuid_.fill(0);
+    cpuid_[0] = 0x49656e69756e6547ULL; // "GenuineI"
+    cpuid_[1] = 0x000000006c65746eULL; // "ntel"
+    cpuid_[3] = 0x0000000000000004ULL;
+    cpuid_[4] = 0x0000000000000001ULL;
+
     // Clear translation-register state
     itr_.fill(TranslationRegisterState());
     dtr_.fill(TranslationRegisterState());
@@ -382,6 +392,20 @@ void CPUState::SetCR(size_t index, uint64_t value) {
     cr_[index] = value;
 }
 
+uint64_t CPUState::GetCPUID(size_t index) const {
+    if (index >= NUM_CPUID_REGISTERS) {
+        throw std::out_of_range("CPUID register index out of range");
+    }
+    return cpuid_[index];
+}
+
+void CPUState::SetCPUIDForCheckpoint(size_t index, uint64_t value) {
+    if (index >= NUM_CPUID_REGISTERS) {
+        throw std::out_of_range("CPUID register index out of range");
+    }
+    cpuid_[index] = value;
+}
+
 const TranslationRegisterState& CPUState::GetITR(size_t index) const {
     if (index >= NUM_TRANSLATION_REGISTERS) {
         throw std::out_of_range("Instruction translation register index out of range");
@@ -394,6 +418,22 @@ const TranslationRegisterState& CPUState::GetDTR(size_t index) const {
         throw std::out_of_range("Data translation register index out of range");
     }
     return dtr_[index];
+}
+
+void CPUState::SetITRStateForCheckpoint(size_t index,
+                                        const TranslationRegisterState& state) {
+    if (index >= NUM_TRANSLATION_REGISTERS) {
+        throw std::out_of_range("Instruction translation register index out of range");
+    }
+    itr_[index] = state;
+}
+
+void CPUState::SetDTRStateForCheckpoint(size_t index,
+                                        const TranslationRegisterState& state) {
+    if (index >= NUM_TRANSLATION_REGISTERS) {
+        throw std::out_of_range("Data translation register index out of range");
+    }
+    dtr_[index] = state;
 }
 
 void CPUState::SetITR(size_t index, uint64_t physicalAddress,

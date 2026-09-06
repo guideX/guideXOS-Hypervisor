@@ -8,10 +8,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <streambuf>
 #include <vector>
 
 namespace {
@@ -21,9 +23,16 @@ struct Options {
     uint64_t cycles = 2'000'000;
     uint64_t memoryMiB = 512;
     uint64_t keyAfterCycles = 300'000;
+    uint64_t handoffCycles = 1'200'000'000;
+    uint64_t postCheckpointCycles = 2'000'000;
     bool placementTelemetry = false;
     bool instructionTrace = false;
     std::string oraclePath;
+    std::string checkpointWritePath;
+    std::string checkpointReadPath;
+    std::string guestIdentity =
+        "artifact-c:size=13035024;sha256=81B843ACDD1F69456D5D1BF2C6FE7059ECB8730BAAD1405BFFA109872EF23B45;iso-size=4695296000;gzip-sha256=4C62D04431645C8F5F4CC30861DE30A153C47D5B487549B5CFCCF2DE03B8B94";
+    std::string equivalenceLogPath;
     struct InputKey {
         uint16_t scanCode = 0;
         uint16_t unicodeChar = 0;
@@ -114,6 +123,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             if (!parseUnsigned(argv[++i], options.keyAfterCycles)) {
                 return false;
             }
+        } else if (argument == "--handoff-cycles" && i + 1 < argc) {
+            if (!parseUnsigned(argv[++i], options.handoffCycles)) return false;
+        } else if (argument == "--post-checkpoint-cycles" && i + 1 < argc) {
+            if (!parseUnsigned(argv[++i], options.postCheckpointCycles)) return false;
         } else if (argument == "--key" && i + 1 < argc) {
             Options::InputKey key;
             if (!parseInputKey(argv[++i], key)) {
@@ -126,21 +139,36 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.instructionTrace = true;
         } else if (argument == "--verify-oracle" && i + 1 < argc) {
             options.oraclePath = argv[++i];
+        } else if (argument == "--checkpoint-write" && i + 1 < argc) {
+            options.checkpointWritePath = argv[++i];
+        } else if (argument == "--checkpoint-read" && i + 1 < argc) {
+            options.checkpointReadPath = argv[++i];
+        } else if (argument == "--guest-identity" && i + 1 < argc) {
+            options.guestIdentity = argv[++i];
+        } else if (argument == "--equivalence-log" && i + 1 < argc) {
+            options.equivalenceLogPath = argv[++i];
         } else if (argument == "--help" || argument == "-h") {
             return false;
         } else {
             return false;
         }
     }
-    return !options.isoPath.empty() && options.cycles > 0 && options.memoryMiB >= 1;
+    return !options.isoPath.empty() && options.cycles > 0 && options.memoryMiB >= 1 &&
+           options.handoffCycles > 0 && options.postCheckpointCycles > 0 &&
+           !(options.checkpointWritePath.empty() && !options.checkpointReadPath.empty() && !options.keys.empty()) &&
+           !(options.checkpointWritePath.empty() == false && !options.checkpointReadPath.empty());
 }
 
 void printUsage() {
     std::cout << "Usage: ia64_iso_matrix <iso-path> [--cycles N] [--memory-mib N] "
                  "[--key NAME]... [--key-after-cycles N] [--placement-telemetry] "
-                 "[--verify-oracle PATH] [--instruction-trace]\n"
+                 "[--verify-oracle PATH] [--instruction-trace] "
+                 "[--checkpoint-write PATH | --checkpoint-read PATH] "
+                 "[--handoff-cycles N] [--post-checkpoint-cycles N] "
+                 "[--equivalence-log PATH] [--guest-identity ID]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
-                 "--key-after-cycles 300000\n"
+                 "--key-after-cycles 300000 --handoff-cycles 1200000000 "
+                 "--post-checkpoint-cycles 2000000\n"
               << "Keys: enter, linefeed, up, down, left, right, backspace, escape, or one character\n";
 }
 
@@ -151,6 +179,41 @@ bool setEnvironmentFlag(const char* name) {
     return setenv(name, "1", 1) == 0;
 #endif
 }
+
+class NullStreamBuffer final : public std::streambuf {
+protected:
+    int_type overflow(int_type character) override {
+        return traits_type::not_eof(character);
+    }
+};
+
+class ScopedQuietHostDiagnostics final {
+public:
+    explicit ScopedQuietHostDiagnostics(bool enabled)
+        : enabled_(enabled), output_(nullptr), error_(nullptr), null_() {
+        if (enabled_) {
+            output_ = std::cout.rdbuf(&null_);
+            error_ = std::cerr.rdbuf(&null_);
+        }
+    }
+
+    ~ScopedQuietHostDiagnostics() { restore(); }
+
+    void restore() {
+        if (!enabled_) return;
+        std::cout.rdbuf(output_);
+        std::cerr.rdbuf(error_);
+        std::cout.clear();
+        std::cerr.clear();
+        enabled_ = false;
+    }
+
+private:
+    bool enabled_;
+    std::streambuf* output_;
+    std::streambuf* error_;
+    NullStreamBuffer null_;
+};
 
 void verifyPlacementOracle(const ia64::VirtualMachine& vm,
                            const ia64::IA64ISAPlugin::EfiTraceSummary& summary,
@@ -209,6 +272,115 @@ void verifyPlacementOracle(const ia64::VirtualMachine& vm,
               << " invalidRanges=" << invalidRanges << std::endl;
 }
 
+struct ContinuationRecord {
+    struct Instruction {
+        uint64_t ip = 0;
+        size_t slot = 0;
+        uint64_t itc = 0;
+    };
+    uint64_t cycles = 0;
+    std::vector<Instruction> firstInstructions;
+    ia64::CPUState cpu;
+    ia64::FramebufferDeviceState framebuffer;
+    std::vector<std::string> consoleLines;
+    uint64_t consoleBytes = 0;
+};
+
+ia64::IA64ISAPlugin* getPlugin(ia64::VirtualMachine& vm) {
+    ia64::CPUContext* context = vm.getCPUContext(0);
+    return context == nullptr
+        ? nullptr
+        : dynamic_cast<ia64::IA64ISAPlugin*>(context->isaPlugin.get());
+}
+
+uint64_t canonicalKernelVma(uint64_t rawIP) {
+    constexpr uint64_t virtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t physicalBase = 0x04000000ULL;
+    constexpr uint64_t span = 0x01000000ULL;
+    const uint64_t bundleIP = rawIP & ~0xFULL;
+    if (bundleIP >= physicalBase && bundleIP - physicalBase < span) {
+        return virtualBase + bundleIP - physicalBase;
+    }
+    return bundleIP;
+}
+
+ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles) {
+    ContinuationRecord record;
+    record.firstInstructions.reserve(64);
+    for (uint64_t i = 0; i < cycles; ++i) {
+        ia64::IA64ISAPlugin* plugin = getPlugin(vm);
+        if (plugin != nullptr && record.firstInstructions.size() < 64) {
+            record.firstInstructions.push_back({
+                vm.getIP(0), plugin->getCurrentSlot(), vm.getCPUState(0).GetAR(44)});
+        }
+        if (!vm.step()) break;
+        ++record.cycles;
+    }
+    record.cpu = vm.getCPUState(0);
+    record.framebuffer = vm.getFramebufferDevice()->createSnapshot();
+    record.consoleLines = vm.getConsoleOutput();
+    record.consoleBytes = vm.getConsoleTotalBytes();
+    return record;
+}
+
+bool cpuStateEqual(const ia64::CPUState& left, const ia64::CPUState& right) {
+    for (size_t i = 0; i < ia64::NUM_GENERAL_REGISTERS; ++i) {
+        if (left.GetGRPhysical(i) != right.GetGRPhysical(i) ||
+            left.GetGRNaTPhysical(i) != right.GetGRNaTPhysical(i)) return false;
+    }
+    for (size_t i = 0; i < ia64::NUM_FLOAT_REGISTERS; ++i) {
+        uint8_t leftValue[16] = {}, rightValue[16] = {};
+        left.GetFRPhysical(i, leftValue); right.GetFRPhysical(i, rightValue);
+        if (std::memcmp(leftValue, rightValue, sizeof(leftValue)) != 0) return false;
+    }
+    for (size_t i = 0; i < ia64::NUM_PREDICATE_REGISTERS; ++i) {
+        if (left.GetPRPhysical(i) != right.GetPRPhysical(i)) return false;
+    }
+    for (size_t i = 0; i < ia64::NUM_BRANCH_REGISTERS; ++i) if (left.GetBR(i) != right.GetBR(i)) return false;
+    for (size_t i = 0; i < ia64::NUM_REGION_REGISTERS; ++i) if (left.GetRR(i) != right.GetRR(i)) return false;
+    for (size_t i = 0; i < ia64::NUM_CONTROL_REGISTERS; ++i) if (left.GetCR(i) != right.GetCR(i)) return false;
+    for (size_t set = 0; set < 2; ++set) {
+        for (size_t i = 0; i < ia64::NUM_TRANSLATION_REGISTERS; ++i) {
+            const auto& a = set == 0 ? left.GetITR(i) : left.GetDTR(i);
+            const auto& b = set == 0 ? right.GetITR(i) : right.GetDTR(i);
+            if (a.physicalAddress != b.physicalAddress || a.virtualAddress != b.virtualAddress ||
+                a.itir != b.itir || a.regionValue != b.regionValue || a.valid != b.valid) return false;
+        }
+    }
+    for (size_t i = 0; i < ia64::NUM_APPLICATION_REGISTERS; ++i) if (left.GetAR(i) != right.GetAR(i)) return false;
+    const auto& leftRse = left.GetRSEState();
+    const auto& rightRse = right.GetRSEState();
+    return left.GetIP() == right.GetIP() && left.GetCFM() == right.GetCFM() && left.GetPSR() == right.GetPSR() &&
+           leftRse.cfm == rightRse.cfm && leftRse.rsc == rightRse.rsc &&
+           leftRse.bsp == rightRse.bsp && leftRse.bspstore == rightRse.bspstore &&
+           leftRse.rnat == rightRse.rnat && leftRse.pfs == rightRse.pfs &&
+           leftRse.sof == rightRse.sof && leftRse.sol == rightRse.sol && leftRse.sor == rightRse.sor;
+}
+
+void writeContinuationLog(const std::string& path,
+                          const char* label,
+                          const ContinuationRecord& record,
+                          uint64_t checkpointIP) {
+    if (path.empty()) return;
+    std::ofstream output(path, std::ios::trunc);
+    if (!output) return;
+    output << "label=" << label << " cycles=" << record.cycles
+           << " first_ip=0x" << std::hex
+           << (record.firstInstructions.empty() ? checkpointIP : record.firstInstructions.front().ip)
+           << " first_canonical_vma=0x"
+           << canonicalKernelVma(record.firstInstructions.empty() ? checkpointIP : record.firstInstructions.front().ip)
+           << std::dec << "\n";
+    for (size_t i = 0; i < record.firstInstructions.size(); ++i) {
+        output << "instruction=" << i << " ip=0x" << std::hex << record.firstInstructions[i].ip
+               << " canonical_vma=0x" << canonicalKernelVma(record.firstInstructions[i].ip)
+               << " slot=" << std::dec << record.firstInstructions[i].slot
+               << " itc=" << record.firstInstructions[i].itc << "\n";
+    }
+    output << "final_ip=0x" << std::hex << record.cpu.GetIP()
+           << " final_canonical_vma=0x" << canonicalKernelVma(record.cpu.GetIP())
+           << " final_itc=" << std::dec << record.cpu.GetAR(44) << "\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -229,10 +401,19 @@ int main(int argc, char** argv) {
     if (options.instructionTrace) {
         setEnvironmentFlag("GUIDEXOS_IA64_INSTRUCTION_TRACE");
     }
+    if (!options.checkpointWritePath.empty() || !options.checkpointReadPath.empty()) {
+        // This only suppresses host-side per-instruction diagnostics.  It does
+        // not change guest execution, strict validation, or recovery policy.
+        setEnvironmentFlag("GUIDEXOS_SUPPRESS_VERBOSE_TRACE");
+        setEnvironmentFlag("GUIDEXOS_IA64_A5D_TRACE");
+    }
 
     if (std::getenv("GUIDEXOS_MATRIX_QUIET") != nullptr) {
         std::cout.setstate(std::ios_base::failbit);
     }
+
+    ScopedQuietHostDiagnostics quietCheckpointDiagnostics(
+        !options.checkpointWritePath.empty() || !options.checkpointReadPath.empty());
 
     try {
         ia64::Logger::getInstance().setLogLevel(ia64::LogLevel::INFO);
@@ -274,6 +455,176 @@ int main(int argc, char** argv) {
                       << " ip=0x" << std::hex << vm->getIP(0) << std::dec
                       << std::endl;
         };
+
+        if (!options.checkpointReadPath.empty()) {
+            ia64::VirtualMachine* vm = manager.getVMDirect(vmId);
+            if (vm == nullptr) {
+                std::cerr << "[IA64-CHECKPOINT] checkpoint restore VM unavailable\n";
+                return 1;
+            }
+            std::string checkpointError;
+            if (!vm->readDiagnosticCheckpoint(options.checkpointReadPath,
+                                              options.guestIdentity,
+                                              &checkpointError)) {
+                quietCheckpointDiagnostics.restore();
+                std::cerr << "[IA64-CHECKPOINT] restore-failed error=\""
+                          << checkpointError << "\"\n";
+                return 1;
+            }
+            const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles);
+            const std::string restoreLog = options.equivalenceLogPath.empty()
+                ? std::string()
+                : options.equivalenceLogPath + ".restore.log";
+            writeContinuationLog(restoreLog, "restore", restored, vm->getIP(0));
+            quietCheckpointDiagnostics.restore();
+            std::cout << "[IA64-CHECKPOINT] restored path=\"" << options.checkpointReadPath
+                      << "\" cycle=" << vm->getCyclesExecuted()
+                      << " rawIP=0x" << std::hex << vm->getIP(0)
+                      << " canonicalVMA=0x" << canonicalKernelVma(vm->getIP(0))
+                      << std::dec << " slot=0\n";
+            std::cerr << "[IA64-CHECKPOINT] restore-continuation cycles=" << restored.cycles
+                      << " finalIP=0x" << std::hex << restored.cpu.GetIP()
+                      << " finalCanonicalVMA=0x" << canonicalKernelVma(restored.cpu.GetIP())
+                      << std::dec << " strictRecovery=1\n";
+            return 0;
+        }
+
+        if (!options.checkpointWritePath.empty()) {
+            if (options.keys.empty()) {
+                std::cerr << "[IA64-CHECKPOINT] write mode requires scripted input (use --key enter)\n";
+                return 2;
+            }
+            if (options.keyAfterCycles >= options.handoffCycles) {
+                std::cerr << "[IA64-CHECKPOINT] key boundary must precede handoff search bound\n";
+                return 2;
+            }
+            const uint64_t warmupExecuted = manager.runVM(vmId, options.keyAfterCycles);
+            reportRuntime("before-input");
+            if (warmupExecuted != options.keyAfterCycles) {
+                std::cerr << "[IA64-CHECKPOINT] stopped before scripted input boundary requested="
+                          << options.keyAfterCycles << " executed=" << warmupExecuted << "\n";
+                return 1;
+            }
+            ia64::VirtualMachine* vm = manager.getVMDirect(vmId);
+            ia64::IA64ISAPlugin* plugin = vm == nullptr ? nullptr : getPlugin(*vm);
+            if (plugin == nullptr) {
+                std::cerr << "[IA64-CHECKPOINT] IA-64 plugin unavailable\n";
+                return 1;
+            }
+            for (const auto& key : options.keys) {
+                plugin->enqueueEfiInputKey(key.scanCode, key.unicodeChar);
+                std::cout << "[IA64-MATRIX] queued key=" << key.name
+                          << " scan=0x" << std::hex << key.scanCode
+                          << " unicode=0x" << key.unicodeChar << std::dec << "\n";
+            }
+
+            uint64_t handoffSearchCycles = 0;
+            ia64::IA64ISAPlugin::EfiHandoffCheckpointBoundary boundary;
+            while (handoffSearchCycles < options.handoffCycles && vm->getState() != ia64::VMState::ERROR) {
+                if (!vm->step()) break;
+                ++handoffSearchCycles;
+                if (plugin->hasEfiHandoffCheckpointBoundary()) {
+                    boundary = plugin->consumeEfiHandoffCheckpointBoundary();
+                    break;
+                }
+            }
+            if (!boundary.valid) {
+                quietCheckpointDiagnostics.restore();
+                std::cerr << "[IA64-CHECKPOINT] handoff-not-reached searched="
+                          << handoffSearchCycles << " strictRecovery=1\n";
+                return 1;
+            }
+            std::cout << "[IA64-CHECKPOINT] boundary cycle=" << vm->getCyclesExecuted()
+                      << " callerRawIP=0x" << std::hex << boundary.callerIP
+                      << " callerCanonicalVMA=0x" << canonicalKernelVma(boundary.callerIP)
+                      << " callerSlot=" << std::dec << boundary.callerSlot
+                      << " rawTarget=0x" << std::hex << boundary.rawTarget
+                      << " checkpointRawIP=0x" << boundary.targetIP
+                      << " checkpointCanonicalVMA=0x" << canonicalKernelVma(boundary.targetIP)
+                      << " checkpointSlot=" << std::dec << boundary.targetSlot << "\n";
+            std::string checkpointError;
+            if (!vm->writeDiagnosticCheckpoint(options.checkpointWritePath,
+                                                options.guestIdentity,
+                                                &checkpointError)) {
+                quietCheckpointDiagnostics.restore();
+                std::cerr << "[IA64-CHECKPOINT] write-failed error=\""
+                          << checkpointError << "\"\n";
+                return 1;
+            }
+            const std::string manifestPath = options.checkpointWritePath + ".manifest.txt";
+            std::ofstream manifest(manifestPath, std::ios::trunc);
+            if (manifest) {
+                manifest << "format_version=1\narchitecture=IA-64\ncheckpoint_kind=after-ExitBootServices-kernel-handoff\n"
+                         << "build_identity=guideXOS-Hypervisor/IA64-checkpoint-v1\n"
+                         << "guest_identity=" << options.guestIdentity << "\n"
+                         << "checkpoint_cycle=" << vm->getCyclesExecuted() << "\n"
+                         << "checkpoint_itc=0x" << std::hex << plugin->getCPUState().GetAR(44)
+                         << "\ncaller_raw_ip=0x" << boundary.callerIP
+                         << "\ncaller_canonical_vma=0x" << canonicalKernelVma(boundary.callerIP)
+                         << "\ncaller_slot=" << std::dec << boundary.callerSlot
+                         << "\nraw_target=0x" << std::hex << boundary.rawTarget
+                         << "\ncheckpoint_raw_ip=0x" << std::hex << boundary.targetIP
+                         << "\ncheckpoint_canonical_vma=0x" << canonicalKernelVma(boundary.targetIP)
+                         << "\ncheckpoint_slot=" << std::dec << boundary.targetSlot
+                         << "\nfile_size=" << std::filesystem::file_size(options.checkpointWritePath) << "\n";
+            }
+            std::cout << "[IA64-CHECKPOINT] written path=\"" << options.checkpointWritePath
+                      << "\" manifest=\"" << manifestPath << "\"\n";
+
+            const uint64_t checkpointIP = vm->getIP(0);
+            const ContinuationRecord control = runContinuation(*vm, options.postCheckpointCycles);
+            const std::string controlLog = options.equivalenceLogPath.empty()
+                ? std::string()
+                : options.equivalenceLogPath + ".control.log";
+            const std::string restoreLog = options.equivalenceLogPath.empty()
+                ? std::string()
+                : options.equivalenceLogPath + ".restore.log";
+            writeContinuationLog(controlLog, "control", control, checkpointIP);
+            const std::vector<uint8_t> controlRam(
+                vm->getMemory().GetRawData(),
+                vm->getMemory().GetRawData() + vm->getMemory().GetTotalSize());
+            std::string restoreError;
+            if (!vm->readDiagnosticCheckpoint(options.checkpointWritePath,
+                                              options.guestIdentity,
+                                              &restoreError)) {
+                quietCheckpointDiagnostics.restore();
+                std::cerr << "[IA64-CHECKPOINT] in-process restore-failed error=\""
+                          << restoreError << "\"\n";
+                return 1;
+            }
+            const uint64_t firstRestoreIP = vm->getIP(0);
+            const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles);
+            writeContinuationLog(restoreLog, "restore", restored, firstRestoreIP);
+
+            bool traceEqual = control.firstInstructions.size() == restored.firstInstructions.size();
+            for (size_t i = 0; traceEqual && i < control.firstInstructions.size(); ++i) {
+                traceEqual = control.firstInstructions[i].ip == restored.firstInstructions[i].ip &&
+                             control.firstInstructions[i].slot == restored.firstInstructions[i].slot &&
+                             control.firstInstructions[i].itc == restored.firstInstructions[i].itc;
+            }
+            const bool cpuEqual = cpuStateEqual(control.cpu, restored.cpu);
+            const bool memoryEqual = controlRam.size() == vm->getMemory().GetTotalSize() &&
+                                     std::memcmp(controlRam.data(), vm->getMemory().GetRawData(), controlRam.size()) == 0;
+            const bool framebufferEqual = control.framebuffer.baseAddress == restored.framebuffer.baseAddress &&
+                                          control.framebuffer.framebuffer == restored.framebuffer.framebuffer;
+            const bool consoleEqual = control.consoleLines == restored.consoleLines &&
+                                      control.consoleBytes == restored.consoleBytes;
+            quietCheckpointDiagnostics.restore();
+            std::cerr << "[IA64-CHECKPOINT] equivalence controlCycles=" << control.cycles
+                      << " restoreCycles=" << restored.cycles
+                      << " firstIPControl=0x" << std::hex
+                      << (control.firstInstructions.empty() ? checkpointIP : control.firstInstructions.front().ip)
+                      << " firstIPRestore=0x"
+                      << (restored.firstInstructions.empty() ? firstRestoreIP : restored.firstInstructions.front().ip)
+                      << std::dec << " instructionTrace=" << (traceEqual ? "equal" : "different")
+                      << " cpu=" << (cpuEqual ? "equal" : "different")
+                      << " ram=" << (memoryEqual ? "equal" : "different")
+                      << " framebuffer=" << (framebufferEqual ? "equal" : "different")
+                      << " console=" << (consoleEqual ? "equal" : "different")
+                      << " result=" << (traceEqual && cpuEqual && memoryEqual && framebufferEqual && consoleEqual ? "PASS" : "FAIL")
+                      << " strictRecovery=1\n";
+            return (traceEqual && cpuEqual && memoryEqual && framebufferEqual && consoleEqual) ? 0 : 1;
+        }
 
         uint64_t executed = 0;
         if (options.keys.empty()) {

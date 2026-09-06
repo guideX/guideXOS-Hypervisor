@@ -105,6 +105,8 @@ InterruptControllerState BasicInterruptController::createSnapshot() const {
     
     state.vectorBase = 0;  // Not currently used
     state.enabled = true;  // Always enabled in current implementation
+    state.sources = sources_;
+    state.nextSourceId = nextSourceId_;
     
     return state;
 }
@@ -123,6 +125,10 @@ void BasicInterruptController::restoreSnapshot(const InterruptControllerState& s
         if (source.vector < snapshot.maskedInterrupts.size()) {
             source.enabled = !snapshot.maskedInterrupts[source.vector];
         }
+    }
+    if (!snapshot.sources.empty()) {
+        sources_ = snapshot.sources;
+        nextSourceId_ = snapshot.nextSourceId;
     }
 }
 

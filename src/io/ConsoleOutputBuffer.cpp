@@ -197,6 +197,29 @@ void ConsoleOutputBuffer::setMaxLines(size_t maxLines) {
     enforceMaxLines();
 }
 
+std::vector<std::string> ConsoleOutputBuffer::getCompleteLines() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::vector<std::string>(lines_.begin(), lines_.end());
+}
+
+std::string ConsoleOutputBuffer::getCurrentLine() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return currentLine_;
+}
+
+void ConsoleOutputBuffer::restoreExactState(
+    const std::vector<std::string>& completeLines,
+    const std::string& currentLine,
+    size_t maxLines,
+    uint64_t totalBytesWritten) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    maxLines_ = maxLines;
+    lines_.assign(completeLines.begin(), completeLines.end());
+    currentLine_ = currentLine;
+    totalBytesWritten_ = totalBytesWritten;
+    enforceMaxLines();
+}
+
 void ConsoleOutputBuffer::completeLine() {
     if (currentLine_.empty() || currentLine_.back() != '\n') {
         return;

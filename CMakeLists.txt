@@ -91,6 +91,7 @@ set(VM_SOURCES
     src/vm/BootTraceSystem.cpp
     src/vm/KernelPanic.cpp
     src/vm/VMSnapshotManager.cpp
+    src/vm/VMCheckpoint.cpp
 )
 
 set(STORAGE_SOURCES
@@ -171,6 +172,7 @@ set(HEADERS
     include/CPUContext.h
     include/IVirtualMachine.h
     include/VirtualMachine.h
+    include/VMCheckpoint.h
     include/VMConfiguration.h
     include/VMMetadata.h
     include/VMManager.h
@@ -279,6 +281,19 @@ if(MSVC)
     target_compile_options(test_efi_memory_map PRIVATE /W4)
 else()
     target_compile_options(test_efi_memory_map PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Full-machine diagnostic checkpoint format and state round-trip tests
+add_executable(test_vm_checkpoint
+    tests/test_vm_checkpoint.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(MSVC)
+    target_compile_options(test_vm_checkpoint PRIVATE /W4)
+else()
+    target_compile_options(test_vm_checkpoint PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # RISC-V RV64I decoder smoke tests
@@ -570,6 +585,7 @@ enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
 add_test(NAME NewInstructionTests COMMAND test_new_instructions)
 add_test(NAME EfiMemoryMapTests COMMAND test_efi_memory_map)
+add_test(NAME VMCheckpointTests COMMAND test_vm_checkpoint)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)

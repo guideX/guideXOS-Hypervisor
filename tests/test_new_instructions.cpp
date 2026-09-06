@@ -713,6 +713,18 @@ void test_latest_boot_log_blockers() {
     assert_equal("kernel direct-map load should translate canonical address",
                  kernelDataValue, kernelCpu.GetGR(16));
 
+    // The post-EFI kernel also references the same flat RAM through the
+    // region-6 uncached alias observed at the first strict replay frontier.
+    const uint64_t uncachedVirtualData = 0xc0000001008e1610ULL;
+    const uint64_t uncachedPhysicalData = 0x008e1610ULL;
+    const uint64_t uncachedDataValue = 0x5aULL;
+    kernelMemory.write<uint8_t>(uncachedPhysicalData, uncachedDataValue);
+    CPUState uncachedCpu;
+    uncachedCpu.SetGR(2, uncachedVirtualData);
+    kernelLoad.Execute(uncachedCpu, kernelMemory);
+    assert_equal("kernel direct-map load should translate region-6 alias",
+                 uncachedDataValue, uncachedCpu.GetGR(16));
+
     // Exact Linux entry translation instruction at 0x047f8150.  Retained
     // Binutils 2.19.1 identifies raw 0x20f02000c0 as tpa r3=r2.
     InstructionEx tpa = decoder.DecodeSlot(0x20f02000c0ULL, UnitType::M_UNIT, 0x047f8150);
@@ -1765,6 +1777,60 @@ void test_ia64_control_register_moves() {
     assert_equal("mov-from-PSR should copy the processor status register",
                  0x1010084a2008ULL,
                  cpu.GetGR(47));
+
+    // Exact Linux instruction at canonical VMA 0xA000000100012BA0.
+    // Retained Binutils disassembles raw 0x216804e000 as "mov psr.l=r39".
+    const uint64_t rawToPsr = 0x216804e000ULL;
+    const InstructionEx toPsr = decoder.DecodeSlot(
+        rawToPsr, UnitType::M_UNIT, 0x04012ba0);
+    assert_true("Linux mov-to-PSR should decode",
+                toPsr.GetType() == InstructionType::MOV_TO_PSR);
+    assert_equal("mov-to-PSR source register", 39, toPsr.GetSrc1());
+    assert_equal("mov-to-PSR qualifying predicate", 0, toPsr.GetPredicate());
+    assert_string("mov-to-PSR disassembly",
+                  "mov psr.l = r39",
+                  toPsr.GetDisassembly());
+
+    cpu.SetPSR(0xA5A500001010084AULL);
+    cpu.SetGR(39, 0xFFFFFFFF12345678ULL);
+    toPsr.Execute(cpu, memory);
+    assert_equal("mov-to-PSR should replace only PSR.l",
+                 0xA5A5000012345678ULL,
+                 cpu.GetPSR());
+
+    // Exact post-A5D Linux instruction at canonical VMA
+    // 0xA00000010080DDC0.  Retained Binutils disassembles raw
+    // 0x20B80003C0 as "mov r15=cpuid[r0]".
+    const uint64_t rawFromCpuid = 0x20b80003c0ULL;
+    const InstructionEx fromCpuid = decoder.DecodeSlot(
+        rawFromCpuid, UnitType::M_UNIT, 0x0480ddc0);
+    assert_true("Linux mov-from-CPUID should decode",
+                fromCpuid.GetType() == InstructionType::MOV_FROM_CPUID);
+    assert_equal("mov-from-CPUID destination register", 15, fromCpuid.GetDst());
+    assert_equal("mov-from-CPUID selector register", 0, fromCpuid.GetSrc1());
+    assert_equal("mov-from-CPUID qualifying predicate", 0, fromCpuid.GetPredicate());
+    assert_string("mov-from-CPUID disassembly",
+                  "mov r15 = cpuid[r0]",
+                  fromCpuid.GetDisassembly());
+
+    fromCpuid.Execute(cpu, memory);
+    assert_equal("mov-from-CPUID should return the vendor low word",
+                 0x49656e69756e6547ULL,
+                 cpu.GetGR(15));
+
+    InstructionEx indexedCpuid(InstructionType::MOV_FROM_CPUID, UnitType::M_UNIT);
+    indexedCpuid.SetOperands(10, 11, 0);
+    cpu.SetGR(11, 0x102ULL); // selector uses only GR[11]{7:0}: CPUID[2]
+    indexedCpuid.Execute(cpu, memory);
+    assert_equal("mov-from-CPUID should use the low selector byte", 0, cpu.GetGR(10));
+
+    cpu.SetGR(10, 0xfeedfaceULL);
+    indexedCpuid.SetPredicate(1);
+    cpu.SetPR(1, false);
+    indexedCpuid.Execute(cpu, memory);
+    assert_equal("false-predicated mov-from-CPUID preserves its destination",
+                 0xfeedfaceULL,
+                 cpu.GetGR(10));
 
     std::cout << "  ? IA-64 indirect control-register moves passed" << std::endl;
 }

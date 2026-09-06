@@ -234,6 +234,27 @@ public:
     };
 
     EfiTraceSummary getEfiTraceSummary() const;
+
+    struct EfiHandoffCheckpointBoundary {
+        bool valid = false;
+        uint64_t callerIP = 0;
+        size_t callerSlot = 0;
+        uint64_t rawTarget = 0;
+        uint64_t targetIP = 0;
+        size_t targetSlot = 0;
+    };
+
+    // The boundary is raised only after the existing successful
+    // ExitBootServices-to-kernel control-flow observation.  It is consumed by
+    // the VM after instruction accounting and timer delivery complete.
+    bool hasEfiHandoffCheckpointBoundary() const { return efiHandoffBoundaryPending_; }
+    EfiHandoffCheckpointBoundary consumeEfiHandoffCheckpointBoundary();
+
+    // Full IA-64/plugin state for the diagnostic checkpoint facility.  This is
+    // intentionally separate from the legacy IISA serialization contract,
+    // whose format predates NaT, translation-register, and RSE persistence.
+    std::vector<uint8_t> serializeCheckpointState() const;
+    bool deserializeCheckpointState(const std::vector<uint8_t>& data);
     
     /**
      * Get optional components
@@ -514,6 +535,9 @@ private:
     uint64_t pendingRegisterConfigEntryTarget_;
     uint64_t pendingRegisterConfigEntryCallsite_;
     bool pendingRegisterConfigEntryArmed_;
+    bool efiHandoffBoundaryPending_;
+    EfiHandoffCheckpointBoundary efiHandoffBoundary_;
+    bool efiHandoffCheckpointConsumed_;
 };
 
 /**

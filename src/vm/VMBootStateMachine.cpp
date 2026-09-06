@@ -264,6 +264,17 @@ void VMBootStateMachine::clearHistory() {
     transitionHistory_.clear();
 }
 
+void VMBootStateMachine::restoreCheckpointState(VMBootState currentState,
+                                                VMBootState previousState) {
+    currentState_ = currentState;
+    previousState_ = previousState;
+    currentStateEntryTime_ = 0;
+    powerOnTime_ = 0;
+    bootCompleteTime_ = 0;
+    transitionHistory_.clear();
+    stateTimeAccumulator_.clear();
+}
+
 std::string VMBootStateMachine::getDiagnostics() const {
     std::ostringstream oss;
     

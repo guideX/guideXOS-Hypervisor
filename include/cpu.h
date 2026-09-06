@@ -25,6 +25,8 @@ struct CPURuntimeStateSnapshot {
     bool bundleValid;
     std::vector<uint8_t> pendingInterrupts;
     uint64_t interruptVectorBase;
+    bool halted;
+    std::vector<uint64_t> pendingCallInputs;
 
     CPURuntimeStateSnapshot()
         : architecturalState()
@@ -32,7 +34,9 @@ struct CPURuntimeStateSnapshot {
         , currentSlot(0)
         , bundleValid(false)
         , pendingInterrupts()
-        , interruptVectorBase(0) {}
+        , interruptVectorBase(0)
+        , halted(false)
+        , pendingCallInputs() {}
 };
 
 // Forward declarations

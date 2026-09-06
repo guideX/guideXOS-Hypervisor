@@ -82,6 +82,21 @@ bool shouldEmitGpRelativeDataDiag() {
     return enabled;
 }
 
+bool shouldEmitA5dTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_A5D_TRACE");
+    return enabled;
+}
+
+bool isA5dTraceIP(uint64_t ip) {
+    // The replay executes the kernel image at its flat physical placement.
+    // Keep the helper range containing POPCNT, and include the A5D function
+    // plus its nearby caller so the trace can prove the complete call/return
+    // path without enabling a process-wide instruction trace.
+    return (ip >= 0x043F0000ULL && ip < 0x043F4000ULL) ||
+           (ip >= 0x04A5D400ULL && ip < 0x04A5D560ULL) ||
+           (ip >= 0x04A11200ULL && ip < 0x04A11320ULL);
+}
+
 constexpr uint64_t kRegisterConfigCallsiteA = 0xEC60ULL;
 constexpr uint64_t kRegisterConfigCallsiteB = 0xECA0ULL;
 constexpr uint64_t kRegisterConfigComputedListHead0Delta = 0x1FAFB0ULL;
@@ -218,7 +233,7 @@ uint64_t EFI_UNSUPPORTED_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiUnsuppor
 uint64_t EFI_SUCCESS_STUB_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSuccessStubCodeOffset;
 uint64_t EFI_LOADED_IMAGE_LOAD_OPTIONS_TRACE_ADDR = EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR;
 uint64_t EFI_POST_SIMPLEFS_OUT_WATCH_ADDR = EFI_HANDOFF_REGION_BASE + 0x193010ULL;
-constexpr bool IA64_STRICT_RECOVERY = false;
+constexpr bool IA64_STRICT_RECOVERY = true;
 constexpr uint64_t IA64_EXECUTABLE_IMAGE_BASE = 0x100000ULL;
 constexpr uint64_t IA64_EXECUTABLE_IMAGE_END = 0x200000ULL;
 using EfiGuid = std::array<uint8_t, 16>;
@@ -2145,7 +2160,10 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , completedCallFrames_()
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
-    , pendingRegisterConfigEntryArmed_(false) {
+    , pendingRegisterConfigEntryArmed_(false)
+    , efiHandoffBoundaryPending_(false)
+    , efiHandoffBoundary_()
+    , efiHandoffCheckpointConsumed_(false) {
     resetEfiProtocolAttachments();
 }
 
@@ -2231,7 +2249,10 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , completedCallFrames_()
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
-    , pendingRegisterConfigEntryArmed_(false) {
+    , pendingRegisterConfigEntryArmed_(false)
+    , efiHandoffBoundaryPending_(false)
+    , efiHandoffBoundary_()
+    , efiHandoffCheckpointConsumed_(false) {
     resetEfiProtocolAttachments();
 }
 
@@ -2518,6 +2539,9 @@ void IA64ISAPlugin::reset() {
     pendingRegisterConfigEntryTarget_ = 0;
     pendingRegisterConfigEntryCallsite_ = 0;
     pendingRegisterConfigEntryArmed_ = false;
+    efiHandoffBoundaryPending_ = false;
+    efiHandoffBoundary_ = EfiHandoffCheckpointBoundary();
+    efiHandoffCheckpointConsumed_ = false;
 }
 
 ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
@@ -3003,6 +3027,35 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             cachedInstruction_.GetType() == InstructionType::BR_RET ||
             cachedInstruction_.GetType() == InstructionType::BR_CLOOP ||
             moduloLoopBranch;
+        const bool traceA5d = shouldEmitA5dTrace() && isA5dTraceIP(currentIP);
+        if (traceA5d) {
+            const CPUState& traceCPU = state_.getCPUState();
+            std::ostringstream trace;
+            trace << "cycle=" << traceCPU.GetAR(44)
+                  << " ip=" << BootStageTrace::Hex(currentIP)
+                  << " canonicalVMA=" << BootStageTrace::Hex(
+                         currentIP >= 0x04000000ULL
+                             ? 0xA000000100000000ULL + currentIP - 0x04000000ULL
+                             : currentIP)
+                  << " slot=" << state_.currentSlot_
+                  << " disasm=\"" << decodeResult.disassembly << "\""
+                  << " pred=p" << static_cast<unsigned>(predicate)
+                  << " livePred=" << (livePredicateTrue ? 1 : 0)
+                  << " p6=" << traceCPU.GetPR(6) << " p7=" << traceCPU.GetPR(7)
+                  << " r8=" << BootStageTrace::Hex(traceCPU.GetGR(8))
+                  << " r32=" << BootStageTrace::Hex(traceCPU.GetGR(32))
+                  << " r33=" << BootStageTrace::Hex(traceCPU.GetGR(33))
+                  << " r35=" << BootStageTrace::Hex(traceCPU.GetGR(35))
+                  << " r38=" << BootStageTrace::Hex(traceCPU.GetGR(38))
+                  << " lc=" << BootStageTrace::Hex(traceCPU.GetAR(65))
+                  << " ec=" << BootStageTrace::Hex(traceCPU.GetAR(66));
+            if (cachedInstruction_.GetType() == InstructionType::POPCNT) {
+                trace << " popcntInput=" << BootStageTrace::Hex(traceCPU.GetGR(cachedInstruction_.GetSrc1()))
+                      << " popcntDst=r" << static_cast<unsigned>(cachedInstruction_.GetDst());
+            }
+            std::cout << "[IA64-A5D] pre " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_A5D_PRE", trace.str());
+        }
         switch (cachedInstruction_.GetType()) {
             case InstructionType::BR_COND:
                 if (livePredicateTrue) {
@@ -4303,6 +4356,29 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             }
         }
 
+        if (traceA5d && branchInstruction && !isBranch) {
+            // A false-predicate conditional branch does not enter the normal
+            // branch path, but its skipped decision is essential evidence at
+            // the A5D sentinel.  Log the statically decoded target and the
+            // post-instruction predicates so the trace distinguishes
+            // fall-through from an omitted/incorrect branch.
+            const CPUState& traceCPU = state_.getCPUState();
+            std::ostringstream trace;
+            trace << "cycle=" << traceCPU.GetAR(44)
+                  << " ip=" << BootStageTrace::Hex(currentIP)
+                  << " slot=" << state_.currentSlot_
+                  << " kind=skipped"
+                  << " target=" << BootStageTrace::Hex(branchTargetValue)
+                  << " rawTarget=" << BootStageTrace::Hex(branchTargetValue)
+                  << " pred=p" << static_cast<unsigned>(predicate)
+                  << " livePred=" << (livePredicateTrue ? 1 : 0)
+                  << " p6=" << traceCPU.GetPR(6) << " p7=" << traceCPU.GetPR(7)
+                  << " r33=" << BootStageTrace::Hex(traceCPU.GetGR(33))
+                  << " r38=" << BootStageTrace::Hex(traceCPU.GetGR(38));
+            std::cout << "[IA64-A5D] branch-skip " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_A5D_BRANCH_SKIP", trace.str());
+        }
+
         // Direct calls/branches can also land on IA-64 function descriptors.
         // Resolve those before stub dispatch so imported EFI entry points jump
         // to code rather than executing the descriptor payload as a bundle.
@@ -4359,6 +4435,24 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             if (cachedInstruction_.GetType() == InstructionType::ALLOC) {
                 applyPendingCallInputRegisters();
             }
+        }
+
+        if (traceA5d && cachedInstruction_.GetType() == InstructionType::POPCNT) {
+            const CPUState& traceCPU = state_.getCPUState();
+            std::ostringstream trace;
+            trace << "cycle=" << traceCPU.GetAR(44)
+                  << " ip=" << BootStageTrace::Hex(currentIP)
+                  << " slot=" << state_.currentSlot_
+                  << " input=" << BootStageTrace::Hex(traceCPU.GetGR(cachedInstruction_.GetSrc1()))
+                  << " result=" << BootStageTrace::Hex(traceCPU.GetGR(cachedInstruction_.GetDst()))
+                  << " dst=r" << static_cast<unsigned>(cachedInstruction_.GetDst())
+                  << " pred=p" << static_cast<unsigned>(predicate)
+                  << " livePred=" << (livePredicateTrue ? 1 : 0)
+                  << " p6=" << traceCPU.GetPR(6) << " p7=" << traceCPU.GetPR(7)
+                  << " r33=" << BootStageTrace::Hex(traceCPU.GetGR(33))
+                  << " r38=" << BootStageTrace::Hex(traceCPU.GetGR(38));
+            std::cout << "[IA64-A5D] popcnt " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_A5D_POPCNT", trace.str());
         }
 
         // Handle branch after execution
@@ -4481,6 +4575,23 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             }
             const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             rememberBranchTarget(branchEntryIP);
+            if (traceA5d) {
+                const CPUState& traceCPU = state_.getCPUState();
+                std::ostringstream trace;
+                trace << "cycle=" << traceCPU.GetAR(44)
+                      << " ip=" << BootStageTrace::Hex(currentIP)
+                      << " slot=" << state_.currentSlot_
+                      << " kind=\"" << (cachedInstruction_.GetType() == InstructionType::BR_RET ? "br.ret" :
+                                           cachedInstruction_.GetType() == InstructionType::BR_CALL ? "br.call" : "branch")
+                      << "\" target=" << BootStageTrace::Hex(branchEntryIP)
+                      << " rawTarget=" << BootStageTrace::Hex(branchTarget)
+                      << " pred=p" << static_cast<unsigned>(predicate)
+                      << " p6=" << traceCPU.GetPR(6) << " p7=" << traceCPU.GetPR(7)
+                      << " r33=" << BootStageTrace::Hex(traceCPU.GetGR(33))
+                      << " r38=" << BootStageTrace::Hex(traceCPU.GetGR(38));
+                std::cout << "[IA64-A5D] branch " << trace.str() << std::endl;
+                BootStageTrace::Event("IA64_A5D_BRANCH", trace.str());
+            }
             if (efiExitBootServicesCalls_ > 0 &&
                 branchEntryIP < memory.GetTotalSize() &&
                 (branchEntryIP < EFI_HANDOFF_REGION_BASE || branchEntryIP >= EFI_HANDOFF_REGION_END) &&
@@ -4497,6 +4608,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 std::cout << "[EFI-MILESTONE] branch/call to non-firmware kernel entry candidate ip=0x"
                           << std::hex << currentIP << " target=0x" << branchEntryIP
                           << " lastEfiCall=" << lastEfiCallName_ << std::dec << std::endl;
+                if (!efiHandoffBoundaryPending_) {
+                    efiHandoffBoundaryPending_ = true;
+                    efiHandoffBoundary_.valid = true;
+                    efiHandoffBoundary_.callerIP = currentIP;
+                    efiHandoffBoundary_.callerSlot = state_.currentSlot_;
+                    efiHandoffBoundary_.rawTarget = branchTarget;
+                    efiHandoffBoundary_.targetIP = branchEntryIP;
+                    efiHandoffBoundary_.targetSlot = 0;
+                }
             }
             if (callLooksLikeCountedLoop) {
                 g_countedLoopTrace.active = true;
@@ -4686,6 +4806,726 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiBootImageFromVmManager_ = false;
     callFrameStack_.clear();
     completedCallFrames_.clear();
+}
+
+namespace {
+
+struct CheckpointBlobWriter {
+    std::vector<uint8_t> data;
+
+    void u8(uint8_t value) { data.push_back(value); }
+    void u32(uint32_t value) {
+        for (unsigned shift = 0; shift < 32; shift += 8) {
+            data.push_back(static_cast<uint8_t>((value >> shift) & 0xFFU));
+        }
+    }
+    void u64(uint64_t value) {
+        for (unsigned shift = 0; shift < 64; shift += 8) {
+            data.push_back(static_cast<uint8_t>((value >> shift) & 0xFFU));
+        }
+    }
+    void raw(const uint8_t* bytes, size_t size) {
+        data.insert(data.end(), bytes, bytes + size);
+    }
+    void bytes(const std::vector<uint8_t>& value) {
+        u64(static_cast<uint64_t>(value.size()));
+        raw(value.data(), value.size());
+    }
+    void string(const std::string& value) {
+        u64(static_cast<uint64_t>(value.size()));
+        raw(reinterpret_cast<const uint8_t*>(value.data()), value.size());
+    }
+};
+
+class CheckpointBlobReader {
+public:
+    explicit CheckpointBlobReader(const std::vector<uint8_t>& data)
+        : data_(data), offset_(0), valid_(true) {}
+
+    bool valid() const { return valid_ && offset_ <= data_.size(); }
+    size_t remaining() const { return valid() ? data_.size() - offset_ : 0; }
+    uint8_t u8() {
+        if (remaining() < 1) { valid_ = false; return 0; }
+        return data_[offset_++];
+    }
+    uint32_t u32() {
+        if (remaining() < 4) { valid_ = false; return 0; }
+        uint32_t value = 0;
+        for (unsigned shift = 0; shift < 32; shift += 8) {
+            value |= static_cast<uint32_t>(data_[offset_++]) << shift;
+        }
+        return value;
+    }
+    uint64_t u64() {
+        if (remaining() < 8) { valid_ = false; return 0; }
+        uint64_t value = 0;
+        for (unsigned shift = 0; shift < 64; shift += 8) {
+            value |= static_cast<uint64_t>(data_[offset_++]) << shift;
+        }
+        return value;
+    }
+    std::vector<uint8_t> bytes(size_t maximum) {
+        const uint64_t count = u64();
+        if (!valid_ || count > maximum || count > remaining()) {
+            valid_ = false;
+            return {};
+        }
+        std::vector<uint8_t> result(data_.begin() + static_cast<std::ptrdiff_t>(offset_),
+                                    data_.begin() + static_cast<std::ptrdiff_t>(offset_ + count));
+        offset_ += static_cast<size_t>(count);
+        return result;
+    }
+    std::string string(size_t maximum) {
+        const uint64_t count = u64();
+        if (!valid_ || count > maximum || count > remaining()) {
+            valid_ = false;
+            return {};
+        }
+        std::string result(reinterpret_cast<const char*>(data_.data() + offset_),
+                           static_cast<size_t>(count));
+        offset_ += static_cast<size_t>(count);
+        return result;
+    }
+
+private:
+    const std::vector<uint8_t>& data_;
+    size_t offset_;
+    bool valid_;
+};
+
+constexpr uint32_t kIA64CheckpointBlobVersion = 3;
+constexpr size_t kMaxCheckpointVectorEntries = 1'000'000;
+constexpr size_t kMaxCheckpointStringBytes = 1'048'576;
+constexpr size_t kMaxCheckpointBlobBytes = 64 * 1024 * 1024;
+
+template <typename T>
+bool checkpointSizeFromU64(uint64_t value, T& result) {
+    if (value > static_cast<uint64_t>(std::numeric_limits<T>::max())) return false;
+    result = static_cast<T>(value);
+    return true;
+}
+
+} // namespace
+
+IA64ISAPlugin::EfiHandoffCheckpointBoundary
+IA64ISAPlugin::consumeEfiHandoffCheckpointBoundary() {
+    const EfiHandoffCheckpointBoundary result = efiHandoffBoundary_;
+    efiHandoffBoundaryPending_ = false;
+    efiHandoffBoundary_ = EfiHandoffCheckpointBoundary();
+    if (result.valid) efiHandoffCheckpointConsumed_ = true;
+    return result;
+}
+
+std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
+    if (!efiHandoffCheckpointConsumed_ || hasCachedInstruction_ ||
+        state_.bundleValid_ || state_.currentSlot_ != 0) {
+        return {};
+    }
+
+    CheckpointBlobWriter writer;
+    writer.raw(reinterpret_cast<const uint8_t*>("IA64"), 4);
+    writer.u32(kIA64CheckpointBlobVersion);
+
+    const CPUState& cpu = state_.getCPUState();
+    for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
+        writer.u64(cpu.GetGRPhysical(i));
+        writer.u8(cpu.GetGRNaTPhysical(i) ? 1 : 0);
+    }
+    for (size_t i = 0; i < NUM_FLOAT_REGISTERS; ++i) {
+        uint8_t value[16] = {};
+        cpu.GetFRPhysical(i, value);
+        writer.raw(value, sizeof(value));
+    }
+    for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
+        writer.u8(cpu.GetPRPhysical(i) ? 1 : 0);
+    }
+    for (size_t i = 0; i < NUM_BRANCH_REGISTERS; ++i) writer.u64(cpu.GetBR(i));
+    for (size_t i = 0; i < NUM_REGION_REGISTERS; ++i) writer.u64(cpu.GetRR(i));
+    for (size_t i = 0; i < NUM_CONTROL_REGISTERS; ++i) writer.u64(cpu.GetCR(i));
+    for (size_t set = 0; set < 2; ++set) {
+        for (size_t i = 0; i < NUM_TRANSLATION_REGISTERS; ++i) {
+            const TranslationRegisterState& tr = set == 0 ? cpu.GetITR(i) : cpu.GetDTR(i);
+            writer.u64(tr.physicalAddress);
+            writer.u64(tr.virtualAddress);
+            writer.u64(tr.itir);
+            writer.u64(tr.regionValue);
+            writer.u8(tr.valid ? 1 : 0);
+        }
+    }
+    for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) writer.u64(cpu.GetAR(i));
+    const RSEState& rse = cpu.GetRSEState();
+    writer.u64(rse.cfm);
+    writer.u64(rse.rsc);
+    writer.u64(rse.bsp);
+    writer.u64(rse.bspstore);
+    writer.u64(rse.rnat);
+    writer.u64(rse.pfs);
+    writer.u8(rse.sof);
+    writer.u8(rse.sol);
+    writer.u8(rse.sor);
+    writer.u64(cpu.GetIP());
+    writer.u64(cpu.GetCFM());
+    writer.u64(cpu.GetPSR());
+    for (size_t i = 0; i < NUM_CPUID_REGISTERS; ++i) writer.u64(cpu.GetCPUID(i));
+
+    writer.u64(static_cast<uint64_t>(state_.currentSlot_));
+    writer.u8(state_.bundleValid_ ? 1 : 0);
+    for (bool predicate : state_.predicateGroupSnapshot_) writer.u8(predicate ? 1 : 0);
+    writer.u64(state_.interruptVectorBase_);
+    writer.bytes(state_.pendingInterrupts_);
+    writer.u64(static_cast<uint64_t>(pendingCallInputs_.size()));
+    for (uint64_t value : pendingCallInputs_) writer.u64(value);
+
+    writer.u64(static_cast<uint64_t>(callFrameStack_.size()));
+    for (const CallFrameSnapshot& frame : callFrameStack_) {
+        for (uint64_t value : frame.stackedRegisters) writer.u64(value);
+        writer.u64(frame.cfm);
+        writer.u64(frame.returnAddress);
+    }
+    std::vector<uint64_t> completedKeys;
+    completedKeys.reserve(completedCallFrames_.size());
+    for (const auto& entry : completedCallFrames_) completedKeys.push_back(entry.first);
+    std::sort(completedKeys.begin(), completedKeys.end());
+    writer.u64(static_cast<uint64_t>(completedKeys.size()));
+    for (uint64_t key : completedKeys) {
+        const CallFrameSnapshot& frame = completedCallFrames_.at(key);
+        writer.u64(key);
+        for (uint64_t value : frame.stackedRegisters) writer.u64(value);
+        writer.u64(frame.cfm);
+        writer.u64(frame.returnAddress);
+    }
+
+    writer.u64(efiCurrentTpl_);
+    writer.u64(static_cast<uint64_t>(efiExitBootServicesCalls_));
+    writer.u64(efiTotalFileBytesRead_);
+    writer.string(lastEfiCallName_);
+    writer.u64(lastEfiCallIP_);
+    writer.u64(lastDescriptorAddress_);
+    writer.u64(lastDescriptorCode_);
+    writer.u64(lastDescriptorGp_);
+    writer.u64(efiHandoffLayoutMemorySize_);
+    writer.u8(efiHandoffLayoutInitialized_ ? 1 : 0);
+    writer.u64(static_cast<uint64_t>(efiInputQueue_.size()));
+    for (const EfiInputKey& key : efiInputQueue_) {
+        writer.u32(key.scanCode);
+        writer.u32(key.unicodeChar);
+        writer.u32(key.shiftState);
+        writer.u32(key.toggleState);
+    }
+
+    // The state above is the architectural core.  The remainder is the
+    // mutable EFI/plugin machine state.  It is deliberately encoded in a
+    // fixed order so a post-ExitBootServices restore cannot accidentally
+    // depend on host object layout or unordered-container iteration order.
+    writer.u64(lastEfiDescriptorFieldAddress_);
+    writer.u64(efiNextSyntheticHandle_);
+    const auto writeSize = [&writer](size_t value) { writer.u64(static_cast<uint64_t>(value)); };
+    writeSize(efiTextOutputCalls_); writeSize(efiTextOutputMirrored_); writeSize(efiTextOutputFramebuffer_);
+    writeSize(efiOpenVolumeCalls_); writeSize(efiSimpleFsProtocolReturns_);
+    writeSize(efiGenericSuccessCalls_); writeSize(efiGenericUnsupportedCalls_);
+    writeSize(efiZeroGuidProtocolCalls_); writeSize(efiHandleProtocolCalls_);
+    writeSize(efiLocateHandleCalls_); writeSize(efiLocateProtocolCalls_);
+    writeSize(efiGetMemoryMapCalls_); writeSize(efiExitBootServicesCalls_);
+    writeSize(efiAllocatePoolCalls_); writeSize(efiAllocatePagesCalls_);
+    writeSize(efiFreePagesCalls_); writeSize(efiFreePoolCalls_); writeSize(efiCopyMemCalls_);
+    writeSize(efiLoadImageCalls_); writeSize(efiStartImageCalls_); writeSize(efiSetMemCalls_);
+    writeSize(efiFileOpenCalls_); writeSize(efiFileReadCalls_); writeSize(efiFileGetInfoCalls_);
+    writeSize(efiFileCloseCalls_); writeSize(efiFileSetPositionCalls_); writeSize(efiFileGetPositionCalls_);
+    writeSize(efiReadKeyStrokeCalls_); writeSize(efiReadKeyStrokeExCalls_);
+    writeSize(efiReadKeyStrokeNotReadyCalls_); writeSize(efiReadKeyStrokeSuccessCalls_);
+    writeSize(efiReadKeyStrokeExNotReadyCalls_); writeSize(efiReadKeyStrokeExSuccessCalls_);
+    writeSize(efiWaitForEventCalls_); writeSize(efiCheckEventCalls_); writeSize(efiFirstSuccessfulFileOpen_);
+    writer.u64(efiTotalFileBytesRead_); writeSize(descriptorCallCount_); writeSize(gpSwitchCount_);
+    writeSize(suspiciousGpCount_); writeSize(unknownRegionCallCount_); writeSize(recoveredLoadStoreCount_);
+    writeSize(postSimpleFsTraceBudget_); writer.u8(postSimpleFsTraceActive_ ? 1 : 0);
+    writer.u64(postSimpleFsProtocolAddress_);
+    writer.string(lastEfiCallName_); writer.u64(lastEfiCallIP_);
+    writer.u64(lastDescriptorAddress_); writer.u64(lastDescriptorCode_); writer.u64(lastDescriptorGp_);
+
+    writeSize(lastBranchTargets_.size());
+    for (uint64_t target : lastBranchTargets_) writer.u64(target);
+    writeSize(recentInstructions_.size());
+    for (const RecentInstructionTrace& entry : recentInstructions_) {
+        writer.u64(entry.ip); writeSize(entry.slot); writer.string(entry.disasm);
+    }
+    writeSize(recentTrackedRegisterWrites_.size());
+    for (const RecentRegisterWriteTrace& entry : recentTrackedRegisterWrites_) {
+        writeSize(entry.reg); writer.u64(entry.value); writer.u64(entry.ip);
+        writeSize(entry.slot); writer.string(entry.disasm);
+    }
+    writeSize(recentInstructionSequenceRepeatCount_);
+    writer.u64(placementStepCount_); writer.u64(placementFileBackedBytes_);
+    writeSize(placementEvents_.size());
+    for (const EfiTraceSummary::PlacementEvent& event : placementEvents_) {
+        writer.u64(event.step); writer.u64(event.destination); writer.u64(event.source);
+        writer.u64(event.length); writer.u64(event.cumulativeFileBackedBytes);
+        writer.u64(event.elfOffset); writer.u64(static_cast<uint64_t>(static_cast<int64_t>(event.segmentIndex)));
+    }
+
+    writeSize(efiProtocolAttachments_.size());
+    for (const EfiProtocolAttachment& attachment : efiProtocolAttachments_) {
+        writer.u64(attachment.handle); writer.raw(attachment.protocol.data(), attachment.protocol.size());
+        writer.u64(attachment.interfaceAddress);
+    }
+
+    writeSize(efiFileHandles_.size());
+    for (const auto& [handleAddress, handle] : efiFileHandles_) {
+        writer.u64(handleAddress); writer.u64(handle.protocolAddress); writer.string(handle.path);
+        writer.u8(handle.isDirectory ? 1 : 0); writer.bytes(handle.data);
+        writeSize(handle.directoryEntries.size());
+        for (const guideXOS::FATFileInfo& entry : handle.directoryEntries) {
+            writer.string(entry.name); writer.u8(entry.isDirectory ? 1 : 0);
+            writer.u32(entry.size); writer.u32(entry.firstCluster); writer.u8(entry.attributes);
+        }
+        writeSize(handle.directoryIndex); writer.u64(handle.position);
+    }
+
+    writeSize(efiMemoryMap_.size());
+    for (const EfiMemoryDescriptor& descriptor : efiMemoryMap_) {
+        writer.u32(descriptor.type); writer.u64(descriptor.physicalStart);
+        writer.u64(descriptor.numberOfPages); writer.u64(descriptor.attributes);
+    }
+    writeSize(efiMemoryReservations_.size());
+    for (const EfiMemoryReservation& reservation : efiMemoryReservations_) {
+        writer.u32(reservation.type); writer.u64(reservation.physicalStart); writer.u64(reservation.numberOfPages);
+    }
+    writeSize(efiPageAllocations_.size());
+    for (const EfiPageAllocation& allocation : efiPageAllocations_) {
+        writer.u64(allocation.physicalStart); writer.u64(allocation.numberOfPages); writer.u32(allocation.type);
+    }
+    writeSize(efiPoolAllocations_.size());
+    for (const EfiPoolAllocation& allocation : efiPoolAllocations_) {
+        writer.u64(allocation.physicalStart); writer.u64(allocation.numberOfPages); writer.u32(allocation.type);
+    }
+    writeSize(efiLoadedImages_.size());
+    for (const auto& [key, image] : efiLoadedImages_) {
+        writer.u64(key); writer.u64(image.handle); writer.u64(image.protocolAddress);
+        writer.u64(image.parentHandle); writer.u64(image.deviceHandle); writer.u64(image.imageBase);
+        writer.u64(image.imageSize); writer.u64(image.entryPoint); writer.u64(image.globalPointer);
+        writer.u64(image.filePath);
+    }
+    writer.u64(efiMemoryMapKey_); writer.u64(efiMemoryMapMemorySize_);
+    writer.u8(efiMemoryMapInitialized_ ? 1 : 0); writer.bytes(efiBootImage_);
+    writer.u8(efiBootImageFromVmManager_ ? 1 : 0);
+    writer.u64(efiHandoffLayoutMemorySize_); writer.u8(efiHandoffLayoutInitialized_ ? 1 : 0);
+    writer.u64(pendingRegisterConfigEntryTarget_); writer.u64(pendingRegisterConfigEntryCallsite_);
+    writer.u8(pendingRegisterConfigEntryArmed_ ? 1 : 0);
+    writer.u8(efiHandoffBoundaryPending_ ? 1 : 0);
+    writer.u8(efiHandoffBoundary_.valid ? 1 : 0); writer.u64(efiHandoffBoundary_.callerIP);
+    writeSize(efiHandoffBoundary_.callerSlot); writer.u64(efiHandoffBoundary_.rawTarget);
+    writer.u64(efiHandoffBoundary_.targetIP); writeSize(efiHandoffBoundary_.targetSlot);
+    writer.u8(efiHandoffCheckpointConsumed_ ? 1 : 0);
+    writer.u8(hasCachedInstruction_ ? 1 : 0);
+
+    return std::move(writer.data);
+}
+
+bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data) {
+    try {
+        if (data.size() > kMaxCheckpointBlobBytes) return false;
+        CheckpointBlobReader reader(data);
+        for (const char expected : std::string("IA64")) {
+            if (reader.u8() != static_cast<uint8_t>(expected)) return false;
+        }
+        const uint32_t checkpointBlobVersion = reader.u32();
+        if (checkpointBlobVersion != 2 && checkpointBlobVersion != kIA64CheckpointBlobVersion) return false;
+
+        CPUState restoredCPU;
+        for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
+            restoredCPU.SetGRPhysical(i, reader.u64());
+            restoredCPU.SetGRNaTPhysical(i, reader.u8() != 0);
+        }
+        for (size_t i = 0; i < NUM_FLOAT_REGISTERS; ++i) {
+            uint8_t value[16] = {};
+            for (uint8_t& byte : value) byte = reader.u8();
+            restoredCPU.SetFRPhysical(i, value);
+        }
+        for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) restoredCPU.SetPRPhysical(i, reader.u8() != 0);
+        for (size_t i = 0; i < NUM_BRANCH_REGISTERS; ++i) restoredCPU.SetBR(i, reader.u64());
+        for (size_t i = 0; i < NUM_REGION_REGISTERS; ++i) restoredCPU.SetRR(i, reader.u64());
+        for (size_t i = 0; i < NUM_CONTROL_REGISTERS; ++i) restoredCPU.SetCR(i, reader.u64());
+        for (size_t set = 0; set < 2; ++set) {
+            for (size_t i = 0; i < NUM_TRANSLATION_REGISTERS; ++i) {
+                TranslationRegisterState tr;
+                tr.physicalAddress = reader.u64();
+                tr.virtualAddress = reader.u64();
+                tr.itir = reader.u64();
+                tr.regionValue = reader.u64();
+                tr.valid = reader.u8() != 0;
+                if (set == 0) restoredCPU.SetITRStateForCheckpoint(i, tr);
+                else restoredCPU.SetDTRStateForCheckpoint(i, tr);
+            }
+        }
+        for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) restoredCPU.SetAR(i, reader.u64());
+        RSEState rse;
+        rse.cfm = reader.u64();
+        rse.rsc = reader.u64();
+        rse.bsp = reader.u64();
+        rse.bspstore = reader.u64();
+        rse.rnat = reader.u64();
+        rse.pfs = reader.u64();
+        rse.sof = reader.u8();
+        rse.sol = reader.u8();
+        rse.sor = reader.u8();
+        const uint64_t ip = reader.u64();
+        const uint64_t cfm = reader.u64();
+        const uint64_t psr = reader.u64();
+        restoredCPU.SetIP(ip);
+        restoredCPU.SetCFM(cfm);
+        restoredCPU.SetPSR(psr);
+        restoredCPU.SetRSEStateForCheckpoint(rse);
+        if (checkpointBlobVersion >= 3) {
+            for (size_t i = 0; i < NUM_CPUID_REGISTERS; ++i) {
+                restoredCPU.SetCPUIDForCheckpoint(i, reader.u64());
+            }
+        }
+
+        const uint64_t currentSlot = reader.u64();
+        const bool bundleValid = reader.u8() != 0;
+        std::array<bool, NUM_PREDICATE_REGISTERS> predicateSnapshot{};
+        for (bool& predicate : predicateSnapshot) predicate = reader.u8() != 0;
+        const uint64_t interruptVectorBase = reader.u64();
+        const std::vector<uint8_t> pendingInterrupts = reader.bytes(kMaxCheckpointVectorEntries);
+        const uint64_t pendingInputCount = reader.u64();
+        if (!reader.valid() || pendingInputCount > kMaxCheckpointVectorEntries) return false;
+        std::vector<uint64_t> pendingInputs;
+        pendingInputs.reserve(static_cast<size_t>(pendingInputCount));
+        for (uint64_t i = 0; i < pendingInputCount; ++i) pendingInputs.push_back(reader.u64());
+
+        const uint64_t callFrameCount = reader.u64();
+        if (!reader.valid() || callFrameCount > kMaxCheckpointVectorEntries) return false;
+        std::vector<CallFrameSnapshot> callFrames;
+        callFrames.resize(static_cast<size_t>(callFrameCount));
+        for (CallFrameSnapshot& frame : callFrames) {
+            for (uint64_t& value : frame.stackedRegisters) value = reader.u64();
+            frame.cfm = reader.u64();
+            frame.returnAddress = reader.u64();
+        }
+        const uint64_t completedCount = reader.u64();
+        if (!reader.valid() || completedCount > kMaxCheckpointVectorEntries) return false;
+        std::unordered_map<uint64_t, CallFrameSnapshot> completed;
+        for (uint64_t i = 0; i < completedCount; ++i) {
+            const uint64_t key = reader.u64();
+            CallFrameSnapshot frame;
+            for (uint64_t& value : frame.stackedRegisters) value = reader.u64();
+            frame.cfm = reader.u64();
+            frame.returnAddress = reader.u64();
+            completed.emplace(key, frame);
+        }
+
+        const uint64_t restoredTpl = reader.u64();
+        const uint64_t restoredExitCount = reader.u64();
+        const uint64_t restoredFileBytes = reader.u64();
+        const std::string restoredLastCall = reader.string(kMaxCheckpointStringBytes);
+        const uint64_t restoredLastCallIP = reader.u64();
+        const uint64_t restoredDescriptorAddress = reader.u64();
+        const uint64_t restoredDescriptorCode = reader.u64();
+        const uint64_t restoredDescriptorGp = reader.u64();
+        const uint64_t restoredHandoffMemorySize = reader.u64();
+        const bool restoredHandoffInitialized = reader.u8() != 0;
+        const uint64_t inputCount = reader.u64();
+        if (!reader.valid() || inputCount > kMaxCheckpointVectorEntries) return false;
+        std::deque<EfiInputKey> restoredInputQueue;
+        for (uint64_t i = 0; i < inputCount; ++i) {
+            EfiInputKey key;
+            key.scanCode = static_cast<uint16_t>(reader.u32());
+            key.unicodeChar = static_cast<uint16_t>(reader.u32());
+            key.shiftState = reader.u32();
+            key.toggleState = static_cast<uint8_t>(reader.u32());
+            restoredInputQueue.push_back(key);
+        }
+
+        auto readFlag = [&reader](bool& value) {
+            const uint8_t raw = reader.u8();
+            if (!reader.valid() || raw > 1) return false;
+            value = raw != 0;
+            return true;
+        };
+        auto readSize = [&reader](size_t& value) {
+            const uint64_t raw = reader.u64();
+            return reader.valid() && checkpointSizeFromU64(raw, value);
+        };
+        auto readCount = [&reader, &readSize](size_t& value) {
+            return readSize(value) && value <= kMaxCheckpointVectorEntries;
+        };
+
+        const uint64_t restoredDescriptorFieldAddress = reader.u64();
+        const uint64_t restoredNextSyntheticHandle = reader.u64();
+        std::array<size_t, 36> restoredCounters{};
+        for (size_t& counter : restoredCounters) {
+            if (!readSize(counter)) return false;
+        }
+        const uint64_t restoredTotalFileBytes = reader.u64();
+        size_t restoredDescriptorCalls = 0;
+        size_t restoredGpSwitches = 0;
+        size_t restoredSuspiciousGp = 0;
+        size_t restoredUnknownRegion = 0;
+        size_t restoredRecoveredLoads = 0;
+        size_t restoredPostTraceBudget = 0;
+        if (!readSize(restoredDescriptorCalls) || !readSize(restoredGpSwitches) ||
+            !readSize(restoredSuspiciousGp) || !readSize(restoredUnknownRegion) ||
+            !readSize(restoredRecoveredLoads) || !readSize(restoredPostTraceBudget)) return false;
+        bool restoredPostTraceActive = false;
+        if (!readFlag(restoredPostTraceActive)) return false;
+        const uint64_t restoredPostSimpleFsAddress = reader.u64();
+        const std::string restoredLastEfiCallName = reader.string(kMaxCheckpointStringBytes);
+        const uint64_t restoredLastEfiCallIP = reader.u64();
+        const uint64_t restoredLastDescriptorAddress = reader.u64();
+        const uint64_t restoredLastDescriptorCode = reader.u64();
+        const uint64_t restoredLastDescriptorGp = reader.u64();
+
+        size_t branchTargetCount = 0;
+        if (!readCount(branchTargetCount)) return false;
+        std::vector<uint64_t> restoredBranchTargets;
+        restoredBranchTargets.reserve(branchTargetCount);
+        for (size_t i = 0; i < branchTargetCount; ++i) restoredBranchTargets.push_back(reader.u64());
+
+        size_t recentInstructionCount = 0;
+        if (!readCount(recentInstructionCount)) return false;
+        std::deque<RecentInstructionTrace> restoredRecentInstructions;
+        for (size_t i = 0; i < recentInstructionCount; ++i) {
+            RecentInstructionTrace entry;
+            entry.ip = reader.u64();
+            if (!readSize(entry.slot)) return false;
+            entry.disasm = reader.string(kMaxCheckpointStringBytes);
+            restoredRecentInstructions.push_back(std::move(entry));
+        }
+        size_t recentWriteCount = 0;
+        if (!readCount(recentWriteCount)) return false;
+        std::deque<RecentRegisterWriteTrace> restoredRecentWrites;
+        for (size_t i = 0; i < recentWriteCount; ++i) {
+            RecentRegisterWriteTrace entry;
+            if (!readSize(entry.reg)) return false;
+            entry.value = reader.u64(); entry.ip = reader.u64();
+            if (!readSize(entry.slot)) return false;
+            entry.disasm = reader.string(kMaxCheckpointStringBytes);
+            restoredRecentWrites.push_back(std::move(entry));
+        }
+        size_t restoredRepeatCount = 0;
+        if (!readSize(restoredRepeatCount)) return false;
+        const uint64_t restoredPlacementSteps = reader.u64();
+        const uint64_t restoredPlacementBytes = reader.u64();
+        size_t placementEventCount = 0;
+        if (!readCount(placementEventCount)) return false;
+        std::vector<EfiTraceSummary::PlacementEvent> restoredPlacementEvents;
+        restoredPlacementEvents.reserve(placementEventCount);
+        for (size_t i = 0; i < placementEventCount; ++i) {
+            EfiTraceSummary::PlacementEvent event;
+            event.step = reader.u64(); event.destination = reader.u64(); event.source = reader.u64();
+            event.length = reader.u64(); event.cumulativeFileBackedBytes = reader.u64();
+            event.elfOffset = reader.u64();
+            const uint64_t segment = reader.u64();
+            if (segment > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()) &&
+                segment < static_cast<uint64_t>(-std::numeric_limits<int32_t>::max() - 1LL)) return false;
+            event.segmentIndex = static_cast<int>(static_cast<int64_t>(segment));
+            restoredPlacementEvents.push_back(event);
+        }
+
+        size_t protocolCount = 0;
+        if (!readCount(protocolCount)) return false;
+        std::vector<EfiProtocolAttachment> restoredProtocolAttachments;
+        restoredProtocolAttachments.reserve(protocolCount);
+        for (size_t i = 0; i < protocolCount; ++i) {
+            EfiProtocolAttachment attachment;
+            attachment.handle = reader.u64();
+            for (uint8_t& byte : attachment.protocol) byte = reader.u8();
+            attachment.interfaceAddress = reader.u64();
+            restoredProtocolAttachments.push_back(attachment);
+        }
+
+        size_t fileHandleCount = 0;
+        if (!readCount(fileHandleCount)) return false;
+        std::map<uint64_t, EfiFileHandle> restoredFileHandles;
+        for (size_t i = 0; i < fileHandleCount; ++i) {
+            const uint64_t key = reader.u64();
+            EfiFileHandle handle;
+            handle.protocolAddress = reader.u64();
+            handle.path = reader.string(kMaxCheckpointStringBytes);
+            if (!readFlag(handle.isDirectory)) return false;
+            handle.data = reader.bytes(kMaxCheckpointBlobBytes);
+            size_t directoryEntryCount = 0;
+            if (!readCount(directoryEntryCount)) return false;
+            handle.directoryEntries.reserve(directoryEntryCount);
+            for (size_t n = 0; n < directoryEntryCount; ++n) {
+                guideXOS::FATFileInfo entry;
+                entry.name = reader.string(kMaxCheckpointStringBytes);
+                if (!readFlag(entry.isDirectory)) return false;
+                entry.size = reader.u32(); entry.firstCluster = reader.u32(); entry.attributes = reader.u8();
+                handle.directoryEntries.push_back(std::move(entry));
+            }
+            if (!readSize(handle.directoryIndex)) return false;
+            handle.position = reader.u64();
+            if (!reader.valid() || !restoredFileHandles.emplace(key, std::move(handle)).second) return false;
+        }
+
+        size_t memoryMapCount = 0;
+        if (!readCount(memoryMapCount)) return false;
+        std::vector<EfiMemoryDescriptor> restoredMemoryMap;
+        restoredMemoryMap.reserve(memoryMapCount);
+        for (size_t i = 0; i < memoryMapCount; ++i) {
+            EfiMemoryDescriptor descriptor;
+            descriptor.type = reader.u32(); descriptor.physicalStart = reader.u64();
+            descriptor.numberOfPages = reader.u64(); descriptor.attributes = reader.u64();
+            restoredMemoryMap.push_back(descriptor);
+        }
+        size_t reservationCount = 0;
+        if (!readCount(reservationCount)) return false;
+        std::vector<EfiMemoryReservation> restoredReservations;
+        restoredReservations.reserve(reservationCount);
+        for (size_t i = 0; i < reservationCount; ++i) {
+            EfiMemoryReservation reservation;
+            reservation.type = reader.u32(); reservation.physicalStart = reader.u64();
+            reservation.numberOfPages = reader.u64(); restoredReservations.push_back(reservation);
+        }
+        size_t pageAllocationCount = 0;
+        if (!readCount(pageAllocationCount)) return false;
+        std::vector<EfiPageAllocation> restoredPageAllocations;
+        restoredPageAllocations.reserve(pageAllocationCount);
+        for (size_t i = 0; i < pageAllocationCount; ++i) {
+            EfiPageAllocation allocation;
+            allocation.physicalStart = reader.u64(); allocation.numberOfPages = reader.u64();
+            allocation.type = reader.u32(); restoredPageAllocations.push_back(allocation);
+        }
+        size_t poolAllocationCount = 0;
+        if (!readCount(poolAllocationCount)) return false;
+        std::vector<EfiPoolAllocation> restoredPoolAllocations;
+        restoredPoolAllocations.reserve(poolAllocationCount);
+        for (size_t i = 0; i < poolAllocationCount; ++i) {
+            EfiPoolAllocation allocation;
+            allocation.physicalStart = reader.u64(); allocation.numberOfPages = reader.u64();
+            allocation.type = reader.u32(); restoredPoolAllocations.push_back(allocation);
+        }
+        size_t loadedImageCount = 0;
+        if (!readCount(loadedImageCount)) return false;
+        std::map<uint64_t, EfiLoadedImage> restoredLoadedImages;
+        for (size_t i = 0; i < loadedImageCount; ++i) {
+            const uint64_t key = reader.u64();
+            EfiLoadedImage image;
+            image.handle = reader.u64(); image.protocolAddress = reader.u64(); image.parentHandle = reader.u64();
+            image.deviceHandle = reader.u64(); image.imageBase = reader.u64(); image.imageSize = reader.u64();
+            image.entryPoint = reader.u64(); image.globalPointer = reader.u64(); image.filePath = reader.u64();
+            if (!reader.valid() || !restoredLoadedImages.emplace(key, image).second) return false;
+        }
+        const uint64_t restoredMemoryMapKey = reader.u64();
+        const uint64_t restoredMemoryMapMemorySize = reader.u64();
+        bool restoredMemoryMapInitialized = false;
+        if (!readFlag(restoredMemoryMapInitialized)) return false;
+        const std::vector<uint8_t> restoredBootImage = reader.bytes(kMaxCheckpointBlobBytes);
+        bool restoredBootImageFromManager = false;
+        if (!readFlag(restoredBootImageFromManager)) return false;
+        const uint64_t restoredHandoffLayoutSize = reader.u64();
+        bool restoredHandoffLayoutInitialized = false;
+        if (!readFlag(restoredHandoffLayoutInitialized)) return false;
+        const uint64_t restoredRegisterConfigTarget = reader.u64();
+        const uint64_t restoredRegisterConfigCallsite = reader.u64();
+        bool restoredRegisterConfigArmed = false;
+        if (!readFlag(restoredRegisterConfigArmed)) return false;
+        bool restoredBoundaryPending = false;
+        bool restoredBoundaryValid = false;
+        if (!readFlag(restoredBoundaryPending) || !readFlag(restoredBoundaryValid)) return false;
+        EfiHandoffCheckpointBoundary restoredBoundary;
+        restoredBoundary.valid = restoredBoundaryValid;
+        restoredBoundary.callerIP = reader.u64();
+        if (!readSize(restoredBoundary.callerSlot)) return false;
+        restoredBoundary.rawTarget = reader.u64(); restoredBoundary.targetIP = reader.u64();
+        if (!readSize(restoredBoundary.targetSlot)) return false;
+        bool restoredCheckpointConsumed = false;
+        bool restoredHasCachedInstruction = false;
+        if (!readFlag(restoredCheckpointConsumed) || !readFlag(restoredHasCachedInstruction) ||
+            restoredHasCachedInstruction || !reader.valid() || reader.remaining() != 0 ||
+            bundleValid || currentSlot != 0) return false;
+
+        state_.getCPUState() = restoredCPU;
+        state_.currentBundle_ = Bundle();
+        state_.currentSlot_ = 0;
+        state_.bundleValid_ = false;
+        state_.predicateGroupSnapshot_ = predicateSnapshot;
+        state_.interruptVectorBase_ = interruptVectorBase;
+        state_.pendingInterrupts_ = pendingInterrupts;
+        pendingCallInputs_ = std::move(pendingInputs);
+        callFrameStack_ = std::move(callFrames);
+        completedCallFrames_ = std::move(completed);
+        efiCurrentTpl_ = restoredTpl;
+        efiExitBootServicesCalls_ = static_cast<size_t>(restoredExitCount);
+        efiTotalFileBytesRead_ = restoredFileBytes;
+        lastEfiCallName_ = restoredLastCall;
+        lastEfiCallIP_ = restoredLastCallIP;
+        lastDescriptorAddress_ = restoredDescriptorAddress;
+        lastDescriptorCode_ = restoredDescriptorCode;
+        lastDescriptorGp_ = restoredDescriptorGp;
+        efiHandoffLayoutMemorySize_ = restoredHandoffMemorySize;
+        efiHandoffLayoutInitialized_ = restoredHandoffInitialized;
+        efiInputQueue_ = std::move(restoredInputQueue);
+        hasCachedInstruction_ = false;
+        lastEfiDescriptorFieldAddress_ = restoredDescriptorFieldAddress;
+        efiNextSyntheticHandle_ = restoredNextSyntheticHandle;
+        size_t counterIndex = 0;
+        efiTextOutputCalls_ = restoredCounters[counterIndex++];
+        efiTextOutputMirrored_ = restoredCounters[counterIndex++];
+        efiTextOutputFramebuffer_ = restoredCounters[counterIndex++];
+        efiOpenVolumeCalls_ = restoredCounters[counterIndex++];
+        efiSimpleFsProtocolReturns_ = restoredCounters[counterIndex++];
+        efiGenericSuccessCalls_ = restoredCounters[counterIndex++];
+        efiGenericUnsupportedCalls_ = restoredCounters[counterIndex++];
+        efiZeroGuidProtocolCalls_ = restoredCounters[counterIndex++];
+        efiHandleProtocolCalls_ = restoredCounters[counterIndex++];
+        efiLocateHandleCalls_ = restoredCounters[counterIndex++];
+        efiLocateProtocolCalls_ = restoredCounters[counterIndex++];
+        efiGetMemoryMapCalls_ = restoredCounters[counterIndex++];
+        efiExitBootServicesCalls_ = restoredCounters[counterIndex++];
+        efiAllocatePoolCalls_ = restoredCounters[counterIndex++];
+        efiAllocatePagesCalls_ = restoredCounters[counterIndex++];
+        efiFreePagesCalls_ = restoredCounters[counterIndex++];
+        efiFreePoolCalls_ = restoredCounters[counterIndex++];
+        efiCopyMemCalls_ = restoredCounters[counterIndex++];
+        efiLoadImageCalls_ = restoredCounters[counterIndex++];
+        efiStartImageCalls_ = restoredCounters[counterIndex++];
+        efiSetMemCalls_ = restoredCounters[counterIndex++];
+        efiFileOpenCalls_ = restoredCounters[counterIndex++];
+        efiFileReadCalls_ = restoredCounters[counterIndex++];
+        efiFileGetInfoCalls_ = restoredCounters[counterIndex++];
+        efiFileCloseCalls_ = restoredCounters[counterIndex++];
+        efiFileSetPositionCalls_ = restoredCounters[counterIndex++];
+        efiFileGetPositionCalls_ = restoredCounters[counterIndex++];
+        efiReadKeyStrokeCalls_ = restoredCounters[counterIndex++];
+        efiReadKeyStrokeExCalls_ = restoredCounters[counterIndex++];
+        efiReadKeyStrokeNotReadyCalls_ = restoredCounters[counterIndex++];
+        efiReadKeyStrokeSuccessCalls_ = restoredCounters[counterIndex++];
+        efiReadKeyStrokeExNotReadyCalls_ = restoredCounters[counterIndex++];
+        efiReadKeyStrokeExSuccessCalls_ = restoredCounters[counterIndex++];
+        efiWaitForEventCalls_ = restoredCounters[counterIndex++];
+        efiCheckEventCalls_ = restoredCounters[counterIndex++];
+        efiFirstSuccessfulFileOpen_ = restoredCounters[counterIndex++];
+        efiTotalFileBytesRead_ = restoredTotalFileBytes;
+        descriptorCallCount_ = restoredDescriptorCalls; gpSwitchCount_ = restoredGpSwitches;
+        suspiciousGpCount_ = restoredSuspiciousGp; unknownRegionCallCount_ = restoredUnknownRegion;
+        recoveredLoadStoreCount_ = restoredRecoveredLoads; postSimpleFsTraceBudget_ = restoredPostTraceBudget;
+        postSimpleFsTraceActive_ = restoredPostTraceActive; postSimpleFsProtocolAddress_ = restoredPostSimpleFsAddress;
+        lastEfiCallName_ = restoredLastEfiCallName; lastEfiCallIP_ = restoredLastEfiCallIP;
+        lastDescriptorAddress_ = restoredLastDescriptorAddress; lastDescriptorCode_ = restoredLastDescriptorCode;
+        lastDescriptorGp_ = restoredLastDescriptorGp; lastBranchTargets_ = std::move(restoredBranchTargets);
+        recentInstructions_ = std::move(restoredRecentInstructions);
+        recentTrackedRegisterWrites_ = std::move(restoredRecentWrites);
+        recentInstructionSequenceRepeatCount_ = restoredRepeatCount;
+        placementStepCount_ = restoredPlacementSteps; placementFileBackedBytes_ = restoredPlacementBytes;
+        placementEvents_ = std::move(restoredPlacementEvents);
+        efiProtocolAttachments_ = std::move(restoredProtocolAttachments);
+        efiFileHandles_ = std::move(restoredFileHandles); efiMemoryMap_ = std::move(restoredMemoryMap);
+        efiMemoryReservations_ = std::move(restoredReservations); efiPageAllocations_ = std::move(restoredPageAllocations);
+        efiPoolAllocations_ = std::move(restoredPoolAllocations); efiLoadedImages_ = std::move(restoredLoadedImages);
+        efiMemoryMapKey_ = restoredMemoryMapKey; efiMemoryMapMemorySize_ = restoredMemoryMapMemorySize;
+        efiMemoryMapInitialized_ = restoredMemoryMapInitialized; efiBootImage_ = restoredBootImage;
+        efiBootFat_.reset(); efiBootImageFromVmManager_ = restoredBootImageFromManager;
+        efiHandoffLayoutMemorySize_ = restoredHandoffLayoutSize; efiHandoffLayoutInitialized_ = restoredHandoffLayoutInitialized;
+        pendingRegisterConfigEntryTarget_ = restoredRegisterConfigTarget;
+        pendingRegisterConfigEntryCallsite_ = restoredRegisterConfigCallsite;
+        pendingRegisterConfigEntryArmed_ = restoredRegisterConfigArmed;
+        efiHandoffBoundaryPending_ = restoredBoundaryPending; efiHandoffBoundary_ = restoredBoundary;
+        efiHandoffCheckpointConsumed_ = restoredCheckpointConsumed;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::vector<uint8_t> IA64ISAPlugin::serialize_state() const {

@@ -689,22 +689,34 @@ size_t CPU::getCurrentSlot() const {
 
 CPURuntimeStateSnapshot CPU::createSnapshot() const {
     CPURuntimeStateSnapshot snapshot;
-    snapshot.architecturalState = state_;
+    snapshot.architecturalState = getState();
     snapshot.currentBundle = currentBundle_;
     snapshot.currentSlot = currentSlot_;
     snapshot.bundleValid = bundleValid_;
     snapshot.pendingInterrupts.assign(pendingInterrupts_.begin(), pendingInterrupts_.end());
     snapshot.interruptVectorBase = interruptVectorBase_;
+    snapshot.halted = halted_;
+    snapshot.pendingCallInputs = pendingCallInputs_;
     return snapshot;
 }
 
 void CPU::restoreSnapshot(const CPURuntimeStateSnapshot& snapshot) {
-    state_ = snapshot.architecturalState;
+    if (isaPlugin_ == nullptr) {
+        state_ = snapshot.architecturalState;
+    } else if (auto* ia64Plugin = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+        // The plugin owns the architectural register file for the modern
+        // execution path.  Restoring only CPU's legacy shadow state silently
+        // leaves a plugin CPU unchanged and makes a snapshot appear to work
+        // while resuming from the wrong machine state.
+        ia64Plugin->getCPUState() = snapshot.architecturalState;
+    }
     currentBundle_ = snapshot.currentBundle;
     currentSlot_ = snapshot.currentSlot;
     bundleValid_ = snapshot.bundleValid;
     pendingInterrupts_.assign(snapshot.pendingInterrupts.begin(), snapshot.pendingInterrupts.end());
     interruptVectorBase_ = snapshot.interruptVectorBase;
+    halted_ = snapshot.halted;
+    pendingCallInputs_ = snapshot.pendingCallInputs;
 }
 
 bool CPU::servicePendingInterrupt() {

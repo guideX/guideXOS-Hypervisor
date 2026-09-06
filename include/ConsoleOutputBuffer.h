@@ -154,6 +154,14 @@ public:
      * @param maxLines Maximum line count (0 = unlimited)
      */
     void setMaxLines(size_t maxLines);
+
+    // Exact state access for deterministic VM checkpoints.
+    std::vector<std::string> getCompleteLines() const;
+    std::string getCurrentLine() const;
+    void restoreExactState(const std::vector<std::string>& completeLines,
+                           const std::string& currentLine,
+                           size_t maxLines,
+                           uint64_t totalBytesWritten);
     
 private:
     mutable std::mutex mutex_;

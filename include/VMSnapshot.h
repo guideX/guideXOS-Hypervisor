@@ -3,6 +3,7 @@
 #include "cpu_state.h"
 #include "CPUContext.h"
 #include "memory.h"
+#include "InterruptController.h"
 #include <cstdint>
 #include <vector>
 #include <map>
@@ -42,12 +43,18 @@ struct ConsoleDeviceState {
     std::string currentBuffer;           // Current output buffer
     std::vector<std::string> outputLines;  // All output lines
     uint64_t totalBytesWritten;          // Total bytes written
+    std::vector<std::string> completeLines;
+    std::string currentLine;
+    size_t maxLines;
     
     ConsoleDeviceState()
         : baseAddress(0)
         , currentBuffer()
         , outputLines()
-        , totalBytesWritten(0) {}
+        , totalBytesWritten(0)
+        , completeLines()
+        , currentLine()
+        , maxLines(10000) {}
 };
 
 /**
@@ -80,12 +87,34 @@ struct InterruptControllerState {
     std::vector<bool> maskedInterrupts;  // Masked interrupt flags
     uint64_t vectorBase;                 // Interrupt vector base address
     bool enabled;                        // Global interrupt enable
+    std::vector<InterruptSource> sources;
+    size_t nextSourceId;
     
     InterruptControllerState()
         : pendingInterrupts()
         , maskedInterrupts()
         , vectorBase(0)
-        , enabled(false) {}
+        , enabled(false)
+        , sources()
+        , nextSourceId(1) {}
+};
+
+/**
+ * FramebufferDeviceState - exact mutable state of the emulated framebuffer.
+ */
+struct FramebufferDeviceState {
+    uint64_t baseAddress;
+    size_t width;
+    size_t height;
+    size_t pitch;
+    std::vector<uint8_t> framebuffer;
+
+    FramebufferDeviceState()
+        : baseAddress(0)
+        , width(0)
+        , height(0)
+        , pitch(0)
+        , framebuffer() {}
 };
 
 /**

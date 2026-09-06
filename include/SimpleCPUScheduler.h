@@ -5,6 +5,13 @@
 
 namespace ia64 {
 
+struct SimpleCPUSchedulerState {
+    int lastCPUIndex = -1;
+    int numCPUs = 0;
+    uint64_t quantumSize = 10;
+    std::vector<uint64_t> cpuBundleCounters;
+};
+
 /**
  * SimpleCPUScheduler - Basic round-robin CPU scheduler
  * 
@@ -52,6 +59,9 @@ public:
     void unregisterPreemptionCallback(IPreemptionCallback* callback) override;
     uint64_t getQuantumSize() const override;
     void setQuantumSize(uint64_t bundleCount) override;
+
+    SimpleCPUSchedulerState createSnapshot() const;
+    bool restoreSnapshot(const SimpleCPUSchedulerState& snapshot);
 
 private:
     int lastCPUIndex_;      // Last CPU that was selected
