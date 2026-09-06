@@ -7,6 +7,11 @@ namespace ia64 {
 struct EfiHandoffLayout {
     uint64_t base = 0;
     uint64_t end = 0;
+    uint64_t configurationTableAddr = 0;
+    uint64_t salSystemTableAddr = 0;
+    uint64_t salProcedureCodeAddr = 0;
+    uint64_t palProcedureCodeAddr = 0;
+    uint64_t salGlobalPointerAddr = 0;
     uint64_t runtimeServicesAddr = 0;
     uint64_t bootServicesAddr = 0;
     uint64_t firmwareVendorAddr = 0;
@@ -88,6 +93,11 @@ constexpr uint64_t kEfiLowMemoryFloor = 0x100000ULL;
 constexpr uint64_t kEfiRuntimeServicesOffset = 0x400ULL;
 constexpr uint64_t kEfiBootServicesOffset = 0x800ULL;
 constexpr uint64_t kEfiFirmwareVendorOffset = 0xC00ULL;
+constexpr uint64_t kEfiConfigurationTableOffset = 0x2000ULL;
+constexpr uint64_t kEfiSalSystemTableOffset = 0x2040ULL;
+constexpr uint64_t kEfiSalProcedureCodeOffset = 0x2140ULL;
+constexpr uint64_t kEfiPalProcedureCodeOffset = 0x2180ULL;
+constexpr uint64_t kEfiSalGlobalPointerOffset = 0x21C0ULL;
 constexpr uint64_t kEfiBootImageMetadataOffset = 0x1D00ULL;
 constexpr uint64_t kEfiOpenVolumeStubCodeOffset = 0xC80ULL;
 constexpr uint64_t kEfiOpenVolumeStubDescOffset = 0xCC0ULL;
@@ -196,6 +206,11 @@ inline bool tryComputeEfiHandoffLayout(uint64_t guestMemorySize, EfiHandoffLayou
 
     layout.base = base;
     layout.end = base + kEfiHandoffRegionSpan;
+    layout.configurationTableAddr = base + kEfiConfigurationTableOffset;
+    layout.salSystemTableAddr = base + kEfiSalSystemTableOffset;
+    layout.salProcedureCodeAddr = base + kEfiSalProcedureCodeOffset;
+    layout.palProcedureCodeAddr = base + kEfiPalProcedureCodeOffset;
+    layout.salGlobalPointerAddr = base + kEfiSalGlobalPointerOffset;
     layout.runtimeServicesAddr = base + kEfiRuntimeServicesOffset;
     layout.bootServicesAddr = base + kEfiBootServicesOffset;
     layout.firmwareVendorAddr = base + kEfiFirmwareVendorOffset;

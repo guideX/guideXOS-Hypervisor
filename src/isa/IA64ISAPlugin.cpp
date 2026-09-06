@@ -1,5 +1,6 @@
 #include "IA64ISAPlugin.h"
 #include "IA64EfiHandoffLayout.h"
+#include "IA64SalFirmware.h"
 #include "SyscallDispatcher.h"
 #include "Profiler.h"
 #include "PEParser.h"
@@ -160,6 +161,11 @@ constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_BASE = 0x1FE00000ULL;
 constexpr uint64_t EFI_DEFAULT_HANDOFF_REGION_END = 0x20000000ULL;
 uint64_t EFI_HANDOFF_REGION_BASE = EFI_DEFAULT_HANDOFF_REGION_BASE;
 uint64_t EFI_HANDOFF_REGION_END = EFI_DEFAULT_HANDOFF_REGION_END;
+uint64_t EFI_CONFIGURATION_TABLE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiConfigurationTableOffset;
+uint64_t EFI_SAL_SYSTEM_TABLE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalSystemTableOffset;
+uint64_t EFI_SAL_PROCEDURE_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalProcedureCodeOffset;
+uint64_t EFI_PAL_PROCEDURE_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiPalProcedureCodeOffset;
+uint64_t EFI_SAL_GLOBAL_POINTER_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalGlobalPointerOffset;
 uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRuntimeServicesOffset;
 uint64_t EFI_BOOT_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootServicesOffset;
 uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootImageMetadataOffset;
@@ -363,7 +369,18 @@ uint64_t normalizeKernelEntryIP(uint64_t target) {
 }
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
-    return normalizeKernelEntryIP(target);
+    const uint64_t normalized = normalizeKernelEntryIP(target);
+    constexpr uint64_t kIa64RegionOffsetMask = (1ULL << 61) - 1ULL;
+    constexpr uint64_t kIa64KernelRegionBase = 7ULL << 61;
+    const uint64_t bundleTarget = normalized & ~0xFULL;
+    if ((bundleTarget & ~kIa64RegionOffsetMask) == kIa64KernelRegionBase) {
+        const uint64_t physicalTarget = bundleTarget & kIa64RegionOffsetMask;
+        if (physicalTarget >= EFI_HANDOFF_REGION_BASE &&
+            physicalTarget < EFI_HANDOFF_REGION_END) {
+            return physicalTarget;
+        }
+    }
+    return normalized;
 }
 
 uint64_t normalizeRfiEntryIP(uint64_t target) {
@@ -435,6 +452,11 @@ const char* lookupEfiSlotName(uint64_t offset, const EfiSlotName (&slots)[N]) {
 void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_HANDOFF_REGION_BASE = base;
     EFI_HANDOFF_REGION_END = base + kEfiHandoffRegionSpan;
+    EFI_CONFIGURATION_TABLE_ADDR = base + kEfiConfigurationTableOffset;
+    EFI_SAL_SYSTEM_TABLE_ADDR = base + kEfiSalSystemTableOffset;
+    EFI_SAL_PROCEDURE_CODE_ADDR = base + kEfiSalProcedureCodeOffset;
+    EFI_PAL_PROCEDURE_CODE_ADDR = base + kEfiPalProcedureCodeOffset;
+    EFI_SAL_GLOBAL_POINTER_ADDR = base + kEfiSalGlobalPointerOffset;
     EFI_RUNTIME_SERVICES_ADDR = base + kEfiRuntimeServicesOffset;
     EFI_BOOT_SERVICES_ADDR = base + kEfiBootServicesOffset;
     EFI_BOOT_IMAGE_METADATA_ADDR = base + kEfiBootImageMetadataOffset;
@@ -1026,6 +1048,13 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
         }
     }
 
+    if (overlaps(EFI_CONFIGURATION_TABLE_ADDR, 24ULL)) {
+        append("EFI.ConfigurationTable.SAL");
+    }
+    if (overlaps(EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize)) {
+        append("SAL.SystemTable");
+    }
+
     if (first) {
         return {};
     }
@@ -1047,6 +1076,10 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
         }
     } else if (overlaps(0x5E000ULL, 0x80ULL)) {
         oss << "loader-local CHAR16 buffer";
+    } else if (overlaps(EFI_CONFIGURATION_TABLE_ADDR, 24ULL)) {
+        oss << "EFI configuration table SAL entry";
+    } else if (overlaps(EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize)) {
+        oss << "SAL System Table";
     }
     return oss.str();
 }
@@ -1074,8 +1107,13 @@ void logEfiHandoffAccess(const char* phase,
         rangesOverlap(address, size, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL);
     const bool overlapsLocalBuffer =
         rangesOverlap(address, size, 0x5E000ULL, 0x80ULL);
+    const bool overlapsConfigurationTable =
+        rangesOverlap(address, size, EFI_CONFIGURATION_TABLE_ADDR, 24ULL);
+    const bool overlapsSalSystemTable =
+        rangesOverlap(address, size, EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize);
     if (!overlapsLoadedImage && !overlapsFilePath && !overlapsSimpleFs &&
-        !overlapsOpenVolumeDescriptor && !overlapsLocalBuffer) {
+        !overlapsOpenVolumeDescriptor && !overlapsLocalBuffer &&
+        !overlapsConfigurationTable && !overlapsSalSystemTable) {
         return;
     }
 
@@ -2579,7 +2617,7 @@ ISADecodeResult IA64ISAPlugin::decode(IMemory& memory) {
             result.disassembly = instr.GetDisassembly();
         }
         result.internalData = &cachedInstruction_;
-        {
+        if (BootStageTrace::StageNeeded(110)) {
             std::ostringstream ctx;
             ctx << "ip=" << BootStageTrace::Hex(result.instructionAddress)
                 << " slot=" << state_.currentSlot_
@@ -3062,6 +3100,41 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     branchTarget = cachedInstruction_.HasBranchTarget()
                         ? cachedInstruction_.GetBranchTarget()
                         : branchRegisterValue;
+                    if (normalizeBranchEntryIP(branchTarget) == EFI_PAL_PROCEDURE_CODE_ADDR) {
+                        CPUState& cpu = state_.getCPUState();
+                        const uint64_t function = cpu.GetGR(28);
+                        const uint64_t arg1 = cpu.GetGR(29);
+                        const uint64_t arg2 = cpu.GetGR(30);
+                        const uint64_t arg3 = cpu.GetGR(31);
+                        const sal::SalCallResult result = sal::dispatchPalCall(function);
+                        const int64_t status = result.status;
+                        const uint64_t v0 = result.v0;
+                        const uint64_t v1 = result.v1;
+                        const uint64_t v2 = result.v2;
+                        cpu.SetGR(8, static_cast<uint64_t>(status));
+                        cpu.SetGR(9, v0);
+                        cpu.SetGR(10, v1);
+                        cpu.SetGR(11, v2);
+                        branchTarget = cpu.GetBR(0);
+                        handledFirmwareCallStub = true;
+                        isBranch = true;
+                        std::cout << "[IA64-PAL] function=0x" << std::hex << function
+                                  << " args=[0x" << arg1 << ",0x" << arg2
+                                  << ",0x" << arg3 << "] status=" << std::dec
+                                  << status << " v0=0x" << std::hex << v0
+                                  << " v1=0x" << v1 << " v2=0x" << v2
+                                  << " return=0x" << branchTarget << std::dec << std::endl;
+                        std::ostringstream palTrace;
+                        palTrace << "function=" << BootStageTrace::Hex(function)
+                                 << " args=[" << BootStageTrace::Hex(arg1) << ","
+                                 << BootStageTrace::Hex(arg2) << ","
+                                 << BootStageTrace::Hex(arg3) << "] status=" << status
+                                 << " v0=" << BootStageTrace::Hex(v0)
+                                 << " v1=" << BootStageTrace::Hex(v1)
+                                 << " v2=" << BootStageTrace::Hex(v2)
+                                 << " return=" << BootStageTrace::Hex(branchTarget);
+                        BootStageTrace::Event("IA64_PAL_CALL", palTrace.str());
+                    }
                     // The IA-64 EFI bootloader uses a small low-address thunk for
                     // Boot Services calls that decodes as br.cond b6, but it is
                     // followed by an EFI function that returns through b0. Link
@@ -3250,7 +3323,48 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         BootStageTrace::Event("IA64_EA00_CALL", ea00.str());
                     }
                     if (!cachedInstruction_.HasBranchTarget() &&
-                        branchTarget == EFI_INPUT_RESET_STUB_CODE_ADDR) {
+                        normalizeBranchEntryIP(branchTarget) == EFI_SAL_PROCEDURE_CODE_ADDR) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t function = readCallerOutputRegister(state_.getCPUState(), 0);
+                        const uint64_t arg1 = readCallerOutputRegister(state_.getCPUState(), 1);
+                        const uint64_t arg2 = readCallerOutputRegister(state_.getCPUState(), 2);
+                        const uint64_t arg3 = readCallerOutputRegister(state_.getCPUState(), 3);
+                        const uint64_t arg4 = readCallerOutputRegister(state_.getCPUState(), 4);
+                        const uint64_t arg5 = readCallerOutputRegister(state_.getCPUState(), 5);
+                        const uint64_t arg6 = readCallerOutputRegister(state_.getCPUState(), 6);
+                        const uint64_t arg7 = readCallerOutputRegister(state_.getCPUState(), 7);
+                        const sal::SalCallResult result = sal::dispatchSalCall(function, arg1);
+                        const int64_t status = result.status;
+                        const uint64_t v0 = result.v0;
+                        const uint64_t v1 = result.v1;
+                        const uint64_t v2 = result.v2;
+                        state_.getCPUState().SetGR(8, static_cast<uint64_t>(status));
+                        state_.getCPUState().SetGR(9, v0);
+                        state_.getCPUState().SetGR(10, v1);
+                        state_.getCPUState().SetGR(11, v2);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        std::cout << "[IA64-SAL] function=0x" << std::hex << function
+                                  << " args=[0x" << arg1 << ",0x" << arg2 << ",0x" << arg3
+                                  << ",0x" << arg4 << ",0x" << arg5 << ",0x" << arg6
+                                  << ",0x" << arg7 << "] status=" << std::dec << status
+                                  << " v0=0x" << std::hex << v0 << " v1=0x" << v1
+                                  << " v2=0x" << v2 << std::dec << std::endl;
+                        std::ostringstream salTrace;
+                        salTrace << "function=" << BootStageTrace::Hex(function)
+                                 << " args=[" << BootStageTrace::Hex(arg1) << ","
+                                 << BootStageTrace::Hex(arg2) << ","
+                                 << BootStageTrace::Hex(arg3) << ","
+                                 << BootStageTrace::Hex(arg4) << ","
+                                 << BootStageTrace::Hex(arg5) << ","
+                                 << BootStageTrace::Hex(arg6) << ","
+                                 << BootStageTrace::Hex(arg7) << "] status=" << status
+                                 << " v0=" << BootStageTrace::Hex(v0)
+                                 << " v1=" << BootStageTrace::Hex(v1)
+                                 << " v2=" << BootStageTrace::Hex(v2);
+                        BootStageTrace::Event("IA64_SAL_CALL", salTrace.str());
+                    } else if (!cachedInstruction_.HasBranchTarget() &&
+                               branchTarget == EFI_INPUT_RESET_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         resetEfiConsoleInput();
                         branchTarget = currentIP + 16;
@@ -4457,7 +4571,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
 
         // Handle branch after execution
         if (isBranch) {
-            {
+            if (BootStageTrace::StageNeeded(120)) {
                 const char* branchKind = "branch";
                 if (cachedInstruction_.GetType() == InstructionType::BR_CALL) {
                     branchKind = "call";
@@ -5725,13 +5839,15 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
         state_.currentBundle_ = decoder_.DecodeBundleAt(bundleData, ip);
         state_.bundleValid_ = true;
         capturePredicateGroupSnapshot();
-        std::ostringstream ctx;
-        ctx << "bundleIP=" << BootStageTrace::Hex(ip)
-            << " template=" << BootStageTrace::Hex(static_cast<uint64_t>(state_.currentBundle_.templateType))
-            << " instructionCount=" << state_.currentBundle_.instructions.size()
-            << " bytes=" << readHexBytesPreview(memory, ip, 16)
-            << " " << cpuSummary(state_.getCPUState());
-        BootStageTrace::Stage(100, "First bundle fetched", ctx.str());
+        if (BootStageTrace::StageNeeded(100)) {
+            std::ostringstream ctx;
+            ctx << "bundleIP=" << BootStageTrace::Hex(ip)
+                << " template=" << BootStageTrace::Hex(static_cast<uint64_t>(state_.currentBundle_.templateType))
+                << " instructionCount=" << state_.currentBundle_.instructions.size()
+                << " bytes=" << readHexBytesPreview(memory, ip, 16)
+                << " " << cpuSummary(state_.getCPUState());
+            BootStageTrace::Stage(100, "First bundle fetched", ctx.str());
+        }
     } catch (const std::exception& e) {
         const auto& cpu = state_.getCPUState();
         BootStageTrace::EventOnce(
@@ -7763,13 +7879,19 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             (rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
-             rangesOverlap(loadAddress, loadSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL));
+             rangesOverlap(loadAddress, loadSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_CONFIGURATION_TABLE_ADDR, 24ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_SAL_SYSTEM_TABLE_ADDR,
+                           sal::kSalSystemTableSize));
         const bool traceEfiHandoffStore =
             storeSize != 0 &&
             (rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
-             rangesOverlap(storeAddress, storeSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL));
+             rangesOverlap(storeAddress, storeSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_CONFIGURATION_TABLE_ADDR, 24ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_SAL_SYSTEM_TABLE_ADDR,
+                           sal::kSalSystemTableSize));
         if (traceBootLocalLoad) {
             logBootLocalAccess("pre-read", cpu, state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),

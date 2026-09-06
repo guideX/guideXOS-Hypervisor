@@ -2,6 +2,10 @@
 
 #include <cstdint>
 #include <string>
+// linux_errno.h intentionally undefines host errno macros so its IA-64 enum
+// names remain usable.  Load the standard error constants first so later
+// <system_error>/<iostream> includes do not see an incomplete host errno set.
+#include <system_error>
 #include "linux_errno.h"
 
 namespace ia64 {

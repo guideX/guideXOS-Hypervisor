@@ -1,6 +1,7 @@
 #include "KernelPanic.h"
 #include <sstream>
 #include <iomanip>
+#include <cstring>
 
 namespace ia64 {
 

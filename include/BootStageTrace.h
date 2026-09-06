@@ -19,6 +19,10 @@ public:
         Instance().writeStage(stage, label, context);
     }
 
+    static bool StageNeeded(int stage) {
+        return Instance().stageNeeded(stage);
+    }
+
     static void Event(const std::string& tag, const std::string& context = {}) {
         Instance().writeLine("BOOT_EVENT " + tag, context);
     }
@@ -59,6 +63,11 @@ private:
         std::ostringstream tag;
         tag << "BOOT_STAGE_" << std::setw(3) << std::setfill('0') << stage << " " << label;
         writeLineLocked(tag.str(), context);
+    }
+
+    bool stageNeeded(int stage) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return seenStages_.find(stage) == seenStages_.end();
     }
 
     void writeEventOnce(const std::string& tag, const std::string& context) {

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cmath>
+#include <bit>
 #include <limits>
 
 namespace ia64 {
@@ -1451,7 +1452,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
 
         case InstructionType::POPCNT:
             // popcnt rDst = rSrc1: count all one bits in the 64-bit source.
-            cpu.SetGR(dst_, static_cast<uint64_t>(__builtin_popcountll(cpu.GetGR(src1_))));
+            cpu.SetGR(dst_, static_cast<uint64_t>(std::popcount(cpu.GetGR(src1_))));
             break;
 
         case InstructionType::SHRP:

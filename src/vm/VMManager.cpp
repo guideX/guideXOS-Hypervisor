@@ -6,6 +6,7 @@
 #include "PEParser.h"
 #include "TestKernelHandler.h"
 #include "IA64EfiHandoffLayout.h"
+#include "IA64SalFirmware.h"
 #include "memory.h"
 #include "IA64ISAPlugin.h"
 #include "logger.h"
@@ -581,6 +582,36 @@ void WriteIa64Bundle(VMInstance* instance,
     std::memcpy(bundle, &lo, sizeof(lo));
     std::memcpy(bundle + sizeof(lo), &hi, sizeof(hi));
     instance->vm->getMemory().Write(address, bundle, sizeof(bundle));
+}
+
+void WriteIa64SalFirmware(IMemory& memory, const EfiHandoffLayout& layout) {
+    const auto configurationEntry =
+        sal::buildEfiConfigurationTableEntry(layout.salSystemTableAddr);
+    memory.Write(layout.configurationTableAddr,
+                 configurationEntry.data(), configurationEntry.size());
+
+    const sal::SalEntryPoint entryPoint{
+        layout.palProcedureCodeAddr,
+        layout.salProcedureCodeAddr,
+        layout.salGlobalPointerAddr};
+    const sal::SalSystemTable table = sal::buildSalSystemTable(entryPoint);
+    memory.Write(layout.salSystemTableAddr, table.bytes.data(), table.bytes.size());
+
+    BootStageTrace::Event("EFI_SAL_HANDOFF",
+                          "configurationTable=" + BootStageTrace::Hex(layout.configurationTableAddr) +
+                          " numberOfTableEntries=1" +
+                          " guid=EB9D2D32-2D88-11D3-9A16-0090273FC14D" +
+                          " salSystemTable=" + BootStageTrace::Hex(layout.salSystemTableAddr) +
+                          " salTableSize=" + std::to_string(table.bytes.size()) +
+                          " salRevision=0.1 descriptorCount=1");
+
+    // The GP is an address-valued part of the SAL entry-point contract.  Keep
+    // the backing word resident in the same firmware handoff region so the
+    // guest never receives a host pointer if it inspects it.
+    const uint64_t globalPointerStorage = 0;
+    memory.Write(layout.salGlobalPointerAddr,
+                 reinterpret_cast<const uint8_t*>(&globalPointerStorage),
+                 sizeof(globalPointerStorage));
 }
 
 std::string previewBytes(IMemory& memory, uint64_t address, size_t count) {
@@ -1355,8 +1386,14 @@ bool VMManager::startVM(const std::string& vmId) {
             write64(layout.base + 0x50, layout.textOutputProtocolAddr);
             write64(layout.base + 0x58, layout.runtimeServicesAddr);
             write64(layout.base + 0x60, layout.bootServicesAddr);
-            write64(layout.base + 0x68, 0ULL);
-            write64(layout.base + 0x70, 0ULL);
+            write64(layout.base + 0x68, 1ULL);
+            write64(layout.base + 0x70, layout.configurationTableAddr);
+
+            WriteIa64SalFirmware(memory, layout);
+            WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
+                            nopI, nopI, brRetB0);
+            WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
+                            nopI, nopI, brRetB0);
 
             write64(layout.runtimeServicesAddr + 0x00, runtimeServicesSignature);
             write32(layout.runtimeServicesAddr + 0x08, 0x00010010U);
@@ -2268,8 +2305,14 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_STUB_ADDR + 0x50, EFI_TEXT_OUTPUT_PROTOCOL_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x58, EFI_RUNTIME_SERVICES_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x60, EFI_BOOT_SERVICES_ADDR);
-                                                                    write64(EFI_STUB_ADDR + 0x68, 0ULL); // NumberOfTableEntries
-                                                                    write64(EFI_STUB_ADDR + 0x70, 0ULL);
+                                                                    write64(EFI_STUB_ADDR + 0x68, 1ULL); // NumberOfTableEntries
+                                                                    write64(EFI_STUB_ADDR + 0x70, layout.configurationTableAddr);
+
+                                                                    WriteIa64SalFirmware(instance->vm->getMemory(), layout);
+                                                                    WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
+                                                                                    0x0ULL, 0x0ULL, 0x108000100ULL);
+                                                                    WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
+                                                                                    0x0ULL, 0x0ULL, 0x108000100ULL);
 
                                                                     write64(EFI_RUNTIME_SERVICES_ADDR + 0x00, EFI_RUNTIME_SERVICES_SIGNATURE);
                                                                     write32(EFI_RUNTIME_SERVICES_ADDR + 0x08, 0x00010010U);

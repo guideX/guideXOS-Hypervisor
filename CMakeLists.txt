@@ -86,6 +86,7 @@ set(VM_SOURCES
     src/vm/VirtualMachine.cpp
     src/vm/CPUContext.cpp
     src/vm/VMManager.cpp
+    src/vm/IA64SalFirmware.cpp
     src/vm/VMBootStateMachine.cpp
     src/vm/SimpleCPUScheduler.cpp
     src/vm/BootTraceSystem.cpp
@@ -165,6 +166,8 @@ set(HEADERS
     include/IMemory.h
     include/IISA.h
     include/IA64ISAPlugin.h
+    include/IA64EfiHandoffLayout.h
+    include/IA64SalFirmware.h
     include/ISAPluginRegistry.h
     include/ExampleISAPlugin.h
     include/riscv_decoder.h
@@ -206,6 +209,10 @@ add_executable(ia64emu
     ${HEADERS}
 )
 
+if(WIN32)
+    target_link_libraries(ia64emu PRIVATE ws2_32)
+endif()
+
 # Set warning level for MSVC
 if(MSVC)
     target_compile_options(ia64emu PRIVATE /W4)
@@ -221,6 +228,10 @@ add_executable(ia64emu_tests
     ${ALL_SOURCES}
     ${HEADERS}
 )
+
+if(WIN32)
+    target_link_libraries(ia64emu_tests PRIVATE ws2_32)
+endif()
 
 if(MSVC)
     target_compile_options(ia64emu_tests PRIVATE /W4)
@@ -283,12 +294,28 @@ else()
     target_compile_options(test_efi_memory_map PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# IA-64 SAL EFI table construction and independent validation tests
+add_executable(test_ia64_sal
+    tests/test_ia64_sal.cpp
+    src/vm/IA64SalFirmware.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_ia64_sal PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_sal PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # Full-machine diagnostic checkpoint format and state round-trip tests
 add_executable(test_vm_checkpoint
     tests/test_vm_checkpoint.cpp
     ${ALL_SOURCES}
     ${HEADERS}
 )
+
+if(WIN32)
+    target_link_libraries(test_vm_checkpoint PRIVATE ws2_32)
+endif()
 
 if(MSVC)
     target_compile_options(test_vm_checkpoint PRIVATE /W4)
@@ -452,6 +479,10 @@ add_executable(ia64_iso_matrix
     ${HEADERS}
 )
 
+if(WIN32)
+    target_link_libraries(ia64_iso_matrix PRIVATE ws2_32)
+endif()
+
 if(MSVC)
     target_compile_options(ia64_iso_matrix PRIVATE /W4)
 else()
@@ -585,6 +616,7 @@ enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
 add_test(NAME NewInstructionTests COMMAND test_new_instructions)
 add_test(NAME EfiMemoryMapTests COMMAND test_efi_memory_map)
+add_test(NAME IA64SalTests COMMAND test_ia64_sal)
 add_test(NAME VMCheckpointTests COMMAND test_vm_checkpoint)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
