@@ -104,6 +104,7 @@ enum class InstructionType {
     MOV_IMM,    // Move immediate to register
     MOVL,       // Move 64-bit immediate (L+X slots)
     GETF_SIG,   // Move floating-point significand to general register
+    GETF_EXP,   // Move floating-point sign/exponent to general register
     SETF_SIG,   // Move general-register value to floating-point significand
     
     // Arithmetic operations (A-type)

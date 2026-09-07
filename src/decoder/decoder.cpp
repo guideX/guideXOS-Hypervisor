@@ -1186,6 +1186,22 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::GETF_EXP:
+            {
+                // IA-64 GETF.EXP exposes the architectural FR sign and
+                // exponent fields directly.  Keep the result in the GR's
+                // low 18 bits and transfer the deferred-exception token
+                // independently through the GR NaT bit.
+                uint8_t fr[16] = {};
+                cpu.GetFR(src1_, fr);
+                const uint64_t signAndExponent = ReadLittleEndian64(fr + 8);
+                const uint64_t exponent = signAndExponent & 0x1FFFFULL;
+                const uint64_t sign = (signAndExponent >> 17) & 1ULL;
+                cpu.SetGR(dst_, exponent | (sign << 17));
+                cpu.SetGRNaT(dst_, IsNatVal(fr));
+            }
+            break;
+
         case InstructionType::SETF_SIG:
             {
                 uint8_t fr[16] = {};
@@ -2228,6 +2244,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::GETF_SIG:
             oss << "getf.sig r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::GETF_EXP:
+            oss << "getf.exp r" << static_cast<int>(dst_) << " = f" << static_cast<int>(src1_);
             break;
 
         case InstructionType::SETF_SIG:

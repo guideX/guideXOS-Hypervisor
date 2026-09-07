@@ -1022,6 +1022,76 @@ void test_latest_boot_log_blockers() {
                 std::memcmp(setfResult, predicatedSetfResult, sizeof(setfResult)) == 0);
     cpu.SetPR(1, true);
 
+    // M19 GETF.EXP: x6=0x1D, qp/r1/f2 fields, architectural sign/exponent
+    // extraction, NaT propagation, destination clearing, and predication.
+    const uint64_t getfExpRaw = 0x0874800C080ULL;
+    InstructionEx getf_exp = decoder.DecodeSlot(getfExpRaw, UnitType::M_UNIT, 0x4800500);
+    assert_true("Boot raw getf.exp should decode", getf_exp.GetType() == InstructionType::GETF_EXP);
+    assert_equal("Boot getf.exp destination register", 2, getf_exp.GetDst());
+    assert_equal("Boot getf.exp source FP register", 6, getf_exp.GetSrc1());
+    assert_equal("Boot getf.exp qualifying predicate", 0, getf_exp.GetPredicate());
+    assert_string("Boot getf.exp disassembly",
+                  "getf.exp r2 = f6",
+                  getf_exp.GetDisassembly());
+
+    auto setFloatingRegisterFormat = [&](uint64_t signAndExponent, uint64_t significand,
+                                         bool natVal = false) {
+        uint8_t value[16] = {};
+        for (int i = 0; i < 8; ++i) {
+            value[i] = static_cast<uint8_t>(significand >> (i * 8));
+            value[8 + i] = static_cast<uint8_t>(signAndExponent >> (i * 8));
+        }
+        if (natVal) {
+            std::memset(value, 0, sizeof(value));
+            value[8] = 0xFE;
+            value[9] = 0xFF;
+            value[10] = 0x01;
+        }
+        cpu.SetFR(6, value);
+    };
+
+    constexpr uint64_t getfExpExponent = 0x12345ULL;
+    setFloatingRegisterFormat(getfExpExponent, 0x8000000000000000ULL);
+    cpu.SetGR(2, UINT64_MAX);
+    cpu.SetGRNaT(2, true);
+    getf_exp.Execute(cpu, memory);
+    assert_equal("getf.exp normal value returns exponent field",
+                 getfExpExponent, cpu.GetGR(2));
+    assert_true("getf.exp clears destination upper bits", (cpu.GetGR(2) >> 18) == 0);
+    assert_true("getf.exp clears destination NaT for non-NaT source", !cpu.GetGRNaT(2));
+
+    setFloatingRegisterFormat((1ULL << 17) | getfExpExponent, 0x8000000000000000ULL);
+    cpu.SetGR(2, 0);
+    getf_exp.Execute(cpu, memory);
+    assert_equal("getf.exp preserves exponent and maps sign to bit 17",
+                 (1ULL << 17) | getfExpExponent, cpu.GetGR(2));
+
+    setFloatingRegisterFormat(0, 0x8000000000000000ULL);
+    getf_exp.Execute(cpu, memory);
+    assert_equal("getf.exp accepts exponent field zero", 0, cpu.GetGR(2));
+
+    setFloatingRegisterFormat(0x1FFFFULL, 0x8000000000000000ULL);
+    getf_exp.Execute(cpu, memory);
+    assert_equal("getf.exp preserves the maximum 17-bit exponent", 0x1FFFFULL, cpu.GetGR(2));
+
+    setFloatingRegisterFormat(0x1FFFEULL, 0, true);
+    cpu.SetGR(2, UINT64_MAX);
+    cpu.SetGRNaT(2, false);
+    getf_exp.Execute(cpu, memory);
+    assert_equal("getf.exp NaTVal keeps architectural field result", 0x1FFFEULL, cpu.GetGR(2));
+    assert_true("getf.exp propagates source NaTVal to destination GR NaT", cpu.GetGRNaT(2));
+
+    setFloatingRegisterFormat(getfExpExponent, 0x8000000000000000ULL);
+    cpu.SetGR(2, 0xFEDCBA9876543210ULL);
+    cpu.SetGRNaT(2, true);
+    cpu.SetPR(1, false);
+    InstructionEx predicatedGetfExp = getf_exp;
+    predicatedGetfExp.SetPredicate(1);
+    predicatedGetfExp.Execute(cpu, memory);
+    assert_equal("false-predicated getf.exp preserves destination", 0xFEDCBA9876543210ULL, cpu.GetGR(2));
+    assert_true("false-predicated getf.exp preserves destination NaT", cpu.GetGRNaT(2));
+    cpu.SetPR(1, true);
+
     InstructionEx xma_l = decoder.DecodeSlot(0x1d048a10280ULL, UnitType::F_UNIT, 0x36ed0);
     assert_true("Boot raw F-unit xma.l should decode", xma_l.GetType() == InstructionType::XMA);
     assert_equal("Boot xma.l destination FP register", 10, xma_l.GetDst());

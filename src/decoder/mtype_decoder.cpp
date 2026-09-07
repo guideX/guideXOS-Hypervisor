@@ -203,8 +203,9 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                 return false;
 
             case 0x4:
-                if (x == 1 && m == 0 && x6 == 0x1C) {
+                if (x == 1 && m == 0 && (x6 == 0x1C || x6 == 0x1D)) {
                     result.operation = formats::MFormat::MemOp::GETF;
+                    result.getf_exponent = x6 == 0x1D;
                     return true;
                 }
 
@@ -393,7 +394,9 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::GETF) {
-            instr = InstructionEx(InstructionType::GETF_SIG, UnitType::M_UNIT);
+            instr = InstructionEx(fmt.getf_exponent ? InstructionType::GETF_EXP
+                                                     : InstructionType::GETF_SIG,
+                                  UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r2, 0);
             return true;
