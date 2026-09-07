@@ -333,6 +333,12 @@ public:
     uint64_t getTimerBaseAddress() const;
     BasicInterruptController* getInterruptController();
     const BasicInterruptController* getInterruptController() const;
+    class ProcessorInterruptBlock* getProcessorInterruptBlock() {
+        return processorInterruptBlock_.get();
+    }
+    const class ProcessorInterruptBlock* getProcessorInterruptBlock() const {
+        return processorInterruptBlock_.get();
+    }
     
     // ========================================================================
     // Console Output Access
@@ -646,6 +652,7 @@ private:
     // ========================================================================
 
     std::unique_ptr<Memory> memory_;                // Memory system (shared)
+    std::unique_ptr<class ProcessorInterruptBlock> processorInterruptBlock_;
     std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder (shared)
     std::vector<CPUContext> cpus_;                  // CPU contexts (isolated state)
     std::unique_ptr<ICPUScheduler> scheduler_;      // CPU scheduler

@@ -206,6 +206,21 @@ uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
         }
     }
 
+    // IA-64 region 6 is the uncached physical alias. The replay-specific
+    // region-6 RAM window above is intentionally checked first; all other
+    // region-6 addresses retain their physical offset so MMIO devices such as
+    // the Processor Interrupt Block are reached after normalization.
+    constexpr uint64_t kRegion6Base = 0xC000000000000000ULL;
+    constexpr uint64_t kRegionMask = 0xE000000000000000ULL;
+    constexpr uint64_t kRegionOffsetMask = 0x1FFFFFFFFFFFFFFFULL;
+    if ((address & kRegionMask) == kRegion6Base) {
+        const uint64_t physicalAddress = address & kRegionOffsetMask;
+        if (static_cast<uint64_t>(size) <=
+            std::numeric_limits<uint64_t>::max() - physicalAddress) {
+            return physicalAddress;
+        }
+    }
+
     if (address < kKernelVirtualBase) {
         return address;
     }
@@ -1881,6 +1896,10 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 const uint64_t baseAddress = cpu.GetGR(dst_);
                 uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 8);
                 uint64_t value = cpu.GetGR(src1_);
+                // st8.rel is a release store. The emulator's instruction
+                // boundary model is synchronous and single-threaded, so the
+                // prior guest stores have completed before this device write
+                // is dispatched; no host-memory fence is needed here.
                 memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 8);
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));

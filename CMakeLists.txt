@@ -80,6 +80,7 @@ set(IO_SOURCES
     src/io/Timer.cpp
     src/io/InterruptController.cpp
     src/io/FramebufferDevice.cpp
+    src/io/ProcessorInterruptBlock.cpp
 )
 
 set(VM_SOURCES
@@ -191,6 +192,7 @@ set(HEADERS
     include/Console.h
     include/Timer.h
     include/InterruptController.h
+    include/ProcessorInterruptBlock.h
     include/Profiler.h
     include/Fuzzer.h
     include/APITypes.h
@@ -442,6 +444,23 @@ add_executable(test_ia64_interrupt_controller
 
 if(WIN32)
     target_link_libraries(test_ia64_interrupt_controller PRIVATE ws2_32)
+endif()
+
+# IA-64 Processor Interrupt Block address/data decode and IPI delivery tests
+add_executable(test_ia64_processor_interrupt_block
+    tests/test_ia64_processor_interrupt_block.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ia64_processor_interrupt_block PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ia64_processor_interrupt_block PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_processor_interrupt_block PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

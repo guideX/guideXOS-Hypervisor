@@ -8,6 +8,7 @@
 #include "InterruptController.h"
 #include "Timer.h"
 #include "FramebufferDevice.h"
+#include "ProcessorInterruptBlock.h"
 #include "logger.h"
 #include "ISAPluginRegistry.h"
 #include "IA64ISAPlugin.h"
@@ -27,6 +28,7 @@ namespace ia64 {
 
 VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::string& isaName)
 : memory_(nullptr),
+  processorInterruptBlock_(nullptr),
   decoder_(nullptr),
   scheduler_(nullptr),
   interruptController_(nullptr),
@@ -70,9 +72,41 @@ try {
     // Create framebuffer device (default 640x480 at standard VGA region)
     framebufferDevice_ = std::make_unique<FramebufferDevice>();
 
+    processorInterruptBlock_ = std::make_unique<ProcessorInterruptBlock>(
+        [this](uint8_t id, uint8_t eid, uint8_t vector, uint8_t deliveryMode,
+               bool redirect) {
+            if (redirect || deliveryMode != ProcessorInterruptBlock::kDeliveryModeInt) {
+                return false;
+            }
+
+            const uint16_t targetLid =
+                static_cast<uint16_t>((static_cast<uint16_t>(id) << 8) | eid);
+            for (CPUContext& context : cpus_) {
+                if (!context.isaPlugin || !context.cpu) {
+                    continue;
+                }
+                auto* ia64 = dynamic_cast<IA64ISAPlugin*>(context.isaPlugin.get());
+                if (ia64 == nullptr) {
+                    continue;
+                }
+                const uint16_t localLid = static_cast<uint16_t>(
+                    ia64->getCPUState().GetCR(IA64_CR_LID) & 0xffffULL);
+                if (localLid != targetLid) {
+                    continue;
+                }
+                ia64->queueInterrupt(vector);
+                if (context.state == CPUExecutionState::WAITING) {
+                    context.state = CPUExecutionState::RUNNING;
+                }
+                return true;
+            }
+            return false;
+        });
+
     memory_->RegisterDevice(consoleDevice_.get());
     memory_->RegisterDevice(timerDevice_.get());
     memory_->RegisterDevice(framebufferDevice_.get());
+    memory_->RegisterDevice(processorInterruptBlock_.get());
         
     // Create CPU contexts with specified ISA
     if (!createCPUs(numCPUs, isaName)) {

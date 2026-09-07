@@ -1,5 +1,6 @@
 #include "VMManager.h"
 #include "IA64ISAPlugin.h"
+#include "ProcessorInterruptBlock.h"
 #include "logger.h"
 
 #include <algorithm>
@@ -370,6 +371,31 @@ void printInterruptTelemetry(const ia64::IA64ISAPlugin& plugin, const char* phas
     }
 }
 
+void printProcessorInterruptTelemetry(const ia64::VirtualMachine& vm, const char* phase) {
+    const ia64::ProcessorInterruptBlock* pib = vm.getProcessorInterruptBlock();
+    if (pib == nullptr) {
+        return;
+    }
+    const auto& statistics = pib->getStatistics();
+    std::cerr << "[IA64-PIB] phase=" << phase
+              << " writes=" << statistics.writes
+              << " acceptedINT=" << statistics.acceptedInt
+              << " invalidVector=" << statistics.ignoredInvalidVector
+              << " unsupportedMode=" << statistics.ignoredUnsupportedMode
+              << " redirect=" << statistics.ignoredRedirect
+              << " unavailableTarget=" << statistics.unavailableTarget;
+    if (statistics.hasLastMessage) {
+        std::cerr << " lastID=0x" << std::hex
+                  << static_cast<unsigned>(statistics.lastAddress.id)
+                  << " lastEID=0x" << static_cast<unsigned>(statistics.lastAddress.eid)
+                  << " lastRedirect=" << (statistics.lastAddress.redirect ? 1 : 0)
+                  << " lastVector=0x" << static_cast<unsigned>(statistics.lastMessage.vector)
+                  << " lastDM=" << static_cast<unsigned>(statistics.lastMessage.deliveryMode)
+                  << std::dec;
+    }
+    std::cerr << "\n";
+}
+
 uint64_t canonicalKernelVma(uint64_t rawIP) {
     constexpr uint64_t virtualBase = 0xA000000100000000ULL;
     constexpr uint64_t physicalBase = 0x04000000ULL;
@@ -589,6 +615,7 @@ int main(int argc, char** argv) {
             if (ia64::IA64ISAPlugin* plugin = getPlugin(*vm)) {
                 printInterruptTelemetry(*plugin, "restore");
             }
+            printProcessorInterruptTelemetry(*vm, "restore");
             return 0;
         }
 
@@ -797,6 +824,7 @@ int main(int argc, char** argv) {
                       << " totalFileBytesRead=0x" << std::hex << summary.totalFileBytesRead
                       << std::dec << std::endl;
             printInterruptTelemetry(*plugin, "normal");
+            printProcessorInterruptTelemetry(*vm, "normal");
             for (size_t i = 0; i < summary.openFilePaths.size(); ++i) {
                 std::cerr << "[IA64-MATRIX] open-file path=\"" << summary.openFilePaths[i]
                           << "\" position=0x" << std::hex << summary.openFilePositions[i]
