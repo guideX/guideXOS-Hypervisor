@@ -2501,6 +2501,12 @@ void IA64ISAPlugin::resetEfiProtocolAttachments() {
 
 void IA64ISAPlugin::reset() {
     state_.reset();
+    interruptInService_ = false;
+    inServiceVector_ = IA64_SPURIOUS_INT_VECTOR;
+    timerCompareLatched_ = false;
+    intervalTimerConfigured_ = false;
+    interruptTelemetry_ = IA64InterruptTelemetry();
+    lastInterruptTransactionValid_ = false;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
     recentInstructions_.clear();
@@ -4933,7 +4939,7 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
     }
 
     // Service interrupts first
-    servicePendingInterrupt(memory);
+    servicePendingInterrupt();
     
     // Decode and execute
     const uint64_t ipBeforeDecode = state_.getCPUState().GetIP();
@@ -5019,6 +5025,12 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     }
     
     state_ = *ia64State;
+    interruptInService_ = false;
+    inServiceVector_ = IA64_SPURIOUS_INT_VECTOR;
+    timerCompareLatched_ = false;
+    intervalTimerConfigured_ = false;
+    interruptTelemetry_ = IA64InterruptTelemetry();
+    lastInterruptTransactionValid_ = false;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
     resetEfiProtocolAttachments();
@@ -5397,6 +5409,10 @@ std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
     writer.u64(efiHandoffBoundary_.targetIP); writeSize(efiHandoffBoundary_.targetSlot);
     writer.u8(efiHandoffCheckpointConsumed_ ? 1 : 0);
     writer.u8(hasCachedInstruction_ ? 1 : 0);
+    writer.u8(interruptInService_ ? 1 : 0);
+    writer.u8(inServiceVector_);
+    writer.u8(timerCompareLatched_ ? 1 : 0);
+    writer.u8(intervalTimerConfigured_ ? 1 : 0);
 
     return std::move(writer.data);
 }
@@ -5713,8 +5729,22 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         bool restoredCheckpointConsumed = false;
         bool restoredHasCachedInstruction = false;
         if (!readFlag(restoredCheckpointConsumed) || !readFlag(restoredHasCachedInstruction) ||
-            restoredHasCachedInstruction || !reader.valid() || reader.remaining() != 0 ||
+            restoredHasCachedInstruction || !reader.valid() ||
             bundleValid || currentSlot != 0) return false;
+        bool restoredInterruptInService = false;
+        uint8_t restoredInServiceVector = IA64_SPURIOUS_INT_VECTOR;
+        bool restoredTimerCompareLatched = false;
+        bool restoredIntervalTimerConfigured = false;
+        // The original checkpoint predates local interrupt-controller state.
+        // Treat the trailing fields as optional so the authentic SAL
+        // checkpoint remains loadable without rewriting it.
+        if (reader.remaining() != 0) {
+            if (!readFlag(restoredInterruptInService)) return false;
+            restoredInServiceVector = reader.u8();
+            if (!readFlag(restoredTimerCompareLatched)) return false;
+            if (reader.remaining() != 0 && !readFlag(restoredIntervalTimerConfigured)) return false;
+        }
+        if (!reader.valid() || reader.remaining() != 0) return false;
 
         state_.getCPUState() = restoredCPU;
         state_.currentBundle_ = Bundle();
@@ -5815,6 +5845,12 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         pendingRegisterConfigEntryArmed_ = restoredRegisterConfigArmed;
         efiHandoffBoundaryPending_ = restoredBoundaryPending; efiHandoffBoundary_ = restoredBoundary;
         efiHandoffCheckpointConsumed_ = restoredCheckpointConsumed;
+        interruptInService_ = restoredInterruptInService;
+        inServiceVector_ = restoredInServiceVector;
+        timerCompareLatched_ = restoredTimerCompareLatched;
+        intervalTimerConfigured_ = restoredIntervalTimerConfigured ||
+                                   restoredCPU.GetCR(IA64_CR_ITM) != 0;
+        interruptTelemetry_ = IA64InterruptTelemetry();
         return true;
     } catch (...) {
         return false;
@@ -5941,7 +5977,11 @@ void IA64ISAPlugin::setCFM(uint64_t value) {
 }
 
 void IA64ISAPlugin::queueInterrupt(uint8_t vector) {
+    if (vector <= IA64_SPURIOUS_INT_VECTOR) {
+        return;
+    }
     state_.pendingInterrupts_.push_back(vector);
+    ++interruptTelemetry_.queuedInterrupts;
 }
 
 bool IA64ISAPlugin::hasPendingInterrupt() const {
@@ -5970,6 +6010,188 @@ void IA64ISAPlugin::setInterruptVectorBase(uint64_t baseAddress) {
 
 uint64_t IA64ISAPlugin::getInterruptVectorBase() const {
     return state_.interruptVectorBase_;
+}
+
+void IA64ISAPlugin::advanceITC(uint64_t ticks) {
+    state_.getCPUState().AdvanceITC(ticks);
+    updateIntervalTimer();
+}
+
+uint64_t IA64ISAPlugin::readControlRegister(size_t selector) {
+    CPUState& cpu = state_.getCPUState();
+    if (selector < interruptTelemetry_.indirectControlRegisterReadHistogram.size()) {
+        ++interruptTelemetry_.indirectControlRegisterReadHistogram[selector];
+    }
+    if (selector != IA64_CR_IVR) {
+        if (selector >= NUM_CONTROL_REGISTERS) {
+            throw std::out_of_range("IA-64 control-register selector out of range");
+        }
+        return cpu.GetCR(selector);
+    }
+
+    ++interruptTelemetry_.ivrReads;
+    uint8_t vector = IA64_SPURIOUS_INT_VECTOR;
+    if (interruptInService_) {
+        // The IVT entry reads IVR to recover the vector that caused entry.
+        // Once EOI clears in-service state, a later read selects the next
+        // eligible pending vector or returns the architectural spurious code.
+        vector = inServiceVector_;
+    } else {
+        const int pendingIndex = findHighestEligibleInterrupt();
+        if (pendingIndex >= 0) {
+            vector = state_.pendingInterrupts_[static_cast<size_t>(pendingIndex)];
+            state_.pendingInterrupts_.erase(
+                state_.pendingInterrupts_.begin() + pendingIndex);
+            interruptInService_ = true;
+            inServiceVector_ = vector;
+        } else {
+            ++interruptTelemetry_.spuriousIvrReads;
+        }
+    }
+
+    ++interruptTelemetry_.ivrVectorHistogram[vector];
+    noteInterruptTransaction(vector);
+    const uint64_t timerVector = cpu.GetCR(IA64_CR_ITV) & 0xFFULL;
+    if (vector == timerVector && vector != IA64_SPURIOUS_INT_VECTOR) {
+        ++interruptTelemetry_.timerVectorReads;
+    } else if (vector != IA64_SPURIOUS_INT_VECTOR) {
+        ++interruptTelemetry_.otherVectorReads;
+    }
+    return vector;
+}
+
+void IA64ISAPlugin::writeControlRegister(size_t selector, uint64_t value) {
+    if (selector >= NUM_CONTROL_REGISTERS) {
+        throw std::out_of_range("IA-64 control-register selector out of range");
+    }
+
+    CPUState& cpu = state_.getCPUState();
+    if (selector < interruptTelemetry_.indirectControlRegisterWriteHistogram.size()) {
+        ++interruptTelemetry_.indirectControlRegisterWriteHistogram[selector];
+    }
+    switch (selector) {
+        case IA64_CR_EOI:
+            cpu.SetCR(selector, value);
+            ++interruptTelemetry_.eoiWrites;
+            if (interruptInService_) {
+                ++interruptTelemetry_.interruptReturns;
+                if (inServiceVector_ == (cpu.GetCR(IA64_CR_ITV) & 0xFFULL) &&
+                    interruptTelemetry_.firstTimerEoiIP == 0) {
+                    interruptTelemetry_.firstTimerEoiIP = cpu.GetIP();
+                }
+                interruptInService_ = false;
+                inServiceVector_ = IA64_SPURIOUS_INT_VECTOR;
+            }
+            break;
+        case IA64_CR_TPR:
+            cpu.SetCR(selector, value);
+            ++interruptTelemetry_.tprWrites;
+            break;
+        case IA64_CR_ITV:
+            cpu.SetCR(selector, value);
+            ++interruptTelemetry_.itvWrites;
+            if (!interruptTelemetry_.firstItvWriteSeen) {
+                interruptTelemetry_.firstItvWriteSeen = true;
+                interruptTelemetry_.firstItvWriteIP = cpu.GetIP();
+                interruptTelemetry_.firstItvValue = value;
+            }
+            updateIntervalTimer();
+            break;
+        case IA64_CR_ITM:
+            cpu.SetCR(selector, value);
+            ++interruptTelemetry_.itmWrites;
+            timerCompareLatched_ = false;
+            intervalTimerConfigured_ = true;
+            if (!interruptTelemetry_.firstItmWriteSeen) {
+                interruptTelemetry_.firstItmWriteSeen = true;
+                interruptTelemetry_.firstItmWriteIP = cpu.GetIP();
+                interruptTelemetry_.firstItmValue = value;
+                interruptTelemetry_.firstItmProgrammingITC = cpu.GetAR(44);
+            } else if (interruptTelemetry_.firstTimerFiringSeen &&
+                       interruptTelemetry_.firstReplacementITM == 0) {
+                interruptTelemetry_.firstReplacementITM = value;
+            }
+            updateIntervalTimer();
+            break;
+        default:
+            cpu.SetCR(selector, value);
+            break;
+    }
+}
+
+bool IA64ISAPlugin::tryDeliverPendingInterrupt() {
+    return servicePendingInterrupt();
+}
+
+bool IA64ISAPlugin::isInterruptEligible(uint8_t vector) const {
+    if (vector <= IA64_SPURIOUS_INT_VECTOR) return false;
+    const uint64_t tpr = state_.getCPUState().GetCR(IA64_CR_TPR);
+    // TPR's priority-class field is bits 7:4.  The low nibble is not a
+    // Boolean mask; vectors in a higher class remain deliverable.
+    return (vector >> 4) > ((tpr >> 4) & 0x0FULL);
+}
+
+int IA64ISAPlugin::findHighestEligibleInterrupt() const {
+    int best = -1;
+    uint8_t bestVector = IA64_SPURIOUS_INT_VECTOR;
+    for (size_t index = 0; index < state_.pendingInterrupts_.size(); ++index) {
+        const uint8_t vector = state_.pendingInterrupts_[index];
+        if (!isInterruptEligible(vector)) continue;
+        if (best < 0 || vector > bestVector) {
+            best = static_cast<int>(index);
+            bestVector = vector;
+        }
+    }
+    return best;
+}
+
+void IA64ISAPlugin::updateIntervalTimer() {
+    CPUState& cpu = state_.getCPUState();
+    const uint64_t itv = cpu.GetCR(IA64_CR_ITV);
+    const uint64_t itm = cpu.GetCR(IA64_CR_ITM);
+    const uint64_t itc = cpu.GetAR(44);
+    if (!intervalTimerConfigured_ || timerCompareLatched_ ||
+        (itv & IA64_ITV_MASK) != 0 ||
+        static_cast<int64_t>(itc - itm) < 0) {
+        return;
+    }
+
+    const uint8_t vector = static_cast<uint8_t>(itv & 0xFFULL);
+    if (vector <= IA64_SPURIOUS_INT_VECTOR) return;
+    timerCompareLatched_ = true;
+    state_.pendingInterrupts_.push_back(vector);
+    ++interruptTelemetry_.queuedInterrupts;
+    ++interruptTelemetry_.timerCompareEvents;
+    if (!interruptTelemetry_.firstTimerFiringSeen) {
+        interruptTelemetry_.firstTimerFiringSeen = true;
+        interruptTelemetry_.firstTimerFiringITC = itc;
+        interruptTelemetry_.firstTimerVector = vector;
+        const uint64_t iva = cpu.GetCR(IA64_CR_IVA);
+        interruptTelemetry_.firstTimerHandlerIP =
+            (iva != 0 ? iva : state_.interruptVectorBase_) +
+            (static_cast<uint64_t>(vector) * 16ULL);
+    }
+}
+
+void IA64ISAPlugin::noteInterruptTransaction(uint8_t vector) {
+    const CPUState& cpu = state_.getCPUState();
+    const uint64_t tpr = cpu.GetCR(IA64_CR_TPR);
+    const uint64_t itv = cpu.GetCR(IA64_CR_ITV);
+    const uint64_t itm = cpu.GetCR(IA64_CR_ITM);
+    if (lastInterruptTransactionValid_ &&
+        lastInterruptTransactionIP_ == cpu.GetIP() &&
+        lastInterruptTransactionVector_ == vector &&
+        lastInterruptTransactionTPR_ == tpr &&
+        lastInterruptTransactionITV_ == itv &&
+        lastInterruptTransactionITM_ == itm) {
+        ++interruptTelemetry_.transactionRepeats;
+    }
+    lastInterruptTransactionIP_ = cpu.GetIP();
+    lastInterruptTransactionVector_ = vector;
+    lastInterruptTransactionTPR_ = tpr;
+    lastInterruptTransactionITV_ = itv;
+    lastInterruptTransactionITM_ = itm;
+    lastInterruptTransactionValid_ = true;
 }
 
 bool IA64ISAPlugin::isAtBundleBoundary() const {
@@ -8251,7 +8473,17 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             pendingRegisterConfigEntryTarget_ = 0;
             pendingRegisterConfigEntryCallsite_ = 0;
         }
-        instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        // The generic InstructionEx executor intentionally treats indirect
+        // control registers as storage for decoder/unit tests.  The IA-64
+        // plugin must route the live guest's interrupt/timer registers through
+        // their architectural side effects instead.
+        if (instr.GetType() == InstructionType::MOV_FROM_CR) {
+            cpu.SetGR(instr.GetDst(), readControlRegister(instr.GetSrc1()));
+        } else if (instr.GetType() == InstructionType::MOV_TO_CR) {
+            writeControlRegister(instr.GetDst(), cpu.GetGR(instr.GetSrc1()));
+        } else {
+            instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        }
         if (traceBootLocalLoad) {
             logBootLocalAccess("post-read", state_.getCPUState(), state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),
@@ -8499,31 +8731,38 @@ bool IA64ISAPlugin::checkPredicate(size_t predicateReg) const {
     return state_.getCPUState().GetPR(predicateReg);
 }
 
-void IA64ISAPlugin::servicePendingInterrupt(IMemory& memory) {
-    if (!hasPendingInterrupt() || !areInterruptsEnabled()) {
-        return;
+bool IA64ISAPlugin::servicePendingInterrupt() {
+    if (interruptInService_ || !hasPendingInterrupt()) return false;
+    if (!areInterruptsEnabled()) {
+        ++interruptTelemetry_.blockedByPsr;
+        return false;
     }
-    
-    // Get the first pending interrupt
-    uint8_t vector = state_.pendingInterrupts_.front();
-    state_.pendingInterrupts_.erase(state_.pendingInterrupts_.begin());
-    
-    // Calculate interrupt handler address
-    uint64_t handlerAddress = state_.interruptVectorBase_ + (vector * 16);
-    
-    // In a real implementation, we would:
-    // 1. Save current IP to IIP (Interruption Instruction Pointer)
-    // 2. Save PSR to IPSR (Interruption PSR)
-    // 3. Set IP to handler address
-    // 4. Disable interrupts
-    // 5. Switch to privileged mode
-    
-    std::cout << "Servicing interrupt vector " << static_cast<int>(vector)
-              << " at handler 0x" << std::hex << handlerAddress << std::dec << "\n";
-    
-    // For now, just jump to the handler
-    state_.getCPUState().SetIP(handlerAddress);
+
+    const int pendingIndex = findHighestEligibleInterrupt();
+    if (pendingIndex < 0) {
+        ++interruptTelemetry_.blockedByTpr;
+        return false;
+    }
+
+    CPUState& cpu = state_.getCPUState();
+    const uint8_t vector = state_.pendingInterrupts_[static_cast<size_t>(pendingIndex)];
+    state_.pendingInterrupts_.erase(
+        state_.pendingInterrupts_.begin() + pendingIndex);
+    interruptInService_ = true;
+    inServiceVector_ = vector;
+    cpu.SetCR(IA64_CR_IIP, cpu.GetIP());
+    cpu.SetCR(IA64_CR_IPSR, cpu.GetPSR());
+    cpu.SetPSR(cpu.GetPSR() & ~IA64_PSR_I);
+    const uint64_t iva = cpu.GetCR(IA64_CR_IVA);
+    const uint64_t handlerAddress =
+        (iva != 0 ? iva : state_.interruptVectorBase_) +
+        (static_cast<uint64_t>(vector) * 16ULL);
+    cpu.SetIP(handlerAddress);
     state_.bundleValid_ = false;
+    state_.currentSlot_ = 0;
+    ++interruptTelemetry_.interruptEntries;
+    ++interruptTelemetry_.deliveredVectorHistogram[vector];
+    return true;
 }
 
 uint8_t IA64ISAPlugin::getGRRotationBase() const {

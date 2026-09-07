@@ -433,6 +433,23 @@ else()
     target_compile_options(test_io_devices PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# IA-64 local interrupt-controller and interval-timer architectural sequences
+add_executable(test_ia64_interrupt_controller
+    tests/test_ia64_interrupt_controller.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ia64_interrupt_controller PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ia64_interrupt_controller PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_interrupt_controller PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # Debugger test
 add_executable(test_debugger
     tests/test_debugger.cpp

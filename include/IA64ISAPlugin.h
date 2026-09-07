@@ -17,6 +17,64 @@
 
 namespace ia64 {
 
+// IA-64 control-register selectors used by the interrupt and interval-timer
+// paths.  The indirect MOV_FROM_CR/MOV_TO_CR cr3 field uses the compact
+// encodings below for the external-interrupt register block (the Linux
+// ia64_getreg enum values and the reference table's descriptive cr numbers
+// are different namespaces).
+constexpr size_t IA64_CR_ITM = 1;
+constexpr size_t IA64_CR_IVA = 2;
+constexpr size_t IA64_CR_IPSR = 16;
+constexpr size_t IA64_CR_IIP = 19;
+constexpr size_t IA64_CR_LID = 66;
+constexpr size_t IA64_CR_IVR = 65;
+constexpr size_t IA64_CR_TPR = 72;
+constexpr size_t IA64_CR_EOI = 67;
+constexpr size_t IA64_CR_ITV = 79;
+constexpr size_t IA64_CR_PMV = 80;
+constexpr size_t IA64_CR_LRR0 = 82;
+constexpr size_t IA64_CR_LRR1 = 83;
+constexpr size_t IA64_CR_CMCV = 81;
+constexpr uint8_t IA64_SPURIOUS_INT_VECTOR = 0x0f;
+constexpr uint64_t IA64_PSR_I = 1ULL << 14;
+constexpr uint64_t IA64_ITV_MASK = 1ULL << 16;
+
+struct IA64InterruptTelemetry {
+    uint64_t ivrReads = 0;
+    uint64_t eoiWrites = 0;
+    uint64_t tprWrites = 0;
+    uint64_t itvWrites = 0;
+    uint64_t itmWrites = 0;
+    uint64_t queuedInterrupts = 0;
+    uint64_t timerCompareEvents = 0;
+    uint64_t interruptEntries = 0;
+    uint64_t interruptReturns = 0;
+    uint64_t blockedByPsr = 0;
+    uint64_t blockedByTpr = 0;
+    uint64_t spuriousIvrReads = 0;
+    uint64_t timerVectorReads = 0;
+    uint64_t otherVectorReads = 0;
+    uint64_t transactionRepeats = 0;
+    std::array<uint64_t, 256> ivrVectorHistogram{};
+    std::array<uint64_t, 256> deliveredVectorHistogram{};
+    std::array<uint64_t, 128> indirectControlRegisterReadHistogram{};
+    std::array<uint64_t, 128> indirectControlRegisterWriteHistogram{};
+
+    bool firstItvWriteSeen = false;
+    uint64_t firstItvWriteIP = 0;
+    uint64_t firstItvValue = 0;
+    bool firstItmWriteSeen = false;
+    uint64_t firstItmWriteIP = 0;
+    uint64_t firstItmValue = 0;
+    uint64_t firstItmProgrammingITC = 0;
+    bool firstTimerFiringSeen = false;
+    uint64_t firstTimerFiringITC = 0;
+    uint64_t firstTimerVector = 0;
+    uint64_t firstTimerHandlerIP = 0;
+    uint64_t firstTimerEoiIP = 0;
+    uint64_t firstReplacementITM = 0;
+};
+
 // Forward declarations
 class SyscallDispatcher;
 class Profiler;
@@ -160,6 +218,19 @@ public:
     bool areInterruptsEnabled() const;
     void setInterruptVectorBase(uint64_t baseAddress);
     uint64_t getInterruptVectorBase() const;
+    void advanceITC(uint64_t ticks = 1);
+
+    // Architectural indirect control-register access.  MOV_FROM_CR and
+    // MOV_TO_CR use these entry points so IVR/EOI/TPR/ITV/ITM are not treated
+    // as ordinary storage locations.
+    uint64_t readControlRegister(size_t selector);
+    void writeControlRegister(size_t selector, uint64_t value);
+    bool tryDeliverPendingInterrupt();
+    bool hasInServiceInterrupt() const { return interruptInService_; }
+    uint8_t getInServiceVector() const { return inServiceVector_; }
+    const IA64InterruptTelemetry& getInterruptTelemetry() const {
+        return interruptTelemetry_;
+    }
     
     /**
      * Bundle execution state (IA-64 specific)
@@ -351,7 +422,11 @@ private:
     /**
      * Service pending interrupts
      */
-    void servicePendingInterrupt(IMemory& memory);
+    bool servicePendingInterrupt();
+    bool isInterruptEligible(uint8_t vector) const;
+    int findHighestEligibleInterrupt() const;
+    void updateIntervalTimer();
+    void noteInterruptTransaction(uint8_t vector);
     
     /**
      * Extract rotation bases from CFM
@@ -538,6 +613,21 @@ private:
     bool efiHandoffBoundaryPending_;
     EfiHandoffCheckpointBoundary efiHandoffBoundary_;
     bool efiHandoffCheckpointConsumed_;
+
+    // IA-64 local interrupt-controller and interval-timer state.  Pending
+    // vectors remain in IA64ISAState so existing checkpoint payloads retain
+    // their queue; these fields are appended as optional checkpoint data.
+    bool interruptInService_ = false;
+    uint8_t inServiceVector_ = IA64_SPURIOUS_INT_VECTOR;
+    bool timerCompareLatched_ = false;
+    bool intervalTimerConfigured_ = false;
+    IA64InterruptTelemetry interruptTelemetry_;
+    bool lastInterruptTransactionValid_ = false;
+    uint64_t lastInterruptTransactionIP_ = 0;
+    uint8_t lastInterruptTransactionVector_ = IA64_SPURIOUS_INT_VECTOR;
+    uint64_t lastInterruptTransactionTPR_ = 0;
+    uint64_t lastInterruptTransactionITV_ = 0;
+    uint64_t lastInterruptTransactionITM_ = 0;
 };
 
 /**

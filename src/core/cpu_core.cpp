@@ -202,18 +202,26 @@ state_.Reset();
 }
 
 bool CPU::step() {
-// If using ISA plugin, delegate execution to it
-if (isaPlugin_) {
-    if (halted_) {
-        return false;
-    }
-    servicePendingInterrupt();
+    // If using ISA plugin, delegate execution to it
+    if (isaPlugin_) {
+        if (halted_) {
+            return false;
+        }
+        servicePendingInterrupt();
         
-    ISAExecutionResult result = isaPlugin_->step(memory_);
+        ISAExecutionResult result = isaPlugin_->step(memory_);
+
+        const auto advanceITC = [this]() {
+            if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+                ia64->advanceITC();
+            } else {
+                getState().AdvanceITC();
+            }
+        };
         
-    switch (result) {
+        switch (result) {
         case ISAExecutionResult::CONTINUE:
-            getState().AdvanceITC();
+            advanceITC();
             return true;
         case ISAExecutionResult::HALT:
             halted_ = true;
@@ -223,23 +231,23 @@ if (isaPlugin_) {
             return false;
         case ISAExecutionResult::INTERRUPT:
             // Interrupt was handled, continue
-            getState().AdvanceITC();
+            advanceITC();
             return true;
         case ISAExecutionResult::SYSCALL:
             // Syscall was handled, continue
-            getState().AdvanceITC();
+            advanceITC();
             return true;
         case ISAExecutionResult::BREAKPOINT:
             // Breakpoint hit, pause execution
             return false;
         default:
-            getState().AdvanceITC();
+            advanceITC();
             return true;
+        }
     }
-}
     
-// Legacy implementation
-servicePendingInterrupt();
+    // Legacy implementation
+    servicePendingInterrupt();
 
     // Fetch bundle if needed (every 3 instructions, or if invalid)
     if (!bundleValid_ || currentSlot_ >= currentBundle_.instructions.size()) {
@@ -655,27 +663,60 @@ bool CPU::checkPredicate(size_t predicateReg) const {
 }
 
 void CPU::queueInterrupt(uint8_t vector) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->queueInterrupt(vector);
+            return;
+        }
+    }
     pendingInterrupts_.push_back(vector);
 }
 
 bool CPU::hasPendingInterrupt() const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->hasPendingInterrupt();
+        }
+    }
     return !pendingInterrupts_.empty();
 }
 
 void CPU::setInterruptsEnabled(bool enabled) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->setInterruptsEnabled(enabled);
+            return;
+        }
+    }
     const uint64_t psr = state_.GetPSR();
     state_.SetPSR(enabled ? (psr | 0x1ULL) : (psr & ~0x1ULL));
 }
 
 bool CPU::areInterruptsEnabled() const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->areInterruptsEnabled();
+        }
+    }
     return (state_.GetPSR() & 0x1ULL) != 0;
 }
 
 void CPU::setInterruptVectorBase(uint64_t baseAddress) {
+    if (isaPlugin_) {
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->setInterruptVectorBase(baseAddress);
+            return;
+        }
+    }
     interruptVectorBase_ = baseAddress;
 }
 
 uint64_t CPU::getInterruptVectorBase() const {
+    if (isaPlugin_) {
+        if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
+            return ia64->getInterruptVectorBase();
+        }
+    }
     return interruptVectorBase_;
 }
 

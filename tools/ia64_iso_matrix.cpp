@@ -15,6 +15,7 @@
 #include <string>
 #include <streambuf>
 #include <vector>
+#include <unordered_set>
 
 namespace {
 
@@ -279,6 +280,8 @@ struct ContinuationRecord {
         uint64_t itc = 0;
     };
     uint64_t cycles = 0;
+    size_t uniqueInstructionCount = 0;
+    size_t uniqueBundleCount = 0;
     std::vector<Instruction> firstInstructions;
     ia64::CPUState cpu;
     ia64::FramebufferDeviceState framebuffer;
@@ -291,6 +294,80 @@ ia64::IA64ISAPlugin* getPlugin(ia64::VirtualMachine& vm) {
     return context == nullptr
         ? nullptr
         : dynamic_cast<ia64::IA64ISAPlugin*>(context->isaPlugin.get());
+}
+
+void printInterruptTelemetry(const ia64::IA64ISAPlugin& plugin, const char* phase) {
+    const auto& telemetry = plugin.getInterruptTelemetry();
+    const auto& cpu = plugin.getCPUState();
+    std::cerr << "[IA64-IRQ] phase=" << phase
+              << " ivrReads=" << telemetry.ivrReads
+              << " eoiWrites=" << telemetry.eoiWrites
+              << " tprWrites=" << telemetry.tprWrites
+              << " itvWrites=" << telemetry.itvWrites
+              << " itmWrites=" << telemetry.itmWrites
+              << " queued=" << telemetry.queuedInterrupts
+              << " timerCompareEvents=" << telemetry.timerCompareEvents
+              << " interruptEntries=" << telemetry.interruptEntries
+              << " interruptReturns=" << telemetry.interruptReturns
+              << " blockedByPSR=" << telemetry.blockedByPsr
+              << " blockedByTPR=" << telemetry.blockedByTpr
+              << " spurious=" << telemetry.spuriousIvrReads
+              << " timerReads=" << telemetry.timerVectorReads
+              << " otherReads=" << telemetry.otherVectorReads
+              << " transactionRepeats=" << telemetry.transactionRepeats
+              << " pending=" << (plugin.hasPendingInterrupt() ? 1 : 0)
+              << " active=" << (plugin.hasInServiceInterrupt() ? 1 : 0)
+              << " activeVector=0x" << std::hex
+              << static_cast<unsigned>(plugin.getInServiceVector())
+              << " itc=0x" << cpu.GetAR(44)
+              << " itv=0x" << cpu.GetCR(ia64::IA64_CR_ITV)
+              << " itm=0x" << cpu.GetCR(ia64::IA64_CR_ITM)
+              << std::dec << "\n";
+    std::cerr << "[IA64-IRQ] phase=" << phase << " ivrHistogram";
+    for (size_t vector = 0; vector < telemetry.ivrVectorHistogram.size(); ++vector) {
+        if (telemetry.ivrVectorHistogram[vector] == 0) continue;
+        std::cerr << " vector=0x" << std::hex << vector << std::dec
+                  << ":" << telemetry.ivrVectorHistogram[vector];
+    }
+    std::cerr << "\n";
+    std::cerr << "[IA64-IRQ] phase=" << phase << " crReadSelectors";
+    for (size_t selector = 0;
+         selector < telemetry.indirectControlRegisterReadHistogram.size(); ++selector) {
+        if (telemetry.indirectControlRegisterReadHistogram[selector] == 0) continue;
+        std::cerr << " cr" << std::dec << selector << ":"
+                  << telemetry.indirectControlRegisterReadHistogram[selector];
+    }
+    std::cerr << " crWriteSelectors";
+    for (size_t selector = 0;
+         selector < telemetry.indirectControlRegisterWriteHistogram.size(); ++selector) {
+        if (telemetry.indirectControlRegisterWriteHistogram[selector] == 0) continue;
+        std::cerr << " cr" << std::dec << selector << ":"
+                  << telemetry.indirectControlRegisterWriteHistogram[selector];
+    }
+    std::cerr << "\n";
+    if (telemetry.firstItvWriteSeen || telemetry.firstItmWriteSeen ||
+        telemetry.firstTimerFiringSeen) {
+        std::cerr << "[IA64-IRQ] phase=" << phase;
+        if (telemetry.firstItvWriteSeen) {
+            std::cerr << " firstITVWriteIP=0x" << std::hex << telemetry.firstItvWriteIP
+                      << " firstITV=0x" << telemetry.firstItvValue;
+        }
+        if (telemetry.firstItmWriteSeen) {
+            std::cerr << " firstITMWriteIP=0x" << std::hex << telemetry.firstItmWriteIP
+                      << " firstITM=0x" << telemetry.firstItmValue
+                      << " programmingITC=0x" << telemetry.firstItmProgrammingITC
+                      << " delta=0x" << (telemetry.firstItmValue -
+                                           telemetry.firstItmProgrammingITC);
+        }
+        if (telemetry.firstTimerFiringSeen) {
+            std::cerr << " firstTimerFiringITC=0x" << telemetry.firstTimerFiringITC
+                      << " timerVector=0x" << telemetry.firstTimerVector
+                      << " handlerIP=0x" << telemetry.firstTimerHandlerIP
+                      << " firstTimerEOIIP=0x" << telemetry.firstTimerEoiIP
+                      << " replacementITM=0x" << telemetry.firstReplacementITM;
+        }
+        std::cerr << std::dec << "\n";
+    }
 }
 
 uint64_t canonicalKernelVma(uint64_t rawIP) {
@@ -307,16 +384,23 @@ uint64_t canonicalKernelVma(uint64_t rawIP) {
 ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles) {
     ContinuationRecord record;
     record.firstInstructions.reserve(64);
+    std::unordered_set<uint64_t> uniqueInstructions;
+    std::unordered_set<uint64_t> uniqueBundles;
     for (uint64_t i = 0; i < cycles; ++i) {
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
+        const uint64_t ip = vm.getIP(0);
+        uniqueInstructions.insert(ip | (plugin == nullptr ? 0 : plugin->getCurrentSlot()));
+        uniqueBundles.insert(ip & ~0xFULL);
         if (plugin != nullptr && record.firstInstructions.size() < 64) {
             record.firstInstructions.push_back({
-                vm.getIP(0), plugin->getCurrentSlot(), vm.getCPUState(0).GetAR(44)});
+                ip, plugin->getCurrentSlot(), vm.getCPUState(0).GetAR(44)});
         }
         if (!vm.step()) break;
         ++record.cycles;
     }
     record.cpu = vm.getCPUState(0);
+    record.uniqueInstructionCount = uniqueInstructions.size();
+    record.uniqueBundleCount = uniqueBundles.size();
     record.framebuffer = vm.getFramebufferDevice()->createSnapshot();
     record.consoleLines = vm.getConsoleOutput();
     record.consoleBytes = vm.getConsoleTotalBytes();
@@ -365,6 +449,8 @@ void writeContinuationLog(const std::string& path,
     std::ofstream output(path, std::ios::trunc);
     if (!output) return;
     output << "label=" << label << " cycles=" << record.cycles
+           << " unique_instructions=" << record.uniqueInstructionCount
+           << " unique_bundles=" << record.uniqueBundleCount
            << " first_ip=0x" << std::hex
            << (record.firstInstructions.empty() ? checkpointIP : record.firstInstructions.front().ip)
            << " first_canonical_vma=0x"
@@ -483,9 +569,26 @@ int main(int argc, char** argv) {
                       << " canonicalVMA=0x" << canonicalKernelVma(vm->getIP(0))
                       << std::dec << " slot=0\n";
             std::cerr << "[IA64-CHECKPOINT] restore-continuation cycles=" << restored.cycles
+                      << " uniqueInstructions=" << restored.uniqueInstructionCount
+                      << " uniqueBundles=" << restored.uniqueBundleCount
                       << " finalIP=0x" << std::hex << restored.cpu.GetIP()
                       << " finalCanonicalVMA=0x" << canonicalKernelVma(restored.cpu.GetIP())
                       << std::dec << " strictRecovery=1\n";
+            std::cerr << "[IA64-CHECKPOINT] terminal-state state="
+                      << ia64::vmStateToString(vm->getState())
+                      << " panic=" << (vm->hasKernelPanic() ? "yes" : "no");
+            if (const ia64::KernelPanic* panic = vm->getLastPanic()) {
+                std::cerr << " reason=" << static_cast<int>(panic->reason)
+                          << " description=\"" << panic->description << "\""
+                          << " panicIP=0x" << std::hex << panic->registers.instructionPointer
+                          << " lastBundle=0x" << panic->lastBundleAddress
+                          << " lastSlot=" << std::dec << panic->lastSlot
+                          << " additional=\"" << panic->additionalInfo << "\"";
+            }
+            std::cerr << "\n";
+            if (ia64::IA64ISAPlugin* plugin = getPlugin(*vm)) {
+                printInterruptTelemetry(*plugin, "restore");
+            }
             return 0;
         }
 
@@ -693,6 +796,7 @@ int main(int argc, char** argv) {
                       << " CheckEvent=" << summary.checkEventCalls
                       << " totalFileBytesRead=0x" << std::hex << summary.totalFileBytesRead
                       << std::dec << std::endl;
+            printInterruptTelemetry(*plugin, "normal");
             for (size_t i = 0; i < summary.openFilePaths.size(); ++i) {
                 std::cerr << "[IA64-MATRIX] open-file path=\"" << summary.openFilePaths[i]
                           << "\" position=0x" << std::hex << summary.openFilePositions[i]
