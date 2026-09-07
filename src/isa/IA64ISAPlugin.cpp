@@ -6022,6 +6022,21 @@ uint64_t IA64ISAPlugin::readControlRegister(size_t selector) {
     if (selector < interruptTelemetry_.indirectControlRegisterReadHistogram.size()) {
         ++interruptTelemetry_.indirectControlRegisterReadHistogram[selector];
     }
+    if (isIA64IrrSelector(selector)) {
+        uint64_t irr = 0;
+        const size_t bank = ia64IrrBankForSelector(selector);
+        for (const uint8_t vector : state_.pendingInterrupts_) {
+            if ((static_cast<size_t>(vector) >> 6) == bank) {
+                irr |= 1ULL << (vector & 63U);
+            }
+        }
+        ++interruptTelemetry_.irrReads;
+        if (interruptTelemetry_.irrReads == 2) {
+            interruptTelemetry_.secondIrrReadSeen = true;
+            interruptTelemetry_.secondIrrReadValue = irr;
+        }
+        return irr;
+    }
     if (selector != IA64_CR_IVR) {
         if (selector >= NUM_CONTROL_REGISTERS) {
             throw std::out_of_range("IA-64 control-register selector out of range");
@@ -6036,6 +6051,11 @@ uint64_t IA64ISAPlugin::readControlRegister(size_t selector) {
         // Once EOI clears in-service state, a later read selects the next
         // eligible pending vector or returns the architectural spurious code.
         vector = inServiceVector_;
+        const auto pending = std::find(state_.pendingInterrupts_.begin(),
+                                       state_.pendingInterrupts_.end(), vector);
+        if (pending != state_.pendingInterrupts_.end()) {
+            state_.pendingInterrupts_.erase(pending);
+        }
     } else {
         const int pendingIndex = findHighestEligibleInterrupt();
         if (pendingIndex >= 0) {
@@ -6068,6 +6088,9 @@ void IA64ISAPlugin::writeControlRegister(size_t selector, uint64_t value) {
     CPUState& cpu = state_.getCPUState();
     if (selector < interruptTelemetry_.indirectControlRegisterWriteHistogram.size()) {
         ++interruptTelemetry_.indirectControlRegisterWriteHistogram[selector];
+    }
+    if (isIA64IrrSelector(selector)) {
+        throw std::runtime_error("IA-64 Illegal Operation fault: write to read-only CR.IRR");
     }
     switch (selector) {
         case IA64_CR_EOI:
@@ -8478,7 +8501,19 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         // plugin must route the live guest's interrupt/timer registers through
         // their architectural side effects instead.
         if (instr.GetType() == InstructionType::MOV_FROM_CR) {
-            cpu.SetGR(instr.GetDst(), readControlRegister(instr.GetSrc1()));
+            const uint64_t value = readControlRegister(instr.GetSrc1());
+            if (isIA64IrrSelector(instr.GetSrc1()) &&
+                !interruptTelemetry_.firstIrrReadSeen) {
+                interruptTelemetry_.firstIrrReadSeen = true;
+                interruptTelemetry_.firstIrrReadIP = cpu.GetIP();
+                interruptTelemetry_.firstIrrReadSlot = state_.currentSlot_;
+                interruptTelemetry_.firstIrrReadRawBits = instr.GetRawBits();
+                interruptTelemetry_.firstIrrReadSelector = instr.GetSrc1();
+                interruptTelemetry_.firstIrrReadDestination =
+                    static_cast<uint8_t>(instr.GetDst());
+                interruptTelemetry_.firstIrrReadValue = value;
+            }
+            cpu.SetGR(instr.GetDst(), value);
         } else if (instr.GetType() == InstructionType::MOV_TO_CR) {
             writeControlRegister(instr.GetDst(), cpu.GetGR(instr.GetSrc1()));
         } else {
@@ -8746,8 +8781,9 @@ bool IA64ISAPlugin::servicePendingInterrupt() {
 
     CPUState& cpu = state_.getCPUState();
     const uint8_t vector = state_.pendingInterrupts_[static_cast<size_t>(pendingIndex)];
-    state_.pendingInterrupts_.erase(
-        state_.pendingInterrupts_.begin() + pendingIndex);
+    // Acceptance/entry does not consume the request.  CR.IRR remains
+    // asserted until software reads CR.IVR, which is the architectural
+    // destructive operation for this pending vector.
     interruptInService_ = true;
     inServiceVector_ = vector;
     cpu.SetCR(IA64_CR_IIP, cpu.GetIP());

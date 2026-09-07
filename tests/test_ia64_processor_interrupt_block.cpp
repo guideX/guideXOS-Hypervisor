@@ -75,7 +75,9 @@ int main() {
     require(callbackCount == 1 && callbackId == 0 && callbackEid == 0 &&
                 callbackVector == 0xEF && callbackMode == 0 && !callbackRedirect,
             "direct INT to CPU 0 reaches the delivery callback");
-    require(plugin.hasPendingInterrupt(), "direct INT is pending in the local controller");
+    require(plugin.hasPendingInterrupt() &&
+                plugin.readControlRegister(IA64_CR_IRR3) == (1ULL << 47),
+            "direct INT is pending in CR.IRR3 bit 47");
 
     plugin.reset();
     plugin.setInterruptsEnabled(false);
@@ -90,6 +92,11 @@ int main() {
             "enabling PSR.i permits pending IPI delivery at an instruction boundary");
     require(plugin.hasInServiceInterrupt() && plugin.getInServiceVector() == 0xEF,
             "IPI delivery marks the vector in service");
+    require(plugin.readControlRegister(IA64_CR_IRR3) == (1ULL << 47),
+            "interrupt entry does not consume the pending IRR bit");
+    require(plugin.readControlRegister(IA64_CR_IVR) == 0xEF &&
+                plugin.readControlRegister(IA64_CR_IRR3) == 0,
+            "IVR consumes the pending IPI request");
     plugin.writeControlRegister(IA64_CR_EOI, 0);
     require(!plugin.hasInServiceInterrupt() &&
                 plugin.readControlRegister(IA64_CR_IVR) == IA64_SPURIOUS_INT_VECTOR,

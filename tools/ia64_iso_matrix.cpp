@@ -301,6 +301,7 @@ void printInterruptTelemetry(const ia64::IA64ISAPlugin& plugin, const char* phas
     const auto& telemetry = plugin.getInterruptTelemetry();
     const auto& cpu = plugin.getCPUState();
     std::cerr << "[IA64-IRQ] phase=" << phase
+              << " irrReads=" << telemetry.irrReads
               << " ivrReads=" << telemetry.ivrReads
               << " eoiWrites=" << telemetry.eoiWrites
               << " tprWrites=" << telemetry.tprWrites
@@ -320,7 +321,10 @@ void printInterruptTelemetry(const ia64::IA64ISAPlugin& plugin, const char* phas
               << " active=" << (plugin.hasInServiceInterrupt() ? 1 : 0)
               << " activeVector=0x" << std::hex
               << static_cast<unsigned>(plugin.getInServiceVector())
-              << " itc=0x" << cpu.GetAR(44)
+              << " tpr=0x" << cpu.GetCR(ia64::IA64_CR_TPR)
+              << " psrI=" << std::dec
+              << ((cpu.GetPSR() & ia64::IA64_PSR_I) != 0 ? 1 : 0)
+              << " itc=0x" << std::hex << cpu.GetAR(44)
               << " itv=0x" << cpu.GetCR(ia64::IA64_CR_ITV)
               << " itm=0x" << cpu.GetCR(ia64::IA64_CR_ITM)
               << std::dec << "\n";
@@ -347,8 +351,21 @@ void printInterruptTelemetry(const ia64::IA64ISAPlugin& plugin, const char* phas
     }
     std::cerr << "\n";
     if (telemetry.firstItvWriteSeen || telemetry.firstItmWriteSeen ||
-        telemetry.firstTimerFiringSeen) {
+        telemetry.firstTimerFiringSeen || telemetry.firstIrrReadSeen) {
         std::cerr << "[IA64-IRQ] phase=" << phase;
+        if (telemetry.firstIrrReadSeen) {
+            std::cerr << " firstIRRReadIP=0x" << std::hex << telemetry.firstIrrReadIP
+                      << " firstIRRReadSlot=" << std::dec << telemetry.firstIrrReadSlot
+                      << " firstIRRReadRaw41=0x" << std::hex << telemetry.firstIrrReadRawBits
+                      << " firstIRRReadSelector=" << std::dec << telemetry.firstIrrReadSelector
+                      << " firstIRRReadDestination=r"
+                      << static_cast<unsigned>(telemetry.firstIrrReadDestination)
+                      << " firstIRRReadValue=0x" << std::hex << telemetry.firstIrrReadValue;
+            if (telemetry.secondIrrReadSeen) {
+                std::cerr << " secondIRRReadValue=0x" << std::hex
+                          << telemetry.secondIrrReadValue;
+            }
+        }
         if (telemetry.firstItvWriteSeen) {
             std::cerr << " firstITVWriteIP=0x" << std::hex << telemetry.firstItvWriteIP
                       << " firstITV=0x" << telemetry.firstItvValue;
@@ -392,6 +409,35 @@ void printProcessorInterruptTelemetry(const ia64::VirtualMachine& vm, const char
                   << " lastVector=0x" << static_cast<unsigned>(statistics.lastMessage.vector)
                   << " lastDM=" << static_cast<unsigned>(statistics.lastMessage.deliveryMode)
                   << std::dec;
+    }
+    std::cerr << "\n";
+}
+
+void printConsoleTelemetry(const ia64::VirtualMachine& vm,
+                           const char* phase,
+                           uint64_t bytesBefore = std::numeric_limits<uint64_t>::max()) {
+    const std::vector<std::string> lines = vm.getConsoleOutput();
+    std::cerr << "[IA64-CONSOLE] phase=" << phase
+              << " registered=" << (vm.getConsoleBaseAddress() != 0 ? 1 : 0)
+              << " lines=" << lines.size()
+              << " bytes=" << vm.getConsoleTotalBytes();
+    if (bytesBefore != std::numeric_limits<uint64_t>::max()) {
+        std::cerr << " bytesBefore=" << bytesBefore
+                  << " deltaBytes=" << (vm.getConsoleTotalBytes() - bytesBefore);
+    }
+    if (!lines.empty()) {
+        std::string preview;
+        preview.reserve(160);
+        for (const unsigned char character : lines.front()) {
+            if (preview.size() >= 160) break;
+            if (character >= 0x20 && character <= 0x7E) {
+                preview.push_back(static_cast<char>(character));
+            } else if (preview.empty() || preview.back() != '?') {
+                preview.push_back('?');
+            }
+        }
+        if (lines.front().size() > preview.size()) preview += "...";
+        std::cerr << " firstLinePreview=\"" << preview << "\"";
     }
     std::cerr << "\n";
 }
@@ -583,6 +629,7 @@ int main(int argc, char** argv) {
                           << checkpointError << "\"\n";
                 return 1;
             }
+            const uint64_t consoleBytesBefore = vm->getConsoleTotalBytes();
             const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
@@ -616,6 +663,7 @@ int main(int argc, char** argv) {
                 printInterruptTelemetry(*plugin, "restore");
             }
             printProcessorInterruptTelemetry(*vm, "restore");
+            printConsoleTelemetry(*vm, "restore", consoleBytesBefore);
             return 0;
         }
 

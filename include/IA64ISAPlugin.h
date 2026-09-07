@@ -18,28 +18,43 @@
 namespace ia64 {
 
 // IA-64 control-register selectors used by the interrupt and interval-timer
-// paths.  The indirect MOV_FROM_CR/MOV_TO_CR cr3 field uses the compact
-// encodings below for the external-interrupt register block (the Linux
-// ia64_getreg enum values and the reference table's descriptive cr numbers
-// are different namespaces).
+// paths.  These are the values carried in the indirect MOV_FROM_CR/
+// MOV_TO_CR cr3 field.  Linux's ia64_getreg constants are a separate magic
+// namespace: the IA64_REG_CR_* values in ia64regs.h are 4096 + this selector.
+// The architectural external-interrupt names are CR64..CR81; their cr3
+// selectors are listed explicitly here so an internal enum cannot silently
+// alias TPR/ITV/LRR or the IRR banks.
 constexpr size_t IA64_CR_ITM = 1;
 constexpr size_t IA64_CR_IVA = 2;
 constexpr size_t IA64_CR_IPSR = 16;
 constexpr size_t IA64_CR_IIP = 19;
-constexpr size_t IA64_CR_LID = 66;
+constexpr size_t IA64_CR_LID = 64;
 constexpr size_t IA64_CR_IVR = 65;
-constexpr size_t IA64_CR_TPR = 72;
+constexpr size_t IA64_CR_TPR = 66;
 constexpr size_t IA64_CR_EOI = 67;
-constexpr size_t IA64_CR_ITV = 79;
-constexpr size_t IA64_CR_PMV = 80;
-constexpr size_t IA64_CR_LRR0 = 82;
-constexpr size_t IA64_CR_LRR1 = 83;
-constexpr size_t IA64_CR_CMCV = 81;
+constexpr size_t IA64_CR_IRR0 = 68;
+constexpr size_t IA64_CR_IRR1 = 69;
+constexpr size_t IA64_CR_IRR2 = 70;
+constexpr size_t IA64_CR_IRR3 = 71;
+constexpr size_t IA64_CR_ITV = 72;
+constexpr size_t IA64_CR_PMV = 73;
+constexpr size_t IA64_CR_CMCV = 74;
+constexpr size_t IA64_CR_LRR0 = 80;
+constexpr size_t IA64_CR_LRR1 = 81;
 constexpr uint8_t IA64_SPURIOUS_INT_VECTOR = 0x0f;
 constexpr uint64_t IA64_PSR_I = 1ULL << 14;
 constexpr uint64_t IA64_ITV_MASK = 1ULL << 16;
 
+constexpr bool isIA64IrrSelector(size_t selector) {
+    return selector >= IA64_CR_IRR0 && selector <= IA64_CR_IRR3;
+}
+
+constexpr size_t ia64IrrBankForSelector(size_t selector) {
+    return selector - IA64_CR_IRR0;
+}
+
 struct IA64InterruptTelemetry {
+    uint64_t irrReads = 0;
     uint64_t ivrReads = 0;
     uint64_t eoiWrites = 0;
     uint64_t tprWrites = 0;
@@ -73,6 +88,16 @@ struct IA64InterruptTelemetry {
     uint64_t firstTimerHandlerIP = 0;
     uint64_t firstTimerEoiIP = 0;
     uint64_t firstReplacementITM = 0;
+
+    bool firstIrrReadSeen = false;
+    uint64_t firstIrrReadIP = 0;
+    size_t firstIrrReadSlot = 0;
+    uint64_t firstIrrReadRawBits = 0;
+    size_t firstIrrReadSelector = 0;
+    uint8_t firstIrrReadDestination = 0;
+    uint64_t firstIrrReadValue = 0;
+    bool secondIrrReadSeen = false;
+    uint64_t secondIrrReadValue = 0;
 };
 
 // Forward declarations
@@ -222,7 +247,8 @@ public:
 
     // Architectural indirect control-register access.  MOV_FROM_CR and
     // MOV_TO_CR use these entry points so IVR/EOI/TPR/ITV/ITM are not treated
-    // as ordinary storage locations.
+    // as ordinary storage locations.  IRR0..IRR3 are read-only architectural
+    // views over the canonical pending-vector queue.
     uint64_t readControlRegister(size_t selector);
     void writeControlRegister(size_t selector, uint64_t value);
     bool tryDeliverPendingInterrupt();
