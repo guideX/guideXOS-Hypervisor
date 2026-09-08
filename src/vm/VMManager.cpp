@@ -65,6 +65,31 @@ IA64ISAPlugin* getActiveIa64Plugin(VMInstance* instance) {
     return dynamic_cast<IA64ISAPlugin*>(cpu.getISAPlugin());
 }
 
+bool loadArchitecturalInitialEfiImage(
+    VMInstance* instance,
+    const std::vector<uint8_t>& image,
+    uint64_t& loadAddress,
+    uint64_t& entryPoint,
+    IA64ISAPlugin::InitialEfiImageInfo& imageInfo) {
+    IA64ISAPlugin* ia64Plugin = getActiveIa64Plugin(instance);
+    if (!ia64Plugin) {
+        LOG_ERROR("[EFI-INITIAL-IMAGE] IA-64 ISA plugin is unavailable");
+        return false;
+    }
+
+    if (!ia64Plugin->loadInitialEfiImage(instance->vm->getMemory(), image, imageInfo)) {
+        return false;
+    }
+
+    loadAddress = imageInfo.imageBase;
+    entryPoint = imageInfo.entryPoint;
+    instance->vm->setEntryPoint(entryPoint);
+    if (imageInfo.hasGlobalPointer) {
+        instance->vm->writeGR(0, 1, imageInfo.globalPointer);
+    }
+    return true;
+}
+
 std::string previewBytes(IMemory& memory, uint64_t address, size_t count);
 std::string previewBytesRaw(const IMemory& memory, uint64_t address, size_t count);
 std::string previewUtf16(IMemory& memory, uint64_t address);
@@ -1729,31 +1754,20 @@ bool VMManager::startVM(const std::string& vmId) {
                                     } else if (!peParser.isEFI()) {
                                         LOG_WARN("Executable may not be an EFI application");
                                     } else {
-                                        // Load PE image properly
-                                        std::vector<uint8_t> imageBuffer;
                                         uint64_t loadAddress = 0, entryPoint = 0;
-                                        
-                                        if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
-                                            LOG_INFO("? PE image prepared for loading");
-                                            LOG_INFO("  Preferred load address: 0x" + std::to_string(loadAddress));
+                                        IA64ISAPlugin::InitialEfiImageInfo initialImageInfo;
+                                                         if (loadArchitecturalInitialEfiImage(instance,
+                                                                                              efiExecutable,
+                                                                                              loadAddress,
+                                                                                              entryPoint,
+                                                                                              initialImageInfo)) {
+                                            seedLoaderLocalUtf16Probe(instance);
+                                            LOG_INFO("? EFI bootloader loaded through architectural EFI image allocation");
+                                            LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
                                             LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
-                                            LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
-                                            
-                                            // Load into VM memory at preferred address
-                                            if (instance->vm->loadProgram(imageBuffer.data(), 
-                                                                         imageBuffer.size(), 
-                                                                         loadAddress)) {
-                                                seedLoaderLocalUtf16Probe(instance);
-                                                // Set entry point from PE header
-                                                instance->vm->setEntryPoint(entryPoint);
-                                                LOG_INFO("? EFI bootloader loaded successfully");
-                                                LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
-                                                LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
-                                            } else {
-                                                LOG_ERROR("Failed to load EFI bootloader into memory");
-                                            }
+                                            LOG_INFO("  Image size: " + std::to_string(initialImageInfo.imageSize) + " bytes");
                                         } else {
-                                            LOG_ERROR("Failed to prepare PE image for loading");
+                                            LOG_ERROR("Failed to load EFI bootloader through architectural EFI image allocation");
                                         }
                                     }
                                 } else {
@@ -1810,50 +1824,40 @@ bool VMManager::startVM(const std::string& vmId) {
                                     } else if (!peParser.isEFI()) {
                                         LOG_WARN("Executable may not be an EFI application");
                                     } else {
-                                        // Load PE image properly
-                                        std::vector<uint8_t> imageBuffer;
                                         uint64_t loadAddress = 0, entryPoint = 0;
-                                        
-                                        if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
-                                            LOG_INFO("? PE image prepared for loading");
-                                            LOG_INFO("  Preferred load address: 0x" + std::to_string(loadAddress));
+                                        IA64ISAPlugin::InitialEfiImageInfo initialImageInfo;
+                                        if (loadArchitecturalInitialEfiImage(instance,
+                                                                             efiExecutable,
+                                                                             loadAddress,
+                                                                             entryPoint,
+                                                                             initialImageInfo)) {
+                                            seedLoaderLocalUtf16Probe(instance);
+                                            const EfiHandoffLayout& layout = ensureEfiLayout();
+                                            constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;
+                                            prepareEfiHandoff(
+                                                layout,
+                                                loadAddress,
+                                                initialImageInfo.imageSize,
+                                                initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : 0ULL);
+                                            instance->vm->writeGR(
+                                                0, 1, initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : 0ULL);
+                                            instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
+                                            instance->vm->writeGR(0, 33, layout.base);
+                                            std::ostringstream efiEntryOss;
+                                            const uint64_t efiStackTop =
+                                                SetupMinimalEfiStack(instance, efiEntryOss);
+                                            efiEntryOss.str("");
+                                            efiEntryOss << "[EFI-MILESTONE] Direct ISO9660 EFI handoff prepared"
+                                                         << " entry=0x" << std::hex << entryPoint
+                                                         << " gp=0x"
+                                                         << (initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : 0ULL)
+                                                         << " r32_ImageHandle=0x" << EFI_IMAGE_HANDLE
+                                                         << " r33_SystemTable=0x" << layout.base
+                                                         << " r12_StackTop=0x" << efiStackTop;
+                                            LOG_INFO(efiEntryOss.str());
+                                            LOG_INFO("? EFI bootloader loaded successfully from filesystem");
+                                            LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
                                             LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
-                                            LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
-                                            
-                                            // Load into VM memory at preferred address
-                                            if (instance->vm->loadProgram(imageBuffer.data(), 
-                                                                         imageBuffer.size(), 
-                                                                         loadAddress)) {
-                                                seedLoaderLocalUtf16Probe(instance);
-                                                // Set entry point from PE header
-                                                instance->vm->setEntryPoint(entryPoint);
-                                                const auto& peInfo = peParser.getImageInfo();
-                                                const EfiHandoffLayout& layout = ensureEfiLayout();
-                                                constexpr uint64_t EFI_IMAGE_HANDLE = 0x1ULL;
-                                                prepareEfiHandoff(
-                                                    layout,
-                                                    loadAddress,
-                                                    static_cast<uint64_t>(imageBuffer.size()),
-                                                    peInfo.hasGlobalPointer ? peInfo.globalPointer : 0ULL);
-                                                instance->vm->writeGR(
-                                                    0, 1, peInfo.hasGlobalPointer ? peInfo.globalPointer : 0ULL);
-                                                instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
-                                                instance->vm->writeGR(0, 33, layout.base);
-                                                std::ostringstream efiEntryOss;
-                                                const uint64_t efiStackTop =
-                                                    SetupMinimalEfiStack(instance, efiEntryOss);
-                                                efiEntryOss.str("");
-                                                efiEntryOss << "[EFI-MILESTONE] Direct ISO9660 EFI handoff prepared"
-                                                             << " entry=0x" << std::hex << entryPoint
-                                                             << " gp=0x"
-                                                             << (peInfo.hasGlobalPointer ? peInfo.globalPointer : 0ULL)
-                                                             << " r32_ImageHandle=0x" << EFI_IMAGE_HANDLE
-                                                             << " r33_SystemTable=0x" << layout.base
-                                                             << " r12_StackTop=0x" << efiStackTop;
-                                                LOG_INFO(efiEntryOss.str());
-                                                LOG_INFO("? EFI bootloader loaded successfully from filesystem");
-                                                LOG_INFO("  Load address: 0x" + std::to_string(loadAddress));
-                                                LOG_INFO("  Entry point: 0x" + std::to_string(entryPoint));
 
                                                 if (bootImageBackingStoreFound && !bootImageBackingStoreData.empty()) {
                                                     LOG_INFO("? Boot image extracted: " +
@@ -1959,11 +1963,6 @@ bool VMManager::startVM(const std::string& vmId) {
                                                             " metadata=" + BootStageTrace::Hex(ensureEfiLayout().bootImageMetadataAddr));
                                                     }
                                                 }
-                                            } else {
-                                                LOG_ERROR("Failed to load EFI bootloader into memory");
-                                            }
-                                        } else {
-                                            LOG_ERROR("Failed to prepare PE image for loading");
                                         }
                                     }
                                 } else {
@@ -2068,95 +2067,42 @@ bool VMManager::startVM(const std::string& vmId) {
                                                     } else if (!peParser.isEFI()) {
                                                         LOG_WARN("Executable may not be an EFI application");
                                                     } else {
-                                                        // Load PE image properly
-                                                        std::vector<uint8_t> imageBuffer;
                                                         uint64_t loadAddress = 0, entryPoint = 0;
-                                                        
-                                                        if (peParser.loadImage(imageBuffer, loadAddress, entryPoint)) {
-                                                            LOG_INFO("? PE image prepared for loading");
-                                                            
-                                                            // Use ostringstream for proper hex formatting
-                                                            std::ostringstream oss;
-                                                            oss << "  Preferred load address: 0x" << std::hex << loadAddress << std::dec;
+                                                        IA64ISAPlugin::InitialEfiImageInfo initialImageInfo;
+                                                        std::ostringstream oss;
+                                                         if (!loadArchitecturalInitialEfiImage(instance,
+                                                                                               efiExecutable,
+                                                                                               loadAddress,
+                                                                                               entryPoint,
+                                                                                               initialImageInfo)) {
+                                                             LOG_ERROR("Failed to load EFI bootloader through architectural EFI image allocation");
+                                                             DrawBootStatus(instance,
+                                                                            "BOOT FAILED",
+                                                                            "EFI IMAGE ALLOCATION FAILED",
+                                                                            "SEE NATIVE LOG");
+                                                             return false;
+                                                         }
+                                                             LOG_INFO("? PE image loaded through architectural EFI image allocation");
+                                                            oss << "  Preferred load address: 0x" << std::hex
+                                                                << initialImageInfo.preferredImageBase << std::dec;
                                                             LOG_INFO(oss.str());
-                                                            
+                                                            oss.str("");
+                                                            oss << "  Allocated load address: 0x" << std::hex
+                                                                << loadAddress << std::dec;
+                                                            LOG_INFO(oss.str());
                                                             oss.str("");
                                                             oss << "  Entry point: 0x" << std::hex << entryPoint << std::dec;
                                                             LOG_INFO(oss.str());
-                                                            
-                                                            LOG_INFO("  Image size: " + std::to_string(imageBuffer.size()) + " bytes");
-                                                            
-                                                            // Load into VM memory
-                                                                if (instance->vm->loadProgram(imageBuffer.data(), 
-                                                                                         imageBuffer.size(), 
-                                                                                         loadAddress)) {
-                                                                    applyEliloAddressCompatShim(instance,
-                                                                                                peParser,
-                                                                                                loadAddress);
-                                                                    installGpRelativeDataWriteTrace(instance,
-                                                                                                   "boot-image load");
-                                                                    seedLoaderLocalUtf16Probe(instance);
-                                                                    const auto& peInfo = peParser.getImageInfo();
-                                                                    if (peInfo.hasGlobalPointer && loadAddress == 0 &&
-                                                                        peInfo.globalPointer >= imageBuffer.size()) {
-                                                                        const uint64_t ia64EfiImageAliasBase =
-                                                                            guideXOS::ComputeIa64EfiAliasBase(peInfo);
-                                                                    IA64ISAPlugin* ia64Plugin = getActiveIa64Plugin(instance);
-                                                                    if (ia64Plugin &&
-                                                                        !ia64Plugin->reserveEfiMemoryRange(
-                                                                            ia64EfiImageAliasBase,
-                                                                            imageBuffer.size(),
-                                                                            0U)) {
-                                                                        LOG_ERROR("[EFI-MILESTONE] Failed to register IA-64 EFI compatibility mirror reservation");
-                                                                    }
-                                                                    size_t mirroredSections = 0;
-                                                                    size_t mirroredBytes = 0;
-                                                                    for (const auto& section : peInfo.sections) {
-                                                                        if ((section.characteristics & guideXOS::IMAGE_SCN_MEM_EXECUTE) != 0) {
-                                                                            continue;
-                                                                        }
-                                                                        const uint64_t sectionSize = std::max(
-                                                                            section.virtualSize,
-                                                                            static_cast<uint64_t>(section.rawDataSize));
-                                                                        if (sectionSize == 0 ||
-                                                                            section.virtualAddress >= imageBuffer.size()) {
-                                                                            continue;
-                                                                        }
-                                                                        const uint64_t copySize = std::min<uint64_t>(
-                                                                            sectionSize,
-                                                                            imageBuffer.size() - section.virtualAddress);
-                                                                        instance->vm->getMemory().Write(
-                                                                            ia64EfiImageAliasBase + section.virtualAddress,
-                                                                            imageBuffer.data() + section.virtualAddress,
-                                                                            static_cast<size_t>(copySize));
-                                                                        ++mirroredSections;
-                                                                        mirroredBytes += static_cast<size_t>(copySize);
-                                                                    }
-                                                                    oss.str("");
-                                                                    oss << "[EFI-MILESTONE] Mirrored IA-64 EFI non-executable sections at 0x"
-                                                                        << std::hex << ia64EfiImageAliasBase
-                                                                        << "-0x" << (ia64EfiImageAliasBase + imageBuffer.size())
-                                                                        << " while keeping entry=0x" << entryPoint
-                                                                        << "; GP=0x" << peInfo.globalPointer
-                                                                        << " maps GP-relative data into the mirror for load-base diagnosis; "
-                                                                        << "excluded executable .text so bad GP-relative text probes stay zero"
-                                                                        << std::dec
-                                                                        << " mirroredSections=" << mirroredSections
-                                                                        << " mirroredBytes=" << mirroredBytes
-                                                                        << std::dec;
-                                                                    LOG_WARN(oss.str());
-                                                                }
-
-                                                                instance->vm->setEntryPoint(entryPoint);
-                                                                if (peInfo.hasGlobalPointer) {
-                                                                    instance->vm->writeGR(0, 1, peInfo.globalPointer);
-                                                                    oss.str("");
-                                                                    oss << "  Global pointer (r1): 0x" << std::hex
-                                                                        << peInfo.globalPointer << std::dec;
-                                                                    LOG_INFO(oss.str());
-                                                                }
-
-                                                                // Set up minimal EFI firmware environment
+                                                            LOG_INFO("  Image size: " + std::to_string(initialImageInfo.imageSize) + " bytes");
+                                                            installGpRelativeDataWriteTrace(instance, "boot-image load");
+                                                            seedLoaderLocalUtf16Probe(instance);
+                                                            if (initialImageInfo.hasGlobalPointer) {
+                                                                oss.str("");
+                                                                oss << "  Global pointer (r1): 0x" << std::hex
+                                                                    << initialImageInfo.globalPointer << std::dec;
+                                                                LOG_INFO(oss.str());
+                                                            }
+                                                         // Set up minimal EFI firmware environment
                                                                 // BOOTIA64.EFI entry: efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
                                                                 // These are passed in r32 (in0) and r33 (in1) per IA-64 ABI.
                                                                 // Without valid pointers, early EFI code (e.g. st8 [r33]=r16)
@@ -2444,34 +2390,34 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     }
                                                                     write64(EFI_UNSUPPORTED_STUB_DESC_ADDR, EFI_UNSUPPORTED_STUB_CODE_ADDR);
                                                                     write64(EFI_UNSUPPORTED_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_GET_VARIABLE_STUB_DESC_ADDR, EFI_GET_VARIABLE_STUB_CODE_ADDR);
                                                                     write64(EFI_GET_VARIABLE_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_SUCCESS_STUB_DESC_ADDR, EFI_SUCCESS_STUB_CODE_ADDR);
                                                                     write64(EFI_SUCCESS_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_ALLOCATE_POOL_STUB_DESC_ADDR, EFI_ALLOCATE_POOL_STUB_CODE_ADDR);
                                                                     write64(EFI_ALLOCATE_POOL_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR, EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR);
                                                                     write64(EFI_HANDLE_PROTOCOL_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_OPEN_VOLUME_STUB_DESC_ADDR, EFI_OPEN_VOLUME_STUB_CODE_ADDR);
                                                                     write64(EFI_OPEN_VOLUME_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR,
                                                                             EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR);
                                                                     write64(EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     write64(EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR,
                                                                             EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR);
                                                                     write64(EFI_TEXT_OUTPUT_QUERY_MODE_STUB_DESC_ADDR + 8,
-                                                                            peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                            initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     auto writeDescriptor = [&](uint64_t descriptorAddress, uint64_t codeAddress) {
                                                                         write64(descriptorAddress, codeAddress);
                                                                         write64(descriptorAddress + 8,
-                                                                                peInfo.hasGlobalPointer ? peInfo.globalPointer : EFI_STUB_ADDR);
+                                                                                initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : EFI_STUB_ADDR);
                                                                     };
                                                                     writeDescriptor(EFI_FILE_OPEN_STUB_DESC_ADDR, EFI_FILE_OPEN_STUB_CODE_ADDR);
                                                                     writeDescriptor(EFI_FILE_CLOSE_STUB_DESC_ADDR, EFI_FILE_CLOSE_STUB_CODE_ADDR);
@@ -2635,9 +2581,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x30, 0U);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x38, EFI_LOADED_IMAGE_LOAD_OPTIONS_ADDR);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x40, loadAddress);
-                                                                    write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, imageBuffer.size());
-                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 2U);
-                                                                    write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x54, 4U);
+                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x48, initialImageInfo.imageSize);
+                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x50, 1U);
+                                                                     write32(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x54, 2U);
                                                                     write64(EFI_LOADED_IMAGE_PROTOCOL_ADDR + 0x58, EFI_UNSUPPORTED_STUB_DESC_ADDR);
 
                                                                     // MEDIA_FILEPATH_DP("\\EFI\\BOOT\\BOOTIA64.EFI") + End.
@@ -2803,9 +2749,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     std::ostringstream ctx;
                                                                     ctx << "entryPoint=" << BootStageTrace::Hex(entryPoint)
                                                                         << " loadAddress=" << BootStageTrace::Hex(loadAddress)
-                                                                        << " imageBase=" << BootStageTrace::Hex(peInfo.imageBase)
-                                                                        << " imageSize=" << BootStageTrace::Hex(imageBuffer.size())
-                                                                        << " r1_gp=" << BootStageTrace::Hex(peInfo.hasGlobalPointer ? peInfo.globalPointer : 0)
+                                                                        << " imageBase=" << BootStageTrace::Hex(initialImageInfo.preferredImageBase)
+                                                                        << " imageSize=" << BootStageTrace::Hex(initialImageInfo.imageSize)
+                                                                        << " r1_gp=" << BootStageTrace::Hex(initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : 0)
                                                                         << " r12_sp=" << BootStageTrace::Hex(efiStackTop)
                                                                         << " r32_ImageHandle=" << BootStageTrace::Hex(EFI_IMAGE_HANDLE)
                                                                         << " r33_SystemTable=" << BootStageTrace::Hex(EFI_STUB_ADDR)
@@ -2833,19 +2779,9 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                                "STARTING IA64 EXECUTION",
                                                                                "SEE LOGS FOR DECODE TRACE");
                                                                 
-                                                                bootedFromImage = true;
-                                                            } else {
-                                                                LOG_ERROR("Failed to load EFI bootloader into memory");
-                                                                DrawBootStatus(instance,
-                                                                               "BOOT FAILED",
-                                                                               "EFI LOAD INTO MEMORY FAILED",
-                                                                               "SEE NATIVE LOG");
-                                                            }
-                                                        } else {
-                                                            LOG_ERROR("Failed to prepare PE image for loading");
-                                                        }
-                                                    }
-                                                } else {
+                                                                 bootedFromImage = true;
+                                                  }
+                                              } else {
                                                     LOG_ERROR("Failed to parse EFI executable as PE/COFF");
                                                 }
                                             } else {

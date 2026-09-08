@@ -157,16 +157,23 @@ struct PESectionInfo {
 };
 
 struct PEImageInfo {
-    uint16_t machine;
-    uint16_t subsystem;
-    uint64_t imageBase;
-    uint64_t entryPoint;
-    uint32_t sectionAlignment;
-    uint32_t fileAlignment;
-    uint32_t sizeOfImage;
-    uint32_t sizeOfHeaders;
-    uint64_t globalPointer;
-    bool hasGlobalPointer;
+    uint16_t machine = 0;
+    uint16_t subsystem = 0;
+    uint64_t imageBase = 0;
+    uint64_t entryPoint = 0;
+    uint32_t addressOfEntryPoint = 0;
+    uint32_t sectionAlignment = 0;
+    uint32_t fileAlignment = 0;
+    uint32_t sizeOfImage = 0;
+    uint32_t sizeOfHeaders = 0;
+    uint32_t relocationDirectoryRva = 0;
+    uint32_t relocationDirectorySize = 0;
+    uint64_t relocationBlocksProcessed = 0;
+    uint64_t relocationsApplied = 0;
+    uint64_t relocationErrors = 0;
+    std::vector<uint32_t> relocationTypesEncountered;
+    uint64_t globalPointer = 0;
+    bool hasGlobalPointer = false;
     std::vector<PESectionInfo> sections;
 };
 

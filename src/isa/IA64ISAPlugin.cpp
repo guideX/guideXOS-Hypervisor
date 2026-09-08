@@ -2305,11 +2305,198 @@ void IA64ISAPlugin::setBootImageBackingStore(std::vector<uint8_t> bootImage) {
     efiBootImage_ = std::move(bootImage);
     efiBootImageFromVmManager_ = true;
     efiBootFat_.reset();
+
+    // The backing store is normally published before the first EFI map is
+    // built.  If VMManager supplies it after the initial image has already
+    // been allocated, keep the live page-allocation bookkeeping intact and
+    // overlay the fixed media range in the existing map instead of throwing
+    // away the initial image's ownership record.
+    if (efiMemoryMapInitialized_ && !efiBootImage_.empty()) {
+        const uint64_t alignedSize =
+            (static_cast<uint64_t>(efiBootImage_.size()) + EFI_PAGE_SIZE - 1ULL) &
+            ~(EFI_PAGE_SIZE - 1ULL);
+        const uint64_t pages = alignedSize / EFI_PAGE_SIZE;
+        if (pages != 0 &&
+            EFI_BOOT_IMAGE_GUEST_BASE <= UINT64_MAX - alignedSize &&
+            replaceEfiMemoryMapRange(EFI_BOOT_IMAGE_GUEST_BASE,
+                                     pages,
+                                     EFI_MEMORY_BOOT_SERVICES_CODE)) {
+            ++efiMemoryMapKey_;
+        }
+        return;
+    }
+
     efiMemoryMapInitialized_ = false;
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
     efiPoolAllocations_.clear();
     efiMemoryMapKey_ = 1;
+}
+
+bool IA64ISAPlugin::loadInitialEfiImage(IMemory& memory,
+                                        const std::vector<uint8_t>& image,
+                                        InitialEfiImageInfo& result) {
+    result = InitialEfiImageInfo{};
+    if (image.empty() || !ensureEfiHandoffLayout(memory)) {
+        return false;
+    }
+
+    guideXOS::PEParser parser;
+    try {
+        if (!parser.parse(image.data(), image.size()) ||
+            !parser.isIA64() || !parser.isEFI()) {
+            return false;
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    const guideXOS::PEImageInfo parsedInfo = parser.getImageInfo();
+    if (parsedInfo.sizeOfImage == 0 ||
+        parsedInfo.sizeOfImage > UINT64_MAX - (EFI_PAGE_SIZE - 1ULL)) {
+        return false;
+    }
+    const uint64_t numberOfPages =
+        (static_cast<uint64_t>(parsedInfo.sizeOfImage) + EFI_PAGE_SIZE - 1ULL) /
+        EFI_PAGE_SIZE;
+    const uint64_t allocationBytes = numberOfPages * EFI_PAGE_SIZE;
+    const uint64_t imageBase = allocateEfiImagePages(
+        memory, numberOfPages, EFI_MEMORY_LOADER_CODE);
+    if (imageBase == 0) {
+        return false;
+    }
+
+    auto rollback = [&]() {
+        releaseEfiImagePages(imageBase, numberOfPages);
+        result = InitialEfiImageInfo{};
+    };
+
+    std::vector<uint8_t> imageBytes;
+    uint64_t loadAddress = imageBase;
+    uint64_t entryPoint = 0;
+    try {
+        if (!parser.loadImage(imageBytes, loadAddress, entryPoint) ||
+            imageBytes.empty() || imageBytes.size() > allocationBytes ||
+            entryPoint < imageBase ||
+            entryPoint >= imageBase + imageBytes.size()) {
+            rollback();
+            return false;
+        }
+
+        std::vector<uint8_t> zero(static_cast<size_t>(allocationBytes), 0);
+        memory.Write(imageBase, zero.data(), zero.size());
+        memory.Write(imageBase, imageBytes.data(), imageBytes.size());
+
+        auto write64 = [&](uint64_t offset, uint64_t value) {
+            return writeGuestU64(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR + offset, value);
+        };
+        auto write32 = [&](uint64_t offset, uint32_t value) {
+            return writeGuestU32(memory, EFI_LOADED_IMAGE_PROTOCOL_ADDR + offset, value);
+        };
+        if (!write32(0x00, 0x1000U) ||
+            !write64(0x08, 0) ||
+            !write64(0x10, EFI_HANDOFF_REGION_BASE) ||
+            !write64(0x18, EFI_IMAGE_DEVICE_HANDLE) ||
+            !write64(0x20, EFI_LOADED_IMAGE_FILE_PATH_ADDR) ||
+            !write32(0x30, 0U) ||
+            !write64(0x38, 0) ||
+            !write64(0x40, imageBase) ||
+            !write64(0x48, static_cast<uint64_t>(imageBytes.size())) ||
+            !write32(0x50, EFI_MEMORY_LOADER_CODE) ||
+            !write32(0x54, EFI_MEMORY_LOADER_DATA) ||
+            !write64(0x58, 0)) {
+            rollback();
+            return false;
+        }
+
+        // Publish the initial image's own device path as part of the same
+        // LoadedImage object.  VMManager may refresh this fixed handoff
+        // region later while constructing the broader firmware table, but the
+        // architectural image load is already coherent if it is used alone.
+        static constexpr uint16_t loadedImagePath[] = {
+            '\\','E','F','I','\\','B','O','O','T','\\',
+            'B','O','O','T','I','A','6','4','.','E','F','I',0
+        };
+        const uint16_t filePathNodeLength =
+            static_cast<uint16_t>(4 + sizeof(loadedImagePath));
+        const uint8_t filePathNodeType = 0x04U;
+        const uint8_t filePathNodeSubType = 0x04U;
+        const uint8_t endNodeType = 0x7FU;
+        const uint8_t endNodeSubType = 0xFFU;
+        const uint16_t endNodeLength = 0x04U;
+        memory.Write(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x00,
+                     &filePathNodeType, sizeof(filePathNodeType));
+        memory.Write(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x01,
+                     &filePathNodeSubType, sizeof(filePathNodeSubType));
+        memory.Write(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x02,
+                     reinterpret_cast<const uint8_t*>(&filePathNodeLength),
+                     sizeof(filePathNodeLength));
+        memory.Write(EFI_LOADED_IMAGE_FILE_PATH_ADDR + 0x04,
+                     reinterpret_cast<const uint8_t*>(loadedImagePath),
+                     sizeof(loadedImagePath));
+        const uint64_t filePathEndNode =
+            EFI_LOADED_IMAGE_FILE_PATH_ADDR + filePathNodeLength;
+        memory.Write(filePathEndNode + 0x00, &endNodeType, sizeof(endNodeType));
+        memory.Write(filePathEndNode + 0x01, &endNodeSubType, sizeof(endNodeSubType));
+        memory.Write(filePathEndNode + 0x02,
+                     reinterpret_cast<const uint8_t*>(&endNodeLength),
+                     sizeof(endNodeLength));
+
+        efiLoadedImages_[EFI_IMAGE_HANDLE] = EfiLoadedImage{
+            EFI_IMAGE_HANDLE,
+            EFI_LOADED_IMAGE_PROTOCOL_ADDR,
+            0,
+            EFI_IMAGE_DEVICE_HANDLE,
+            imageBase,
+            static_cast<uint64_t>(imageBytes.size()),
+            entryPoint,
+            parser.getImageInfo().hasGlobalPointer
+                ? parser.getImageInfo().globalPointer : 0,
+            EFI_LOADED_IMAGE_FILE_PATH_ADDR};
+    } catch (const std::exception&) {
+        rollback();
+        return false;
+    }
+
+    result.preferredImageBase = parsedInfo.imageBase;
+    result.imageBase = imageBase;
+    result.imageSize = static_cast<uint64_t>(imageBytes.size());
+    result.entryPoint = entryPoint;
+    result.addressOfEntryPoint = parsedInfo.addressOfEntryPoint;
+    result.relocationDirectoryRva = parser.getImageInfo().relocationDirectoryRva;
+    result.relocationDirectorySize = parser.getImageInfo().relocationDirectorySize;
+    result.relocationBlocksProcessed = parser.getImageInfo().relocationBlocksProcessed;
+    result.relocationsApplied = parser.getImageInfo().relocationsApplied;
+    result.relocationErrors = parser.getImageInfo().relocationErrors;
+    result.relocationTypesEncountered = parser.getImageInfo().relocationTypesEncountered;
+    result.globalPointer = parser.getImageInfo().hasGlobalPointer
+        ? parser.getImageInfo().globalPointer : 0;
+    result.hasGlobalPointer = parser.getImageInfo().hasGlobalPointer;
+
+    std::cout << "[EFI-INITIAL-IMAGE] base=0x" << std::hex << result.imageBase
+              << " end=0x" << (result.imageBase + result.imageSize)
+              << " preferred=0x" << result.preferredImageBase
+              << " pages=0x" << std::dec << numberOfPages
+              << " type=" << EFI_MEMORY_LOADER_CODE
+              << " entry=0x" << std::hex << result.entryPoint
+              << " entryRva=0x" << result.addressOfEntryPoint
+              << " relocationDelta=0x"
+              << (static_cast<int64_t>(result.imageBase) -
+                  static_cast<int64_t>(result.preferredImageBase))
+              << " relocations=" << std::dec << result.relocationsApplied
+              << " relocationErrors=" << result.relocationErrors
+              << std::endl;
+    BootStageTrace::Stage(
+        80,
+        "Initial EFI image allocated",
+        "base=" + BootStageTrace::Hex(result.imageBase) +
+        " size=" + BootStageTrace::Hex(result.imageSize) +
+        " entry=" + BootStageTrace::Hex(result.entryPoint) +
+        " entryRva=" + BootStageTrace::Hex(result.addressOfEntryPoint) +
+        " relocationDelta=" + BootStageTrace::Hex(
+            result.imageBase - result.preferredImageBase) +
+        " relocations=" + std::to_string(result.relocationsApplied));
+    return true;
 }
 
 bool IA64ISAPlugin::reserveEfiMemoryRange(uint64_t physicalStart,

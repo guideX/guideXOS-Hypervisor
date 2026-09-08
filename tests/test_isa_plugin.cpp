@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <array>
+#include <algorithm>
 
 using namespace ia64;
 
@@ -4811,6 +4812,99 @@ void testIA64PluginLoadImage() {
                  "inputs, and reports genuine allocation exhaustion\n";
 }
 
+void testIA64PluginInitialEfiImageAllocation() {
+    std::cout << "Testing IA-64 initial EFI image allocation, relocation, and map state...\n";
+
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t handoffBase = 0x1fdb0000ULL;
+    constexpr uint64_t getMemoryMapCode = handoffBase + kEfiGetMemoryMapStubCodeOffset;
+    constexpr uint64_t mirrorStart = 0x200000ULL;
+    constexpr uint64_t mirrorSize = 0x5e000ULL;
+
+    const std::vector<uint8_t> image = makeSyntheticIa64EfiLoadImage();
+    SizedSparseMemory memory(guestMemorySize);
+    uint8_t bundle[16] = {};
+    uint8_t syntheticStub[16] = {1};
+    memory.Write(0x5200, bundle, sizeof(bundle));
+    memory.Write(getMemoryMapCode, syntheticStub, sizeof(syntheticStub));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    assert(plugin.reserveEfiMemoryRange(mirrorStart, mirrorSize, 0U));
+
+    IA64ISAPlugin::InitialEfiImageInfo info;
+    assert(plugin.loadInitialEfiImage(memory, image, info));
+    assert(info.preferredImageBase == 0);
+    assert(info.imageBase != 0);
+    assert(info.imageBase + info.imageSize <= guestMemorySize);
+    assert(info.imageBase + info.imageSize <= mirrorStart ||
+           info.imageBase >= mirrorStart + mirrorSize);
+    assert(info.imageSize == 0x4000);
+    assert(info.addressOfEntryPoint == 0x2000);
+    assert(info.entryPoint == info.imageBase + 0x1000);
+    assert(info.relocationsApplied == 3);
+    assert(info.relocationErrors == 0);
+    assert(std::find(info.relocationTypesEncountered.begin(),
+                     info.relocationTypesEncountered.end(),
+                     guideXOS::R_IA64_DIR64LSB) != info.relocationTypesEncountered.end());
+
+    // The image is section-mapped into its allocated range, not copied as a
+    // raw PE file.  Its IA-64 descriptor and ELF-style relocations resolve
+    // against the selected nonzero image base.
+    assert(memory.read<uint8_t>(info.imageBase + 0x1000) == 0xA0);
+    assert(memory.read<uint64_t>(info.imageBase + 0x2000) == info.imageBase + 0x1000);
+    assert(memory.read<uint64_t>(info.imageBase + 0x2008) == info.imageBase + 0x1234);
+    assert(memory.read<uint64_t>(info.imageBase + 0x2020) == info.imageBase + 0x123);
+
+    const uint64_t loadedImageProtocol = handoffBase + kEfiLoadedImageProtocolOffset;
+    assert(memory.read<uint64_t>(loadedImageProtocol + 0x40) == info.imageBase);
+    assert(memory.read<uint64_t>(loadedImageProtocol + 0x48) == info.imageSize);
+    assert(memory.read<uint32_t>(loadedImageProtocol + 0x50) == 1U);
+    assert(memory.read<uint32_t>(loadedImageProtocol + 0x54) == 2U);
+    assert(memory.read<uint8_t>(handoffBase + kEfiLoadedImageFilePathOffset) == 0x04U);
+    assert(memory.read<uint8_t>(handoffBase + kEfiLoadedImageFilePathOffset + 1) == 0x04U);
+    assert(memory.read<uint8_t>(handoffBase + kEfiLoadedImageFilePathOffset + 4) == '\\');
+
+    // The image allocation is visible in the EFI map as LoaderCode and the
+    // reserved mirror remains excluded from the usable range.
+    memory.write<uint64_t>(0x9300, 0x10000ULL);
+    plugin.getCPUState().SetIP(0x5200);
+    plugin.getCPUState().SetCFM(5 | (static_cast<uint64_t>(5) << 7));
+    plugin.getCPUState().SetBR(6, getMemoryMapCode);
+    plugin.getCPUState().SetGR(37, 0x9300);
+    plugin.getCPUState().SetGR(38, 0x9400);
+    plugin.getCPUState().SetGR(39, 0x9310);
+    plugin.getCPUState().SetGR(40, 0x9318);
+    plugin.getCPUState().SetGR(41, 0x9320);
+    plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+
+    const uint64_t mapBytes = memory.read<uint64_t>(0x9300);
+    const uint64_t descriptorSize = memory.read<uint64_t>(0x9318);
+    assert(descriptorSize == 40);
+    bool sawImage = false;
+    bool sawOverlap = false;
+    for (uint64_t offset = 0; offset < mapBytes; offset += descriptorSize) {
+        const uint64_t descriptor = 0x9400 + offset;
+        const uint32_t type = memory.read<uint32_t>(descriptor);
+        const uint64_t start = memory.read<uint64_t>(descriptor + 8);
+        const uint64_t pages = memory.read<uint64_t>(descriptor + 24);
+        const uint64_t end = start + pages * 0x1000ULL;
+        if (type == 1U && start == info.imageBase && pages == 4) {
+            sawImage = true;
+        }
+        if (start < info.imageBase + 0x4000 && info.imageBase < end) {
+            sawOverlap = sawOverlap || !(type == 1U && start == info.imageBase && pages == 4);
+        }
+    }
+    assert(sawImage);
+    assert(!sawOverlap);
+
+    std::cout << "  ? initial image uses allocated nonzero pages, mapped sections, applied relocations, "
+                 "published LoaderCode metadata, and EFI map ownership\n";
+}
+
 void testIA64PluginEfiBootServicesPlabelDispatch() {
     std::cout << "Testing IA-64 EFI Boot Services table -> plabel -> stub dispatch...\n";
 
@@ -5705,6 +5799,10 @@ int main(int argc, char** argv) {
             testIA64PluginLoadImage();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "initialimage") {
+            testIA64PluginInitialEfiImageAllocation();
+            return 0;
+        }
 
         testISAStateSerialization();
         std::cout << "\n";
@@ -5916,6 +6014,9 @@ int main(int argc, char** argv) {
         std::cout << "\n";
 
         testIA64PluginLoadImage();
+        std::cout << "\n";
+
+        testIA64PluginInitialEfiImageAllocation();
         std::cout << "\n";
 
         testIA64PluginEfiMirrorReservation();

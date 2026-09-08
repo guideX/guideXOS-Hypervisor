@@ -197,6 +197,7 @@ bool PEParser::parseOptionalHeader() {
     }
     
     imageInfo_.imageBase = optionalHeader_.imageBase;
+    imageInfo_.addressOfEntryPoint = optionalHeader_.addressOfEntryPoint;
     imageInfo_.entryPoint = optionalHeader_.imageBase + optionalHeader_.addressOfEntryPoint;
     imageInfo_.subsystem = optionalHeader_.subsystem;
     imageInfo_.sectionAlignment = optionalHeader_.sectionAlignment;
@@ -205,6 +206,33 @@ bool PEParser::parseOptionalHeader() {
     imageInfo_.sizeOfHeaders = optionalHeader_.sizeOfHeaders;
     imageInfo_.globalPointer = 0;
     imageInfo_.hasGlobalPointer = false;
+    imageInfo_.relocationDirectoryRva = 0;
+    imageInfo_.relocationDirectorySize = 0;
+    imageInfo_.relocationBlocksProcessed = 0;
+    imageInfo_.relocationsApplied = 0;
+    imageInfo_.relocationErrors = 0;
+    imageInfo_.relocationTypesEncountered.clear();
+
+    // IMAGE_DIRECTORY_ENTRY_BASERELOC is directory 5.  The fixed optional
+    // header ends immediately before the data-directory array; honor the
+    // COFF-declared optional-header size so truncated/synthetic images remain
+    // valid inputs rather than being read past their headers.
+    constexpr size_t kBaseRelocationDirectoryIndex = 5;
+    const size_t dataDirectoryOffset =
+        static_cast<size_t>(optOffset) + sizeof(PEOptionalHeader64);
+    const size_t directoryBytes =
+        (kBaseRelocationDirectoryIndex + 1) * sizeof(PEDataDirectory);
+    if (optionalHeader_.numberOfRvaAndSizes > kBaseRelocationDirectoryIndex &&
+        coffHeader_.sizeOfOptionalHeader >= sizeof(PEOptionalHeader64) + directoryBytes &&
+        dataDirectoryOffset + directoryBytes <= imageSize_) {
+        PEDataDirectory relocationDirectory{};
+        std::memcpy(&relocationDirectory,
+                    imageData_ + dataDirectoryOffset +
+                        kBaseRelocationDirectoryIndex * sizeof(PEDataDirectory),
+                    sizeof(relocationDirectory));
+        imageInfo_.relocationDirectoryRva = relocationDirectory.virtualAddress;
+        imageInfo_.relocationDirectorySize = relocationDirectory.size;
+    }
     
     LOG_INFO("Optional Header:");
     
@@ -698,6 +726,11 @@ bool PEParser::applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t load
     
     LOG_INFO("");
     LOG_INFO("=== Applying PE Relocations ===");
+
+    imageInfo_.relocationBlocksProcessed = 0;
+    imageInfo_.relocationsApplied = 0;
+    imageInfo_.relocationErrors = 0;
+    imageInfo_.relocationTypesEncountered.clear();
     
     std::ostringstream oss;
     oss << "Load address: 0x" << std::hex << loadAddress << std::dec;
@@ -721,26 +754,49 @@ bool PEParser::applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t load
         LOG_INFO("PE base relocations not needed, but checking ELF relocations...");
     }
     
+    const bool hasPeRelocations = findSectionByName(".reloc") != nullptr;
+    const bool hasElfRelocations = findSectionByName(".rela") != nullptr;
     bool success = true;
-    
-    // Try PE-style base relocations (.reloc section) - only if delta != 0
-    if (delta != 0) {
+    bool relocationSourceFound = false;
+
+    // Try PE-style base relocations (.reloc section) - only if delta != 0.
+    // A missing .reloc section is not an error when the image carries the
+    // repository's IA-64 .rela relocation stream instead.
+    if (delta != 0 && hasPeRelocations) {
+        relocationSourceFound = true;
         LOG_INFO("");
         LOG_INFO("Step 1: Checking for .reloc section (PE base relocations)...");
         if (!applyPEBaseRelocations(imageBuffer, loadAddress)) {
-            LOG_WARN("PE base relocations failed or not present");
+            LOG_WARN("PE base relocations failed");
+            success = false;
+        }
+    } else if (delta == 0) {
+        LOG_INFO("");
+        LOG_INFO("Step 1: Skipping .reloc (delta is 0)");
+    } else {
+        LOG_INFO("");
+        LOG_INFO("Step 1: No PE .reloc section; relying on IA-64 .rela relocations if present");
+    }
+    
+    // Try ELF-style relocations (.rela section) when present.
+    LOG_INFO("");
+    LOG_INFO("Step 2: Checking for .rela section (ELF relocations)...");
+    if (hasElfRelocations) {
+        relocationSourceFound = true;
+        if (!applyELFRelocations(imageBuffer, loadAddress)) {
+            LOG_WARN("ELF relocations failed");
             success = false;
         }
     } else {
-        LOG_INFO("");
-        LOG_INFO("Step 1: Skipping .reloc (delta is 0)");
+        LOG_INFO("  .rela section not found");
     }
-    
-    // Try ELF-style relocations (.rela section) - ALWAYS check
-    LOG_INFO("");
-    LOG_INFO("Step 2: Checking for .rela section (ELF relocations)...");
-    if (!applyELFRelocations(imageBuffer, loadAddress)) {
-        LOG_WARN("ELF relocations failed or not present");
+
+    if (delta != 0 && !relocationSourceFound) {
+        ++imageInfo_.relocationErrors;
+        LOG_WARN("No relocation source is available for a non-preferred load address");
+        success = false;
+    }
+    if (imageInfo_.relocationErrors != 0) {
         success = false;
     }
     
@@ -793,10 +849,19 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
     while (offset < endOffset && offset + sizeof(PEBaseRelocationBlock) <= imageBuffer.size()) {
         PEBaseRelocationBlock block;
         std::memcpy(&block, &imageBuffer[offset], sizeof(PEBaseRelocationBlock));
-        
+
         if (block.sizeOfBlock == 0) {
             break; // End of relocations
         }
+        if (block.sizeOfBlock < sizeof(PEBaseRelocationBlock) ||
+            block.sizeOfBlock > endOffset - offset ||
+            block.sizeOfBlock > imageBuffer.size() - offset) {
+            ++imageInfo_.relocationErrors;
+            LOG_ERROR("    Invalid PE relocation block size");
+            break;
+        }
+
+        ++imageInfo_.relocationBlocksProcessed;
         
         oss.str("");
         oss << "  Relocation block at page 0x" << std::hex << block.virtualAddress << std::dec;
@@ -815,6 +880,11 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
             uint16_t type = entry >> 12;
             uint16_t offsetInPage = entry & 0x0FFF;
             ++typeFoundCounts[type];
+            if (std::find(imageInfo_.relocationTypesEncountered.begin(),
+                          imageInfo_.relocationTypesEncountered.end(), type) ==
+                imageInfo_.relocationTypesEncountered.end()) {
+                imageInfo_.relocationTypesEncountered.push_back(type);
+            }
             
             if (type == IMAGE_REL_BASED_ABSOLUTE) {
                 ++skippedCount;
@@ -826,6 +896,7 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
             
             if (targetRVA + 8 > imageBuffer.size()) {
                 LOG_ERROR("    Relocation target out of bounds!");
+                ++imageInfo_.relocationErrors;
                 continue;
             }
             
@@ -837,6 +908,7 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
                 std::memcpy(&imageBuffer[targetRVA], &newValue, 8);
                 
                 relocationCount++;
+                ++imageInfo_.relocationsApplied;
                 ++typeAppliedCounts[type];
                 
                 if (relocationCount <= 10) { // Log first 10 for debugging
@@ -848,6 +920,7 @@ bool PEParser::applyPEBaseRelocations(std::vector<uint8_t>& imageBuffer, uint64_
             } else {
                 ++unsupportedCount;
                 ++skippedCount;
+                ++imageInfo_.relocationErrors;
                 ++typeUnsupportedCounts[type];
                 ++typeSkippedCounts[type];
                 oss.str("");
@@ -959,6 +1032,7 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         
         if (entryOffset + sizeof(ELFRelaEntry) > imageBuffer.size()) {
             LOG_ERROR("  Relocation entry out of bounds!");
+            ++imageInfo_.relocationErrors;
             break;
         }
         
@@ -968,6 +1042,11 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         uint32_t type = rela.info & 0xFFFFFFFF;
         uint32_t symbol = rela.info >> 32;
         ++typeFoundCounts[type];
+        if (std::find(imageInfo_.relocationTypesEncountered.begin(),
+                      imageInfo_.relocationTypesEncountered.end(), type) ==
+            imageInfo_.relocationTypesEncountered.end()) {
+            imageInfo_.relocationTypesEncountered.push_back(type);
+        }
         
         // Skip NONE relocations
         if (type == R_IA64_NONE) {
@@ -1004,6 +1083,7 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         
         if (rela.offset >= imageBuffer.size()) {
             ++outOfImageOffsetCount;
+            ++imageInfo_.relocationErrors;
             LOG_ERROR("  Relocation offset out of bounds!");
             continue;
         }
@@ -1118,6 +1198,7 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
         
         if (applied) {
             relocationCount++;
+            ++imageInfo_.relocationsApplied;
             ++typeAppliedCounts[type];
             maxRelocationWriteEnd = std::max(maxRelocationWriteEnd, rela.offset + 8);
             
@@ -1129,6 +1210,9 @@ bool PEParser::applyELFRelocations(std::vector<uint8_t>& imageBuffer, uint64_t l
                     << " (addend: 0x" << rela.addend << ")" << std::dec;
                 LOG_INFO(oss.str());
             }
+        }
+        else if (type != R_IA64_NONE) {
+            ++imageInfo_.relocationErrors;
         }
     }
     

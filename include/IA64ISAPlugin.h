@@ -283,6 +283,33 @@ public:
     void setBootImageBackingStore(std::vector<uint8_t> bootImage);
 
     /**
+     * Load the VM's initial EFI application as the firmware-created image
+     * handle (EFI_IMAGE_HANDLE == 1).  This is the host-side equivalent of
+     * EFI LoadImage for the firmware entry image: pages come from the shared
+     * EFI memory map, PE sections/relocations use PEParser, and the initial
+     * LoadedImage protocol is populated at the normal fixed handoff address.
+     */
+    struct InitialEfiImageInfo {
+        uint64_t preferredImageBase = 0;
+        uint64_t imageBase = 0;
+        uint64_t imageSize = 0;
+        uint64_t entryPoint = 0;
+        uint32_t addressOfEntryPoint = 0;
+        uint32_t relocationDirectoryRva = 0;
+        uint32_t relocationDirectorySize = 0;
+        uint64_t relocationBlocksProcessed = 0;
+        uint64_t relocationsApplied = 0;
+        uint64_t relocationErrors = 0;
+        std::vector<uint32_t> relocationTypesEncountered;
+        uint64_t globalPointer = 0;
+        bool hasGlobalPointer = false;
+    };
+
+    bool loadInitialEfiImage(IMemory& memory,
+                             const std::vector<uint8_t>& image,
+                             InitialEfiImageInfo& result);
+
+    /**
      * Register a page-aligned guest range that must remain unavailable to EFI
      * page and pool allocation. The reservation is folded into the EFI
      * memory-map descriptors before the first map is exposed.
