@@ -1,276 +1,90 @@
-# PE Relocation Support Implementation
+# PE/COFF and IA-64 gnu-efi relocation ownership
 
-## Overview
+## Current model
 
-Implemented comprehensive PE relocation support to fix absolute addresses in loaded EFI executables. This resolves the critical issue where branch instructions were jumping to invalid addresses.
+The PE parser maps an EFI image into its allocated `SizeOfImage` range and
+applies only the PE/COFF base-relocation directory. For an IA-64 gnu-efi
+image, the embedded ELF-style `.dynamic`, `.rela`, and `.dynsym` sections are
+mapped as ordinary image data and deliberately left unmodified. The image's
+gnu-efi startup routine calls `_relocate` and owns those IA-64 relocations.
 
-## Problem Statement
+This split is required for nonzero image bases. Applying `.rela` in both the
+host loader and `_relocate` adds the load base twice. A preferred-base-zero
+run hides that error because both additions are zero.
 
-The EFI bootloader (BOOTIA64.EFI) contains absolute addresses that assume loading at a specific base address (0x8400000), but the hypervisor loads it at 0x0. Without relocation, the first branch instruction at 0x1070 jumps to 0x8400040 (outside the loaded image), causing execution to fail.
+## PE/COFF `.reloc`
 
-## Solution Implemented
+`applyRelocations()` computes:
 
-### 1. Added Relocation Structures (PEParser.h)
-
-**PE Base Relocation Types:**
-```cpp
-constexpr uint16_t IMAGE_REL_BASED_ABSOLUTE = 0;  // Padding
-constexpr uint16_t IMAGE_REL_BASED_DIR64 = 10;    // 64-bit address
+```text
+delta = loadAddress - ImageBase
 ```
 
-**ELF Relocation Types for IA-64:**
-```cpp
-constexpr uint32_t R_IA64_NONE = 0;              // No relocation
-constexpr uint32_t R_IA64_DIR64LSB = 0x27;       // Direct 64-bit
-constexpr uint32_t R_IA64_FPTR64LSB = 0x47;      // Function pointer
-constexpr uint32_t R_IA64_PCREL64LSB = 0x4f;     // PC-relative
-constexpr uint32_t R_IA64_SEGREL64LSB = 0x5f;    // Segment-relative
+When `delta` is nonzero, `applyPEBaseRelocations()` processes the PE
+relocation blocks. A `DIR64` entry reads the mapped 64-bit target and writes
+`target + delta`. These entries are firmware/PE-loader-owned. In the
+authentic IA-64 image there are two entries, both for the entry PLABEL fields
+(the code address and GP).
+
+When `delta` is zero, PE relocation writes are unnecessary. A nonpreferred PE
+image without `.reloc` is reported as lacking a relocation source; an
+embedded IA-64 `.rela` stream is not used as a substitute by the PE loader.
+
+## IA-64 gnu-efi `.dynamic` / `.rela`
+
+The IA-64 gnu-efi `_start` routine passes the loaded image base and
+`_DYNAMIC` to its `_relocate` routine. `_relocate` discovers `DT_RELA`,
+`DT_RELASZ`, `DT_RELAENT`, and `DT_SYMTAB`, then applies the records in the
+guest.
+
+For `R_IA64_REL64LSB`, the matching gnu-efi IA-64 startup code performs:
+
+```text
+target = ImageBase + r_offset
+*target = *target + ImageBase
 ```
 
-**Relocation Entry Structures:**
-```cpp
-struct PEBaseRelocationBlock {
-    uint32_t virtualAddress;  // Page RVA
-    uint32_t sizeOfBlock;     // Block size including entries
-};
+The mapped target's linked value is therefore adjusted exactly once by the
+guest. The authentic image has 227 such records.
 
-struct ELFRelaEntry {
-    uint64_t offset;   // Location to apply relocation
-    uint64_t info;     // Type and symbol index
-    int64_t addend;    // Constant addend
-};
-```
+For `R_IA64_FPTR64LSB`, the guest allocates descriptors from its static
+`fptr_mem_base` area. Each 16-byte IA-64 descriptor contains the relocated
+code address at offset 0 and GP at offset 8. The authentic image has 78
+such records. The PE loader must not manufacture a second descriptor or
+rewrite the FPTR target before `_relocate` runs.
 
-### 2. Implemented Relocation Methods (PEParser.cpp)
+## Authentic image evidence
 
-#### Main Entry Point: `applyRelocations()`
-```cpp
-bool applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t loadAddress)
-```
+The recovered `bootia64_exact.efi` has:
 
-**Process:**
-1. Calculate relocation delta: `loadAddress - imageBase`
-2. Apply PE base relocations (.reloc section)
-3. Apply ELF relocations (.rela section)
-4. Log detailed results
+- preferred `ImageBase = 0` and `SizeOfImage = 0x5e000`;
+- PE `.reloc` at RVA `0x5a000`, size `0xc`, with two `DIR64` entries;
+- `.dynamic` at RVA `0x57000`;
+- `DT_RELA = 0x58000`, `DT_RELASZ = 0x1c98`, `DT_RELAENT = 0x18`;
+- 305 IA-64 `.rela` records: 227 `REL64LSB` and 78 `FPTR64LSB`;
+- gnu-efi `_relocate` at image RVA `0x36d60`, including the REL64 and
+  FPTR write loops.
 
-#### PE Base Relocations: `applyPEBaseRelocations()`
+The first causal record is `.rela` index 0: `r_offset = 0x3fad0`, type
+`REL64LSB`, symbol index 0, addend `0x402b0`, and on-disk target value
+`0x402b0`. With the repaired load base `0x1fd52000`, the host leaves that
+value unchanged and the guest writes `0x1fd922b0`. The former host-plus-guest
+path wrote it in the host first and the guest added the same base again,
+producing `0x3fae42b0` and the invalid `init_devices` access at
+`0x3fae42c8`.
 
-Processes .reloc section containing PE-style base relocations:
+## Regression requirements
 
-**Algorithm:**
-```
-For each relocation block:
-  Page RVA = block.virtualAddress
-  For each entry in block:
-    Type = entry >> 12
-    Offset = entry & 0x0FFF
-    Target RVA = Page RVA + Offset
-    
-    If type == DIR64:
-      Read 64-bit value at target
-      Add delta to value
-      Write back to target
-```
+Tests must keep the responsibilities separate:
 
-**Features:**
-- Skips ABSOLUTE entries (padding)
-- Validates targets are within image bounds
-- Logs first 10 relocations for debugging
-- Returns count of applied relocations
+1. PE `DIR64` targets change at a nonzero base.
+2. Embedded IA-64 `.rela` target bytes remain linked/unrelocated after
+   `PEParser::loadImage()` / `applyRelocations()`.
+3. A guest `REL64LSB` application changes a representative datum once.
+4. A guest `FPTR64LSB` application creates one 16-byte code/GP descriptor.
+5. Initial EFI entry and ordinary `LoadImage` preserve the same model.
+6. Zero-base loading remains compatible without being the only relocation
+   test.
 
-#### ELF Relocations: `applyELFRelocations()`
-
-Processes .rela section containing ELF-style relocations:
-
-**Algorithm:**
-```
-For each RELA entry:
-  Type = entry.info & 0xFFFFFFFF
-  Symbol = entry.info >> 32
-  Offset = entry.offset
-  Addend = entry.addend
-  
-  Switch type:
-    DIR64LSB / FPTR64LSB:
-      NewValue = OldValue + Addend + LoadAddress
-    PCREL64LSB:
-      NewValue = OldValue + Addend - Offset
-    SEGREL64LSB:
-      NewValue = OldValue + Addend
-```
-
-**Features:**
-- Supports 4 IA-64 relocation types
-- Skips NONE relocations
-- Validates offsets are within bounds
-- Logs first 10 relocations for debugging
-- Counts applied and skipped relocations
-
-### 3. Integrated into Load Pipeline
-
-**New Step 7 in loadImage():**
-```
-Step 1: Allocate memory (SizeOfImage)
-Step 2: Copy PE headers
-Step 3: Map sections to memory
-Step 4: Set load address and entry point
-Step 5: Validate entry point
-Step 5.5: Handle EFI indirect entry point
-Step 6: Dump entry point memory
-Step 7: Apply relocations ? NEW
-```
-
-**Process:**
-1. Call `applyRelocations()` after image is loaded
-2. Update entry point after relocations
-3. Continue even if relocations fail (with warning)
-4. Log final entry point
-
-## Expected Results
-
-### Before Relocation:
-```
-[IP=0x1070, Slot=2] br.cond 0x8400040  ? Invalid address!
-[IP=0x8400040, Slot=0] unknown (0x0)   ? Executing zeros
-```
-
-### After Relocation:
-```
-[IP=0x1070, Slot=2] br.cond 0x40       ? Fixed address!
-[IP=0x40, Slot=0] <valid instruction>  ? Executing code
-```
-
-## Log Output Example
-
-```
-=== Applying PE Relocations ===
-Load address: 0x0
-Image base: 0x0
-Relocation delta: 0x0
-No relocation needed (loaded at preferred base address)
-
-Step 1: Checking for .reloc section (PE base relocations)...
-  .reloc section not found
-
-Step 2: Checking for .rela section (ELF relocations)...
-  Found .rela section
-    VirtualAddress: 0x58000
-    Size: 7320 bytes
-    Number of relocations: 305
-  [1] Type 0x27 at RVA 0x1008: 0x8400000 -> 0x0 (addend: 0x0)
-  [2] Type 0x27 at RVA 0x1018: 0x8400040 -> 0x40 (addend: 0x40)
-  [3] Type 0x27 at RVA 0x1028: 0x8400080 -> 0x80 (addend: 0x80)
-  ...
-  Applied 305 ELF relocations
-
-=== Relocations Applied Successfully ===
-```
-
-## Technical Details
-
-### Why Two Relocation Formats?
-
-**PE Base Relocations (.reloc):**
-- Windows PE standard
-- Compact format (2 bytes per entry)
-- Page-based addressing
-- Typically used for Windows executables
-
-**ELF Relocations (.rela):**
-- Unix/Linux standard
-- Full format (24 bytes per entry)
-- Explicit addends
-- Typically used for cross-platform executables
-
-**IA-64 EFI files often use ELF relocations** even though they're PE/COFF format, because:
-- More flexible for IA-64 architecture
-- Better support for position-independent code
-- Compatible with GNU toolchain
-
-### Relocation Delta
-
-```
-Delta = LoadAddress - ImageBase
-```
-
-- **If delta == 0**: No relocation needed (loaded at preferred address)
-- **If delta > 0**: Add delta to all absolute addresses
-- **If delta < 0**: Subtract from all absolute addresses
-
-### Memory Safety
-
-All relocation operations validate:
-- ? Target offsets are within image bounds
-- ? Section exists and is large enough
-- ? No overflow when adding delta
-- ? Entry structures are complete
-
-## Files Modified
-
-1. **include/PEParser.h**
-   - Added relocation structures (PEBaseRelocationBlock, ELFRelaEntry)
-   - Added relocation type constants
-   - Added method declarations (applyRelocations, helpers)
-
-2. **src/storage/PEParser.cpp**
-   - Implemented `applyRelocations()` (~60 lines)
-   - Implemented `applyPEBaseRelocations()` (~90 lines)
-   - Implemented `applyELFRelocations()` (~100 lines)
-   - Implemented `findSectionByName()` helper
-   - Integrated into `loadImage()` as Step 7
-
-## Build Status
-
-? **Successfully compiled**
-- DLL: `guideXOS_Hypervisor.dll` built successfully
-- No compilation errors
-- Ready for testing
-
-## Testing Checklist
-
-When running the application:
-
-1. ? Check log for "Step 7: Applying relocations..."
-2. ? Verify relocation delta is calculated
-3. ? Confirm .rela section is found and processed
-4. ? Check relocation count (should be ~305 for this EFI)
-5. ? Verify branch targets are fixed (0x8400040 ? 0x40)
-6. ? Execution continues past first branch
-7. ? More instructions are decoded successfully
-
-## Known Limitations
-
-1. **Only 4 ELF relocation types supported**
-   - Additional types can be added as needed
-   - Unsupported types are logged and skipped
-
-2. **No symbol resolution**
-   - Currently assumes all symbols are within the image
-   - External symbols (if any) would need additional handling
-
-3. **No relocation for dynamic sections**
-   - .dynamic section relocations are applied but not interpreted
-   - Full dynamic linking not implemented
-
-## Performance Impact
-
-- **Minimal overhead**: ~1-2ms for 305 relocations
-- **One-time cost**: Applied during image load only
-- **No runtime impact**: Relocations are permanent in memory
-
-## References
-
-- **PE/COFF Specification**: Microsoft Portable Executable format
-- **ELF Specification**: System V ABI IA-64 Supplement
-- **IA-64 Software Conventions**: Intel Itanium Relocation Types
-
-## Summary
-
-? **Critical feature implemented**: PE relocation support  
-? **Both formats supported**: PE base relocations and ELF relocations  
-? **Comprehensive logging**: Detailed output for debugging  
-? **Production ready**: Proper validation and error handling  
-? **Build successful**: DLL ready for testing  
-
-This implementation should **fix the branch target issue** and enable the EFI bootloader to execute correctly beyond the first few instructions.
+The legacy `applyELFRelocations()` helper remains available as non-PE/legacy
+code reference, but it is not called by the PE/EFI load path.

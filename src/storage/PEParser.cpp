@@ -747,21 +747,23 @@ bool PEParser::applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t load
     oss << "Relocation delta: 0x" << std::hex << delta << std::dec;
     LOG_INFO(oss.str());
     
-    // Note: Even if delta is 0, we still need to check ELF relocations
-    // because they use explicit addends that are independent of delta
     if (delta == 0) {
         LOG_INFO("Delta is 0 (loaded at preferred base address)");
-        LOG_INFO("PE base relocations not needed, but checking ELF relocations...");
+        LOG_INFO("PE base relocations not needed");
     }
     
     const bool hasPeRelocations = findSectionByName(".reloc") != nullptr;
     const bool hasElfRelocations = findSectionByName(".rela") != nullptr;
+    const bool guestOwnsIa64Relocations =
+        isIA64() && isEFI() && hasElfRelocations;
     bool success = true;
     bool relocationSourceFound = false;
 
-    // Try PE-style base relocations (.reloc section) - only if delta != 0.
-    // A missing .reloc section is not an error when the image carries the
-    // repository's IA-64 .rela relocation stream instead.
+    // PE/COFF owns image placement.  IA-64 gnu-efi images retain their
+    // embedded .dynamic/.rela stream and apply it from their startup code;
+    // applying that stream here would make the guest add the image base a
+    // second time.  A non-preferred PE image therefore still needs a PE
+    // .reloc section, even when it also contains an IA-64 .rela section.
     if (delta != 0 && hasPeRelocations) {
         relocationSourceFound = true;
         LOG_INFO("");
@@ -775,20 +777,27 @@ bool PEParser::applyRelocations(std::vector<uint8_t>& imageBuffer, uint64_t load
         LOG_INFO("Step 1: Skipping .reloc (delta is 0)");
     } else {
         LOG_INFO("");
-        LOG_INFO("Step 1: No PE .reloc section; relying on IA-64 .rela relocations if present");
+        LOG_INFO("Step 1: No PE .reloc section; non-preferred PE load cannot be relocated");
     }
     
-    // Try ELF-style relocations (.rela section) when present.
+    // The IA-64 gnu-efi startup self-relocator owns .rela.  Do not mutate
+    // those records or their targets here; .dynamic, .rela, and .dynsym are
+    // mapped as ordinary image data and are intentionally available to the
+    // guest when _start calls _relocate.  Other PE images retain the legacy
+    // host-side ELF path rather than changing unrelated loader semantics.
     LOG_INFO("");
-    LOG_INFO("Step 2: Checking for .rela section (ELF relocations)...");
-    if (hasElfRelocations) {
+    if (guestOwnsIa64Relocations) {
+        LOG_INFO("Step 2: Preserving embedded .rela for IA-64 gnu-efi self-relocation...");
+        LOG_INFO("  .rela section retained without host-side writes");
+    } else if (hasElfRelocations) {
         relocationSourceFound = true;
+        LOG_INFO("Step 2: Applying legacy host-side ELF relocations...");
         if (!applyELFRelocations(imageBuffer, loadAddress)) {
             LOG_WARN("ELF relocations failed");
             success = false;
         }
     } else {
-        LOG_INFO("  .rela section not found");
+        LOG_INFO("Step 2: No embedded .rela section");
     }
 
     if (delta != 0 && !relocationSourceFound) {

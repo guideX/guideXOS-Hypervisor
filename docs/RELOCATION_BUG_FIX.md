@@ -1,3 +1,10 @@
+# Historical relocation investigation (superseded IA-64 PE model)
+
+> This document records an earlier host-side ELF-relocation model. For IA-64
+> gnu-efi PE/EFI images, the current model applies PE `.reloc` in the loader
+> and leaves `.dynamic`/`.rela` to the guest gnu-efi self-relocator. Applying
+> those `.rela` records in both places double-adds the nonzero image base.
+
 # Critical Bug Fix - ELF Relocations Must Run Even When Delta=0
 
 ## Issue Discovered

@@ -78,6 +78,11 @@ bool shouldEmitBootPathTrace() {
     return enabled;
 }
 
+bool shouldEmitGuestRelocationTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_RELOCATION_TRACE");
+    return enabled;
+}
+
 bool shouldEmitGpRelativeDataDiag() {
     static const bool enabled = environmentFlagEnabled("GUIDEXOS_EFI_DIAG_SEED_LOAD_OPTIONS");
     return enabled;
@@ -8484,6 +8489,40 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const uint64_t loadAddress = loadSize != 0 ? cpu.GetGR(instr.GetSrc1()) : 0;
         const size_t storeSize = storeSizeForInstruction(instr.GetType());
         const uint64_t storeAddress = storeSize != 0 ? cpu.GetGR(instr.GetDst()) : 0;
+        uint64_t guestRelocationImageBase = 0;
+        uint64_t guestRelocationImageSize = 0;
+        const auto initialImage = efiLoadedImages_.find(EFI_IMAGE_HANDLE);
+        if (initialImage != efiLoadedImages_.end()) {
+            guestRelocationImageBase = initialImage->second.imageBase;
+            guestRelocationImageSize = initialImage->second.imageSize;
+        }
+        const uint64_t guestRelocationIP =
+            currentIP >= guestRelocationImageBase
+                ? currentIP - guestRelocationImageBase : UINT64_MAX;
+        const bool guestRelocationStore =
+            shouldEmitGuestRelocationTrace() &&
+            instr.GetType() == InstructionType::ST8 &&
+            storeSize == sizeof(uint64_t) &&
+            guestRelocationImageBase != 0 &&
+            guestRelocationIP >= 0x36D60ULL &&
+            guestRelocationIP <= 0x36F10ULL;
+        const bool guestRelocationTargetInImage =
+            guestRelocationStore &&
+            storeAddress >= guestRelocationImageBase &&
+            guestRelocationImageSize >= sizeof(uint64_t) &&
+            storeAddress - guestRelocationImageBase <=
+                guestRelocationImageSize - sizeof(uint64_t);
+        const char* guestRelocationType = "OTHER";
+        if (guestRelocationIP == 0x36EA0ULL) {
+            guestRelocationType = "REL64LSB";
+        } else if (guestRelocationIP == 0x36EB0ULL ||
+                   guestRelocationIP == 0x36EE0ULL ||
+                   guestRelocationIP == 0x36F00ULL) {
+            guestRelocationType = "FPTR64LSB";
+        }
+        uint64_t guestRelocationOldValue = 0;
+        const bool guestRelocationOldValueReadable =
+            guestRelocationStore && readGuestU64(memory, storeAddress, guestRelocationOldValue);
         if (loadSize == sizeof(uint64_t) && instr.GetType() == InstructionType::LD8 &&
             ((loadAddress >= EFI_RUNTIME_SERVICES_ADDR + 0x18ULL &&
               loadAddress < EFI_RUNTIME_SERVICES_ADDR + 0x88ULL) ||
@@ -8705,6 +8744,26 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             writeControlRegister(instr.GetDst(), cpu.GetGR(instr.GetSrc1()));
         } else {
             instr.Execute(state_.getCPUState(), memory, ignorePredicate);
+        }
+        if (guestRelocationStore) {
+            uint64_t guestRelocationNewValue = 0;
+            const bool newValueReadable =
+                readGuestU64(memory, storeAddress, guestRelocationNewValue);
+            std::ostringstream trace;
+            trace << "cycle=0x" << std::hex << cpu.GetAR(44)
+                  << " ip=0x" << currentIP
+                  << " slot=" << std::dec << state_.currentSlot_
+                  << " target=0x" << std::hex << storeAddress
+                  << " targetRva=0x" << (guestRelocationTargetInImage
+                      ? storeAddress - guestRelocationImageBase : UINT64_MAX)
+                  << " old=" << (guestRelocationOldValueReadable
+                      ? BootStageTrace::Hex(guestRelocationOldValue) : "unreadable")
+                  << " new=" << (newValueReadable
+                      ? BootStageTrace::Hex(guestRelocationNewValue) : "unreadable")
+                  << " type=" << guestRelocationType
+                  << " instr=\"" << instr.GetDisassembly() << "\"";
+            std::cout << "[IA64-GUEST-RELOC] " << trace.str() << std::endl;
+            BootStageTrace::Event("IA64_GUEST_RELOC_WRITE", trace.str());
         }
         if (traceBootLocalLoad) {
             logBootLocalAccess("post-read", state_.getCPUState(), state_.currentSlot_, instr,

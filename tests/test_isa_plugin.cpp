@@ -200,7 +200,7 @@ std::vector<uint8_t> makeFatImageWithBootLoader() {
 }
 
 std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
-    std::vector<uint8_t> image(0x800, 0);
+    std::vector<uint8_t> image(0xA00, 0);
 
     guideXOS::DOSHeader dos{};
     dos.e_magic = 0x5A4D;
@@ -213,7 +213,7 @@ std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
 
     guideXOS::COFFHeader coff{};
     coff.machine = guideXOS::IMAGE_FILE_MACHINE_IA64;
-    coff.numberOfSections = 3;
+    coff.numberOfSections = 4;
     coff.sizeOfOptionalHeader = sizeof(guideXOS::PEOptionalHeader64);
     coff.characteristics = 0x2022;
     std::memcpy(image.data() + 0x84, &coff, sizeof(coff));
@@ -227,7 +227,7 @@ std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
     optional.fileAlignment = 0x200;
     optional.majorOperatingSystemVersion = 1;
     optional.majorSubsystemVersion = 1;
-    optional.sizeOfImage = 0x4000;
+    optional.sizeOfImage = 0x5000;
     optional.sizeOfHeaders = 0x200;
     optional.subsystem = guideXOS::IMAGE_SUBSYSTEM_EFI_APPLICATION;
     std::memcpy(image.data() + 0x98, &optional, sizeof(optional));
@@ -255,8 +255,11 @@ std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
                  guideXOS::IMAGE_SCN_MEM_READ |
                  guideXOS::IMAGE_SCN_MEM_WRITE);
     writeSection(0x158, ".rela", 0x3000, 0x600,
-                 guideXOS::IMAGE_SCN_CNT_INITIALIZED_DATA |
-                 guideXOS::IMAGE_SCN_MEM_READ);
+                  guideXOS::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                  guideXOS::IMAGE_SCN_MEM_READ);
+    writeSection(0x180, ".reloc", 0x4000, 0x800,
+                  guideXOS::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                  guideXOS::IMAGE_SCN_MEM_READ);
 
     for (size_t index = 0; index < 0x200; ++index) {
         image[0x200 + index] = static_cast<uint8_t>(0xA0U + (index & 0x1FU));
@@ -265,7 +268,9 @@ std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
     const uint64_t descriptorGpRva = 0x1234;
     std::memcpy(image.data() + 0x400, &descriptorCodeRva, sizeof(descriptorCodeRva));
     std::memcpy(image.data() + 0x408, &descriptorGpRva, sizeof(descriptorGpRva));
-    const uint64_t relocationInitialValue = 0;
+    // REL64LSB uses the linked target contents as its addend.  The guest
+    // gnu-efi self-relocator will add the load base to this value once.
+    const uint64_t relocationInitialValue = 0x123;
     std::memcpy(image.data() + 0x420, &relocationInitialValue,
                 sizeof(relocationInitialValue));
 
@@ -279,7 +284,25 @@ std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
     std::memcpy(image.data() + 0x618, &relocation, sizeof(relocation));
     relocation.offset = 0x2020;
     relocation.addend = 0x123;
+    relocation.info = guideXOS::R_IA64_REL64LSB;
     std::memcpy(image.data() + 0x630, &relocation, sizeof(relocation));
+
+    relocation.info = (static_cast<uint64_t>(1) << 32) |
+                      guideXOS::R_IA64_FPTR64LSB;
+    relocation.offset = 0x2030;
+    relocation.addend = 0;
+    std::memcpy(image.data() + 0x648, &relocation, sizeof(relocation));
+
+    const uint32_t relocationPage = 0x2000;
+    const uint32_t relocationBlockSize = 12;
+    const uint16_t relocationCode =
+        static_cast<uint16_t>((guideXOS::IMAGE_REL_BASED_DIR64 << 12) | 0x000);
+    const uint16_t relocationGp =
+        static_cast<uint16_t>((guideXOS::IMAGE_REL_BASED_DIR64 << 12) | 0x008);
+    std::memcpy(image.data() + 0x800, &relocationPage, sizeof(relocationPage));
+    std::memcpy(image.data() + 0x804, &relocationBlockSize, sizeof(relocationBlockSize));
+    std::memcpy(image.data() + 0x808, &relocationCode, sizeof(relocationCode));
+    std::memcpy(image.data() + 0x80A, &relocationGp, sizeof(relocationGp));
     return image;
 }
 
@@ -4637,6 +4660,50 @@ void testIA64PluginEfiMirrorReservation() {
                  "and excluded from AllocatePool/AllocatePages\n";
 }
 
+void testIA64PeRelocationOwnership() {
+    std::cout << "Testing IA-64 PE/.rela relocation ownership...\n";
+
+    const std::vector<uint8_t> image = makeSyntheticIa64EfiLoadImage();
+    const auto readU64 = [](const std::vector<uint8_t>& buffer, size_t offset) {
+        uint64_t value = 0;
+        std::memcpy(&value, buffer.data() + offset, sizeof(value));
+        return value;
+    };
+
+    guideXOS::PEParser relocatedParser;
+    assert(relocatedParser.parse(image.data(), image.size()));
+    std::vector<uint8_t> relocated;
+    uint64_t relocatedBase = 0x100000ULL;
+    uint64_t relocatedEntry = 0;
+    assert(relocatedParser.loadImage(relocated, relocatedBase, relocatedEntry));
+    assert(relocatedParser.getImageInfo().relocationsApplied == 2);
+    assert(relocatedParser.getImageInfo().relocationErrors == 0);
+    assert(relocatedParser.getImageInfo().relocationTypesEncountered.size() == 1);
+    assert(relocatedParser.getImageInfo().relocationTypesEncountered.front() ==
+           guideXOS::IMAGE_REL_BASED_DIR64);
+    assert(readU64(relocated, 0x2000) == relocatedBase + 0x1000);
+    assert(readU64(relocated, 0x2008) == relocatedBase + 0x1234);
+    // The linked REL64 datum and FPTR slot are preserved for guest startup.
+    assert(readU64(relocated, 0x2020) == 0x123);
+    assert(readU64(relocated, 0x2030) == 0);
+
+    guideXOS::PEParser zeroBaseParser;
+    assert(zeroBaseParser.parse(image.data(), image.size()));
+    std::vector<uint8_t> zeroBase;
+    uint64_t zeroBaseAddress = 0;
+    uint64_t zeroBaseEntry = 0;
+    assert(zeroBaseParser.loadImage(zeroBase, zeroBaseAddress, zeroBaseEntry));
+    assert(zeroBaseParser.getImageInfo().relocationsApplied == 0);
+    assert(zeroBaseParser.getImageInfo().relocationErrors == 0);
+    assert(zeroBaseParser.getImageInfo().relocationTypesEncountered.empty());
+    assert(readU64(zeroBase, 0x2000) == 0x1000);
+    assert(readU64(zeroBase, 0x2008) == 0x1234);
+    assert(readU64(zeroBase, 0x2020) == 0x123);
+    assert(readU64(zeroBase, 0x2030) == 0);
+
+    std::cout << "  ? PE DIR64 relocates once, guest .rela remains linked, and zero-base loading is stable\n";
+}
+
 void testIA64PluginLoadImage() {
     std::cout << "Testing IA-64 EFI LoadImage source-buffer semantics...\n";
 
@@ -4717,20 +4784,21 @@ void testIA64PluginLoadImage() {
     assert(memory.read<uint64_t>(protocol + 0x20) == 0);
     const uint64_t imageBase = memory.read<uint64_t>(protocol + 0x40);
     const uint64_t imageSize = memory.read<uint64_t>(protocol + 0x48);
-    assert(imageBase != 0 && imageSize == 0x4000);
+    assert(imageBase != 0 && imageSize == 0x5000);
     assert(memory.read<uint32_t>(protocol + 0x50) == 1U);
     assert(memory.read<uint32_t>(protocol + 0x54) == 2U);
     assert(memory.read<uint64_t>(protocol + 0x58) == 0);
     assert(imageBase + imageSize <= guestMemorySize);
     assert(imageBase + imageSize <= mirrorStart || imageBase >= mirrorStart + mirrorSize);
 
-    // The mapped bytes and the IA-64 function descriptor must be relocated
-    // to the selected guest base.  LoadImage itself leaves the CPU at its
-    // caller return address, so the child entry was not executed.
+    // PE/COFF relocation updates the entry descriptor fields.  The embedded
+    // IA-64 .rela stream is guest-owned and remains in its original form for
+    // the child gnu-efi startup code; LoadImage itself does not execute it.
     assert(memory.read<uint8_t>(imageBase + 0x1000) == 0xA0);
-    assert(memory.read<uint64_t>(imageBase + 0x2020) == imageBase + 0x123);
     assert(memory.read<uint64_t>(imageBase + 0x2000) == imageBase + 0x1000);
     assert(memory.read<uint64_t>(imageBase + 0x2008) == imageBase + 0x1234);
+    assert(memory.read<uint64_t>(imageBase + 0x2020) == 0x123);
+    assert(memory.read<uint64_t>(imageBase + 0x2030) == 0);
 
     // GetMemoryMap exposes the image allocation as loader code and advances
     // the map key for both the page allocation and Loaded Image protocol pool.
@@ -4752,7 +4820,7 @@ void testIA64PluginLoadImage() {
         const uint64_t descriptor = 0x9400 + offset;
         if (memory.read<uint32_t>(descriptor) == 1U &&
             memory.read<uint64_t>(descriptor + 8) == imageBase &&
-            memory.read<uint64_t>(descriptor + 24) == 4) {
+            memory.read<uint64_t>(descriptor + 24) == 5) {
             sawImageDescriptor = true;
         }
     }
@@ -4839,22 +4907,23 @@ void testIA64PluginInitialEfiImageAllocation() {
     assert(info.imageBase + info.imageSize <= guestMemorySize);
     assert(info.imageBase + info.imageSize <= mirrorStart ||
            info.imageBase >= mirrorStart + mirrorSize);
-    assert(info.imageSize == 0x4000);
+    assert(info.imageSize == 0x5000);
     assert(info.addressOfEntryPoint == 0x2000);
     assert(info.entryPoint == info.imageBase + 0x1000);
-    assert(info.relocationsApplied == 3);
+    assert(info.relocationsApplied == 2);
     assert(info.relocationErrors == 0);
     assert(std::find(info.relocationTypesEncountered.begin(),
                      info.relocationTypesEncountered.end(),
-                     guideXOS::R_IA64_DIR64LSB) != info.relocationTypesEncountered.end());
+                     guideXOS::IMAGE_REL_BASED_DIR64) != info.relocationTypesEncountered.end());
 
     // The image is section-mapped into its allocated range, not copied as a
-    // raw PE file.  Its IA-64 descriptor and ELF-style relocations resolve
-    // against the selected nonzero image base.
+    // raw PE file.  Its PE entry descriptor resolves against the selected
+    // nonzero image base while guest-owned .rela targets remain untouched.
     assert(memory.read<uint8_t>(info.imageBase + 0x1000) == 0xA0);
     assert(memory.read<uint64_t>(info.imageBase + 0x2000) == info.imageBase + 0x1000);
     assert(memory.read<uint64_t>(info.imageBase + 0x2008) == info.imageBase + 0x1234);
-    assert(memory.read<uint64_t>(info.imageBase + 0x2020) == info.imageBase + 0x123);
+    assert(memory.read<uint64_t>(info.imageBase + 0x2020) == 0x123);
+    assert(memory.read<uint64_t>(info.imageBase + 0x2030) == 0);
 
     const uint64_t loadedImageProtocol = handoffBase + kEfiLoadedImageProtocolOffset;
     assert(memory.read<uint64_t>(loadedImageProtocol + 0x40) == info.imageBase);
@@ -4891,17 +4960,17 @@ void testIA64PluginInitialEfiImageAllocation() {
         const uint64_t start = memory.read<uint64_t>(descriptor + 8);
         const uint64_t pages = memory.read<uint64_t>(descriptor + 24);
         const uint64_t end = start + pages * 0x1000ULL;
-        if (type == 1U && start == info.imageBase && pages == 4) {
+        if (type == 1U && start == info.imageBase && pages == 5) {
             sawImage = true;
         }
         if (start < info.imageBase + 0x4000 && info.imageBase < end) {
-            sawOverlap = sawOverlap || !(type == 1U && start == info.imageBase && pages == 4);
+            sawOverlap = sawOverlap || !(type == 1U && start == info.imageBase && pages == 5);
         }
     }
     assert(sawImage);
     assert(!sawOverlap);
 
-    std::cout << "  ? initial image uses allocated nonzero pages, mapped sections, applied relocations, "
+    std::cout << "  ? initial image uses allocated nonzero pages, mapped sections, PE-only host relocation, "
                  "published LoaderCode metadata, and EFI map ownership\n";
 }
 
@@ -5801,6 +5870,10 @@ int main(int argc, char** argv) {
         }
         if (argc > 1 && std::string(argv[1]) == "initialimage") {
             testIA64PluginInitialEfiImageAllocation();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "relocation") {
+            testIA64PeRelocationOwnership();
             return 0;
         }
 
