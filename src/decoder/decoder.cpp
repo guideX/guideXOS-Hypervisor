@@ -131,6 +131,10 @@ InstructionEx::InstructionEx()
     , branchTarget_(0)
     , hasBranchTarget_(false)
     , compareCompleter_(CompareCompleter::NORMAL)
+    , lfetchFault_(false)
+    , lfetchExclusive_(false)
+    , lfetchHint_(0)
+    , registerUpdate_(false)
 {}
 
 InstructionEx::InstructionEx(InstructionType type, UnitType unit)
@@ -148,6 +152,10 @@ InstructionEx::InstructionEx(InstructionType type, UnitType unit)
     , branchTarget_(0)
     , hasBranchTarget_(false)
     , compareCompleter_(CompareCompleter::NORMAL)
+    , lfetchFault_(false)
+    , lfetchExclusive_(false)
+    , lfetchHint_(0)
+    , registerUpdate_(false)
 {}
 
 namespace {
@@ -1823,6 +1831,22 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::LFETCH:
+            // lfetch has no destination register and a non-faulting form is
+            // deliberately not a guest-memory read.  It is a cache hint, so
+            // an address outside the flat replay's RAM must not stop Linux.
+            if (lfetchFault_) {
+                const uint64_t address =
+                    normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 1);
+                uint8_t ignored = 0;
+                memory.Read(address, &ignored, 1);
+            }
+            if (registerUpdate_) {
+                const uint64_t baseAddress = cpu.GetGR(src1_);
+                cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
+            }
+            break;
+
         case InstructionType::CMPXCHG4_ACQ:
             {
                 const uint64_t address =
@@ -2635,6 +2659,27 @@ std::string InstructionEx::GetDisassembly() const {
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
             } else if (src2_ != 0) {
+                oss << ", r" << static_cast<int>(src2_);
+            }
+            break;
+
+        case InstructionType::LFETCH:
+            oss << "lfetch";
+            if (lfetchFault_) {
+                oss << ".fault";
+            }
+            if (lfetchExclusive_) {
+                oss << ".excl";
+            }
+            if (lfetchHint_ == 1) {
+                oss << ".nt1";
+            } else if (lfetchHint_ == 2) {
+                oss << ".nt2";
+            } else if (lfetchHint_ == 3) {
+                oss << ".nta";
+            }
+            oss << " [r" << static_cast<int>(src1_) << "]";
+            if (registerUpdate_) {
                 oss << ", r" << static_cast<int>(src2_);
             }
             break;

@@ -109,6 +109,7 @@ struct MFormat {
         ALLOC,
         EXCHANGE,
         FETCHADD,
+        LFETCH,
         SETF,
         GETF,
         INVALA,
@@ -148,6 +149,8 @@ struct MFormat {
     bool advanced;
     bool acquire;
     bool release;
+    bool lfetch_fault;
+    bool lfetch_exclusive;
     
     // Immediate offset (9-bit signed)
     int16_t imm9;
@@ -163,6 +166,7 @@ struct MFormat {
     MFormat() : qp(0), r1(0), r2(0), r3(0), opcode(0), m(0), x(0), hint(0),
                 operation(MemOp::LOAD), size(Size::SIZE_8),
                 speculative(false), advanced(false), acquire(false), release(false),
+                lfetch_fault(false), lfetch_exclusive(false),
                 imm9(0), has_imm(false), reg_update(false), getf_exponent(false), imm24(0) {}
 };
 

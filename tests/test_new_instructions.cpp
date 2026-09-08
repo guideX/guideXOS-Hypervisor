@@ -1993,6 +1993,32 @@ void test_memory_bounds_throw() {
     std::cout << "  ? Memory bounds diagnostics passed" << std::endl;
 }
 
+void test_ia64_lfetch_nonfaulting_prefetch() {
+    std::cout << "Testing IA-64 non-faulting lfetch semantics..." << std::endl;
+
+    // This is the exact slot word at the investigated Linux memset site:
+    // lfetch.nt1 [r32].  It has no destination register and must not perform
+    // a flat-memory read, even when the virtual alias is outside guest RAM.
+    InstructionDecoder decoder;
+    const InstructionEx lfetch =
+        decoder.DecodeInstruction(0xcb12000000ULL, UnitType::M_UNIT);
+    assert_true("lfetch decodes as its own instruction",
+                lfetch.GetType() == InstructionType::LFETCH);
+    assert_string("lfetch.nt1 disassembly",
+                  "lfetch.nt1 [r32]",
+                  lfetch.GetDisassembly());
+
+    CPUState cpu;
+    cpu.SetGR(32, 0xe000000100000000ULL);
+    Memory memory(1);
+    lfetch.Execute(cpu, memory);
+    assert_equal("non-faulting lfetch leaves its base register unchanged",
+                 0xe000000100000000ULL,
+                 cpu.GetGR(32));
+
+    std::cout << "  ? IA-64 non-faulting lfetch passed" << std::endl;
+}
+
 void test_application_register_moves() {
     std::cout << "Testing application register moves..." << std::endl;
 
@@ -3336,6 +3362,7 @@ int main() {
         test_fat_boot_media_lookup();
         test_el_torito_fat_boot_media_lookup();
         test_memory_bounds_throw();
+        test_ia64_lfetch_nonfaulting_prefetch();
         test_application_register_moves();
         test_test_instructions();
         test_bitwise_operations();

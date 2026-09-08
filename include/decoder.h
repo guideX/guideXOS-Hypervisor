@@ -183,6 +183,7 @@ enum class InstructionType {
     LD2_S,      // Load 2 byte speculative
     LD4_S,      // Load 4 byte speculative
     LD8_S,      // Load 8 byte speculative
+    LFETCH,     // Line prefetch (no destination register)
     CHK_A_NC,   // Advanced load check, no clear
     CHK_A_CLR,  // Advanced load check, clear ALAT entry
     INVALA,     // Invalidate all ALAT entries
@@ -317,6 +318,12 @@ public:
     void SetType(InstructionType type) { type_ = type; }
     void SetRawBits(uint64_t bits) { rawBits_ = bits; }
     void SetCompareCompleter(CompareCompleter completer) { compareCompleter_ = completer; }
+    void SetLfetchProperties(bool faulting, bool exclusive, uint8_t hint) {
+        lfetchFault_ = faulting;
+        lfetchExclusive_ = exclusive;
+        lfetchHint_ = hint;
+    }
+    void SetRegisterUpdate(bool enabled) { registerUpdate_ = enabled; }
     
     // Accessors for execution
     uint8_t GetPredicate() const { return predicate_; }
@@ -330,6 +337,9 @@ public:
     uint64_t GetBranchTarget() const { return branchTarget_; }
     bool HasBranchTarget() const { return hasBranchTarget_; }
     CompareCompleter GetCompareCompleter() const { return compareCompleter_; }
+    bool IsLfetchFaulting() const { return lfetchFault_; }
+    bool IsLfetchExclusive() const { return lfetchExclusive_; }
+    bool HasRegisterUpdate() const { return registerUpdate_; }
     
     
 private:
@@ -349,6 +359,10 @@ private:
     uint64_t branchTarget_;
     bool hasBranchTarget_;
     CompareCompleter compareCompleter_;
+    bool lfetchFault_;
+    bool lfetchExclusive_;
+    uint8_t lfetchHint_;
+    bool registerUpdate_;
 };
 
 // IA-64 Instruction Bundle (128-bit container)

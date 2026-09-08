@@ -289,6 +289,17 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                 return false;
 
             case 0x6:   // Floating-point loads and Set FR
+                // Line prefetch encodings share this major opcode with
+                // floating-point loads.  x6=0x2c..0x2f are lfetch, where
+                // the low two bits select normal/exclusive and
+                // non-faulting/faulting forms.  They have no GR destination.
+                if (m == 0 && x6 >= 0x2c && x6 <= 0x2f) {
+                    result.operation = formats::MFormat::MemOp::LFETCH;
+                    result.lfetch_fault = (x6 & 0x2) != 0;
+                    result.lfetch_exclusive = (x6 & 0x1) != 0;
+                    result.reg_update = (x == 1);
+                    return true;
+                }
                 if (x == 1 && m == 0 && x6 == 0x1C) {
                     result.operation = formats::MFormat::MemOp::SETF;
                     return true;
@@ -381,6 +392,16 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r3, 0);  // r1 = [r3], inc3
             instr.SetImmediate(fmt.imm9);
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::LFETCH) {
+            instr = InstructionEx(InstructionType::LFETCH, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(0, fmt.r3, fmt.reg_update ? fmt.r2 : 0);
+            instr.SetLfetchProperties(fmt.lfetch_fault,
+                                      fmt.lfetch_exclusive,
+                                      fmt.hint);
+            instr.SetRegisterUpdate(fmt.reg_update);
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::EXCHANGE) {
