@@ -2010,13 +2010,25 @@ void test_ia64_lfetch_nonfaulting_prefetch() {
 
     CPUState cpu;
     cpu.SetGR(32, 0xe000000100000000ULL);
-    Memory memory(1);
+    class CountingMemory final : public Memory {
+    public:
+        using Memory::Memory;
+
+        mutable size_t readCount = 0;
+
+        void Read(uint64_t address, uint8_t* dest, size_t size) const override {
+            ++readCount;
+            Memory::Read(address, dest, size);
+        }
+    } memory(1);
     lfetch.Execute(cpu, memory);
     assert_equal("non-faulting lfetch leaves its base register unchanged",
                  0xe000000100000000ULL,
                  cpu.GetGR(32));
+    assert_equal("non-faulting lfetch performs no memory read", size_t(0), memory.readCount);
 
-    std::cout << "  ? IA-64 non-faulting lfetch passed" << std::endl;
+    std::cout << "  ? IA-64 non-faulting lfetch passed (memoryReads="
+              << memory.readCount << ")" << std::endl;
 }
 
 void test_application_register_moves() {
