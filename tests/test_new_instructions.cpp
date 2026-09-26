@@ -2031,6 +2031,260 @@ void test_ia64_lfetch_nonfaulting_prefetch() {
               << memory.readCount << ")" << std::endl;
 }
 
+void test_ia64_floating_stores_and_spill() {
+    std::cout << "Testing IA-64 floating stores and stf.spill semantics..." << std::endl;
+
+    constexpr uint64_t stfSpillF0Raw = 0xEEC9800000ULL;
+    constexpr uint64_t region7RamAlias = 0xE000000000000000ULL;
+    const std::vector<uint8_t> authenticBundle = {
+        0x11, 0x00, 0x00, 0x30, 0xd9, 0x1d,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0xa0,
+        0x00, 0x00, 0x00, 0x42,
+    };
+
+    InstructionDecoder decoder;
+    const Bundle decodedBundle = decoder.DecodeBundleAt(
+        authenticBundle.data(), 0xA0000001003E8960ULL);
+    assert_true("frontier bundle is the MIB-stop template",
+                decodedBundle.templateType == TemplateType::MIB_STOP);
+    assert_true("frontier bundle has three slots", decodedBundle.instructions.size() == 3);
+    const InstructionEx& frontier = decodedBundle.instructions[0];
+    assert_true("exact frontier raw word decodes as STF_SPILL",
+                frontier.GetType() == InstructionType::STF_SPILL);
+    assert_true("frontier slot is an M-unit operation",
+                frontier.GetUnit() == UnitType::M_UNIT);
+    assert_equal("frontier raw instruction bits", stfSpillF0Raw,
+                 frontier.GetRawBits());
+    assert_equal("frontier base register", 24, frontier.GetDst());
+    assert_equal("frontier source is floating register f0", 0,
+                 frontier.GetSrc1());
+    assert_true("frontier has an immediate base update", frontier.HasImmediate());
+    assert_equal("frontier immediate", 128, frontier.GetImmediate());
+    assert_string("frontier operation disassembly",
+                  "stf.spill [r24] = f0, 128",
+                  frontier.GetDisassembly());
+
+    const uint64_t stf8F0Raw =
+        (stfSpillF0Raw & ~(0x3FULL << 30)) | (0x31ULL << 30);
+    const InstructionEx stf8 = decoder.DecodeInstruction(stf8F0Raw, UnitType::M_UNIT);
+    assert_true("adjacent M10 x6=0x31 decodes as STF8, not an integer store",
+                stf8.GetType() == InstructionType::STF8);
+    assert_equal("STF8 source remains a floating register", 0, stf8.GetSrc1());
+    assert_equal("STF8 immediate update", 128, stf8.GetImmediate());
+    const uint64_t stf8F7Raw =
+        (stf8F0Raw & ~(0x7FULL << 13)) | (7ULL << 13);
+    const InstructionEx stf8F7 =
+        decoder.DecodeInstruction(stf8F7Raw, UnitType::M_UNIT);
+    assert_true("STF8 source-field variant remains STF8",
+                stf8F7.GetType() == InstructionType::STF8);
+    assert_equal("STF8 source-field variant selects f7", 7, stf8F7.GetSrc1());
+
+    const uint64_t adjacentSubopcodeRaw =
+        (stfSpillF0Raw & ~(0x3FULL << 30)) | (0x3AULL << 30);
+    const InstructionEx adjacentSubopcode =
+        decoder.DecodeInstruction(adjacentSubopcodeRaw, UnitType::M_UNIT);
+    assert_true("neighboring x6=0x3a is not broadened into STF_SPILL or ST8",
+                adjacentSubopcode.GetType() == InstructionType::UNKNOWN);
+
+    const uint64_t st8SpillRaw =
+        (stfSpillF0Raw & ~(0xFULL << 37)) | (0x5ULL << 37);
+    const InstructionEx st8Spill =
+        decoder.DecodeInstruction(st8SpillRaw, UnitType::M_UNIT);
+    assert_true("M5 x6=0x3b remains in the distinct integer st8 family",
+                st8Spill.GetType() == InstructionType::ST8);
+    assert_equal("M5 st8 source is its GPR operand", 0, st8Spill.GetSrc1());
+
+    constexpr uint64_t ldfFillRaw = 0xE6C2040280ULL;
+    const InstructionEx ldfFill =
+        decoder.DecodeInstruction(ldfFillRaw, UnitType::M_UNIT);
+    assert_true("M10 x6=0x1b decodes as LDF_FILL",
+                ldfFill.GetType() == InstructionType::LDF_FILL);
+    assert_equal("LDF_FILL floating destination", 10, ldfFill.GetDst());
+    assert_equal("LDF_FILL base register", 32, ldfFill.GetSrc1());
+    assert_true("LDF_FILL has a post-increment immediate", ldfFill.HasImmediate());
+    assert_equal("LDF_FILL immediate", 32, ldfFill.GetImmediate());
+    assert_string("LDF_FILL disassembly",
+                  "ldf.fill f10 = [r32], 32",
+                  ldfFill.GetDisassembly());
+
+    class CountingMemory final : public Memory {
+    public:
+        using Memory::Memory;
+
+        std::vector<std::pair<uint64_t, size_t>> writes;
+        mutable std::vector<std::pair<uint64_t, size_t>> reads;
+
+        void Write(uint64_t address, const uint8_t* source, size_t size) override {
+            writes.emplace_back(address, size);
+            Memory::Write(address, source, size);
+        }
+
+        void Read(uint64_t address, uint8_t* destination, size_t size) const override {
+            reads.emplace_back(address, size);
+            Memory::Read(address, destination, size);
+        }
+    } memory(0x6000);
+
+    CPUState cpu;
+    uint8_t architecturalF0[16] = {};
+    cpu.GetFR(0, architecturalF0);
+    assert_true("architectural f0 has fixed +0 register-format contents",
+                std::all_of(architecturalF0, architecturalF0 + sizeof(architecturalF0),
+                            [](uint8_t value) { return value == 0; }));
+
+    // Execute the exact Linux slot.  The region-7 alias is normalized only
+    // for the memory transaction; the architectural base remains virtual.
+    cpu.SetGR(24, region7RamAlias + 0x1000);
+    frontier.Execute(cpu, memory);
+    assert_equal("exact STF_SPILL performs one memory write",
+                 1, memory.writes.size());
+    assert_equal("exact STF_SPILL effective physical address", 0x1000,
+                 memory.writes[0].first);
+    assert_equal("exact STF_SPILL writes exactly 16 bytes", 16,
+                 memory.writes[0].second);
+    uint8_t stored[16] = {};
+    memory.Read(0x1000, stored, sizeof(stored));
+    assert_true("exact STF_SPILL writes f0's 16 zero bytes",
+                std::memcmp(stored, architecturalF0, sizeof(stored)) == 0);
+    assert_equal("exact STF_SPILL commits r24 post-increment after the store",
+                 region7RamAlias + 0x1080, cpu.GetGR(24));
+
+    // Change only the encoded FP source to f7.  A distinct GPR value proves
+    // the execution path reads the FR bank, and the 16 bytes remain opaque.
+    const uint64_t stfSpillF7Raw =
+        (stfSpillF0Raw & ~(0x7FULL << 13)) | (7ULL << 13);
+    const InstructionEx stfSpillF7 =
+        decoder.DecodeInstruction(stfSpillF7Raw, UnitType::M_UNIT);
+    assert_true("source-field variant remains STF_SPILL",
+                stfSpillF7.GetType() == InstructionType::STF_SPILL);
+    assert_equal("source-field variant selects f7", 7, stfSpillF7.GetSrc1());
+    uint8_t floatingRegister[16] = {};
+    for (size_t i = 0; i < sizeof(floatingRegister); ++i) {
+        floatingRegister[i] = static_cast<uint8_t>(0x30 + i);
+    }
+    cpu.SetFR(7, floatingRegister);
+    cpu.SetGR(7, 0x8877665544332211ULL);
+    cpu.SetGR(24, region7RamAlias + 0x2000);
+    stfSpillF7.Execute(cpu, memory);
+    assert_equal("f7 spill adds one additional memory transaction",
+                 2, memory.writes.size());
+    assert_equal("f7 spill writes from its pre-update address", 0x2000,
+                 memory.writes[1].first);
+    assert_equal("f7 spill transaction is 16 bytes", 16,
+                 memory.writes[1].second);
+    std::memset(stored, 0, sizeof(stored));
+    memory.Read(0x2000, stored, sizeof(stored));
+    assert_true("f7 spill stores the exact FR register representation",
+                std::memcmp(stored, floatingRegister, sizeof(stored)) == 0);
+    assert_equal("f7 spill does not use or modify the GPR source lookalike",
+                 0x8877665544332211ULL, cpu.GetGR(7));
+    assert_equal("f7 spill commits r24 + 128", region7RamAlias + 0x2080,
+                 cpu.GetGR(24));
+
+    // NaTVal is legal for stf.spill: the instruction preserves the raw FR
+    // bits and must not perform normal-store NaT consumption.
+    uint8_t natVal[16] = {};
+    natVal[8] = 0xfe;
+    natVal[9] = 0xff;
+    natVal[10] = 0x01;
+    cpu.SetFR(7, natVal);
+    cpu.SetGR(24, region7RamAlias + 0x3000);
+    stfSpillF7.Execute(cpu, memory);
+    assert_equal("NaTVal stf.spill also performs one 16-byte write",
+                 3, memory.writes.size());
+    assert_equal("NaTVal spill address", 0x3000, memory.writes[2].first);
+    assert_equal("NaTVal spill width", 16, memory.writes[2].second);
+    std::memset(stored, 0, sizeof(stored));
+    memory.Read(0x3000, stored, sizeof(stored));
+    assert_true("stf.spill preserves NaTVal register bits verbatim",
+                std::memcmp(stored, natVal, sizeof(stored)) == 0);
+
+    // The neighboring stf8 M10 operation stores only the 64-bit significand.
+    cpu.SetFR(7, floatingRegister);
+    cpu.SetGR(24, region7RamAlias + 0x4000);
+    stf8F7.Execute(cpu, memory);
+    assert_equal("stf8 performs one 8-byte store", 4, memory.writes.size());
+    assert_equal("stf8 starts at the pre-update base", 0x4000,
+                 memory.writes[3].first);
+    assert_equal("stf8 access width", 8, memory.writes[3].second);
+    uint8_t storedSignificand[8] = {};
+    memory.Read(0x4000, storedSignificand, sizeof(storedSignificand));
+    assert_true("stf8 stores the FR significand bytes, not a GPR value",
+                std::memcmp(storedSignificand, floatingRegister,
+                            sizeof(storedSignificand)) == 0);
+    assert_equal("stf8 commits its immediate update", region7RamAlias + 0x4080,
+                 cpu.GetGR(24));
+
+    // The nine-bit M10 displacement is signed across s:i:imm7a.  Here the
+    // encoded value is -1, and address calculation precedes the post-update.
+    const uint64_t negativeUpdateRaw = stfSpillF0Raw |
+        (1ULL << 36) | (0x7FULL << 6);
+    const InstructionEx negativeUpdate =
+        decoder.DecodeInstruction(negativeUpdateRaw, UnitType::M_UNIT);
+    assert_true("negative-displacement encoding remains STF_SPILL",
+                negativeUpdate.GetType() == InstructionType::STF_SPILL);
+    assert_true("M10 sign-extends its 9-bit update immediate",
+                static_cast<int64_t>(negativeUpdate.GetImmediate()) == -1);
+    cpu.SetGR(24, region7RamAlias + 0x5100);
+    negativeUpdate.Execute(cpu, memory);
+    assert_equal("negative update stores at the original base", 0x5100,
+                 memory.writes[4].first);
+    assert_equal("negative update still writes 16 bytes", 16,
+                 memory.writes[4].second);
+    assert_equal("negative update decrements the base only after storing",
+                 region7RamAlias + 0x50ff, cpu.GetGR(24));
+
+    cpu.SetGR(24, region7RamAlias + 0x5ff8);
+    const uint64_t faultingBase = cpu.GetGR(24);
+    bool storeFaulted = false;
+    try {
+        frontier.Execute(cpu, memory);
+    } catch (const std::out_of_range&) {
+        storeFaulted = true;
+    }
+    assert_true("out-of-bounds STF_SPILL raises the memory fault", storeFaulted);
+    assert_equal("faulting STF_SPILL does not commit its base update",
+                 faultingBase, cpu.GetGR(24));
+    assert_equal("faulting STF_SPILL attempts one exact 16-byte transaction",
+                 16, memory.writes.back().second);
+
+    // ldf.fill is the architectural inverse of the opaque 16-byte spill and
+    // appears on the authentic continuation before the memset spill loop.
+    memory.loadBuffer(0x2000, natVal, sizeof(natVal));
+    cpu.SetGR(32, region7RamAlias + 0x2000);
+    const size_t readsBeforeFill = memory.reads.size();
+    ldfFill.Execute(cpu, memory);
+    assert_equal("ldf.fill performs one 16-byte guest-memory read",
+                 readsBeforeFill + 1, memory.reads.size());
+    assert_equal("ldf.fill reads from the pre-update base", 0x2000,
+                 memory.reads.back().first);
+    assert_equal("ldf.fill read width", 16, memory.reads.back().second);
+    uint8_t restoredFloatingRegister[16] = {};
+    cpu.GetFR(10, restoredFloatingRegister);
+    assert_true("ldf.fill restores all register-format bits including NaTVal",
+                std::memcmp(restoredFloatingRegister, natVal,
+                            sizeof(restoredFloatingRegister)) == 0);
+    assert_equal("ldf.fill commits its +32 base update",
+                 region7RamAlias + 0x2020, cpu.GetGR(32));
+
+    const uint64_t ldfFillNegativeRaw = ldfFillRaw |
+        (1ULL << 36) | (1ULL << 27) | (0x7FULL << 13);
+    const InstructionEx ldfFillNegative =
+        decoder.DecodeInstruction(ldfFillNegativeRaw, UnitType::M_UNIT);
+    assert_true("LDF_FILL sign-extends the M10 imm9b displacement",
+                static_cast<int64_t>(ldfFillNegative.GetImmediate()) == -1);
+    memory.loadBuffer(0x3000, floatingRegister, sizeof(floatingRegister));
+    cpu.SetGR(32, region7RamAlias + 0x3000);
+    const size_t readsBeforeNegativeFill = memory.reads.size();
+    ldfFillNegative.Execute(cpu, memory);
+    assert_equal("negative LDF_FILL reads before updating the base", 0x3000,
+                 memory.reads[readsBeforeNegativeFill].first);
+    assert_equal("negative LDF_FILL update is applied after read",
+                 region7RamAlias + 0x2fff, cpu.GetGR(32));
+
+    std::cout << "  ? IA-64 floating stores and stf.spill passed" << std::endl;
+}
+
 void test_application_register_moves() {
     std::cout << "Testing application register moves..." << std::endl;
 
@@ -3375,6 +3629,7 @@ int main() {
         test_el_torito_fat_boot_media_lookup();
         test_memory_bounds_throw();
         test_ia64_lfetch_nonfaulting_prefetch();
+        test_ia64_floating_stores_and_spill();
         test_application_register_moves();
         test_test_instructions();
         test_bitwise_operations();

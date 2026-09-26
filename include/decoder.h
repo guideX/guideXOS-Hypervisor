@@ -250,7 +250,12 @@ enum class InstructionType {
     FPCVT_FX,   // Parallel convert floating-point to fixed-point
     FPCVT_FXU,  // Parallel convert floating-point to unsigned fixed-point
     FPCVT_XF,   // Parallel convert fixed-point to floating-point
-    
+
+    // M-unit floating-point spill/fill and immediate-update stores
+    LDF_FILL,   // Load the complete floating-point register format (16 bytes)
+    STF8,       // Store the floating-point significand as 8 bytes
+    STF_SPILL,  // Store the complete floating-point register format (16 bytes)
+
     // System (special)
     BREAK,      // Break instruction (used for syscalls)
     

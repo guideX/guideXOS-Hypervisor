@@ -307,8 +307,48 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                 decodeLoad(x6, m, result);
                 return true;
 
-            case 0x7:   // Floating-point stores
-                decodeStore(x6, m, result);
+            case 0x7:   // M10 floating-point memory operations with immediate update
+                // M10 ldf.fill uses imm9b in bits 13:19, with the floating
+                // destination in bits 6:12.  It transfers the full 16-byte
+                // register format without conversion.
+                if (x6 == 0x1B) {
+                    result.operation = formats::MFormat::MemOp::LDF_FILL;
+                    result.size = formats::MFormat::Size::SIZE_16;
+                    result.has_imm = true;
+                    const uint16_t imm7b = formats::extractBits(raw_instruction, 13, 7);
+                    const uint16_t i = formats::extractBits(raw_instruction, 27, 1);
+                    const uint16_t s = formats::extractBits(raw_instruction, 36, 1);
+                    const uint16_t encoded = (s << 8) | (i << 7) | imm7b;
+                    result.imm9 = static_cast<int16_t>(formats::signExtend(encoded, 9));
+                    return true;
+                }
+
+                // M10 uses the same x6=0x3b subopcode as M5 st8.spill, but
+                // major opcode 7 selects the floating-point store family.
+                // x6=0x31 is stf8 (the significand-only 8-byte form), while
+                // x6=0x3b is stf.spill (the opaque 16-byte register format).
+                // Do not pass other M10 floating stores through decodeStore:
+                // that helper interprets x6's low bits as an integer width
+                // and would silently turn them into integer stores.
+                if (x6 != 0x31 && x6 != 0x3B) {
+                    return false;
+                }
+
+                result.operation = x6 == 0x3B
+                    ? formats::MFormat::MemOp::STF_SPILL
+                    : formats::MFormat::MemOp::STF8;
+                result.size = x6 == 0x3B
+                    ? formats::MFormat::Size::SIZE_16
+                    : formats::MFormat::Size::SIZE_8;
+                result.r1 = result.r2; // f2 is encoded in bits 13:19.
+                result.has_imm = true;
+                {
+                    const uint16_t imm7a = formats::extractBits(raw_instruction, 6, 7);
+                    const uint16_t i = formats::extractBits(raw_instruction, 27, 1);
+                    const uint16_t s = formats::extractBits(raw_instruction, 36, 1);
+                    const uint16_t encoded = (s << 8) | (i << 7) | imm7a;
+                    result.imm9 = static_cast<int16_t>(formats::signExtend(encoded, 9));
+                }
                 return true;
                 
             default:
@@ -379,6 +419,32 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
                 instr.SetImmediate(fmt.imm9);
             }
             
+            return true;
+        } else if (fmt.operation == formats::MFormat::MemOp::LDF_FILL) {
+            if (fmt.size != formats::MFormat::Size::SIZE_16 || !fmt.has_imm) {
+                return false;
+            }
+
+            instr = InstructionEx(InstructionType::LDF_FILL, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0); // f1 = [r3]
+            instr.SetImmediate(fmt.imm9);
+            return true;
+        } else if (fmt.operation == formats::MFormat::MemOp::STF8 ||
+                   fmt.operation == formats::MFormat::MemOp::STF_SPILL) {
+            const bool spill = fmt.operation == formats::MFormat::MemOp::STF_SPILL;
+            if ((spill && fmt.size != formats::MFormat::Size::SIZE_16) ||
+                (!spill && fmt.size != formats::MFormat::Size::SIZE_8) ||
+                !fmt.has_imm) {
+                return false;
+            }
+
+            instr = InstructionEx(spill ? InstructionType::STF_SPILL
+                                        : InstructionType::STF8,
+                                  UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r3, fmt.r2, 0); // [r3] = f2
+            instr.SetImmediate(fmt.imm9);
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FETCHADD) {

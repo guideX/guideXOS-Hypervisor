@@ -1931,6 +1931,59 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::LDF_FILL:
+            {
+                const uint64_t baseAddress = cpu.GetGR(src1_);
+                const uint64_t address =
+                    normalizeIa64KernelDataAddress(baseAddress, 16);
+                uint8_t floatingRegister[16] = {};
+                memory.Read(address, floatingRegister, sizeof(floatingRegister));
+                cpu.SetFR(dst_, floatingRegister);
+                if (hasImmediate_) {
+                    cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
+                }
+            }
+            break;
+
+        case InstructionType::STF8:
+            {
+                const uint64_t baseAddress = cpu.GetGR(dst_);
+                uint8_t floatingRegister[16] = {};
+                cpu.GetFR(src1_, floatingRegister);
+                if (IsNatVal(floatingRegister)) {
+                    throw std::runtime_error("IA-64 Register NaT Consumption fault on stf8");
+                }
+
+                const uint64_t address =
+                    normalizeIa64KernelDataAddress(baseAddress, 8);
+                // stf8 is the IA-64 integer-format floating store: it writes
+                // the register's 64-bit significand, without FP conversion.
+                memory.Write(address, floatingRegister, 8);
+                if (hasImmediate_) {
+                    cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
+                }
+            }
+            break;
+
+        case InstructionType::STF_SPILL:
+            {
+                const uint64_t baseAddress = cpu.GetGR(dst_);
+                uint8_t floatingRegister[16] = {};
+                cpu.GetFR(src1_, floatingRegister);
+
+                const uint64_t address =
+                    normalizeIa64KernelDataAddress(baseAddress, 16);
+                // stf.spill is a register-format transfer. Copy the complete
+                // architectural FR image verbatim: this preserves NaTVal and
+                // every format bit without IEEE conversion. Commit the
+                // post-increment only after the memory operation succeeds.
+                memory.Write(address, floatingRegister, sizeof(floatingRegister));
+                if (hasImmediate_) {
+                    cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
+                }
+            }
+            break;
+
         case InstructionType::CHK_A_NC:
         case InstructionType::CHK_A_CLR:
             // ALAT tracking is not modeled yet. Treat the advanced-load check as
@@ -2780,6 +2833,30 @@ std::string InstructionEx::GetDisassembly() const {
             
         case InstructionType::ST8:
             oss << "st8 [r" << static_cast<int>(dst_) << "] = r" << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
+            break;
+
+        case InstructionType::LDF_FILL:
+            oss << "ldf.fill f" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "]";
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
+            break;
+
+        case InstructionType::STF8:
+            oss << "stf8 [r" << static_cast<int>(dst_) << "] = f"
+                << static_cast<int>(src1_);
+            if (hasImmediate_) {
+                oss << ", " << static_cast<int64_t>(immediate_);
+            }
+            break;
+
+        case InstructionType::STF_SPILL:
+            oss << "stf.spill [r" << static_cast<int>(dst_) << "] = f"
+                << static_cast<int>(src1_);
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
             }
