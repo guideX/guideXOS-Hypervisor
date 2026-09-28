@@ -97,6 +97,10 @@ enum class InstructionType {
     MOV_TO_CR,  // Move from general register to control register
     ITR_I,      // Insert instruction translation register
     ITR_D,      // Insert data translation register
+    ITC_I,      // Insert instruction translation-cache entry
+    ITC_D,      // Insert data translation-cache entry
+    THASH,      // Compute short-format VHPT address
+    PTC_L,      // Purge a local translation-cache entry
     MOV_FROM_PR,// Move predicate registers to general register
     MOV_FROM_IP,// Move instruction pointer to general register
     MOV_TO_PR,      // Move general register to predicate registers
@@ -192,6 +196,8 @@ enum class InstructionType {
     SYNC_I,     // Synchronize prior cache flushes with instruction fetch
     SRLZ_I,     // Serialize the instruction stream
     SRLZ_D,     // Serialize prior data accesses
+    MF,         // Order prior and subsequent data-memory accesses
+    MF_A,       // Wait for prior data-memory accesses to be accepted
     SSM,        // Set selected PSR system-mask bits
     RSM,        // Reset selected PSR system-mask bits
     RFI,        // Return from interruption

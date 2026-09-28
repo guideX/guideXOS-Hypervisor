@@ -1,4 +1,5 @@
 #include "IA64ISAPlugin.h"
+#include "IA64AddressTranslation.h"
 #include "IA64EfiHandoffLayout.h"
 #include "IA64SalFirmware.h"
 #include "SyscallDispatcher.h"
@@ -378,6 +379,17 @@ uint64_t normalizeKernelEntryIP(uint64_t target) {
         return kIa64KernelPhysicalBase + (bundleTarget - kIa64KernelVirtualBase);
     }
     return bundleTarget;
+}
+
+uint64_t canonicalizeKernelInstructionPointer(uint64_t ip) {
+    constexpr uint64_t kIa64KernelVirtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t kIa64KernelPhysicalBase = 0x04000000ULL;
+    constexpr uint64_t kIa64KernelVirtualSpan = 0x01000000ULL;
+    if (ip >= kIa64KernelPhysicalBase &&
+        ip - kIa64KernelPhysicalBase < kIa64KernelVirtualSpan) {
+        return kIa64KernelVirtualBase + (ip - kIa64KernelPhysicalBase);
+    }
+    return ip;
 }
 
 uint64_t normalizeBranchEntryIP(uint64_t target) {
@@ -3207,7 +3219,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             const uint64_t interruptedIP = cpu.GetIP();
             const uint64_t restoredIP = cpu.GetCR(19);
             const uint64_t restoredPSR = cpu.GetCR(16);
-            executeInstruction(memory, cachedInstruction_, true);
+            if (executeInstruction(memory, cachedInstruction_, true)) {
+                hasCachedInstruction_ = false;
+                return ISAExecutionResult::CONTINUE;
+            }
             const uint64_t normalizedIP = normalizeRfiEntryIP(cpu.GetIP());
             const size_t restoredSlot = static_cast<size_t>((restoredPSR >> 41) & 0x3ULL);
             cpu.SetIP(normalizedIP);
@@ -4837,7 +4852,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 }
             } else {
                 if (!handledFirmwareCallStub) {
-                    executeInstruction(memory, cachedInstruction_, true);
+                    if (executeInstruction(memory, cachedInstruction_, true)) {
+                        hasCachedInstruction_ = false;
+                        return ISAExecutionResult::CONTINUE;
+                    }
                 }
             }
             if (cachedInstruction_.GetType() == InstructionType::ALLOC) {
@@ -5378,7 +5396,7 @@ private:
     bool valid_;
 };
 
-constexpr uint32_t kIA64CheckpointBlobVersion = 3;
+constexpr uint32_t kIA64CheckpointBlobVersion = 4;
 constexpr size_t kMaxCheckpointVectorEntries = 1'000'000;
 constexpr size_t kMaxCheckpointStringBytes = 1'048'576;
 constexpr size_t kMaxCheckpointBlobBytes = 64 * 1024 * 1024;
@@ -5437,6 +5455,24 @@ std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
             writer.u8(tr.valid ? 1 : 0);
         }
     }
+    for (size_t i = 0; i < NUM_INSTRUCTION_TLB_ENTRIES; ++i) {
+        const TranslationRegisterState& tr = cpu.GetITLB(i);
+        writer.u64(tr.physicalAddress);
+        writer.u64(tr.virtualAddress);
+        writer.u64(tr.itir);
+        writer.u64(tr.regionValue);
+        writer.u8(tr.valid ? 1 : 0);
+    }
+    for (size_t i = 0; i < NUM_DATA_TLB_ENTRIES; ++i) {
+        const TranslationRegisterState& tr = cpu.GetDTLB(i);
+        writer.u64(tr.physicalAddress);
+        writer.u64(tr.virtualAddress);
+        writer.u64(tr.itir);
+        writer.u64(tr.regionValue);
+        writer.u8(tr.valid ? 1 : 0);
+    }
+    writer.u64(static_cast<uint64_t>(cpu.GetITLBReplacementIndex()));
+    writer.u64(static_cast<uint64_t>(cpu.GetDTLBReplacementIndex()));
     for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) writer.u64(cpu.GetAR(i));
     const RSEState& rse = cpu.GetRSEState();
     writer.u64(rse.cfm);
@@ -5617,7 +5653,8 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
             if (reader.u8() != static_cast<uint8_t>(expected)) return false;
         }
         const uint32_t checkpointBlobVersion = reader.u32();
-        if (checkpointBlobVersion != 2 && checkpointBlobVersion != kIA64CheckpointBlobVersion) return false;
+        if (checkpointBlobVersion != 2 && checkpointBlobVersion != 3 &&
+            checkpointBlobVersion != kIA64CheckpointBlobVersion) return false;
 
         CPUState restoredCPU;
         for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
@@ -5644,6 +5681,36 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
                 if (set == 0) restoredCPU.SetITRStateForCheckpoint(i, tr);
                 else restoredCPU.SetDTRStateForCheckpoint(i, tr);
             }
+        }
+        if (checkpointBlobVersion >= 4) {
+            for (size_t i = 0; i < NUM_INSTRUCTION_TLB_ENTRIES; ++i) {
+                TranslationRegisterState entry;
+                entry.physicalAddress = reader.u64();
+                entry.virtualAddress = reader.u64();
+                entry.itir = reader.u64();
+                entry.regionValue = reader.u64();
+                entry.valid = reader.u8() != 0;
+                restoredCPU.SetITLBStateForCheckpoint(i, entry);
+            }
+            for (size_t i = 0; i < NUM_DATA_TLB_ENTRIES; ++i) {
+                TranslationRegisterState entry;
+                entry.physicalAddress = reader.u64();
+                entry.virtualAddress = reader.u64();
+                entry.itir = reader.u64();
+                entry.regionValue = reader.u64();
+                entry.valid = reader.u8() != 0;
+                restoredCPU.SetDTLBStateForCheckpoint(i, entry);
+            }
+            const uint64_t itlbReplacementIndex = reader.u64();
+            const uint64_t dtlbReplacementIndex = reader.u64();
+            if (itlbReplacementIndex >= NUM_INSTRUCTION_TLB_ENTRIES ||
+                dtlbReplacementIndex >= NUM_DATA_TLB_ENTRIES) {
+                return false;
+            }
+            restoredCPU.SetITLBReplacementIndexForCheckpoint(
+                static_cast<size_t>(itlbReplacementIndex));
+            restoredCPU.SetDTLBReplacementIndexForCheckpoint(
+                static_cast<size_t>(dtlbReplacementIndex));
         }
         for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) restoredCPU.SetAR(i, reader.u64());
         RSEState rse;
@@ -6649,7 +6716,8 @@ void IA64ISAPlugin::recordRecentInstruction(uint64_t ip, size_t slot, const std:
 }
 
 void IA64ISAPlugin::recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm) {
-    if (reg != 16 && reg != 17) {
+    if (reg != 16 && reg != 17 && reg != 18 && reg != 19 &&
+        reg != 21 && reg != 22) {
         return;
     }
 
@@ -6670,10 +6738,19 @@ void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, siz
               << " r16=0x" << cpu.GetGR(16)
               << " r17=0x" << cpu.GetGR(17)
               << " r18=0x" << cpu.GetGR(18)
+              << " r19=0x" << cpu.GetGR(19)
+              << " r21=0x" << cpu.GetGR(21)
+              << " r22=0x" << cpu.GetGR(22)
               << " r32=0x" << cpu.GetGR(32)
               << " r33=0x" << cpu.GetGR(33)
               << " r34=0x" << cpu.GetGR(34)
               << " r35=0x" << cpu.GetGR(35)
+              << " p6=" << cpu.GetPR(6)
+              << " p7=" << cpu.GetPR(7)
+              << " ar.k7=0x" << cpu.GetAR(7)
+              << " cr.ifa=0x" << cpu.GetCR(20)
+              << " cr.itir=0x" << cpu.GetCR(21)
+              << " psr=0x" << cpu.GetPSR()
               << std::dec << "\n";
 
     std::cerr << "[IA64-FAULT-HISTORY] recent-instructions:";
@@ -6688,7 +6765,7 @@ void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, siz
     }
     std::cerr << std::dec << "\n";
 
-    std::cerr << "[IA64-FAULT-HISTORY] recent-r16-r17-writes:";
+    std::cerr << "[IA64-FAULT-HISTORY] recent-translation-register-writes:";
     if (recentTrackedRegisterWrites_.empty()) {
         std::cerr << " <empty>";
     } else {
@@ -6702,6 +6779,16 @@ void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, siz
     }
     std::cerr << std::dec << "\n";
 
+    for (size_t i = 0; i < NUM_TRANSLATION_REGISTERS; ++i) {
+        const TranslationRegisterState& tr = cpu.GetDTR(i);
+        if (!tr.valid) continue;
+        std::cerr << "[IA64-FAULT-HISTORY] dtr=" << i
+                  << " va=0x" << std::hex << tr.virtualAddress
+                  << " tte=0x" << tr.physicalAddress
+                  << " itir=0x" << tr.itir
+                  << " rr=0x" << tr.regionValue << std::dec << "\n";
+    }
+
     std::ostringstream history;
     history << "ip=" << BootStageTrace::Hex(ip)
             << " slot=" << slot
@@ -6709,7 +6796,7 @@ void IA64ISAPlugin::dumpRecentFaultContext(const CPUState& cpu, uint64_t ip, siz
             << " baseBefore=" << BootStageTrace::Hex(baseBefore)
             << " r1=" << BootStageTrace::Hex(cpu.GetGR(1))
             << " r12=" << BootStageTrace::Hex(cpu.GetGR(12))
-            << " recent-r16-r17-writes=";
+            << " recent-translation-register-writes=";
     if (recentTrackedRegisterWrites_.empty()) {
         history << "<empty>";
     } else {
@@ -8373,12 +8460,14 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
     return EFI_STATUS_SUCCESS;
 }
 
-void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
+bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
         CPUState& cpu = state_.getCPUState();
         const uint64_t currentIP = cpu.GetIP();
         const bool instructionTrace = shouldEmitInstructionTrace();
         const bool bootPathTrace = shouldEmitBootPathTrace();
+        const uint64_t tpaInput = instr.GetType() == InstructionType::TPA
+            ? cpu.GetGR(instr.GetSrc1()) : 0;
         const bool traceScanLoop =
             bootPathTrace && currentIP >= 0x36D90ULL && currentIP <= 0x36F10ULL;
         static uint64_t scanLoopTraceCount = 0;
@@ -8745,6 +8834,14 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         } else {
             instr.Execute(state_.getCPUState(), memory, ignorePredicate);
         }
+        if (instructionTrace && instr.GetType() == InstructionType::TPA) {
+            std::cout << "[IA64-TPA] ip=0x" << std::hex << currentIP
+                      << " va=0x" << tpaInput
+                      << " pa=0x" << cpu.GetGR(instr.GetDst())
+                      << " rr=0x" << cpu.GetRR((tpaInput >> 61) & 0x7ULL)
+                      << " pta=0x" << cpu.GetCR(8)
+                      << std::dec << std::endl;
+        }
         if (guestRelocationStore) {
             uint64_t guestRelocationNewValue = 0;
             const bool newValueReadable =
@@ -8813,8 +8910,12 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         } else if (traceScanLoop) {
             ++scanLoopTraceCount;
         }
-        if ((instructionTrace || bootPathTrace) &&
-            (instr.GetDst() == 16 || instr.GetDst() == 17)) {
+        const uint8_t destinationRegister = instr.GetDst();
+        const bool isTranslationWalkRegister =
+            destinationRegister == 16 || destinationRegister == 17 ||
+            destinationRegister == 18 || destinationRegister == 19 ||
+            destinationRegister == 21 || destinationRegister == 22;
+        if ((instructionTrace || bootPathTrace) && isTranslationWalkRegister) {
             recordTrackedRegisterWrite(instr.GetDst(), state_.getCPUState().GetGR(instr.GetDst()),
                                        cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
         }
@@ -8839,6 +8940,74 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
                       << " treated as success; ALAT tracking is not implemented"
                       << std::endl;
         }
+    } catch (const IA64TranslationFault& fault) {
+        CPUState& cpu = state_.getCPUState();
+        const uint64_t interruptedPsr = cpu.GetPSR();
+        const uint64_t faultingInstructionIP =
+            canonicalizeKernelInstructionPointer(cpu.GetIP()) & ~0xFULL;
+        const uint64_t faultVa = fault.GetVirtualAddress();
+        const uint64_t rr = cpu.GetRR((faultVa >> 61) & 0x7ULL);
+        const uint64_t rid = (rr >> 8) & 0xFFFFFFULL;
+        const uint64_t pageShift = (rr >> 2) & 0x3FULL;
+        const bool nestedTlbMiss =
+            fault.GetKind() == IA64TranslationFaultKind::NESTED_TLB_MISS;
+        uint64_t isr = nestedTlbMiss ? (cpu.GetCR(17) & ~(1ULL << 38)) : 0;
+        if (!nestedTlbMiss) {
+            switch (fault.GetAccessType()) {
+                case MemoryAccessType::READ: isr = 1ULL << 34; break;
+                case MemoryAccessType::WRITE: isr = 1ULL << 33; break;
+                case MemoryAccessType::EXECUTE: isr = 1ULL << 32; break;
+                case MemoryAccessType::NON_ACCESS: isr = 1ULL << 35; break;
+            }
+        }
+
+        // Save the IA-64 interruption frame and dispatch through the guest's
+        // installed vector table. The original memory instruction has not
+        // committed its destination or post-increment at this point.
+        if (!nestedTlbMiss) {
+            cpu.SetCR(19, faultingInstructionIP);
+            cpu.SetCR(16, interruptedPsr);
+        }
+        cpu.SetCR(17, isr);
+        if (!nestedTlbMiss) {
+            cpu.SetCR(20, faultVa);
+            cpu.SetCR(21, (rid << 8) | (pageShift << 2));
+            cpu.SetCR(25, fault.GetHashAddress());
+        }
+        cpu.SetPSR(interruptedPsr & ~((1ULL << 13) | (1ULL << 14) |
+                                      (3ULL << 41)));
+
+        const uint64_t vectorBase = cpu.GetCR(2) != 0
+            ? cpu.GetCR(2) : state_.interruptVectorBase_;
+        const uint64_t rawHandler = normalizeKernelEntryIP(
+            vectorBase + fault.GetVectorOffset());
+        if (nestedTlbMiss) {
+            // KVM's nested_dtlb path injects the vector without collecting an
+            // IIP/PSR interruption frame when PSR.IC is clear. The current
+            // IIP therefore becomes the vector address rather than saving the
+            // interrupted bundle for an RFI retry.
+            cpu.SetCR(19, rawHandler);
+        }
+        cpu.SetIP(rawHandler);
+        state_.currentSlot_ = 0;
+        state_.bundleValid_ = false;
+        capturePredicateGroupSnapshot();
+        hasCachedInstruction_ = false;
+
+        std::ostringstream trace;
+        trace << "ip=" << BootStageTrace::Hex(faultingInstructionIP)
+              << " vector=" << BootStageTrace::Hex(fault.GetVectorOffset())
+              << " handler=" << BootStageTrace::Hex(rawHandler)
+              << " va=" << BootStageTrace::Hex(faultVa)
+              << " iha=" << BootStageTrace::Hex(fault.GetHashAddress())
+              << " rr=" << BootStageTrace::Hex(rr)
+              << " pta=" << BootStageTrace::Hex(cpu.GetCR(8))
+              << " kind=" << static_cast<unsigned>(fault.GetKind())
+              << " access=" << static_cast<unsigned>(fault.GetAccessType())
+              << " reason=\"" << fault.what() << '\"';
+        BootStageTrace::Event("IA64_TRANSLATION_FAULT", trace.str());
+        std::cerr << "[IA64-TRANSLATION-FAULT] " << trace.str() << std::endl;
+        return true;
     } catch (const std::exception& e) {
         CPUState& cpu = state_.getCPUState();
         const uint64_t ip = cpu.GetIP();
@@ -8962,6 +9131,7 @@ void IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             std::cerr << "Treating as NOP and continuing...\n";
         }
     }
+    return false;
 }
 
 size_t IA64ISAPlugin::applyRegisterRotation(size_t logicalReg, char regType) const {

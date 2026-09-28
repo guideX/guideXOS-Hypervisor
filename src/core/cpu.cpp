@@ -4,6 +4,70 @@
 #include <cstring>
 
 namespace ia64 {
+namespace {
+
+bool translationEntryCovers(const TranslationRegisterState& entry,
+                            uint64_t virtualAddress,
+                            uint64_t regionId) {
+    if (!entry.valid || ((entry.regionValue >> 8) & 0xFFFFFFULL) != regionId) {
+        return false;
+    }
+    const unsigned pageShift = static_cast<unsigned>((entry.itir >> 2) & 0x3FULL);
+    if (pageShift < 12 || pageShift > 61) return false;
+    const uint64_t pageMask = (1ULL << pageShift) - 1;
+    return (entry.virtualAddress & ~pageMask) == (virtualAddress & ~pageMask);
+}
+
+template <size_t EntryCount>
+void insertTranslationEntry(std::array<TranslationRegisterState, EntryCount>& entries,
+                             size_t& replacementIndex,
+                             uint64_t tte,
+                             uint64_t virtualAddress,
+                             uint64_t itir,
+                             uint64_t regionValue) {
+    const uint64_t rid = (regionValue >> 8) & 0xFFFFFFULL;
+    const unsigned pageShift = static_cast<unsigned>((itir >> 2) & 0x3FULL);
+    if (pageShift < 12 || pageShift > 61) {
+        throw std::invalid_argument("IA-64 TLB insertion has an invalid page size");
+    }
+    const uint64_t pageMask = (1ULL << pageShift) - 1;
+    const uint64_t alignedVirtualAddress = virtualAddress & ~pageMask;
+
+    size_t selected = EntryCount;
+    for (size_t i = 0; i < EntryCount; ++i) {
+        if (translationEntryCovers(entries[i], alignedVirtualAddress, rid) &&
+            ((entries[i].itir >> 2) & 0x3FULL) == pageShift) {
+            selected = i;
+            break;
+        }
+        if (!entries[i].valid && selected == EntryCount) selected = i;
+    }
+    if (selected == EntryCount) {
+        selected = replacementIndex % EntryCount;
+        replacementIndex = (selected + 1) % EntryCount;
+    }
+
+    entries[selected].physicalAddress = tte;
+    entries[selected].virtualAddress = alignedVirtualAddress;
+    entries[selected].itir = itir;
+    entries[selected].regionValue = regionValue;
+    entries[selected].valid = true;
+}
+
+template <size_t EntryCount>
+void purgeTranslationEntries(std::array<TranslationRegisterState, EntryCount>& entries,
+                             uint64_t virtualAddress,
+                             unsigned pageShift,
+                             uint64_t regionId) {
+    if (pageShift < 12 || pageShift > 61) return;
+    for (TranslationRegisterState& entry : entries) {
+        if (translationEntryCovers(entry, virtualAddress, regionId)) {
+            entry.valid = false;
+        }
+    }
+}
+
+} // namespace
 
 CPUState::CPUState() {
     Reset();
@@ -45,6 +109,10 @@ void CPUState::Reset() {
     // Clear translation-register state
     itr_.fill(TranslationRegisterState());
     dtr_.fill(TranslationRegisterState());
+    itlb_.fill(TranslationRegisterState());
+    dtlb_.fill(TranslationRegisterState());
+    itlbReplacementIndex_ = 0;
+    dtlbReplacementIndex_ = 0;
     
     // Clear application registers
     ar_.fill(0);
@@ -420,6 +488,20 @@ const TranslationRegisterState& CPUState::GetDTR(size_t index) const {
     return dtr_[index];
 }
 
+const TranslationRegisterState& CPUState::GetITLB(size_t index) const {
+    if (index >= NUM_INSTRUCTION_TLB_ENTRIES) {
+        throw std::out_of_range("Instruction TLB entry index out of range");
+    }
+    return itlb_[index];
+}
+
+const TranslationRegisterState& CPUState::GetDTLB(size_t index) const {
+    if (index >= NUM_DATA_TLB_ENTRIES) {
+        throw std::out_of_range("Data TLB entry index out of range");
+    }
+    return dtlb_[index];
+}
+
 void CPUState::SetITRStateForCheckpoint(size_t index,
                                         const TranslationRegisterState& state) {
     if (index >= NUM_TRANSLATION_REGISTERS) {
@@ -434,6 +516,52 @@ void CPUState::SetDTRStateForCheckpoint(size_t index,
         throw std::out_of_range("Data translation register index out of range");
     }
     dtr_[index] = state;
+}
+
+void CPUState::SetITLBStateForCheckpoint(size_t index,
+                                         const TranslationRegisterState& state) {
+    if (index >= NUM_INSTRUCTION_TLB_ENTRIES) {
+        throw std::out_of_range("Instruction TLB entry index out of range");
+    }
+    itlb_[index] = state;
+}
+
+void CPUState::SetDTLBStateForCheckpoint(size_t index,
+                                         const TranslationRegisterState& state) {
+    if (index >= NUM_DATA_TLB_ENTRIES) {
+        throw std::out_of_range("Data TLB entry index out of range");
+    }
+    dtlb_[index] = state;
+}
+
+void CPUState::InsertITLB(uint64_t tte, uint64_t virtualAddress,
+                          uint64_t itir, uint64_t regionValue) {
+    insertTranslationEntry(itlb_, itlbReplacementIndex_, tte, virtualAddress,
+                           itir, regionValue);
+}
+
+void CPUState::InsertDTLB(uint64_t tte, uint64_t virtualAddress,
+                          uint64_t itir, uint64_t regionValue) {
+    insertTranslationEntry(dtlb_, dtlbReplacementIndex_, tte, virtualAddress,
+                           itir, regionValue);
+}
+
+void CPUState::PurgeITLB(uint64_t virtualAddress, unsigned pageShift,
+                         uint64_t regionId) {
+    purgeTranslationEntries(itlb_, virtualAddress, pageShift, regionId);
+}
+
+void CPUState::PurgeDTLB(uint64_t virtualAddress, unsigned pageShift,
+                         uint64_t regionId) {
+    purgeTranslationEntries(dtlb_, virtualAddress, pageShift, regionId);
+}
+
+void CPUState::SetITLBReplacementIndexForCheckpoint(size_t index) {
+    itlbReplacementIndex_ = index % NUM_INSTRUCTION_TLB_ENTRIES;
+}
+
+void CPUState::SetDTLBReplacementIndexForCheckpoint(size_t index) {
+    dtlbReplacementIndex_ = index % NUM_DATA_TLB_ENTRIES;
 }
 
 void CPUState::SetITR(size_t index, uint64_t physicalAddress,

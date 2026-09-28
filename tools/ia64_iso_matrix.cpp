@@ -503,6 +503,20 @@ bool cpuStateEqual(const ia64::CPUState& left, const ia64::CPUState& right) {
                 a.itir != b.itir || a.regionValue != b.regionValue || a.valid != b.valid) return false;
         }
     }
+    for (size_t i = 0; i < ia64::NUM_INSTRUCTION_TLB_ENTRIES; ++i) {
+        const auto& a = left.GetITLB(i);
+        const auto& b = right.GetITLB(i);
+        if (a.physicalAddress != b.physicalAddress || a.virtualAddress != b.virtualAddress ||
+            a.itir != b.itir || a.regionValue != b.regionValue || a.valid != b.valid) return false;
+    }
+    for (size_t i = 0; i < ia64::NUM_DATA_TLB_ENTRIES; ++i) {
+        const auto& a = left.GetDTLB(i);
+        const auto& b = right.GetDTLB(i);
+        if (a.physicalAddress != b.physicalAddress || a.virtualAddress != b.virtualAddress ||
+            a.itir != b.itir || a.regionValue != b.regionValue || a.valid != b.valid) return false;
+    }
+    if (left.GetITLBReplacementIndex() != right.GetITLBReplacementIndex() ||
+        left.GetDTLBReplacementIndex() != right.GetDTLBReplacementIndex()) return false;
     for (size_t i = 0; i < ia64::NUM_APPLICATION_REGISTERS; ++i) if (left.GetAR(i) != right.GetAR(i)) return false;
     const auto& leftRse = left.GetRSEState();
     const auto& rightRse = right.GetRSEState();
@@ -563,7 +577,6 @@ int main(int argc, char** argv) {
         // This only suppresses host-side per-instruction diagnostics.  It does
         // not change guest execution, strict validation, or recovery policy.
         setEnvironmentFlag("GUIDEXOS_SUPPRESS_VERBOSE_TRACE");
-        setEnvironmentFlag("GUIDEXOS_IA64_A5D_TRACE");
     }
 
     if (std::getenv("GUIDEXOS_MATRIX_QUIET") != nullptr) {
@@ -571,7 +584,8 @@ int main(int argc, char** argv) {
     }
 
     ScopedQuietHostDiagnostics quietCheckpointDiagnostics(
-        !options.checkpointWritePath.empty() || !options.checkpointReadPath.empty());
+        (!options.checkpointWritePath.empty() || !options.checkpointReadPath.empty()) &&
+        !options.instructionTrace);
 
     try {
         ia64::Logger::getInstance().setLogLevel(ia64::LogLevel::INFO);

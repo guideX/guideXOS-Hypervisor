@@ -4,6 +4,7 @@
 #include "ia64_formats.h"
 #include "ia64_opcodes.h"
 #include "cpu_state.h"
+#include "IA64AddressTranslation.h"
 #include "memory.h"
 #include <sstream>
 #include <cstdlib>
@@ -165,81 +166,36 @@ bool suppressVerboseRseDiagnostics() {
     return suppressed;
 }
 
-// The authentic Debian IA-64 kernel is linked in the region-5 direct map and
-// consumes EFI handoff structures through the region-7 direct map.
-// The replay keeps its physical image at 0x04000000, while the kernel's
-// canonical data pointers use 0xa000000100000000 plus the same offset and
-// __va() pointers use 0xe000000000000000 plus the physical address. The
-// generic Memory object is intentionally flat, so translate these direct-map
-// aliases at the IA-64 instruction boundary and leave the register value
-// itself virtual for subsequent guest instructions.
-uint64_t normalizeIa64KernelDataAddress(uint64_t address, size_t size) {
-    constexpr uint64_t kKernelVirtualBase = 0xA000000100000000ULL;
-    constexpr uint64_t kKernelPhysicalBase = 0x04000000ULL;
-    constexpr uint64_t kKernelVirtualSpan = 0x01000000ULL;
-    // The authentic Debian IA-64 image has a second PT_LOAD for the UP
-    // per-CPU section.  The flat replay loads it at this physical address,
-    // while Linux references it through its region-7 canonical address.
-    constexpr uint64_t kPerCpuVirtualBase = 0xFFFFFFFFFFFC0000ULL;
-    constexpr uint64_t kPerCpuPhysicalBase = 0x04B80000ULL;
-    constexpr uint64_t kPerCpuVirtualSpan = 0x0000000000003440ULL;
-    // Linux also uses the region-6 uncached direct-map alias for early
-    // post-EFI data accesses.  In this flat replay it aliases physical RAM
-    // starting at zero; keep the architectural pointer virtual in GRs.
-    constexpr uint64_t kRegion6VirtualBase = 0xC000000100000000ULL;
-    constexpr uint64_t kRegion6VirtualSpan = 0x20000000ULL;
-    constexpr uint64_t kRegion7VirtualBase = 0xE000000000000000ULL;
+const IA64AddressTranslator& replayAddressTranslator() {
+    static const IA64AddressTranslator translator;
+    return translator;
+}
 
-    if (address >= kPerCpuVirtualBase) {
-        const uint64_t perCpuOffset = address - kPerCpuVirtualBase;
-        if (perCpuOffset < kPerCpuVirtualSpan &&
-            static_cast<uint64_t>(size) <= kPerCpuVirtualSpan - perCpuOffset) {
-            return kPerCpuPhysicalBase + perCpuOffset;
-        }
-    }
+uint64_t translateIa64KernelDataAddress(CPUState& cpu,
+                                        const IMemory& memory,
+                                        uint64_t address,
+                                        MemoryAccessType accessType,
+                                        bool forceVirtualTranslation = false) {
+    return replayAddressTranslator()
+        .TranslateDataAddress(cpu, memory, address, accessType,
+                              forceVirtualTranslation)
+        .physicalAddress;
+}
 
-    if (address >= kRegion7VirtualBase) {
-        const uint64_t physicalAddress = address - kRegion7VirtualBase;
-        if (static_cast<uint64_t>(size) <=
-            std::numeric_limits<uint64_t>::max() - physicalAddress) {
-            return physicalAddress;
-        }
-    }
+void readIa64Data(CPUState& cpu,
+                  const IMemory& memory,
+                  uint64_t address,
+                  uint8_t* destination,
+                  size_t size) {
+    replayAddressTranslator().ReadData(cpu, memory, address, destination, size);
+}
 
-    if (address >= kRegion6VirtualBase) {
-        const uint64_t physicalAddress = address - kRegion6VirtualBase;
-        if (physicalAddress < kRegion6VirtualSpan &&
-            static_cast<uint64_t>(size) <= kRegion6VirtualSpan - physicalAddress) {
-            return physicalAddress;
-        }
-    }
-
-    // IA-64 region 6 is the uncached physical alias. The replay-specific
-    // region-6 RAM window above is intentionally checked first; all other
-    // region-6 addresses retain their physical offset so MMIO devices such as
-    // the Processor Interrupt Block are reached after normalization.
-    constexpr uint64_t kRegion6Base = 0xC000000000000000ULL;
-    constexpr uint64_t kRegionMask = 0xE000000000000000ULL;
-    constexpr uint64_t kRegionOffsetMask = 0x1FFFFFFFFFFFFFFFULL;
-    if ((address & kRegionMask) == kRegion6Base) {
-        const uint64_t physicalAddress = address & kRegionOffsetMask;
-        if (static_cast<uint64_t>(size) <=
-            std::numeric_limits<uint64_t>::max() - physicalAddress) {
-            return physicalAddress;
-        }
-    }
-
-    if (address < kKernelVirtualBase) {
-        return address;
-    }
-
-    const uint64_t offset = address - kKernelVirtualBase;
-    if (offset >= kKernelVirtualSpan ||
-        static_cast<uint64_t>(size) > kKernelVirtualSpan - offset) {
-        return address;
-    }
-
-    return kKernelPhysicalBase + offset;
+void writeIa64Data(CPUState& cpu,
+                   IMemory& memory,
+                   uint64_t address,
+                   const uint8_t* source,
+                   size_t size) {
+    replayAddressTranslator().WriteData(cpu, memory, address, source, size);
 }
 
 }
@@ -1197,6 +1153,38 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::ITC_I:
+        case InstructionType::ITC_D:
+            {
+                const uint64_t virtualAddress = cpu.GetCR(20);
+                const uint64_t regionIndex = (virtualAddress >> 61) & 0x7ULL;
+                const uint64_t regionValue = cpu.GetRR(regionIndex);
+                const uint64_t tte = cpu.GetGR(src1_);
+                const uint64_t itir = cpu.GetCR(21);
+                if (type_ == InstructionType::ITC_I) {
+                    cpu.InsertITLB(tte, virtualAddress, itir, regionValue);
+                } else {
+                    cpu.InsertDTLB(tte, virtualAddress, itir, regionValue);
+                }
+            }
+            break;
+
+        case InstructionType::THASH:
+            cpu.SetGR(dst_, ComputeIA64ShortVhptAddress(cpu, cpu.GetGR(src1_)));
+            break;
+
+        case InstructionType::PTC_L:
+            {
+                const uint64_t virtualAddress = cpu.GetGR(src1_);
+                const unsigned pageShift =
+                    static_cast<unsigned>((cpu.GetGR(src2_) >> 2) & 0x3FULL);
+                const uint64_t rid =
+                    (cpu.GetRR((virtualAddress >> 61) & 0x7ULL) >> 8) & 0xFFFFFFULL;
+                cpu.PurgeITLB(virtualAddress, pageShift, rid);
+                cpu.PurgeDTLB(virtualAddress, pageShift, rid);
+            }
+            break;
+
         case InstructionType::GETF_SIG:
             {
                 uint8_t fr[16] = {};
@@ -1467,8 +1455,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::SHL:
             // shl rDst = rSrc1, rSrc2
             {
-                const uint64_t count = hasImmediate_ ? immediate_ : cpu.GetGR(src2_);
-                const uint64_t result = count > 63 ? 0 : (cpu.GetGR(src1_) << count);
+                // IA-64 uses the low six bits of a variable shift-count
+                // register; callers may intentionally pass a wrapped or
+                // negative count (for example, the MOVL patcher).
+                const uint64_t count =
+                    (hasImmediate_ ? immediate_ : cpu.GetGR(src2_)) & 0x3FULL;
+                const uint64_t result = cpu.GetGR(src1_) << count;
                 cpu.SetGR(dst_, result);
                 cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_) ||
                                       (!hasImmediate_ && cpu.GetGRNaT(src2_)));
@@ -1771,9 +1763,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD1_S:
             {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 1);
                 uint8_t value = 0;
-                memory.Read(addr, &value, 1);
+                readIa64Data(cpu, memory, baseAddress, &value, sizeof(value));
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
@@ -1787,9 +1778,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD2_S:
             {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 2);
                 uint16_t value = 0;
-                memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 2);
+                readIa64Data(cpu, memory, baseAddress,
+                             reinterpret_cast<uint8_t*>(&value), sizeof(value));
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
@@ -1803,9 +1794,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD4_S:
             {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 4);
                 uint32_t value = 0;
-                memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 4);
+                readIa64Data(cpu, memory, baseAddress,
+                             reinterpret_cast<uint8_t*>(&value), sizeof(value));
                 cpu.SetGR(dst_, static_cast<uint64_t>(value));
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
@@ -1819,9 +1810,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LD8_S:
             {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 8);
                 uint64_t value = 0;
-                memory.Read(addr, reinterpret_cast<uint8_t*>(&value), 8);
+                readIa64Data(cpu, memory, baseAddress,
+                             reinterpret_cast<uint8_t*>(&value), sizeof(value));
                 cpu.SetGR(dst_, value);
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
@@ -1836,10 +1827,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // deliberately not a guest-memory read.  It is a cache hint, so
             // an address outside the flat replay's RAM must not stop Linux.
             if (lfetchFault_) {
-                const uint64_t address =
-                    normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 1);
+                const uint64_t address = cpu.GetGR(src1_);
                 uint8_t ignored = 0;
-                memory.Read(address, &ignored, 1);
+                readIa64Data(cpu, memory, address, &ignored, sizeof(ignored));
             }
             if (registerUpdate_) {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
@@ -1849,14 +1839,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
 
         case InstructionType::CMPXCHG4_ACQ:
             {
-                const uint64_t address =
-                    normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 4);
+                const uint64_t address = cpu.GetGR(src1_);
                 uint32_t oldValue = 0;
-                memory.Read(address, reinterpret_cast<uint8_t*>(&oldValue), 4);
+                readIa64Data(cpu, memory, address,
+                             reinterpret_cast<uint8_t*>(&oldValue), sizeof(oldValue));
                 if (oldValue == static_cast<uint32_t>(cpu.GetAR(32))) {
                     const uint32_t newValue = static_cast<uint32_t>(cpu.GetGR(src2_));
-                    memory.Write(address,
-                                 reinterpret_cast<const uint8_t*>(&newValue), 4);
+                    writeIa64Data(cpu, memory, address,
+                                  reinterpret_cast<const uint8_t*>(&newValue), sizeof(newValue));
                 }
                 cpu.SetGR(dst_, static_cast<uint64_t>(oldValue));
                 cpu.SetGRNaT(dst_, false);
@@ -1866,14 +1856,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::FETCHADD4_ACQ:
         case InstructionType::FETCHADD4_REL:
             {
-                const uint64_t address =
-                    normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 4);
+                const uint64_t address = cpu.GetGR(src1_);
                 uint32_t oldValue = 0;
-                memory.Read(address, reinterpret_cast<uint8_t*>(&oldValue), 4);
+                readIa64Data(cpu, memory, address,
+                             reinterpret_cast<uint8_t*>(&oldValue), sizeof(oldValue));
                 const uint32_t newValue =
                     oldValue + static_cast<uint32_t>(immediate_);
-                memory.Write(address,
-                             reinterpret_cast<const uint8_t*>(&newValue), 4);
+                writeIa64Data(cpu, memory, address,
+                              reinterpret_cast<const uint8_t*>(&newValue), sizeof(newValue));
                 cpu.SetGR(dst_, static_cast<uint64_t>(oldValue));
                 cpu.SetGRNaT(dst_, false);
             }
@@ -1882,9 +1872,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::ST1:
             {
                 const uint64_t baseAddress = cpu.GetGR(dst_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 1);
                 uint8_t value = static_cast<uint8_t>(cpu.GetGR(src1_));
-                memory.Write(addr, &value, 1);
+                writeIa64Data(cpu, memory, baseAddress, &value, sizeof(value));
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
@@ -1894,9 +1883,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::ST2:
             {
                 const uint64_t baseAddress = cpu.GetGR(dst_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 2);
                 uint16_t value = static_cast<uint16_t>(cpu.GetGR(src1_));
-                memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 2);
+                writeIa64Data(cpu, memory, baseAddress,
+                              reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
@@ -1906,9 +1895,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::ST4:
             {
                 const uint64_t baseAddress = cpu.GetGR(dst_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 4);
                 uint32_t value = static_cast<uint32_t>(cpu.GetGR(src1_));
-                memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 4);
+                writeIa64Data(cpu, memory, baseAddress,
+                              reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
@@ -1918,13 +1907,13 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::ST8:
             {
                 const uint64_t baseAddress = cpu.GetGR(dst_);
-                uint64_t addr = normalizeIa64KernelDataAddress(baseAddress, 8);
                 uint64_t value = cpu.GetGR(src1_);
                 // st8.rel is a release store. The emulator's instruction
                 // boundary model is synchronous and single-threaded, so the
                 // prior guest stores have completed before this device write
                 // is dispatched; no host-memory fence is needed here.
-                memory.Write(addr, reinterpret_cast<const uint8_t*>(&value), 8);
+                writeIa64Data(cpu, memory, baseAddress,
+                              reinterpret_cast<const uint8_t*>(&value), sizeof(value));
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
@@ -1934,10 +1923,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::LDF_FILL:
             {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
-                const uint64_t address =
-                    normalizeIa64KernelDataAddress(baseAddress, 16);
                 uint8_t floatingRegister[16] = {};
-                memory.Read(address, floatingRegister, sizeof(floatingRegister));
+                readIa64Data(cpu, memory, baseAddress,
+                             floatingRegister, sizeof(floatingRegister));
                 cpu.SetFR(dst_, floatingRegister);
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
@@ -1954,11 +1942,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     throw std::runtime_error("IA-64 Register NaT Consumption fault on stf8");
                 }
 
-                const uint64_t address =
-                    normalizeIa64KernelDataAddress(baseAddress, 8);
                 // stf8 is the IA-64 integer-format floating store: it writes
                 // the register's 64-bit significand, without FP conversion.
-                memory.Write(address, floatingRegister, 8);
+                writeIa64Data(cpu, memory, baseAddress, floatingRegister, 8);
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
@@ -1971,13 +1957,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 uint8_t floatingRegister[16] = {};
                 cpu.GetFR(src1_, floatingRegister);
 
-                const uint64_t address =
-                    normalizeIa64KernelDataAddress(baseAddress, 16);
                 // stf.spill is a register-format transfer. Copy the complete
                 // architectural FR image verbatim: this preserves NaTVal and
                 // every format bit without IEEE conversion. Commit the
                 // post-increment only after the memory operation succeeds.
-                memory.Write(address, floatingRegister, sizeof(floatingRegister));
+                writeIa64Data(cpu, memory, baseAddress,
+                              floatingRegister, sizeof(floatingRegister));
                 if (hasImmediate_) {
                     cpu.SetGR(dst_, baseAddress + static_cast<int64_t>(immediate_));
                 }
@@ -2028,7 +2013,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             if (const auto* concreteMemory = dynamic_cast<const Memory*>(&memory)) {
                 const uint64_t address = cpu.GetGR(src1_);
                 const uint64_t translatedAddress =
-                    normalizeIa64KernelDataAddress(address, 1);
+                    translateIa64KernelDataAddress(cpu, memory, address,
+                                                   MemoryAccessType::READ);
                 concreteMemory->GetMMU().TranslateAddress(translatedAddress);
                 const uint64_t cpl = (cpu.GetPSR() >> 32) & 0x3;
                 if (cpl != 0) {
@@ -2039,21 +2025,24 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::TPA:
-            // The authentic kernel uses tpa on its region-5 direct-map
-            // pointers during entry.  The flat replay image has that mapping
-            // at 0x04000000, so use the same narrow translation as memory
-            // references and retain the architectural physical result in r1.
-            cpu.SetGR(dst_, normalizeIa64KernelDataAddress(cpu.GetGR(src1_), 1));
+            // TPA reports the physical address selected by the same IA-64
+            // region/TR/VHPT path used by data references.
+            cpu.SetGR(dst_, translateIa64KernelDataAddress(
+                                cpu, memory, cpu.GetGR(src1_),
+                                MemoryAccessType::READ, true));
             cpu.SetGRNaT(dst_, false);
             break;
 
         case InstructionType::SYNC_I:
         case InstructionType::SRLZ_I:
         case InstructionType::SRLZ_D:
+        case InstructionType::MF:
+        case InstructionType::MF_A:
             // sync.i/srlz.i order the cache-coherency and instruction-stream
-            // effects that guideXOS models with the same coherent backing
-            // memory.  There is no separate cache or fetch stream state to
-            // mutate, so these serialization points are deliberate no-ops.
+            // effects; mf/mf.a order data references and external acceptance.
+            // This CPU executes each memory operation synchronously against a
+            // single coherent backing store, so these ordering points need no
+            // additional host-side state transition.
             break;
 
         case InstructionType::SSM:
@@ -2313,6 +2302,24 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::ITR_D:
             oss << "itr.d dtr[r" << static_cast<int>(dst_) << "] = r"
                 << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ITC_I:
+            oss << "itc.i r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::ITC_D:
+            oss << "itc.d r" << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::THASH:
+            oss << "thash r" << static_cast<int>(dst_) << " = r"
+                << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::PTC_L:
+            oss << "ptc.l r" << static_cast<int>(src1_) << ", r"
+                << static_cast<int>(src2_);
             break;
 
         case InstructionType::RFI:
@@ -2800,6 +2807,14 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::SRLZ_D:
             oss << "srlz.d";
+            break;
+
+        case InstructionType::MF:
+            oss << "mf";
+            break;
+
+        case InstructionType::MF_A:
+            oss << "mf.a";
             break;
 
         case InstructionType::SSM:

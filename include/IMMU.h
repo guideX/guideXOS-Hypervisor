@@ -14,7 +14,8 @@ namespace ia64 {
 enum class MemoryAccessType {
     READ,
     WRITE,
-    EXECUTE
+    EXECUTE,
+    NON_ACCESS
 };
 
 /**

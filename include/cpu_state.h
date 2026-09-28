@@ -49,6 +49,8 @@ constexpr size_t NUM_REGION_REGISTERS = 8;
 constexpr size_t NUM_CONTROL_REGISTERS = 128;
 
 constexpr size_t NUM_TRANSLATION_REGISTERS = 256;
+constexpr size_t NUM_INSTRUCTION_TLB_ENTRIES = 64;
+constexpr size_t NUM_DATA_TLB_ENTRIES = 64;
 
 // IA-64 exposes a fixed architectural CPUID region (registers 0..4) and an
 // implementation-defined variable region beyond it.  The diagnostic machine
@@ -194,12 +196,26 @@ public:
     // Translation-register state populated by itr.i and itr.d.
     const TranslationRegisterState& GetITR(size_t index) const;
     const TranslationRegisterState& GetDTR(size_t index) const;
+    const TranslationRegisterState& GetITLB(size_t index) const;
+    const TranslationRegisterState& GetDTLB(size_t index) const;
     void SetITRStateForCheckpoint(size_t index, const TranslationRegisterState& state);
     void SetDTRStateForCheckpoint(size_t index, const TranslationRegisterState& state);
+    void SetITLBStateForCheckpoint(size_t index, const TranslationRegisterState& state);
+    void SetDTLBStateForCheckpoint(size_t index, const TranslationRegisterState& state);
     void SetITR(size_t index, uint64_t physicalAddress, uint64_t virtualAddress,
                 uint64_t itir, uint64_t regionValue);
     void SetDTR(size_t index, uint64_t physicalAddress, uint64_t virtualAddress,
                 uint64_t itir, uint64_t regionValue);
+    void InsertITLB(uint64_t tte, uint64_t virtualAddress, uint64_t itir,
+                    uint64_t regionValue);
+    void InsertDTLB(uint64_t tte, uint64_t virtualAddress, uint64_t itir,
+                    uint64_t regionValue);
+    void PurgeITLB(uint64_t virtualAddress, unsigned pageShift, uint64_t regionId);
+    void PurgeDTLB(uint64_t virtualAddress, unsigned pageShift, uint64_t regionId);
+    size_t GetITLBReplacementIndex() const { return itlbReplacementIndex_; }
+    size_t GetDTLBReplacementIndex() const { return dtlbReplacementIndex_; }
+    void SetITLBReplacementIndexForCheckpoint(size_t index);
+    void SetDTLBReplacementIndexForCheckpoint(size_t index);
 
     // Application register access
     uint64_t GetAR(size_t index) const;
@@ -305,6 +321,10 @@ private:
     // the full selector space lets the decoder preserve architectural state.
     std::array<TranslationRegisterState, NUM_TRANSLATION_REGISTERS> itr_;
     std::array<TranslationRegisterState, NUM_TRANSLATION_REGISTERS> dtr_;
+    std::array<TranslationRegisterState, NUM_INSTRUCTION_TLB_ENTRIES> itlb_;
+    std::array<TranslationRegisterState, NUM_DATA_TLB_ENTRIES> dtlb_;
+    size_t itlbReplacementIndex_;
+    size_t dtlbReplacementIndex_;
 
     // Application registers (64-bit)
     std::array<uint64_t, NUM_APPLICATION_REGISTERS> ar_;

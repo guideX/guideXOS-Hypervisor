@@ -122,6 +122,18 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // ITC inserts a translation-cache entry using the current CR.IFA and
+        // CR.ITIR values.  It differs from ITR by its x6 value and has no TR
+        // selector operand.
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x2f) {
+            result.operation = formats::MFormat::MemOp::ITC_I;
+            return true;
+        }
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x2e) {
+            result.operation = formats::MFormat::MemOp::ITC_D;
+            return true;
+        }
+
         if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x30) {
             result.operation = formats::MFormat::MemOp::FC;
             return true;
@@ -133,9 +145,26 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             result.operation = formats::MFormat::MemOp::TPA;
             return true;
         }
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x1a) {
+            result.operation = formats::MFormat::MemOp::THASH;
+            return true;
+        }
+        if (major == 0x1 && x3 == 0x0 && m == 0 && m28_x6 == 0x09) {
+            result.operation = formats::MFormat::MemOp::PTC_L;
+            return true;
+        }
 
         // M24 cache/instruction-stream ordering forms.  The architectural
-        // x6 field is 0x33 for sync.i and 0x31 for srlz.i.
+        // x6 field is 0x22/0x23 for mf/mf.a, 0x33 for sync.i, and
+        // 0x31 for srlz.i.
+        if (major == 0x0 && x3 == 0x0 && m == 0 && m28_x6 == 0x22) {
+            result.operation = formats::MFormat::MemOp::MF;
+            return true;
+        }
+        if (major == 0x0 && x3 == 0x0 && m == 0 && m28_x6 == 0x23) {
+            result.operation = formats::MFormat::MemOp::MF_A;
+            return true;
+        }
         if (major == 0x0 && x3 == 0x0 && m == 0 && m28_x6 == 0x33) {
             result.operation = formats::MFormat::MemOp::SYNC_I;
             return true;
@@ -221,15 +250,13 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                 // M17/M18 fetchadd4 use the same major opcode as ordinary
                 // loads/stores.  The retained Binutils table identifies the
                 // acquire form as x6=0x12 and the release form as x6=0x16.
-                // INC3 occupies bits 13:15 and encodes the signed set
-                // {-16,-8,-4,-1,1,4,8,16}; the authentic instruction uses
-                // field 3 => +1.
+                // M17 INC3 is split into i2b at bits 13:14 and sign at bit
+                // 15.  Its architectural values are {-16,-8,-4,-1,1,4,8,16};
+                // bit 36 is the M ordering field, not the immediate sign.
                 if (x == 1 && m == 0 && (x6 == 0x12 || x6 == 0x16)) {
-                    const uint8_t i2b = formats::extractBits(raw_instruction, 13, 3);
-                    if (i2b > 3) {
-                        return false;
-                    }
-
+                    const uint8_t i2b = formats::extractBits(raw_instruction, 13, 2);
+                    const bool negative =
+                        formats::extractBits(raw_instruction, 15, 1) != 0;
                     const int32_t magnitude =
                         i2b == 3 ? 1 : (1 << (4 - i2b));
                     result.operation = formats::MFormat::MemOp::FETCHADD;
@@ -237,9 +264,7 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                     result.has_imm = true;
                     result.release = x6 == 0x16;
                     result.imm9 = static_cast<int16_t>(
-                        formats::extractBits(raw_instruction, 36, 1)
-                            ? -magnitude
-                            : magnitude);
+                        negative ? -magnitude : magnitude);
                     return true;
                 }
 
@@ -526,6 +551,14 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::SRLZ_D, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             return true;
+        } else if (fmt.operation == formats::MFormat::MemOp::MF) {
+            instr = InstructionEx(InstructionType::MF, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            return true;
+        } else if (fmt.operation == formats::MFormat::MemOp::MF_A) {
+            instr = InstructionEx(InstructionType::MF_A, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::SSM) {
             instr = InstructionEx(InstructionType::SSM, UnitType::M_UNIT);
@@ -591,6 +624,30 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::ITR_D, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r3, fmt.r2, 0);  // itr.d dtr[r3] = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::ITC_I) {
+            instr = InstructionEx(InstructionType::ITC_I, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(0, fmt.r2, 0);  // itc.i r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::ITC_D) {
+            instr = InstructionEx(InstructionType::ITC_D, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(0, fmt.r2, 0);  // itc.d r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::THASH) {
+            instr = InstructionEx(InstructionType::THASH, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // thash r1 = r3
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::PTC_L) {
+            instr = InstructionEx(InstructionType::PTC_L, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(0, fmt.r3, fmt.r2);  // ptc.l r3, r2
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FLUSHRS) {

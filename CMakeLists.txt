@@ -32,6 +32,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 set(CORE_SOURCES
     src/core/cpu.cpp
     src/core/cpu_core.cpp
+    src/core/ia64_address_translation.cpp
 )
 
 set(ISA_SOURCES
@@ -151,6 +152,7 @@ set(ALL_SOURCES
 # Header files (for IDE organization)
 set(HEADERS
     include/cpu_state.h
+    include/IA64AddressTranslation.h
     include/cpu.h
     include/decoder.h
     include/memory.h
@@ -271,6 +273,7 @@ endif()
 add_executable(test_new_instructions
     tests/test_new_instructions.cpp
     src/core/cpu.cpp
+    src/core/ia64_address_translation.cpp
     ${DECODER_SOURCES}
     src/memory/memory.cpp
     src/mmu/mmu.cpp

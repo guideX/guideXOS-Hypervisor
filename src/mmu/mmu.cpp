@@ -147,6 +147,9 @@ bool MMU::CheckPermission(uint64_t virtualAddr, MemoryAccessType accessType) con
         
         case MemoryAccessType::EXECUTE:
             return HasPermission(entry->permissions, PermissionFlags::EXECUTE);
+
+        case MemoryAccessType::NON_ACCESS:
+            return true;
         
         default:
             return false;
@@ -194,6 +197,11 @@ void MMU::CheckPermissionOrThrow(uint64_t virtualAddr, MemoryAccessType accessTy
         case MemoryAccessType::EXECUTE:
             hasPermission = HasPermission(entry.permissions, PermissionFlags::EXECUTE);
             faultType = PageFaultType::PERMISSION_EXEC;
+            break;
+
+        case MemoryAccessType::NON_ACCESS:
+            hasPermission = true;
+            faultType = PageFaultType::PERMISSION_READ;
             break;
         
         default:

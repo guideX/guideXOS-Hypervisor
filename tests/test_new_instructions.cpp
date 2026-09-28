@@ -1,5 +1,6 @@
 #include "decoder.h"
 #include "cpu_state.h"
+#include "IA64AddressTranslation.h"
 #include "memory.h"
 #include "ISO9660Parser.h"
 #include "FATParser.h"
@@ -21,6 +22,15 @@ void assert_true(const char* name, bool condition);
 void assert_string(const char* name, const std::string& expected, const std::string& actual);
 
 namespace {
+
+void installAuthenticKernelImageDtr(CPUState& cpu) {
+    constexpr uint64_t rr5 = 0x539ULL;
+    constexpr uint64_t kernelVma = 0xA000000100000000ULL;
+    constexpr uint64_t kernelImageTte = 0x10000004000661ULL;
+    constexpr uint64_t kernelImageItir = 0x68ULL;
+    cpu.SetRR(5, rr5);
+    cpu.SetDTR(0, kernelImageTte, kernelVma, kernelImageItir, rr5);
+}
 
 uint64_t build_mov_to_pr_slot(uint8_t sourceRegister,
                               uint64_t mask17,
@@ -560,6 +570,8 @@ void test_latest_boot_log_blockers() {
 
     Memory kernelFcMemory(128 * 1024 * 1024);
     CPUState kernelFcCpu;
+    kernelFcCpu.SetPSR(1ULL << 17);
+    installAuthenticKernelImageDtr(kernelFcCpu);
     kernelFcCpu.SetGR(34, 0xA00000010004D4F1ULL);
     linuxFc.Execute(kernelFcCpu, kernelFcMemory);
     assert_equal("Linux canonical fc must preserve its address register",
@@ -595,6 +607,37 @@ void test_latest_boot_log_blockers() {
     assert_equal("srlz.i qualifying predicate", 0, srlzI.GetPredicate());
     assert_string("srlz.i disassembly", "srlz.i", srlzI.GetDisassembly());
     srlzI.Execute(cpu, memory);
+
+    const uint8_t frontierBundleBytes[16] = {
+        0x03, 0xD0, 0x00, 0x48, 0x18, 0x10, 0x60, 0x03,
+        0x90, 0x00, 0x42, 0x20, 0xE3, 0xD2, 0x30, 0x80
+    };
+    const Bundle frontierBundle = decoder.DecodeBundleAt(
+        frontierBundleBytes, 0x4A5E3B0ULL);
+    assert_equal("frontier bundle template bits", 0x03,
+                 static_cast<uint8_t>(frontierBundle.templateType));
+    assert_true("frontier template 0x03 maps slots M/I/I",
+                frontierBundle.templateType == TemplateType::MI_I_STOP &&
+                frontierBundle.instructions.size() == 3 &&
+                frontierBundle.instructions[0].GetUnit() == UnitType::M_UNIT &&
+                frontierBundle.instructions[1].GetUnit() == UnitType::I_UNIT &&
+                frontierBundle.instructions[2].GetUnit() == UnitType::I_UNIT);
+    const InstructionEx frontierLoad = frontierBundle.instructions[0];
+    assert_equal("frontier raw slot", 0x80C2400680ULL,
+                 frontierLoad.GetRawBits());
+    assert_true("frontier slot independently decodes as LD8",
+                frontierLoad.GetType() == InstructionType::LD8 &&
+                frontierLoad.GetUnit() == UnitType::M_UNIT);
+    assert_equal("frontier load predicate is p0", 0,
+                 frontierLoad.GetPredicate());
+    assert_equal("frontier LD8 destination", 26, frontierLoad.GetDst());
+    assert_equal("frontier LD8 base register", 36, frontierLoad.GetSrc1());
+    assert_equal("frontier LD8 has no index/update register", 0,
+                 frontierLoad.GetSrc2());
+    assert_true("frontier LD8 is non-updating and has no immediate",
+                !frontierLoad.HasRegisterUpdate() && !frontierLoad.HasImmediate());
+    assert_string("frontier LD8 disassembly", "ld8 r26 = [r36]",
+                  frontierLoad.GetDisassembly());
 
     // Exact Linux entry instruction at guest address 0x040d3ba6.
     // Retained Binutils 2.19.1 identifies raw 0x180000006 as (p06) srlz.d.
@@ -705,9 +748,36 @@ void test_latest_boot_log_blockers() {
     const uint64_t kernelDataValue = 0xa000000100cd55b0ULL;
     Memory kernelMemory(0x20000000);
     kernelMemory.write<uint64_t>(kernelPhysicalData, kernelDataValue);
+
+    const uint64_t frontierDtrTte =
+        0x04000000ULL | (1ULL << 52) | (1ULL << 6) | (1ULL << 5) |
+        1ULL | (3ULL << 9);
+    const uint64_t frontierDtrItir = (26ULL << 2) | (5ULL << 8);
+    const uint64_t frontierDtrVirtualBase = 0xa000000100000000ULL;
+    const uint64_t frontierDtrPhysicalOffset = 0x00d00000ULL;
+    const uint64_t frontierDtrPhysicalAddress =
+        0x04000000ULL + frontierDtrPhysicalOffset;
+    const uint64_t frontierLoadValue = 0xFEDCBA9876543210ULL;
+    kernelMemory.write<uint64_t>(frontierDtrPhysicalAddress, frontierLoadValue);
+    CPUState frontierDtrCpu;
+    frontierDtrCpu.SetPSR(1ULL << 17);
+    frontierDtrCpu.SetRR(5, 0x539ULL);
+    frontierDtrCpu.SetDTR(0, frontierDtrTte, frontierDtrVirtualBase,
+                          frontierDtrItir, 0x539ULL);
+    frontierDtrCpu.SetGR(36, frontierDtrVirtualBase + frontierDtrPhysicalOffset);
+    frontierDtrCpu.SetGR(26, 0x1122334455667788ULL);
+    frontierLoad.Execute(frontierDtrCpu, kernelMemory);
+    assert_equal("exact frontier LD8 returns all 64 bits through the DTR",
+                 frontierLoadValue, frontierDtrCpu.GetGR(26));
+    assert_equal("exact frontier LD8 has no base update",
+                 frontierDtrVirtualBase + frontierDtrPhysicalOffset,
+                 frontierDtrCpu.GetGR(36));
+
     InstructionEx kernelLoad(InstructionType::LD8, UnitType::M_UNIT);
     kernelLoad.SetOperands(16, 2);
     CPUState kernelCpu;
+    kernelCpu.SetPSR(1ULL << 17);
+    installAuthenticKernelImageDtr(kernelCpu);
     kernelCpu.SetGR(2, kernelVirtualData);
     kernelLoad.Execute(kernelCpu, kernelMemory);
     assert_equal("kernel direct-map load should translate canonical address",
@@ -720,6 +790,7 @@ void test_latest_boot_log_blockers() {
     const uint64_t uncachedDataValue = 0x5aULL;
     kernelMemory.write<uint8_t>(uncachedPhysicalData, uncachedDataValue);
     CPUState uncachedCpu;
+    uncachedCpu.SetPSR(1ULL << 17);
     uncachedCpu.SetGR(2, uncachedVirtualData);
     kernelLoad.Execute(uncachedCpu, kernelMemory);
     assert_equal("kernel direct-map load should translate region-6 alias",
@@ -734,6 +805,7 @@ void test_latest_boot_log_blockers() {
     assert_equal("Linux entry tpa source register", 2, tpa.GetSrc1());
     assert_string("Linux entry tpa disassembly", "tpa r3 = r2", tpa.GetDisassembly());
     CPUState tpaCpu;
+    installAuthenticKernelImageDtr(tpaCpu);
     tpaCpu.SetGR(2, 0xa0000001009fe510ULL);
     tpa.Execute(tpaCpu, kernelMemory);
     assert_equal("tpa should translate the kernel direct-map pointer",
@@ -770,6 +842,7 @@ void test_latest_boot_log_blockers() {
     const uint64_t perCpuPhysicalAddress = 0x04b80478ULL;
     kernelMemory.write<uint64_t>(perCpuPhysicalAddress, 0x1122334455667788ULL);
     CPUState perCpuLoadCpu;
+    perCpuLoadCpu.SetPSR(1ULL << 17);
     perCpuLoadCpu.SetGR(2, perCpuVirtualAddress);
     InstructionEx perCpuLoad(InstructionType::LD8, UnitType::M_UNIT);
     perCpuLoad.SetOperands(15, 2);
@@ -784,6 +857,7 @@ void test_latest_boot_log_blockers() {
     const uint64_t region7Value = 0x5453595320494249ULL;
     kernelMemory.write<uint64_t>(region7PhysicalAddress, region7Value);
     CPUState region7LoadCpu;
+    region7LoadCpu.SetPSR(1ULL << 17);
     region7LoadCpu.SetGR(2, region7VirtualAddress);
     InstructionEx region7Load(InstructionType::LD8, UnitType::M_UNIT);
     region7Load.SetOperands(14, 2);
@@ -815,6 +889,8 @@ void test_latest_boot_log_blockers() {
     const uint64_t fetchaddPhysicalAddress = 0x04004000ULL;
     kernelMemory.write<uint32_t>(fetchaddPhysicalAddress, 0x12345678U);
     CPUState fetchaddCpu;
+    fetchaddCpu.SetPSR(1ULL << 17);
+    installAuthenticKernelImageDtr(fetchaddCpu);
     fetchaddCpu.SetGR(32, fetchaddVirtualAddress);
     fetchadd.Execute(fetchaddCpu, kernelMemory);
     assert_equal("fetchadd should return the old zero-extended value",
@@ -823,6 +899,50 @@ void test_latest_boot_log_blockers() {
                  0x12345679ULL,
                  kernelMemory.read<uint32_t>(fetchaddPhysicalAddress));
     assert_true("fetchadd result should not be NaT", !fetchaddCpu.GetGRNaT(3));
+
+    // The authentic continuation's next M17-family use is the negative
+    // INC3 form fetchadd4.acq r14=[r32],-1. INC3's sign is bit 15; the
+    // adjacent M-ordering bit 36 remains zero for this acquire encoding.
+    constexpr uint64_t fetchaddNegativeRaw = 0x848A00E380ULL;
+    const InstructionEx fetchaddNegative = decoder.DecodeSlot(
+        fetchaddNegativeRaw, UnitType::M_UNIT, 0x04827790);
+    assert_true("Linux negative fetchadd4.acq should decode",
+                fetchaddNegative.GetType() == InstructionType::FETCHADD4_ACQ);
+    assert_equal("negative fetchadd destination", 14,
+                 fetchaddNegative.GetDst());
+    assert_equal("negative fetchadd address register", 32,
+                 fetchaddNegative.GetSrc1());
+    assert_equal("negative fetchadd INC3", static_cast<uint64_t>(-1),
+                 fetchaddNegative.GetImmediate());
+    assert_string("negative fetchadd disassembly",
+                  "fetchadd4.acq r14 = [r32], -1",
+                  fetchaddNegative.GetDisassembly());
+
+    constexpr uint64_t fetchaddInc3Base = 0x848A0060C0ULL & ~(7ULL << 13);
+    constexpr int32_t expectedInc3[8] = {16, 8, 4, 1, -16, -8, -4, -1};
+    for (uint64_t encoded = 0; encoded < 8; ++encoded) {
+        const uint64_t raw = fetchaddInc3Base |
+            ((encoded & 0x3ULL) << 13) | ((encoded >> 2) << 15);
+        const InstructionEx decodedInc3 =
+            decoder.DecodeInstruction(raw, UnitType::M_UNIT);
+        assert_true("all M17 INC3 encodings remain fetchadd4.acq",
+                    decodedInc3.GetType() == InstructionType::FETCHADD4_ACQ);
+        assert_equal("M17 signed INC3 table",
+                     static_cast<uint64_t>(static_cast<int64_t>(expectedInc3[encoded])),
+                     decodedInc3.GetImmediate());
+    }
+
+    const uint64_t fetchaddNegativeVirtual = 0xE000000000A14050ULL;
+    const uint64_t fetchaddNegativePhysical = 0x00A14050ULL;
+    kernelMemory.write<uint32_t>(fetchaddNegativePhysical, 3U);
+    CPUState fetchaddNegativeCpu;
+    fetchaddNegativeCpu.SetPSR(1ULL << 17);
+    fetchaddNegativeCpu.SetGR(32, fetchaddNegativeVirtual);
+    fetchaddNegative.Execute(fetchaddNegativeCpu, kernelMemory);
+    assert_equal("negative fetchadd returns the old zero-extended value",
+                 3, fetchaddNegativeCpu.GetGR(14));
+    assert_equal("negative fetchadd decrements mapped memory", 2,
+                 kernelMemory.read<uint32_t>(fetchaddNegativePhysical));
 
     // Exact Linux kernel instruction at physical IP 0x048274e0.  Retained
     // Binutils 2.19.1 identifies raw 0x858a006380 as fetchadd4.rel
@@ -846,6 +966,8 @@ void test_latest_boot_log_blockers() {
     const uint64_t fetchaddRelPhysicalAddress = 0x04004100ULL;
     kernelMemory.write<uint32_t>(fetchaddRelPhysicalAddress, 0xABCDEF01U);
     CPUState fetchaddRelCpu;
+    fetchaddRelCpu.SetPSR(1ULL << 17);
+    installAuthenticKernelImageDtr(fetchaddRelCpu);
     fetchaddRelCpu.SetGR(32, fetchaddRelVirtualAddress);
     fetchaddRel.Execute(fetchaddRelCpu, kernelMemory);
     assert_equal("release fetchadd should return the old zero-extended value",
@@ -1119,6 +1241,40 @@ void test_latest_boot_log_blockers() {
     xma_l.Execute(cpu, memory);
     getf_sig.Execute(cpu, memory);
     assert_equal("Boot xma.l should compute signed low product plus addend", 26, cpu.GetGR(21));
+
+    // Linux's IA-64 udelay path uses SETF.SIG -> XMA.L -> GETF.SIG to form
+    // start + usecs * cyc_per_usec. Exercise the authentic integer-format FP
+    // exponent and operand values used by that path, rather than only raw
+    // significands with zeroed exponent fields.
+    const InstructionEx timebaseXma = decoder.DecodeSlot(
+        0x1d038910180ULL, UnitType::F_UNIT, 0x4039240);
+    assert_true("Authentic udelay XMA.L slot should decode",
+                timebaseXma.GetType() == InstructionType::XMA);
+    assert_equal("Authentic udelay XMA.L destination", 6, timebaseXma.GetDst());
+    assert_equal("Authentic udelay XMA.L multiplicand f9", 9, timebaseXma.GetSrc1());
+    assert_equal("Authentic udelay XMA.L multiplier f7", 7, timebaseXma.GetSrc2());
+    assert_equal("Authentic udelay XMA.L addend f8", 8, timebaseXma.GetSrc3());
+
+    const auto setIntegerFormat = [&cpu](uint8_t reg, uint64_t value) {
+        uint8_t format[16] = {};
+        for (int i = 0; i < 8; ++i) {
+            format[i] = static_cast<uint8_t>(value >> (i * 8));
+        }
+        format[8] = 0x3e;
+        format[9] = 0x00;
+        format[10] = 0x01;
+        cpu.SetFR(reg, format);
+    };
+    constexpr uint64_t itcStart = 0x2e665b0bULL;
+    setIntegerFormat(8, itcStart);
+    setIntegerFormat(9, 1000);
+    setIntegerFormat(7, 18);
+    timebaseXma.Execute(cpu, memory);
+    InstructionEx getfTimebase = getf_sig;
+    getfTimebase.SetOperands(14, 6, 0);
+    getfTimebase.Execute(cpu, memory);
+    assert_equal("Authentic udelay XMA.L should add the usec-to-ITC delta",
+                 itcStart + 18000, cpu.GetGR(14));
 
     const InstructionEx xma_h = decoder.DecodeSlot(0x1dc48a10280ULL, UnitType::F_UNIT, 0x36ed0);
     const InstructionEx xma_hu = decoder.DecodeSlot(0x1d848a10280ULL, UnitType::F_UNIT, 0x36ed0);
@@ -1448,6 +1604,44 @@ void test_latest_boot_log_blockers() {
     debianShr.Execute(cpu, memory);
     assert_equal("Authentic ELILO SHR logical sign-bit result", 1,
                  cpu.GetGR(14));
+
+    // Linux's MOVL patcher uses predicate-paired variable SHRs when the
+    // address shift is below 64. Preserve the encoded p6 so this path remains
+    // nullified when the complementary p7 path is selected.
+    const InstructionEx patchShrMask = decoder.DecodeSlot(
+        0xF20211E846ULL, UnitType::I_UNIT, 0x4012F76ULL);
+    const InstructionEx patchShrValue = decoder.DecodeSlot(
+        0xF20221E3C6ULL, UnitType::I_UNIT, 0x4012F7CULL);
+    assert_true("Linux MOVL patch-mask SHR decodes",
+                patchShrMask.GetType() == InstructionType::SHR);
+    assert_equal("Linux MOVL patch-mask SHR predicate", 6,
+                 patchShrMask.GetPredicate());
+    assert_equal("Linux MOVL patch-value SHR predicate", 6,
+                 patchShrValue.GetPredicate());
+    cpu.SetPR(6, false);
+    cpu.SetGR(33, 0xFFFF7F000000000ULL);
+    cpu.SetGR(15, 0x202900000000000ULL);
+    patchShrMask.Execute(cpu, memory);
+    patchShrValue.Execute(cpu, memory);
+    assert_equal("false p6 patch-mask SHR leaves the MOVL mask intact",
+                 0xFFFF7F000000000ULL, cpu.GetGR(33));
+    assert_equal("false p6 patch-value SHR leaves the MOVL value intact",
+                 0x202900000000000ULL, cpu.GetGR(15));
+    cpu.SetPR(6, true);
+
+    // IA-64 variable shift counts use only the low six bits. Linux's
+    // ia64_patch_imm64 relies on wrapped counts when patching the X-slot of a
+    // long MOVL bundle.
+    InstructionEx wrappedShl(InstructionType::SHL, UnitType::I_UNIT);
+    wrappedShl.SetOperands(14, 25, 23);
+    cpu.SetGR(25, 1);
+    cpu.SetGR(23, 0xFFFFFFFFFFFFFFE9ULL); // low six bits are 41.
+    wrappedShl.Execute(cpu, memory);
+    assert_equal("variable SHL wraps negative count to its low six bits",
+                 1ULL << 41, cpu.GetGR(14));
+    cpu.SetGR(23, 64);
+    wrappedShl.Execute(cpu, memory);
+    assert_equal("variable SHL count 64 wraps to zero", 1, cpu.GetGR(14));
 
     // Exact authentic ELILO repeat-index update at 0x25730/0x259d0.
     // Historical Binutils decodes this A1 slot as "add r40=r40,r16,1".
@@ -1968,6 +2162,410 @@ void test_ia64_translation_register_inserts() {
     std::cout << "  ? IA-64 translation-register inserts passed" << std::endl;
 }
 
+void test_ia64_vhpt_instructions() {
+    std::cout << "Testing IA-64 VHPT and TLB refill instructions..." << std::endl;
+
+    InstructionDecoder decoder;
+    constexpr uint64_t itcDAddress = 0xA000000100000130ULL;
+    const uint8_t itcDBundleBytes[16] = {
+        0x6A, 0x01, 0x48, 0x00, 0x2E, 0x04,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+        0x00, 0x00, 0x04, 0x00
+    };
+    const Bundle itcDBundle = decoder.DecodeBundleAt(itcDBundleBytes, itcDAddress);
+    assert_true("Linux VHPT handler itc.d bundle should decode",
+                itcDBundle.instructions.size() == 3 &&
+                itcDBundle.instructions[0].GetType() == InstructionType::ITC_D);
+    const InstructionEx& itcD = itcDBundle.instructions[0];
+    assert_equal("itc.d source TTE register", 18, itcD.GetSrc1());
+    assert_equal("Linux itc.d qualifying predicate", 11, itcD.GetPredicate());
+
+    constexpr uint64_t thashAddress = 0xA000000100002010ULL;
+    const uint8_t thashBundleBytes[16] = {
+        0x00, 0x88, 0x00, 0x20, 0x1A, 0x04,
+        0xD0, 0x01, 0x00, 0x62, 0x00, 0xE0,
+        0x03, 0x00, 0xCC, 0x00
+    };
+    const Bundle thashBundle = decoder.DecodeBundleAt(thashBundleBytes, thashAddress);
+    assert_true("Linux VHPT thash bundle should decode",
+                thashBundle.instructions.size() == 3 &&
+                thashBundle.instructions[0].GetType() == InstructionType::THASH);
+    assert_equal("thash destination register", 17,
+                 thashBundle.instructions[0].GetDst());
+    assert_equal("thash virtual-address source register", 16,
+                 thashBundle.instructions[0].GetSrc1());
+
+    constexpr uint64_t ptcAddress = 0xA000000100000190ULL;
+    const uint8_t ptcBundleBytes[16] = {
+        0xD1, 0x00, 0x6C, 0x20, 0x09, 0x04,
+        0xF0, 0xFF, 0xC0, 0xBF, 0x05, 0x00,
+        0x00, 0x00, 0x20, 0x00
+    };
+    const Bundle ptcBundle = decoder.DecodeBundleAt(ptcBundleBytes, ptcAddress);
+    assert_true("Linux VHPT-handler ptc.l bundle should decode",
+                ptcBundle.instructions.size() == 3 &&
+                ptcBundle.instructions[0].GetType() == InstructionType::PTC_L);
+    assert_equal("ptc.l invalidation address register", 16,
+                 ptcBundle.instructions[0].GetSrc1());
+    assert_equal("ptc.l invalidation page-size register", 27,
+                 ptcBundle.instructions[0].GetSrc2());
+
+    constexpr uint64_t rr5 = 0x539ULL;
+    constexpr uint64_t pta = ((1ULL << 61) - (1ULL << 50)) | (50ULL << 2) | 1ULL;
+    constexpr uint64_t virtualAddress = 0xA0007FFFFFC80000ULL;
+    constexpr uint64_t pageFlags = (1ULL << 52) | (1ULL << 6) | (1ULL << 5) |
+                                   1ULL | (3ULL << 9);
+    CPUState cpu;
+    Memory memory(0x100000, false);
+    cpu.SetPSR(1ULL << 17);
+    cpu.SetRR(5, rr5);
+    cpu.SetCR(8, pta);
+    cpu.SetCR(20, virtualAddress);
+    cpu.SetCR(21, (5ULL << 8) | (14ULL << 2));
+    cpu.SetPR(11, true);
+    cpu.SetGR(18, 0x3C000ULL | pageFlags);
+    itcD.Execute(cpu, memory);
+    assert_true("itc.d installs a valid data-TLB entry", cpu.GetDTLB(0).valid);
+    assert_equal("itc.d records the guest TTE", 0x1000000003C661ULL,
+                 cpu.GetDTLB(0).physicalAddress);
+    assert_equal("itc.d records the faulting VA page", virtualAddress,
+                 cpu.GetDTLB(0).virtualAddress);
+    assert_equal("itc.d records RID and page size", 0x538ULL,
+                 cpu.GetDTLB(0).itir);
+    assert_equal("short-format thash uses the live PTA/RR", 0xBFFC000FFFFFF900ULL,
+                 ComputeIA64ShortVhptAddress(cpu, virtualAddress));
+
+    memory.write<uint64_t>(0x3C123ULL, 0xFEDCBA9876543210ULL);
+    const IA64AddressTranslator translator;
+    const IA64AddressTranslation cached = translator.TranslateDataAddress(
+        cpu, memory, virtualAddress + 0x123ULL, MemoryAccessType::READ);
+    assert_true("itc.d entry satisfies a later DTLB lookup",
+                cached.mechanism == IA64TranslationMechanism::DATA_TLB);
+    assert_equal("itc.d entry translates to the guest physical PPN",
+                 0x3C123ULL, cached.physicalAddress);
+    uint64_t cachedValue = 0;
+    translator.ReadData(cpu, memory, virtualAddress + 0x123ULL,
+                        reinterpret_cast<uint8_t*>(&cachedValue), sizeof(cachedValue));
+    assert_equal("DTLB hit reads the translated guest physical data",
+                 0xFEDCBA9876543210ULL, cachedValue);
+
+    cpu.SetGR(16, virtualAddress);
+    thashBundle.instructions[0].Execute(cpu, memory);
+    assert_equal("executed thash writes CR.PTA-derived IHA", 0xBFFC000FFFFFF900ULL,
+                 cpu.GetGR(17));
+
+    std::cout << "  ? VHPT hash and ITC.D refill instructions passed" << std::endl;
+}
+
+void test_ia64_data_address_translation() {
+    std::cout << "Testing IA-64 data address translation..." << std::endl;
+
+    constexpr uint64_t psrDt = (1ULL << 17) | (1ULL << 13);
+    constexpr uint64_t rr5 = 0x539ULL; // RID 5, PS 14, VHPT enabled.
+    constexpr uint64_t shortVhptPta =
+        ((1ULL << 61) - (1ULL << 50)) | (50ULL << 2) | 1ULL;
+    constexpr uint64_t pageFlags =
+        (1ULL << 52) | (1ULL << 6) | (1ULL << 5) | 1ULL | (3ULL << 9);
+    constexpr uint64_t region5 = 5ULL << 61;
+
+    // Exact authentic Linux bundle at raw IP 0x4a5e3b0. The raw 41-bit slot
+    // is independently extracted from the full 128-bit bundle, whose template
+    // is 0x03 (MII with an internal and bundle-end stop).
+    const uint8_t frontierBundleBytes[16] = {
+        0x03, 0xD0, 0x00, 0x48, 0x18, 0x10, 0x60, 0x03,
+        0x90, 0x00, 0x42, 0x20, 0xE3, 0xD2, 0x30, 0x80
+    };
+    InstructionDecoder decoder;
+    // Exact MLX bundle from the kernel's nested-DTLB vector. LOAD_PHYSICAL
+    // will patch this canonical swapper_pg_dir address at runtime; before that
+    // patch, MOVL must retain the full 64-bit symbol address.
+    const uint8_t nestedVectorMovlBundle[16] = {
+        0x04, 0x00, 0x00, 0x00, 0x30, 0x80, 0x00, 0x01,
+        0x00, 0x00, 0x20, 0x63, 0x02, 0x90, 0x02, 0x6A
+    };
+    const Bundle nestedVectorMovl = decoder.DecodeBundleAt(
+        nestedVectorMovlBundle, 0x4001450ULL);
+    assert_true("nested-DTLB LOAD_PHYSICAL bundle decodes as MLX MOVL",
+                nestedVectorMovl.instructions.size() == 2 &&
+                nestedVectorMovl.instructions[1].GetType() == InstructionType::MOVL);
+    assert_equal("nested-DTLB swapper_pg_dir MOVL keeps its canonical immediate",
+                 0xA000000100B44000ULL,
+                 nestedVectorMovl.instructions[1].GetImmediate());
+
+    const Bundle frontierBundle = decoder.DecodeBundleAt(
+        frontierBundleBytes, 0x4A5E3B0ULL);
+    assert_equal("frontier bundle template", 0x03,
+                 static_cast<uint8_t>(frontierBundle.templateType));
+    assert_true("frontier bundle has three slots",
+                frontierBundle.instructions.size() == 3);
+    const InstructionEx& frontierLoad = frontierBundle.instructions[0];
+    assert_equal("frontier slot raw 41-bit instruction", 0x80C2400680ULL,
+                 frontierLoad.GetRawBits());
+    assert_true("frontier slot is an M-unit LD8",
+                frontierLoad.GetUnit() == UnitType::M_UNIT &&
+                frontierLoad.GetType() == InstructionType::LD8);
+    assert_equal("frontier predicate", 0, frontierLoad.GetPredicate());
+    assert_equal("frontier destination", 26, frontierLoad.GetDst());
+    assert_equal("frontier base register", 36, frontierLoad.GetSrc1());
+    assert_equal("frontier has no register operand update", 0,
+                 frontierLoad.GetSrc2());
+    assert_true("frontier has no immediate update",
+                !frontierLoad.HasImmediate() && !frontierLoad.HasRegisterUpdate());
+    assert_string("frontier instruction disassembly",
+                  "ld8 r26 = [r36]", frontierLoad.GetDisassembly());
+
+    // A DTR hit is an independently testable IA-64 translation mechanism.
+    // The TTE has P/A/D, kernel RWX rights, and a write-back memory attribute.
+    Memory trMemory(0x100000, false);
+    const uint64_t trVaBase = region5 + 0x100000ULL;
+    constexpr uint64_t trPaBase = 0x20000ULL;
+    constexpr uint64_t trItir = (14ULL << 2) | (5ULL << 8);
+    trMemory.write<uint64_t>(trPaBase + 0x123ULL, 0xFEDCBA9876543210ULL);
+    CPUState trCpu;
+    trCpu.SetPSR(psrDt);
+    trCpu.SetRR(5, rr5);
+    trCpu.SetCR(8, shortVhptPta);
+    trCpu.SetDTR(0, trPaBase | pageFlags, trVaBase, trItir, rr5);
+    const IA64AddressTranslator translator;
+    const IA64AddressTranslation trResult = translator.TranslateDataAddress(
+        trCpu, trMemory, trVaBase + 0x123ULL, MemoryAccessType::READ);
+    assert_true("DTR supplies the selected translation",
+                trResult.mechanism == IA64TranslationMechanism::TRANSLATION_REGISTER);
+    assert_equal("DTR physical address", trPaBase + 0x123ULL,
+                 trResult.physicalAddress);
+    assert_equal("DTR page size", 0x4000ULL, trResult.pageSize);
+    assert_equal("DTR RID", 5, trResult.regionId);
+    assert_equal("DTR memory attribute", 0, trResult.memoryAttribute);
+    assert_equal("DTR access rights", 3, trResult.accessRights);
+
+    // Execute the exact frontier LD8 through a valid DTR and use a value with
+    // its sign bit set to prove the complete 64-bit bit pattern is preserved.
+    trCpu.SetGR(36, trVaBase + 0x123ULL);
+    trCpu.SetGR(26, 0x1122334455667788ULL);
+    frontierLoad.Execute(trCpu, trMemory);
+    assert_equal("frontier-family LD8 returns the full 64-bit value",
+                 0xFEDCBA9876543210ULL, trCpu.GetGR(26));
+    assert_equal("non-updating LD8 preserves its base register",
+                 trVaBase + 0x123ULL, trCpu.GetGR(36));
+
+    InstructionEx translatedStore(InstructionType::ST8, UnitType::M_UNIT);
+    translatedStore.SetOperands(36, 26, 0);
+    trCpu.SetGR(26, 0x8877665544332211ULL);
+    translatedStore.Execute(trCpu, trMemory);
+    assert_equal("store uses the same translated DTR page",
+                 0x8877665544332211ULL,
+                 trMemory.read<uint64_t>(trPaBase + 0x123ULL));
+
+    // Reject a DTR with a different RID, and verify a page-size boundary does
+    // not let the entry cover the next 16-KiB page.
+    CPUState otherRidCpu;
+    otherRidCpu.SetPSR(psrDt);
+    otherRidCpu.SetRR(5, 0x639ULL); // RID 6, same PS and VHPT enable.
+    otherRidCpu.SetCR(8, shortVhptPta);
+    otherRidCpu.SetDTR(0, trPaBase | pageFlags, trVaBase, trItir, rr5);
+    bool wrongRidRejected = false;
+    try {
+        translator.TranslateDataAddress(otherRidCpu, trMemory,
+            trVaBase + 0x123ULL, MemoryAccessType::READ);
+    } catch (const IA64TranslationFault& fault) {
+        wrongRidRejected = fault.GetKind() == IA64TranslationFaultKind::VHPT_MISS &&
+                           fault.GetVectorOffset() == 0;
+    }
+    assert_true("different RID cannot hit the DTR", wrongRidRejected);
+
+    bool pageBoundaryMiss = false;
+    try {
+        translator.TranslateDataAddress(trCpu, trMemory,
+            trVaBase + 0x4000ULL, MemoryAccessType::READ);
+    } catch (const IA64TranslationFault& fault) {
+        pageBoundaryMiss = fault.GetKind() == IA64TranslationFaultKind::VHPT_MISS &&
+                           fault.GetVectorOffset() == 0;
+    }
+    assert_true("DTR match stops exactly at its page-size boundary", pageBoundaryMiss);
+
+    CPUState readOnlyCpu;
+    readOnlyCpu.SetPSR(psrDt);
+    readOnlyCpu.SetRR(5, rr5);
+    readOnlyCpu.SetCR(8, shortVhptPta);
+    readOnlyCpu.SetDTR(0, trPaBase | (pageFlags & ~(7ULL << 9)),
+                       trVaBase, trItir, rr5);
+    bool writeRightsFault = false;
+    try {
+        translator.TranslateDataAddress(readOnlyCpu, trMemory,
+            trVaBase + 0x123ULL, MemoryAccessType::WRITE);
+    } catch (const IA64TranslationFault& fault) {
+        writeRightsFault = fault.GetKind() == IA64TranslationFaultKind::ACCESS_RIGHTS &&
+                           fault.GetVectorOffset() == 0x5300;
+    }
+    assert_true("read-only TTE rejects a store with data-access-rights vector",
+                writeRightsFault);
+
+    // Exercise the short-format VHPT using only CR.PTA, RR, and the cached TLB
+    // mapping for the guest-owned VHPT page. Two neighboring PTEs map to
+    // non-contiguous physical frames so an 8-byte access crosses translations.
+    Memory pageTableMemory(0x200000, false);
+    constexpr uint64_t vhptBackingPa = 0x8000;
+    constexpr uint64_t firstDataPa = 0x10000;
+    constexpr uint64_t secondDataPa = 0x14000;
+    constexpr uint64_t virtualCrossingBase = region5 + 0x18000ULL;
+    CPUState walkCpu;
+    walkCpu.SetPSR(psrDt);
+    walkCpu.SetRR(5, rr5);
+    walkCpu.SetCR(8, shortVhptPta);
+    const uint64_t firstCrossingVa = virtualCrossingBase + 0x3FFCULL;
+    const uint64_t secondCrossingVa = firstCrossingVa + 4;
+    const uint64_t firstHashAddress =
+        ComputeIA64ShortVhptAddress(walkCpu, firstCrossingVa);
+    const uint64_t secondHashAddress =
+        ComputeIA64ShortVhptAddress(walkCpu, secondCrossingVa);
+    const uint64_t vhptPageVa = firstHashAddress & ~0x3FFFULL;
+    assert_equal("adjacent 8-byte access PTEs share a VHPT backing page",
+                 vhptPageVa, secondHashAddress & ~0x3FFFULL);
+    const uint64_t firstPtePa = vhptBackingPa + (firstHashAddress & 0x3FFFULL);
+    const uint64_t secondPtePa = vhptBackingPa + (secondHashAddress & 0x3FFFULL);
+    pageTableMemory.write<uint64_t>(firstPtePa, firstDataPa | pageFlags);
+    pageTableMemory.write<uint64_t>(secondPtePa, secondDataPa | pageFlags);
+    pageTableMemory.write<uint32_t>(firstDataPa + 0x3FFC, 0x44332211U);
+    pageTableMemory.write<uint32_t>(secondDataPa, 0x88776655U);
+
+    const uint64_t rr5Itir = (5ULL << 8) | (14ULL << 2);
+    walkCpu.InsertDTLB(vhptBackingPa | pageFlags, vhptPageVa, rr5Itir, rr5);
+    const IA64AddressTranslation walked = translator.TranslateDataAddress(
+        walkCpu, pageTableMemory, firstCrossingVa, MemoryAccessType::READ);
+    assert_true("region-5 page-table walk is selected",
+                walked.mechanism == IA64TranslationMechanism::SHORT_VHPT);
+    assert_equal("walked PTE maps to the first physical frame",
+                 firstDataPa + 0x3FFC, walked.physicalAddress);
+    assert_equal("walked mapping uses the RR page size", 0x4000, walked.pageSize);
+    assert_equal("walked mapping retains RID 5", 5, walked.regionId);
+    assert_equal("walked PTE is write-back", 0, walked.memoryAttribute);
+    const IA64AddressTranslation refilled = translator.TranslateDataAddress(
+        walkCpu, pageTableMemory, firstCrossingVa, MemoryAccessType::READ);
+    assert_true("short VHPT lookup fills a subsequent DTLB hit",
+                refilled.mechanism == IA64TranslationMechanism::DATA_TLB);
+
+    uint64_t crossingValue = 0;
+    translator.ReadData(walkCpu, pageTableMemory,
+                        firstCrossingVa,
+                        reinterpret_cast<uint8_t*>(&crossingValue),
+                        sizeof(crossingValue));
+    assert_equal("8-byte load crosses translations without assuming contiguous PAs",
+                 0x8877665544332211ULL, crossingValue);
+    const uint64_t crossingStore = 0x0102030405060708ULL;
+    translator.WriteData(walkCpu, pageTableMemory,
+                         firstCrossingVa,
+                         reinterpret_cast<const uint8_t*>(&crossingStore),
+                         sizeof(crossingStore));
+    assert_equal("cross-page store updates its first physical frame",
+                 0x05060708U,
+                 pageTableMemory.read<uint32_t>(firstDataPa + 0x3FFC));
+    assert_equal("cross-page store updates its second physical frame",
+                 0x01020304U, pageTableMemory.read<uint32_t>(secondDataPa));
+
+    // Region 7 remains the documented identity-mapped kernel region.  Region
+    // 5 with no matching DTR or valid page-table root must instead miss; its
+    // region bits are never stripped into flat physical RAM.
+    CPUState region7Cpu;
+    region7Cpu.SetPSR(psrDt);
+    region7Cpu.SetRR(7, 0x760ULL);
+    const IA64AddressTranslation region7Translation = translator.TranslateDataAddress(
+        region7Cpu, trMemory, 0xE000000000001234ULL, MemoryAccessType::READ);
+    assert_true("region 7 retains identity translation",
+                region7Translation.mechanism == IA64TranslationMechanism::REGION7_IDENTITY);
+    assert_equal("region 7 maps the region offset", 0x1234,
+                 region7Translation.physicalAddress);
+
+    CPUState region5MissCpu;
+    region5MissCpu.SetPSR(psrDt);
+    region5MissCpu.SetRR(5, rr5);
+    region5MissCpu.SetCR(8, shortVhptPta);
+    bool region5Miss = false;
+    try {
+        translator.TranslateDataAddress(region5MissCpu, trMemory,
+            region5 + 0x1234, MemoryAccessType::READ);
+    } catch (const IA64TranslationFault& fault) {
+        region5Miss = fault.GetKind() == IA64TranslationFaultKind::VHPT_MISS &&
+                      fault.GetVectorOffset() == 0 &&
+                      fault.GetHashAddress() ==
+                          ComputeIA64ShortVhptAddress(region5MissCpu, region5 + 0x1234);
+    }
+    assert_true("unmapped VHPT page raises the guest VHPT translation vector", region5Miss);
+
+    // TPA is a non-access reference. With VHPT disabled and interruption
+    // collection off, IA-64 routes its miss through the nested DTLB vector.
+    CPUState nestedTpaCpu;
+    nestedTpaCpu.SetPSR(1ULL << 17);
+    nestedTpaCpu.SetRR(0, 0x39ULL);
+    bool nestedTpaMiss = false;
+    try {
+        translator.TranslateDataAddress(nestedTpaCpu, trMemory, 0,
+                                        MemoryAccessType::READ, true);
+    } catch (const IA64TranslationFault& fault) {
+        nestedTpaMiss = fault.GetKind() == IA64TranslationFaultKind::NESTED_TLB_MISS &&
+                        fault.GetAccessType() == MemoryAccessType::NON_ACCESS &&
+                        fault.GetVectorOffset() == 0x1400;
+    }
+    assert_true("TPA without a VHPT raises a nested DTLB miss when IC is clear",
+                nestedTpaMiss);
+
+    // A PTE miss is reported architecturally before a guest physical OOB can
+    // occur, and a failed LD8 leaves its destination untouched.
+    Memory missingPageTableMemory(0x20000, false);
+    CPUState missingPageCpu;
+    missingPageCpu.SetPSR(psrDt);
+    missingPageCpu.SetRR(5, rr5);
+    missingPageCpu.SetCR(8, shortVhptPta);
+    missingPageCpu.SetGR(36, region5 + 0x1234);
+    missingPageCpu.SetGR(26, 0xAABBCCDDEEFF0011ULL);
+    const uint64_t missingHash = ComputeIA64ShortVhptAddress(
+        missingPageCpu, region5 + 0x1234);
+    const uint64_t missingHashPage = missingHash & ~0x3FFFULL;
+    missingPageCpu.InsertDTLB(vhptBackingPa | pageFlags,
+                              missingHashPage, rr5Itir, rr5);
+    bool pageNotPresent = false;
+    try {
+        frontierLoad.Execute(missingPageCpu, missingPageTableMemory);
+    } catch (const IA64TranslationFault& fault) {
+        pageNotPresent = fault.GetKind() == IA64TranslationFaultKind::PAGE_NOT_PRESENT &&
+                         fault.GetVectorOffset() == 0x5000;
+    }
+    assert_true("missing short-format VHPT entry produces page-not-present fault",
+                pageNotPresent);
+    assert_equal("faulting LD8 preserves its destination register",
+                 0xAABBCCDDEEFF0011ULL, missingPageCpu.GetGR(26));
+
+    std::cout << "  ? IA-64 DTR/VHPT region-5 translations passed" << std::endl;
+}
+
+void test_ia64_mf_memory_fence() {
+    std::cout << "Testing IA-64 M24 memory-fence decoding..." << std::endl;
+
+    InstructionDecoder decoder;
+    const InstructionEx mf = decoder.DecodeSlot(
+        0x110000000ULL, UnitType::M_UNIT, 0x040D2460ULL);
+    assert_true("authentic M24 slot decodes as mf",
+                mf.GetType() == InstructionType::MF);
+    assert_equal("mf qualifying predicate", 0, mf.GetPredicate());
+    assert_string("mf disassembly", "mf", mf.GetDisassembly());
+
+    const InstructionEx mfAcceptance = decoder.DecodeSlot(
+        0x118000000ULL, UnitType::M_UNIT, 0x040D24B0ULL);
+    assert_true("M24 acceptance-form slot decodes as mf.a",
+                mfAcceptance.GetType() == InstructionType::MF_A);
+    assert_string("mf.a disassembly", "mf.a", mfAcceptance.GetDisassembly());
+
+    Memory memory(0x1000, false);
+    memory.write<uint64_t>(0x100, 0x1122334455667788ULL);
+    CPUState cpu;
+    cpu.SetGR(32, 0x100);
+    mf.Execute(cpu, memory);
+    mfAcceptance.Execute(cpu, memory);
+    assert_equal("mf and mf.a do not alter coherent guest memory",
+                 0x1122334455667788ULL, memory.read<uint64_t>(0x100));
+
+    std::cout << "  ? IA-64 M24 memory-fence decoding passed" << std::endl;
+}
+
 void test_memory_bounds_throw() {
     std::cout << "Testing memory bounds diagnostics..." << std::endl;
 
@@ -2126,6 +2724,7 @@ void test_ia64_floating_stores_and_spill() {
     } memory(0x6000);
 
     CPUState cpu;
+    cpu.SetPSR(1ULL << 17);
     uint8_t architecturalF0[16] = {};
     cpu.GetFR(0, architecturalF0);
     assert_true("architectural f0 has fixed +0 register-format contents",
@@ -3624,6 +4223,9 @@ int main() {
         test_ia64_region_register_moves();
         test_ia64_control_register_moves();
         test_ia64_translation_register_inserts();
+        test_ia64_vhpt_instructions();
+        test_ia64_data_address_translation();
+        test_ia64_mf_memory_fence();
         test_iso_boot_media_direct_path();
         test_fat_boot_media_lookup();
         test_el_torito_fat_boot_media_lookup();

@@ -129,6 +129,7 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                     
                 case 0x1: // SHR
                     instr = InstructionEx(InstructionType::SHR, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
                     if (fmt.has_imm) {
                         instr.SetOperands(fmt.r1, fmt.r2, 0);
                         instr.SetImmediate(fmt.count);
