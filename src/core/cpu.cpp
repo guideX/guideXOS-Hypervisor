@@ -155,7 +155,12 @@ void CPUState::Reset() {
     // Initialize special registers
     ip_ = 0;
     cfm_ = 0;
-    psr_ = 0;
+    // IA-64 non-interrupt execution (firmware, bootloader and operating
+    // system) runs in static-register bank 1; interruption entry selects bank
+    // 0 and rfi restores the bank from IPSR.bn.  A freshly reset processor
+    // therefore starts in bank 1 so the bootloader's banked GR16-GR31 writes
+    // and the kernel's startup rfi observe the same register bank.
+    psr_ = IA64_PSR_BN_MASK;
 }
 
 uint64_t CPUState::GetGR(size_t index) const {

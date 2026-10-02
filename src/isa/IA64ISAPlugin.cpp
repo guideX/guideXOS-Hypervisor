@@ -5752,7 +5752,18 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         const uint64_t psr = reader.u64();
         restoredCPU.SetIP(ip);
         restoredCPU.SetCFM(cfm);
-        restoredCPU.SetPSR(psr);
+        if (checkpointBlobVersion < 5) {
+            // Legacy checkpoints did not model the PSR.bn static-register bank.
+            // The pre-banking emulator exposed a single GR16-GR31 file; the
+            // architecturally selected bank for non-interrupt (firmware,
+            // bootloader and kernel) execution is bank 1, which is also the
+            // bank the kernel's startup rfi selects.  Resume the single-file
+            // context in bank 1 so the bootloader's static-register writes and
+            // the kernel's bank-1 reads observe the same registers.
+            restoredCPU.SetPSR(psr | IA64_PSR_BN_MASK);
+        } else {
+            restoredCPU.SetPSR(psr);
+        }
         restoredCPU.SetRSEStateForCheckpoint(rse);
         if (checkpointBlobVersion >= 3) {
             for (size_t i = 0; i < NUM_CPUID_REGISTERS; ++i) {
