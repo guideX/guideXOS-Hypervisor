@@ -177,6 +177,7 @@ enum class InstructionType {
     LD4,        // Load 4 bytes
     LD8,        // Load 8 bytes
     CMPXCHG4_ACQ, // Compare-and-exchange 4 bytes with acquire semantics
+    XCHG4,      // Atomic exchange 4 bytes
     FETCHADD4_ACQ, // Fetch-and-add 4 bytes with acquire semantics
     FETCHADD4_REL, // Fetch-and-add 4 bytes with release semantics
     ST1,        // Store 1 byte
@@ -267,7 +268,12 @@ enum class InstructionType {
 
     // Static register bank switch (B-type)
     BSW,        // Switch PSR.bn to the encoded bank
-    
+
+    // B8/B0 special forms.  These share the B-type slot but are not branch
+    // control transfers and must not be decoded as IP-relative branches.
+    COVER,      // Cover the current register-stack frame and reset the RRB
+    CLRRB,      // Clear the rotating-register base (clrrb / clrrb.pr)
+
     UNKNOWN
 };
 

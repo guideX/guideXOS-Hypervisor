@@ -48,21 +48,40 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
 
-        // bsw.0 and bsw.1 select the two static GR16-GR31 banks by changing
-        // PSR.bn.  These B8 forms do not use branch-register operands.
-        if (major == 0x0 && (x6 == 0x0C || x6 == 0x0D)) {
-            result.type = x6 == 0x0C ? formats::BFormat::BranchType::BSW0
-                                     : formats::BFormat::BranchType::BSW1;
-            result.indirect = false;
-            result.has_target = false;
-            return true;
+        // B8/B0 special forms share the B-type slot but are not branch control
+        // transfers.  They must be classified before the generic IP-relative
+        // branch decoder, otherwise forms such as "cover" (major 0, x6 0x02)
+        // are turned into bogus br.cond jumps that corrupt control flow.
+        if (major == 0x0) {
+            formats::BFormat::BranchType specialType;
+            bool isSpecial = true;
+            switch (x6) {
+                case 0x00: specialType = formats::BFormat::BranchType::BREAK_B; break;
+                case 0x02: specialType = formats::BFormat::BranchType::COVER; break;
+                case 0x04: specialType = formats::BFormat::BranchType::CLRRB; break;
+                case 0x05: specialType = formats::BFormat::BranchType::CLRRB_PR; break;
+                case 0x08: specialType = formats::BFormat::BranchType::RFI; break;
+                case 0x0C: specialType = formats::BFormat::BranchType::BSW0; break;
+                case 0x0D: specialType = formats::BFormat::BranchType::BSW1; break;
+                case 0x10: specialType = formats::BFormat::BranchType::EPC; break;
+                case 0x18: specialType = formats::BFormat::BranchType::VMSW0; break;
+                case 0x19: specialType = formats::BFormat::BranchType::VMSW1; break;
+                default: isSpecial = false; break;
+            }
+            if (isSpecial) {
+                result.type = specialType;
+                result.indirect = false;
+                result.has_target = false;
+                return true;
+            }
         }
 
-        // B8 is the unpredicated return-from-interruption instruction.  It
-        // restores the interrupted context from CR.IPSR/CR.IIP rather than
-        // forming a branch target from the encoded branch fields.
-        if (major == 0x0 && x6 == 0x08) {
-            result.type = formats::BFormat::BranchType::RFI;
+        // nop.b and hint.b are major-2 B-type no-ops.  They carry an
+        // unconstrained 21-bit immediate which the IP-relative branch decoder
+        // would otherwise misinterpret as a branch displacement.
+        if (major == 0x2 && (x6 == 0x00 || x6 == 0x01)) {
+            result.type = x6 == 0x00 ? formats::BFormat::BranchType::NOP_B
+                                     : formats::BFormat::BranchType::HINT_B;
             result.indirect = false;
             result.has_target = false;
             return true;
@@ -162,6 +181,33 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
             case formats::BFormat::BranchType::BSW1:
                 type = InstructionType::BSW;
                 break;
+
+            case formats::BFormat::BranchType::COVER:
+                type = InstructionType::COVER;
+                break;
+
+            case formats::BFormat::BranchType::CLRRB:
+            case formats::BFormat::BranchType::CLRRB_PR:
+                type = InstructionType::CLRRB;
+                break;
+
+            case formats::BFormat::BranchType::EPC:
+            case formats::BFormat::BranchType::VMSW0:
+            case formats::BFormat::BranchType::VMSW1:
+                // This emulator does not model per-page privilege promotion
+                // (epc) or PSR.vm (vmsw); both are architectural no-ops here.
+                // They are classified so they are never mistaken for branches.
+                type = InstructionType::NOP;
+                break;
+
+            case formats::BFormat::BranchType::BREAK_B:
+                type = InstructionType::BREAK;
+                break;
+
+            case formats::BFormat::BranchType::NOP_B:
+            case formats::BFormat::BranchType::HINT_B:
+                type = InstructionType::NOP;
+                break;
                 
             case formats::BFormat::BranchType::IA:
                 type = InstructionType::BR_IA;
@@ -201,12 +247,27 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
             fmt.type == formats::BFormat::BranchType::CEXIT ||
             fmt.type == formats::BFormat::BranchType::RFI ||
             fmt.type == formats::BFormat::BranchType::BSW0 ||
-            fmt.type == formats::BFormat::BranchType::BSW1;
+            fmt.type == formats::BFormat::BranchType::BSW1 ||
+            fmt.type == formats::BFormat::BranchType::COVER ||
+            fmt.type == formats::BFormat::BranchType::CLRRB ||
+            fmt.type == formats::BFormat::BranchType::CLRRB_PR ||
+            fmt.type == formats::BFormat::BranchType::EPC ||
+            fmt.type == formats::BFormat::BranchType::VMSW0 ||
+            fmt.type == formats::BFormat::BranchType::VMSW1 ||
+            fmt.type == formats::BFormat::BranchType::BREAK_B ||
+            fmt.type == formats::BFormat::BranchType::NOP_B ||
+            fmt.type == formats::BFormat::BranchType::HINT_B;
         instr.SetPredicate(unpredicatedCountedBranch ? 0 : fmt.qp);
 
         if (fmt.type == formats::BFormat::BranchType::BSW0 ||
             fmt.type == formats::BFormat::BranchType::BSW1) {
             instr.SetImmediate(fmt.type == formats::BFormat::BranchType::BSW1 ? 1 : 0);
+        } else if (fmt.type == formats::BFormat::BranchType::CLRRB ||
+                   fmt.type == formats::BFormat::BranchType::CLRRB_PR) {
+            instr.SetImmediate(fmt.type == formats::BFormat::BranchType::CLRRB_PR ? 1 : 0);
+        } else if (fmt.type == formats::BFormat::BranchType::VMSW0 ||
+                   fmt.type == formats::BFormat::BranchType::VMSW1) {
+            instr.SetImmediate(fmt.type == formats::BFormat::BranchType::VMSW1 ? 1 : 0);
         }
         
         // Set operands based on branch type

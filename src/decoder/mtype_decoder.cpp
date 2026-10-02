@@ -247,6 +247,20 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                     return true;
                 }
 
+                // M16 xchg1/2/4/8 use x6a = 0x08..0x0b.  Only the 4-byte form
+                // is modelled here, matching the other semaphore operations.
+                if (x == 1 && m == 0 && (x6 == 0x08 || x6 == 0x09 ||
+                                         x6 == 0x0A || x6 == 0x0B)) {
+                    result.operation = formats::MFormat::MemOp::XCHG;
+                    switch (x6) {
+                        case 0x08: result.size = formats::MFormat::Size::SIZE_1; break;
+                        case 0x09: result.size = formats::MFormat::Size::SIZE_2; break;
+                        case 0x0A: result.size = formats::MFormat::Size::SIZE_4; break;
+                        default:   result.size = formats::MFormat::Size::SIZE_8; break;
+                    }
+                    return true;
+                }
+
                 // M17/M18 fetchadd4 use the same major opcode as ordinary
                 // loads/stores.  The retained Binutils table identifies the
                 // acquire form as x6=0x12 and the release form as x6=0x16.
@@ -333,6 +347,23 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                 return true;
 
             case 0x7:   // M10 floating-point memory operations with immediate update
+                // The post-increment line-prefetch forms are M10 (major 7)
+                // with x6a = 0x2c..0x2f.  They prefetch [r3],imm9b and update
+                // r3 by the signed immediate.
+                if (x6 >= 0x2C && x6 <= 0x2F) {
+                    result.operation = formats::MFormat::MemOp::LFETCH;
+                    result.lfetch_fault = (x6 & 0x2) != 0;
+                    result.lfetch_exclusive = (x6 & 0x1) != 0;
+                    result.reg_update = true;
+                    result.has_imm = true;
+                    const uint16_t imm7b = formats::extractBits(raw_instruction, 13, 7);
+                    const uint16_t i = formats::extractBits(raw_instruction, 27, 1);
+                    const uint16_t s = formats::extractBits(raw_instruction, 36, 1);
+                    const uint16_t encoded = (s << 8) | (i << 7) | imm7b;
+                    result.imm9 = static_cast<int16_t>(formats::signExtend(encoded, 9));
+                    return true;
+                }
+
                 // M10 ldf.fill uses imm9b in bits 13:19, with the floating
                 // destination in bits 6:12.  It transfers the full 16-byte
                 // register format without conversion.
@@ -489,6 +520,9 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::LFETCH, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(0, fmt.r3, fmt.reg_update ? fmt.r2 : 0);
+            if (fmt.has_imm) {
+                instr.SetImmediate(static_cast<uint64_t>(fmt.imm9));
+            }
             instr.SetLfetchProperties(fmt.lfetch_fault,
                                       fmt.lfetch_exclusive,
                                       fmt.hint);
@@ -501,6 +535,16 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             }
 
             instr = InstructionEx(InstructionType::CMPXCHG4_ACQ, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, fmt.r2);  // r1=[r3], r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::XCHG) {
+            if (fmt.size != formats::MFormat::Size::SIZE_4) {
+                return false;
+            }
+
+            instr = InstructionEx(InstructionType::XCHG4, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r3, fmt.r2);  // r1=[r3], r2
             return true;

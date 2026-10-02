@@ -689,6 +689,102 @@ void test_latest_boot_log_blockers() {
     assert_equal("cmpxchg should not store on a failed compare",
                  0x55667788U, cmpxchgMemory.read<uint32_t>(cmpxchgAddress));
 
+    // Exact Linux page_fault SAVE_MIN instruction at physical IP 0x04007f50.
+    // Retained Binutils 2.19.1 identifies raw 0x10000000 as unpredicated
+    // cover.  It must never be decoded as an IP-relative branch.
+    InstructionEx cover = decoder.DecodeSlot(0x10000000ULL, UnitType::B_UNIT, 0x04007f50);
+    assert_true("Linux cover should decode", cover.GetType() == InstructionType::COVER);
+    assert_equal("Linux cover qualifying predicate", 0, cover.GetPredicate());
+    assert_string("Linux cover disassembly", "cover", cover.GetDisassembly());
+
+    const uint64_t coverOldCfm = 0x0000000F12345678ULL;
+    CPUState coverCpu;
+    coverCpu.SetCFM(coverOldCfm);
+    coverCpu.SetPSR(0);  // PSR.ic == 0
+    cover.Execute(coverCpu, memory);
+    assert_equal("cover should clear sof/sol/sor and every RRB field",
+                 0, coverCpu.GetCFM());
+    assert_true("cover with PSR.ic=0 should set IFS.v",
+                (coverCpu.GetCR(23) & (1ULL << 63)) != 0);
+    assert_equal("cover should latch the old CFM into IFS",
+                 coverOldCfm & 0x3FFFFFFFFFULL,
+                 coverCpu.GetCR(23) & 0x3FFFFFFFFFULL);
+
+    coverCpu.SetCFM(coverOldCfm);
+    coverCpu.SetCR(23, 0);
+    coverCpu.SetPSR(1ULL << 13);  // PSR.ic == 1
+    cover.Execute(coverCpu, memory);
+    assert_equal("cover with PSR.ic=1 should not latch IFS", 0, coverCpu.GetCR(23));
+    assert_equal("cover should still clear the frame marker when ic=1",
+                 0, coverCpu.GetCFM());
+
+    // clrrb / clrrb.pr are B8 specials that clear the rotating register base.
+    InstructionEx clrrb = decoder.DecodeSlot(0x20000000ULL, UnitType::B_UNIT, 0x04007f00);
+    assert_true("clrrb should decode", clrrb.GetType() == InstructionType::CLRRB);
+    assert_string("clrrb disassembly", "clrrrb", clrrb.GetDisassembly());
+    InstructionEx clrrbPr = decoder.DecodeSlot(0x28000000ULL, UnitType::B_UNIT, 0x04007f00);
+    assert_true("clrrb.pr should decode", clrrbPr.GetType() == InstructionType::CLRRB);
+    assert_string("clrrb.pr disassembly", "clrrrb.pr", clrrbPr.GetDisassembly());
+
+    CPUState clrrbCpu;
+    clrrbCpu.SetCFM(0x0000000F12345678ULL);
+    clrrb.Execute(clrrbCpu, memory);
+    assert_equal("clrrb should clear all three RRB fields",
+                 0x0000000F12345678ULL & ~((0x7FULL << 18) | (0x7FULL << 25) |
+                                           (0x3FULL << 32)),
+                 clrrbCpu.GetCFM());
+    clrrbCpu.SetCFM(0x0000000F12345678ULL);
+    clrrbPr.Execute(clrrbCpu, memory);
+    assert_equal("clrrb.pr should clear only RRB.pr",
+                 0x0000000F12345678ULL & ~(0x3FULL << 32),
+                 clrrbCpu.GetCFM());
+
+    // Exact Linux SAVE_MIN instruction at physical IP 0x04007fd6.  The
+    // post-increment line prefetch is an M10 (major 7) form.
+    InstructionEx lfetchInc = decoder.DecodeSlot(0x0EBD1180000ULL,
+                                                 UnitType::M_UNIT, 0x04007fd0);
+    assert_true("post-increment lfetch should decode",
+                lfetchInc.GetType() == InstructionType::LFETCH);
+    assert_true("post-increment lfetch should be faulting",
+                lfetchInc.IsLfetchFaulting());
+    assert_true("post-increment lfetch should be exclusive",
+                lfetchInc.IsLfetchExclusive());
+    assert_true("post-increment lfetch should update its base",
+                lfetchInc.HasRegisterUpdate());
+    assert_equal("post-increment lfetch base register", 17, lfetchInc.GetSrc1());
+    assert_true("post-increment lfetch should carry the immediate",
+                lfetchInc.HasImmediate());
+    assert_equal("post-increment lfetch immediate", 64, lfetchInc.GetImmediate());
+
+    CPUState lfetchCpu;
+    lfetchCpu.SetGR(17, 0x1000);
+    lfetchInc.Execute(lfetchCpu, memory);
+    assert_equal("post-increment lfetch should advance the base by the immediate",
+                 0x1040, lfetchCpu.GetGR(17));
+
+    // Exact Linux instruction at physical IP 0x04088990.
+    // Retained Binutils 2.19.1 identifies raw 0x8288e1e380 as xchg4 r14=[r14],r15.
+    InstructionEx xchg4 = decoder.DecodeSlot(0x08288E1E380ULL,
+                                             UnitType::M_UNIT, 0x04088990);
+    assert_true("xchg4 should decode", xchg4.GetType() == InstructionType::XCHG4);
+    assert_equal("xchg4 destination register", 14, xchg4.GetDst());
+    assert_equal("xchg4 address register", 14, xchg4.GetSrc1());
+    assert_equal("xchg4 store register", 15, xchg4.GetSrc2());
+    assert_string("xchg4 disassembly", "xchg4 r14 = [r14], r15",
+                  xchg4.GetDisassembly());
+
+    Memory xchgMemory(0x2000);
+    const uint64_t xchgAddress = 0x800;
+    xchgMemory.write<uint32_t>(xchgAddress, 0xDEADBEEFU);
+    CPUState xchgCpu;
+    xchgCpu.SetGR(14, xchgAddress);
+    xchgCpu.SetGR(15, 0x12345678U);
+    xchg4.Execute(xchgCpu, xchgMemory);
+    assert_equal("xchg4 should return the old 32-bit value",
+                 0xDEADBEEFU, xchgCpu.GetGR(14));
+    assert_equal("xchg4 should store the new value unconditionally",
+                 0x12345678U, xchgMemory.read<uint32_t>(xchgAddress));
+
     // Exact Linux entry instruction at guest address 0x047f7b80.
     // Binutils disassembles raw 0x38180000 as: rsm 0x6000.
     InstructionEx rsm = decoder.DecodeSlot(0x38180000ULL, UnitType::M_UNIT, 0x047f7b80);

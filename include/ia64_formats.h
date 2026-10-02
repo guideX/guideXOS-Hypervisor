@@ -111,6 +111,7 @@ struct MFormat {
         STF_SPILL,
         ALLOC,
         EXCHANGE,
+        XCHG,
         FETCHADD,
         LFETCH,
         SETF,
@@ -203,7 +204,16 @@ struct BFormat {
         WTOP,           // While top
         WEXIT,          // While exit
         BSW0,           // Switch to static register bank 0
-        BSW1            // Switch to static register bank 1
+        BSW1,           // Switch to static register bank 1
+        COVER,          // Cover the current register-stack frame (B8)
+        CLRRB,          // Clear RRB, all forms (B8)
+        CLRRB_PR,       // Clear RRB, predicate form (B8)
+        EPC,            // Enter privileged code (B8)
+        VMSW0,          // Set PSR.vm to 0 (B8)
+        VMSW1,          // Set PSR.vm to 1 (B8)
+        BREAK_B,        // break.b (B0)
+        NOP_B,          // nop.b (B0 major-2 form)
+        HINT_B          // hint.b (B0 major-2 form)
     } type;
     
     // Target encoding

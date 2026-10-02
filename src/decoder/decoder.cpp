@@ -1855,7 +1855,10 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             if (registerUpdate_) {
                 const uint64_t baseAddress = cpu.GetGR(src1_);
-                cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
+                const uint64_t increment = hasImmediate_
+                    ? immediate_
+                    : cpu.GetGR(src2_);
+                cpu.SetGR(src1_, baseAddress + increment);
             }
             break;
 
@@ -1870,6 +1873,21 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     writeIa64Data(cpu, memory, address,
                                   reinterpret_cast<const uint8_t*>(&newValue), sizeof(newValue));
                 }
+                cpu.SetGR(dst_, static_cast<uint64_t>(oldValue));
+                cpu.SetGRNaT(dst_, false);
+            }
+            break;
+
+        case InstructionType::XCHG4:
+            {
+                // xchg4: r1 = [r3]; [r3] = r2, unconditionally.
+                const uint64_t address = cpu.GetGR(src1_);
+                uint32_t oldValue = 0;
+                readIa64Data(cpu, memory, address,
+                             reinterpret_cast<uint8_t*>(&oldValue), sizeof(oldValue));
+                const uint32_t newValue = static_cast<uint32_t>(cpu.GetGR(src2_));
+                writeIa64Data(cpu, memory, address,
+                              reinterpret_cast<const uint8_t*>(&newValue), sizeof(newValue));
                 cpu.SetGR(dst_, static_cast<uint64_t>(oldValue));
                 cpu.SetGRNaT(dst_, false);
             }
@@ -2109,7 +2127,39 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetPSR((cpu.GetPSR() & ~IA64_PSR_BN_MASK) |
                        ((immediate_ & 1ULL) != 0 ? IA64_PSR_BN_MASK : 0));
             break;
-            
+
+        case InstructionType::COVER:
+            // cover allocates a zero-size stack frame: sof/sol/sor and all
+            // three RRB fields are cleared.  When interruption collection is
+            // disabled, the old CFM is also latched into CR.IFS with IFS.v=1.
+            {
+                constexpr uint64_t kPsrInterruptionCollection = 1ULL << 13;
+                constexpr uint64_t kFrameMarkerMask = 0x3FFFFFFFFFULL;
+                constexpr uint64_t kIfsValid = 1ULL << 63;
+                const uint64_t cfm = cpu.GetCFM();
+                if ((cpu.GetPSR() & kPsrInterruptionCollection) == 0) {
+                    cpu.SetCR(23, (cfm & kFrameMarkerMask) | kIfsValid);
+                }
+                cpu.SetCFM(cfm & ~kFrameMarkerMask);
+            }
+            break;
+
+        case InstructionType::CLRRB:
+            // clrrrb clears all RRB fields; clrrrb.pr clears only RRB.pr.
+            {
+                constexpr uint64_t kRrbGrMask = 0x7FULL << 18;
+                constexpr uint64_t kRrbFrMask = 0x7FULL << 25;
+                constexpr uint64_t kRrbPrMask = 0x3FULL << 32;
+                uint64_t cfm = cpu.GetCFM();
+                if (immediate_ != 0) {
+                    cfm &= ~kRrbPrMask;
+                } else {
+                    cfm &= ~(kRrbGrMask | kRrbFrMask | kRrbPrMask);
+                }
+                cpu.SetCFM(cfm);
+            }
+            break;
+
         // ===== BRANCH OPERATIONS =====
             
         case InstructionType::BR_COND:
@@ -2356,6 +2406,14 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::BSW:
             oss << "bsw." << ((immediate_ & 1ULL) != 0 ? 1 : 0);
+            break;
+
+        case InstructionType::COVER:
+            oss << "cover";
+            break;
+
+        case InstructionType::CLRRB:
+            oss << (immediate_ != 0 ? "clrrrb.pr" : "clrrrb");
             break;
 
         case InstructionType::MOV_FROM_PR:
@@ -2780,6 +2838,12 @@ std::string InstructionEx::GetDisassembly() const {
             oss << "cmpxchg4.acq r" << static_cast<int>(dst_)
                 << " = [r" << static_cast<int>(src1_) << "], r"
                 << static_cast<int>(src2_) << ", ar.ccv";
+            break;
+
+        case InstructionType::XCHG4:
+            oss << "xchg4 r" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "], r"
+                << static_cast<int>(src2_);
             break;
 
         case InstructionType::FETCHADD4_ACQ:
