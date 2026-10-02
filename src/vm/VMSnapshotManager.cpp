@@ -535,10 +535,11 @@ CPUStateDelta VMSnapshotManager::computeCPUStateDelta(
     CPUStateDelta delta;
     delta.cpuId = current.cpuId;
     
-    // Compare general registers
-    for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
-        uint64_t currVal = current.architecturalState.GetGR(i);
-        uint64_t parentVal = parent.architecturalState.GetGR(i);
+    // Compare physical general-register slots so changes in the inactive
+    // static bank are retained in snapshots regardless of the current PSR.bn.
+    for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
+        uint64_t currVal = current.architecturalState.GetGRPhysical(i);
+        uint64_t parentVal = parent.architecturalState.GetGRPhysical(i);
         if (currVal != parentVal) {
             delta.changedGR[i] = currVal;
         }
@@ -629,9 +630,9 @@ CPUSnapshotRecord VMSnapshotManager::applyCPUStateDelta(
 
     CPUSnapshotRecord result = base;
     
-    // Apply general register changes
+    // Apply physical general-register changes, including the inactive bank.
     for (const auto& pair : delta.changedGR) {
-        result.architecturalState.SetGR(pair.first, pair.second);
+        result.architecturalState.SetGRPhysical(pair.first, pair.second);
     }
     
     // Apply predicate register changes

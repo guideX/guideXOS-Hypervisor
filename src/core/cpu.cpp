@@ -67,6 +67,38 @@ void purgeTranslationEntries(std::array<TranslationRegisterState, EntryCount>& e
     }
 }
 
+uint64_t skipRseRegisters(uint64_t address, int64_t registerCount) {
+    if (registerCount == 0) return address;
+
+    int64_t delta = static_cast<int64_t>((address >> 3) & 0x3FULL) + registerCount;
+    int64_t collectionWords = 0;
+    if (registerCount < 0) {
+        delta -= 0x3E;
+    }
+    if (delta < 0) {
+        while (delta <= -0x3F) {
+            --collectionWords;
+            delta += 0x3F;
+        }
+    } else {
+        while (delta >= 0x3F) {
+            ++collectionWords;
+            delta -= 0x3F;
+        }
+    }
+
+    return address + static_cast<uint64_t>(registerCount + collectionWords) * 8ULL;
+}
+
+uint64_t rseRegistersBetween(uint64_t bspstore, uint64_t bsp) {
+    if (bsp < bspstore) return 0;
+
+    const uint64_t backingStoreWords = (bsp - bspstore) >> 3;
+    const uint64_t firstNatSlot = (bspstore >> 3) & 0x3FULL;
+    const uint64_t natCollectionWords = (firstNatSlot + backingStoreWords) / 64ULL;
+    return backingStoreWords - natCollectionWords;
+}
+
 } // namespace
 
 CPUState::CPUState() {
@@ -164,14 +196,14 @@ void CPUState::SetGRNaT(size_t index, bool value) {
 }
 
 uint64_t CPUState::GetGRPhysical(size_t index) const {
-    if (index >= NUM_GENERAL_REGISTERS) {
+    if (index >= NUM_PHYSICAL_GENERAL_REGISTERS) {
         throw std::out_of_range("Physical general register index out of range");
     }
     return index == 0 ? 0 : gr_[index];
 }
 
 void CPUState::SetGRPhysical(size_t index, uint64_t value) {
-    if (index >= NUM_GENERAL_REGISTERS) {
+    if (index >= NUM_PHYSICAL_GENERAL_REGISTERS) {
         throw std::out_of_range("Physical general register index out of range");
     }
     if (index != 0) {
@@ -181,14 +213,14 @@ void CPUState::SetGRPhysical(size_t index, uint64_t value) {
 }
 
 bool CPUState::GetGRNaTPhysical(size_t index) const {
-    if (index >= NUM_GENERAL_REGISTERS) {
+    if (index >= NUM_PHYSICAL_GENERAL_REGISTERS) {
         throw std::out_of_range("Physical general register index out of range");
     }
     return index == 0 ? false : gr_nat_[index];
 }
 
 void CPUState::SetGRNaTPhysical(size_t index, bool value) {
-    if (index >= NUM_GENERAL_REGISTERS) {
+    if (index >= NUM_PHYSICAL_GENERAL_REGISTERS) {
         throw std::out_of_range("Physical general register index out of range");
     }
     if (index != 0) {
@@ -312,6 +344,9 @@ void CPUState::SetPRPhysical(size_t index, bool value) {
 }
 
 size_t CPUState::MapGR(size_t logical) const {
+    if (logical >= 16 && logical < NUM_STATIC_GR && (psr_ & IA64_PSR_BN_MASK) != 0) {
+        return NUM_GENERAL_REGISTERS + (logical - 16);
+    }
     if (logical < NUM_STATIC_GR || logical >= NUM_GENERAL_REGISTERS) {
         return logical;
     }
@@ -625,6 +660,31 @@ void CPUState::SetAR(size_t index, uint64_t value) {
             break;
         default:
             break;
+    }
+}
+
+void CPUState::WriteBSPSTORE(uint64_t value) {
+    const uint64_t dirtyRegisters = rseRegistersBetween(GetBSPSTORE(), GetBSP());
+    const uint64_t newBspstore = value & ~0x7ULL;
+    SetBSPSTORE(newBspstore);
+    SetBSP(skipRseRegisters(newBspstore, static_cast<int64_t>(dirtyRegisters)));
+}
+
+void CPUState::AdvanceBSPForCall() {
+    SetBSP(skipRseRegisters(GetBSP(), static_cast<int64_t>(GetSOL())));
+}
+
+void CPUState::RewindBSPForReturn(uint8_t callerSol) {
+    const uint64_t returnedBsp =
+        skipRseRegisters(GetBSP(), -static_cast<int64_t>(callerSol));
+    SetBSP(returnedBsp);
+    if (GetBSPSTORE() > returnedBsp) {
+        // A return to a frame below the current spill pointer requires the RSE
+        // to refill that frame. Backing-store fills are not modeled here, but
+        // the call-frame snapshot restores the registers; move the store
+        // boundary back to the returned frame rather than leaving an
+        // architecturally incomplete (BSPSTORE > BSP) RSE state.
+        SetBSPSTORE(returnedBsp);
     }
 }
 

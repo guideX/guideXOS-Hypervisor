@@ -14,12 +14,16 @@ namespace ia64 {
 // IA-64 Register File Definitions
 // ===================================================================
 
-// IA-64 has 128 general registers (GR0-GR127)
+// IA-64 exposes 128 logical general registers (GR0-GR127), plus a second
+// physical bank for GR16-GR31 selected by PSR.bn.
 // - GR0 is hardwired to 0 (always reads zero, writes ignored)
-// - GR1-GR31 are static (not subject to rotation)
+// - GR1-GR15 are static and unbanked
+// - GR16-GR31 are static and banked
 // - GR32-GR127 are stacked registers (subject to register rotation)
 constexpr size_t NUM_GENERAL_REGISTERS = 128;
+constexpr size_t NUM_PHYSICAL_GENERAL_REGISTERS = NUM_GENERAL_REGISTERS + 16;
 constexpr size_t NUM_STATIC_GR = 32;
+constexpr uint64_t IA64_PSR_BN_MASK = 1ULL << 44;
 
 // IA-64 has 128 floating-point registers (FR0-FR127)
 // - FR0 and FR1 are special (FR0 = +0.0, FR1 = +1.0)
@@ -154,6 +158,7 @@ public:
     void SetGRNaT(size_t index, bool value);
 
     // Raw physical register access used by serialization and diagnostics.
+    // Physical indices 128..143 hold the alternate PSR.bn bank for GR16..31.
     uint64_t GetGRPhysical(size_t index) const;
     void SetGRPhysical(size_t index, uint64_t value);
     bool GetGRNaTPhysical(size_t index) const;
@@ -237,6 +242,9 @@ public:
     void SetBSPSTORE(uint64_t value) { SetAR(18, value); }
     void SetRNAT(uint64_t value) { SetAR(19, value); }
     void SetPFS(uint64_t value) { SetAR(64, value); }
+    void WriteBSPSTORE(uint64_t value);
+    void AdvanceBSPForCall();
+    void RewindBSPForReturn(uint8_t callerSol);
 
     // Instruction pointer (IP/PC)
     uint64_t GetIP() const { return ip_; }
@@ -293,8 +301,8 @@ private:
     size_t MapPR(size_t logical) const;
 
     // General registers (64-bit)
-    std::array<uint64_t, NUM_GENERAL_REGISTERS> gr_;
-    std::array<bool, NUM_GENERAL_REGISTERS> gr_nat_;
+    std::array<uint64_t, NUM_PHYSICAL_GENERAL_REGISTERS> gr_;
+    std::array<bool, NUM_PHYSICAL_GENERAL_REGISTERS> gr_nat_;
 
     // Floating-point registers (80-bit extended precision, stored as 16 bytes)
     std::array<std::array<uint8_t, 16>, NUM_FLOAT_REGISTERS> fr_;

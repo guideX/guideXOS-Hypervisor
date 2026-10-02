@@ -480,7 +480,7 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles) {
 }
 
 bool cpuStateEqual(const ia64::CPUState& left, const ia64::CPUState& right) {
-    for (size_t i = 0; i < ia64::NUM_GENERAL_REGISTERS; ++i) {
+    for (size_t i = 0; i < ia64::NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
         if (left.GetGRPhysical(i) != right.GetGRPhysical(i) ||
             left.GetGRNaTPhysical(i) != right.GetGRNaTPhysical(i)) return false;
     }

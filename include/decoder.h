@@ -264,6 +264,9 @@ enum class InstructionType {
 
     // System (special)
     BREAK,      // Break instruction (used for syscalls)
+
+    // Static register bank switch (B-type)
+    BSW,        // Switch PSR.bn to the encoded bank
     
     UNKNOWN
 };

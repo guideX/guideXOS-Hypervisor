@@ -201,7 +201,9 @@ struct BFormat {
         CTOP,           // Counted top
         CEXIT,          // Counted exit
         WTOP,           // While top
-        WEXIT           // While exit
+        WEXIT,          // While exit
+        BSW0,           // Switch to static register bank 0
+        BSW1            // Switch to static register bank 1
     } type;
     
     // Target encoding

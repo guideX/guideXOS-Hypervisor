@@ -733,10 +733,15 @@ void test_latest_boot_log_blockers() {
     assert_equal("Linux entry rfi qualifying predicate", 0, rfi.GetPredicate());
     assert_string("Linux entry rfi disassembly", "rfi", rfi.GetDisassembly());
     CPUState rfiCpu;
-    rfiCpu.SetCR(16, 0x1010084a2008ULL);
+    constexpr uint64_t rfiPsr = 0x1010084a2008ULL | IA64_PSR_BN_MASK;
+    rfiCpu.SetGRPhysical(16, 0x1616ULL);
+    rfiCpu.SetGRPhysical(NUM_GENERAL_REGISTERS, 0xB016ULL);
+    rfiCpu.SetCR(16, rfiPsr);
     rfiCpu.SetCR(19, 0xa0000001007f7e50ULL);
     rfi.Execute(rfiCpu, memory);
-    assert_equal("rfi should restore IPSR into PSR", 0x1010084a2008ULL, rfiCpu.GetPSR());
+    assert_equal("rfi should restore IPSR into PSR", rfiPsr, rfiCpu.GetPSR());
+    assert_equal("rfi should reactivate the interrupted static GR bank",
+                 0xB016ULL, rfiCpu.GetGR(16));
     assert_equal("rfi should restore IIP as a bundle address",
                  0xa0000001007f7e50ULL & ~0xFULL, rfiCpu.GetIP());
 
@@ -1604,6 +1609,47 @@ void test_latest_boot_log_blockers() {
     debianShr.Execute(cpu, memory);
     assert_equal("Authentic ELILO SHR logical sign-bit result", 1,
                  cpu.GetGR(14));
+
+    // Linux's early virtual-HPT setup uses the X2b=2 encoding of variable
+    // SHR.  The ELF disassembly identifies raw 0xf221636588 as
+    // "shr r22=r22,r27" at physical address 0x4000050.
+    const InstructionEx kernelShr = decoder.DecodeSlot(
+        0xF221636588ULL, UnitType::I_UNIT, 0x4000050ULL);
+    assert_true("Linux X2b=2 variable SHR should decode",
+                kernelShr.GetType() == InstructionType::SHR);
+    assert_equal("Linux variable SHR destination", 22, kernelShr.GetDst());
+    assert_equal("Linux variable SHR source", 22, kernelShr.GetSrc1());
+    assert_equal("Linux variable SHR count register", 27, kernelShr.GetSrc2());
+    assert_string("Linux variable SHR disassembly", "shr r22 = r22, r27",
+                  kernelShr.GetDisassembly());
+    cpu.SetPR(8, true);
+    cpu.SetGR(22, 0xFEDCBA9876543210ULL);
+    cpu.SetGR(27, 12);
+    kernelShr.Execute(cpu, memory);
+    assert_equal("Linux variable SHR executes as logical right shift",
+                 0x000FEDCBA9876543ULL, cpu.GetGR(22));
+
+    // The Linux VHPT refill vector uses this table-indexed TBIT.Z.UNC form.
+    const InstructionEx kernelTbit = decoder.DecodeSlot(
+        0xA0513812C7ULL, UnitType::I_UNIT, 0x4000100ULL);
+    assert_true("Linux table-indexed TBIT.Z.UNC should decode",
+                kernelTbit.GetType() == InstructionType::TBIT_Z);
+    assert_equal("Linux TBIT.Z.UNC predicate", 7, kernelTbit.GetPredicate());
+    assert_equal("Linux TBIT.Z.UNC first predicate destination", 11,
+                 kernelTbit.GetDst());
+    assert_equal("Linux TBIT.Z.UNC source register", 19,
+                 kernelTbit.GetSrc1());
+    assert_equal("Linux TBIT.Z.UNC second predicate destination", 10,
+                 kernelTbit.GetSrc3());
+    assert_equal("Linux TBIT.Z.UNC bit position", 32,
+                 kernelTbit.GetImmediate());
+    assert_true("Linux TBIT.Z.UNC should retain its unc completer",
+                kernelTbit.GetCompareCompleter() == CompareCompleter::UNC);
+    cpu.SetPR(7, true);
+    cpu.SetGR(19, 0);
+    kernelTbit.Execute(cpu, memory);
+    assert_true("Linux TBIT.Z.UNC zero bit should set p11", cpu.GetPR(11));
+    assert_true("Linux TBIT.Z.UNC zero bit should clear p10", !cpu.GetPR(10));
 
     // Linux's MOVL patcher uses predicate-paired variable SHRs when the
     // address shift is below 64. Preserve the encoded p6 so this path remains
@@ -3746,6 +3792,69 @@ void test_rse_state_aliases() {
     std::cout << "  ? RSE state aliases passed" << std::endl;
 }
 
+void test_ia64_virtual_ip_observation() {
+    std::cout << "Testing IA-64 virtual IP reads and call links..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    constexpr uint64_t kernelPhysicalIP = 0x04009F00ULL;
+    constexpr uint64_t kernelVirtualIP = 0xA000000100009F00ULL;
+    cpu.SetIP(kernelPhysicalIP);
+    cpu.SetPSR(1ULL << 36);
+
+    InstructionEx movFromIp(InstructionType::MOV_FROM_IP, UnitType::I_UNIT);
+    movFromIp.SetOperands(15, 0, 0);
+    movFromIp.Execute(cpu, memory);
+    assert_equal("mov r15=ip should expose the active kernel virtual IP",
+                 kernelVirtualIP, cpu.GetGR(15));
+
+    InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+    call.SetOperands(0, 0, 0);
+    call.Execute(cpu, memory);
+    assert_equal("br.call should save a virtual return IP while IT is enabled",
+                 kernelVirtualIP + 16, cpu.GetBR(0));
+
+    cpu.SetPSR(0);
+    cpu.SetIP(kernelPhysicalIP);
+    call.Execute(cpu, memory);
+    assert_equal("physical-mode br.call should preserve the physical return IP",
+                 kernelPhysicalIP + 16, cpu.GetBR(0));
+
+    std::cout << "  ? IA-64 IP reads and call links reflect translation mode" << std::endl;
+}
+
+void test_ia64_bspstore_write() {
+    std::cout << "Testing IA-64 BSPSTORE write and dirty-partition preservation..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    InstructionEx writeBspstore(InstructionType::MOV_TO_AR, UnitType::M_UNIT);
+    writeBspstore.SetOperands(18, 2, 0);
+
+    cpu.SetRSC(0);
+    cpu.SetBSP(0);
+    cpu.SetBSPSTORE(0);
+    cpu.SetGR(2, 0xA000000100BC0CE7ULL);
+    writeBspstore.Execute(cpu, memory);
+    assert_equal("BSPSTORE write should ignore low address bits",
+                 0xA000000100BC0CE0ULL, cpu.GetBSPSTORE());
+    assert_equal("BSPSTORE write with empty dirty partition should move BSP",
+                 0xA000000100BC0CE0ULL, cpu.GetBSP());
+
+    // From slot zero, 63 dirty registers occupy 64 backing-store words because
+    // the RSE inserts an RNAT collection after each 63-register group.
+    cpu.SetBSPSTORE(0x1000);
+    cpu.SetBSP(0x1200);
+    cpu.SetGR(2, 0x2007);
+    writeBspstore.Execute(cpu, memory);
+    assert_equal("BSPSTORE write should skip the RNAT collection word",
+                 0x2200, cpu.GetBSP());
+    assert_equal("BSPSTORE write should store the aligned new pointer",
+                 0x2000, cpu.GetBSPSTORE());
+
+    std::cout << "  ? IA-64 BSPSTORE write preserves the dirty RSE partition" << std::endl;
+}
+
 void test_ia64_flushrs() {
     std::cout << "Testing IA-64 M0 flushrs decoding and execution..." << std::endl;
 
@@ -4210,6 +4319,93 @@ void test_ia64_rotating_register_mapping() {
     std::cout << "  ? IA-64 rotating register mapping passed" << std::endl;
 }
 
+void test_ia64_static_register_banks() {
+    std::cout << "Testing IA-64 static register banks..." << std::endl;
+
+    InstructionDecoder decoder;
+    InstructionEx bsw0 = decoder.DecodeSlot(0x60000000ULL, UnitType::B_UNIT, 0x1000);
+    InstructionEx bsw1 = decoder.DecodeSlot(0x68000000ULL, UnitType::B_UNIT, 0x1000);
+    assert_true("bsw.0 should decode", bsw0.GetType() == InstructionType::BSW);
+    assert_true("bsw.1 should decode", bsw1.GetType() == InstructionType::BSW);
+    assert_equal("bsw.0 is unpredicated", 0, bsw0.GetPredicate());
+    assert_equal("bsw.1 is unpredicated", 0, bsw1.GetPredicate());
+    assert_equal("bsw.0 selects bank zero", 0, bsw0.GetImmediate());
+    assert_equal("bsw.1 selects bank one", 1, bsw1.GetImmediate());
+    assert_string("bsw.0 disassembly", "bsw.0", bsw0.GetDisassembly());
+    assert_string("bsw.1 disassembly", "bsw.1", bsw1.GetDisassembly());
+
+    CPUState cpu;
+    cpu.SetGRPhysical(16, 0x1616ULL);
+    cpu.SetGRPhysical(NUM_GENERAL_REGISTERS, 0xB016ULL);
+    cpu.SetGRNaTPhysical(NUM_GENERAL_REGISTERS, true);
+    cpu.SetPSR((1ULL << 17) | (1ULL << 32));
+    assert_equal("bank zero is selected after reset", 0x1616ULL, cpu.GetGR(16));
+
+    Memory memory(0x1000);
+    bsw1.Execute(cpu, memory);
+    assert_equal("bsw.1 selects the alternate bank", 0xB016ULL, cpu.GetGR(16));
+    assert_true("bsw.1 selects the alternate bank NaT bit", cpu.GetGRNaT(16));
+    assert_true("bsw.1 preserves unrelated PSR bits",
+                (cpu.GetPSR() & ((1ULL << 17) | (1ULL << 32))) ==
+                    ((1ULL << 17) | (1ULL << 32)));
+    cpu.SetGR(16, 0xB117ULL);
+    cpu.SetGRNaT(16, true);
+
+    bsw0.Execute(cpu, memory);
+    assert_equal("bsw.0 restores bank-zero contents", 0x1616ULL, cpu.GetGR(16));
+    assert_true("bsw.0 leaves the inactive bank's NaT bit intact",
+                cpu.GetGRNaTPhysical(NUM_GENERAL_REGISTERS));
+    bsw1.Execute(cpu, memory);
+    assert_equal("alternate bank writes survive a bank switch", 0xB117ULL, cpu.GetGR(16));
+
+    std::cout << "  ? IA-64 static register banks passed" << std::endl;
+}
+
+void test_ia64_banked_context_survives_interruption_return() {
+    std::cout << "Testing IA-64 banked static-register context across an RFI..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(0x1000);
+
+    // The checkpointed/loader context lives in bank zero while the kernel's
+    // interrupted context lives in the alternate bank selected by PSR.bn.
+    cpu.SetGRPhysical(16, 0x0000'0000'0000'0016ULL);
+    cpu.SetGRPhysical(17, 0x0000'0000'0000'0017ULL);
+    cpu.SetGRPhysical(NUM_GENERAL_REGISTERS + 0, 0xB000'0000'0000'0016ULL);
+    cpu.SetGRPhysical(NUM_GENERAL_REGISTERS + 1, 0xB000'0000'0000'0017ULL);
+
+    // Run the loader-style prologue with bank zero active and modify bank zero.
+    cpu.SetPSR(0);
+    assert_equal("bank zero is active before the bank switch",
+                 0x0000'0000'0000'0016ULL, cpu.GetGR(16));
+    cpu.SetGR(16, 0x0000'0000'0000'00AAULL);
+    cpu.SetGR(17, 0x0000'0000'0000'00BBULL);
+    assert_equal("bank zero records the loader writes",
+                 0x0000'0000'0000'00AAULL, cpu.GetGR(16));
+
+    // rfi reactivates the interrupted bank from IPSR.bn and must expose the
+    // alternate bank, not the loader's modified bank zero.
+    const uint64_t interruptedPsr = IA64_PSR_BN_MASK;
+    cpu.SetCR(16, interruptedPsr);
+    cpu.SetCR(19, 0x4000ULL);
+    InstructionEx rfi(InstructionType::RFI, UnitType::B_UNIT);
+    rfi.Execute(cpu, memory);
+    assert_true("rfi switches to the interrupted static bank",
+                (cpu.GetPSR() & IA64_PSR_BN_MASK) != 0);
+    assert_equal("banked r16 survives an interruption return",
+                 0xB000'0000'0000'0016ULL, cpu.GetGR(16));
+    assert_equal("banked r17 survives an interruption return",
+                 0xB000'0000'0000'0017ULL, cpu.GetGR(17));
+
+    // Returning to bank zero must still observe the loader's values.
+    cpu.SetPSR(0);
+    assert_equal("bank zero retains the loader value after the return",
+                 0x0000'0000'0000'00AAULL, cpu.GetGR(16));
+
+    std::cout << "  ? IA-64 banked static context survives an interruption return"
+              << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "IA-64 Instruction Set Tests" << std::endl;
@@ -4246,6 +4442,8 @@ int main() {
         test_predicated_execution();
         test_alloc_instruction();
         test_rse_state_aliases();
+        test_ia64_virtual_ip_observation();
+        test_ia64_bspstore_write();
         test_ia64_flushrs();
         test_ia64_brp_hint();
         test_ia64_invala();
@@ -4255,6 +4453,8 @@ int main() {
         test_ia64_unknown_slot_formatter();
         test_ia64_br_ctop_state_machine();
         test_ia64_rotating_register_mapping();
+        test_ia64_static_register_banks();
+        test_ia64_banked_context_survives_interruption_return();
         
         std::cout << std::endl;
         std::cout << "========================================" << std::endl;

@@ -1529,6 +1529,10 @@ void testISAStateSerialization() {
     // Create IA-64 state
     IA64ISAState state1;
     state1.getCPUState().SetGR(1, 0x1234567890ABCDEF);
+    state1.getCPUState().SetGRPhysical(16, 0x1616ULL);
+    state1.getCPUState().SetGRPhysical(NUM_GENERAL_REGISTERS, 0xB016ULL);
+    state1.getCPUState().SetGRNaTPhysical(NUM_GENERAL_REGISTERS, true);
+    state1.getCPUState().SetPSR(IA64_PSR_BN_MASK);
     state1.getCPUState().SetIP(0x1000);
     state1.getCPUState().SetCFM(0x42);
     
@@ -1542,6 +1546,10 @@ void testISAStateSerialization() {
     
     // Verify
     assert(state2.getCPUState().GetGR(1) == 0x1234567890ABCDEF);
+    assert(state2.getCPUState().GetGRPhysical(16) == 0x1616ULL);
+    assert(state2.getCPUState().GetGRPhysical(NUM_GENERAL_REGISTERS) == 0xB016ULL);
+    assert(state2.getCPUState().GetGRNaTPhysical(NUM_GENERAL_REGISTERS));
+    assert(state2.getCPUState().GetGR(16) == 0xB016ULL);
     assert(state2.getCPUState().GetIP() == 0x1000);
     assert(state2.getCPUState().GetCFM() == 0x42);
     
@@ -2979,6 +2987,8 @@ void testIA64PluginCallOutputInputs() {
 
     plugin.getCPUState().SetIP(0x1000);
     plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(4) << 7));
+    plugin.getCPUState().SetBSP(0x1000);
+    plugin.getCPUState().SetBSPSTORE(0x1000);
     plugin.getCPUState().SetGR(36, 0x12345678);
     plugin.getCPUState().SetGR(37, 0xabcdef00);
     plugin.getCPUState().SetGR(55, 0x380f8);
@@ -2988,6 +2998,7 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.getCPUState().GetBR(0) == 0x1010);
     assert(plugin.getCPUState().GetCFM() == 2);
     assert(plugin.getCPUState().GetPFS() == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(plugin.getCPUState().GetBSP() == 0x1020);
     assert(plugin.getCPUState().GetGR(55) == 0);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
@@ -2998,9 +3009,16 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(36) == 0);
 
+    // Simulate flushrs in the callee. A return must restore both the caller's
+    // BSP and a complete BSPSTORE boundary after the modeled register refill.
+    plugin.getCPUState().SetBSPSTORE(plugin.getCPUState().GetBSP());
+    assert(plugin.getCPUState().GetBSPSTORE() == 0x1020);
+
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x1010);
     assert(plugin.getCPUState().GetCFM() == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(plugin.getCPUState().GetBSP() == 0x1000);
+    assert(plugin.getCPUState().GetBSPSTORE() == 0x1000);
     assert(plugin.getCPUState().GetGR(36) == 0x12345678);
     assert(plugin.getCPUState().GetGR(37) == 0xabcdef00);
     assert(plugin.getCPUState().GetGR(55) == 0x380f8);
@@ -5870,6 +5888,10 @@ int main(int argc, char** argv) {
         }
         if (argc > 1 && std::string(argv[1]) == "initialimage") {
             testIA64PluginInitialEfiImageAllocation();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "serialization") {
+            testISAStateSerialization();
             return 0;
         }
         if (argc > 1 && std::string(argv[1]) == "relocation") {

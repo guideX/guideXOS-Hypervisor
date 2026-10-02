@@ -166,6 +166,21 @@ bool suppressVerboseRseDiagnostics() {
     return suppressed;
 }
 
+uint64_t architecturalInstructionPointer(const CPUState& cpu) {
+    constexpr uint64_t kPsrInstructionTranslation = 1ULL << 36;
+    constexpr uint64_t kIa64KernelPhysicalBase = 0x04000000ULL;
+    constexpr uint64_t kIa64KernelVirtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t kIa64KernelVirtualSpan = 0x01000000ULL;
+
+    const uint64_t ip = cpu.GetIP();
+    if ((cpu.GetPSR() & kPsrInstructionTranslation) != 0 &&
+        ip >= kIa64KernelPhysicalBase &&
+        ip - kIa64KernelPhysicalBase < kIa64KernelVirtualSpan) {
+        return kIa64KernelVirtualBase + (ip - kIa64KernelPhysicalBase);
+    }
+    return ip;
+}
+
 const IA64AddressTranslator& replayAddressTranslator() {
     static const IA64AddressTranslator translator;
     return translator;
@@ -1106,7 +1121,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // ar.pfs is written independently of the current frame marker.
             {
                 const uint64_t value = hasImmediate_ ? immediate_ : cpu.GetGR(src1_);
-                cpu.SetAR(dst_, value);
+                if (dst_ == 18) {
+                    // A BSPSTORE write repositions the RSE store/load pointers
+                    // while preserving the dirty register partition, which in
+                    // turn determines the architectural value of BSP.
+                    cpu.WriteBSPSTORE(value);
+                } else {
+                    cpu.SetAR(dst_, value);
+                }
             }
             break;
 
@@ -1307,7 +1329,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::MOV_FROM_IP:
-            cpu.SetGR(dst_, cpu.GetIP());
+            cpu.SetGR(dst_, architecturalInstructionPointer(cpu));
             break;
 
         case InstructionType::MOV_TO_PR:
@@ -2081,6 +2103,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetPSR(cpu.GetCR(16));
             cpu.SetIP(cpu.GetCR(19) & ~0xFULL);
             break;
+
+        case InstructionType::BSW:
+            // bsw.0/bsw.1 selects the static GR16-GR31 bank through PSR.bn.
+            cpu.SetPSR((cpu.GetPSR() & ~IA64_PSR_BN_MASK) |
+                       ((immediate_ & 1ULL) != 0 ? IA64_PSR_BN_MASK : 0));
+            break;
             
         // ===== BRANCH OPERATIONS =====
             
@@ -2088,7 +2116,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::BR_CALL:
             // br.call saves return address
             if (type_ == InstructionType::BR_CALL) {
-                cpu.SetBR(dst_, cpu.GetIP() + 16);
+                cpu.SetBR(dst_, architecturalInstructionPointer(cpu) + 16);
             }
             break;
             
@@ -2324,6 +2352,10 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::RFI:
             oss << "rfi";
+            break;
+
+        case InstructionType::BSW:
+            oss << "bsw." << ((immediate_ & 1ULL) != 0 ? 1 : 0);
             break;
 
         case InstructionType::MOV_FROM_PR:

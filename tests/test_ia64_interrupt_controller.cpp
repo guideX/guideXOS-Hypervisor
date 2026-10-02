@@ -170,6 +170,7 @@ int main() {
 
     plugin.reset();
     plugin.getCPUState().SetIP(0x2000);
+    plugin.getCPUState().SetPSR(ia64::IA64_PSR_BN_MASK);
     plugin.getCPUState().SetCR(ia64::IA64_CR_IVA, 0x1000);
     plugin.setInterruptsEnabled(false);
     plugin.queueInterrupt(0x40);
@@ -185,8 +186,12 @@ int main() {
             "interrupt entry uses CR.IVA plus vector stride");
     require(plugin.getCPUState().GetCR(ia64::IA64_CR_IIP) == 0x2000,
             "interrupt entry saves IIP");
+    require((plugin.getCPUState().GetCR(ia64::IA64_CR_IPSR) & ia64::IA64_PSR_BN_MASK) != 0,
+            "interrupt entry saves the interrupted bank number in IPSR");
     require((plugin.getCPUState().GetPSR() & ia64::IA64_PSR_I) == 0,
             "interrupt entry clears PSR.i");
+    require((plugin.getCPUState().GetPSR() & ia64::IA64_PSR_BN_MASK) == 0,
+            "interrupt entry switches to static register bank zero");
     require(savedPsr == 0, "initial IPSR storage is not fabricated");
     require(plugin.readControlRegister(ia64::IA64_CR_IVR) == 0x40,
             "IVR reports the vector that caused entry");

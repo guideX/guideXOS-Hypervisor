@@ -48,6 +48,16 @@ bool BTypeDecoder::decode(uint64_t raw_instruction, formats::BFormat& result, ui
         // Build full opcode
         result.opcode = (major << 4) | (x6 & 0xF);
 
+        // bsw.0 and bsw.1 select the two static GR16-GR31 banks by changing
+        // PSR.bn.  These B8 forms do not use branch-register operands.
+        if (major == 0x0 && (x6 == 0x0C || x6 == 0x0D)) {
+            result.type = x6 == 0x0C ? formats::BFormat::BranchType::BSW0
+                                     : formats::BFormat::BranchType::BSW1;
+            result.indirect = false;
+            result.has_target = false;
+            return true;
+        }
+
         // B8 is the unpredicated return-from-interruption instruction.  It
         // restores the interrupted context from CR.IPSR/CR.IIP rather than
         // forming a branch target from the encoded branch fields.
@@ -147,6 +157,11 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
             case formats::BFormat::BranchType::RFI:
                 type = InstructionType::RFI;
                 break;
+
+            case formats::BFormat::BranchType::BSW0:
+            case formats::BFormat::BranchType::BSW1:
+                type = InstructionType::BSW;
+                break;
                 
             case formats::BFormat::BranchType::IA:
                 type = InstructionType::BR_IA;
@@ -184,8 +199,15 @@ bool BTypeDecoder::toInstruction(const formats::BFormat& fmt, InstructionEx& ins
             fmt.type == formats::BFormat::BranchType::CLOOP ||
             fmt.type == formats::BFormat::BranchType::CTOP ||
             fmt.type == formats::BFormat::BranchType::CEXIT ||
-            fmt.type == formats::BFormat::BranchType::RFI;
+            fmt.type == formats::BFormat::BranchType::RFI ||
+            fmt.type == formats::BFormat::BranchType::BSW0 ||
+            fmt.type == formats::BFormat::BranchType::BSW1;
         instr.SetPredicate(unpredicatedCountedBranch ? 0 : fmt.qp);
+
+        if (fmt.type == formats::BFormat::BranchType::BSW0 ||
+            fmt.type == formats::BFormat::BranchType::BSW1) {
+            instr.SetImmediate(fmt.type == formats::BFormat::BranchType::BSW1 ? 1 : 0);
+        }
         
         // Set operands based on branch type
         if (fmt.type == formats::BFormat::BranchType::RET) {

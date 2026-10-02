@@ -99,6 +99,11 @@ bool shouldEmitPalTrace() {
     return enabled;
 }
 
+bool shouldEmitIa64TimeLoopTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_TIME_LOOP_TRACE");
+    return enabled;
+}
+
 uint64_t gPalDispatchCount = 0;
 
 bool isA5dTraceIP(uint64_t ip) {
@@ -1931,8 +1936,8 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
     size_t offset = 0;
     
     // Serialize CPUState registers
-    // General registers (128 * 8 bytes)
-    for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
+    // Physical general registers include the alternate PSR.bn bank.
+    for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
         uint64_t val = cpuState_.GetGRPhysical(i);
         std::memcpy(buffer + offset, &val, sizeof(uint64_t));
         offset += sizeof(uint64_t);
@@ -2005,7 +2010,7 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
     
     // Deserialize CPUState registers
     // General registers
-    for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
+    for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
         uint64_t val;
         std::memcpy(&val, buffer + offset, sizeof(uint64_t));
         cpuState_.SetGRPhysical(i, val);
@@ -2081,7 +2086,7 @@ size_t IA64ISAState::getStateSize() const {
     size_t size = 0;
     
     // CPUState
-    size += NUM_GENERAL_REGISTERS * sizeof(uint64_t);  // GRs
+    size += NUM_PHYSICAL_GENERAL_REGISTERS * sizeof(uint64_t);  // Physical GRs
     size += NUM_PREDICATE_REGISTERS;                   // PRs (padded to bytes)
     size += NUM_BRANCH_REGISTERS * sizeof(uint64_t);   // BRs
     size += NUM_APPLICATION_REGISTERS * sizeof(uint64_t); // ARs
@@ -4655,6 +4660,11 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             ? static_cast<size_t>(state_.getCPUState().GetSOF()) -
                                   static_cast<size_t>(state_.getCPUState().GetSOL())
                             : 0;
+                        // br.call moves the caller's local area from the
+                        // current frame into the dirty partition. The BSP
+                        // advances by CFM.sol, skipping each RNAT collection
+                        // slot as specified by the RSE.
+                        state_.getCPUState().AdvanceBSPForCall();
                         state_.getCPUState().SetPFS(callerCfm);
                         state_.getCPUState().SetCFM(static_cast<uint64_t>(callerOutputCount));
                         if (traceRegisterConfigCallsite) {
@@ -5396,7 +5406,7 @@ private:
     bool valid_;
 };
 
-constexpr uint32_t kIA64CheckpointBlobVersion = 4;
+constexpr uint32_t kIA64CheckpointBlobVersion = 5;
 constexpr size_t kMaxCheckpointVectorEntries = 1'000'000;
 constexpr size_t kMaxCheckpointStringBytes = 1'048'576;
 constexpr size_t kMaxCheckpointBlobBytes = 64 * 1024 * 1024;
@@ -5430,7 +5440,7 @@ std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
     writer.u32(kIA64CheckpointBlobVersion);
 
     const CPUState& cpu = state_.getCPUState();
-    for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
+    for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
         writer.u64(cpu.GetGRPhysical(i));
         writer.u8(cpu.GetGRNaTPhysical(i) ? 1 : 0);
     }
@@ -5654,12 +5664,26 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         }
         const uint32_t checkpointBlobVersion = reader.u32();
         if (checkpointBlobVersion != 2 && checkpointBlobVersion != 3 &&
+            checkpointBlobVersion != 4 &&
             checkpointBlobVersion != kIA64CheckpointBlobVersion) return false;
 
         CPUState restoredCPU;
-        for (size_t i = 0; i < NUM_GENERAL_REGISTERS; ++i) {
+        const size_t serializedGRCount = checkpointBlobVersion >= 5
+            ? NUM_PHYSICAL_GENERAL_REGISTERS : NUM_GENERAL_REGISTERS;
+        for (size_t i = 0; i < serializedGRCount; ++i) {
             restoredCPU.SetGRPhysical(i, reader.u64());
             restoredCPU.SetGRNaTPhysical(i, reader.u8() != 0);
+        }
+        if (checkpointBlobVersion < 5) {
+            // Legacy checkpoints stored one value for each logical GR.  Seed
+            // both static banks from that value so either saved BN setting
+            // resumes with the state the pre-banking emulator exposed.
+            for (size_t i = 16; i < NUM_STATIC_GR; ++i) {
+                restoredCPU.SetGRPhysical(NUM_GENERAL_REGISTERS + (i - 16),
+                                          restoredCPU.GetGRPhysical(i));
+                restoredCPU.SetGRNaTPhysical(NUM_GENERAL_REGISTERS + (i - 16),
+                                              restoredCPU.GetGRNaTPhysical(i));
+            }
         }
         for (size_t i = 0; i < NUM_FLOAT_REGISTERS; ++i) {
             uint8_t value[16] = {};
@@ -6634,6 +6658,9 @@ void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
         completedCallFrames_[frame.returnAddress] = frame;
         callFrameStack_.erase(callFrameStack_.begin() + matchIndex, callFrameStack_.end());
 
+        CPUState& returnCpu = state_.getCPUState();
+        const uint8_t callerSol = static_cast<uint8_t>((frame.cfm >> 7) & 0x7FULL);
+        returnCpu.RewindBSPForReturn(callerSol);
         state_.getCPUState().SetCFM(frame.cfm);
         // The snapshot contains logical stacked-register values from the caller
         // frame.  Restore that frame's CFM before writing them so the active RRB
@@ -8834,6 +8861,42 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         } else {
             instr.Execute(state_.getCPUState(), memory, ignorePredicate);
         }
+        static uint64_t timeLoopTraceCount = 0;
+        if (shouldEmitIa64TimeLoopTrace() &&
+            currentIP >= 0x40391A0ULL && currentIP <= 0x40392B0ULL &&
+            timeLoopTraceCount < 192) {
+            ++timeLoopTraceCount;
+            std::cerr << "[IA64-TIME-LOOP-STATE] index=" << timeLoopTraceCount - 1
+                      << " ip=0x" << std::hex << currentIP
+                      << " slot=" << std::dec << state_.currentSlot_
+                      << " raw=0x" << std::hex << instr.GetRawBits()
+                      << " disasm=\"" << instr.GetDisassembly() << '"'
+                      << " psr=0x" << cpu.GetPSR()
+                      << " cfm=0x" << cpu.GetCFM()
+                      << " r1=0x" << cpu.GetGR(1)
+                      << " r2=0x" << cpu.GetGR(2)
+                      << " r8=0x" << cpu.GetGR(8)
+                      << " r9=0x" << cpu.GetGR(9)
+                      << " r14=0x" << cpu.GetGR(14)
+                      << " r15=0x" << cpu.GetGR(15)
+                      << " r16=0x" << cpu.GetGR(16)
+                      << " r18=0x" << cpu.GetGR(18)
+                      << " r32=0x" << cpu.GetGR(32)
+                      << " r33=0x" << cpu.GetGR(33)
+                      << " r34=0x" << cpu.GetGR(34)
+                      << " r35=0x" << cpu.GetGR(35)
+                      << " r36=0x" << cpu.GetGR(36)
+                      << " r41=0x" << cpu.GetGR(41)
+                      << " r42=0x" << cpu.GetGR(42)
+                      << " r43=0x" << cpu.GetGR(43)
+                      << " r47=0x" << cpu.GetGR(47)
+                      << " r48=0x" << cpu.GetGR(48)
+                      << " r49=0x" << cpu.GetGR(49)
+                      << " itc=0x" << cpu.GetAR(44)
+                      << " itv=0x" << cpu.GetCR(IA64_CR_ITV)
+                      << " itm=0x" << cpu.GetCR(IA64_CR_ITM)
+                      << std::dec << std::endl;
+        }
         if (instructionTrace && instr.GetType() == InstructionType::TPA) {
             std::cout << "[IA64-TPA] ip=0x" << std::hex << currentIP
                       << " va=0x" << tpaInput
@@ -8951,43 +9014,35 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const uint64_t pageShift = (rr >> 2) & 0x3FULL;
         const bool nestedTlbMiss =
             fault.GetKind() == IA64TranslationFaultKind::NESTED_TLB_MISS;
-        uint64_t isr = nestedTlbMiss ? (cpu.GetCR(17) & ~(1ULL << 38)) : 0;
         if (!nestedTlbMiss) {
+            uint64_t isr = 0;
             switch (fault.GetAccessType()) {
                 case MemoryAccessType::READ: isr = 1ULL << 34; break;
                 case MemoryAccessType::WRITE: isr = 1ULL << 33; break;
                 case MemoryAccessType::EXECUTE: isr = 1ULL << 32; break;
                 case MemoryAccessType::NON_ACCESS: isr = 1ULL << 35; break;
             }
-        }
-
-        // Save the IA-64 interruption frame and dispatch through the guest's
-        // installed vector table. The original memory instruction has not
-        // committed its destination or post-increment at this point.
-        if (!nestedTlbMiss) {
+            // Ordinary interruptions collect their interruption frame and
+            // fault-address resources.  The Data Nested TLB vector is the
+            // architectural exception: it preserves IIP/IPSR/IIPA/IFS, IFA,
+            // ITIR, IHA, and ISR so the nested handler can use the original
+            // TLB-miss context plus the OS-defined address register.
             cpu.SetCR(19, faultingInstructionIP);
             cpu.SetCR(16, interruptedPsr);
-        }
-        cpu.SetCR(17, isr);
-        if (!nestedTlbMiss) {
+            cpu.SetCR(17, isr);
             cpu.SetCR(20, faultVa);
             cpu.SetCR(21, (rid << 8) | (pageShift << 2));
             cpu.SetCR(25, fault.GetHashAddress());
         }
         cpu.SetPSR(interruptedPsr & ~((1ULL << 13) | (1ULL << 14) |
-                                      (3ULL << 41)));
+                                      (3ULL << 41) | IA64_PSR_BN_MASK));
 
         const uint64_t vectorBase = cpu.GetCR(2) != 0
             ? cpu.GetCR(2) : state_.interruptVectorBase_;
         const uint64_t rawHandler = normalizeKernelEntryIP(
             vectorBase + fault.GetVectorOffset());
-        if (nestedTlbMiss) {
-            // KVM's nested_dtlb path injects the vector without collecting an
-            // IIP/PSR interruption frame when PSR.IC is clear. The current
-            // IIP therefore becomes the vector address rather than saving the
-            // interrupted bundle for an RFI retry.
-            cpu.SetCR(19, rawHandler);
-        }
+        // Even for a nested DTLB fault, internal IP vectors to the handler;
+        // the architecturally visible interruption registers remain untouched.
         cpu.SetIP(rawHandler);
         state_.currentSlot_ = 0;
         state_.bundleValid_ = false;
@@ -9204,7 +9259,7 @@ bool IA64ISAPlugin::servicePendingInterrupt() {
     inServiceVector_ = vector;
     cpu.SetCR(IA64_CR_IIP, cpu.GetIP());
     cpu.SetCR(IA64_CR_IPSR, cpu.GetPSR());
-    cpu.SetPSR(cpu.GetPSR() & ~IA64_PSR_I);
+    cpu.SetPSR(cpu.GetPSR() & ~(IA64_PSR_I | IA64_PSR_BN_MASK));
     const uint64_t iva = cpu.GetCR(IA64_CR_IVA);
     const uint64_t handlerAddress =
         (iva != 0 ? iva : state_.interruptVectorBase_) +

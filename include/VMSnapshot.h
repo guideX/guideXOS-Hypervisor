@@ -251,7 +251,7 @@ struct MemoryDelta {
 struct CPUStateDelta {
     uint32_t cpuId;                      // CPU identifier
     
-    // Changed general registers (register index -> new value)
+    // Changed physical general-register slots (including the alternate bank)
     std::map<size_t, uint64_t> changedGR;
     
     // Changed floating-point registers (register index -> new value)

@@ -1,5 +1,6 @@
 #include "VirtualMachine.h"
 #include "VMCheckpoint.h"
+#include "VMSnapshotManager.h"
 #include "IA64ISAPlugin.h"
 #include "cpu.h"
 #include "decoder.h"
@@ -41,6 +42,10 @@ int main() {
     ia64::CPUState& cpu = context->cpu->getState();
     cpu.SetGRPhysical(32, 0x1122334455667788ULL);
     cpu.SetGRNaTPhysical(32, true);
+    cpu.SetGRPhysical(16, 0x1616ULL);
+    cpu.SetGRPhysical(ia64::NUM_GENERAL_REGISTERS, 0xB016ULL);
+    cpu.SetGRNaTPhysical(ia64::NUM_GENERAL_REGISTERS, true);
+    cpu.SetPSR(ia64::IA64_PSR_BN_MASK);
     cpu.SetPRPhysical(6, true);
     cpu.SetBR(0, 0x12340ULL);
     cpu.SetIP(0x240ULL);
@@ -69,6 +74,10 @@ int main() {
     const ia64::CPURuntimeStateSnapshot cpuSnapshot = context->cpu->createSnapshot();
     cpu.SetGRPhysical(32, 0);
     cpu.SetGRNaTPhysical(32, false);
+    cpu.SetGRPhysical(16, 0);
+    cpu.SetGRPhysical(ia64::NUM_GENERAL_REGISTERS, 0);
+    cpu.SetGRNaTPhysical(ia64::NUM_GENERAL_REGISTERS, false);
+    cpu.SetPSR(0);
     cpu.SetPRPhysical(6, false);
     cpu.SetBR(0, 0);
     cpu.SetIP(0);
@@ -79,6 +88,11 @@ int main() {
     context->cpu->restoreSnapshot(cpuSnapshot);
     check(cpu.GetGRPhysical(32) == 0x1122334455667788ULL, "general register survives CPU round trip");
     check(cpu.GetGRNaTPhysical(32), "NaT bit survives CPU round trip");
+    check(cpu.GetGRPhysical(16) == 0x1616ULL &&
+              cpu.GetGRPhysical(ia64::NUM_GENERAL_REGISTERS) == 0xB016ULL &&
+              cpu.GetGRNaTPhysical(ia64::NUM_GENERAL_REGISTERS) &&
+              cpu.GetGR(16) == 0xB016ULL,
+          "both static GR banks and active BN survive CPU round trip");
     check(cpu.GetPRPhysical(6) && cpu.GetBR(0) == 0x12340ULL, "predicate and branch state survive CPU round trip");
     check(cpu.GetIP() == 0x240ULL && sameRse(cpu.GetRSEState(), rse), "IP and RSE state survive CPU round trip");
     check(cpu.GetITLB(0).valid && cpu.GetDTLB(0).valid,
@@ -86,8 +100,30 @@ int main() {
     check(cpu.GetITLBReplacementIndex() == 17 && cpu.GetDTLBReplacementIndex() == 23,
           "TLB replacement state survives CPU round trip");
 
-    // A nested DTLB miss injects the guest vector without collecting the
-    // ordinary IIP/PSR/IFA/ITIR/IHA frame (KVM nested_dtlb semantics).
+    {
+        ia64::VMStateSnapshot parent;
+        ia64::VMStateSnapshot current;
+        ia64::CPUSnapshotRecord parentCpu;
+        parentCpu.cpuId = 0;
+        parentCpu.architecturalState.SetGRPhysical(16, 0x1616ULL);
+        parentCpu.architecturalState.SetGRPhysical(ia64::NUM_GENERAL_REGISTERS, 0xB016ULL);
+        parent.cpus.push_back(parentCpu);
+        current = parent;
+        current.cpus[0].architecturalState.SetGRPhysical(
+            ia64::NUM_GENERAL_REGISTERS, 0xB117ULL);
+
+        const ia64::VMStateSnapshotDelta delta =
+            ia64::VMSnapshotManager::computeDelta(current, parent);
+        const ia64::VMStateSnapshot restored =
+            ia64::VMSnapshotManager::applyDelta(parent, delta);
+        check(restored.cpus[0].architecturalState.GetGRPhysical(
+                  ia64::NUM_GENERAL_REGISTERS) == 0xB117ULL,
+              "snapshot deltas retain inactive static-register bank changes");
+    }
+
+    // A Data Nested TLB fault vectors through the IVT but preserves every
+    // interruption resource from the original context (IA-64 SDM Vol. 2,
+    // Sections 5.5 and 16.4.4).
     {
         constexpr uint64_t rr5 = 0x539ULL;
         constexpr uint64_t region5 = 5ULL << 61;
@@ -103,23 +139,29 @@ int main() {
         ia64::Memory faultMemory(0x20000, false);
         faultMemory.Write(0x1000, frontierBundle, sizeof(frontierBundle));
 
-        constexpr uint64_t oldIpsr = 0x12345678ULL;
+        constexpr uint64_t oldIpsr = 0x12345678ULL | ia64::IA64_PSR_BN_MASK;
         constexpr uint64_t oldIsr = (1ULL << 38) | (1ULL << 34) | (1ULL << 7);
         constexpr uint64_t oldIip = 0x2340ULL;
+        constexpr uint64_t oldIipa = 0x3450ULL;
+        constexpr uint64_t oldIfs = (1ULL << 63) | 0x345ULL;
         constexpr uint64_t oldIfa = 0x5678000ULL;
         constexpr uint64_t oldItir = 0x9cULL;
         constexpr uint64_t oldIha = 0x12345000ULL;
         faultCpu.SetIP(0x1000);
-        faultCpu.SetPSR(1ULL << 17);
+        faultCpu.SetPSR((1ULL << 17) | ia64::IA64_PSR_BN_MASK);
         faultCpu.SetRR(5, rr5);
         faultCpu.SetCR(2, 0x4000000);
         faultCpu.SetCR(8, 0);
         faultCpu.SetCR(16, oldIpsr);
         faultCpu.SetCR(17, oldIsr);
+        faultCpu.SetCR(18, oldIipa);
         faultCpu.SetCR(19, oldIip);
+        faultCpu.SetCR(3, oldIfs);
         faultCpu.SetCR(20, oldIfa);
         faultCpu.SetCR(21, oldItir);
         faultCpu.SetCR(25, oldIha);
+        faultCpu.SetGRPhysical(16, 0x1616ULL);
+        faultCpu.SetGRPhysical(ia64::NUM_GENERAL_REGISTERS, 0xB016ULL);
         faultCpu.SetGR(36, region5 + 0x1234);
 
         const ia64::ISADecodeResult decoded = plugin.decode(faultMemory);
@@ -128,12 +170,22 @@ int main() {
             check(plugin.execute(faultMemory, decoded) == ia64::ISAExecutionResult::CONTINUE,
                   "nested translation fault dispatches to the guest vector");
         }
-        check(faultCpu.GetCR(19) == 0x4001400,
-              "nested DTLB vector becomes the current IIP");
+        check(faultCpu.GetIP() == 0x4001400,
+              "nested DTLB vectors the current execution IP");
+        check((faultCpu.GetPSR() & ia64::IA64_PSR_BN_MASK) == 0,
+              "interrupt entry switches to static register bank zero");
+        check(faultCpu.GetGR(16) == 0x1616ULL,
+              "interrupt entry exposes bank-zero static registers");
+        check(faultCpu.GetCR(19) == oldIip,
+              "nested DTLB preserves the prior IIP");
         check(faultCpu.GetCR(16) == oldIpsr,
               "nested DTLB preserves the prior IPSR");
-        check(faultCpu.GetCR(17) == (oldIsr & ~(1ULL << 38)),
-              "nested DTLB clears only ISR.IR");
+        check(faultCpu.GetCR(17) == oldIsr,
+              "nested DTLB preserves the prior ISR");
+        check(faultCpu.GetCR(18) == oldIipa,
+              "nested DTLB preserves the prior IIPA");
+        check(faultCpu.GetCR(3) == oldIfs,
+              "nested DTLB preserves the prior IFS");
         check(faultCpu.GetCR(20) == oldIfa, "nested DTLB preserves IFA");
         check(faultCpu.GetCR(21) == oldItir, "nested DTLB preserves ITIR");
         check(faultCpu.GetCR(25) == oldIha, "nested DTLB preserves IHA");

@@ -313,7 +313,7 @@ static bool decodeTest(uint64_t raw, formats::IFormat& result) {
                                  (bit13 ? 0x01 : 0));
 
         const bool plainTbitZ = tableIndex == 0x00 || tableIndex == 0x10;
-        const bool tbitZUnc = tableIndex == 0x02;
+        const bool tbitZUnc = tableIndex == 0x02 || tableIndex == 0x12;
         const bool plainTnatZ = tableIndex == 0x01;
 
         result.r1 = static_cast<uint8_t>(formats::extractBits(raw, 6, 6));
@@ -455,14 +455,14 @@ static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& 
             return true;
         }
 
-        // IA-64 variable logical SHR (Binutils: OpZaZbVeX2aX2bX2c
-        // (7,1,1,0,0,0,0)).  Its architectural operand order is
+        // IA-64 variable logical SHR uses both X2b encodings present in the
+        // Linux image (0 and 2).  Its architectural operand order is
         // {r1, r3, r2}; toInstruction() reverses the two source fields for
         // this opcode.  Without this case the zero-initialized opcode falls
         // through to the wrong shift form, which corrupts authentic ELILO's
-        // Huffman table-code calculation.
+        // Huffman table-code calculation and the kernel's early VHPT setup.
         if (z_a == 1 && z_b == 1 && v_e == 0 &&
-            x2a == 0 && x2b == 0 && x2c == 0) {
+            x2a == 0 && (x2b == 0 || x2b == 2) && x2c == 0) {
             result.opcode = 0x71; // SHR.U / logical SHR
             result.has_imm = false;
             return true;
