@@ -14,6 +14,7 @@ struct EfiHandoffLayout {
     uint64_t salGlobalPointerAddr = 0;
     uint64_t rsdpAddr = 0;
     uint64_t rsdtAddr = 0;
+    uint64_t xsdtAddr = 0;
     uint64_t madtAddr = 0;
     uint64_t runtimeServicesAddr = 0;
     uint64_t bootServicesAddr = 0;
@@ -103,6 +104,7 @@ constexpr uint64_t kEfiPalProcedureCodeOffset = 0x2180ULL;
 constexpr uint64_t kEfiSalGlobalPointerOffset = 0x21C0ULL;
 constexpr uint64_t kEfiRsdpOffset = 0x2200ULL;
 constexpr uint64_t kEfiRsdtOffset = 0x2240ULL;
+constexpr uint64_t kEfiXsdtOffset = 0x22C0ULL;
 constexpr uint64_t kEfiMadtOffset = 0x2280ULL;
 constexpr uint64_t kEfiBootImageMetadataOffset = 0x1D00ULL;
 constexpr uint64_t kEfiOpenVolumeStubCodeOffset = 0xC80ULL;
@@ -219,6 +221,7 @@ inline bool tryComputeEfiHandoffLayout(uint64_t guestMemorySize, EfiHandoffLayou
     layout.salGlobalPointerAddr = base + kEfiSalGlobalPointerOffset;
     layout.rsdpAddr = base + kEfiRsdpOffset;
     layout.rsdtAddr = base + kEfiRsdtOffset;
+    layout.xsdtAddr = base + kEfiXsdtOffset;
     layout.madtAddr = base + kEfiMadtOffset;
     layout.runtimeServicesAddr = base + kEfiRuntimeServicesOffset;
     layout.bootServicesAddr = base + kEfiBootServicesOffset;

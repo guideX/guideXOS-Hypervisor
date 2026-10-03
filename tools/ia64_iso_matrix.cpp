@@ -35,6 +35,7 @@ struct Options {
     std::string guestIdentity =
         "artifact-c:size=13035024;sha256=81B843ACDD1F69456D5D1BF2C6FE7059ECB8730BAAD1405BFFA109872EF23B45;iso-size=4695296000;gzip-sha256=4C62D04431645C8F5F4CC30861DE30A153C47D5B487549B5CFCCF2DE03B8B94";
     std::string equivalenceLogPath;
+    std::string dumpRamPath;
     struct InputKey {
         uint16_t scanCode = 0;
         uint16_t unicodeChar = 0;
@@ -149,6 +150,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.guestIdentity = argv[++i];
         } else if (argument == "--equivalence-log" && i + 1 < argc) {
             options.equivalenceLogPath = argv[++i];
+        } else if (argument == "--dump-ram" && i + 1 < argc) {
+            options.dumpRamPath = argv[++i];
         } else if (argument == "--help" || argument == "-h") {
             return false;
         } else {
@@ -167,7 +170,7 @@ void printUsage() {
                  "[--verify-oracle PATH] [--instruction-trace] "
                  "[--checkpoint-write PATH | --checkpoint-read PATH] "
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
-                 "[--equivalence-log PATH] [--guest-identity ID]\n"
+                 "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
                  "--key-after-cycles 300000 --handoff-cycles 1200000000 "
                  "--post-checkpoint-cycles 2000000\n"
@@ -553,6 +556,21 @@ void writeContinuationLog(const std::string& path,
            << " final_itc=" << std::dec << record.cpu.GetAR(44) << "\n";
 }
 
+void dumpGuestRam(ia64::VirtualMachine& vm, const std::string& path) {
+    if (path.empty()) return;
+    const uint8_t* data = vm.getMemory().GetRawData();
+    const size_t size = vm.getMemory().GetTotalSize();
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        std::cerr << "[IA64-MATRIX] dump-ram-open-failed path=\"" << path << "\"\n";
+        return;
+    }
+    output.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+    std::cerr << "[IA64-MATRIX] dump-ram path=\"" << path << "\" bytes=" << size
+              << " cycles=" << vm.getCyclesExecuted()
+              << " ip=0x" << std::hex << vm.getIP(0) << std::dec << "\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -678,6 +696,7 @@ int main(int argc, char** argv) {
             }
             printProcessorInterruptTelemetry(*vm, "restore");
             printConsoleTelemetry(*vm, "restore", consoleBytesBefore);
+            dumpGuestRam(*vm, options.dumpRamPath);
             return 0;
         }
 
@@ -815,6 +834,7 @@ int main(int argc, char** argv) {
                       << " console=" << (consoleEqual ? "equal" : "different")
                       << " result=" << (traceEqual && cpuEqual && memoryEqual && framebufferEqual && consoleEqual ? "PASS" : "FAIL")
                       << " strictRecovery=1\n";
+            dumpGuestRam(*vm, options.dumpRamPath);
             return (traceEqual && cpuEqual && memoryEqual && framebufferEqual && consoleEqual) ? 0 : 1;
         }
 
@@ -911,6 +931,9 @@ int main(int argc, char** argv) {
                   << (vm == nullptr ? std::string("unknown") : ia64::vmStateToString(vm->getState()))
                   << " error=\"" << metadata.lastError << "\""
                   << std::endl;
+        if (ia64::VirtualMachine* dumpVm = manager.getVMDirect(vmId)) {
+            dumpGuestRam(*dumpVm, options.dumpRamPath);
+        }
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "[IA64-MATRIX] exception: " << exception.what() << std::endl;

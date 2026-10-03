@@ -7,7 +7,8 @@
 
 void testRsdp() {
     const uint64_t rsdtAddr = 0x1000;
-    const auto rsdp = ia64::acpi::buildRsdp(rsdtAddr);
+    const uint64_t xsdtAddr = 0x2000;
+    const auto rsdp = ia64::acpi::buildRsdp(rsdtAddr, xsdtAddr);
     assert(rsdp.bytes.size() == ia64::acpi::kRsdpSizeAcpi2);
     assert(std::memcmp(rsdp.bytes.data(), "RSD PTR ", 8) == 0);
 
@@ -16,6 +17,12 @@ void testRsdp() {
         rsdtEncoded |= static_cast<uint32_t>(rsdp.bytes[16 + i]) << (i * 8);
     }
     assert(rsdtEncoded == static_cast<uint32_t>(rsdtAddr));
+
+    uint64_t xsdtEncoded = 0;
+    for (size_t i = 0; i < 8; ++i) {
+        xsdtEncoded |= static_cast<uint64_t>(rsdp.bytes[24 + i]) << (i * 8);
+    }
+    assert(xsdtEncoded == xsdtAddr);
 
     uint8_t sum = 0;
     for (size_t i = 0; i < 20; ++i) {
@@ -29,6 +36,32 @@ void testRsdp() {
     }
     assert(extSum == 0);
     std::cout << "testRsdp PASSED\n";
+}
+
+void testXsdt() {
+    const uint64_t madtAddr = 0x4000;
+    const auto xsdt = ia64::acpi::buildXsdt(madtAddr);
+    assert(xsdt.bytes.size() == ia64::acpi::kXsdtSize);
+    assert(std::memcmp(xsdt.bytes.data(), "XSDT", 4) == 0);
+
+    uint32_t length = 0;
+    for (size_t i = 0; i < 4; ++i) {
+        length |= static_cast<uint32_t>(xsdt.bytes[4 + i]) << (i * 8);
+    }
+    assert(length == ia64::acpi::kXsdtSize);
+
+    uint64_t madtEncoded = 0;
+    for (size_t i = 0; i < 8; ++i) {
+        madtEncoded |= static_cast<uint64_t>(xsdt.bytes[ia64::acpi::kXsdtHeaderSize + i]) << (i * 8);
+    }
+    assert(madtEncoded == madtAddr);
+
+    uint8_t sum = 0;
+    for (uint8_t byte : xsdt.bytes) {
+        sum = static_cast<uint8_t>(sum + byte);
+    }
+    assert(sum == 0);
+    std::cout << "testXsdt PASSED\n";
 }
 
 void testRsdt() {
@@ -58,6 +91,7 @@ void testMadt() {
     assert(std::memcmp(madt.bytes.data(), "APIC", 4) == 0);
 
     const size_t entry = ia64::acpi::kMadtHeaderSize;
+    assert(ia64::acpi::kMadtTypeProcessorLocalSapic == 7);
     assert(madt.bytes[entry] == ia64::acpi::kMadtTypeProcessorLocalSapic);
     assert(madt.bytes[entry + 1] == ia64::acpi::kProcessorLocalSapicSize);
     assert(madt.bytes[entry + 2] == 0);
@@ -92,7 +126,7 @@ void testEfiConfigEntry() {
 }
 
 void testValidate() {
-    const auto rsdp = ia64::acpi::buildRsdp(0x1000);
+    const auto rsdp = ia64::acpi::buildRsdp(0x1000, 0x2000);
     const auto rsdt = ia64::acpi::buildRsdt(0x2000);
     const auto madt = ia64::acpi::buildMadt(0, 0, 0x40,
                                             ia64::acpi::kMadtFlagEnabled, 0);
@@ -108,7 +142,7 @@ void testValidate() {
 }
 
 void testValidateRejectsBadChecksum() {
-    auto rsdp = ia64::acpi::buildRsdp(0x1000);
+    auto rsdp = ia64::acpi::buildRsdp(0x1000, 0x2000);
     rsdp.bytes[20] = 0xFF;
     const auto rsdt = ia64::acpi::buildRsdt(0x2000);
     const auto madt = ia64::acpi::buildMadt(0, 0, 0x40,
@@ -124,6 +158,7 @@ void testValidateRejectsBadChecksum() {
 int main() {
     testRsdp();
     testRsdt();
+    testXsdt();
     testMadt();
     testEfiConfigEntry();
     testValidate();

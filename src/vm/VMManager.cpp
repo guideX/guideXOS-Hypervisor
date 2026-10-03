@@ -1417,12 +1417,14 @@ bool VMManager::startVM(const std::string& vmId) {
 
             WriteIa64SalFirmware(memory, layout);
 
-            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr);
+            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr, layout.xsdtAddr);
             const auto rsdt = acpi::buildRsdt(layout.madtAddr);
+            const auto xsdt = acpi::buildXsdt(layout.madtAddr);
             const auto madt = acpi::buildMadt(0, 0, 0,
                                               acpi::kMadtFlagEnabled, 0);
             memory.Write(layout.rsdpAddr, rsdp.bytes.data(), rsdp.bytes.size());
             memory.Write(layout.rsdtAddr, rsdt.bytes.data(), rsdt.bytes.size());
+            memory.Write(layout.xsdtAddr, xsdt.bytes.data(), xsdt.bytes.size());
             memory.Write(layout.madtAddr, madt.bytes.data(), madt.bytes.size());
 
             const auto acpiEntry = acpi::buildEfiConfigurationTableEntry(layout.rsdpAddr);
@@ -2269,12 +2271,14 @@ bool VMManager::startVM(const std::string& vmId) {
 
             WriteIa64SalFirmware(instance->vm->getMemory(), layout);
 
-            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr);
+            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr, layout.xsdtAddr);
             const auto rsdt = acpi::buildRsdt(layout.madtAddr);
+            const auto xsdt = acpi::buildXsdt(layout.madtAddr);
             const auto madt = acpi::buildMadt(0, 0, 0,
                                               acpi::kMadtFlagEnabled, 0);
             instance->vm->getMemory().Write(layout.rsdpAddr, rsdp.bytes.data(), rsdp.bytes.size());
             instance->vm->getMemory().Write(layout.rsdtAddr, rsdt.bytes.data(), rsdt.bytes.size());
+            instance->vm->getMemory().Write(layout.xsdtAddr, xsdt.bytes.data(), xsdt.bytes.size());
             instance->vm->getMemory().Write(layout.madtAddr, madt.bytes.data(), madt.bytes.size());
             const auto acpiEntry = acpi::buildEfiConfigurationTableEntry(layout.rsdpAddr);
             instance->vm->getMemory().Write(layout.configurationTableAddr + 24,

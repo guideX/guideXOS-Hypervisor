@@ -58,7 +58,7 @@ void writeTableHeader(std::span<uint8_t> bytes,
 
 } // namespace
 
-Rsdp buildRsdp(uint64_t rsdtAddress) {
+Rsdp buildRsdp(uint64_t rsdtAddress, uint64_t xsdtAddress) {
     Rsdp rsdp{};
     auto bytes = std::span<uint8_t>(rsdp.bytes);
 
@@ -70,7 +70,11 @@ Rsdp buildRsdp(uint64_t rsdtAddress) {
     bytes[15] = 2;
     put32(bytes, 16, static_cast<uint32_t>(rsdtAddress));
     put32(bytes, 20, static_cast<uint32_t>(kRsdpSizeAcpi2));
-    put64(bytes, 24, rsdtAddress);
+    // ACPI 2.0+ RSDP: the 64-bit XSDT pointer must reference an actual XSDT
+    // table (or be zero when no XSDT is provided). Pointing it at the RSDT
+    // makes ACPICA treat the RSDT as an XSDT, compute zero root entries, and
+    // never discover the MADT.
+    put64(bytes, 24, xsdtAddress);
     bytes[32] = 0;
     bytes[33] = 0;
     bytes[34] = 0;
@@ -94,6 +98,19 @@ Rsdt buildRsdt(uint64_t madtAddress) {
     const uint8_t sum = checksum(bytes, rsdt.bytes.size());
     bytes[9] = static_cast<uint8_t>(0U - sum);
     return rsdt;
+}
+
+Xsdt buildXsdt(uint64_t madtAddress) {
+    Xsdt xsdt{};
+    auto bytes = std::span<uint8_t>(xsdt.bytes);
+
+    writeTableHeader(bytes, "XSDT", static_cast<uint32_t>(xsdt.bytes.size()), 1,
+                     "guideX", "GUIDE   ");
+    put64(bytes, kXsdtHeaderSize, madtAddress);
+
+    const uint8_t sum = checksum(bytes, xsdt.bytes.size());
+    bytes[9] = static_cast<uint8_t>(0U - sum);
+    return xsdt;
 }
 
 Madt buildMadt(uint8_t acpiProcessorId,
