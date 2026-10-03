@@ -156,6 +156,13 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                     instr.SetPredicate(fmt.qp);
                     instr.SetOperands(fmt.r1, fmt.r3, 0);
                     return true;
+
+                case 0x4: // MUX1 (I21 byte permutation / broadcast)
+                    instr = InstructionEx(InstructionType::MUX1, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    instr.SetImmediate(fmt.imm);  // mux selector in bits 20:23
+                    return true;
             }
         }
         
@@ -413,7 +420,29 @@ static bool decodeDepositExtract(uint64_t raw, uint8_t x, uint8_t x2, formats::I
         return true;
     }
 static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& result) {
-        // Shift operations: SHL, SHR, SHRA
+        // Shift operations: SHL, SHR, SHRA, and the I21 byte-permutation
+        // instruction MUX1.  They share the major-7 opcode space and the
+        // dispersed z_a/z_b/v_e/x2a/x2b/x2c fields.
+        const uint8_t z_a = static_cast<uint8_t>(formats::extractBits(raw, 36, 1));
+        const uint8_t z_b = static_cast<uint8_t>(formats::extractBits(raw, 33, 1));
+        const uint8_t v_e = static_cast<uint8_t>(formats::extractBits(raw, 32, 1));
+        const uint8_t x2a = static_cast<uint8_t>(formats::extractBits(raw, 34, 2));
+        const uint8_t x2b = static_cast<uint8_t>(formats::extractBits(raw, 28, 2));
+        const uint8_t x2c = static_cast<uint8_t>(formats::extractBits(raw, 30, 2));
+
+        // I21 MUX1 is the byte-permutation / broadcast instruction.  Binutils
+        // encodes it as OpZaZbVeX2aX2bX2c(7,0,0,0,3,2,2) with the mux selector
+        // in bits 20:23.  This form has x6 == 0x14 and was previously mistaken
+        // for the fixed-count SHL below, which silently turned every MUX1
+        // (including the kernel's memset @brcst) into a no-op.  Recognize it
+        // before the x6 test.
+        if (z_a == 0 && z_b == 0 && v_e == 0 &&
+            x2a == 3 && x2b == 2 && x2c == 2) {
+            result.opcode = 0x74; // MUX1
+            result.has_imm = true;
+            result.imm = formats::extractBits(raw, 20, 4);  // mux selector
+            return true;
+        }
 
         // The fixed-count SHL form is the I7 encoding with x6=0x14.  It is
         // the architectural immediate form of SHL (the manual describes it
@@ -431,12 +460,7 @@ static bool decodeShift(uint64_t raw, uint8_t x2, uint8_t x6, formats::IFormat& 
         // I7 variable shifts use the dispersed z_a/z_b/v_e/x2a/x2b/x2c
         // fields.  The exact Gentoo blocker is the variable SHL row from
         // Table 4-20; it does not use the low four bits of x6 as an opcode.
-        const uint8_t z_a = static_cast<uint8_t>(formats::extractBits(raw, 36, 1));
-        const uint8_t z_b = static_cast<uint8_t>(formats::extractBits(raw, 33, 1));
-        const uint8_t v_e = static_cast<uint8_t>(formats::extractBits(raw, 32, 1));
-        const uint8_t x2a = static_cast<uint8_t>(formats::extractBits(raw, 34, 2));
-        const uint8_t x2b = static_cast<uint8_t>(formats::extractBits(raw, 28, 2));
-        const uint8_t x2c = static_cast<uint8_t>(formats::extractBits(raw, 30, 2));
+
 
         // IA-64 popcnt is an I-unit OpZaZbVeX2aX2bX2c form.  It uses the
         // register-source fields {r1, r3}; recognize it before the generic

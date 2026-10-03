@@ -1508,6 +1508,44 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetGR(dst_, static_cast<uint64_t>(std::popcount(cpu.GetGR(src1_))));
             break;
 
+        case InstructionType::MUX1:
+            {
+                // mux1 rDst = rSrc1, mux: permute the eight source bytes.  The
+                // selector is encoded in bits 20:23: 0=@brcst, 8=@mix, 9=@shuf,
+                // 10=@alt, 11=@rev.  Byte 0 is the least-significant byte.
+                const uint64_t source = cpu.GetGR(src1_);
+                uint8_t bytes[8];
+                for (int i = 0; i < 8; ++i) {
+                    bytes[i] = static_cast<uint8_t>((source >> (8 * i)) & 0xFF);
+                }
+                static const uint8_t kRev[8]  = {7, 6, 5, 4, 3, 2, 1, 0};
+                static const uint8_t kMix[8]  = {0, 4, 2, 6, 1, 5, 3, 7};
+                static const uint8_t kShuf[8] = {0, 4, 1, 5, 2, 6, 3, 7};
+                static const uint8_t kAlt[8]  = {0, 2, 4, 6, 1, 3, 5, 7};
+                const uint8_t* table = nullptr;
+                switch (static_cast<uint8_t>(immediate_ & 0xF)) {
+                    case 0x8: table = kMix; break;
+                    case 0x9: table = kShuf; break;
+                    case 0xA: table = kAlt; break;
+                    case 0xB: table = kRev; break;
+                    default: break;  // @brcst (and reserved): broadcast byte 0
+                }
+                uint64_t result = 0;
+                if (table == nullptr) {
+                    const uint8_t broadcast = bytes[0];
+                    for (int i = 0; i < 8; ++i) {
+                        result |= static_cast<uint64_t>(broadcast) << (8 * i);
+                    }
+                } else {
+                    for (int i = 0; i < 8; ++i) {
+                        result |= static_cast<uint64_t>(bytes[table[i]]) << (8 * i);
+                    }
+                }
+                cpu.SetGR(dst_, result);
+                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_));
+            }
+            break;
+
         case InstructionType::SHRP:
             // shrp rDst = rSrc1, rSrc2, count: low 64 bits of (rSrc1:rSrc2) >> count.
             if (hasImmediate_) {
@@ -2657,6 +2695,22 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::POPCNT:
             oss << "popcnt r" << static_cast<int>(dst_) << " = r"
                 << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::MUX1:
+            {
+                const char* muxName = "?";
+                switch (static_cast<uint8_t>(immediate_ & 0xF)) {
+                    case 0x0: muxName = "@brcst"; break;
+                    case 0x8: muxName = "@mix"; break;
+                    case 0x9: muxName = "@shuf"; break;
+                    case 0xA: muxName = "@alt"; break;
+                    case 0xB: muxName = "@rev"; break;
+                    default: break;
+                }
+                oss << "mux1 r" << static_cast<int>(dst_) << " = r"
+                    << static_cast<int>(src1_) << ", " << muxName;
+            }
             break;
 
         case InstructionType::SHRP:

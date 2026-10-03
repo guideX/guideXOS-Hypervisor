@@ -138,6 +138,7 @@ enum class InstructionType {
     SHRP,       // Shift right pair
     SHLADD,     // Shift left and add
     POPCNT,     // Population count
+    MUX1,       // Byte permutation / broadcast (I21)
     
     // Extract/Deposit (I-type)
     EXTR,       // Extract bits

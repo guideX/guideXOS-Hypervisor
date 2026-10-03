@@ -1537,24 +1537,45 @@ void test_latest_boot_log_blockers() {
     shladd_scale40.Execute(cpu, memory);
     assert_equal("Boot shladd scale-40 should compute base + index * 40", 0x1118, cpu.GetGR(16));
 
-    // Exact Debian DVD/netinst ELILO blocker: I7 fixed-count SHL.
-    InstructionEx shl_fixed = decoder.DecodeSlot(0xeca0042840ULL, UnitType::I_UNIT, 0x27e80);
-    assert_true("Debian fixed-count SHL should decode",
-                shl_fixed.GetType() == InstructionType::SHL);
-    assert_equal("Debian fixed-count SHL destination", 33, shl_fixed.GetDst());
-    assert_equal("Debian fixed-count SHL source", 33, shl_fixed.GetSrc1());
-    assert_true("Debian fixed-count SHL should carry an immediate",
-                shl_fixed.HasImmediate());
-    assert_equal("Debian fixed-count SHL count", 0, shl_fixed.GetImmediate());
-    assert_string("Debian fixed-count SHL disassembly",
-                  "shl r33 = r33, 0",
-                  shl_fixed.GetDisassembly());
+    // The exact Debian ELILO instruction previously mistaken for an I7
+    // fixed-count SHL is really I21 MUX1 with the @brcst selector.  The
+    // kernel memset() uses mux1 @brcst to replicate its fill byte across a
+    // 64-bit word; decoding it as a no-op left only one byte set in every
+    // eight and corrupted the bootmem bitmap.
+    InstructionEx mux1_brcst = decoder.DecodeSlot(0xeca0042840ULL, UnitType::I_UNIT, 0x27e80);
+    assert_true("mux1 @brcst should decode",
+                mux1_brcst.GetType() == InstructionType::MUX1);
+    assert_equal("mux1 @brcst destination", 33, mux1_brcst.GetDst());
+    assert_equal("mux1 @brcst source", 33, mux1_brcst.GetSrc1());
+    assert_true("mux1 @brcst should carry the mux selector",
+                mux1_brcst.HasImmediate());
+    assert_equal("mux1 @brcst selector", 0, mux1_brcst.GetImmediate());
+    assert_string("mux1 @brcst disassembly",
+                  "mux1 r33 = r33, @brcst",
+                  mux1_brcst.GetDisassembly());
 
-    cpu.SetGR(33, 0x123456789abcdef0ULL);
-    shl_fixed.Execute(cpu, memory);
-    assert_equal("Debian fixed-count SHL should preserve count-zero source",
-                 0x123456789abcdef0ULL,
+    cpu.SetGR(33, 0x00000000000000abULL);
+    mux1_brcst.Execute(cpu, memory);
+    assert_equal("mux1 @brcst broadcasts byte 0",
+                 0xababababababababULL,
                  cpu.GetGR(33));
+
+    // Authentic kernel mux1 @rev (raw 0xeca0b386c0) reverses the eight source
+    // bytes.  The same encoding was previously folded into the fixed-count
+    // SHL case and became a no-op.
+    InstructionEx mux1_rev = decoder.DecodeSlot(0xeca0b386c0ULL, UnitType::I_UNIT, 0x1b9ab0);
+    assert_true("mux1 @rev should decode",
+                mux1_rev.GetType() == InstructionType::MUX1);
+    assert_equal("mux1 @rev selector", 11, mux1_rev.GetImmediate());
+    assert_string("mux1 @rev disassembly",
+                  "mux1 r27 = r28, @rev",
+                  mux1_rev.GetDisassembly());
+
+    cpu.SetGR(28, 0x0123456789abcdefULL);
+    mux1_rev.Execute(cpu, memory);
+    assert_equal("mux1 @rev reverses byte order",
+                 0xefcdab8967452301ULL,
+                 cpu.GetGR(27));
 
     // IA-64 major-5 DEP.Z alias used by the authentic ELILO descriptor-index
     // calculation.  Historical Binutils decodes this as shl r20=r19,32;
