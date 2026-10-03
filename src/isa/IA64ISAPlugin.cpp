@@ -184,6 +184,9 @@ uint64_t EFI_SAL_SYSTEM_TABLE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalSystemTabl
 uint64_t EFI_SAL_PROCEDURE_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalProcedureCodeOffset;
 uint64_t EFI_PAL_PROCEDURE_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiPalProcedureCodeOffset;
 uint64_t EFI_SAL_GLOBAL_POINTER_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalGlobalPointerOffset;
+uint64_t EFI_RSDP_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRsdpOffset;
+uint64_t EFI_RSDT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRsdtOffset;
+uint64_t EFI_MADT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiMadtOffset;
 uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRuntimeServicesOffset;
 uint64_t EFI_BOOT_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootServicesOffset;
 uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootImageMetadataOffset;
@@ -486,6 +489,9 @@ void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_SAL_PROCEDURE_CODE_ADDR = base + kEfiSalProcedureCodeOffset;
     EFI_PAL_PROCEDURE_CODE_ADDR = base + kEfiPalProcedureCodeOffset;
     EFI_SAL_GLOBAL_POINTER_ADDR = base + kEfiSalGlobalPointerOffset;
+    EFI_RSDP_ADDR = base + kEfiRsdpOffset;
+    EFI_RSDT_ADDR = base + kEfiRsdtOffset;
+    EFI_MADT_ADDR = base + kEfiMadtOffset;
     EFI_RUNTIME_SERVICES_ADDR = base + kEfiRuntimeServicesOffset;
     EFI_BOOT_SERVICES_ADDR = base + kEfiBootServicesOffset;
     EFI_BOOT_IMAGE_METADATA_ADDR = base + kEfiBootImageMetadataOffset;
@@ -1077,11 +1083,20 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
         }
     }
 
-    if (overlaps(EFI_CONFIGURATION_TABLE_ADDR, 24ULL)) {
-        append("EFI.ConfigurationTable.SAL");
+    if (overlaps(EFI_CONFIGURATION_TABLE_ADDR, 48ULL)) {
+        append("EFI.ConfigurationTable");
     }
     if (overlaps(EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize)) {
         append("SAL.SystemTable");
+    }
+    if (overlaps(EFI_RSDP_ADDR, 36ULL)) {
+        append("ACPI.RSDP");
+    }
+    if (overlaps(EFI_RSDT_ADDR, 40ULL)) {
+        append("ACPI.RSDT");
+    }
+    if (overlaps(EFI_MADT_ADDR, 60ULL)) {
+        append("ACPI.MADT");
     }
 
     if (first) {
@@ -1105,10 +1120,16 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
         }
     } else if (overlaps(0x5E000ULL, 0x80ULL)) {
         oss << "loader-local CHAR16 buffer";
-    } else if (overlaps(EFI_CONFIGURATION_TABLE_ADDR, 24ULL)) {
-        oss << "EFI configuration table SAL entry";
+    } else if (overlaps(EFI_CONFIGURATION_TABLE_ADDR, 48ULL)) {
+        oss << "EFI configuration table";
     } else if (overlaps(EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize)) {
         oss << "SAL System Table";
+    } else if (overlaps(EFI_RSDP_ADDR, 36ULL)) {
+        oss << "ACPI RSDP";
+    } else if (overlaps(EFI_RSDT_ADDR, 40ULL)) {
+        oss << "ACPI RSDT";
+    } else if (overlaps(EFI_MADT_ADDR, 60ULL)) {
+        oss << "ACPI MADT";
     }
     return oss.str();
 }
@@ -1137,12 +1158,19 @@ void logEfiHandoffAccess(const char* phase,
     const bool overlapsLocalBuffer =
         rangesOverlap(address, size, 0x5E000ULL, 0x80ULL);
     const bool overlapsConfigurationTable =
-        rangesOverlap(address, size, EFI_CONFIGURATION_TABLE_ADDR, 24ULL);
+        rangesOverlap(address, size, EFI_CONFIGURATION_TABLE_ADDR, 48ULL);
     const bool overlapsSalSystemTable =
         rangesOverlap(address, size, EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize);
+    const bool overlapsRsdp =
+        rangesOverlap(address, size, EFI_RSDP_ADDR, 36ULL);
+    const bool overlapsRsdt =
+        rangesOverlap(address, size, EFI_RSDT_ADDR, 40ULL);
+    const bool overlapsMadt =
+        rangesOverlap(address, size, EFI_MADT_ADDR, 60ULL);
     if (!overlapsLoadedImage && !overlapsFilePath && !overlapsSimpleFs &&
         !overlapsOpenVolumeDescriptor && !overlapsLocalBuffer &&
-        !overlapsConfigurationTable && !overlapsSalSystemTable) {
+        !overlapsConfigurationTable && !overlapsSalSystemTable &&
+        !overlapsRsdp && !overlapsRsdt && !overlapsMadt) {
         return;
     }
 
@@ -8669,18 +8697,24 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
              rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL) ||
-             rangesOverlap(loadAddress, loadSize, EFI_CONFIGURATION_TABLE_ADDR, 24ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_CONFIGURATION_TABLE_ADDR, 48ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_SAL_SYSTEM_TABLE_ADDR,
-                           sal::kSalSystemTableSize));
+                           sal::kSalSystemTableSize) ||
+             rangesOverlap(loadAddress, loadSize, EFI_RSDP_ADDR, 36ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_RSDT_ADDR, 40ULL) ||
+             rangesOverlap(loadAddress, loadSize, EFI_MADT_ADDR, 60ULL));
         const bool traceEfiHandoffStore =
             storeSize != 0 &&
             (rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_OPEN_VOLUME_STUB_DESC_ADDR, 0x20ULL) ||
-             rangesOverlap(storeAddress, storeSize, EFI_CONFIGURATION_TABLE_ADDR, 24ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_CONFIGURATION_TABLE_ADDR, 48ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_SAL_SYSTEM_TABLE_ADDR,
-                           sal::kSalSystemTableSize));
+                           sal::kSalSystemTableSize) ||
+             rangesOverlap(storeAddress, storeSize, EFI_RSDP_ADDR, 36ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_RSDT_ADDR, 40ULL) ||
+             rangesOverlap(storeAddress, storeSize, EFI_MADT_ADDR, 60ULL));
         if (traceBootLocalLoad) {
             logBootLocalAccess("pre-read", cpu, state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),

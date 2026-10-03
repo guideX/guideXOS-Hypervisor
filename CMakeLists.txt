@@ -89,6 +89,7 @@ set(VM_SOURCES
     src/vm/CPUContext.cpp
     src/vm/VMManager.cpp
     src/vm/IA64SalFirmware.cpp
+    src/vm/IA64AcpiFirmware.cpp
     src/vm/VMBootStateMachine.cpp
     src/vm/SimpleCPUScheduler.cpp
     src/vm/BootTraceSystem.cpp
@@ -171,6 +172,7 @@ set(HEADERS
     include/IA64ISAPlugin.h
     include/IA64EfiHandoffLayout.h
     include/IA64SalFirmware.h
+    include/IA64AcpiFirmware.h
     include/ISAPluginRegistry.h
     include/ExampleISAPlugin.h
     include/riscv_decoder.h
@@ -309,6 +311,18 @@ if(MSVC)
     target_compile_options(test_ia64_sal PRIVATE /W4)
 else()
     target_compile_options(test_ia64_sal PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# IA-64 ACPI table construction and independent validation tests
+add_executable(test_ia64_acpi
+    tests/test_ia64_acpi.cpp
+    src/vm/IA64AcpiFirmware.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_ia64_acpi PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_acpi PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Full-machine diagnostic checkpoint format and state round-trip tests

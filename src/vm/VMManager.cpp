@@ -7,6 +7,7 @@
 #include "TestKernelHandler.h"
 #include "IA64EfiHandoffLayout.h"
 #include "IA64SalFirmware.h"
+#include "IA64AcpiFirmware.h"
 #include "memory.h"
 #include "IA64ISAPlugin.h"
 #include "logger.h"
@@ -1411,10 +1412,22 @@ bool VMManager::startVM(const std::string& vmId) {
             write64(layout.base + 0x50, layout.textOutputProtocolAddr);
             write64(layout.base + 0x58, layout.runtimeServicesAddr);
             write64(layout.base + 0x60, layout.bootServicesAddr);
-            write64(layout.base + 0x68, 1ULL);
+            write64(layout.base + 0x68, 2ULL);
             write64(layout.base + 0x70, layout.configurationTableAddr);
 
             WriteIa64SalFirmware(memory, layout);
+
+            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr);
+            const auto rsdt = acpi::buildRsdt(layout.madtAddr);
+            const auto madt = acpi::buildMadt(0, 0, 0,
+                                              acpi::kMadtFlagEnabled, 0);
+            memory.Write(layout.rsdpAddr, rsdp.bytes.data(), rsdp.bytes.size());
+            memory.Write(layout.rsdtAddr, rsdt.bytes.data(), rsdt.bytes.size());
+            memory.Write(layout.madtAddr, madt.bytes.data(), madt.bytes.size());
+
+            const auto acpiEntry = acpi::buildEfiConfigurationTableEntry(layout.rsdpAddr);
+            memory.Write(layout.configurationTableAddr + 24,
+                         acpiEntry.data(), acpiEntry.size());
             WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
                             nopI, nopI, brRetB0);
             WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
@@ -2251,11 +2264,23 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_STUB_ADDR + 0x50, EFI_TEXT_OUTPUT_PROTOCOL_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x58, EFI_RUNTIME_SERVICES_ADDR);
                                                                     write64(EFI_STUB_ADDR + 0x60, EFI_BOOT_SERVICES_ADDR);
-                                                                    write64(EFI_STUB_ADDR + 0x68, 1ULL); // NumberOfTableEntries
-                                                                    write64(EFI_STUB_ADDR + 0x70, layout.configurationTableAddr);
+            write64(EFI_STUB_ADDR + 0x68, 2ULL); // NumberOfTableEntries
+            write64(EFI_STUB_ADDR + 0x70, layout.configurationTableAddr);
 
-                                                                    WriteIa64SalFirmware(instance->vm->getMemory(), layout);
-                                                                    WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
+            WriteIa64SalFirmware(instance->vm->getMemory(), layout);
+
+            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr);
+            const auto rsdt = acpi::buildRsdt(layout.madtAddr);
+            const auto madt = acpi::buildMadt(0, 0, 0,
+                                              acpi::kMadtFlagEnabled, 0);
+            instance->vm->getMemory().Write(layout.rsdpAddr, rsdp.bytes.data(), rsdp.bytes.size());
+            instance->vm->getMemory().Write(layout.rsdtAddr, rsdt.bytes.data(), rsdt.bytes.size());
+            instance->vm->getMemory().Write(layout.madtAddr, madt.bytes.data(), madt.bytes.size());
+            const auto acpiEntry = acpi::buildEfiConfigurationTableEntry(layout.rsdpAddr);
+            instance->vm->getMemory().Write(layout.configurationTableAddr + 24,
+                                            acpiEntry.data(), acpiEntry.size());
+
+            WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
                                                                                     0x0ULL, 0x0ULL, 0x108000100ULL);
                                                                     WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
                                                                                     0x0ULL, 0x0ULL, 0x108000100ULL);
