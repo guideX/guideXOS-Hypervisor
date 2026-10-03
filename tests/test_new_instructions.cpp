@@ -936,14 +936,21 @@ void test_latest_boot_log_blockers() {
     assert_equal("ar.itc should advance between CPU steps", 101,
                  itcCpu.GetGR(14));
 
-    // The same Linux image's per-CPU PT_LOAD is mapped at physical
-    // 0x04b80000.  The timing helper reads offset 0x478 through its
-    // canonical region-7 address.
+    // Linux/ia64 places the static per-CPU area at PERCPU_ADDR
+    // (-PERCPU_PAGE_SIZE) and remaps that page onto the live per-CPU physical
+    // page.  The live base is carried in ar.k3 (IA64_KR_PER_CPU_DATA), and the
+    // alt-DTLB-miss vector forms the translation as
+    // "ar.k3 - PERCPU_PAGE_SIZE".  Model the load image's per-CPU page at
+    // physical 0x04b80000 and read offset 0x478 through its canonical
+    // region-7 address.
     const uint64_t perCpuVirtualAddress = 0xfffffffffffc0478ULL;
     const uint64_t perCpuPhysicalAddress = 0x04b80478ULL;
+    const uint64_t perCpuPageBase = 0x04b80000ULL;
+    const uint64_t perCpuPageSize = 1ULL << 18;
     kernelMemory.write<uint64_t>(perCpuPhysicalAddress, 0x1122334455667788ULL);
     CPUState perCpuLoadCpu;
     perCpuLoadCpu.SetPSR(1ULL << 17);
+    perCpuLoadCpu.SetAR(3, perCpuPageBase + perCpuPageSize);
     perCpuLoadCpu.SetGR(2, perCpuVirtualAddress);
     InstructionEx perCpuLoad(InstructionType::LD8, UnitType::M_UNIT);
     perCpuLoad.SetOperands(15, 2);
@@ -967,6 +974,7 @@ void test_latest_boot_log_blockers() {
                  region7Value, region7LoadCpu.GetGR(14));
 
     CPUState perCpuTpaCpu;
+    perCpuTpaCpu.SetAR(3, perCpuPageBase + perCpuPageSize);
     perCpuTpaCpu.SetGR(2, perCpuVirtualAddress);
     tpa.Execute(perCpuTpaCpu, kernelMemory);
     assert_equal("tpa should translate the per-CPU pointer",

@@ -14,7 +14,6 @@ constexpr uint64_t kVirtualRegionNumberMask = 0xE000000000000000ULL;
 constexpr uint64_t kRegion6ReplayVirtualBase = 0xC000000100000000ULL;
 constexpr uint64_t kRegion6ReplayVirtualSpan = 0x20000000ULL;
 constexpr uint64_t kPerCpuVirtualBase = 0xFFFFFFFFFFFC0000ULL;
-constexpr uint64_t kPerCpuPhysicalBase = 0x04B80000ULL;
 constexpr uint64_t kPerCpuVirtualSpan = 0x3440ULL;
 constexpr uint64_t kIa64PhysicalAddressMask = (1ULL << 50) - 1;
 
@@ -226,8 +225,19 @@ IA64AddressTranslation IA64AddressTranslator::TranslateDataAddress(
     if (virtualAddress >= kPerCpuVirtualBase) {
         const uint64_t offset = virtualAddress - kPerCpuVirtualBase;
         if (offset < kPerCpuVirtualSpan) {
-            return makeTranslation(virtualAddress, kPerCpuPhysicalBase + offset,
-                                   1ULL << 18, rid, 0, 3,
+            // Linux/ia64 places the static per-CPU area at PERCPU_ADDR
+            // (-PERCPU_PAGE_SIZE) and remaps that virtual page onto the live
+            // per-CPU physical page of the running CPU.  The physical base is
+            // carried in ar.k3 (IA64_KR_PER_CPU_DATA) and the alt-DTLB-miss
+            // vector turns it into a translation as "ar.k3 - PERCPU_PAGE_SIZE".
+            // Deriving the base from ar.k3 keeps this alias coherent with the
+            // kernel's own per_cpu_offset()/ia64_set_kr() bookkeeping instead
+            // of pinning it to a build-specific physical address.
+            constexpr uint64_t kPerCpuPageSize = 1ULL << 18;
+            const uint64_t physicalBase =
+                (cpu.GetAR(3) - kPerCpuPageSize) & kIa64PhysicalAddressMask;
+            return makeTranslation(virtualAddress, physicalBase + offset,
+                                   kPerCpuPageSize, rid, 0, 3,
                                    IA64TranslationMechanism::REGION7_IDENTITY);
         }
     }
