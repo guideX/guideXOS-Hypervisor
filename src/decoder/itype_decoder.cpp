@@ -93,6 +93,22 @@ bool ITypeDecoder::decode(uint64_t raw_instruction, formats::IFormat& result) {
                     result.count = static_cast<uint8_t>(0x3F - cpos);
                     return true;
                 }
+                // dep.z r1=r2,cpos6a,len6 uses the same OpX2XYb(5,1,1,0)
+                // encoding as the fixed-count SHL pseudo-op but with
+                // LEN6 != CPOS6a.  Without this case the fall-through
+                // opcode (0x51) collides with EXTR, which silently turned
+                // the kernel's pcpu_setup_first_chunk "dep.z r46=r46,14,18"
+                // into an extract of r49 and produced pcpu_unit_size == 0.
+                const bool major5DepZForm =
+                    major5_x == 1 && major5_x2 == 1 &&
+                    formats::extractBits(raw_instruction, 26, 1) == 0 &&
+                    encodedLen != cpos;
+                if (major5DepZForm) {
+                    result.opcode = 0x5E; // DEP.Z
+                    result.pos = static_cast<uint8_t>(0x3F - cpos);
+                    result.len = encodedLen;  // encoded length minus one
+                    return true;
+                }
                 if (decodeTest(raw_instruction, result)) {
                     return true;
                 }
@@ -223,6 +239,13 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                     instr.SetOperands4(fmt.r1, fmt.r3, 0, fmt.r2);
                     instr.SetCompareCompleter(CompareCompleter::OR_ANDCM);
                     instr.SetImmediate(fmt.pos);
+                    return true;
+
+                case 0xE: // DEP.Z (zero base)
+                    instr = InstructionEx(InstructionType::DEP_Z, UnitType::I_UNIT);
+                    instr.SetPredicate(fmt.qp);
+                    instr.SetOperands(fmt.r1, fmt.r2, 0);
+                    instr.SetImmediate((fmt.len << 6) | fmt.pos);
                     return true;
 
                 case 0x0: // DEP

@@ -182,8 +182,12 @@ int main() {
     const uint64_t savedPsr = plugin.getCPUState().GetCR(ia64::IA64_CR_IPSR);
     require(plugin.tryDeliverPendingInterrupt(),
             "re-enabling PSR.i permits entry at an instruction boundary");
-    require(plugin.getCPUState().GetIP() == 0x1400,
-            "interrupt entry uses CR.IVA plus vector stride");
+    // External interrupts enter through the architectural external interrupt
+    // vector (12), whose Linux IVT slot is at offset 0x3000 (vectors 0..19 use
+    // 64-bundle slots).  The CR.IVR device vector is reported by the handler,
+    // not used as the IVT index.
+    require(plugin.getCPUState().GetIP() == 0x4000,
+            "interrupt entry uses CR.IVA plus the external-interrupt IVT entry");
     require(plugin.getCPUState().GetCR(ia64::IA64_CR_IIP) == 0x2000,
             "interrupt entry saves IIP");
     require((plugin.getCPUState().GetCR(ia64::IA64_CR_IPSR) & ia64::IA64_PSR_BN_MASK) != 0,

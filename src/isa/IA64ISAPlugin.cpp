@@ -1914,6 +1914,27 @@ void finishCountedLoopTraceIfActive() {
     g_countedLoopTrace = CountedLoopTraceState();
 }
 
+// Architectural IA-64 external interrupt vector.  All external interrupts
+// (timer, device, IPI) are delivered here; the handler reads CR.IVR to
+// recover the specific device vector.  Linux's ivt.S lays the IVT out with
+// 64-bundle (0x400) slots for vectors 0..19 and 16-bundle (0x100) slots for
+// vectors 20..255, so vector 12 lands at offset 0x3000.
+constexpr uint8_t IA64_EXTERNAL_INTERRUPT_VECTOR = 0x0C;
+constexpr unsigned IA64_IVT_LONG_ENTRY_COUNT = 20;
+constexpr uint64_t IA64_IVT_LONG_ENTRY_SIZE = 0x400;
+constexpr uint64_t IA64_IVT_SHORT_ENTRY_BASE =
+    IA64_IVT_LONG_ENTRY_COUNT * IA64_IVT_LONG_ENTRY_SIZE;
+constexpr uint64_t IA64_IVT_SHORT_ENTRY_SIZE = 0x100;
+
+uint64_t ia64IvtEntryOffset(uint8_t vector) {
+    if (vector < IA64_IVT_LONG_ENTRY_COUNT) {
+        return static_cast<uint64_t>(vector) * IA64_IVT_LONG_ENTRY_SIZE;
+    }
+    return IA64_IVT_SHORT_ENTRY_BASE +
+           (static_cast<uint64_t>(vector) - IA64_IVT_LONG_ENTRY_COUNT) *
+               IA64_IVT_SHORT_ENTRY_SIZE;
+}
+
 } // namespace
 
 // ============================================================================
@@ -6514,7 +6535,7 @@ void IA64ISAPlugin::updateIntervalTimer() {
         const uint64_t iva = cpu.GetCR(IA64_CR_IVA);
         interruptTelemetry_.firstTimerHandlerIP =
             (iva != 0 ? iva : state_.interruptVectorBase_) +
-            (static_cast<uint64_t>(vector) * 16ULL);
+            ia64IvtEntryOffset(IA64_EXTERNAL_INTERRUPT_VECTOR);
     }
 }
 
@@ -9306,9 +9327,15 @@ bool IA64ISAPlugin::servicePendingInterrupt() {
     cpu.SetCR(IA64_CR_IPSR, cpu.GetPSR());
     cpu.SetPSR(cpu.GetPSR() & ~(IA64_PSR_I | IA64_PSR_BN_MASK));
     const uint64_t iva = cpu.GetCR(IA64_CR_IVA);
-    const uint64_t handlerAddress =
+    // External interrupts enter through the architectural external interrupt
+    // vector, not the CR.IVR device vector.  Using the device vector here
+    // previously jumped into the zero-filled tail of the IVT.  CR.IVA holds
+    // the kernel virtual base while this emulator executes the kernel image
+    // through its physical load address, so normalize the entry the same way
+    // ordinary branch targets are normalized.
+    const uint64_t handlerAddress = normalizeKernelEntryIP(
         (iva != 0 ? iva : state_.interruptVectorBase_) +
-        (static_cast<uint64_t>(vector) * 16ULL);
+        ia64IvtEntryOffset(IA64_EXTERNAL_INTERRUPT_VECTOR));
     cpu.SetIP(handlerAddress);
     state_.bundleValid_ = false;
     state_.currentSlot_ = 0;

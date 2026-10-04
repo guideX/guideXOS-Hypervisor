@@ -109,6 +109,21 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
             return true;
         }
 
+        // M35/M36 performance-monitor register moves.  x6=0x04/0x05 are the
+        // PMC/PMD to-form and x6=0x14/0x15 the from-form.  The virtual
+        // machine does not model performance counters; Linux only needs the
+        // writes to retire and the reads to return a stable value.
+        if (major == 0x1 && x3 == 0x0 && m == 0 &&
+            (m28_x6 == 0x04 || m28_x6 == 0x05)) {
+            result.operation = formats::MFormat::MemOp::MOV_TO_PMC;
+            return true;
+        }
+        if (major == 0x1 && x3 == 0x0 && m == 0 &&
+            (m28_x6 == 0x14 || m28_x6 == 0x15)) {
+            result.operation = formats::MFormat::MemOp::MOV_FROM_PMC;
+            return true;
+        }
+
         // M42 inserts an instruction or data translation register.  The
         // retained Binutils table assigns x6=0x0f to itr.i and x6=0x0e to
         // itr.d; both use r3 as the low-byte TR selector and r2 as the
@@ -241,9 +256,11 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                 // M16 cmpxchg4.acq uses the exact retained Binutils form
                 // major=4, x=1, m=0, x6a=0x02. Its operands are
                 // r1=[r3] compare result, r2 store value, and AR.CCV.
-                if (x == 1 && m == 0 && x6 == 0x02) {
+                if (x == 1 && m == 0 && (x6 == 0x02 || x6 == 0x03)) {
                     result.operation = formats::MFormat::MemOp::EXCHANGE;
-                    result.size = formats::MFormat::Size::SIZE_4;
+                    result.size = (x6 == 0x03)
+                        ? formats::MFormat::Size::SIZE_8
+                        : formats::MFormat::Size::SIZE_4;
                     return true;
                 }
 
@@ -530,11 +547,13 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::EXCHANGE) {
-            if (fmt.size != formats::MFormat::Size::SIZE_4) {
+            if (fmt.size == formats::MFormat::Size::SIZE_4) {
+                instr = InstructionEx(InstructionType::CMPXCHG4_ACQ, UnitType::M_UNIT);
+            } else if (fmt.size == formats::MFormat::Size::SIZE_8) {
+                instr = InstructionEx(InstructionType::CMPXCHG8_ACQ, UnitType::M_UNIT);
+            } else {
                 return false;
             }
-
-            instr = InstructionEx(InstructionType::CMPXCHG4_ACQ, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r1, fmt.r3, fmt.r2);  // r1=[r3], r2
             return true;
@@ -656,6 +675,18 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             instr = InstructionEx(InstructionType::MOV_TO_CR, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r3, fmt.r2, 0);  // mov cr3 = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_TO_PMC) {
+            instr = InstructionEx(InstructionType::MOV_TO_PMC, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r3, fmt.r2, 0);  // mov pmc[r3] = r2
+            return true;
+        }
+        else if (fmt.operation == formats::MFormat::MemOp::MOV_FROM_PMC) {
+            instr = InstructionEx(InstructionType::MOV_FROM_PMC, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetOperands(fmt.r1, fmt.r3, 0);  // mov r1 = pmc[r3]
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::ITR_I) {

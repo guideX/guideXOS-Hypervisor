@@ -90,6 +90,8 @@ enum class InstructionType {
     MOV_FROM_PSR,// Move from processor status register to general register
     MOV_TO_PSR, // Move the low 32 bits of a general register to PSR.l
     MOV_FROM_CPUID, // Move from processor identification register to GR
+    MOV_TO_PMC, // Move from general register to a performance monitor register
+    MOV_FROM_PMC, // Move from a performance monitor register to general register
     MOV_TO_AR,  // Move from general register to application register
     MOV_FROM_RR,// Move from region register to general register
     MOV_TO_RR,  // Move from general register to region register
@@ -143,6 +145,7 @@ enum class InstructionType {
     // Extract/Deposit (I-type)
     EXTR,       // Extract bits
     DEP,        // Deposit bits
+    DEP_Z,      // Deposit bits with a zero base (dep.z)
     ZXT1,       // Zero extend 1 byte
     ZXT2,       // Zero extend 2 bytes
     ZXT4,       // Zero extend 4 bytes
@@ -178,6 +181,7 @@ enum class InstructionType {
     LD4,        // Load 4 bytes
     LD8,        // Load 8 bytes
     CMPXCHG4_ACQ, // Compare-and-exchange 4 bytes with acquire semantics
+    CMPXCHG8_ACQ, // Compare-and-exchange 8 bytes with acquire semantics
     XCHG4,      // Atomic exchange 4 bytes
     FETCHADD4_ACQ, // Fetch-and-add 4 bytes with acquire semantics
     FETCHADD4_REL, // Fetch-and-add 4 bytes with release semantics

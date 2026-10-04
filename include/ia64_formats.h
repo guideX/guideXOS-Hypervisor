@@ -141,7 +141,9 @@ struct MFormat {
         PTC_L,
         MOV_FROM_PSR,
         MOV_TO_PSR,
-        MOV_FROM_CPUID
+        MOV_FROM_CPUID,
+        MOV_TO_PMC,
+        MOV_FROM_PMC
     } operation;
     
     // Access size

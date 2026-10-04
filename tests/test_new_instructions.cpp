@@ -4273,6 +4273,201 @@ void test_ia64_unsigned_fixed_truncate_modulus_sequence() {
     std::cout << "  ? IA-64 FCVT.FXU.TRUNC modulus sequence passed" << std::endl;
 }
 
+void test_ia64_signed_fixed_truncate_modulus_sequence() {
+    std::cout << "Testing IA-64 FCVT.FX.TRUNC signed modulus sequence..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    const InstructionEx convert = decoder.DecodeSlot(
+        0x4d00162c0ULL, UnitType::F_UNIT, 0x3e7df6);
+    assert_true("raw FCVT.FX.TRUNC should decode",
+                convert.GetType() == InstructionType::FCVT_FX);
+    assert_equal("FCVT.FX.TRUNC destination FP register", 11, convert.GetDst());
+    assert_equal("FCVT.FX.TRUNC source FP register", 11, convert.GetSrc1());
+    assert_string("FCVT.FX.TRUNC disassembly",
+                  "fcvt.fx.trunc.s1 f11 = f11",
+                  convert.GetDisassembly());
+
+    auto setFloatingValue = [&cpu](uint8_t reg, uint64_t significand,
+                                   uint64_t signAndExponent) {
+        uint8_t bytes[16] = {};
+        for (int i = 0; i < 8; ++i) {
+            bytes[i] = static_cast<uint8_t>((significand >> (i * 8)) & 0xff);
+            bytes[8 + i] = static_cast<uint8_t>((signAndExponent >> (i * 8)) & 0xff);
+        }
+        cpu.SetFR(reg, bytes);
+    };
+    auto readFloatingValue = [&cpu](uint8_t reg, uint64_t& significand,
+                                    uint64_t& signAndExponent) {
+        uint8_t bytes[16] = {};
+        cpu.GetFR(reg, bytes);
+        significand = 0;
+        signAndExponent = 0;
+        for (int i = 0; i < 8; ++i) {
+            significand |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+            signAndExponent |= static_cast<uint64_t>(bytes[8 + i]) << (i * 8);
+        }
+    };
+
+    uint64_t significand = 0;
+    uint64_t signAndExponent = 0;
+
+    // +52.5 -> 52, and the integer-format exponent 0x1003e.
+    setFloatingValue(11, 0xd200000000000000ULL, 0x10004ULL);
+    convert.Execute(cpu, memory);
+    readFloatingValue(11, significand, signAndExponent);
+    assert_equal("FCVT.FX.TRUNC truncates a positive value toward zero",
+                 0x34, significand);
+    assert_equal("FCVT.FX.TRUNC positive result uses integer-format exponent",
+                 0x1003E, signAndExponent);
+
+    // -52.5 -> -52, stored as the two's complement significand that XMA.L
+    // consumes as a signed 64-bit value.
+    setFloatingValue(11, 0xd200000000000000ULL, 0x10004ULL | (1ULL << 17));
+    convert.Execute(cpu, memory);
+    readFloatingValue(11, significand, signAndExponent);
+    assert_equal("FCVT.FX.TRUNC sign-extends a negative value",
+                 0xFFFFFFFFFFFFFFCCULL, significand);
+    assert_equal("FCVT.FX.TRUNC negative result uses integer-format exponent",
+                 0x1003E, signAndExponent);
+
+    std::cout << "  ? IA-64 FCVT.FX.TRUNC signed modulus sequence passed" << std::endl;
+}
+
+void test_ia64_dep_z_instruction() {
+    std::cout << "Testing IA-64 DEP.Z instruction..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Authentic pcpu_setup_first_chunk encoding: "dep.z r46=r46,14,18".
+    const InstructionEx depz = decoder.DecodeSlot(
+        0x0a68b15cb80ULL, UnitType::I_UNIT, 0xa20c7c);
+    assert_true("raw dep.z should decode as DEP.Z",
+                depz.GetType() == InstructionType::DEP_Z);
+    assert_equal("dep.z destination register", 46, depz.GetDst());
+    assert_equal("dep.z source register", 46, depz.GetSrc1());
+    assert_string("dep.z disassembly",
+                  "dep.z r46 = r46, 14, 18",
+                  depz.GetDisassembly());
+
+    cpu.SetGR(46, 16);
+    depz.Execute(cpu, memory);
+    assert_equal("dep.z deposits into a zeroed base", 0x40000ULL, cpu.GetGR(46));
+
+    // Bits outside the deposited field must remain zero.
+    cpu.SetGR(46, 0xFFFFFFFFFFFFFFFFULL);
+    depz.Execute(cpu, memory);
+    assert_equal("dep.z clears bits outside the field",
+                 0x3FFFFULL << 14, cpu.GetGR(46));
+
+    std::cout << "  ? IA-64 DEP.Z instruction passed" << std::endl;
+}
+
+void test_ia64_cmpxchg8_instruction() {
+    std::cout << "Testing IA-64 CMPXCHG8.ACQ instruction..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    const InstructionEx exchange = decoder.DecodeSlot(
+        0x80ca02e580ULL, UnitType::M_UNIT, 0x184570);
+    assert_true("raw cmpxchg8.acq should decode",
+                exchange.GetType() == InstructionType::CMPXCHG8_ACQ);
+    assert_equal("cmpxchg8.acq destination register", 22, exchange.GetDst());
+    assert_equal("cmpxchg8.acq address register", 32, exchange.GetSrc1());
+    assert_equal("cmpxchg8.acq value register", 23, exchange.GetSrc2());
+    assert_string("cmpxchg8.acq disassembly",
+                  "cmpxchg8.acq r22 = [r32], r23, ar.ccv",
+                  exchange.GetDisassembly());
+
+    const uint64_t address = 0x2000;
+    cpu.SetPSR(0);  // physical mode for the unit test memory window
+    cpu.SetGR(32, address);
+    cpu.SetGR(23, 0xAABBCCDDEEFF0011ULL);
+    cpu.SetAR(32, 0x1122334455667788ULL);
+
+    uint64_t stored = 0x1122334455667788ULL;
+    memory.Write(address, reinterpret_cast<const uint8_t*>(&stored), sizeof(stored));
+    exchange.Execute(cpu, memory);
+    assert_equal("cmpxchg8.acq returns the old value",
+                 0x1122334455667788ULL, cpu.GetGR(22));
+    memory.Read(address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+    assert_equal("cmpxchg8.acq stores the new value on a match",
+                 0xAABBCCDDEEFF0011ULL, stored);
+
+    // A mismatched compare value must leave memory unchanged.
+    stored = 0x0102030405060708ULL;
+    memory.Write(address, reinterpret_cast<const uint8_t*>(&stored), sizeof(stored));
+    cpu.SetAR(32, 0xFFFFFFFFFFFFFFFFULL);
+    exchange.Execute(cpu, memory);
+    assert_equal("cmpxchg8.acq returns the old value on a mismatch",
+                 0x0102030405060708ULL, cpu.GetGR(22));
+    memory.Read(address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+    assert_equal("cmpxchg8.acq leaves memory unchanged on a mismatch",
+                 0x0102030405060708ULL, stored);
+
+    std::cout << "  ? IA-64 CMPXCHG8.ACQ instruction passed" << std::endl;
+}
+
+void test_alloc_large_rotating_output() {
+    std::cout << "Testing ALLOC with a rotating output count above four..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    cpu.SetCFM(0);
+
+    InstructionEx alloc(InstructionType::ALLOC, UnitType::I_UNIT);
+    alloc.SetOperands(31, 0, 0);
+    // __copy_user: "alloc r31=ar.pfs,51,51,6".
+    alloc.SetImmediate((6ULL << 14) | (51ULL << 7) | 51ULL);
+    alloc.Execute(cpu, memory);
+
+    assert_equal("alloc accepts sor <= sof",
+                 static_cast<uint64_t>(51 | (51 << 7) | (6 << 14)),
+                 cpu.GetCFM());
+    assert_true("alloc records ar.pfs", cpu.GetPFS() == 0);
+
+    std::cout << "  ? ALLOC large rotating output count passed" << std::endl;
+}
+
+void test_ia64_performance_monitor_moves() {
+    std::cout << "Testing IA-64 performance-monitor register moves..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // "mov pmc[r2]=r15" from the perfmon setup path.
+    const InstructionEx toPmc = decoder.DecodeSlot(
+        0x202021e000ULL, UnitType::M_UNIT, 0x2b2b0);
+    assert_true("raw mov pmc should decode",
+                toPmc.GetType() == InstructionType::MOV_TO_PMC);
+    assert_equal("mov pmc selector register", 2, toPmc.GetDst());
+    assert_equal("mov pmc value register", 15, toPmc.GetSrc1());
+    assert_string("mov pmc disassembly",
+                  "mov pmc[r2] = r15",
+                  toPmc.GetDisassembly());
+
+    cpu.SetGR(2, 0);
+    cpu.SetGR(15, 0);
+    toPmc.Execute(cpu, memory);  // Unmodelled write must retire.
+    assert_true("mov pmc write retires without faulting", true);
+
+    cpu.SetGR(5, 0xDEADBEEFULL);
+    InstructionEx fromPmc(InstructionType::MOV_FROM_PMC, UnitType::M_UNIT);
+    fromPmc.SetOperands(6, 5, 0);
+    fromPmc.Execute(cpu, memory);
+    assert_equal("mov from pmc returns zero for an unmodelled counter",
+                 0ULL, cpu.GetGR(6));
+
+    std::cout << "  ? IA-64 performance-monitor register moves passed" << std::endl;
+}
+
 void test_ia64_unknown_slot_formatter() {
     std::cout << "Testing IA-64 unknown-slot formatter..." << std::endl;
 
@@ -4575,6 +4770,11 @@ int main() {
         test_alloc_invalid_frame_size_fails_safe();
         test_cmp4_instructions();
         test_ia64_unsigned_fixed_truncate_modulus_sequence();
+        test_ia64_signed_fixed_truncate_modulus_sequence();
+        test_ia64_dep_z_instruction();
+        test_ia64_cmpxchg8_instruction();
+        test_alloc_large_rotating_output();
+        test_ia64_performance_monitor_moves();
         test_ia64_unknown_slot_formatter();
         test_ia64_br_ctop_state_machine();
         test_ia64_rotating_register_mapping();

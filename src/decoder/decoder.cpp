@@ -782,6 +782,53 @@ static void ExecuteUnsignedFixedTruncate(CPUState& cpu,
     cpu.SetFR(destination, resultBytes);
 }
 
+static void ExecuteSignedFixedTruncate(CPUState& cpu,
+                                        uint8_t destination,
+                                        uint8_t source) {
+    uint8_t sourceBytes[16] = {};
+    uint8_t resultBytes[16] = {};
+    cpu.GetFR(source, sourceBytes);
+    const IA64FloatingValue value = ReadIA64FloatingValue(sourceBytes);
+
+    if (value.natVal) {
+        WriteNatVal(resultBytes);
+        cpu.SetFR(destination, resultBytes);
+        return;
+    }
+
+    // fcvt.fx.trunc converts a finite floating-point value to a signed
+    // integer in IA-64 integer format: the two's-complement integer lives in
+    // the significand field with the integer-format exponent 0x1003e and the
+    // sign field clear.  The ELILO __modsi3/__divsi3 helpers feed the result
+    // straight into xma.l, which reads the significand as a signed 64-bit
+    // value, so the sign must be folded into the two's complement.
+    constexpr int64_t kIntegerExponent = 0x1003E;
+    if (value.significand == 0) {
+        WriteLittleEndian64(resultBytes, 0);
+        WriteLittleEndian64(resultBytes + 8, kIntegerExponent);
+        cpu.SetFR(destination, resultBytes);
+        return;
+    }
+
+    const int64_t shift = static_cast<int64_t>(value.exponent) -
+                          kIntegerExponent;
+    uint64_t integerValue = 0;
+    if (shift >= 64) {
+        integerValue = 0;
+    } else if (shift >= 0) {
+        integerValue = value.significand << static_cast<unsigned>(shift);
+    } else if (shift > -64) {
+        integerValue = value.significand >> static_cast<unsigned>(-shift);
+    }
+    if (value.negative) {
+        integerValue = ~integerValue + 1ULL;
+    }
+
+    WriteLittleEndian64(resultBytes, integerValue);
+    WriteLittleEndian64(resultBytes + 8, kIntegerExponent);
+    cpu.SetFR(destination, resultBytes);
+}
+
 static unsigned FusedArithmeticPrecisionBits(const CPUState& cpu, uint64_t rawBits) {
     const uint8_t major = static_cast<uint8_t>((rawBits >> 37) & 0x0F);
     const bool fixedSingle = ((rawBits >> 36) & 1ULL) != 0;
@@ -1156,6 +1203,16 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             cpu.SetCR(dst_, cpu.GetGR(src1_));
             break;
 
+        case InstructionType::MOV_TO_PMC:
+            // Performance monitor configuration/counter writes are not
+            // modelled; the kernel only needs them to retire.
+            break;
+
+        case InstructionType::MOV_FROM_PMC:
+            // Reads of unmodelled performance monitor registers return zero.
+            cpu.SetGR(dst_, 0);
+            break;
+
         case InstructionType::ITR_I:
         case InstructionType::ITR_D:
             {
@@ -1265,11 +1322,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::FCVT_FX:
-            {
-                uint8_t fr[16] = {};
-                cpu.GetFR(src1_, fr);
-                cpu.SetFR(dst_, fr);
-            }
+            ExecuteSignedFixedTruncate(cpu, dst_, src1_);
             break;
 
         case InstructionType::FMA:
@@ -1597,6 +1650,17 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetGR(dst_, new_val);
             }
             break;
+
+        case InstructionType::DEP_Z:
+            // dep.z rDst = rSrc1, pos, len  (zero base)
+            if (hasImmediate_) {
+                uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
+                uint8_t len = static_cast<uint8_t>(((immediate_ >> 6) & 0x3F) + 1);
+                uint64_t fieldMask = (len >= 64) ? ~0ULL : ((1ULL << len) - 1);
+                uint64_t mask = fieldMask << pos;
+                cpu.SetGR(dst_, (cpu.GetGR(src1_) << pos) & mask);
+            }
+            break;
             
         case InstructionType::ZXT1:
             cpu.SetGR(dst_, cpu.GetGR(src1_) & 0xFF);
@@ -1912,6 +1976,22 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                                   reinterpret_cast<const uint8_t*>(&newValue), sizeof(newValue));
                 }
                 cpu.SetGR(dst_, static_cast<uint64_t>(oldValue));
+                cpu.SetGRNaT(dst_, false);
+            }
+            break;
+
+        case InstructionType::CMPXCHG8_ACQ:
+            {
+                const uint64_t address = cpu.GetGR(src1_);
+                uint64_t oldValue = 0;
+                readIa64Data(cpu, memory, address,
+                             reinterpret_cast<uint8_t*>(&oldValue), sizeof(oldValue));
+                if (oldValue == cpu.GetAR(32)) {
+                    const uint64_t newValue = cpu.GetGR(src2_);
+                    writeIa64Data(cpu, memory, address,
+                                  reinterpret_cast<const uint8_t*>(&newValue), sizeof(newValue));
+                }
+                cpu.SetGR(dst_, oldValue);
                 cpu.SetGRNaT(dst_, false);
             }
             break;
@@ -2238,7 +2318,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 const uint8_t sof = static_cast<uint8_t>(immediate_ & 0x7F);
                 const uint8_t sol = static_cast<uint8_t>((immediate_ >> 7) & 0x7F);
                 const uint8_t sor = static_cast<uint8_t>((immediate_ >> 14) & 0xF);
-                if (sol > sof || sof > 96 || sor > 4) {
+                // The architectural constraint is 0 <= sol <= sof and
+                // 0 <= sor <= sof with sof within the 96-entry register
+                // stack.  sor is a four-bit field (0..15); rejecting sor > 4
+                // mis-decoded valid frames such as __copy_user's
+                // "alloc r31=ar.pfs,51,51,6" as illegal.
+                if (sol > sof || sof > 96 || sor > sof) {
                     throw std::out_of_range("ALLOC frame size invalid");
                 }
 
@@ -2408,6 +2493,16 @@ std::string InstructionEx::GetDisassembly() const {
         case InstructionType::MOV_TO_CR:
             oss << "mov cr[r" << static_cast<int>(dst_) << "] = r"
                 << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::MOV_TO_PMC:
+            oss << "mov pmc[r" << static_cast<int>(dst_) << "] = r"
+                << static_cast<int>(src1_);
+            break;
+
+        case InstructionType::MOV_FROM_PMC:
+            oss << "mov r" << static_cast<int>(dst_) << " = pmc[r"
+                << static_cast<int>(src1_) << "]";
             break;
 
         case InstructionType::ITR_I:
@@ -2756,6 +2851,18 @@ std::string InstructionEx::GetDisassembly() const {
             }
             break;
 
+        case InstructionType::DEP_Z:
+            if (hasImmediate_) {
+                uint8_t pos = static_cast<uint8_t>(immediate_ & 0x3F);
+                uint8_t len = static_cast<uint8_t>(((immediate_ >> 6) & 0x3F) + 1);
+                oss << "dep.z r" << static_cast<int>(dst_) << " = r"
+                    << static_cast<int>(src1_) << ", "
+                    << static_cast<int>(pos) << ", " << static_cast<int>(len);
+            } else {
+                oss << "dep.z r" << static_cast<int>(dst_);
+            }
+            break;
+
         case InstructionType::ZXT1:
             oss << "zxt1 r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_);
             break;
@@ -2890,6 +2997,12 @@ std::string InstructionEx::GetDisassembly() const {
 
         case InstructionType::CMPXCHG4_ACQ:
             oss << "cmpxchg4.acq r" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "], r"
+                << static_cast<int>(src2_) << ", ar.ccv";
+            break;
+
+        case InstructionType::CMPXCHG8_ACQ:
+            oss << "cmpxchg8.acq r" << static_cast<int>(dst_)
                 << " = [r" << static_cast<int>(src1_) << "], r"
                 << static_cast<int>(src2_) << ", ar.ccv";
             break;

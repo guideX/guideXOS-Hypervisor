@@ -16,7 +16,9 @@
 #include <string>
 #include <streambuf>
 #include <vector>
+#include <map>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace {
 
@@ -36,6 +38,8 @@ struct Options {
         "artifact-c:size=13035024;sha256=81B843ACDD1F69456D5D1BF2C6FE7059ECB8730BAAD1405BFFA109872EF23B45;iso-size=4695296000;gzip-sha256=4C62D04431645C8F5F4CC30861DE30A153C47D5B487549B5CFCCF2DE03B8B94";
     std::string equivalenceLogPath;
     std::string dumpRamPath;
+    std::string hotIpsPath;
+    std::vector<uint64_t> probeIps;
     struct InputKey {
         uint16_t scanCode = 0;
         uint16_t unicodeChar = 0;
@@ -152,6 +156,12 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.equivalenceLogPath = argv[++i];
         } else if (argument == "--dump-ram" && i + 1 < argc) {
             options.dumpRamPath = argv[++i];
+        } else if (argument == "--hot-ips" && i + 1 < argc) {
+            options.hotIpsPath = argv[++i];
+        } else if (argument == "--probe-ip" && i + 1 < argc) {
+            uint64_t probe = 0;
+            if (!parseUnsigned(argv[++i], probe)) return false;
+            options.probeIps.push_back(probe);
         } else if (argument == "--help" || argument == "-h") {
             return false;
         } else {
@@ -170,7 +180,8 @@ void printUsage() {
                  "[--verify-oracle PATH] [--instruction-trace] "
                  "[--checkpoint-write PATH | --checkpoint-read PATH] "
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
-                 "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH]\n"
+                 "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
+                 "[--hot-ips PATH]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
                  "--key-after-cycles 300000 --handoff-cycles 1200000000 "
                  "--post-checkpoint-cycles 2000000\n"
@@ -287,6 +298,18 @@ struct ContinuationRecord {
     size_t uniqueInstructionCount = 0;
     size_t uniqueBundleCount = 0;
     std::vector<Instruction> firstInstructions;
+    std::unordered_map<uint64_t, uint64_t> hotIps;
+    bool panicSeen = false;
+    uint64_t panicCaller = 0;
+    uint64_t panicFmtVA = 0;
+    std::string panicFormat;
+    bool doExitSeen = false;
+    uint64_t doExitCaller = 0;
+    uint64_t doExitItc = 0;
+    std::vector<uint64_t> panicPath;
+    bool dieSeen = false;
+    std::vector<uint64_t> diePath;
+    std::vector<std::string> probeLines;
     ia64::CPUState cpu;
     ia64::FramebufferDeviceState framebuffer;
     std::vector<std::string> consoleLines;
@@ -456,16 +479,88 @@ uint64_t canonicalKernelVma(uint64_t rawIP) {
     return bundleIP;
 }
 
-ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles) {
+std::string readKernelCString(ia64::VirtualMachine& vm, uint64_t va, size_t maxLength) {
+    constexpr uint64_t virtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t physicalBase = 0x04000000ULL;
+    if (va < virtualBase) return std::string();
+    const uint64_t pa = va - virtualBase + physicalBase;
+    const uint8_t* memory = vm.getMemory().GetRawData();
+    const size_t size = vm.getMemory().GetTotalSize();
+    if (memory == nullptr || pa >= size) return std::string();
+    const size_t available = std::min<size_t>(size - static_cast<size_t>(pa), maxLength);
+    std::string text;
+    for (size_t i = 0; i < available; ++i) {
+        const char c = static_cast<char>(memory[pa + i]);
+        if (c == '\0') break;
+        text.push_back((c >= 0x20 && c < 0x7F) ? c : '.');
+    }
+    return text;
+}
+
+ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
+                                   bool collectHotIps = false,
+                                   const std::vector<uint64_t>& probeIps = {}) {
+    constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
+    constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     ContinuationRecord record;
     record.firstInstructions.reserve(64);
     std::unordered_set<uint64_t> uniqueInstructions;
     std::unordered_set<uint64_t> uniqueBundles;
+    std::unordered_map<uint64_t, size_t> probeLineIndex;
+    std::vector<uint64_t> recentPath;
+    recentPath.reserve(16384);
     for (uint64_t i = 0; i < cycles; ++i) {
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
         const uint64_t ip = vm.getIP(0);
-        uniqueInstructions.insert(ip | (plugin == nullptr ? 0 : plugin->getCurrentSlot()));
+        const size_t slot = plugin == nullptr ? 0 : plugin->getCurrentSlot();
+        uniqueInstructions.insert(ip | slot);
         uniqueBundles.insert(ip & ~0xFULL);
+        const uint64_t canonicalIp = canonicalKernelVma(ip);
+        recentPath.push_back((canonicalIp & ~0xFULL) | (slot & 0xF));
+        if (recentPath.size() > 16384) {
+            recentPath.erase(recentPath.begin(), recentPath.begin() + 4096);
+        }
+        if (!record.dieSeen && canonicalIp == 0xA00000010003A2D0ULL) {
+            record.dieSeen = true;
+            record.diePath = recentPath;
+        }
+        if (!record.doExitSeen && canonicalIp == doExitEntryVma) {
+            const ia64::CPUState& cpu = vm.getCPUState(0);
+            record.doExitSeen = true;
+            record.doExitCaller = cpu.GetBR(0);
+            record.doExitItc = cpu.GetAR(44);
+        }
+        if (!record.panicSeen && canonicalIp == panicEntryVma) {
+            const ia64::CPUState& cpu = vm.getCPUState(0);
+            record.panicSeen = true;
+            record.panicCaller = cpu.GetBR(0);
+            record.panicFmtVA = cpu.GetGR(32);
+            record.panicFormat = readKernelCString(vm, record.panicFmtVA, 256);
+            record.panicPath = recentPath;
+        }
+        for (const uint64_t probe : probeIps) {
+            if (canonicalIp == probe) {
+                const ia64::CPUState& cpu = vm.getCPUState(0);
+                std::ostringstream probeLine;
+                probeLine << "[IA64-PROBE] ip=0x" << std::hex << probe
+                          << " slot=" << std::dec << slot
+                          << " itc=0x" << std::hex << cpu.GetAR(44);
+                for (size_t reg = 1; reg < 64; ++reg) {
+                    probeLine << " r" << std::dec << reg << "=0x" << std::hex
+                              << cpu.GetGR(reg);
+                }
+                auto it = probeLineIndex.find(probe);
+                if (it == probeLineIndex.end()) {
+                    probeLineIndex[probe] = record.probeLines.size();
+                    record.probeLines.push_back(probeLine.str());
+                } else {
+                    record.probeLines[it->second] = probeLine.str();
+                }
+            }
+        }
+        if (collectHotIps) {
+            ++record.hotIps[canonicalKernelVma(ip)];
+        }
         if (plugin != nullptr && record.firstInstructions.size() < 64) {
             record.firstInstructions.push_back({
                 ip, plugin->getCurrentSlot(), vm.getCPUState(0).GetAR(44)});
@@ -554,6 +649,30 @@ void writeContinuationLog(const std::string& path,
     output << "final_ip=0x" << std::hex << record.cpu.GetIP()
            << " final_canonical_vma=0x" << canonicalKernelVma(record.cpu.GetIP())
            << " final_itc=" << std::dec << record.cpu.GetAR(44) << "\n";
+}
+
+void writeHotIps(const std::string& path,
+                 const char* label,
+                 const ContinuationRecord& record) {
+    if (path.empty()) return;
+    std::vector<std::pair<uint64_t, uint64_t>> entries(record.hotIps.begin(),
+                                                       record.hotIps.end());
+    std::sort(entries.begin(), entries.end(),
+              [](const std::pair<uint64_t, uint64_t>& a,
+                 const std::pair<uint64_t, uint64_t>& b) {
+                  if (a.second != b.second) return a.second > b.second;
+                  return a.first < b.first;
+              });
+    std::ofstream output(path, std::ios::trunc);
+    if (!output) return;
+    output << "label=" << label << " cycles=" << record.cycles
+           << " unique_instructions=" << record.uniqueInstructionCount
+           << " unique_bundles=" << record.uniqueBundleCount
+           << " distinct_ips=" << entries.size() << "\n";
+    for (const auto& entry : entries) {
+        output << "ip=0x" << std::hex << entry.first
+               << " count=" << std::dec << entry.second << "\n";
+    }
 }
 
 void dumpGuestRam(ia64::VirtualMachine& vm, const std::string& path) {
@@ -662,11 +781,14 @@ int main(int argc, char** argv) {
                 return 1;
             }
             const uint64_t consoleBytesBefore = vm->getConsoleTotalBytes();
-            const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles);
+            const bool collectHotIps = !options.hotIpsPath.empty();
+            const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles,
+                                                                collectHotIps, options.probeIps);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
             writeContinuationLog(restoreLog, "restore", restored, vm->getIP(0));
+            writeHotIps(options.hotIpsPath, "restore", restored);
             quietCheckpointDiagnostics.restore();
             std::cout << "[IA64-CHECKPOINT] restored path=\"" << options.checkpointReadPath
                       << "\" cycle=" << vm->getCyclesExecuted()
@@ -679,6 +801,47 @@ int main(int argc, char** argv) {
                       << " finalIP=0x" << std::hex << restored.cpu.GetIP()
                       << " finalCanonicalVMA=0x" << canonicalKernelVma(restored.cpu.GetIP())
                       << std::dec << " strictRecovery=1\n";
+            for (const std::string& probeLine : restored.probeLines) {
+                std::cerr << probeLine << "\n";
+            }
+            if (!options.equivalenceLogPath.empty() && !restored.diePath.empty()) {
+                std::ofstream dieLog(options.equivalenceLogPath + ".diepath.log", std::ios::trunc);
+                if (dieLog) {
+                    for (size_t i = 0; i < restored.diePath.size(); ++i) {
+                        dieLog << i << " ip=0x" << std::hex
+                               << (restored.diePath[i] & ~0xFULL)
+                               << " slot=" << std::dec << (restored.diePath[i] & 0xF)
+                               << "\n";
+                    }
+                }
+            }
+            if (restored.doExitSeen) {
+                std::cerr << "[IA64-DOEXIT] seen=1 caller=0x" << std::hex << restored.doExitCaller
+                          << " callerCanonicalVMA=0x" << canonicalKernelVma(restored.doExitCaller)
+                          << " itc=0x" << restored.doExitItc << std::dec << "\n";
+            } else {
+                std::cerr << "[IA64-DOEXIT] seen=0\n";
+            }
+            if (restored.panicSeen) {
+                std::cerr << "[IA64-PANIC] seen=1 caller=0x" << std::hex << restored.panicCaller
+                          << " callerCanonicalVMA=0x" << canonicalKernelVma(restored.panicCaller)
+                          << " fmtVA=0x" << restored.panicFmtVA
+                          << std::dec << " format=\"" << restored.panicFormat << "\"\n";
+                if (!options.equivalenceLogPath.empty() && !restored.panicPath.empty()) {
+                    std::ofstream pathLog(options.equivalenceLogPath + ".panicpath.log",
+                                          std::ios::trunc);
+                    if (pathLog) {
+                        for (size_t i = 0; i < restored.panicPath.size(); ++i) {
+                            pathLog << i << " ip=0x" << std::hex
+                                    << (restored.panicPath[i] & ~0xFULL)
+                                    << " slot=" << std::dec << (restored.panicPath[i] & 0xF)
+                                    << "\n";
+                        }
+                    }
+                }
+            } else {
+                std::cerr << "[IA64-PANIC] seen=0\n";
+            }
             std::cerr << "[IA64-CHECKPOINT] terminal-state state="
                       << ia64::vmStateToString(vm->getState())
                       << " panic=" << (vm->hasKernelPanic() ? "yes" : "no");
@@ -783,7 +946,9 @@ int main(int argc, char** argv) {
                       << "\" manifest=\"" << manifestPath << "\"\n";
 
             const uint64_t checkpointIP = vm->getIP(0);
-            const ContinuationRecord control = runContinuation(*vm, options.postCheckpointCycles);
+            const bool collectHotIps = !options.hotIpsPath.empty();
+            const ContinuationRecord control = runContinuation(*vm, options.postCheckpointCycles,
+                                                               collectHotIps, options.probeIps);
             const std::string controlLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".control.log";
@@ -804,8 +969,10 @@ int main(int argc, char** argv) {
                 return 1;
             }
             const uint64_t firstRestoreIP = vm->getIP(0);
-            const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles);
+            const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles,
+                                                                collectHotIps, options.probeIps);
             writeContinuationLog(restoreLog, "restore", restored, firstRestoreIP);
+            writeHotIps(options.hotIpsPath, "control", control);
 
             bool traceEqual = control.firstInstructions.size() == restored.firstInstructions.size();
             for (size_t i = 0; traceEqual && i < control.firstInstructions.size(); ++i) {
