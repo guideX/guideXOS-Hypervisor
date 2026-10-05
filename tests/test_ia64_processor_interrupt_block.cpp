@@ -43,6 +43,61 @@ int main() {
         });
     memory.RegisterDevice(&pib);
 
+    // Interrupt delivery renames the register stack exactly like a call: the
+    // interrupted procedure's frame is spilled and the handler builds its own
+    // frame over GR32+.  This model has no RSE backing store, so the plugin
+    // must snapshot the interrupted CFM/stacked view at entry and restore it
+    // on rfi, or the interrupted procedure resumes with the handler's GR32+.
+    {
+        IA64ISAPlugin framePlugin(decoder);
+        // Place the staged bundle inside the synthetic EFI handoff region so
+        // the fetch path does not reinterpret its first qword as a function
+        // descriptor (which would redirect execution to the template bits).
+        Memory frameMemory(0x20000000ULL);
+        constexpr uint64_t interruptedCfm = 4;
+        framePlugin.getCPUState().SetCFM(interruptedCfm);
+        framePlugin.getCPUState().SetGR(32, 0x1111'2222'3333'4444ULL);
+        framePlugin.getCPUState().SetGR(33, 0x5555'6666'7777'8888ULL);
+        framePlugin.getCPUState().SetGR(34, 0x9999'AAAA'BBBB'CCCCULL);
+        framePlugin.getCPUState().SetGR(35, 0xDDDD'EEEE'FFFF'0000ULL);
+
+        framePlugin.setInterruptsEnabled(true);
+        framePlugin.queueInterrupt(0xEF);
+        require(framePlugin.tryDeliverPendingInterrupt(),
+                "interrupt frame test delivers an external interrupt");
+        require(framePlugin.hasInServiceInterrupt(),
+                "interrupt frame test marks the vector in service");
+
+        // The handler clobbers the register stack with its own frame.
+        framePlugin.getCPUState().SetCFM(0x895);
+        framePlugin.getCPUState().SetGR(32, 0xDEAD'BEEF'DEAD'BEEFULL);
+        framePlugin.getCPUState().SetGR(33, 0xFEED'FACE'FEED'FACEULL);
+
+        // Stage a synthetic MIB bundle whose third slot is rfi (raw slot
+        // 0x40000000) and restore the interrupted IIP/IPSR.
+        constexpr uint64_t rfiBundleAddress = 0x1FE00000ULL;
+        const uint8_t rfiBundle[16] = {0x10, 0, 0, 0, 0, 0, 0, 0,
+                                       0, 0, 0, 0, 0, 0, 0x20, 0};
+        frameMemory.Write(rfiBundleAddress, rfiBundle, sizeof(rfiBundle));
+        framePlugin.getCPUState().SetIP(rfiBundleAddress);
+        framePlugin.getCPUState().SetCR(19, 0x1FE00020ULL);
+        framePlugin.getCPUState().SetCR(16, 0);
+        // The rfi is the third slot of the bundle; advance through the two
+        // leading nops before the return executes.
+        for (int slot = 0; slot < 3; ++slot) {
+            require(framePlugin.step(frameMemory) != ISAExecutionResult::HALT,
+                    "interrupt frame test executes the staged rfi bundle");
+        }
+
+        require(framePlugin.getCPUState().GetGR(32) == 0x1111'2222'3333'4444ULL &&
+                    framePlugin.getCPUState().GetGR(33) == 0x5555'6666'7777'8888ULL &&
+                    framePlugin.getCPUState().GetGR(34) == 0x9999'AAAA'BBBB'CCCCULL &&
+                    framePlugin.getCPUState().GetGR(35) == 0xDDDD'EEEE'FFFF'0000ULL,
+                "interrupted stacked registers survive the handler and rfi");
+        require(framePlugin.getCPUState().GetCFM() == interruptedCfm,
+                "interrupted CFM survives the handler and rfi");
+    }
+
     const uint64_t base = ProcessorInterruptBlock::kDefaultBaseAddress;
     const uint64_t targetAddress = base | (0x12ULL << 12) | (0x34ULL << 4);
     const auto decodedAddress = ProcessorInterruptBlock::DecodeAddress(targetAddress);
@@ -138,7 +193,10 @@ int main() {
             "redirected messages do not enter the direct CPU path");
 
     // Execute the actual store normalization path used by Linux's st8.rel.
+    // st8.rel runs with data address translation enabled; region 6 is the
+    // kernel's uncached physical/I/O alias of the PIB.
     plugin.reset();
+    plugin.getCPUState().SetPSR(plugin.getCPUState().GetPSR() | (1ULL << 17));
     plugin.getCPUState().SetGR(14, 0xC0000000FEE00000ULL);
     plugin.getCPUState().SetGR(34, 0xEFULL);
     InstructionEx store(InstructionType::ST8, UnitType::M_UNIT);

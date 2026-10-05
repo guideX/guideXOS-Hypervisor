@@ -2767,6 +2767,7 @@ void IA64ISAPlugin::reset() {
     lastInterruptTransactionValid_ = false;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    interruptFrameStack_.clear();
     recentInstructions_.clear();
     recentTrackedRegisterWrites_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
@@ -3276,6 +3277,14 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             if (executeInstruction(memory, cachedInstruction_, true)) {
                 hasCachedInstruction_ = false;
                 return ISAExecutionResult::CONTINUE;
+            }
+            if (!interruptFrameStack_.empty()) {
+                const CallFrameSnapshot frame = interruptFrameStack_.back();
+                interruptFrameStack_.pop_back();
+                cpu.SetCFM(frame.cfm);
+                for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
+                    cpu.SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
+                }
             }
             const uint64_t normalizedIP = normalizeRfiEntryIP(cpu.GetIP());
             const size_t restoredSlot = static_cast<size_t>((restoredPSR >> 41) & 0x3ULL);
@@ -5302,6 +5311,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     lastInterruptTransactionValid_ = false;
     hasCachedInstruction_ = false;
     pendingCallInputs_.clear();
+    interruptFrameStack_.clear();
     resetEfiProtocolAttachments();
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
@@ -9336,6 +9346,17 @@ bool IA64ISAPlugin::servicePendingInterrupt() {
     const uint64_t handlerAddress = normalizeKernelEntryIP(
         (iva != 0 ? iva : state_.interruptVectorBase_) +
         ia64IvtEntryOffset(IA64_EXTERNAL_INTERRUPT_VECTOR));
+    // The interrupted frame must survive the handler's own register-stack use.
+    // Snapshot the CFM and the logical GR32+ view now; rfi restores it.
+    {
+        CallFrameSnapshot frame{};
+        frame.cfm = cpu.GetCFM();
+        frame.returnAddress = cpu.GetCR(IA64_CR_IIP);
+        for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
+            frame.stackedRegisters[i] = cpu.GetGR(NUM_STATIC_GR + i);
+        }
+        interruptFrameStack_.push_back(frame);
+    }
     cpu.SetIP(handlerAddress);
     state_.bundleValid_ = false;
     state_.currentSlot_ = 0;

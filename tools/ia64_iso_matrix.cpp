@@ -4,6 +4,7 @@
 #include "logger.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -310,10 +311,34 @@ struct ContinuationRecord {
     bool dieSeen = false;
     std::vector<uint64_t> diePath;
     std::vector<std::string> probeLines;
+    bool faultSeen = false;
+    uint64_t faultVectorEntry = 0;
+    std::vector<std::string> faultTrace;
+    std::vector<std::string> interruptTrace;
+    bool spinSeen = false;
+    std::vector<uint64_t> spinPath;
     ia64::CPUState cpu;
     ia64::FramebufferDeviceState framebuffer;
     std::vector<std::string> consoleLines;
     uint64_t consoleBytes = 0;
+};
+
+struct FaultStep {
+    uint64_t ip = 0;
+    size_t slot = 0;
+    uint64_t cfm = 0;
+    uint64_t r8 = 0;
+    uint64_t r32 = 0;
+    uint64_t r33 = 0;
+    uint64_t r34 = 0;
+    uint64_t r35 = 0;
+    uint64_t r44 = 0;
+    uint64_t r45 = 0;
+    uint64_t r46 = 0;
+    uint64_t r47 = 0;
+    uint64_t r48 = 0;
+    uint64_t b0 = 0;
+    uint64_t itc = 0;
 };
 
 ia64::IA64ISAPlugin* getPlugin(ia64::VirtualMachine& vm) {
@@ -509,6 +534,10 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
     std::unordered_map<uint64_t, size_t> probeLineIndex;
     std::vector<uint64_t> recentPath;
     recentPath.reserve(16384);
+    constexpr size_t faultRingSize = 64;
+    std::array<FaultStep, faultRingSize> faultRing{};
+    size_t faultRingCount = 0;
+    constexpr uint64_t ivtFaultEntryVma = 0xA000000100000000ULL;
     for (uint64_t i = 0; i < cycles; ++i) {
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
         const uint64_t ip = vm.getIP(0);
@@ -519,6 +548,88 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
         recentPath.push_back((canonicalIp & ~0xFULL) | (slot & 0xF));
         if (recentPath.size() > 16384) {
             recentPath.erase(recentPath.begin(), recentPath.begin() + 4096);
+        }
+        const uint64_t previousFaultIp = faultRingCount > 0
+            ? (faultRing[(faultRingCount - 1) % faultRingSize].ip & ~0xFULL) : 0;
+        constexpr uint64_t externalInterruptEntryVma = 0xA000000100003000ULL;
+        if (canonicalIp == externalInterruptEntryVma &&
+            previousFaultIp >= 0xA0000001003F11A0ULL &&
+            previousFaultIp <= 0xA0000001003F1330ULL) {
+            record.interruptTrace.clear();
+            const size_t count = std::min(faultRingCount, faultRingSize);
+            for (size_t k = 0; k < count; ++k) {
+                const size_t index = (faultRingCount - count + k) % faultRingSize;
+                const FaultStep& step = faultRing[index];
+                std::ostringstream line;
+                line << "[IA64-INTERRUPTPATH] ip=0x" << std::hex << (step.ip & ~0xFULL)
+                     << " slot=" << std::dec << step.slot
+                     << " cfm=0x" << std::hex << step.cfm
+                     << " r8=0x" << step.r8
+                     << " r32=0x" << step.r32
+                     << " r33=0x" << step.r33
+                     << " r34=0x" << step.r34
+                     << " r35=0x" << step.r35
+                     << " r44=0x" << step.r44
+                     << " r45=0x" << step.r45
+                     << " r46=0x" << step.r46
+                     << " r47=0x" << step.r47
+                     << " r48=0x" << step.r48
+                     << " b0=0x" << step.b0
+                     << " itc=0x" << step.itc;
+                record.interruptTrace.push_back(line.str());
+            }
+        }
+        if (canonicalIp == ivtFaultEntryVma &&
+            previousFaultIp == 0xA0000001003F1260ULL) {
+            record.faultSeen = true;
+            record.faultVectorEntry = canonicalIp;
+            record.faultTrace.clear();
+            const size_t count = std::min(faultRingCount, faultRingSize);
+            for (size_t k = 0; k < count; ++k) {
+                const size_t index = (faultRingCount - count + k) % faultRingSize;
+                const FaultStep& step = faultRing[index];
+                std::ostringstream line;
+                line << "[IA64-FAULTPATH] ip=0x" << std::hex << (step.ip & ~0xFULL)
+                     << " slot=" << std::dec << step.slot
+                     << " cfm=0x" << std::hex << step.cfm
+                     << " r8=0x" << step.r8
+                     << " r32=0x" << step.r32
+                     << " r33=0x" << step.r33
+                     << " r34=0x" << step.r34
+                     << " r35=0x" << step.r35
+                     << " r44=0x" << step.r44
+                     << " r45=0x" << step.r45
+                     << " r46=0x" << step.r46
+                     << " r47=0x" << step.r47
+                     << " r48=0x" << step.r48
+                     << " b0=0x" << step.b0
+                     << " itc=0x" << step.itc;
+                record.faultTrace.push_back(line.str());
+            }
+        }
+        {
+            FaultStep& step = faultRing[faultRingCount % faultRingSize];
+            const ia64::CPUState& stepCpu = vm.getCPUState(0);
+            step.ip = canonicalIp;
+            step.slot = slot;
+            step.cfm = stepCpu.GetCFM();
+            step.r8 = stepCpu.GetGR(8);
+            step.r32 = stepCpu.GetGR(32);
+            step.r33 = stepCpu.GetGR(33);
+            step.r34 = stepCpu.GetGR(34);
+            step.r35 = stepCpu.GetGR(35);
+            step.r44 = stepCpu.GetGR(44);
+            step.r45 = stepCpu.GetGR(45);
+            step.r46 = stepCpu.GetGR(46);
+            step.r47 = stepCpu.GetGR(47);
+            step.r48 = stepCpu.GetGR(48);
+            step.b0 = stepCpu.GetBR(0);
+            step.itc = stepCpu.GetAR(44);
+            ++faultRingCount;
+        }
+        if (!record.spinSeen && canonicalIp == 0xA000000100829CB0ULL) {
+            record.spinSeen = true;
+            record.spinPath = recentPath;
         }
         if (!record.dieSeen && canonicalIp == 0xA00000010003A2D0ULL) {
             record.dieSeen = true;
@@ -803,6 +914,40 @@ int main(int argc, char** argv) {
                       << std::dec << " strictRecovery=1\n";
             for (const std::string& probeLine : restored.probeLines) {
                 std::cerr << probeLine << "\n";
+            }
+            for (const std::string& faultLine : restored.faultTrace) {
+                std::cerr << faultLine << "\n";
+            }
+            for (const std::string& interruptLine : restored.interruptTrace) {
+                std::cerr << interruptLine << "\n";
+            }
+            if (!options.equivalenceLogPath.empty() && !restored.spinPath.empty()) {
+                std::ofstream spinLog(options.equivalenceLogPath + ".spinpath.log",
+                                      std::ios::trunc);
+                if (spinLog) {
+                    for (size_t i = 0; i < restored.spinPath.size(); ++i) {
+                        spinLog << i << " ip=0x" << std::hex
+                                << (restored.spinPath[i] & ~0xFULL)
+                                << " slot=" << std::dec << (restored.spinPath[i] & 0xF)
+                                << "\n";
+                    }
+                }
+            }
+            if (!options.equivalenceLogPath.empty() &&
+                (!restored.faultTrace.empty() || !restored.interruptTrace.empty())) {
+                std::ofstream traceLog(options.equivalenceLogPath + ".faulttrace.log",
+                                       std::ios::trunc);
+                if (traceLog) {
+                    for (const std::string& line : restored.probeLines) {
+                        traceLog << line << "\n";
+                    }
+                    for (const std::string& line : restored.faultTrace) {
+                        traceLog << line << "\n";
+                    }
+                    for (const std::string& line : restored.interruptTrace) {
+                        traceLog << line << "\n";
+                    }
+                }
             }
             if (!options.equivalenceLogPath.empty() && !restored.diePath.empty()) {
                 std::ofstream dieLog(options.equivalenceLogPath + ".diepath.log", std::ios::trunc);

@@ -658,6 +658,12 @@ private:
     // Retain the latest completed snapshot for each return address so the
     // return can restore the caller's stacked-register view as the RSE would.
     std::unordered_map<uint64_t, CallFrameSnapshot> completedCallFrames_;
+    // Interrupt delivery renames the register stack the same way a call does:
+    // the interrupted procedure's frame is spilled and the handler builds its
+    // own frame over GR32+.  This model has no RSE backing store, so the
+    // interrupted CFM and stacked-register view are snapshotted at entry and
+    // restored by rfi, exactly as the call-frame mechanism covers calls.
+    std::vector<CallFrameSnapshot> interruptFrameStack_;
 
     // Narrow diagnostics for register_config_options only.
     uint64_t pendingRegisterConfigEntryTarget_;
