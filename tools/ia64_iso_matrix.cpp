@@ -2,6 +2,7 @@
 #include "IA64ISAPlugin.h"
 #include "ProcessorInterruptBlock.h"
 #include "logger.h"
+#include "memory.h"
 
 #include <algorithm>
 #include <array>
@@ -40,6 +41,7 @@ struct Options {
     std::string equivalenceLogPath;
     std::string dumpRamPath;
     std::string hotIpsPath;
+    std::string lockTracePath;
     std::vector<uint64_t> probeIps;
     struct InputKey {
         uint16_t scanCode = 0;
@@ -159,6 +161,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.dumpRamPath = argv[++i];
         } else if (argument == "--hot-ips" && i + 1 < argc) {
             options.hotIpsPath = argv[++i];
+        } else if (argument == "--lock-trace" && i + 1 < argc) {
+            options.lockTracePath = argv[++i];
         } else if (argument == "--probe-ip" && i + 1 < argc) {
             uint64_t probe = 0;
             if (!parseUnsigned(argv[++i], probe)) return false;
@@ -182,7 +186,7 @@ void printUsage() {
                  "[--checkpoint-write PATH | --checkpoint-read PATH] "
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
-                 "[--hot-ips PATH]\n"
+                 "[--hot-ips PATH] [--lock-trace PATH]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
                  "--key-after-cycles 300000 --handoff-cycles 1200000000 "
                  "--post-checkpoint-cycles 2000000\n"
@@ -524,7 +528,8 @@ std::string readKernelCString(ia64::VirtualMachine& vm, uint64_t va, size_t maxL
 
 ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    bool collectHotIps = false,
-                                   const std::vector<uint64_t>& probeIps = {}) {
+                                   const std::vector<uint64_t>& probeIps = {},
+                                   std::string lockTracePath = {}) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     ContinuationRecord record;
@@ -537,6 +542,89 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
     constexpr size_t faultRingSize = 64;
     std::array<FaultStep, faultRingSize> faultRing{};
     size_t faultRingCount = 0;
+    constexpr uint64_t vmlistLockVma = 0xA000000100CBE4E8ULL;
+    constexpr uint64_t vmlistLockPa = 0x04CBE4E8ULL;
+    std::ofstream lockTrace;
+    ia64::Memory* concreteMemory = nullptr;
+    size_t lockWriteHookId = 0;
+    const uint8_t* rawMemory = nullptr;
+    if (!lockTracePath.empty()) {
+        lockTrace.open(lockTracePath, std::ios::trunc);
+        concreteMemory = dynamic_cast<ia64::Memory*>(&vm.getMemory());
+        rawMemory = vm.getMemory().GetRawData();
+        uint32_t initialLockWord = 0;
+        const bool initialLockAvailable = rawMemory != nullptr &&
+            vmlistLockPa + sizeof(initialLockWord) <= vm.getMemory().GetTotalSize();
+        if (initialLockAvailable) {
+            std::memcpy(&initialLockWord, rawMemory + vmlistLockPa,
+                        sizeof(initialLockWord));
+        }
+        if (lockTrace && concreteMemory != nullptr) {
+            lockTrace << "[VLIST-LOCK] initial cycle=" << vm.getCyclesExecuted()
+                      << " vma=0x" << std::hex << vmlistLockVma
+                      << " pa=0x" << vmlistLockPa << " value=0x"
+                      << (initialLockAvailable ? initialLockWord : 0)
+                      << " available=" << (initialLockAvailable ? 1 : 0)
+                      << std::dec << "\n";
+            lockWriteHookId = concreteMemory->GetMMU().RegisterWriteHook(
+                [&vm, &lockTrace, rawMemory](ia64::HookContext& context,
+                                             uint8_t* data) {
+                    const uint64_t lockEnd = vmlistLockPa + sizeof(uint32_t);
+                    const uint64_t writeEnd =
+                        context.physicalAddress + context.size;
+                    if (context.physicalAddress >= lockEnd ||
+                        writeEnd <= vmlistLockPa) {
+                        return;
+                    }
+                    uint32_t before = 0;
+                    uint32_t after = 0;
+                    bool beforeAvailable = rawMemory != nullptr &&
+                        vmlistLockPa + sizeof(before) <=
+                            vm.getMemory().GetTotalSize();
+                    if (beforeAvailable) {
+                        std::memcpy(&before, rawMemory + vmlistLockPa,
+                                    sizeof(before));
+                        after = before;
+                    }
+                    for (size_t byte = 0; byte < context.size; ++byte) {
+                        const uint64_t address = context.physicalAddress + byte;
+                        if (address >= vmlistLockPa && address < lockEnd) {
+                            const unsigned shift =
+                                static_cast<unsigned>((address - vmlistLockPa) * 8);
+                            const uint32_t mask = 0xFFU << shift;
+                            after = (after & ~mask) |
+                                (static_cast<uint32_t>(data[byte]) << shift);
+                        }
+                    }
+                    const ia64::CPUState& cpu = vm.getCPUState(0);
+                    const ia64::IA64ISAPlugin* plugin = getPlugin(vm);
+                    lockTrace << "[VLIST-LOCK] write cycle="
+                              << vm.getCyclesExecuted() << " ip=0x" << std::hex
+                              << canonicalKernelVma(vm.getIP(0))
+                              << " slot=" << std::dec
+                              << (plugin == nullptr ? 0 : plugin->getCurrentSlot())
+                              << " va=0x" << std::hex << context.address
+                              << " pa=0x" << context.physicalAddress
+                              << " size=0x" << context.size
+                              << " before=0x" << before << " after=0x" << after
+                              << " oldAvailable=" << (beforeAvailable ? 1 : 0)
+                              << " cfm=0x" << cpu.GetCFM()
+                              << " r2=0x" << cpu.GetGR(2)
+                              << " r32=0x" << cpu.GetGR(32)
+                              << " ccv=0x" << cpu.GetAR(32);
+                    for (size_t reg = 0; reg < 8; ++reg) {
+                        lockTrace << " b" << std::dec << reg << "=0x"
+                                  << std::hex << cpu.GetBR(reg);
+                    }
+                    lockTrace << std::dec << "\n";
+                });
+        } else {
+            std::cerr << "[VLIST-LOCK] trace setup failed path=\""
+                      << lockTracePath << "\" memoryType="
+                      << (concreteMemory == nullptr ? "unsupported" : "ok")
+                      << " file=" << (lockTrace ? "ok" : "failed") << "\n";
+        }
+    }
     constexpr uint64_t ivtFaultEntryVma = 0xA000000100000000ULL;
     for (uint64_t i = 0; i < cycles; ++i) {
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
@@ -678,6 +766,23 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
         }
         if (!vm.step()) break;
         ++record.cycles;
+    }
+    if (lockWriteHookId != 0 && concreteMemory != nullptr) {
+        concreteMemory->GetMMU().UnregisterWriteHook(lockWriteHookId);
+    }
+    if (lockTrace) {
+        uint32_t finalLockWord = 0;
+        const bool finalLockAvailable = rawMemory != nullptr &&
+            vmlistLockPa + sizeof(finalLockWord) <= vm.getMemory().GetTotalSize();
+        if (finalLockAvailable) {
+            std::memcpy(&finalLockWord, rawMemory + vmlistLockPa,
+                        sizeof(finalLockWord));
+        }
+        lockTrace << "[VLIST-LOCK] final cycle=" << vm.getCyclesExecuted()
+                  << " value=0x" << std::hex
+                  << (finalLockAvailable ? finalLockWord : 0)
+                  << " available=" << (finalLockAvailable ? 1 : 0)
+                  << std::dec << "\n";
     }
     record.cpu = vm.getCPUState(0);
     record.uniqueInstructionCount = uniqueInstructions.size();
@@ -894,7 +999,8 @@ int main(int argc, char** argv) {
             const uint64_t consoleBytesBefore = vm->getConsoleTotalBytes();
             const bool collectHotIps = !options.hotIpsPath.empty();
             const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles,
-                                                                collectHotIps, options.probeIps);
+                                                                collectHotIps, options.probeIps,
+                                                                options.lockTracePath);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";

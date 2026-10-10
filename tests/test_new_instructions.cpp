@@ -1111,6 +1111,27 @@ void test_latest_boot_log_blockers() {
     assert_equal("Linux dep should preserve the source address except field",
                  0xa0000001009674a0ULL, depCpu.GetGR(19));
 
+    // Exact Linux write-lock bit construction at canonical IP
+    // 0xa000000100829c96: dep r29=-1,r0,31,1.  The architectural r0 merge
+    // base must replace the destination's old low bits.
+    InstructionEx depWriteLockBit = decoder.DecodeSlot(0xbe00080740ULL,
+                                                        UnitType::I_UNIT,
+                                                        0x04829c96);
+    assert_true("Linux write-lock dep should decode",
+                depWriteLockBit.GetType() == InstructionType::DEP);
+    assert_equal("Linux write-lock dep destination", 29,
+                 depWriteLockBit.GetDst());
+    assert_equal("Linux write-lock dep merge base is r0", 0,
+                 depWriteLockBit.GetSrc2());
+    assert_string("Linux write-lock dep disassembly",
+                  "dep r29 = 1, r0, 31, 1",
+                  depWriteLockBit.GetDisassembly());
+    CPUState depWriteLockCpu;
+    depWriteLockCpu.SetGR(29, 0x20);
+    depWriteLockBit.Execute(depWriteLockCpu, kernelMemory);
+    assert_equal("Linux write-lock dep must not retain stale low bits",
+                 0x80000000ULL, depWriteLockCpu.GetGR(29));
+
     cpu.SetGR(26, 1);
     cpu.SetGR(27, 2);
     cmp_ltu.Execute(cpu, memory);
@@ -3722,6 +3743,58 @@ void test_popcnt_instruction() {
     std::cout << "  ? POPCNT passed" << std::endl;
 }
 
+void test_ia64_czx1_r_instruction() {
+    std::cout << "Testing IA-64 CZX1.R..." << std::endl;
+
+    InstructionDecoder decoder;
+    Memory memory(1024 * 1024);
+    CPUState cpu;
+
+    // Exact Debian 7.11 kernel I29 slot at 0xa0000001003e8ba6:
+    // czx1.r r22 = r33.  The adjacent slot is the same encoding for r23=r35.
+    constexpr uint64_t rawCzx1R = 0x0E2100580ULL;
+    InstructionEx czx1r = decoder.DecodeSlot(rawCzx1R, UnitType::I_UNIT,
+                                             0xA0000001003E8BA6ULL);
+    assert_true("Authentic CZX1.R encoding should decode",
+                czx1r.GetType() == InstructionType::CZX1_R);
+    assert_equal("CZX1.R destination", 22, czx1r.GetDst());
+    assert_equal("CZX1.R source", 33, czx1r.GetSrc1());
+    assert_string("CZX1.R disassembly", "czx1.r r22 = r33",
+                  czx1r.GetDisassembly());
+
+    // IA-64 scans least-significant byte first.  "rootfs\0" therefore
+    // returns 6, which is the length Linux needs from strlen().
+    cpu.SetGR(33, 0x007366746F6F72ULL);
+    czx1r.Execute(cpu, memory);
+    assert_equal("CZX1.R finds the first zero byte", 6, cpu.GetGR(22));
+
+    cpu.SetGR(33, 0xFFFFFFFFFFFFFFFFULL);
+    czx1r.Execute(cpu, memory);
+    assert_equal("CZX1.R returns eight when no byte is zero", 8, cpu.GetGR(22));
+
+    cpu.SetGR(33, 0xFFFFFFFFFFFFFF00ULL);
+    czx1r.Execute(cpu, memory);
+    assert_equal("CZX1.R finds a zero in byte zero", 0, cpu.GetGR(22));
+
+    cpu.SetGR(33, 0xFF00FFFFFFFFFFFFULL);
+    cpu.SetGRNaT(33, true);
+    czx1r.Execute(cpu, memory);
+    assert_equal("CZX1.R finds a zero in byte six", 6, cpu.GetGR(22));
+    assert_true("CZX1.R propagates source NaT", cpu.GetGRNaT(22));
+
+    cpu.SetPR(1, false);
+    cpu.SetGR(22, 0xA5A5A5A5ULL);
+    cpu.SetGRNaT(22, false);
+    czx1r.SetPredicate(1);
+    czx1r.Execute(cpu, memory);
+    assert_equal("False-predicated CZX1.R preserves its destination",
+                 0xA5A5A5A5ULL, cpu.GetGR(22));
+    assert_true("False-predicated CZX1.R preserves destination NaT",
+                !cpu.GetGRNaT(22));
+
+    std::cout << "  ? CZX1.R passed" << std::endl;
+}
+
 // Test extract/deposit operations
 void test_extract_deposit() {
     std::cout << "Testing extract/deposit operations..." << std::endl;
@@ -4414,6 +4487,74 @@ void test_ia64_cmpxchg8_instruction() {
     std::cout << "  ? IA-64 CMPXCHG8.ACQ instruction passed" << std::endl;
 }
 
+void test_ia64_cmpxchg_release_instructions() {
+    std::cout << "Testing IA-64 CMPXCHG.REL instructions..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+
+    // Exact Debian 7.11 IA-64 kernel instruction at canonical VMA
+    // 0xa0000001000d0fd6 (physical IP 0x040d0fd6).
+    const InstructionEx exchange8 = decoder.DecodeSlot(
+        0x81CA41C440ULL, UnitType::M_UNIT, 0x040d0fd6);
+    assert_true("raw cmpxchg8.rel should decode",
+                exchange8.GetType() == InstructionType::CMPXCHG8_REL);
+    assert_equal("cmpxchg8.rel destination register", 17, exchange8.GetDst());
+    assert_equal("cmpxchg8.rel address register", 36, exchange8.GetSrc1());
+    assert_equal("cmpxchg8.rel value register", 14, exchange8.GetSrc2());
+    assert_string("cmpxchg8.rel disassembly",
+                  "cmpxchg8.rel r17 = [r36], r14, ar.ccv",
+                  exchange8.GetDisassembly());
+
+    const uint64_t address8 = 0x2000;
+    cpu.SetPSR(0);
+    cpu.SetGR(36, address8);
+    cpu.SetGR(14, 0xAABBCCDDEEFF0011ULL);
+    cpu.SetAR(32, 0x1122334455667788ULL);
+    uint64_t stored8 = 0x1122334455667788ULL;
+    memory.Write(address8, reinterpret_cast<const uint8_t*>(&stored8), sizeof(stored8));
+    exchange8.Execute(cpu, memory);
+    assert_equal("cmpxchg8.rel returns the old value on a match",
+                 0x1122334455667788ULL, cpu.GetGR(17));
+    memory.Read(address8, reinterpret_cast<uint8_t*>(&stored8), sizeof(stored8));
+    assert_equal("cmpxchg8.rel stores on a match",
+                 0xAABBCCDDEEFF0011ULL, stored8);
+
+    stored8 = 0x0102030405060708ULL;
+    memory.Write(address8, reinterpret_cast<const uint8_t*>(&stored8), sizeof(stored8));
+    cpu.SetAR(32, 0xFFFFFFFFFFFFFFFFULL);
+    exchange8.Execute(cpu, memory);
+    assert_equal("cmpxchg8.rel returns the old value on a mismatch",
+                 0x0102030405060708ULL, cpu.GetGR(17));
+    memory.Read(address8, reinterpret_cast<uint8_t*>(&stored8), sizeof(stored8));
+    assert_equal("cmpxchg8.rel leaves memory unchanged on a mismatch",
+                 0x0102030405060708ULL, stored8);
+
+    // The same instruction encoding family supports the four-byte release form.
+    const InstructionEx exchange4 = decoder.DecodeSlot(
+        0x818A41C440ULL, UnitType::M_UNIT, 0x040d0fd6);
+    assert_true("raw cmpxchg4.rel should decode",
+                exchange4.GetType() == InstructionType::CMPXCHG4_REL);
+    assert_string("cmpxchg4.rel disassembly",
+                  "cmpxchg4.rel r17 = [r36], r14, ar.ccv",
+                  exchange4.GetDisassembly());
+
+    const uint64_t address4 = 0x2100;
+    cpu.SetGR(36, address4);
+    cpu.SetGR(14, 0xAABBCCDDU);
+    cpu.SetAR(32, 0x11223344U);
+    uint32_t stored4 = 0x11223344U;
+    memory.Write(address4, reinterpret_cast<const uint8_t*>(&stored4), sizeof(stored4));
+    exchange4.Execute(cpu, memory);
+    assert_equal("cmpxchg4.rel returns the old value on a match",
+                 0x11223344U, cpu.GetGR(17));
+    memory.Read(address4, reinterpret_cast<uint8_t*>(&stored4), sizeof(stored4));
+    assert_equal("cmpxchg4.rel stores on a match", 0xAABBCCDDU, stored4);
+
+    std::cout << "  ? IA-64 CMPXCHG.REL instructions passed" << std::endl;
+}
+
 void test_alloc_large_rotating_output() {
     std::cout << "Testing ALLOC with a rotating output count above four..." << std::endl;
 
@@ -4757,6 +4898,7 @@ int main() {
         test_ia64_sub_minus_one_raw_encoding();
         test_shift_operations();
         test_popcnt_instruction();
+        test_ia64_czx1_r_instruction();
         test_extract_deposit();
         test_memory_operations();
         test_predicated_execution();
@@ -4773,6 +4915,7 @@ int main() {
         test_ia64_signed_fixed_truncate_modulus_sequence();
         test_ia64_dep_z_instruction();
         test_ia64_cmpxchg8_instruction();
+        test_ia64_cmpxchg_release_instructions();
         test_alloc_large_rotating_output();
         test_ia64_performance_monitor_moves();
         test_ia64_unknown_slot_formatter();

@@ -141,6 +141,7 @@ enum class InstructionType {
     SHLADD,     // Shift left and add
     POPCNT,     // Population count
     MUX1,       // Byte permutation / broadcast (I21)
+    CZX1_R,     // Compute index of first zero byte from least significant side
     
     // Extract/Deposit (I-type)
     EXTR,       // Extract bits
@@ -182,6 +183,8 @@ enum class InstructionType {
     LD8,        // Load 8 bytes
     CMPXCHG4_ACQ, // Compare-and-exchange 4 bytes with acquire semantics
     CMPXCHG8_ACQ, // Compare-and-exchange 8 bytes with acquire semantics
+    CMPXCHG4_REL, // Compare-and-exchange 4 bytes with release semantics
+    CMPXCHG8_REL, // Compare-and-exchange 8 bytes with release semantics
     XCHG4,      // Atomic exchange 4 bytes
     FETCHADD4_ACQ, // Fetch-and-add 4 bytes with acquire semantics
     FETCHADD4_REL, // Fetch-and-add 4 bytes with release semantics

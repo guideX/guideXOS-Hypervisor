@@ -1599,6 +1599,21 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             }
             break;
 
+        case InstructionType::CZX1_R:
+            {
+                const uint64_t source = cpu.GetGR(src1_);
+                uint64_t index = 8;
+                for (uint64_t byteIndex = 0; byteIndex < 8; ++byteIndex) {
+                    if (((source >> (byteIndex * 8)) & 0xFF) == 0) {
+                        index = byteIndex;
+                        break;
+                    }
+                }
+                cpu.SetGR(dst_, index);
+                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_));
+            }
+            break;
+
         case InstructionType::SHRP:
             // shrp rDst = rSrc1, rSrc2, count: low 64 bits of (rSrc1:rSrc2) >> count.
             if (hasImmediate_) {
@@ -1642,7 +1657,10 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 uint64_t fieldMask = (len >= 64) ? ~0ULL : ((1ULL << len) - 1);
                 uint64_t mask = fieldMask << pos;
                 bool immediateSource = ((immediate_ >> 12) & 0x1) != 0;
-                uint64_t dest_val = (src2_ != 0) ? cpu.GetGR(src2_) : cpu.GetGR(dst_);
+                // DEP always merges its inserted field into the encoded base
+                // register.  Register r0 is a valid base (and reads as zero);
+                // do not use it as a sentinel for the old destination value.
+                uint64_t dest_val = cpu.GetGR(src2_);
                 uint64_t src_val = immediateSource
                     ? ((((immediate_ >> 13) & 0x1) != 0) ? ~0ULL : 0ULL)
                     : cpu.GetGR(src1_);
@@ -1965,6 +1983,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::CMPXCHG4_ACQ:
+        case InstructionType::CMPXCHG4_REL:
             {
                 const uint64_t address = cpu.GetGR(src1_);
                 uint32_t oldValue = 0;
@@ -1981,6 +2000,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::CMPXCHG8_ACQ:
+        case InstructionType::CMPXCHG8_REL:
             {
                 const uint64_t address = cpu.GetGR(src1_);
                 uint64_t oldValue = 0;
@@ -2808,6 +2828,11 @@ std::string InstructionEx::GetDisassembly() const {
             }
             break;
 
+        case InstructionType::CZX1_R:
+            oss << "czx1.r r" << static_cast<int>(dst_) << " = r"
+                << static_cast<int>(src1_);
+            break;
+
         case InstructionType::SHRP:
             oss << "shrp r" << static_cast<int>(dst_) << " = r" << static_cast<int>(src1_)
                 << ", r" << static_cast<int>(src2_)
@@ -2842,9 +2867,7 @@ std::string InstructionEx::GetDisassembly() const {
                 } else {
                     oss << "r" << static_cast<int>(src1_);
                 }
-                if (src2_ != 0) {
-                    oss << ", r" << static_cast<int>(src2_);
-                }
+                oss << ", r" << static_cast<int>(src2_);
                 oss << ", " << static_cast<int>(pos) << ", " << static_cast<int>(len);
             } else {
                 oss << "dep r" << static_cast<int>(dst_);
@@ -3001,8 +3024,20 @@ std::string InstructionEx::GetDisassembly() const {
                 << static_cast<int>(src2_) << ", ar.ccv";
             break;
 
+        case InstructionType::CMPXCHG4_REL:
+            oss << "cmpxchg4.rel r" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "], r"
+                << static_cast<int>(src2_) << ", ar.ccv";
+            break;
+
         case InstructionType::CMPXCHG8_ACQ:
             oss << "cmpxchg8.acq r" << static_cast<int>(dst_)
+                << " = [r" << static_cast<int>(src1_) << "], r"
+                << static_cast<int>(src2_) << ", ar.ccv";
+            break;
+
+        case InstructionType::CMPXCHG8_REL:
+            oss << "cmpxchg8.rel r" << static_cast<int>(dst_)
                 << " = [r" << static_cast<int>(src1_) << "], r"
                 << static_cast<int>(src2_) << ", ar.ccv";
             break;

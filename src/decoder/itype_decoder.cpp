@@ -310,6 +310,12 @@ bool ITypeDecoder::toInstruction(const formats::IFormat& fmt, InstructionEx& ins
                 instr.SetOperands(fmt.r1, fmt.r3, 0);
                 return true;
 
+            case 0x1C: // CZX1.R
+                instr = InstructionEx(InstructionType::CZX1_R, UnitType::I_UNIT);
+                instr.SetPredicate(fmt.qp);
+                instr.SetOperands(fmt.r1, fmt.r3, 0);
+                return true;
+
             case 0x0C: // ALLOC
                 instr = InstructionEx(InstructionType::ALLOC, UnitType::I_UNIT);
                 instr.SetOperands(fmt.r1, 0, 0);
@@ -390,6 +396,13 @@ static bool decodeMixedI(uint64_t raw, uint8_t x, uint8_t x2, uint8_t x3,
             // Preserve the full opcode so toInstruction() can distinguish
             // ZXT1/ZXT2/ZXT4 and SXT1/SXT2/SXT4 instead of collapsing to the
             // low nibble.
+            result.opcode = x6;
+            return true;
+        }
+
+        // I29 czx1.r scans bytes from least to most significant and returns
+        // the first zero byte's index (or 8 when no byte is zero).
+        if (x3 == 0 && x6 == 0x1C) {
             result.opcode = x6;
             return true;
         }

@@ -253,12 +253,16 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                     return true;
                 }
 
-                // M16 cmpxchg4.acq uses the exact retained Binutils form
-                // major=4, x=1, m=0, x6a=0x02. Its operands are
-                // r1=[r3] compare result, r2 store value, and AR.CCV.
-                if (x == 1 && m == 0 && (x6 == 0x02 || x6 == 0x03)) {
+                // M16 cmpxchg uses x6=0x02/0x03 for acquire and
+                // x6=0x06/0x07 for release, with the low x6 bit selecting
+                // four- or eight-byte width. Its operands are r1=[r3]
+                // compare result, r2 store value, and AR.CCV.
+                if (x == 1 && m == 0 &&
+                    (x6 == 0x02 || x6 == 0x03 ||
+                     x6 == 0x06 || x6 == 0x07)) {
                     result.operation = formats::MFormat::MemOp::EXCHANGE;
-                    result.size = (x6 == 0x03)
+                    result.release = x6 == 0x06 || x6 == 0x07;
+                    result.size = (x6 & 0x01)
                         ? formats::MFormat::Size::SIZE_8
                         : formats::MFormat::Size::SIZE_4;
                     return true;
@@ -547,10 +551,15 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::EXCHANGE) {
+            const bool eightByte = fmt.size == formats::MFormat::Size::SIZE_8;
             if (fmt.size == formats::MFormat::Size::SIZE_4) {
-                instr = InstructionEx(InstructionType::CMPXCHG4_ACQ, UnitType::M_UNIT);
-            } else if (fmt.size == formats::MFormat::Size::SIZE_8) {
-                instr = InstructionEx(InstructionType::CMPXCHG8_ACQ, UnitType::M_UNIT);
+                instr = InstructionEx(fmt.release ? InstructionType::CMPXCHG4_REL
+                                                  : InstructionType::CMPXCHG4_ACQ,
+                                     UnitType::M_UNIT);
+            } else if (eightByte) {
+                instr = InstructionEx(fmt.release ? InstructionType::CMPXCHG8_REL
+                                                  : InstructionType::CMPXCHG8_ACQ,
+                                     UnitType::M_UNIT);
             } else {
                 return false;
             }
