@@ -682,6 +682,7 @@ add_test(NAME FuzzerTests COMMAND test_fuzzer)
 add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
+add_test(NAME AArch64FoundationTests COMMAND test_aarch64_foundation)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -711,3 +712,32 @@ else()
 endif()
 
 # Add to the test suite
+
+# ---------------------------------------------------------------------------
+# AArch64 Phase AARCH64-1 foundation backend.
+# Isolated sources under src/aarch64 + include/aarch64; no IA-64 target is
+# modified. The test links the shared ALL_SOURCES set (same pattern as
+# test_isa_plugin) so the real ISAPluginRegistry and the IA-64 compatibility
+# gate are exercised with no stubs or fakes.
+# ---------------------------------------------------------------------------
+set(AARCH64_SOURCES
+    src/aarch64/AArch64Cpu.cpp
+    src/aarch64/AArch64ISAPlugin.cpp
+)
+
+add_executable(test_aarch64_foundation
+    tests/test_aarch64_foundation.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_aarch64_foundation PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_aarch64_foundation PRIVATE /W4)
+else()
+    target_compile_options(test_aarch64_foundation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
