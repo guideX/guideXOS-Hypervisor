@@ -684,6 +684,7 @@ add_test(NAME FuzzerTests COMMAND test_fuzzer)
 add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 add_test(NAME PPC64Phase1Tests COMMAND test_ppc64_phase1)
+add_test(NAME PPC64Phase2Tests COMMAND test_ppc64_phase2)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -713,6 +714,23 @@ if(MSVC)
     target_compile_options(test_ppc64_phase1 PRIVATE /W4)
 else()
     target_compile_options(test_ppc64_phase1 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# PPC64 Phase 2 fixed-point + branches test (standalone ISA plugin, real Memory)
+add_executable(test_ppc64_phase2
+    tests/test_ppc64_phase2.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase2 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase2 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase2 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # RISC-V CPU implementation

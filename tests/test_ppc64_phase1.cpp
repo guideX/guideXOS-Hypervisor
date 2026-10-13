@@ -252,7 +252,11 @@ static void testInvalidOpcode() {
     ppc64::PPC64ISAPlugin cpu;
     Memory mem(4096);
     storeBE(mem, 0, 0xFFFFFFFFU);  // primary opcode 63: not in Phase 1
-    storeBE(mem, 4, 0x7C000000U);  // primary opcode 31 (X-form): Phase 1 gap
+    // NOTE (PPC64-2): 0x7C000000 used to be the X-form gap probe here, but it
+    // is the valid encoding of `cmpw cr0,r0,r0` since Phase 2 implements the
+    // opcode-31 compare family. The probe now uses XO=1, which remains
+    // unimplemented, so this still verifies EXCEPTION-on-unsupported.
+    storeBE(mem, 4, 0x7C000002U);  // primary opcode 31, XO=1: unsupported
     cpu.reset();
     ISADecodeResult dec = cpu.decode(mem);
     CHECK(!dec.valid);
