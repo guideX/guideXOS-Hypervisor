@@ -1,5 +1,0 @@
-etc/initramfs/post-update.d
-etc/kernel/postinst.d
-etc/kernel/postrm.d
-usr/lib/elilo
-usr/sbin

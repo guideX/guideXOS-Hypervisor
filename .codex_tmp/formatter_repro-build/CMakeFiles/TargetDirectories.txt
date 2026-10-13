@@ -1,3 +1,0 @@
-D:/dev/guideXOS_Hypervisor/.codex_tmp/formatter_repro-build/CMakeFiles/formatter_repro.dir
-D:/dev/guideXOS_Hypervisor/.codex_tmp/formatter_repro-build/CMakeFiles/ALL_BUILD.dir
-D:/dev/guideXOS_Hypervisor/.codex_tmp/formatter_repro-build/CMakeFiles/ZERO_CHECK.dir
