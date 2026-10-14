@@ -1,3 +1,3 @@
 project=guideXOS_Hypervisor
-last_completed=IA64-POST-MADT-6
-next_expected=IA64-POST-MADT-7
+last_completed=IA64-POST-MADT-7
+next_expected=IA64-POST-MADT-8

@@ -3076,6 +3076,210 @@ void test_ia64_floating_stores_and_spill() {
     std::cout << "  ? IA-64 floating stores and stf.spill passed" << std::endl;
 }
 
+void test_ia64_fp_spill_fill_no_update_forms() {
+    std::cout << "Testing IA-64 M6/M9 FP spill/fill without base update..." << std::endl;
+
+    // Authentic timer-interrupt save slots from the IA-64 Linux kernel
+    // (interrupt epilogue prologue at canonical VMA 0x8a40): the final two
+    // floating-point saves use the no-update M9 form, major opcode 6.
+    constexpr uint64_t stfSpillF10M9Raw = 0x0CEC0214000ULL;  // stf.spill [r2] = f10
+    constexpr uint64_t stfSpillF11M9Raw = 0x0CEC0316000ULL;  // stf.spill [r3] = f11
+    // Authentic restore slot (canonical VMA 0xbd80): the final floating-point
+    // restore uses the no-update M6 form, major opcode 6.  Its destination
+    // is FR f11; general register r11 must survive it unchanged.
+    constexpr uint64_t ldfFillF11M6Raw = 0x0C6C02002C0ULL;   // ldf.fill f11 = [r2]
+    constexpr uint64_t region7RamAlias = 0xE000000000000000ULL;
+
+    InstructionDecoder decoder;
+    const InstructionEx spillF10 =
+        decoder.DecodeInstruction(stfSpillF10M9Raw, UnitType::M_UNIT);
+    assert_true("M9 x6=0x3b decodes as STF_SPILL, not an integer load",
+                spillF10.GetType() == InstructionType::STF_SPILL);
+    assert_equal("M9 spill base register", 2, spillF10.GetDst());
+    assert_equal("M9 spill source is floating register f10", 10,
+                spillF10.GetSrc1());
+    assert_true("M9 spill has no post-increment immediate",
+                !spillF10.HasImmediate());
+    assert_equal("M9 spill predicate", 0, spillF10.GetPredicate());
+    assert_string("M9 spill disassembly",
+                  "stf.spill [r2] = f10",
+                  spillF10.GetDisassembly());
+
+    const InstructionEx spillF11 =
+        decoder.DecodeInstruction(stfSpillF11M9Raw, UnitType::M_UNIT);
+    assert_true("second M9 slot decodes as STF_SPILL",
+                spillF11.GetType() == InstructionType::STF_SPILL);
+    assert_equal("second M9 spill base register", 3, spillF11.GetDst());
+    assert_equal("second M9 spill source is floating register f11", 11,
+                spillF11.GetSrc1());
+    assert_true("second M9 spill has no post-increment immediate",
+                !spillF11.HasImmediate());
+    assert_string("second M9 spill disassembly",
+                  "stf.spill [r3] = f11",
+                  spillF11.GetDisassembly());
+
+    const InstructionEx fillF11 =
+        decoder.DecodeInstruction(ldfFillF11M6Raw, UnitType::M_UNIT);
+    assert_true("M6 x6=0x1b decodes as LDF_FILL, not an integer load",
+                fillF11.GetType() == InstructionType::LDF_FILL);
+    assert_equal("M6 fill destination is floating register f11", 11,
+                fillF11.GetDst());
+    assert_equal("M6 fill base register", 2, fillF11.GetSrc1());
+    assert_equal("M6 fill carries no register-update operand", 0,
+                fillF11.GetSrc2());
+    assert_true("M6 fill has no post-increment immediate",
+                !fillF11.HasImmediate());
+    assert_equal("M6 fill predicate", 0, fillF11.GetPredicate());
+    assert_string("M6 fill disassembly",
+                  "ldf.fill f11 = [r2]",
+                  fillF11.GetDisassembly());
+
+    // Predicate qualification is orthogonal to the family selection.
+    const InstructionEx predicatedFill =
+        decoder.DecodeInstruction(ldfFillF11M6Raw | 9ULL, UnitType::M_UNIT);
+    assert_true("predicated M6 slot remains LDF_FILL",
+                predicatedFill.GetType() == InstructionType::LDF_FILL);
+    assert_equal("predicated M6 slot keeps its qualifier", 9,
+                predicatedFill.GetPredicate());
+
+    // Floating source/destination aliases select FR, never GR lookalikes.
+    const uint64_t spillF7Raw =
+        (stfSpillF10M9Raw & ~(0x7FULL << 13)) | (7ULL << 13);
+    const InstructionEx spillF7 =
+        decoder.DecodeInstruction(spillF7Raw, UnitType::M_UNIT);
+    assert_true("M9 source-field variant remains STF_SPILL",
+                spillF7.GetType() == InstructionType::STF_SPILL);
+    assert_equal("M9 source-field variant selects f7", 7,
+                spillF7.GetSrc1());
+
+    // Neighboring subopcodes must not broaden into the fill/spill family.
+    // (Plain major-6 floating loads/stores stay outside this repair.)
+    const InstructionEx neighborFill =
+        decoder.DecodeInstruction(ldfFillF11M6Raw ^ (1ULL << 30),
+                                  UnitType::M_UNIT);
+    assert_true("neighboring x6=0x1a is not LDF_FILL",
+                neighborFill.GetType() != InstructionType::LDF_FILL);
+    const InstructionEx neighborSpill =
+        decoder.DecodeInstruction(stfSpillF10M9Raw ^ (1ULL << 30),
+                                  UnitType::M_UNIT);
+    assert_true("neighboring x6=0x3a is not STF_SPILL",
+                neighborSpill.GetType() != InstructionType::STF_SPILL);
+
+    // M8 register-update form: x=1 selects f1 = [r3], r2.
+    const uint64_t fillM8Raw =
+        (ldfFillF11M6Raw & ~(0x7FULL << 13)) | (5ULL << 13) | (1ULL << 27);
+    const InstructionEx fillM8 =
+        decoder.DecodeInstruction(fillM8Raw, UnitType::M_UNIT);
+    assert_true("M8 x=1 form decodes as LDF_FILL",
+                fillM8.GetType() == InstructionType::LDF_FILL);
+    assert_equal("M8 update register", 5, fillM8.GetSrc2());
+    assert_true("M8 form has no immediate", !fillM8.HasImmediate());
+
+    class CountingMemory final : public Memory {
+    public:
+        using Memory::Memory;
+
+        std::vector<std::pair<uint64_t, size_t>> writes;
+        mutable std::vector<std::pair<uint64_t, size_t>> reads;
+
+        void Write(uint64_t address, const uint8_t* source, size_t size) override {
+            writes.emplace_back(address, size);
+            Memory::Write(address, source, size);
+        }
+
+        void Read(uint64_t address, uint8_t* destination, size_t size) const override {
+            reads.emplace_back(address, size);
+            Memory::Read(address, destination, size);
+        }
+    } memory(0x6000);
+
+    CPUState cpu;
+    // Enable address translation exactly like the M10 spill/fill test so the
+    // region-7 stack alias normalizes to the flat test memory.
+    cpu.SetPSR(1ULL << 17);
+    uint8_t patternF10[16] = {};
+    uint8_t patternF11[16] = {};
+    for (size_t i = 0; i < sizeof(patternF10); ++i) {
+        patternF10[i] = static_cast<uint8_t>(0xA0 + i);
+        patternF11[i] = static_cast<uint8_t>(0x50 + i);
+    }
+    constexpr uint64_t tableBaseSentinel = 0xA000000100CC5FC0ULL;
+    cpu.SetFR(10, patternF10);
+    cpu.SetFR(11, patternF11);
+    cpu.SetGR(2, region7RamAlias + 0x1000);
+    cpu.SetGR(3, region7RamAlias + 0x2000);
+    cpu.SetGR(10, 0x1111111111111111ULL);
+    cpu.SetGR(11, tableBaseSentinel);
+
+    // Authentic save pair: both stores commit before any base update, and
+    // neither update exists for the M9 form.
+    spillF10.Execute(cpu, memory);
+    spillF11.Execute(cpu, memory);
+    assert_equal("M9 spill pair performs two memory writes",
+                2, memory.writes.size());
+    assert_equal("f10 spill address", 0x1000, memory.writes[0].first);
+    assert_equal("f10 spill width", 16, memory.writes[0].second);
+    assert_equal("f11 spill address", 0x2000, memory.writes[1].first);
+    assert_equal("f11 spill width", 16, memory.writes[1].second);
+    uint8_t stored[16] = {};
+    memory.Read(0x1000, stored, sizeof(stored));
+    assert_true("f10 spill stores the FR image",
+                std::memcmp(stored, patternF10, sizeof(stored)) == 0);
+    memory.Read(0x2000, stored, sizeof(stored));
+    assert_true("f11 spill stores the FR image",
+                std::memcmp(stored, patternF11, sizeof(stored)) == 0);
+    assert_equal("M9 spill leaves r2 unchanged",
+                region7RamAlias + 0x1000, cpu.GetGR(2));
+    assert_equal("M9 spill leaves r3 unchanged",
+                region7RamAlias + 0x2000, cpu.GetGR(3));
+    assert_equal("M9 spill leaves GR r10 alone",
+                0x1111111111111111ULL, cpu.GetGR(10));
+    assert_equal("M9 spill leaves GR r11 alone", tableBaseSentinel,
+                cpu.GetGR(11));
+
+    // The handler legitimately clobbers FR state; the general registers keep
+    // the values the earlier integer restores produced.
+    uint8_t clobber[16] = {};
+    cpu.SetFR(10, clobber);
+    cpu.SetFR(11, clobber);
+
+    // Authentic restore: FR f11 returns, GR r11 (the RCU table base) and the
+    // base register survive unchanged.  Like the kernel epilogue, r2 already
+    // addresses f11's spill slot when the final fill executes.
+    cpu.SetGR(2, region7RamAlias + 0x2000);
+    const size_t readsBeforeFill = memory.reads.size();
+    fillF11.Execute(cpu, memory);
+    assert_equal("M6 fill performs one 16-byte read",
+                readsBeforeFill + 1, memory.reads.size());
+    assert_equal("M6 fill reads from the unchanged base", 0x2000,
+                memory.reads.back().first);
+    assert_equal("M6 fill read width", 16, memory.reads.back().second);
+    uint8_t restored[16] = {};
+    cpu.GetFR(11, restored);
+    assert_true("M6 fill restores f11 from the spill slot",
+                std::memcmp(restored, patternF11, sizeof(restored)) == 0);
+    assert_equal("M6 fill preserves GR r11", tableBaseSentinel,
+                cpu.GetGR(11));
+    assert_equal("M6 fill leaves the base register unchanged",
+                region7RamAlias + 0x2000, cpu.GetGR(2));
+    assert_equal("no extra memory writes from the fill",
+                2, memory.writes.size());
+
+    // M8 form loads FR and then advances the base by the update register.
+    memory.loadBuffer(0x3000, patternF10, sizeof(patternF10));
+    cpu.SetGR(2, region7RamAlias + 0x3000);
+    cpu.SetGR(5, 0x40);
+    cpu.SetFR(11, clobber);
+    fillM8.Execute(cpu, memory);
+    cpu.GetFR(11, restored);
+    assert_true("M8 fill loads f11 before updating the base",
+                std::memcmp(restored, patternF10, sizeof(restored)) == 0);
+    assert_equal("M8 fill advances the base by r5",
+                region7RamAlias + 0x3040, cpu.GetGR(2));
+
+    std::cout << "  ? IA-64 M6/M9 FP spill/fill no-update forms passed" << std::endl;
+}
+
 void test_application_register_moves() {
     std::cout << "Testing application register moves..." << std::endl;
 
@@ -4889,6 +5093,7 @@ int main() {
         test_memory_bounds_throw();
         test_ia64_lfetch_nonfaulting_prefetch();
         test_ia64_floating_stores_and_spill();
+        test_ia64_fp_spill_fill_no_update_forms();
         test_application_register_moves();
         test_test_instructions();
         test_bitwise_operations();

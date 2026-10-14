@@ -2107,6 +2107,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetFR(dst_, floatingRegister);
                 if (hasImmediate_) {
                     cpu.SetGR(src1_, baseAddress + static_cast<int64_t>(immediate_));
+                } else if (src2_ != 0) {
+                    // M8 register post-increment: f1 = [r3], r2.
+                    cpu.SetGR(src1_, baseAddress + cpu.GetGR(src2_));
                 }
             }
             break;
@@ -3156,6 +3159,8 @@ std::string InstructionEx::GetDisassembly() const {
                 << " = [r" << static_cast<int>(src1_) << "]";
             if (hasImmediate_) {
                 oss << ", " << static_cast<int64_t>(immediate_);
+            } else if (src2_ != 0) {
+                oss << ", r" << static_cast<int>(src2_);
             }
             break;
 

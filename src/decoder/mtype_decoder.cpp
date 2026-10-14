@@ -364,6 +364,28 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
                     result.operation = formats::MFormat::MemOp::SETF;
                     return true;
                 }
+                // M6 ldf.fill (x6=0x1b) and M9 stf.spill (x6=0x3b) share
+                // major opcode 6 with the floating-point loads.  They move
+                // the 16-byte FP spill/fill format between memory and FR,
+                // never GR: decoding them as integer LD8 both skips the
+                // spill store and clobbers the same-numbered GR on fill.
+                // The authentic Linux interrupt epilogue saves f10/f11 with
+                // the M9 form and restores f11 with the M6 form, so both
+                // must be recognized here.
+                if (m == 0 && x6 == 0x1B) {
+                    result.operation = formats::MFormat::MemOp::LDF_FILL;
+                    result.size = formats::MFormat::Size::SIZE_16;
+                    result.has_imm = false;
+                    result.reg_update = (x == 1);  // M8: f1 = [r3], r2
+                    return true;
+                }
+                if (m == 0 && x == 0 && x6 == 0x3B) {
+                    result.operation = formats::MFormat::MemOp::STF_SPILL;
+                    result.size = formats::MFormat::Size::SIZE_16;
+                    result.r1 = result.r2; // f2 is encoded in bits 13:19.
+                    result.has_imm = false;
+                    return true;
+                }
                 decodeLoad(x6, m, result);
                 return true;
 
@@ -498,21 +520,28 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
             
             return true;
         } else if (fmt.operation == formats::MFormat::MemOp::LDF_FILL) {
-            if (fmt.size != formats::MFormat::Size::SIZE_16 || !fmt.has_imm) {
+            if (fmt.size != formats::MFormat::Size::SIZE_16) {
                 return false;
             }
 
             instr = InstructionEx(InstructionType::LDF_FILL, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
-            instr.SetOperands(fmt.r1, fmt.r3, 0); // f1 = [r3]
-            instr.SetImmediate(fmt.imm9);
+            // M10 carries an immediate post-increment; M8 carries a register
+            // post-increment in r2; M6 carries neither.
+            instr.SetOperands(fmt.r1, fmt.r3,
+                              fmt.reg_update ? fmt.r2 : 0); // f1 = [r3]
+            if (fmt.has_imm) {
+                instr.SetImmediate(fmt.imm9);
+            }
+            if (fmt.reg_update) {
+                instr.SetRegisterUpdate(true);
+            }
             return true;
         } else if (fmt.operation == formats::MFormat::MemOp::STF8 ||
                    fmt.operation == formats::MFormat::MemOp::STF_SPILL) {
             const bool spill = fmt.operation == formats::MFormat::MemOp::STF_SPILL;
             if ((spill && fmt.size != formats::MFormat::Size::SIZE_16) ||
-                (!spill && fmt.size != formats::MFormat::Size::SIZE_8) ||
-                !fmt.has_imm) {
+                (!spill && fmt.size != formats::MFormat::Size::SIZE_8)) {
                 return false;
             }
 
@@ -521,7 +550,10 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
                                   UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetOperands(fmt.r3, fmt.r2, 0); // [r3] = f2
-            instr.SetImmediate(fmt.imm9);
+            // M10 carries an immediate post-increment; M9 carries none.
+            if (fmt.has_imm) {
+                instr.SetImmediate(fmt.imm9);
+            }
             return true;
         }
         else if (fmt.operation == formats::MFormat::MemOp::FETCHADD) {
