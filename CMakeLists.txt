@@ -711,3 +711,74 @@ else()
 endif()
 
 # Add to the test suite
+
+# ============================================================================
+# MIPS64 Release 2 CPU foundation (Phase MIPS64-1)
+#
+# The MIPS64 core and plugin are intentionally self-contained: the focused
+# test targets below link only the MIPS64 sources plus the repository memory
+# abstraction. Existing IA-64 targets are untouched.
+# ============================================================================
+set(MIPS64_CORE_SOURCES
+    src/mips64/Mips64Cpu.cpp
+)
+
+set(MIPS64_PLUGIN_SOURCES
+    src/isa/Mips64ISAPlugin.cpp
+    src/isa/ISAPluginRegistry.cpp
+)
+
+set(MIPS64_MEMORY_SOURCES
+    src/memory/memory.cpp
+    src/mmu/mmu.cpp
+)
+
+# MIPS64 CPU core tests: reset, registers, arithmetic, shifts, branches,
+# delay slots, linkage, endianness fetch, snapshots.
+add_executable(test_mips64_cpu
+    tests/test_mips64_cpu.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_cpu PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_cpu PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# MIPS64 execution tests: demo program, load/store extension, alignment and
+# memory failures, unsupported/reserved handling, delay-slot violations.
+add_executable(test_mips64_execution
+    tests/test_mips64_execution.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_execution PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_execution PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# MIPS64 plugin tests: registration, real stepping, decode/execute split,
+# state management, serialization, capabilities.
+# NOTE: links ISAPluginRegistry.cpp for genuine "MIPS64" registration
+# coverage; the test TU provides test-local stubs for the IA-64 factory
+# symbols so this target stays independent of the full IA-64 object chain.
+add_executable(test_mips64_plugin
+    tests/test_mips64_plugin.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_PLUGIN_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_plugin PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_plugin PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME Mips64CpuTests COMMAND test_mips64_cpu)
+add_test(NAME Mips64ExecutionTests COMMAND test_mips64_execution)
+add_test(NAME Mips64PluginTests COMMAND test_mips64_plugin)
