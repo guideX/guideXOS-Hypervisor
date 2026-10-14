@@ -1,7 +1,8 @@
 #pragma once
 
 // AArch64 (ARMv8-A, A64 instruction set) CPU architectural state,
-// instruction fetch/decode and execution for guideXOS Hypervisor Phase AARCH64-1.
+// instruction fetch/decode and execution for guideXOS Hypervisor
+// Phases AARCH64-1 and AARCH64-2.
 //
 // SCOPE (Phase AARCH64-1):
 //   - General-purpose registers X0-X30 plus a DISTINCT stack pointer (SP),
@@ -10,12 +11,33 @@
 //     as one ordinary register.
 //   - A64 fixed 32-bit little-endian fetch, deterministic reset/entry profile,
 //     bounded stepping, and explicit faults for everything unsupported.
+// SCOPE (Phase AARCH64-2, additive):
+//   - LDR/STR (unsigned immediate offset, 32/64-bit) through IMemory.
+//   - CBZ/CBNZ, flag-setting ADDS/SUBS/CMP immediates, B.cond.
+//   - RET Rn==31 audit fix: RET uses the general-purpose register view
+//     (X(n)), so encoding 31 reads XZR (zero), never SP.
 // OUT OF SCOPE: MMU, GIC, EL1 exception model, timers, PL011, virtio, SMP,
 //   JIT, SIMD/FP, and the rest of the A64 ISA (see docs/aarch64/).
 //
+// AARCH64-2 memory profile (explicit and bounded):
+//   - Little-endian guest data access through the generic IMemory contract.
+//   - Normal memory, no MMU, no Device mapping, no EL-specific system
+//     registers (SCTLR_ELx.A alignment control is therefore deferred).
+//   - Architecturally permitted unaligned ordinary LDR/STR accesses are
+//     ALLOWED in this profile (ARM permits them for Normal memory when
+//     alignment checking is disabled).
+//   - Instruction fetch still requires 4-byte alignment (UnalignedPC).
+//   - SP-alignment checking (CheckSPAlignment) is deferred, as in AARCH64-1.
+//
 // Encoding tables used: ARM Architecture Reference Manual ARMv8-A (ARM DDI 0487),
-//   sections C6.6 (branches), C6.2 (add/sub immediate), C6.2 (move wide
-//   immediate) and C6.2 (HINT/NOP = 0xD503201F).
+//   sections C6.6 (branches), C6.2 (add/sub immediate, load/store immediate),
+//   C6.2 (move wide immediate) and C6.2 (HINT/NOP = 0xD503201F).
+// Cross-checked against the machine-readable A64 ISA definitions mirrored at
+//   https://arm.jonpalmisc.com/latest_aarch64/ (RET operation target = X(n);
+//   LDR/STR unsigned-offset offset = LSL(ZeroExtend(imm12), scale);
+//   B.cond decode offset = SignExtend(imm19:'00')) and the shared
+//   ConditionHolds() pseudocode (cond 0b1110 AL and 0b1111 NV both always
+//   hold; the bit-0 inversion explicitly excludes 0b1111).
 // This header is intentionally decoupled from IA-64 state (cpu_state.h),
 // the IA-64 decoder and IA-64 firmware. It only depends on the generic
 // IMemory contract (forward declared) for instruction fetch.
@@ -51,10 +73,11 @@ enum class Fault {
     UnalignedPC,         // PC not 4-byte aligned at fetch time
     InvalidFetch,        // instruction bytes not readable from guest memory
     UnallocatedEncoding, // bit pattern is unallocated/malformed in A64
-    UnsupportedFeature,  // allocated A64 encoding outside the AARCH64-1 subset
+    UnsupportedFeature,  // allocated A64 encoding outside the subset
+    MemoryFault,         // data access (LDR/STR) failed in backing memory
 };
 
-// Phase AARCH64-1 operation set.
+// Phase AARCH64-1 + AARCH64-2 operation set.
 enum class Op {
     Invalid = 0,
     Nop,
@@ -65,6 +88,14 @@ enum class Op {
     B,
     Bl,
     Ret,
+    LdrImm,   // LDR (immediate, unsigned offset), 32/64-bit via sf64
+    StrImm,   // STR (immediate, unsigned offset), 32/64-bit via sf64
+    Cbz,      // Compare and branch on zero
+    Cbnz,     // Compare and branch on non-zero
+    AddsImm,  // ADDS (immediate): flag-setting add
+    SubsImm,  // SUBS (immediate): flag-setting subtract
+    CmpImm,   // CMP (immediate): SUBS with XZR/WZR destination (alias)
+    BCond,    // B.<cond>: conditional branch on NZCV
 };
 
 // Result of decoding one 32-bit A64 instruction word.
@@ -76,9 +107,11 @@ struct Decoded {
     uint8_t rn = 0;            // source register number 0..31
     uint8_t hw = 0;            // MOVZ/MOVK halfword selector 0..3
     uint16_t imm16 = 0;        // MOVZ/MOVK 16-bit immediate
-    uint16_t imm12 = 0;        // ADD/SUB 12-bit immediate
+    uint16_t imm12 = 0;        // ADD/SUB/LDR/STR 12-bit immediate
     uint8_t shift = 0;         // ADD/SUB shift amount (0 or 12); MOVZ/MOVK pos = hw*16
-    int64_t branchOffset = 0;  // B/BL signed byte offset (already scaled by 4)
+    int64_t branchOffset = 0;  // B/BL/CBZ/CBNZ/B.cond signed byte offset (scaled by 4)
+    uint64_t memOffset = 0;    // LDR/STR scaled unsigned byte offset (imm12 << 2 or 3)
+    uint8_t cond = 0;          // B.cond 4-bit condition code (bits [3:0])
     uint64_t address = 0;      // address the word was fetched from
     uint32_t word = 0;         // raw instruction word
     Fault fault = Fault::None;
@@ -140,8 +173,14 @@ public:
     Decoded fetchDecode(ia64::IMemory& memory) const;
     // Execute a previously decoded instruction. Executing an invalid
     // Decoded returns its fault and changes no architectural state.
-    // None of the AARCH64-1 instructions access guest memory, so the
-    // memory parameter is currently unused (kept for IISA symmetry).
+    // LDR/STR perform real guest-memory access through `memory`; a failed
+    // data access reports Fault::MemoryFault and changes neither the
+    // destination register nor PC. All other currently implemented
+    // instructions ignore `memory`.
+    Fault executeDecoded(const Decoded& decoded, ia64::IMemory& memory);
+    // Legacy single-argument form kept for AARCH64-1 call-site
+    // compatibility: behaves identically for non-memory instructions; data
+    // accesses report Fault::MemoryFault because no memory is bound.
     Fault executeDecoded(const Decoded& decoded);
     // Combined fetch+decode+execute of the instruction at PC.
     Fault step(ia64::IMemory& memory);
@@ -165,5 +204,12 @@ private:
 
 // Canonical 64-bit sign extension of an N-bit field value.
 int64_t signExtend(uint32_t value, unsigned bits);
+
+// Authoritative A64 condition evaluation (ARM ConditionHolds pseudocode):
+// cond[3:1] selects EQ/NE(Z), CS/CC(C), MI/PL(N), VS/VC(V), HI/LS(C&~Z),
+// GE/LT(N==V), GT/LE(N==V&~Z), or 111->TRUE(AL); bit 0 inverts the result
+// EXCEPT for cond 0b1111 (NV), which — like 0b1110 (AL) — always holds.
+// Cond 14 and 15 are therefore NOT inverses of each other.
+bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v);
 
 } // namespace aarch64

@@ -1,14 +1,36 @@
-// AArch64 Phase AARCH64-1 CPU implementation.
-// Encoding field layout per ARM DDI 0487 (ARMv8-A ARM):
+// AArch64 Phase AARCH64-1/AARCH64-2 CPU implementation.
+// Encoding field layout per ARM DDI 0487 (ARMv8-A ARM), cross-checked with
+// the machine-readable ISA definitions (see header for links):
 //   Move wide immediate: sf[31] opc[30:29] 100101 hw[22:21] imm16[20:5] Rd[4:0]
 //     opc 10 = MOVZ, 11 = MOVK (00/01 = MOVN, out of scope).
 //     hw selects halfword 0..3 (64-bit) or 0..1 (32-bit).
 //   Add/sub immediate: sf[31] op[30] S[29] 10001 0[23] sh[22] imm12[21:10]
-//     Rn[9:5] Rd[4:0]; op 0 = ADD, 1 = SUB; S=1 (ADDS/SUBS) out of scope.
-//     Rn/Rd == 31 denote SP (NOT the zero register) for these two ops.
+//     Rn[9:5] Rd[4:0]; op 0 = ADD, 1 = SUB; S 0 = ADD/SUB, S 1 = ADDS/SUBS.
+//     For ADD/SUB, Rn/Rd == 31 denote SP. For ADDS/SUBS, Rn == 31 is SP but
+//     Rd == 31 is XZR/WZR (result discarded, flags still set); SUBS with
+//     Rd == 31 is the CMP alias and writes nothing.
 //   B: 000101 imm26; BL: 100101 imm26 (X30 = PC+4); offset = SEx(imm26)<<2.
 //   HINT/NOP: 0xD503201F exactly; other HINT encodings are out of scope.
-//   RET: 11010110010 11111 000000 Rn[9:5] 00000 (Rn==31 reads SP).
+//   RET: 11010110010 11111 000000 Rn[9:5] 00000. The operation is
+//     target = X(n) (general-purpose register view), so Rn == 31 reads XZR
+//     (zero), NEVER SP. (AARCH64-2 audit fix; AARCH64-1 wrongly read SP.)
+//   LDR/STR immediate unsigned offset: size[31:30] 111001 o1[22]
+//     imm12[21:10] Rn[9:5] Rt[4:0]; size 10 = 32-bit, 11 = 64-bit;
+//     o1 1 = load, 0 = store. offset = imm12 scaled by access size (<<2/<<3).
+//     Rn == 31 is SP; Rt == 31 is WZR/XZR. No writeback; NZCV untouched.
+//   CBZ/CBNZ: sf[31] 011010 op[24] imm19[23:5] Rt[4:0]; op 0 = CBZ, 1 = CBNZ.
+//     offset = SEx(imm19)<<2 from the current instruction address.
+//     Rt == 31 reads XZR/WZR (zero). NZCV untouched.
+//   B.cond: 01010100 imm19[23:5] 0[4] cond[3:0]; offset = SEx(imm19)<<2.
+//     Condition per ConditionHolds(): cond 1110 (AL) and 1111 (NV) BOTH
+//     always hold. NZCV untouched. Bit 4 set (or any other mismatch) is
+//     UnallocatedEncoding, never a NOP.
+//
+// AARCH64-2 memory profile: little-endian Normal guest memory, no MMU, no
+// Device mapping, no EL-specific alignment control. Architecturally
+// permitted unaligned ordinary LDR/STR accesses are allowed; only failures
+// reported by the IMemory implementation itself become MemoryFault.
+// Instruction fetch still requires 4-byte alignment.
 
 #include "aarch64/AArch64Cpu.h"
 
@@ -43,8 +65,10 @@ Decoded invalid(uint32_t word, uint64_t address, Fault fault, const char* error)
 std::string regName(bool is64, unsigned reg) {
     char buf[8];
     if (reg == 31) {
-        // Only used for RET disassembly where Rn==31 reads SP.
-        std::snprintf(buf, sizeof(buf), is64 ? "sp" : "wsp");
+        // General-purpose register view: 31 is XZR/WZR (reads zero).
+        // Used by RET disassembly (RET Xn reads X(n)); ADD/SUB immediates
+        // handle their SP-context 31 inline and never reach this path.
+        std::snprintf(buf, sizeof(buf), is64 ? "xzr" : "wzr");
     } else if (is64) {
         std::snprintf(buf, sizeof(buf), "x%u", reg);
     } else {
@@ -53,7 +77,92 @@ std::string regName(bool is64, unsigned reg) {
     return std::string(buf);
 }
 
+// Architecturally correct NZCV for one ADD/SUB immediate step, computed
+// with unsigned host arithmetic only (no signed-overflow UB).
+struct AddSubFlags {
+    uint64_t result; // already width-masked (32-bit results zero-extended)
+    bool n;
+    bool z;
+    bool c;
+    bool v;
+};
+
+AddSubFlags addFlags(bool is64, uint64_t a, uint64_t b) {
+    AddSubFlags out{};
+    if (is64) {
+        const uint64_t r = a + b;
+        out.result = r;
+        out.n = (r >> 63) != 0;
+        out.z = (r == 0);
+        out.c = (r < a); // carry out of bit 63
+        out.v = ((((~(a ^ b)) & (a ^ r)) >> 63) != 0);
+    } else {
+        const auto a32 = static_cast<uint32_t>(a);
+        const auto b32 = static_cast<uint32_t>(b);
+        const uint64_t wide = static_cast<uint64_t>(a32) + b32;
+        const auto r = static_cast<uint32_t>(wide);
+        out.result = wide & 0xFFFFFFFFu;
+        out.n = (r >> 31) != 0;
+        out.z = (r == 0);
+        out.c = (wide >> 32) != 0; // carry out of bit 31
+        out.v = ((((~(static_cast<uint32_t>(a32 ^ b32))) & (a32 ^ r)) >> 31) != 0);
+    }
+    return out;
+}
+
+AddSubFlags subFlags(bool is64, uint64_t a, uint64_t b) {
+    AddSubFlags out{};
+    if (is64) {
+        const uint64_t r = a - b;
+        out.result = r;
+        out.n = (r >> 63) != 0;
+        out.z = (r == 0);
+        out.c = (a >= b); // C = NOT borrow
+        out.v = ((((a ^ b) & (a ^ r)) >> 63) != 0);
+    } else {
+        const auto a32 = static_cast<uint32_t>(a);
+        const auto b32 = static_cast<uint32_t>(b);
+        const auto r = static_cast<uint32_t>(a32 - b32);
+        out.result = r;
+        out.n = (r >> 31) != 0;
+        out.z = (r == 0);
+        out.c = (a32 >= b32); // C = NOT borrow
+        out.v = ((((a32 ^ b32) & (a32 ^ r)) >> 31) != 0);
+    }
+    return out;
+}
+
+const char* condName(uint8_t cond) {
+    static const char* const kNames[16] = {
+        "eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc",
+        "hi", "ls", "ge", "lt", "gt", "le", "al", "nv",
+    };
+    return kNames[cond & 15u];
+}
+
 } // namespace
+
+bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v) {
+    // Verbatim implementation of the ARM ConditionHolds() pseudocode.
+    bool result = true;
+    switch ((cond >> 1) & 7u) { // cond[3:1]
+    case 0: result = z; break;          // EQ or NE
+    case 1: result = c; break;          // CS or CC
+    case 2: result = n; break;          // MI or PL
+    case 3: result = v; break;          // VS or VC
+    case 4: result = (c && !z); break;  // HI or LS
+    case 5: result = (n == v); break;   // GE or LT
+    case 6: result = ((n == v) && !z); break; // GT or LE
+    default: result = true; break;      // 111: AL
+    }
+    // '111x' always true; otherwise invert when bit 0 is set.
+    // Note cond == 0b1111 (NV) is explicitly excluded from inversion,
+    // so NV behaves as AL (always), NOT as the inverse of AL (never).
+    if (((cond & 1u) != 0) && cond != 15u) {
+        result = !result;
+    }
+    return result;
+}
 
 int64_t signExtend(uint32_t value, unsigned bits) {
     assert(bits >= 1 && bits <= 32);
@@ -157,7 +266,7 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         const uint8_t hw = static_cast<uint8_t>((word >> 21) & 3u);
         if (opc == 0 || opc == 1) {
             return invalid(word, address, Fault::UnsupportedFeature,
-                           "MOVN (move wide with NOT) is outside the AARCH64-1 subset");
+                           "MOVN (move wide with NOT) is outside the implemented subset");
         }
         if (!sf && hw >= 2) {
             return invalid(word, address, Fault::UnallocatedEncoding,
@@ -187,13 +296,7 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         const bool sf = (word & 0x80000000u) != 0;
         const bool isSub = (word & 0x40000000u) != 0;
         const bool setsFlags = (word & 0x20000000u) != 0;
-        if (setsFlags) {
-            return invalid(word, address, Fault::UnsupportedFeature,
-                           "ADDS/SUBS (flag-setting) are outside the AARCH64-1 subset");
-        }
         Decoded d;
-        d.op = isSub ? Op::SubImm : Op::AddImm;
-        d.valid = true;
         d.sf64 = sf;
         d.word = word;
         d.address = address;
@@ -201,17 +304,104 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         d.imm12 = static_cast<uint16_t>((word >> 10) & 0xFFFu);
         d.rn = static_cast<uint8_t>((word >> 5) & 31u);
         d.rd = static_cast<uint8_t>(word & 31u);
+        d.valid = true;
         char buf[128];
-        // Rn/Rd 31 denote SP for these ops.
-        std::snprintf(buf, sizeof(buf), "%s %s, %s, #0x%x, lsl #%u",
-                      isSub ? "sub" : "add",
-                      d.rd == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rd).c_str(),
-                      d.rn == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rn).c_str(),
-                      d.imm12, d.shift);
+        if (!setsFlags) {
+            d.op = isSub ? Op::SubImm : Op::AddImm;
+            // Rn/Rd 31 denote SP for non-flag-setting ADD/SUB.
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, #0x%x, lsl #%u",
+                          isSub ? "sub" : "add",
+                          d.rd == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rd).c_str(),
+                          d.rn == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rn).c_str(),
+                          d.imm12, d.shift);
+        } else if (isSub && d.rd == 31) {
+            // CMP (immediate): SUBS with XZR/WZR destination; writes no
+            // register but still updates NZCV. Rn==31 remains SP.
+            d.op = Op::CmpImm;
+            std::snprintf(buf, sizeof(buf), "cmp %s, #0x%x, lsl #%u",
+                          d.rn == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rn).c_str(),
+                          d.imm12, d.shift);
+        } else {
+            d.op = isSub ? Op::SubsImm : Op::AddsImm;
+            // Rn==31 is SP; Rd==31 is XZR/WZR (result discarded).
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, #0x%x, lsl #%u",
+                          isSub ? "subs" : "adds",
+                          d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
+                          d.rn == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rn).c_str(),
+                          d.imm12, d.shift);
+        }
         d.disassembly = buf;
         return d;
     }
 
+    // LDR/STR immediate, unsigned offset: bits[31:22] fixed except for
+    // the size low bit (bit 30). Bases: LDR Wt 0xB9400000, LDR Xt
+    // 0xF9400000, STR Wt 0xB9000000, STR Xt 0xF9000000.
+    if ((word & 0xFFC00000u) == 0xB9400000u || (word & 0xFFC00000u) == 0xF9400000u ||
+        (word & 0xFFC00000u) == 0xB9000000u || (word & 0xFFC00000u) == 0xF9000000u) {
+        const bool sf = (word & 0x40000000u) != 0; // size[0]: 0 = W, 1 = X
+        const bool isLoad = (word & 0x00400000u) != 0; // o1 bit 22
+        Decoded d;
+        d.op = isLoad ? Op::LdrImm : Op::StrImm;
+        d.valid = true;
+        d.sf64 = sf;
+        d.word = word;
+        d.address = address;
+        d.imm12 = static_cast<uint16_t>((word >> 10) & 0xFFFu);
+        d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+        d.rd = static_cast<uint8_t>(word & 31u);
+        // Unsigned offset scales by the access size (x4 for W, x8 for X).
+        d.memOffset = static_cast<uint64_t>(d.imm12) << (sf ? 3 : 2);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%llu]",
+                      isLoad ? "ldr" : "str",
+                      d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
+                      d.rn == 31 ? "sp" : regName(true, d.rn).c_str(),
+                      static_cast<unsigned long long>(d.memOffset));
+        d.disassembly = buf;
+        return d;
+    }
+
+    // CBZ/CBNZ: sf[31] 011010 op[24] imm19[23:5] Rt[4:0].
+    if ((word & 0x7F000000u) == 0x34000000u || (word & 0x7F000000u) == 0x35000000u) {
+        const bool sf = (word & 0x80000000u) != 0;
+        const bool isCbnz = (word & 0x01000000u) != 0; // op bit 24
+        Decoded d;
+        d.op = isCbnz ? Op::Cbnz : Op::Cbz;
+        d.valid = true;
+        d.sf64 = sf;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        const uint32_t imm19 = (word >> 5) & 0x7FFFFu;
+        d.branchOffset = signExtend(imm19, 19) * 4;
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s %s, #0x%llx",
+                      isCbnz ? "cbnz" : "cbz",
+                      d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
+                      static_cast<unsigned long long>(address + d.branchOffset));
+        d.disassembly = buf;
+        return d;
+    }
+
+    // B.cond: 01010100 imm19[23:5] 0[4] cond[3:0]. Bit 4 set (or any other
+    // mismatch) is unallocated, never a NOP.
+    if ((word & 0xFF000010u) == 0x54000000u) {
+        Decoded d;
+        d.op = Op::BCond;
+        d.valid = true;
+        d.sf64 = true;
+        d.word = word;
+        d.address = address;
+        d.cond = static_cast<uint8_t>(word & 15u);
+        const uint32_t imm19 = (word >> 5) & 0x7FFFFu;
+        d.branchOffset = signExtend(imm19, 19) * 4;
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "b.%s #0x%llx", condName(d.cond),
+                      static_cast<unsigned long long>(address + d.branchOffset));
+        d.disassembly = buf;
+        return d;
+    }
     // Exactly one HINT encoding is implemented. Anything else that looks
     // like a HINT/system instruction is explicitly unsupported, never a NOP.
     if (word == kNopEncoding) {
@@ -226,7 +416,7 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
     }
 
     return invalid(word, address, Fault::UnallocatedEncoding,
-                   "instruction is unallocated or outside the AARCH64-1 subset");
+                   "instruction is unallocated or outside the implemented subset");
 }
 
 Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
@@ -252,7 +442,7 @@ Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
     return decodeWord(word, pc_);
 }
 
-Fault Cpu::executeDecoded(const Decoded& decoded) {
+Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     if (!decoded.valid) {
         lastFault_ = decoded.fault == Fault::None ? Fault::UnallocatedEncoding
                                                   : decoded.fault;
@@ -328,10 +518,126 @@ Fault Cpu::executeDecoded(const Decoded& decoded) {
         pc_ = static_cast<uint64_t>(static_cast<int64_t>(pc_) + decoded.branchOffset);
         break;
     case Op::Ret: {
-        // RET <Xn> with n==31 returns to the address held in SP.
-        const uint64_t target =
-            (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        // RET <Xn> branches to X(n): the general-purpose register view, so
+        // encoding 31 reads XZR (zero), NEVER SP (AARCH64-2 audit fix).
+        // A zero target faults deterministically on the next fetch when
+        // address 0 is unmapped, exactly like any other bad target.
+        const uint64_t target = (decoded.rn == 31) ? 0 : x_[decoded.rn];
         pc_ = target;
+        break;
+    }
+    case Op::LdrImm: {
+        // Base register 31 is SP; destination 31 is WZR/XZR (discarded).
+        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
+        const size_t size = decoded.sf64 ? 8 : 4;
+        uint8_t bytes[8] = {};
+        try {
+            memory.Read(address, bytes, size);
+        } catch (const std::exception& ex) {
+            // Failed loads change nothing: destination and PC preserved.
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = std::string("LDR data access failed: ") + ex.what();
+            return lastFault_;
+        }
+        // Little-endian assembly independent of host endianness.
+        // Unaligned ordinary accesses to Normal memory are permitted in
+        // the AARCH64-2 profile, so no alignment fault is raised here.
+        uint64_t value = 0;
+        for (size_t i = 0; i < size; ++i) {
+            value |= static_cast<uint64_t>(bytes[i]) << (8 * i);
+        }
+        if (decoded.rd != 31) {
+            // 32-bit loads zero-extend into the full 64-bit register.
+            x_[decoded.rd] = decoded.sf64 ? value : (value & 0xFFFFFFFFu);
+        }
+        // NZCV untouched by loads.
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::StrImm: {
+        // Base register 31 is SP; source 31 is WZR/XZR (stores zero).
+        // The memory access always happens (and can fault) even for XZR.
+        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
+        const size_t size = decoded.sf64 ? 8 : 4;
+        uint64_t source = 0;
+        if (decoded.rd != 31) {
+            source = decoded.sf64 ? x_[decoded.rd]
+                                  : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rd]));
+        }
+        uint8_t bytes[8] = {};
+        for (size_t i = 0; i < size; ++i) {
+            bytes[i] = static_cast<uint8_t>(source >> (8 * i));
+        }
+        try {
+            memory.Write(address, bytes, size);
+        } catch (const std::exception& ex) {
+            // Single bounded Write call: rejected stores report MemoryFault
+            // without advancing PC. No broader transactionality is claimed
+            // beyond the IMemory contract (bounds-checked implementations
+            // reject before writing).
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = std::string("STR data access failed: ") + ex.what();
+            return lastFault_;
+        }
+        // NZCV untouched by stores; base register never written back.
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Cbz:
+    case Op::Cbnz: {
+        // Rt==31 reads XZR/WZR (zero), so CBZ with Rt 31 always branches
+        // and CBNZ with Rt 31 never does. NZCV preserved.
+        uint64_t test = 0;
+        if (decoded.rd != 31) {
+            test = decoded.sf64 ? x_[decoded.rd]
+                                : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rd]));
+        }
+        const bool isZero = (test == 0);
+        const bool taken = (decoded.op == Op::Cbz) ? isZero : !isZero;
+        if (taken) {
+            pc_ = static_cast<uint64_t>(static_cast<int64_t>(pc_) + decoded.branchOffset);
+        } else {
+            pc_ += kInstructionSize;
+        }
+        break;
+    }
+    case Op::AddsImm:
+    case Op::SubsImm:
+    case Op::CmpImm: {
+        // Rn==31 is SP; Rd==31 is XZR/WZR (result discarded, flags set).
+        // CMP is SUBS with Rd==31 and additionally writes nothing.
+        const bool is64 = decoded.sf64;
+        uint64_t rnVal = (decoded.rn == 31)
+            ? (is64 ? sp_ : static_cast<uint64_t>(static_cast<uint32_t>(sp_)))
+            : (is64 ? x_[decoded.rn]
+                    : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rn])));
+        const uint64_t addend = static_cast<uint64_t>(decoded.imm12) << decoded.shift;
+        const bool isSub = (decoded.op != Op::AddsImm);
+        const AddSubFlags flags =
+            isSub ? subFlags(is64, rnVal, addend) : addFlags(is64, rnVal, addend);
+        if (decoded.op != Op::CmpImm && decoded.rd != 31) {
+            x_[decoded.rd] = flags.result;
+        } else if (decoded.op != Op::CmpImm) {
+            // ADDS/SUBS to XZR/WZR: result discarded, flags still updated.
+        }
+        setNzcv(flags.n, flags.z, flags.c, flags.v);
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::BCond: {
+        // Authoritative ConditionHolds(): cond 1110 (AL) and 1111 (NV) both
+        // always branch; every other odd cond is the inverse of cond-1.
+        // NZCV never modified. A taken branch to a misaligned address
+        // faults on the next fetch, same as B/BL/RET (existing model).
+        const bool taken =
+            conditionHolds(decoded.cond, flagN(), flagZ(), flagC(), flagV());
+        if (taken) {
+            pc_ = static_cast<uint64_t>(static_cast<int64_t>(pc_) + decoded.branchOffset);
+        } else {
+            pc_ += kInstructionSize;
+        }
         break;
     }
     case Op::Invalid:
@@ -345,9 +651,38 @@ Fault Cpu::executeDecoded(const Decoded& decoded) {
     return Fault::None;
 }
 
+namespace {
+// IMemory with no storage: every data access throws, so the legacy
+// single-argument executeDecoded() reports Fault::MemoryFault for LDR/STR
+// without touching architectural state.
+class DenyMemory : public ia64::IMemory {
+public:
+    void Read(uint64_t, uint8_t*, size_t) const override {
+        throw std::out_of_range("AArch64: no memory bound for data access");
+    }
+    void Write(uint64_t, const uint8_t*, size_t) override {
+        throw std::out_of_range("AArch64: no memory bound for data access");
+    }
+    void loadBuffer(uint64_t, const uint8_t*, size_t) override {
+        throw std::out_of_range("AArch64: no memory bound for data access");
+    }
+    void loadBuffer(uint64_t, const std::vector<uint8_t>&) override {
+        throw std::out_of_range("AArch64: no memory bound for data access");
+    }
+    size_t GetTotalSize() const override { return 0; }
+    void Clear() override {}
+    const uint8_t* GetRawData() const override { return nullptr; }
+};
+} // namespace
+
+Fault Cpu::executeDecoded(const Decoded& decoded) {
+    DenyMemory deny;
+    return executeDecoded(decoded, deny);
+}
+
 Fault Cpu::step(ia64::IMemory& memory) {
     const Decoded decoded = fetchDecode(memory);
-    return executeDecoded(decoded);
+    return executeDecoded(decoded, memory);
 }
 
 RunOutcome Cpu::run(ia64::IMemory& memory, uint64_t maxSteps) {

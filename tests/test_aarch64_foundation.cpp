@@ -299,11 +299,15 @@ void testAddSub() {
     CHECK(runOne(cpu, mem, encAddSub(true, true, 1, false, 0, 1), 4) == Fault::None);
     CHECK(cpu.flagN() && cpu.flagZ() && cpu.flagC() && cpu.flagV());
 
-    // ADDS/SUBS (S=1) are allocated but outside the subset -> UnsupportedFeature.
+    // ADDS/SUBS (S=1) are allocated and implemented since AARCH64-2:
+    // they execute, advance PC and update NZCV (flag tables are covered
+    // by the AARCH64-2 memory/branch suite).
     cpu.reset(0);
-    CHECK(runOne(cpu, mem, 0xB1000420u) == Fault::UnsupportedFeature); // adds x0,x1,#1
-    CHECK(runOne(cpu, mem, 0xF1000420u) == Fault::UnsupportedFeature); // subs ...
-    CHECK_EQ(0u, cpu.pc());
+    CHECK(runOne(cpu, mem, 0xB1000420u) == Fault::None); // adds x0,x1,#1
+    CHECK_EQ(4u, cpu.pc());
+    cpu.reset(0);
+    CHECK(runOne(cpu, mem, 0xF1000420u) == Fault::None); // subs ...
+    CHECK_EQ(4u, cpu.pc());
 }
 
 void testBranches() {
@@ -339,11 +343,14 @@ void testBranches() {
     CHECK(runOne(cpu, mem, encRet(5), 0x300) == Fault::None);
     CHECK_EQ(0x600u, cpu.pc());
 
-    // RET with Rn=31 reads SP.
+    // RET with Rn=31 reads XZR (general-purpose register view), NOT SP.
+    // (AARCH64-2 audit fix: the ARM operation is target = X(n), and
+    // X(31) is the zero register. AARCH64-1 wrongly aliased SP here.)
     cpu.reset(0x300);
     cpu.setSp(0x5000);
     CHECK(runOne(cpu, mem, encRet(31), 0x300) == Fault::None);
-    CHECK_EQ(0x5000u, cpu.pc());
+    CHECK_EQ(0u, cpu.pc()); // XZR target, provably not the SP sentinel
+    CHECK_EQ(0x5000u, cpu.sp()); // SP itself undisturbed
 
     // Misaligned RET target faults deterministically on the next fetch.
     cpu.reset(0x300);

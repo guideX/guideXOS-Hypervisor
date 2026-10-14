@@ -157,12 +157,14 @@ size_t AArch64ISAPlugin::getInstructionLength(ia64::IMemory& /*memory*/,
 }
 
 ia64::ISAExecutionResult AArch64ISAPlugin::execute(
-    ia64::IMemory& /*memory*/, const ia64::ISADecodeResult& decodeResult) {
+    ia64::IMemory& memory, const ia64::ISADecodeResult& decodeResult) {
     if (!decodeResult.valid || decodeResult.internalData == nullptr) {
         return ia64::ISAExecutionResult::EXCEPTION;
     }
     const Decoded* decoded = static_cast<const Decoded*>(decodeResult.internalData);
-    const Fault fault = cpu_.executeDecoded(*decoded);
+    // AARCH64-2: guest memory is forwarded so LDR/STR execute real data
+    // accesses; failures surface deterministically as EXCEPTION.
+    const Fault fault = cpu_.executeDecoded(*decoded, memory);
     state_.capture(cpu_);
     return faultToResult(fault);
 }
@@ -241,7 +243,10 @@ std::string AArch64ISAPlugin::disassemble(ia64::IMemory& memory, uint64_t addres
 bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
     return feature == "A64" || feature == "NOP" || feature == "MOVZ" ||
            feature == "MOVK" || feature == "ADD_IMM" || feature == "SUB_IMM" ||
-           feature == "B" || feature == "BL" || feature == "RET";
+           feature == "B" || feature == "BL" || feature == "RET" ||
+           feature == "LDR_IMM" || feature == "STR_IMM" || feature == "CBZ" ||
+           feature == "CBNZ" || feature == "ADDS_IMM" || feature == "SUBS_IMM" ||
+           feature == "CMP_IMM" || feature == "B_COND";
 }
 
 std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint) {

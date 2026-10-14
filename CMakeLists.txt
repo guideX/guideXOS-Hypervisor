@@ -683,6 +683,7 @@ add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 add_test(NAME AArch64FoundationTests COMMAND test_aarch64_foundation)
+add_test(NAME AArch64MemoryBranchTests COMMAND test_aarch64_memory_branch)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -740,4 +741,28 @@ if(MSVC)
     target_compile_options(test_aarch64_foundation PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_foundation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# ---------------------------------------------------------------------------
+# AArch64 Phase AARCH64-2 memory/branch backend tests.
+# Same isolated sources and link pattern as test_aarch64_foundation; the new
+# suite covers LDR/STR, CBZ/CBNZ, ADDS/SUBS/CMP, B.cond and the integrated
+# memory-backed loop programs through the production fetch/decode/execute
+# path. No IA-64 target is modified.
+# ---------------------------------------------------------------------------
+add_executable(test_aarch64_memory_branch
+    tests/test_aarch64_memory_branch.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_aarch64_memory_branch PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_aarch64_memory_branch PRIVATE /W4)
+else()
+    target_compile_options(test_aarch64_memory_branch PRIVATE -Wall -Wextra -Wpedantic)
 endif()
