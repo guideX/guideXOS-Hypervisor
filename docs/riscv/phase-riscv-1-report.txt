@@ -1,0 +1,91 @@
+guideXOS Hypervisor - Phase RISCV-1 Report
+==========================================
+Outcome: A (complete)
+Date (UTC): 2026-10-15
+Branch: RISCV (never switched, renamed, merged, reset or rebased)
+Remote: https://github.com/guideX/guideXOS-Hypervisor/tree/RISCV
+
+Starting state
+--------------
+- HEAD: 93eed2369b295eb8b67dd654e667f16be11573de ("Cleanup")
+- Upstream: origin/RISCV, up to date, working tree clean
+- No pre-existing .phase-riscv marker; shared IA-64 .phase untouched
+  (still last_completed=IA64-POST-MADT-6 / next_expected=IA64-POST-MADT-7)
+- Existing RISC-V foundation recovered, not rebuilt:
+  RV64I/RV64M/Zicsr/SYSTEM/RV64A decode, RV64C decode foundation,
+  DecodeStream/DecodeByteStream helpers, RV64CPUState (32 GPRs, x0=0,
+  64-bit PC, deterministic reset), fetch/decode harnesses, CMake targets
+  test_riscv_decoder + test_riscv_fetch_decode.
+
+Baseline before semantic changes
+--------------------------------
+- test_riscv_decoder: BUILT + PASSED
+- test_riscv_fetch_decode: BUILT + PASSED
+- test_riscv_minimal_execution: BLOCKED - target linked riscv_decoder.cpp
+  alone (no test or CPU sources) and failed with undefined WinMain;
+  include/riscv_cpu.h had malformed `#include \` lines; src/riscv/riscv_cpu.cpp
+  was UTF-16 with malformed `#include \...h\` lines; tests file had doubled
+  quotes `#include ""riscv_cpu.h""`.
+
+Build defects repaired (smallest RISC-V-scoped changes)
+-------------------------------------------------------
+1. include/riscv_cpu.h: rewrote as clean standalone header (32 GPR state
+   preserved; ia64::ICPU inheritance removed - no consumer needs the adapter,
+   IA-64 ICPU untouched). Adds StepOutcome/StepResult, bounded guest memory,
+   genuine step() contract.
+2. src/riscv/riscv_cpu.cpp: rewrote from UTF-16/malformed includes to UTF-8;
+   replaced stub step() with genuine fetch/length/decode/execute.
+3. tests/test_riscv_minimal_execution.cpp: rewrote from stub asserts to
+   deterministic Programs A-D + reset/x0/bound coverage with explicit
+   runtime checks (no assert()-only verification).
+4. CMakeLists.txt: removed duplicate cmake_minimum_required; added missing
+   test + CPU sources and warning flags to test_riscv_minimal_execution;
+   registered RiscVFetchDecodeSmokeTest + RiscVMinimalExecutionTests with
+   CTest; listed include/riscv_cpu.h in HEADERS.
+
+Genuinely executable (via RV64CPU::step + production decoder)
+--------------------------------------------------------------
+LUI, AUIPC, ADDI, ADD, SUB, LD, SD, BEQ, BNE, JAL, JALR; EBREAK/C.EBREAK
+as explicit Halt. All other valid decodes -> Unsupported (never Ok);
+rejected encodings -> Illegal.
+
+Tests performed
+---------------
+- test_riscv_decoder: PASS (pre-existing suite, untouched)
+- test_riscv_fetch_decode: PASS (pre-existing suite, untouched)
+- test_riscv_minimal_execution: PASS, 173 explicit checks:
+  Program A arithmetic (9 Ok + Halt, regs/PC/wraparound/AUIPC verified),
+  Program B memory (8 Ok + Halt, LD/SD round-trip + LE byte check),
+  Program C control flow (12 Ok + Halt, taken/not-taken/JAL/JALR+low-bit-clear),
+  Program D containment (Illegal, Unsupported LW, compressed deferred,
+  truncated FetchFault, OOB FetchFault, LD/SD MemoryFault with rd preserved),
+  reset/x0/PC/counters, 50-step infinite-loop bound.
+- ctest -R RiscV: 3/3 passed.
+- IA-64 spot regressions (implementation untouched): test_efi_memory_map
+  PASS, test_ia64_sal PASS, test_ia64_acpi PASS, test_new_instructions PASS.
+- git diff --check: clean.
+
+Files modified or created
+-------------------------
+- Modified: include/riscv_cpu.h
+- Modified: src/riscv/riscv_cpu.cpp
+- Modified: tests/test_riscv_minimal_execution.cpp
+- Modified: CMakeLists.txt (RISC-V target/CTest lines only)
+- Modified: docs/riscv/rv64-decoder-status.txt (decoded-vs-executed split)
+- Created: docs/riscv/phase-riscv-1-report.txt (this file)
+- Created: .phase-riscv (last_completed=RISCV-1, next_expected=RISCV-2)
+
+Remaining gaps (execution, privilege, MMU, SBI, boot)
+----------------------------------------------------
+- CSR file, traps, Sv39/Sv48 MMU, SBI, shifts/compares/word ops, F/D/V,
+  full C extension, PLIC/CLINT/UART/virtio, ELF boot path. No guest OS boot
+  readiness is claimed: deterministic CPU execution tests only.
+
+Next phase recommendation
+-------------------------
+- RISCV-2: CSR + privilege skeleton (ecall/mret trap round-trip), complete
+  RV64I execution (all loads/stores/branches/immediates), misaligned-access
+  policy, M-mode timer stub, SBI stub surface, supervisor hello-world binary
+  run. Do NOT attempt Linux boot before MMU+SBI+devices land (RISCV-3+).
+
+Local commit SHA: (recorded after commit; no push performed)

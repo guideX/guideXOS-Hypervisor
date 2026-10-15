@@ -1,4 +1,4 @@
-RISC-V Decoder Status
+RISC-V Decoder Status (updated Phase RISCV-1)
 
 Current decoded instruction families:
 - RV64I
@@ -19,36 +19,65 @@ Fetch/decode smoke harness:
 Byte-stream helper coverage:
 - Deterministic DecodeByteStream helper for little-endian in-memory byte sequences with 16-bit/32-bit selection and trailing-byte reporting
 
-Deferred instruction families / behaviors:
-- full C extension
-- compressed floating-point forms
-- F/D floating-point
-- V vector extension
-- full privileged behavior
-- MMU/page tables
-- SBI
-- execution semantics
-- runtime/plugin registration
+--- Phase RISCV-1: decoded vs actually executed ---
+
+Instructions decoded (production riscv::Decoder, unchanged this phase):
+- Full RV64I/RV64M/Zicsr/SYSTEM/RV64A/RV64C decode coverage listed above.
+  Decode-only coverage is NOT execution.
+
+Instructions actually executed (RV64CPU::step, genuine semantics):
+- LUI, AUIPC, ADDI, ADD, SUB, LD, SD, BEQ, BNE, JAL, JALR
+- EBREAK (32-bit) and C.EBREAK are explicit Halt outcomes, not Ok.
+
+Tested CPU semantics (test_riscv_minimal_execution, 173 runtime checks):
+- x0 hardwired zero (direct writes and ADDI x0 ignored)
+- Signed immediates (ADDI -1/-2, S-immediate, B/J offsets incl. negative path via wraparound)
+- 64-bit wraparound arithmetic (0xFFFFFFFFFFFFFFFF + 10 = 9)
+- PC-relative addressing (AUIPC) and JAL/JALR link = PC+4
+- JALR low-bit clearing ((rs1+imm) & ~1, proven with odd offset 13)
+- Branch taken (BEQ skips) and not-taken (BNE falls through)
+- Little-endian LD/SD round-trip incl. sign-extended LUI patterns, raw byte verification
+- Reset determinism (PC=base, regs=0, counters=0; fresh CPU PC=0)
+- Failure containment: Illegal / Unsupported / FetchFault (truncated + out-of-range) /
+  MemoryFault (LD/SD OOB, rd preserved, PC unchanged)
+- Compressed instructions never report Ok (Unsupported; C.EBREAK reports Halt)
+- Instruction-count bounds (50-step infinite JAL x0,0 loop terminates by harness bound)
+
+Explicitly unsupported operations (valid decode -> StepOutcome::Unsupported):
+- Every other decoded mnemonic: LB/LH/LW/LBU/LHU/LWU, SB/SH/SW, BLT/BGE/BLTU/BGEU,
+  SLTI/SLTIU/XORI/ORI/ANDI/SLLI/SRLI/SRAI, SLL/SLT/SLTU/XOR/SRL/SRA/OR/AND,
+  ADDIW/SLLIW/SRLIW/SRAIW, ADDW/SUBW/SLLW/SRLW/SRAW, all RV64M, all RV64A,
+  all CSR/ECALL/MRET/SRET/WFI/FENCE forms, all compressed except C.EBREAK.
+
+Remaining architectural requirements for Linux boot (NOT in RISCV-1):
+- Full CSR file + privileged traps (ecall/mret/sret/wfi semantics, trap vectors)
+- MMU/page tables (Sv39/Sv48), SFENCE.VMA behavior, fault reporting
+- SBI interface for the guest kernel
+- Full integer coverage (shifts, compares, word ops), F/D floating point, full C extension
+- PLIC/CLINT, UART/virtio device emulation, timer/interrupt delivery
+- ELF loader integration and boot Hart state machine
 
 Test command used:
-- D:\dev\guideXOS_Emulator\build-riscv\bin\test_riscv_decoder.exe
-- Command: `cmake --build 'D:\dev\guideXOS_Emulator\build-riscv' --target test_riscv_decoder --config Debug; & 'D:\dev\guideXOS_Emulator\build-riscv\bin\test_riscv_decoder.exe'`
+- cmake -S . -B build-riscv1
+- cmake --build build-riscv1 --target test_riscv_decoder --target test_riscv_fetch_decode --target test_riscv_minimal_execution --config Debug
+- ctest --test-dir build-riscv1 -R "RiscV" --output-on-failure
 
 Latest test result:
 - PASS: RISC-V RV64I/RV64M/Zicsr/RV64A/RV64C decoder smoke tests passed
 - PASS: RISC-V guest-memory fetch/decode smoke harness passed
+- PASS: RISC-V minimal execution test passed (173 checks)
 
 Next milestone runway:
-- Minimal RV64 CPU state plus tiny execution harness
-- Keep execution semantics deferred unless a tiny bookkeeping helper is required
-- No ISO boot attempt yet
+- RISCV-2 (proposed, not implemented): CSR/privilege skeleton, full RV64I execution,
+  byte/half/word loads and stores, remaining branches, misaligned-fault policy,
+  SBI stub surface for a hello-world supervisor binary. No ISO boot attempt yet.
 
-Execution semantics: deferred
+Execution semantics: partial (12 instructions + EBREAK halt, see above)
 Runtime/plugin registration: deferred
 
 Audit notes:
 - IA-64 / Itanium modified: no
 - Windows-specific dependencies added to C++ core: no
 - IA-64 / Itanium modified: no
-- Execution semantics: deferred
+- Execution semantics: partial (RISCV-1 subset)
 - Runtime/plugin registration: deferred

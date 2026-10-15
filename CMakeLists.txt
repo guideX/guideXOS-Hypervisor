@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-cmake_minimum_required(VERSION 3.15)
 project(IA64Emulator VERSION 1.0 LANGUAGES CXX)
 
 # Require C++20
@@ -176,6 +175,7 @@ set(HEADERS
     include/ISAPluginRegistry.h
     include/ExampleISAPlugin.h
     include/riscv_decoder.h
+    include/riscv_cpu.h
     include/SyscallDispatcher.h
     include/CPUContext.h
     include/IVirtualMachine.h
@@ -681,6 +681,8 @@ add_test(NAME ProfilerTests COMMAND test_profiler)
 add_test(NAME FuzzerTests COMMAND test_fuzzer)
 add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
+add_test(NAME RiscVFetchDecodeSmokeTest COMMAND test_riscv_fetch_decode)
+add_test(NAME RiscVMinimalExecutionTests COMMAND test_riscv_minimal_execution)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -700,14 +702,15 @@ set(RISCV_CPU_SOURCES
     src/riscv/riscv_cpu.cpp
 )
 
-# Add RISC-V test for minimal execution harness
+# RISC-V RV64 execution harness: real fetch/decode/step through RV64CPU.
 add_executable(test_riscv_minimal_execution
-    
+    tests/test_riscv_minimal_execution.cpp
+    src/riscv/riscv_cpu.cpp
     src/decoder/riscv_decoder.cpp
 )
 
 if(MSVC)
+    target_compile_options(test_riscv_minimal_execution PRIVATE /W4)
 else()
+    target_compile_options(test_riscv_minimal_execution PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-
-# Add to the test suite
