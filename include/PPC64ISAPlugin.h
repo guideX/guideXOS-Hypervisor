@@ -25,6 +25,12 @@ namespace ppc64 {
 //   and[.], or[.], xor[.], andi., andis., xori, xoris,
 //   cmp[l] (L=0/1, BF=0..7), cmpi, cmpli (L=0/1, BF=0..7),
 //   bc[bca][bcl][bcla], bclr[bclrl], bcctr[bcctrl], mfspr/mtspr (XER/LR/CTR).
+// Phase 3 subset (Power ISA v3.1C, Book I integer storage access + traps):
+//   D-form: lbz[ux], lhz[ux], lha[ux], lwz[ux], stb[ux], sth[ux], stw[ux],
+//   DS-form: ld[u], lwa, std[u] (XO=3 reserved),
+//   X-form indexed: lbzx, lhzx, lhax, lwzx, lwax, ldx,
+//                   stbx, sthx, stwx, stdx (Rc must be 0),
+//   SC-form: sc (LEV=0 only; other opcode-17 patterns rejected).
 // Everything else decodes as unsupported and executes as EXCEPTION.
 
 constexpr size_t NUM_GPR = 32;
@@ -55,6 +61,26 @@ constexpr uint8_t OPCODE_XORI = 26;
 constexpr uint8_t OPCODE_XORIS = 27;
 constexpr uint8_t OPCODE_ANDI_DOT = 28;
 constexpr uint8_t OPCODE_ANDIS_DOT = 29;
+// Phase 3 D-form integer load/store opcodes (Power ISA Book I §4.6).
+constexpr uint8_t OPCODE_LWZ = 32;
+constexpr uint8_t OPCODE_LWZU = 33;
+constexpr uint8_t OPCODE_LBZ = 34;
+constexpr uint8_t OPCODE_LBZU = 35;
+constexpr uint8_t OPCODE_STW = 36;
+constexpr uint8_t OPCODE_STWU = 37;
+constexpr uint8_t OPCODE_STB = 38;
+constexpr uint8_t OPCODE_STBU = 39;
+constexpr uint8_t OPCODE_LHZ = 40;
+constexpr uint8_t OPCODE_LHZU = 41;
+constexpr uint8_t OPCODE_LHA = 42;
+constexpr uint8_t OPCODE_LHAU = 43;
+constexpr uint8_t OPCODE_STH = 44;
+constexpr uint8_t OPCODE_STHU = 45;
+// Phase 3 DS-form opcodes: 58 = ld/ldu/lwa, 62 = std/stdu.
+constexpr uint8_t OPCODE_DS_LOAD = 58;
+constexpr uint8_t OPCODE_DS_STORE = 62;
+// Phase 3 SC-form opcode (sc trap).
+constexpr uint8_t OPCODE_SC = 17;
 
 // X-form 10-bit extended opcodes ((word >> 1) & 0x3FF), matching the
 // OpenPOWER/IBM opcode tables. For the OE-capable arithmetic family the
@@ -78,6 +104,29 @@ constexpr uint16_t XO_MTSPR = 467;
 constexpr uint16_t XO_BCLR = 16;
 constexpr uint16_t XO_BCCTR = 528;
 
+// Phase 3 X-form indexed integer load/store extended opcodes (opcode 31).
+// Only the non-update forms are in scope; update-indexed XO values
+// (lbzux=119, lhzux=311, lhaux=375, lwzux=55, lwaux=373, ldux=53,
+//  stbux=247, sthux=439, stwux=183, stdux=181) decode as unsupported.
+constexpr uint16_t XO_LBZX = 87;
+constexpr uint16_t XO_LHZX = 279;
+constexpr uint16_t XO_LHAX = 343;
+constexpr uint16_t XO_LWZX = 23;
+constexpr uint16_t XO_LWAX = 341;
+constexpr uint16_t XO_LDX = 21;
+constexpr uint16_t XO_STBX = 215;
+constexpr uint16_t XO_STHX = 407;
+constexpr uint16_t XO_STWX = 151;
+constexpr uint16_t XO_STDX = 149;
+
+// Phase 3 DS-form 2-bit XO field (word bits 0-1) for opcodes 58/62.
+constexpr uint8_t DS_XO_LOAD = 0;    // ld (opcode 58)
+constexpr uint8_t DS_XO_LOAD_U = 1;  // ldu (opcode 58)
+constexpr uint8_t DS_XO_LWA = 2;     // lwa (opcode 58)
+constexpr uint8_t DS_XO_STORE = 0;   // std (opcode 62)
+constexpr uint8_t DS_XO_STORE_U = 1;  // stdu (opcode 62)
+// DS XO value 3 is reserved on both opcodes.
+
 // Bounded SPR set for mfspr/mtspr (user-accessible fixed-point SPRs).
 constexpr uint16_t SPR_XER = 1;
 constexpr uint16_t SPR_LR = 8;
@@ -95,6 +144,61 @@ constexpr uint32_t XER_CA = 0x20000000U;
 
 // Conventional nop encoding: ori r0,r0,0
 constexpr uint32_t ENCODING_NOP = 0x60000000;
+
+// Supported system-call trap encoding: sc with LEV=0 and all reserved
+// SC-form bits zero (Power ISA Book I §4.6.14 / Book III). Any other
+// word with primary opcode 17 is rejected as an invalid encoding.
+constexpr uint32_t ENCODING_SC = 0x44000002;
+
+// Phase 3 per-CPU architectural fault/exception record.
+//
+// A host IMemory Read/Write failure is recorded as-is (with the host
+// exception text preserved in `reason`); it is NOT automatically proof
+// of a guest Data/Instruction Storage Interrupt. The `category` values
+// name the emulator-observed condition and leave room for later Book III
+// DSI/ISI/Alignment/Program-interrupt delivery, which is out of scope.
+//
+// Precision rules: the faulting NIP is preserved (never advanced past
+// the faulting instruction), no partial destination/base register update
+// is committed, and each CPU instance keeps its own record. reset()
+// clears the record. The record is sticky: a later successful execution
+// retains it for diagnostics until clearFault() or reset() is called.
+// The record is host-side diagnostics only and is never serialized into
+// the 304-byte Phase 1 checkpoint format.
+enum class PPC64AccessType : uint8_t {
+    NONE,   // No memory access attempted (trap / encoding error)
+    FETCH,  // Instruction-fetch access at NIP
+    READ,   // Data load access at the effective address
+    WRITE,  // Data store access at the effective address
+};
+
+enum class PPC64FaultCategory : uint8_t {
+    NONE,                // No fault recorded
+    INVALID_INSTRUCTION,  // Unknown/unsupported opcode or XO form
+    INVALID_ENCODING,    // Known form with reserved/invalid field combination
+    FETCH_FAILURE,       // Instruction-fetch memory access failed
+    DATA_LOAD_FAILURE,   // Data-load memory access failed
+    DATA_STORE_FAILURE,  // Data-store memory access failed
+    ALIGNMENT,           // Fetch or data alignment violation
+    SYSCALL,             // System-call trap (sc)
+};
+
+struct PPC64Fault {
+    bool valid = false;  // True once any fault/trap has been recorded
+    uint64_t cia = 0;    // Address of the faulting/trapping instruction
+    uint32_t raw = 0;    // Faulting instruction encoding, if fetched
+    bool hasRaw = false;
+    uint64_t ea = 0;  // Effective address, if a data access was attempted
+    bool hasEA = false;
+    PPC64AccessType access = PPC64AccessType::NONE;
+    uint32_t width = 0;  // Access width in bytes (0 when access == NONE)
+    PPC64FaultCategory category = PPC64FaultCategory::NONE;
+    std::string reason;   // Human-readable diagnostic (host-side only)
+    // True when retrying the same instruction after fixing the environment
+    // (e.g. mapping memory) could succeed. False for encodings that can
+    // never execute (invalid opcode / reserved fields).
+    bool resumable = false;
+};
 
 enum class DecodedKind {
     ADDI,
@@ -125,6 +229,36 @@ enum class DecodedKind {
     BCCTR,      // bcctr/bcctrl (XL-form, opcode 19, XO 528; target CTR & ~3)
     MFSPR,      // mfspr (XFX-form, XO 339; SPR in {1,8,9})
     MTSPR,      // mtspr (XFX-form, XO 467; SPR in {1,8,9})
+    LBZ,        // lbz   (D-form, opcode 34)
+    LBZU,       // lbzu  (D-form, opcode 35; invalid if RA==0 or RA==RT)
+    LHZ,        // lhz   (D-form, opcode 40)
+    LHZU,       // lhzu  (D-form, opcode 41; invalid if RA==0 or RA==RT)
+    LHA,        // lha   (D-form, opcode 42; sign-extending)
+    LHAU,       // lhau  (D-form, opcode 43; invalid if RA==0 or RA==RT)
+    LWZ,        // lwz   (D-form, opcode 32)
+    LWZU,       // lwzu  (D-form, opcode 33; invalid if RA==0 or RA==RT)
+    LWA,        // lwa   (DS-form, opcode 58 XO 2; word-algebraic, EA%4==0)
+    LD,         // ld    (DS-form, opcode 58 XO 0)
+    LDU,        // ldu   (DS-form, opcode 58 XO 1; invalid if RA==0 or RA==RT)
+    STB,        // stb   (D-form, opcode 38)
+    STBU,       // stbu  (D-form, opcode 39; invalid if RA==0)
+    STH,        // sth   (D-form, opcode 44)
+    STHU,       // sthu  (D-form, opcode 45; invalid if RA==0)
+    STW,        // stw   (D-form, opcode 36)
+    STWU,       // stwu  (D-form, opcode 37; invalid if RA==0)
+    STD,        // std   (DS-form, opcode 62 XO 0)
+    STDU,       // stdu  (DS-form, opcode 62 XO 1; invalid if RA==0)
+    LBZX,       // lbzx  (X-form, opcode 31 XO 87)
+    LHZX,       // lhzx  (X-form, opcode 31 XO 279)
+    LHAX,       // lhax  (X-form, opcode 31 XO 343; sign-extending)
+    LWZX,       // lwzx  (X-form, opcode 31 XO 23)
+    LWAX,       // lwax  (X-form, opcode 31 XO 341; word-algebraic, EA%4==0)
+    LDX,        // ldx   (X-form, opcode 31 XO 21)
+    STBX,       // stbx  (X-form, opcode 31 XO 215)
+    STHX,       // sthx  (X-form, opcode 31 XO 407)
+    STWX,       // stwx  (X-form, opcode 31 XO 151)
+    STDX,       // stdx  (X-form, opcode 31 XO 149)
+    SC,         // sc    (SC-form, opcode 17, encoding 0x44000002 only)
     UNSUPPORTED
 };
 
@@ -150,6 +284,8 @@ struct DecodedInstruction {
     uint8_t bf = 0;      // Compare BF field (CR field selector 0-7)
     bool l = false;      // Compare L bit (false = 32-bit, true = 64-bit)
     uint16_t sprn = 0;   // XFX-form SPR number
+    uint16_t ds = 0;     // DS-form 14-bit displacement field (bits 2-15)
+    uint8_t dsXo = 0;    // DS-form 2-bit XO field (word bits 0-1)
 };
 
 /**
@@ -211,7 +347,7 @@ public:
 
     // IISA identity
     std::string getName() const override { return "PPC64"; }
-    std::string getVersion() const override { return "2.0-phase2"; }
+    std::string getVersion() const override { return "3.0-phase3"; }
     void reset() override;
 
     // Decode / execute
@@ -249,6 +385,13 @@ public:
     uint32_t getXER() const { return state_.xer; }
     uint64_t getMSR() const { return state_.msr; }
 
+    // Phase 3 per-CPU fault/exception record. Independent per instance,
+    // cleared by reset(), sticky across successful execution (see the
+    // PPC64Fault contract above), never part of checkpoint serialization.
+    const PPC64Fault& getLastFault() const { return lastFault_; }
+    bool hasFault() const { return lastFault_.valid; }
+    void clearFault() { lastFault_ = PPC64Fault(); }
+
     // Pure decoder helpers (no state); also used by disassemble().
     static DecodedInstruction decodeWord(uint32_t word);
     static std::string disassembleDecoded(const DecodedInstruction& instr, uint64_t address);
@@ -264,11 +407,34 @@ public:
 private:
     ISAExecutionResult executeDecoded(IMemory& memory, const DecodedInstruction& instr);
     void evaluateBranch(const DecodedInstruction& instr, bool& tookBranch);
+    // Phase 3 helpers (defined in PPC64ISAPlugin.cpp).
+    void recordFault(PPC64FaultCategory category, uint64_t cia, uint32_t raw, bool hasRaw,
+                     uint64_t ea, bool hasEA, PPC64AccessType access, uint32_t width,
+                     const std::string& reason, bool resumable);
+    // Sign-extend the DS-form 14-bit field (ds || 0b00) to 64 bits.
+    static int64_t signExtendDS(uint16_t dsField);
+    // Wrapping effective-address generation (mod 2^64, no host UB).
+    uint64_t eaDForm(uint8_t ra, int16_t d) const;
+    uint64_t eaDSForm(uint8_t ra, uint16_t dsField) const;
+    uint64_t eaXForm(uint8_t ra, uint8_t rb) const;
+    // Bounded big-endian memory transactions. Both validate the full
+    // [ea, ea+width) range for wrap-around up front, then perform a single
+    // IMemory call so a failure throws before any architectural register is
+    // touched. Returns false with a diagnostic in `reason` on any host
+    // exception (bounds, permission/PageFault, hook denial, MMIO failure).
+    static bool memLoadBE(IMemory& memory, uint64_t ea, uint32_t width, uint64_t& out,
+                          std::string& reason);
+    static bool memStoreBE(IMemory& memory, uint64_t ea, uint32_t width, uint64_t value,
+                           std::string& reason);
+    // Execute one decoded integer load/store with precise fault semantics.
+    ISAExecutionResult executeLoadStore(IMemory& memory, const DecodedInstruction& instr,
+                                       uint64_t cia);
 
     PPC64ISAState state_;
     DecodedInstruction cachedInstruction_;
     bool hasCachedInstruction_ = false;
     uint64_t cachedAddress_ = 0;
+    PPC64Fault lastFault_;
 };
 
 /**

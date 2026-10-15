@@ -173,7 +173,7 @@ void PPC64ISAState::deserialize(const uint8_t* buffer) {
 
 std::string PPC64ISAState::toString() const {
     std::ostringstream out;
-    out << "PPC64 State (BE, interpreter, phase 2):\n";
+    out << "PPC64 State (BE, interpreter, phase 3):\n";
     out << "  NIP: 0x" << std::hex << nip << std::dec << "\n";
     out << "  LR:  0x" << std::hex << lr << std::dec << "\n";
     out << "  CTR: 0x" << std::hex << ctr << std::dec << "\n";
@@ -254,6 +254,103 @@ void PPC64ISAPlugin::reset() {
     state_.reset();
     hasCachedInstruction_ = false;
     cachedAddress_ = 0;
+    lastFault_ = PPC64Fault();
+}
+
+void PPC64ISAPlugin::recordFault(PPC64FaultCategory category, uint64_t cia, uint32_t raw,
+                                 bool hasRaw, uint64_t ea, bool hasEA,
+                                 PPC64AccessType access, uint32_t width,
+                                 const std::string& reason, bool resumable) {
+    lastFault_.valid = true;
+    lastFault_.cia = cia;
+    lastFault_.raw = raw;
+    lastFault_.hasRaw = hasRaw;
+    lastFault_.ea = ea;
+    lastFault_.hasEA = hasEA;
+    lastFault_.access = access;
+    lastFault_.width = width;
+    lastFault_.category = category;
+    lastFault_.reason = reason;
+    lastFault_.resumable = resumable;
+}
+
+int64_t PPC64ISAPlugin::signExtendDS(uint16_t dsField) {
+    int32_t value = static_cast<int32_t>(dsField & 0x3FFFU);
+    if ((value & 0x2000) != 0) {
+        value |= ~0x3FFF;
+    }
+    return static_cast<int64_t>(value << 2);
+}
+
+uint64_t PPC64ISAPlugin::eaDForm(uint8_t ra, int16_t d) const {
+    const uint64_t base = (ra == 0) ? 0 : state_.gpr[ra];
+    return base + static_cast<uint64_t>(static_cast<int64_t>(d));
+}
+
+uint64_t PPC64ISAPlugin::eaDSForm(uint8_t ra, uint16_t dsField) const {
+    const uint64_t base = (ra == 0) ? 0 : state_.gpr[ra];
+    return base + static_cast<uint64_t>(signExtendDS(dsField));
+}
+
+uint64_t PPC64ISAPlugin::eaXForm(uint8_t ra, uint8_t rb) const {
+    const uint64_t base = (ra == 0) ? 0 : state_.gpr[ra];
+    return base + state_.gpr[rb];  // wraps mod 2^64
+}
+
+bool PPC64ISAPlugin::memLoadBE(IMemory& memory, uint64_t ea, uint32_t width, uint64_t& out,
+                               std::string& reason) {
+    if (width == 0 || width > 8) {
+        reason = "memLoadBE: unsupported width";
+        return false;
+    }
+    // The full [ea, ea+width) range must not wrap past 2^64-1; such an
+    // access can never be satisfied by the flat guest memory, so fail
+    // before attempting any host call.
+    if (static_cast<uint64_t>(width - 1) > (0xFFFFFFFFFFFFFFFFULL - ea)) {
+        reason = "effective range wraps past 2^64-1";
+        return false;
+    }
+    uint8_t buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    try {
+        memory.Read(ea, buf, width);
+    } catch (const std::exception& e) {
+        reason = e.what();
+        return false;
+    }
+    uint64_t value = 0;
+    for (uint32_t i = 0; i < width; ++i) {
+        value = (value << 8) | static_cast<uint64_t>(buf[i]);
+    }
+    out = value;
+    return true;
+}
+
+bool PPC64ISAPlugin::memStoreBE(IMemory& memory, uint64_t ea, uint32_t width, uint64_t value,
+                                std::string& reason) {
+    if (width == 0 || width > 8) {
+        reason = "memStoreBE: unsupported width";
+        return false;
+    }
+    if (static_cast<uint64_t>(width - 1) > (0xFFFFFFFFFFFFFFFFULL - ea)) {
+        reason = "effective range wraps past 2^64-1";
+        return false;
+    }
+    uint8_t buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    for (uint32_t i = 0; i < width; ++i) {
+        buf[i] = static_cast<uint8_t>((value >> (8 * (width - 1 - i))) & 0xFF);
+    }
+    // Single IMemory::Write call: the Memory implementation bounds-checks
+    // the whole range and throws before any byte is committed, so a failed
+    // store leaves guest memory untouched (no rollback needed). Cross-page
+    // MMU permission granularity is a Memory-implementation limitation and
+    // is documented, not worked around here.
+    try {
+        memory.Write(ea, buf, width);
+    } catch (const std::exception& e) {
+        reason = e.what();
+        return false;
+    }
+    return true;
 }
 
 DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
@@ -396,6 +493,117 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.uimm = static_cast<uint16_t>(word & 0xFFFF);
             instr.supported = true;
             break;
+        case OPCODE_SC:
+            // SC-form: only LEV=0 with all reserved bits zero is supported.
+            if (word == ENCODING_SC) {
+                instr.kind = DecodedKind::SC;
+                instr.supported = true;
+            } else {
+                instr.kind = DecodedKind::UNSUPPORTED;
+                instr.supported = false;
+            }
+            break;
+        case OPCODE_LWZ:
+        case OPCODE_LWZU:
+        case OPCODE_LBZ:
+        case OPCODE_LBZU:
+        case OPCODE_LHZ:
+        case OPCODE_LHZU:
+        case OPCODE_LHA:
+        case OPCODE_LHAU: {
+            switch (instr.opcode) {
+                case OPCODE_LWZ: instr.kind = DecodedKind::LWZ; break;
+                case OPCODE_LWZU: instr.kind = DecodedKind::LWZU; break;
+                case OPCODE_LBZ: instr.kind = DecodedKind::LBZ; break;
+                case OPCODE_LBZU: instr.kind = DecodedKind::LBZU; break;
+                case OPCODE_LHZ: instr.kind = DecodedKind::LHZ; break;
+                case OPCODE_LHZU: instr.kind = DecodedKind::LHZU; break;
+                case OPCODE_LHA: instr.kind = DecodedKind::LHA; break;
+                default: instr.kind = DecodedKind::LHAU; break;
+            }
+            instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
+            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.supported = true;
+            // Update forms cannot target r0-as-literal and cannot use the
+            // destination as its own base (Power ISA Book I §4.6).
+            if (instr.opcode == OPCODE_LWZU || instr.opcode == OPCODE_LBZU ||
+                instr.opcode == OPCODE_LHZU || instr.opcode == OPCODE_LHAU) {
+                if (instr.ra == 0 || instr.ra == instr.rt) {
+                    instr.supported = false;
+                }
+            }
+            break;
+        }
+        case OPCODE_STW:
+        case OPCODE_STWU:
+        case OPCODE_STB:
+        case OPCODE_STBU:
+        case OPCODE_STH:
+        case OPCODE_STHU: {
+            switch (instr.opcode) {
+                case OPCODE_STW: instr.kind = DecodedKind::STW; break;
+                case OPCODE_STWU: instr.kind = DecodedKind::STWU; break;
+                case OPCODE_STB: instr.kind = DecodedKind::STB; break;
+                case OPCODE_STBU: instr.kind = DecodedKind::STBU; break;
+                case OPCODE_STH: instr.kind = DecodedKind::STH; break;
+                default: instr.kind = DecodedKind::STHU; break;
+            }
+            // S-field (source) sits in the RT bit position for stores.
+            instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
+            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.supported = true;
+            // Store-with-update cannot update the r0 literal. RS==RA
+            // overlap is well-defined (old source value is stored, then
+            // RA is updated) and remains supported.
+            if (instr.opcode == OPCODE_STWU || instr.opcode == OPCODE_STBU ||
+                instr.opcode == OPCODE_STHU) {
+                if (instr.ra == 0) {
+                    instr.supported = false;
+                }
+            }
+            break;
+        }
+        case OPCODE_DS_LOAD: {
+            instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
+            instr.ds = static_cast<uint16_t>((word >> 2) & 0x3FFFU);
+            instr.dsXo = static_cast<uint8_t>(word & 0x3U);
+            if (instr.dsXo == DS_XO_LOAD) {
+                instr.kind = DecodedKind::LD;
+                instr.supported = true;
+            } else if (instr.dsXo == DS_XO_LOAD_U) {
+                instr.kind = DecodedKind::LDU;
+                instr.supported = (instr.ra != 0 && instr.ra != instr.rt);
+            } else if (instr.dsXo == DS_XO_LWA) {
+                instr.kind = DecodedKind::LWA;
+                instr.supported = true;
+            } else {
+                // DS XO=3 is reserved.
+                instr.kind = DecodedKind::UNSUPPORTED;
+                instr.supported = false;
+            }
+            break;
+        }
+        case OPCODE_DS_STORE: {
+            instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
+            instr.ds = static_cast<uint16_t>((word >> 2) & 0x3FFFU);
+            instr.dsXo = static_cast<uint8_t>(word & 0x3U);
+            if (instr.dsXo == DS_XO_STORE) {
+                instr.kind = DecodedKind::STD;
+                instr.supported = true;
+            } else if (instr.dsXo == DS_XO_STORE_U) {
+                instr.kind = DecodedKind::STDU;
+                instr.supported = (instr.ra != 0);
+            } else {
+                // DS XO=2/3 are reserved on opcode 62.
+                instr.kind = DecodedKind::UNSUPPORTED;
+                instr.supported = false;
+            }
+            break;
+        }
         case OPCODE_XO: {
             const uint16_t combined = static_cast<uint16_t>((word >> 1) & 0x3FFU);
             const uint16_t base = static_cast<uint16_t>(combined & 0x1FFU);
@@ -473,6 +681,28 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                                                        : DecodedKind::MTSPR;
                     instr.supported = false;
                 }
+            } else if (!rc && (combined == XO_LBZX || combined == XO_LHZX ||
+                               combined == XO_LHAX || combined == XO_LWZX ||
+                               combined == XO_LWAX || combined == XO_LDX ||
+                               combined == XO_STBX || combined == XO_STHX ||
+                               combined == XO_STWX || combined == XO_STDX)) {
+                // Phase 3 indexed integer loads/stores. Rc must be 0 (the
+                // record bit has no meaning on storage-access X-forms); the
+                // RA=0 zero-base rule applies at execution time, and RB=0
+                // reads GPR0 as an ordinary index register.
+                switch (combined) {
+                    case XO_LBZX: instr.kind = DecodedKind::LBZX; break;
+                    case XO_LHZX: instr.kind = DecodedKind::LHZX; break;
+                    case XO_LHAX: instr.kind = DecodedKind::LHAX; break;
+                    case XO_LWZX: instr.kind = DecodedKind::LWZX; break;
+                    case XO_LWAX: instr.kind = DecodedKind::LWAX; break;
+                    case XO_LDX: instr.kind = DecodedKind::LDX; break;
+                    case XO_STBX: instr.kind = DecodedKind::STBX; break;
+                    case XO_STHX: instr.kind = DecodedKind::STHX; break;
+                    case XO_STWX: instr.kind = DecodedKind::STWX; break;
+                    default: instr.kind = DecodedKind::STDX; break;
+                }
+                instr.supported = true;
             } else {
                 // Covers: OE=1 on addc/adde/subfc (valid-per-ISA but out of
                 // Phase 2 scope), Rc=1 on cmp/cmpl, unknown XO values, and
@@ -713,6 +943,96 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << "mtspr " << instr.sprn
                 << ",r" << static_cast<int>(instr.rt);
             break;
+        case DecodedKind::LBZ:
+        case DecodedKind::LBZU:
+        case DecodedKind::LHZ:
+        case DecodedKind::LHZU:
+        case DecodedKind::LHA:
+        case DecodedKind::LHAU:
+        case DecodedKind::LWZ:
+        case DecodedKind::LWZU:
+        case DecodedKind::STB:
+        case DecodedKind::STBU:
+        case DecodedKind::STH:
+        case DecodedKind::STHU:
+        case DecodedKind::STW:
+        case DecodedKind::STWU: {
+            const char* name = "?";
+            switch (instr.kind) {
+                case DecodedKind::LBZ: name = "lbz"; break;
+                case DecodedKind::LBZU: name = "lbzu"; break;
+                case DecodedKind::LHZ: name = "lhz"; break;
+                case DecodedKind::LHZU: name = "lhzu"; break;
+                case DecodedKind::LHA: name = "lha"; break;
+                case DecodedKind::LHAU: name = "lhau"; break;
+                case DecodedKind::LWZ: name = "lwz"; break;
+                case DecodedKind::LWZU: name = "lwzu"; break;
+                case DecodedKind::STB: name = "stb"; break;
+                case DecodedKind::STBU: name = "stbu"; break;
+                case DecodedKind::STH: name = "sth"; break;
+                case DecodedKind::STHU: name = "sthu"; break;
+                case DecodedKind::STW: name = "stw"; break;
+                default: name = "stwu"; break;
+            }
+            out << name << " r" << static_cast<int>(instr.rt)
+                << "," << instr.simm << "(r" << static_cast<int>(instr.ra) << ")";
+            if (!instr.supported) {
+                out << " ; invalid update form";
+            }
+            break;
+        }
+        case DecodedKind::LWA:
+        case DecodedKind::LD:
+        case DecodedKind::LDU:
+        case DecodedKind::STD:
+        case DecodedKind::STDU: {
+            const char* name = "?";
+            switch (instr.kind) {
+                case DecodedKind::LWA: name = "lwa"; break;
+                case DecodedKind::LD: name = "ld"; break;
+                case DecodedKind::LDU: name = "ldu"; break;
+                case DecodedKind::STD: name = "std"; break;
+                default: name = "stdu"; break;
+            }
+            out << name << " r" << static_cast<int>(instr.rt)
+                << "," << signExtendDS(instr.ds)
+                << "(r" << static_cast<int>(instr.ra) << ")";
+            if (!instr.supported) {
+                out << " ; invalid update form";
+            }
+            break;
+        }
+        case DecodedKind::LBZX:
+        case DecodedKind::LHZX:
+        case DecodedKind::LHAX:
+        case DecodedKind::LWZX:
+        case DecodedKind::LWAX:
+        case DecodedKind::LDX:
+        case DecodedKind::STBX:
+        case DecodedKind::STHX:
+        case DecodedKind::STWX:
+        case DecodedKind::STDX: {
+            const char* name = "?";
+            switch (instr.kind) {
+                case DecodedKind::LBZX: name = "lbzx"; break;
+                case DecodedKind::LHZX: name = "lhzx"; break;
+                case DecodedKind::LHAX: name = "lhax"; break;
+                case DecodedKind::LWZX: name = "lwzx"; break;
+                case DecodedKind::LWAX: name = "lwax"; break;
+                case DecodedKind::LDX: name = "ldx"; break;
+                case DecodedKind::STBX: name = "stbx"; break;
+                case DecodedKind::STHX: name = "sthx"; break;
+                case DecodedKind::STWX: name = "stwx"; break;
+                default: name = "stdx"; break;
+            }
+            out << name << " r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            break;
+        }
+        case DecodedKind::SC:
+            out << "sc";
+            break;
         case DecodedKind::UNSUPPORTED:
             out << "<unsupported ppc64 opcode " << static_cast<int>(instr.opcode) << ">";
             break;
@@ -731,6 +1051,9 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
     if ((state_.nip % INSN_WIDTH) != 0) {
         result.disassembly = "<misaligned fetch>";
         hasCachedInstruction_ = false;
+        recordFault(PPC64FaultCategory::ALIGNMENT, state_.nip, 0, false, 0, false,
+                    PPC64AccessType::FETCH, INSN_WIDTH,
+                    "instruction fetch address is not 4-byte aligned", true);
         return result;
     }
 
@@ -740,6 +1063,10 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
     } catch (const std::exception& e) {
         result.disassembly = std::string("<fetch fault: ") + e.what() + ">";
         hasCachedInstruction_ = false;
+        // Host fetch failure (bounds, permission, hook, MMIO): recorded
+        // as observed, not claimed to be a guest ISI.
+        recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false, 0, false,
+                    PPC64AccessType::FETCH, INSN_WIDTH, e.what(), true);
         return result;
     }
 
@@ -760,6 +1087,15 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
     result.internalData = hasCachedInstruction_ ? &cachedInstruction_ : nullptr;
     if (!cachedInstruction_.supported) {
         result.internalData = nullptr;
+        // Known form with reserved/invalid fields (e.g. bad update-form
+        // registers, reserved DS XO, Rc on indexed memory, bad sc shape)
+        // is an encoding error; anything else is an unknown instruction.
+        const bool isEncodingError =
+            (cachedInstruction_.kind != DecodedKind::UNSUPPORTED);
+        recordFault(isEncodingError ? PPC64FaultCategory::INVALID_ENCODING
+                                    : PPC64FaultCategory::INVALID_INSTRUCTION,
+                    state_.nip, word, true, 0, false, PPC64AccessType::NONE, 0,
+                    result.disassembly, false);
     }
     return result;
 }
@@ -772,17 +1108,28 @@ size_t PPC64ISAPlugin::getInstructionLength(IMemory&, uint64_t) {
 ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResult& decodeResult) {
     (void)memory;
     if (!decodeResult.valid || !hasCachedInstruction_) {
+        // decode() already recorded the fetch/invalid fault; preserve it.
         hasCachedInstruction_ = false;
         return ISAExecutionResult::EXCEPTION;
     }
     if (decodeResult.instructionAddress != cachedAddress_ ||
         decodeResult.instructionAddress != state_.nip) {
+        recordFault(PPC64FaultCategory::INVALID_INSTRUCTION, state_.nip,
+                    cachedInstruction_.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                    "stale decode: NIP moved between decode and execute", false);
         hasCachedInstruction_ = false;
         return ISAExecutionResult::EXCEPTION;
     }
     DecodedInstruction instr = cachedInstruction_;
     hasCachedInstruction_ = false;
     if (!instr.supported) {
+        // Defensive: decode() marks these invalid (and records the fault),
+        // so reaching here means decode/execute were paired inconsistently.
+        recordFault(instr.kind != DecodedKind::UNSUPPORTED
+                        ? PPC64FaultCategory::INVALID_ENCODING
+                        : PPC64FaultCategory::INVALID_INSTRUCTION,
+                    state_.nip, instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                    "unsupported instruction reached execute", false);
         return ISAExecutionResult::EXCEPTION;
     }
     return executeDecoded(memory, instr);
@@ -814,7 +1161,143 @@ void PPC64ISAPlugin::evaluateBranch(const DecodedInstruction& instr, bool& tookB
     tookBranch = ctrOk && condOk;
 }
 
-ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory&, const DecodedInstruction& instr) {
+ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
+                                                     const DecodedInstruction& instr,
+                                                     uint64_t cia) {
+    // Classify the decoded form. Widths are in bytes; sign extension applies
+    // to LHA[L][U]/LWA[ X] results; update forms rewrite RA after success.
+    bool isLoad = true;
+    bool isUpdate = false;
+    bool signExtend = false;
+    uint32_t width = 0;
+    uint64_t ea = 0;
+    switch (instr.kind) {
+        case DecodedKind::LBZ: width = 1; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LBZU:
+            width = 1; isUpdate = true; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LHZ: width = 2; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LHZU:
+            width = 2; isUpdate = true; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LHA:
+            width = 2; signExtend = true; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LHAU:
+            width = 2; signExtend = true; isUpdate = true;
+            ea = eaDForm(instr.ra, instr.simm);
+            break;
+        case DecodedKind::LWZ: width = 4; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LWZU:
+            width = 4; isUpdate = true; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::LWA:
+            width = 4; signExtend = true; ea = eaDSForm(instr.ra, instr.ds); break;
+        case DecodedKind::LD: width = 8; ea = eaDSForm(instr.ra, instr.ds); break;
+        case DecodedKind::LDU:
+            width = 8; isUpdate = true; ea = eaDSForm(instr.ra, instr.ds); break;
+        case DecodedKind::LBZX: width = 1; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::LHZX: width = 2; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::LHAX:
+            width = 2; signExtend = true; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::LWZX: width = 4; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::LWAX:
+            width = 4; signExtend = true; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::LDX: width = 8; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::STB:
+            isLoad = false; width = 1; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::STBU:
+            isLoad = false; width = 1; isUpdate = true;
+            ea = eaDForm(instr.ra, instr.simm);
+            break;
+        case DecodedKind::STH:
+            isLoad = false; width = 2; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::STHU:
+            isLoad = false; width = 2; isUpdate = true;
+            ea = eaDForm(instr.ra, instr.simm);
+            break;
+        case DecodedKind::STW:
+            isLoad = false; width = 4; ea = eaDForm(instr.ra, instr.simm); break;
+        case DecodedKind::STWU:
+            isLoad = false; width = 4; isUpdate = true;
+            ea = eaDForm(instr.ra, instr.simm);
+            break;
+        case DecodedKind::STD:
+            isLoad = false; width = 8; ea = eaDSForm(instr.ra, instr.ds); break;
+        case DecodedKind::STDU:
+            isLoad = false; width = 8; isUpdate = true;
+            ea = eaDSForm(instr.ra, instr.ds);
+            break;
+        case DecodedKind::STBX:
+            isLoad = false; width = 1; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::STHX:
+            isLoad = false; width = 2; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::STWX:
+            isLoad = false; width = 4; ea = eaXForm(instr.ra, instr.rb); break;
+        case DecodedKind::STDX:
+            isLoad = false; width = 8; ea = eaXForm(instr.ra, instr.rb); break;
+        default:
+            recordFault(PPC64FaultCategory::INVALID_INSTRUCTION, cia, instr.raw, true, 0,
+                        false, PPC64AccessType::NONE, 0,
+                        "non-memory instruction reached load/store executor", false);
+            return ISAExecutionResult::EXCEPTION;
+    }
+
+    // Alignment: ordinary byte/halfword/word/doubleword accesses permit any
+    // EA (Power ISA v3.1 does not mandate Alignment interrupts for naturally
+    // unaligned ordinary fixed-point loads/stores; imposing one would be an
+    // artifact of host page organization). The word-algebraic forms LWA/LWAX
+    // load a 32-bit word and architecturally require a word-aligned EA.
+    if ((instr.kind == DecodedKind::LWA || instr.kind == DecodedKind::LWAX) &&
+        ((ea % 4) != 0)) {
+        recordFault(PPC64FaultCategory::ALIGNMENT, cia, instr.raw, true, ea, true,
+                    PPC64AccessType::READ, width,
+                    "lwa/lwax effective address is not word-aligned", true);
+        return ISAExecutionResult::EXCEPTION;
+    }
+
+    if (isLoad) {
+        uint64_t value = 0;
+        std::string reason;
+        if (!memLoadBE(memory, ea, width, value, reason)) {
+            recordFault(PPC64FaultCategory::DATA_LOAD_FAILURE, cia, instr.raw, true, ea,
+                        true, PPC64AccessType::READ, width, reason, true);
+            return ISAExecutionResult::EXCEPTION;
+        }
+        if (signExtend) {
+            value = (width == 2)
+                        ? static_cast<uint64_t>(static_cast<int64_t>(
+                              static_cast<int16_t>(value & 0xFFFFU)))
+                        : static_cast<uint64_t>(static_cast<int64_t>(
+                              static_cast<int32_t>(value & 0xFFFFFFFFU)));
+        }
+        // Commit order: destination first, then the update-form base, then
+        // NIP. A failed access returns above with no register touched.
+        state_.gpr[instr.rt] = value;
+        if (isUpdate) {
+            state_.gpr[instr.ra] = ea;
+        }
+        state_.nip = cia + INSN_WIDTH;
+        return ISAExecutionResult::CONTINUE;
+    }
+
+    // Store path: capture the source (RT field position) before any RA
+    // update so RS==RA overlap stores the pre-update value, per the ISA
+    // MEM(EA) <- (RS); RA <- EA ordering.
+    const uint64_t source = state_.gpr[instr.rt];
+    {
+        std::string reason;
+        if (!memStoreBE(memory, ea, width, source, reason)) {
+            recordFault(PPC64FaultCategory::DATA_STORE_FAILURE, cia, instr.raw, true, ea,
+                        true, PPC64AccessType::WRITE, width, reason, true);
+            return ISAExecutionResult::EXCEPTION;
+        }
+    }
+    if (isUpdate) {
+        state_.gpr[instr.ra] = ea;
+    }
+    state_.nip = cia + INSN_WIDTH;
+    return ISAExecutionResult::CONTINUE;
+}
+
+ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
+                                                  const DecodedInstruction& instr) {
     const uint64_t cia = state_.nip;
     switch (instr.kind) {
         case DecodedKind::ADDI: {
@@ -1147,6 +1630,44 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory&, const DecodedInstruc
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
+        case DecodedKind::SC:
+            // System-call trap surface: record the trap address and report
+            // SYSCALL. No host syscall is dispatched, no guest privilege
+            // transition or SRR0/SRR1 update is performed here (a later
+            // privileged-architecture phase owns exception delivery).
+            recordFault(PPC64FaultCategory::SYSCALL, cia, instr.raw, true, 0, false,
+                        PPC64AccessType::NONE, 0, "sc system-call trap", true);
+            return ISAExecutionResult::SYSCALL;
+        case DecodedKind::LBZ:
+        case DecodedKind::LBZU:
+        case DecodedKind::LHZ:
+        case DecodedKind::LHZU:
+        case DecodedKind::LHA:
+        case DecodedKind::LHAU:
+        case DecodedKind::LWZ:
+        case DecodedKind::LWZU:
+        case DecodedKind::LWA:
+        case DecodedKind::LD:
+        case DecodedKind::LDU:
+        case DecodedKind::LBZX:
+        case DecodedKind::LHZX:
+        case DecodedKind::LHAX:
+        case DecodedKind::LWZX:
+        case DecodedKind::LWAX:
+        case DecodedKind::LDX:
+        case DecodedKind::STB:
+        case DecodedKind::STBU:
+        case DecodedKind::STH:
+        case DecodedKind::STHU:
+        case DecodedKind::STW:
+        case DecodedKind::STWU:
+        case DecodedKind::STD:
+        case DecodedKind::STDU:
+        case DecodedKind::STBX:
+        case DecodedKind::STHX:
+        case DecodedKind::STWX:
+        case DecodedKind::STDX:
+            return executeLoadStore(memory, instr, cia);
         case DecodedKind::UNSUPPORTED:
             break;
     }
