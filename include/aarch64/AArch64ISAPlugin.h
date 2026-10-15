@@ -71,7 +71,7 @@ public:
 
     // -- identity ------------------------------------------------------
     std::string getName() const override { return kArchName; }
-    std::string getVersion() const override { return "AARCH64-2 (ARMv8-A A64 subset)"; }
+    std::string getVersion() const override { return "AARCH64-3 (ARMv8-A A64 subset)"; }
     void reset() override;
 
     // -- decode / execute -----------------------------------------------

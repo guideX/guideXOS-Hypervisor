@@ -242,11 +242,12 @@ std::string AArch64ISAPlugin::disassemble(ia64::IMemory& memory, uint64_t addres
 
 bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
     return feature == "A64" || feature == "NOP" || feature == "MOVZ" ||
-           feature == "MOVK" || feature == "ADD_IMM" || feature == "SUB_IMM" ||
-           feature == "B" || feature == "BL" || feature == "RET" ||
-           feature == "LDR_IMM" || feature == "STR_IMM" || feature == "CBZ" ||
-           feature == "CBNZ" || feature == "ADDS_IMM" || feature == "SUBS_IMM" ||
-           feature == "CMP_IMM" || feature == "B_COND";
+            feature == "MOVK" || feature == "ADD_IMM" || feature == "SUB_IMM" ||
+            feature == "B" || feature == "BL" || feature == "RET" ||
+            feature == "LDR_IMM" || feature == "STR_IMM" || feature == "CBZ" ||
+            feature == "CBNZ" || feature == "ADDS_IMM" || feature == "SUBS_IMM" ||
+            feature == "CMP_IMM" || feature == "B_COND" || feature == "ADR" ||
+            feature == "ADRP" || feature == "LDR_LIT";
 }
 
 std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint) {

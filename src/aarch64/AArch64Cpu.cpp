@@ -25,6 +25,17 @@
 //     Condition per ConditionHolds(): cond 1110 (AL) and 1111 (NV) BOTH
 //     always hold. NZCV untouched. Bit 4 set (or any other mismatch) is
 //     UnallocatedEncoding, never a NOP.
+//   ADR/ADRP: op[31] immlo[30:29] 10000 immhi[23:5] Rd[4:0] (op 0 = ADR,
+//     op 1 = ADRP). imm21 = immhi:immlo, SEx from 21 bits. ADR result is
+//     PC + SEx(imm21) (no scaling); ADRP result is (PC & ~0xFFF) +
+//     (SEx(imm21)<<12). Rd == 31 is XZR, never SP. NZCV untouched. PC += 4.
+//     Must not share one generic formula: scaling and base differ.
+//   LDR literal (integer): opc[31:30] 011000 imm19[23:5] Rt[4:0]; opc 00 =
+//     LDR Wt (0x18000000 family), opc 01 = LDR Xt (0x58000000 family).
+//     Address is PC + SEx(imm19)<<2. 32-bit forms zero-extend. Rt == 31 is
+//     WZR/XZR. Failed loads preserve dest and PC (MemoryFault). NZCV kept.
+//     opc 10 (LDRSW), opc 11 (PRFM) and the SIMD&FP literal families
+//     (0x1C/0x5C/0x9C/0xDC) are NOT integer LDR and stay unsupported.
 //
 // AARCH64-2 memory profile: little-endian Normal guest memory, no MMU, no
 // Device mapping, no EL-specific alignment control. Architecturally
@@ -246,6 +257,39 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         return d;
     }
 
+    // ADR/ADRP: op[31] immlo[30:29] 10000 immhi[23:5] Rd[4:0].
+    // Proven disjoint from B/BL above (bits[31:26] are 000100, 001100,
+    // 010100, 011100, 100100, 101100, 110100 or 111100 -- never the B/BL
+    // 000101/100101) and from every pattern below (bits[28:23] are 10000x,
+    // never 100101/100010/011010). Order relative to those checks is
+    // therefore irrelevant to correctness.
+    if ((word & 0x1F000000u) == 0x10000000u || (word & 0x1F000000u) == 0x90000000u) {
+        const bool isAdrp = (word & 0x80000000u) != 0;
+        const uint32_t immlo = (word >> 29) & 3u;
+        const uint32_t immhi = (word >> 5) & 0x7FFFFu;
+        const uint32_t imm21 = (immhi << 2) | immlo;
+        const int64_t disp = signExtend(imm21, 21);
+        Decoded d;
+        d.op = isAdrp ? Op::Adrp : Op::Adr;
+        d.valid = true;
+        d.sf64 = true;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        // Distinct formulae by design: ADR scales by 1 from PC, ADRP
+        // scales by 4096 from the 4 KiB page base of PC.
+        d.pcOffset = isAdrp ? disp * 4096 : disp;
+        const uint64_t base = isAdrp ? (address & ~0xFFFULL) : address;
+        const uint64_t target = base + static_cast<uint64_t>(d.pcOffset);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s %s, #0x%llx",
+                      isAdrp ? "adrp" : "adr",
+                      d.rd == 31 ? "xzr" : regName(true, d.rd).c_str(),
+                      static_cast<unsigned long long>(target));
+        d.disassembly = buf;
+        return d;
+    }
+
     // RET: fixed bits[31:10] and bits[4:0]; Rn in bits[9:5] (may be 31 = SP).
     if ((word & 0xFFFFFC1Fu) == 0xD65F0000u) {
         Decoded d;
@@ -330,6 +374,34 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
                           d.rn == 31 ? (sf ? "sp" : "wsp") : regName(sf, d.rn).c_str(),
                           d.imm12, d.shift);
         }
+        d.disassembly = buf;
+        return d;
+    }
+
+    // LDR (literal, general-purpose integer): opc[31:30] 011000
+    // imm19[23:5] Rt[4:0]. opc 00 (0x18 family) = LDR Wt, opc 01 (0x58
+    // family) = LDR Xt. opc 10 is LDRSW, opc 11 is PRFM, and the
+    // 0x1C/0x5C/0x9C/0xDC families are SIMD&FP literal forms: none of them
+    // matches this mask pair, so they can never decode as ordinary LDR and
+    // stay explicitly unsupported below. Disjoint from CBZ/CBNZ (which need
+    // bits[30:24] == 011010x, never 0011000/1011000) and from the
+    // LDR/STR-unsigned-offset bases checked next (bits[28:24] differ).
+    if ((word & 0xFF000000u) == 0x18000000u || (word & 0xFF000000u) == 0x58000000u) {
+        const bool sf = (word & 0x40000000u) != 0; // opc[0]: 0 = W, 1 = X
+        Decoded d;
+        d.op = Op::LdrLit;
+        d.valid = true;
+        d.sf64 = sf;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        const uint32_t imm19 = (word >> 5) & 0x7FFFFu;
+        d.pcOffset = signExtend(imm19, 19) * 4;
+        const uint64_t target = address + static_cast<uint64_t>(d.pcOffset);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "ldr %s, #0x%llx",
+                      d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
+                      static_cast<unsigned long long>(target));
         d.disassembly = buf;
         return d;
     }
@@ -513,6 +585,56 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     case Op::B:
         pc_ = static_cast<uint64_t>(static_cast<int64_t>(pc_) + decoded.branchOffset);
         break;
+    case Op::Adr: {
+        // ADR: Xd = PC + SEx(imm21), where PC is the address of THIS
+        // instruction (pc_ still points at it), never PC+4. Unsigned
+        // addition wraps mod 2^64. Rd==31 is XZR (discarded), never SP.
+        // NZCV untouched.
+        if (decoded.rd != 31) {
+            x_[decoded.rd] = pc_ + static_cast<uint64_t>(decoded.pcOffset);
+        }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Adrp: {
+        // ADRP: Xd = (PC & ~0xFFF) + SEx(imm21)*4096 (pcOffset pre-scaled
+        // at decode). Deliberately page-based, unlike ADR. Rd==31 is XZR.
+        if (decoded.rd != 31) {
+            x_[decoded.rd] =
+                (pc_ & ~0xFFFULL) + static_cast<uint64_t>(decoded.pcOffset);
+        }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::LdrLit: {
+        // LDR literal: address is PC + SEx(imm19)*4 (pcOffset pre-scaled).
+        // The access always happens -- even for Rt==31 (WZR/XZR) -- so a
+        // faulting address still reports MemoryFault. On success a 32-bit
+        // load zero-extends; Rt==31 discards the value. Failed loads
+        // preserve both the destination register and PC. NZCV untouched.
+        const uint64_t target = pc_ + static_cast<uint64_t>(decoded.pcOffset);
+        const size_t size = decoded.sf64 ? 8 : 4;
+        uint8_t bytes[8] = {};
+        try {
+            memory.Read(target, bytes, size);
+        } catch (const std::exception& ex) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = std::string("LDR literal access failed: ") + ex.what();
+            return lastFault_;
+        }
+        // Little-endian assembly independent of host endianness. Unaligned
+        // ordinary accesses to Normal memory are permitted in the
+        // AARCH64-2/AARCH64-3 profile, so no alignment fault is raised here.
+        uint64_t value = 0;
+        for (size_t i = 0; i < size; ++i) {
+            value |= static_cast<uint64_t>(bytes[i]) << (8 * i);
+        }
+        if (decoded.rd != 31) {
+            x_[decoded.rd] = decoded.sf64 ? value : (value & 0xFFFFFFFFu);
+        }
+        pc_ += kInstructionSize;
+        break;
+    }
     case Op::Bl:
         x_[30] = pc_ + kInstructionSize; // link register
         pc_ = static_cast<uint64_t>(static_cast<int64_t>(pc_) + decoded.branchOffset);

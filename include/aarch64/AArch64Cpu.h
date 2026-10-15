@@ -11,11 +11,13 @@
 //     as one ordinary register.
 //   - A64 fixed 32-bit little-endian fetch, deterministic reset/entry profile,
 //     bounded stepping, and explicit faults for everything unsupported.
-// SCOPE (Phase AARCH64-2, additive):
-//   - LDR/STR (unsigned immediate offset, 32/64-bit) through IMemory.
-//   - CBZ/CBNZ, flag-setting ADDS/SUBS/CMP immediates, B.cond.
-//   - RET Rn==31 audit fix: RET uses the general-purpose register view
-//     (X(n)), so encoding 31 reads XZR (zero), never SP.
+// SCOPE (Phase AARCH64-3, additive):
+//   - ADR / ADRP (PC-relative address generation, Rd==31 is XZR).
+//   - LDR (literal, immediate) 32/64-bit general-purpose forms through
+//     IMemory (Rt==31 is WZR/XZR; failed loads preserve dest and PC).
+//   - MOVZ/MOVK unchanged; full-width synthesis validated by tests.
+//   - Nested BL/RET programs using SUB/ADD SP + STR/LDR unsigned-offset
+//     stack frames (no STP/LDP required).
 // OUT OF SCOPE: MMU, GIC, EL1 exception model, timers, PL011, virtio, SMP,
 //   JIT, SIMD/FP, and the rest of the A64 ISA (see docs/aarch64/).
 //
@@ -31,7 +33,8 @@
 //
 // Encoding tables used: ARM Architecture Reference Manual ARMv8-A (ARM DDI 0487),
 //   sections C6.6 (branches), C6.2 (add/sub immediate, load/store immediate),
-//   C6.2 (move wide immediate) and C6.2 (HINT/NOP = 0xD503201F).
+//   C6.2 (move wide immediate), C6.2.10/11 (ADR/ADRP), C6.2 (load literal),
+//   and C6.2 (HINT/NOP = 0xD503201F).
 // Cross-checked against the machine-readable A64 ISA definitions mirrored at
 //   https://arm.jonpalmisc.com/latest_aarch64/ (RET operation target = X(n);
 //   LDR/STR unsigned-offset offset = LSL(ZeroExtend(imm12), scale);
@@ -77,7 +80,7 @@ enum class Fault {
     MemoryFault,         // data access (LDR/STR) failed in backing memory
 };
 
-// Phase AARCH64-1 + AARCH64-2 operation set.
+// Phase AARCH64-1 + AARCH64-2 + AARCH64-3 operation set.
 enum class Op {
     Invalid = 0,
     Nop,
@@ -96,6 +99,9 @@ enum class Op {
     SubsImm,  // SUBS (immediate): flag-setting subtract
     CmpImm,   // CMP (immediate): SUBS with XZR/WZR destination (alias)
     BCond,    // B.<cond>: conditional branch on NZCV
+    Adr,      // ADR: Xd = PC + SEx(imm21) (Rd==31 is XZR, never SP)
+    Adrp,     // ADRP: Xd = (PC & ~0xFFF) + SEx(imm21)*4096 (Rd==31 is XZR)
+    LdrLit,   // LDR (literal): Xt/Wt = Mem[PC + SEx(imm19)*4] via sf64
 };
 
 // Result of decoding one 32-bit A64 instruction word.
@@ -111,6 +117,11 @@ struct Decoded {
     uint8_t shift = 0;         // ADD/SUB shift amount (0 or 12); MOVZ/MOVK pos = hw*16
     int64_t branchOffset = 0;  // B/BL/CBZ/CBNZ/B.cond signed byte offset (scaled by 4)
     uint64_t memOffset = 0;    // LDR/STR scaled unsigned byte offset (imm12 << 2 or 3)
+    int64_t pcOffset = 0;      // ADR/ADRP/LDR-literal signed byte displacement
+                               // from the current instruction address, fully
+                               // scaled (ADR x1, ADRP x4096, LDR literal x4).
+                               // ADR/ADRP/LDR-literal only; branches use
+                               // branchOffset, LDR/STR-imm use memOffset.
     uint8_t cond = 0;          // B.cond 4-bit condition code (bits [3:0])
     uint64_t address = 0;      // address the word was fetched from
     uint32_t word = 0;         // raw instruction word
