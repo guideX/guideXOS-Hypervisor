@@ -146,7 +146,9 @@ static void testRealStepping() {
     CHECK(plugin->core().readGpr(14) == 3);
 
     // Unsupported encodings surface as EXCEPTION, never silent NOPs.
-    storeWordLE(mem, 16, encodeR(8, 9, 10, 0, 0x18));  // mult
+    // (MULT is implemented since MIPS64-2, so LWC1 is used here instead.)
+    // Unsupported encodings perform no exception entry: PC is preserved.
+    storeWordLE(mem, 16, encodeI(0x31, 0, 8, 0));  // lwc1
     isa->setPC(16);
     CHECK(isa->step(mem) == ia64::ISAExecutionResult::EXCEPTION);
     CHECK(isa->getPC() == 16);

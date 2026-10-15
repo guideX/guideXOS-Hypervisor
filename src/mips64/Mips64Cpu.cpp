@@ -1,9 +1,10 @@
-// guideXOS Hypervisor — MIPS64r2 CPU core (Phase MIPS64-1).
+// guideXOS Hypervisor — MIPS64r2 CPU core (Phases MIPS64-1 + MIPS64-2).
 //
-// Real fetch/decode/execute with MIPS64 Release 2 semantics for the
-// phase-1 subset, architecturally correct branch delay slots, explicit
-// little/big-endian handling and safe failure outcomes. See
-// docs/MIPS64_PHASE1_FOUNDATION.md for the full design notes.
+// Real fetch/decode/execute with MIPS64 Release 2 semantics, bounded CP0,
+// genuine exception entry/return, trapping arithmetic, portable HI/LO
+// multiply/divide, REGIMM/BLEZ/BGTZ/branch-likely control flow and explicit
+// little/big-endian handling. See docs/MIPS64_PHASE1_FOUNDATION.md and
+// docs/MIPS64_PHASE2_CP0_EXCEPTIONS.md for the design notes.
 
 #include "mips64/Mips64Cpu.h"
 
@@ -19,15 +20,23 @@ namespace {
 
 // -- primary opcodes ----------------------------------------------------------
 constexpr uint8_t kOpSpecial = 0x00;
+constexpr uint8_t kOpRegimm = 0x01;
 constexpr uint8_t kOpJ = 0x02;
 constexpr uint8_t kOpJal = 0x03;
 constexpr uint8_t kOpBeq = 0x04;
 constexpr uint8_t kOpBne = 0x05;
+constexpr uint8_t kOpBlez = 0x06;
+constexpr uint8_t kOpBgtz = 0x07;
+constexpr uint8_t kOpAddi = 0x08;
 constexpr uint8_t kOpAddiu = 0x09;
 constexpr uint8_t kOpAndi = 0x0C;
 constexpr uint8_t kOpOri = 0x0D;
 constexpr uint8_t kOpXori = 0x0E;
 constexpr uint8_t kOpLui = 0x0F;
+constexpr uint8_t kOpCop0 = 0x10;
+constexpr uint8_t kOpBlezl = 0x16;
+constexpr uint8_t kOpBgtzl = 0x17;
+constexpr uint8_t kOpDaddi = 0x18;
 constexpr uint8_t kOpDaddiu = 0x19;
 constexpr uint8_t kOpLb = 0x20;
 constexpr uint8_t kOpLh = 0x21;
@@ -47,7 +56,23 @@ constexpr uint8_t kFnSrl = 0x02;
 constexpr uint8_t kFnSra = 0x03;
 constexpr uint8_t kFnJr = 0x08;
 constexpr uint8_t kFnJalr = 0x09;
+constexpr uint8_t kFnSyscall = 0x0C;
+constexpr uint8_t kFnBreak = 0x0D;
+constexpr uint8_t kFnMfhi = 0x10;
+constexpr uint8_t kFnMthi = 0x11;
+constexpr uint8_t kFnMflo = 0x12;
+constexpr uint8_t kFnMtlo = 0x13;
+constexpr uint8_t kFnMult = 0x18;
+constexpr uint8_t kFnMultu = 0x19;
+constexpr uint8_t kFnDiv = 0x1A;
+constexpr uint8_t kFnDivu = 0x1B;
+constexpr uint8_t kFnDmult = 0x1C;
+constexpr uint8_t kFnDmultu = 0x1D;
+constexpr uint8_t kFnDdiv = 0x1E;
+constexpr uint8_t kFnDdivu = 0x1F;
+constexpr uint8_t kFnAdd = 0x20;
 constexpr uint8_t kFnAddu = 0x21;
+constexpr uint8_t kFnSub = 0x22;
 constexpr uint8_t kFnSubu = 0x23;
 constexpr uint8_t kFnAnd = 0x24;
 constexpr uint8_t kFnOr = 0x25;
@@ -55,15 +80,37 @@ constexpr uint8_t kFnXor = 0x26;
 constexpr uint8_t kFnNor = 0x27;
 constexpr uint8_t kFnSlt = 0x2A;
 constexpr uint8_t kFnSltu = 0x2B;
+constexpr uint8_t kFnDadd = 0x2C;
 constexpr uint8_t kFnDaddu = 0x2D;
+constexpr uint8_t kFnDsub = 0x2E;
 constexpr uint8_t kFnDsubu = 0x2F;
 constexpr uint8_t kFnDsll = 0x38;
 constexpr uint8_t kFnDsrl = 0x3A;
 constexpr uint8_t kFnDsra = 0x3B;
 
+// -- REGIMM rt field ------------------------------------------------------------
+constexpr uint8_t kRiBltz = 0x00;
+constexpr uint8_t kRiBgez = 0x01;
+constexpr uint8_t kRiBltzl = 0x02;
+constexpr uint8_t kRiBgezl = 0x03;
+constexpr uint8_t kRiBltzal = 0x10;
+constexpr uint8_t kRiBgezal = 0x11;
+constexpr uint8_t kRiBltzall = 0x12;
+constexpr uint8_t kRiBgezall = 0x13;
+constexpr uint8_t kRiBposge32 = 0x1C;
+constexpr uint8_t kRiBposge32l = 0x1D;
+
+// -- COP0 rs field ---------------------------------------------------------------
+constexpr uint8_t kC0Mfc0 = 0x00;
+constexpr uint8_t kC0Dmfc0 = 0x01;
+constexpr uint8_t kC0Mtc0 = 0x04;
+constexpr uint8_t kC0Dmtc0 = 0x05;
+constexpr uint8_t kC0Func = 0x10;
+constexpr uint8_t kC0FnEret = 0x18;
+
 // SPECIAL funct values that are genuinely reserved in MIPS64r2.
 // All other unimplemented funct values are allocated encodings outside
-// the phase-1 subset (reported as unsupported, not reserved).
+// the implemented subset (reported as unsupported, not reserved).
 bool isReservedSpecialFunct(uint8_t funct) {
     switch (funct) {
         case 0x05:
@@ -87,7 +134,7 @@ bool isReservedSpecialFunct(uint8_t funct) {
 }
 
 // Primary opcode 0x1D (JALX/MIPS16e) is unallocated in MIPS64r2 when no
-// MIPS16e ASE is present; phase-1 has no ASEs, so it is reserved.
+// MIPS16e ASE is present; this core has no ASEs, so it is reserved.
 bool isReservedPrimaryOpcode(uint8_t op) { return op == 0x1D; }
 
 // -- sign-extension helpers (all via unsigned arithmetic; no UB) ---------------
@@ -153,6 +200,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
     decoded.rt = static_cast<uint8_t>((word >> 16) & 0x1F);
     decoded.rd = static_cast<uint8_t>((word >> 11) & 0x1F);
     decoded.sa = static_cast<uint8_t>((word >> 6) & 0x1F);
+    decoded.sel = static_cast<uint8_t>(word & 0x7U);
     decoded.imm = static_cast<uint16_t>(word & 0xFFFF);
     decoded.index = word & 0x03FFFFFFU;
 
@@ -174,7 +222,23 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                 case kFnSra: mapped = Mips64Op::Sra; break;
                 case kFnJr: mapped = Mips64Op::Jr; break;
                 case kFnJalr: mapped = Mips64Op::Jalr; break;
+                case kFnSyscall: mapped = Mips64Op::Syscall; break;
+                case kFnBreak: mapped = Mips64Op::Break; break;
+                case kFnMfhi: mapped = Mips64Op::Mfhi; break;
+                case kFnMthi: mapped = Mips64Op::Mthi; break;
+                case kFnMflo: mapped = Mips64Op::Mflo; break;
+                case kFnMtlo: mapped = Mips64Op::Mtlo; break;
+                case kFnMult: mapped = Mips64Op::Mult; break;
+                case kFnMultu: mapped = Mips64Op::Multu; break;
+                case kFnDiv: mapped = Mips64Op::Div; break;
+                case kFnDivu: mapped = Mips64Op::Divu; break;
+                case kFnDmult: mapped = Mips64Op::Dmult; break;
+                case kFnDmultu: mapped = Mips64Op::Dmultu; break;
+                case kFnDdiv: mapped = Mips64Op::Ddiv; break;
+                case kFnDdivu: mapped = Mips64Op::Ddivu; break;
+                case kFnAdd: mapped = Mips64Op::Add; break;
                 case kFnAddu: mapped = Mips64Op::Addu; break;
+                case kFnSub: mapped = Mips64Op::Sub; break;
                 case kFnSubu: mapped = Mips64Op::Subu; break;
                 case kFnAnd: mapped = Mips64Op::And; break;
                 case kFnOr: mapped = Mips64Op::Or; break;
@@ -182,7 +246,9 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                 case kFnNor: mapped = Mips64Op::Nor; break;
                 case kFnSlt: mapped = Mips64Op::Slt; break;
                 case kFnSltu: mapped = Mips64Op::Sltu; break;
+                case kFnDadd: mapped = Mips64Op::Dadd; break;
                 case kFnDaddu: mapped = Mips64Op::DaddU; break;
+                case kFnDsub: mapped = Mips64Op::Dsub; break;
                 case kFnDsubu: mapped = Mips64Op::Dsubu; break;
                 case kFnDsll: mapped = Mips64Op::Dsll; break;
                 case kFnDsrl: mapped = Mips64Op::Dsrl; break;
@@ -199,17 +265,108 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                             "reserved SPECIAL funct encoding");
             }
             return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
-                        "valid MIPS64 SPECIAL encoding outside the phase-1 subset");
+                        "valid MIPS64 SPECIAL encoding outside the implemented subset");
+        }
+        case kOpRegimm: {
+            Mips64Op mapped = Mips64Op::Invalid;
+            switch (decoded.rt) {
+                case kRiBltz: mapped = Mips64Op::Bltz; break;
+                case kRiBgez: mapped = Mips64Op::Bgez; break;
+                case kRiBltzl: mapped = Mips64Op::Bltzl; break;
+                case kRiBgezl: mapped = Mips64Op::Bgezl; break;
+                case kRiBltzal: mapped = Mips64Op::Bltzal; break;
+                case kRiBgezal: mapped = Mips64Op::Bgezal; break;
+                case kRiBltzall: mapped = Mips64Op::Bltzall; break;
+                case kRiBgezall: mapped = Mips64Op::Bgezall; break;
+                case kRiBposge32:
+                case kRiBposge32l:
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                "valid MIPS64 REGIMM encoding outside the implemented subset");
+                default: break;
+            }
+            if (mapped != Mips64Op::Invalid) {
+                decoded.op = mapped;
+                decoded.valid = true;
+                return decoded;
+            }
+            return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                        "reserved REGIMM rt encoding");
+        }
+        case kOpCop0: {
+            // MFC0/DMFC0/MTC0/DMTC0: bits 10:3 must be zero; sel in bits 2:0.
+            if (decoded.rs == kC0Mfc0 || decoded.rs == kC0Dmfc0 ||
+                decoded.rs == kC0Mtc0 || decoded.rs == kC0Dmtc0) {
+                if (((word >> 3) & 0xFFU) != 0) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                "COP0 move with nonzero reserved bits");
+                }
+                decoded.op = (decoded.rs == kC0Mfc0)    ? Mips64Op::Mfc0
+                             : (decoded.rs == kC0Dmfc0) ? Mips64Op::Dmfc0
+                             : (decoded.rs == kC0Mtc0)  ? Mips64Op::Mtc0
+                                                       : Mips64Op::Dmtc0;
+                decoded.valid = true;
+                return decoded;
+            }
+            if (decoded.rs == kC0Func) {
+                const uint8_t funct = static_cast<uint8_t>(word & 0x3F);
+                // ERET = 0x42000018 exactly: COP0/CO class, funct 0x18 with
+                // rt, rd and sa (bits 10:6) zero. Note bits 5:3 are part of
+                // the funct field itself and must NOT be masked here.
+                if (funct == kC0FnEret && decoded.rt == 0 && decoded.rd == 0 &&
+                    decoded.sa == 0) {
+                    decoded.op = Mips64Op::Eret;
+                    decoded.valid = true;
+                    return decoded;
+                }
+                if (funct == kC0FnEret) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                "malformed ERET encoding");
+                }
+                return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                            "valid MIPS64 COP0 function outside the implemented subset");
+            }
+            return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                        "reserved COP0 rs encoding");
         }
         case kOpJ: decoded.op = Mips64Op::J; break;
         case kOpJal: decoded.op = Mips64Op::Jal; break;
         case kOpBeq: decoded.op = Mips64Op::Beq; break;
         case kOpBne: decoded.op = Mips64Op::Bne; break;
+        case kOpBlez:
+            if (decoded.rt != 0) {
+                return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                            "BLEZ with nonzero rt field");
+            }
+            decoded.op = Mips64Op::Blez;
+            break;
+        case kOpBgtz:
+            if (decoded.rt != 0) {
+                return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                            "BGTZ with nonzero rt field");
+            }
+            decoded.op = Mips64Op::Bgtz;
+            break;
+        case kOpBlezl:
+            if (decoded.rt != 0) {
+                return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                            "BLEZL with nonzero rt field");
+            }
+            decoded.op = Mips64Op::Blezl;
+            break;
+        case kOpBgtzl:
+            if (decoded.rt != 0) {
+                return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                            "BGTZL with nonzero rt field");
+            }
+            decoded.op = Mips64Op::Bgtzl;
+            break;
+        case kOpAddi: decoded.op = Mips64Op::Addi; break;
         case kOpAddiu: decoded.op = Mips64Op::Addiu; break;
         case kOpAndi: decoded.op = Mips64Op::Andi; break;
         case kOpOri: decoded.op = Mips64Op::Ori; break;
         case kOpXori: decoded.op = Mips64Op::Xori; break;
         case kOpLui: decoded.op = Mips64Op::Lui; break;
+        case kOpDaddi: decoded.op = Mips64Op::Daddi; break;
         case kOpDaddiu: decoded.op = Mips64Op::Daddiu; break;
         case kOpLb: decoded.op = Mips64Op::Lb; break;
         case kOpLh: decoded.op = Mips64Op::Lh; break;
@@ -228,7 +385,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                             "reserved primary opcode encoding");
             }
             return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
-                        "valid MIPS64 opcode outside the phase-1 subset");
+                        "valid MIPS64 opcode outside the implemented subset");
     }
 
     decoded.valid = true;
@@ -248,6 +405,15 @@ void Mips64Cpu::reset() {
     lo_ = 0;
     delayArmed_ = false;
     delayTarget_ = 0;
+    delayBranch_ = 0;
+    status_ = kStatusReset;
+    cause_ = 0;
+    epc_ = 0;
+    errorEpc_ = 0;
+    badVAddr_ = 0;
+    ebase_ = kEBaseReset;
+    count_ = 0;
+    compare_ = 0;
     clearFault();
 }
 
@@ -272,6 +438,15 @@ bool Mips64Cpu::writeGpr(unsigned index, uint64_t value) {
     return true;
 }
 
+uint64_t Mips64Cpu::exceptionVector() const {
+    if ((status_ & kStatusBitBev) != 0) {
+        return kVectorBev1;
+    }
+    const uint32_t base = static_cast<uint32_t>((ebase_ & kEBaseWritableMask) |
+                                                (kVectorOffsetGeneral & 0xFFFU));
+    return signExtend32(base);
+}
+
 void Mips64Cpu::setFault(Mips64Fault fault, const std::string& message) {
     fault_ = fault;
     lastError_ = message;
@@ -280,6 +455,126 @@ void Mips64Cpu::setFault(Mips64Fault fault, const std::string& message) {
 void Mips64Cpu::clearFault() {
     fault_ = Mips64Fault::None;
     lastError_.clear();
+}
+
+void Mips64Cpu::raiseException(Mips64ExcCode code, Mips64Fault fault,
+                               const std::string& message, uint64_t faultPc,
+                               bool inDelaySlot, uint64_t branchPc,
+                               bool hasBadVAddr, uint64_t badVAddrValue) {
+    // Cause.ExcCode and Cause.BD are updated on every exception entry,
+    // including nested entries taken while Status.EXL is already set.
+    cause_ = (cause_ & ~kCauseExcCodeMask) |
+             ((static_cast<uint64_t>(code) << kCauseExcCodeShift) & kCauseExcCodeMask);
+    if (inDelaySlot) {
+        cause_ |= kCauseBitBd;
+    } else {
+        cause_ &= ~kCauseBitBd;
+    }
+    if (hasBadVAddr) {
+        badVAddr_ = badVAddrValue;
+    }
+    // EPC captures the restart address only for the outermost exception;
+    // a nested entry (EXL already set) must not clobber the outer EPC.
+    const bool nested = (status_ & kStatusBitExl) != 0;
+    if (!nested) {
+        epc_ = inDelaySlot ? branchPc : faultPc;
+        status_ |= kStatusBitExl;
+    }
+    // Any pending delay-slot transfer is cancelled: execution resumes in
+    // the handler, and ERET returns to EPC.
+    delayArmed_ = false;
+    delayTarget_ = 0;
+    delayBranch_ = 0;
+    pc_ = exceptionVector();
+    setFault(fault, message);
+}
+
+bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
+    if (rd == kCp0RegStatus && sel == kCp0SelStatus) {
+        out = status_ & kStatusWritableMask;
+        return true;
+    }
+    if (rd == kCp0RegCause && sel == kCp0SelCause) {
+        out = cause_ & (kCauseBitBd | kCauseExcCodeMask | kCauseIpSwMask);
+        return true;
+    }
+    if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
+        out = epc_;
+        return true;
+    }
+    if (rd == kCp0RegErrorEpc && sel == kCp0SelErrorEpc) {
+        out = errorEpc_;
+        return true;
+    }
+    if (rd == kCp0RegBadVAddr && sel == kCp0SelBadVAddr) {
+        out = badVAddr_;
+        return true;
+    }
+    if (rd == kCp0RegEBase && sel == kCp0SelEBase) {
+        out = ebase_ & kEBaseWritableMask;
+        return true;
+    }
+    if (rd == kCp0RegCount && sel == kCp0SelCount) {
+        out = count_ & 0xFFFFFFFFULL;
+        return true;
+    }
+    if (rd == kCp0RegCompare && sel == kCp0SelCompare) {
+        out = compare_ & 0xFFFFFFFFULL;
+        return true;
+    }
+    return false;
+}
+
+bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
+    if (rd == kCp0RegStatus && sel == kCp0SelStatus) {
+        status_ = (status_ & ~kStatusWritableMask) | (value & kStatusWritableMask);
+        return true;
+    }
+    if (rd == kCp0RegCause && sel == kCp0SelCause) {
+        cause_ = (cause_ & ~kCauseIpSwMask) | (value & kCauseIpSwMask);
+        return true;
+    }
+    if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
+        epc_ = value;
+        return true;
+    }
+    if (rd == kCp0RegErrorEpc && sel == kCp0SelErrorEpc) {
+        errorEpc_ = value;
+        return true;
+    }
+    if (rd == kCp0RegBadVAddr && sel == kCp0SelBadVAddr) {
+        badVAddr_ = value;
+        return true;
+    }
+    if (rd == kCp0RegEBase && sel == kCp0SelEBase) {
+        ebase_ = value & kEBaseWritableMask;
+        return true;
+    }
+    if (rd == kCp0RegCount && sel == kCp0SelCount) {
+        count_ = value & 0xFFFFFFFFULL;
+        return true;
+    }
+    if (rd == kCp0RegCompare && sel == kCp0SelCompare) {
+        compare_ = value & 0xFFFFFFFFULL;
+        return true;
+    }
+    return false;
+}
+
+void Mips64Cpu::multiplyU64(uint64_t a, uint64_t b, uint64_t& hi, uint64_t& lo) {
+    // Four 32x32 -> 64 partial products combined with wraparound unsigned
+    // arithmetic only, so this is portable (no __int128) and has no UB.
+    const uint64_t a0 = a & 0xFFFFFFFFULL;
+    const uint64_t a1 = a >> 32;
+    const uint64_t b0 = b & 0xFFFFFFFFULL;
+    const uint64_t b1 = b >> 32;
+    const uint64_t p0 = a0 * b0;
+    const uint64_t p1 = a0 * b1;
+    const uint64_t p2 = a1 * b0;
+    const uint64_t p3 = a1 * b1;
+    const uint64_t mid = (p0 >> 32) + (p1 & 0xFFFFFFFFULL) + (p2 & 0xFFFFFFFFULL);
+    lo = (p0 & 0xFFFFFFFFULL) | (mid << 32);
+    hi = p3 + (p1 >> 32) + (p2 >> 32) + (mid >> 32);
 }
 
 bool Mips64Cpu::fetchWord(ia64::IMemory& memory, uint64_t address, uint32_t& out) {
@@ -329,20 +624,47 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         const Mips64Fault fault =
             decoded.fault == Mips64Fault::None ? Mips64Fault::ReservedInstruction : decoded.fault;
         std::string message = decoded.error.empty() ? "invalid instruction encoding" : decoded.error;
-        // Never silently treat unsupported instructions as NOPs.
+        if (fault == Mips64Fault::ReservedInstruction) {
+            // Genuine reserved encodings raise the RI exception.
+            const bool inDelay = delayArmed_;
+            const uint64_t branchPc = delayBranch_;
+            raiseException(Mips64ExcCode::RI, fault, message, address, inDelay, branchPc,
+                           false, 0);
+            return Mips64StepResult::Fault;
+        }
+        // Valid-but-unimplemented encodings fail explicitly with no
+        // exception entry; they are never treated as NOPs.
         setFault(fault, message);
         return Mips64StepResult::Fault;
     }
 
     const bool wasDelaySlot = delayArmed_;
+    const uint64_t branchPc = delayBranch_;
     const bool isControlFlow =
-        decoded.op == Mips64Op::Beq || decoded.op == Mips64Op::Bne || decoded.op == Mips64Op::J ||
-        decoded.op == Mips64Op::Jal || decoded.op == Mips64Op::Jr || decoded.op == Mips64Op::Jalr;
+        decoded.op == Mips64Op::Beq || decoded.op == Mips64Op::Bne ||
+        decoded.op == Mips64Op::J || decoded.op == Mips64Op::Jal ||
+        decoded.op == Mips64Op::Jr || decoded.op == Mips64Op::Jalr ||
+        decoded.op == Mips64Op::Bltz || decoded.op == Mips64Op::Bgez ||
+        decoded.op == Mips64Op::Bltzal || decoded.op == Mips64Op::Bgezal ||
+        decoded.op == Mips64Op::Bltzl || decoded.op == Mips64Op::Bgezl ||
+        decoded.op == Mips64Op::Bltzall || decoded.op == Mips64Op::Bgezall ||
+        decoded.op == Mips64Op::Blez || decoded.op == Mips64Op::Bgtz ||
+        decoded.op == Mips64Op::Blezl || decoded.op == Mips64Op::Bgtzl ||
+        decoded.op == Mips64Op::Eret;
 
     if (isControlFlow) {
         return executeBranch(memory, decoded, address);
     }
     (void)memory;
+
+    // Helper: raise a synchronous exception for the current instruction,
+    // attributing EPC/BD to the delay slot when appropriate.
+    const auto trap = [&](Mips64ExcCode code, Mips64Fault fault, const std::string& message,
+                          bool hasBadVAddr = false, uint64_t badVAddrValue = 0) {
+        raiseException(code, fault, message, address, wasDelaySlot, branchPc,
+                       hasBadVAddr, badVAddrValue);
+        return Mips64StepResult::Fault;
+    };
 
     // Non-branch instruction: retire it, then resolve any pending delay slot.
     switch (decoded.op) {
@@ -383,6 +705,83 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Dsubu:
             writeGpr(decoded.rd, readGpr(decoded.rs) - readGpr(decoded.rt));
             break;
+        case Mips64Op::Add: {
+            // Trapping 32-bit add: computed in 64 bits so overflow is exact.
+            const int64_t lhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rs))));
+            const int64_t rhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rt))));
+            const int64_t sum = lhs + rhs;
+            if (sum != static_cast<int64_t>(static_cast<int32_t>(sum))) {
+                return trap(Mips64ExcCode::Ov, Mips64Fault::OverflowTrap,
+                            "ADD signed overflow");
+            }
+            writeGpr(decoded.rd, signExtend32(static_cast<uint32_t>(sum)));
+            break;
+        }
+        case Mips64Op::Addi: {
+            const int64_t lhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rs))));
+            const int64_t rhs = static_cast<int64_t>(static_cast<int16_t>(decoded.imm));
+            const int64_t sum = lhs + rhs;
+            if (sum != static_cast<int64_t>(static_cast<int32_t>(sum))) {
+                return trap(Mips64ExcCode::Ov, Mips64Fault::OverflowTrap,
+                            "ADDI signed overflow");
+            }
+            writeGpr(decoded.rt, signExtend32(static_cast<uint32_t>(sum)));
+            break;
+        }
+        case Mips64Op::Sub: {
+            const int64_t lhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rs))));
+            const int64_t rhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rt))));
+            const int64_t diff = lhs - rhs;
+            if (diff != static_cast<int64_t>(static_cast<int32_t>(diff))) {
+                return trap(Mips64ExcCode::Ov, Mips64Fault::OverflowTrap,
+                            "SUB signed overflow");
+            }
+            writeGpr(decoded.rd, signExtend32(static_cast<uint32_t>(diff)));
+            break;
+        }
+        case Mips64Op::Dadd: {
+            // Trapping 64-bit add via wraparound unsigned arithmetic.
+            const uint64_t lhs = readGpr(decoded.rs);
+            const uint64_t rhs = readGpr(decoded.rt);
+            const uint64_t sum = lhs + rhs;
+            const bool lhsNeg = (lhs >> 63) != 0;
+            const bool rhsNeg = (rhs >> 63) != 0;
+            const bool sumNeg = (sum >> 63) != 0;
+            if ((lhsNeg == rhsNeg) && (sumNeg != lhsNeg)) {
+                return trap(Mips64ExcCode::Ov, Mips64Fault::OverflowTrap,
+                            "DADD signed overflow");
+            }
+            writeGpr(decoded.rd, sum);
+            break;
+        }
+        case Mips64Op::Daddi: {
+            const uint64_t lhs = readGpr(decoded.rs);
+            const uint64_t rhs = signExtend16(decoded.imm);
+            const uint64_t sum = lhs + rhs;
+            const bool lhsNeg = (lhs >> 63) != 0;
+            const bool rhsNeg = (rhs >> 63) != 0;
+            const bool sumNeg = (sum >> 63) != 0;
+            if ((lhsNeg == rhsNeg) && (sumNeg != lhsNeg)) {
+                return trap(Mips64ExcCode::Ov, Mips64Fault::OverflowTrap,
+                            "DADDI signed overflow");
+            }
+            writeGpr(decoded.rt, sum);
+            break;
+        }
+        case Mips64Op::Dsub: {
+            const uint64_t lhs = readGpr(decoded.rs);
+            const uint64_t rhs = readGpr(decoded.rt);
+            const uint64_t diff = lhs - rhs;
+            const bool lhsNeg = (lhs >> 63) != 0;
+            const bool rhsNeg = (rhs >> 63) != 0;
+            const bool diffNeg = (diff >> 63) != 0;
+            if ((lhsNeg != rhsNeg) && (diffNeg != lhsNeg)) {
+                return trap(Mips64ExcCode::Ov, Mips64Fault::OverflowTrap,
+                            "DSUB signed overflow");
+            }
+            writeGpr(decoded.rd, diff);
+            break;
+        }
         case Mips64Op::And:
             writeGpr(decoded.rd, readGpr(decoded.rs) & readGpr(decoded.rt));
             break;
@@ -432,6 +831,160 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rd, static_cast<uint64_t>(value >> decoded.sa));
             break;
         }
+        case Mips64Op::Mult: {
+            const int64_t lhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rs))));
+            const int64_t rhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rt))));
+            const uint64_t product = static_cast<uint64_t>(lhs * rhs);
+            lo_ = signExtend32(low32(product));
+            hi_ = signExtend32(static_cast<uint32_t>(product >> 32));
+            break;
+        }
+        case Mips64Op::Multu: {
+            const uint64_t product = static_cast<uint64_t>(low32(readGpr(decoded.rs))) *
+                                     static_cast<uint64_t>(low32(readGpr(decoded.rt)));
+            lo_ = static_cast<uint64_t>(low32(product));
+            hi_ = static_cast<uint64_t>(static_cast<uint32_t>(product >> 32));
+            break;
+        }
+        case Mips64Op::Dmult: {
+            const uint64_t lhs = readGpr(decoded.rs);
+            const uint64_t rhs = readGpr(decoded.rt);
+            uint64_t hi = 0, lo = 0;
+            multiplyU64(lhs, rhs, hi, lo);
+            // Convert the unsigned 128-bit product to the signed product:
+            // subtract 2^64 * rhs when lhs is negative and 2^64 * lhs
+            // when rhs is negative (all wraparound, no UB).
+            if ((lhs >> 63) != 0) {
+                hi -= rhs;
+            }
+            if ((rhs >> 63) != 0) {
+                hi -= lhs;
+            }
+            lo_ = lo;
+            hi_ = hi;
+            break;
+        }
+        case Mips64Op::Dmultu: {
+            uint64_t hi = 0, lo = 0;
+            multiplyU64(readGpr(decoded.rs), readGpr(decoded.rt), hi, lo);
+            lo_ = lo;
+            hi_ = hi;
+            break;
+        }
+        case Mips64Op::Div: {
+            // Architecturally UNPREDICTABLE cases (divisor zero, INT32_MIN/-1)
+            // use the deterministic emulator results documented in the
+            // phase-2 notes; no host UB is possible.
+            const int32_t lhs = static_cast<int32_t>(low32(readGpr(decoded.rs)));
+            const int32_t rhs = static_cast<int32_t>(low32(readGpr(decoded.rt)));
+            if (rhs == 0) {
+                lo_ = signExtend32(lhs < 0 ? 1U : 0xFFFFFFFFU);
+                hi_ = signExtend32(static_cast<uint32_t>(lhs));
+                break;
+            }
+            if (lhs == INT32_MIN && rhs == -1) {
+                lo_ = signExtend32(0x80000000U);
+                hi_ = 0;
+                break;
+            }
+            lo_ = signExtend32(static_cast<uint32_t>(lhs / rhs));
+            hi_ = signExtend32(static_cast<uint32_t>(lhs % rhs));
+            break;
+        }
+        case Mips64Op::Divu: {
+            const uint32_t lhs = low32(readGpr(decoded.rs));
+            const uint32_t rhs = low32(readGpr(decoded.rt));
+            if (rhs == 0) {
+                lo_ = 0xFFFFFFFFULL;
+                hi_ = static_cast<uint64_t>(lhs);
+                break;
+            }
+            lo_ = static_cast<uint64_t>(lhs / rhs);
+            hi_ = static_cast<uint64_t>(lhs % rhs);
+            break;
+        }
+        case Mips64Op::Ddiv: {
+            const int64_t lhs = static_cast<int64_t>(readGpr(decoded.rs));
+            const int64_t rhs = static_cast<int64_t>(readGpr(decoded.rt));
+            if (rhs == 0) {
+                lo_ = lhs < 0 ? 1ULL : 0xFFFFFFFFFFFFFFFFULL;
+                hi_ = static_cast<uint64_t>(lhs);
+                break;
+            }
+            if (lhs == INT64_MIN && rhs == -1) {
+                lo_ = 0x8000000000000000ULL;
+                hi_ = 0;
+                break;
+            }
+            lo_ = static_cast<uint64_t>(lhs / rhs);
+            hi_ = static_cast<uint64_t>(lhs % rhs);
+            break;
+        }
+        case Mips64Op::Ddivu: {
+            const uint64_t lhs = readGpr(decoded.rs);
+            const uint64_t rhs = readGpr(decoded.rt);
+            if (rhs == 0) {
+                lo_ = 0xFFFFFFFFFFFFFFFFULL;
+                hi_ = lhs;
+                break;
+            }
+            lo_ = lhs / rhs;
+            hi_ = lhs % rhs;
+            break;
+        }
+        case Mips64Op::Mfhi:
+            writeGpr(decoded.rd, hi_);
+            break;
+        case Mips64Op::Mflo:
+            writeGpr(decoded.rd, lo_);
+            break;
+        case Mips64Op::Mthi:
+            hi_ = readGpr(decoded.rs);
+            break;
+        case Mips64Op::Mtlo:
+            lo_ = readGpr(decoded.rs);
+            break;
+        case Mips64Op::Mfc0: {
+            uint64_t value = 0;
+            if (!readCp0(decoded.rd, decoded.sel, value)) {
+                setFault(Mips64Fault::Cp0Violation, "MFC0 to unsupported CP0 register/selector");
+                return Mips64StepResult::Fault;
+            }
+            // 32-bit transfer: low word sign-extended into the GPR.
+            writeGpr(decoded.rt, signExtend32(low32(value)));
+            break;
+        }
+        case Mips64Op::Dmfc0: {
+            uint64_t value = 0;
+            if (!readCp0(decoded.rd, decoded.sel, value)) {
+                setFault(Mips64Fault::Cp0Violation, "DMFC0 to unsupported CP0 register/selector");
+                return Mips64StepResult::Fault;
+            }
+            writeGpr(decoded.rt, value);
+            break;
+        }
+        case Mips64Op::Mtc0: {
+            // 32-bit transfer: low word of the GPR, sign-extended, then
+            // per-register writable masks applied.
+            if (!writeCp0(decoded.rd, decoded.sel, signExtend32(low32(readGpr(decoded.rt))))) {
+                setFault(Mips64Fault::Cp0Violation, "MTC0 to unsupported CP0 register/selector");
+                return Mips64StepResult::Fault;
+            }
+            break;
+        }
+        case Mips64Op::Dmtc0: {
+            if (!writeCp0(decoded.rd, decoded.sel, readGpr(decoded.rt))) {
+                setFault(Mips64Fault::Cp0Violation, "DMTC0 to unsupported CP0 register/selector");
+                return Mips64StepResult::Fault;
+            }
+            break;
+        }
+        case Mips64Op::Syscall:
+            return trap(Mips64ExcCode::Sys, Mips64Fault::SyscallTrap,
+                        "SYSCALL exception");
+        case Mips64Op::Break:
+            return trap(Mips64ExcCode::Bp, Mips64Fault::BreakTrap,
+                        "BREAK exception");
         case Mips64Op::Lb:
         case Mips64Op::Lbu:
         case Mips64Op::Lh:
@@ -443,13 +996,14 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Sh:
         case Mips64Op::Sw:
         case Mips64Op::Sd:
-            if (executeMemory(memory, decoded, address) != Mips64StepResult::Continue) {
+            if (executeMemory(memory, decoded, address, wasDelaySlot, branchPc) !=
+                Mips64StepResult::Continue) {
                 return Mips64StepResult::Fault;
             }
             break;
         default:
             setFault(Mips64Fault::UnsupportedInstruction,
-                     "decoded operation has no phase-1 executor");
+                     "decoded operation has no executor");
             return Mips64StepResult::Fault;
     }
 
@@ -457,6 +1011,7 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         pc_ = delayTarget_;
         delayArmed_ = false;
         delayTarget_ = 0;
+        delayBranch_ = 0;
     } else {
         pc_ = address + kInstructionSize;
     }
@@ -465,8 +1020,9 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
 
 Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
                                           const Mips64Decoded& decoded,
-                                          uint64_t address) {
-    (void)address;
+                                          uint64_t address,
+                                          bool inDelaySlot,
+                                          uint64_t branchPc) {
     const uint64_t base = readGpr(decoded.rs);
     const uint64_t effective = base + signExtend16(decoded.imm);
 
@@ -491,8 +1047,15 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
     }
 
     if (accessSize > 1 && (effective % accessSize) != 0) {
-        setFault(isLoad ? Mips64Fault::MisalignedLoad : Mips64Fault::MisalignedStore,
-                 "data access violates natural alignment");
+        if (isLoad) {
+            raiseException(Mips64ExcCode::AdEL, Mips64Fault::MisalignedLoad,
+                           "data access violates natural alignment", address,
+                           inDelaySlot, branchPc, true, effective);
+        } else {
+            raiseException(Mips64ExcCode::AdES, Mips64Fault::MisalignedStore,
+                           "data access violates natural alignment", address,
+                           inDelaySlot, branchPc, true, effective);
+        }
         return Mips64StepResult::Fault;
     }
 
@@ -501,11 +1064,14 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
         try {
             memory.Read(effective, bytes, accessSize);
         } catch (const std::exception& ex) {
-            setFault(Mips64Fault::MemoryFaultLoad,
-                     std::string("load rejected by memory: ") + ex.what());
+            raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
+                           std::string("load rejected by memory: ") + ex.what(), address,
+                           inDelaySlot, branchPc, false, 0);
             return Mips64StepResult::Fault;
         } catch (...) {
-            setFault(Mips64Fault::MemoryFaultLoad, "load rejected by memory (unknown error)");
+            raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
+                           "load rejected by memory (unknown error)", address,
+                           inDelaySlot, branchPc, false, 0);
             return Mips64StepResult::Fault;
         }
         const uint64_t raw = assembleBytes(bytes, accessSize, isLittleEndian());
@@ -528,11 +1094,14 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
     try {
         memory.Write(effective, bytes, accessSize);
     } catch (const std::exception& ex) {
-        setFault(Mips64Fault::MemoryFaultStore,
-                 std::string("store rejected by memory: ") + ex.what());
+        raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultStore,
+                       std::string("store rejected by memory: ") + ex.what(), address,
+                       inDelaySlot, branchPc, false, 0);
         return Mips64StepResult::Fault;
     } catch (...) {
-        setFault(Mips64Fault::MemoryFaultStore, "store rejected by memory (unknown error)");
+        raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultStore,
+                       "store rejected by memory (unknown error)", address,
+                       inDelaySlot, branchPc, false, 0);
         return Mips64StepResult::Fault;
     }
     return Mips64StepResult::Continue;
@@ -543,17 +1112,29 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
                                           uint64_t address) {
     (void)memory;
     if (delayArmed_) {
-        // MIPS64r2 forbids useful branch-in-delay-slot behavior for this
-        // subset; reject explicitly rather than improvising.
+        // MIPS64r2 leaves branch-in-delay-slot behavior UNPREDICTABLE for
+        // this subset; reject explicitly rather than improvising.
         setFault(Mips64Fault::BranchInDelaySlot,
                  "control-flow instruction inside a branch delay slot is not supported");
         return Mips64StepResult::Fault;
     }
 
+    // ERET transfers control immediately and never has a delay slot.
+    if (decoded.op == Mips64Op::Eret) {
+        if ((status_ & kStatusBitErl) != 0) {
+            pc_ = errorEpc_;
+            status_ &= ~kStatusBitErl;
+        } else {
+            pc_ = epc_;
+            status_ &= ~kStatusBitExl;
+        }
+        return Mips64StepResult::Continue;
+    }
+
     bool taken = true;
     uint64_t target = address + kInstructionSize;
     bool writesLink = false;
-    unsigned linkReg = kReturnAddrReg;
+    bool branchLikely = false;
 
     switch (decoded.op) {
         case Mips64Op::Beq:
@@ -566,6 +1147,50 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
             target = address + kInstructionSize + byteOffset;
             break;
         }
+        case Mips64Op::Bltz:
+        case Mips64Op::Bgez:
+        case Mips64Op::Bltzal:
+        case Mips64Op::Bgezal:
+        case Mips64Op::Bltzl:
+        case Mips64Op::Bgezl:
+        case Mips64Op::Bltzall:
+        case Mips64Op::Bgezall: {
+            const int64_t value = static_cast<int64_t>(readGpr(decoded.rs));
+            const bool negative = value < 0;
+            switch (decoded.op) {
+                case Mips64Op::Bltz:
+                case Mips64Op::Bltzl:
+                case Mips64Op::Bltzal:
+                case Mips64Op::Bltzall:
+                    taken = negative;
+                    break;
+                default:
+                    taken = !negative;
+                    break;
+            }
+            branchLikely = decoded.op == Mips64Op::Bltzl || decoded.op == Mips64Op::Bgezl ||
+                           decoded.op == Mips64Op::Bltzall || decoded.op == Mips64Op::Bgezall;
+            writesLink = decoded.op == Mips64Op::Bltzal || decoded.op == Mips64Op::Bgezal ||
+                         decoded.op == Mips64Op::Bltzall || decoded.op == Mips64Op::Bgezall;
+            const int64_t offset = static_cast<int64_t>(static_cast<int16_t>(decoded.imm));
+            target = address + kInstructionSize + static_cast<uint64_t>(offset * 4);
+            break;
+        }
+        case Mips64Op::Blez:
+        case Mips64Op::Blezl:
+        case Mips64Op::Bgtz:
+        case Mips64Op::Bgtzl: {
+            const int64_t value = static_cast<int64_t>(readGpr(decoded.rs));
+            if (decoded.op == Mips64Op::Blez || decoded.op == Mips64Op::Blezl) {
+                taken = value <= 0;
+            } else {
+                taken = value > 0;
+            }
+            branchLikely = decoded.op == Mips64Op::Blezl || decoded.op == Mips64Op::Bgtzl;
+            const int64_t offset = static_cast<int64_t>(static_cast<int16_t>(decoded.imm));
+            target = address + kInstructionSize + static_cast<uint64_t>(offset * 4);
+            break;
+        }
         case Mips64Op::J:
             target = ((address + kInstructionSize) & 0xF000000000000000ULL) |
                      (static_cast<uint64_t>(decoded.index) << 2);
@@ -574,7 +1199,6 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
             target = ((address + kInstructionSize) & 0xF000000000000000ULL) |
                      (static_cast<uint64_t>(decoded.index) << 2);
             writesLink = true;
-            linkReg = kReturnAddrReg;
             break;
         case Mips64Op::Jr:
             target = readGpr(decoded.rs);
@@ -582,7 +1206,6 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
         case Mips64Op::Jalr:
             target = readGpr(decoded.rs);
             writesLink = true;
-            linkReg = decoded.rd;
             break;
         default:
             setFault(Mips64Fault::UnsupportedInstruction, "not a branch operation");
@@ -596,22 +1219,61 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
     }
 
     if (writesLink) {
-        // Return address is the instruction after the delay slot (PC+8).
+        // Return address is the instruction after the delay slot (PC+8),
+        // written even when a conditional link-branch is not taken.
+        // REGIMM link branches always target $ra; JALR targets rd.
+        const unsigned linkReg =
+            (decoded.op == Mips64Op::Jalr) ? decoded.rd : kReturnAddrReg;
         writeGpr(linkReg, address + 2 * kInstructionSize);
+    }
+
+    if (branchLikely && !taken) {
+        // Branch-likely with a false condition annuls the delay slot:
+        // execution continues at PC+8 with no slot retired.
+        delayArmed_ = false;
+        delayTarget_ = 0;
+        delayBranch_ = 0;
+        pc_ = address + 2 * kInstructionSize;
+        return Mips64StepResult::Continue;
     }
 
     // Taken and not-taken branches alike execute the delay slot: arm the
     // pending transfer and advance into the delay slot.
     delayArmed_ = true;
     delayTarget_ = taken ? target : address + 2 * kInstructionSize;
+    delayBranch_ = address;
     pc_ = address + kInstructionSize;
     return Mips64StepResult::Continue;
 }
 
 Mips64StepResult Mips64Cpu::step(ia64::IMemory& memory) {
+    // Count is a simple deterministic tick: one increment per step call.
+    // Compare match delivers no interrupt (Cause TI/IP stay 0); see docs.
+    count_ = (count_ + 1) & 0xFFFFFFFFULL;
     const uint64_t address = pc_;
     Mips64Decoded decoded = decodeAt(memory, address);
     if (!decoded.valid) {
+        if (decoded.fault == Mips64Fault::ReservedInstruction) {
+            const bool inDelay = delayArmed_;
+            const uint64_t branchPc = delayBranch_;
+            raiseException(Mips64ExcCode::RI, decoded.fault, decoded.error, address,
+                           inDelay, branchPc, false, 0);
+            return Mips64StepResult::Fault;
+        }
+        if (decoded.fault == Mips64Fault::MisalignedFetch) {
+            const bool inDelay = delayArmed_;
+            const uint64_t branchPc = delayBranch_;
+            raiseException(Mips64ExcCode::AdEL, decoded.fault, decoded.error, address,
+                           inDelay, branchPc, true, address);
+            return Mips64StepResult::Fault;
+        }
+        if (decoded.fault == Mips64Fault::MemoryFaultFetch) {
+            const bool inDelay = delayArmed_;
+            const uint64_t branchPc = delayBranch_;
+            raiseException(Mips64ExcCode::IBE, decoded.fault, decoded.error, address,
+                           inDelay, branchPc, false, 0);
+            return Mips64StepResult::Fault;
+        }
         return Mips64StepResult::Fault;
     }
     return executeDecoded(memory, decoded, address);
@@ -631,7 +1293,9 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Andi:
         case Mips64Op::Xori:
         case Mips64Op::Addiu:
+        case Mips64Op::Addi:
         case Mips64Op::Daddiu:
+        case Mips64Op::Daddi:
         case Mips64Op::Lb:
         case Mips64Op::Lbu:
         case Mips64Op::Lh:
@@ -647,9 +1311,13 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
                           static_cast<int>(static_cast<int16_t>(decoded.imm)), decoded.rs);
             break;
         case Mips64Op::Addu:
+        case Mips64Op::Add:
         case Mips64Op::DaddU:
+        case Mips64Op::Dadd:
         case Mips64Op::Subu:
+        case Mips64Op::Sub:
         case Mips64Op::Dsubu:
+        case Mips64Op::Dsub:
         case Mips64Op::And:
         case Mips64Op::Or:
         case Mips64Op::Xor:
@@ -658,6 +1326,25 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Sltu:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, $%u", name, decoded.rd,
                           decoded.rs, decoded.rt);
+            break;
+        case Mips64Op::Mult:
+        case Mips64Op::Multu:
+        case Mips64Op::Div:
+        case Mips64Op::Divu:
+        case Mips64Op::Dmult:
+        case Mips64Op::Dmultu:
+        case Mips64Op::Ddiv:
+        case Mips64Op::Ddivu:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u", name, decoded.rs,
+                          decoded.rt);
+            break;
+        case Mips64Op::Mfhi:
+        case Mips64Op::Mflo:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u", name, decoded.rd);
+            break;
+        case Mips64Op::Mthi:
+        case Mips64Op::Mtlo:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u", name, decoded.rs);
             break;
         case Mips64Op::Sll:
         case Mips64Op::Srl:
@@ -673,6 +1360,28 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %d", name, decoded.rs,
                           decoded.rt, static_cast<int>(static_cast<int16_t>(decoded.imm)));
             break;
+        case Mips64Op::Bltz:
+        case Mips64Op::Bgez:
+        case Mips64Op::Bltzl:
+        case Mips64Op::Bgezl:
+        case Mips64Op::Bltzal:
+        case Mips64Op::Bgezal:
+        case Mips64Op::Bltzall:
+        case Mips64Op::Bgezall:
+        case Mips64Op::Blez:
+        case Mips64Op::Bgtz:
+        case Mips64Op::Blezl:
+        case Mips64Op::Bgtzl:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, %d", name, decoded.rs,
+                          static_cast<int>(static_cast<int16_t>(decoded.imm)));
+            break;
+        case Mips64Op::Mfc0:
+        case Mips64Op::Mtc0:
+        case Mips64Op::Dmfc0:
+        case Mips64Op::Dmtc0:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u", name, decoded.rt,
+                          decoded.rd, decoded.sel);
+            break;
         case Mips64Op::J:
         case Mips64Op::Jal:
             std::snprintf(buffer, sizeof(buffer), "%s 0x%X", name, decoded.index << 2);
@@ -682,6 +1391,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
             break;
         case Mips64Op::Jalr:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u", name, decoded.rd, decoded.rs);
+            break;
+        case Mips64Op::Eret:
+        case Mips64Op::Syscall:
+        case Mips64Op::Break:
+            std::snprintf(buffer, sizeof(buffer), "%s", name);
             break;
         default:
             std::snprintf(buffer, sizeof(buffer), "%s", name);
@@ -695,8 +1409,8 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     blob[0] = 'M';
     blob[1] = 'P';
     blob[2] = '6';
-    blob[3] = '1';
-    blob[4] = 1;  // format version
+    blob[3] = '2';
+    blob[4] = 2;  // format version
     blob[5] = static_cast<uint8_t>(endianness_);
     // bytes 6..7 reserved (zero)
 
@@ -714,12 +1428,22 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     store64(8 + 32 * 8 + 16, lo_);
     blob[8 + 32 * 8 + 24] = delayArmed_ ? 1 : 0;
     store64(8 + 32 * 8 + 25, delayTarget_);
+    store64(8 + 32 * 8 + 33, delayBranch_);
     const uint32_t fault = static_cast<uint32_t>(fault_);
-    const std::size_t faultOffset = 8 + 32 * 8 + 25 + 8;
+    const std::size_t faultOffset = 8 + 32 * 8 + 41;
     for (int i = 0; i < 4; ++i) {
         blob[faultOffset + static_cast<std::size_t>(i)] =
             static_cast<uint8_t>((fault >> (8 * i)) & 0xFFU);
     }
+    const std::size_t cp0Offset = faultOffset + 4;
+    store64(cp0Offset, status_);
+    store64(cp0Offset + 8, cause_);
+    store64(cp0Offset + 16, epc_);
+    store64(cp0Offset + 24, errorEpc_);
+    store64(cp0Offset + 32, badVAddr_);
+    store64(cp0Offset + 40, ebase_);
+    store64(cp0Offset + 48, count_);
+    store64(cp0Offset + 56, compare_);
     return blob;
 }
 
@@ -727,10 +1451,10 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if (data == nullptr || size != kSerializedSize) {
         return false;
     }
-    if (data[0] != 'M' || data[1] != 'P' || data[2] != '6' || data[3] != '1') {
+    if (data[0] != 'M' || data[1] != 'P' || data[2] != '6' || data[3] != '2') {
         return false;
     }
-    if (data[4] != 1) {
+    if (data[4] != 2) {
         return false;
     }
     if (data[5] != static_cast<uint8_t>(Mips64Endianness::Little) &&
@@ -755,15 +1479,25 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     lo_ = load64(8 + 32 * 8 + 16);
     delayArmed_ = data[8 + 32 * 8 + 24] != 0;
     delayTarget_ = load64(8 + 32 * 8 + 25);
-    const std::size_t faultOffset = 8 + 32 * 8 + 25 + 8;
+    delayBranch_ = load64(8 + 32 * 8 + 33);
+    const std::size_t faultOffset = 8 + 32 * 8 + 41;
     uint32_t fault = 0;
     for (int i = 0; i < 4; ++i) {
         fault |= static_cast<uint32_t>(data[faultOffset + static_cast<std::size_t>(i)])
                  << (8 * i);
     }
-    fault_ = fault <= static_cast<uint32_t>(Mips64Fault::MisalignedBranchTarget)
+    fault_ = fault <= static_cast<uint32_t>(Mips64Fault::OverflowTrap)
                  ? static_cast<Mips64Fault>(fault)
                  : Mips64Fault::None;
+    const std::size_t cp0Offset = faultOffset + 4;
+    status_ = load64(cp0Offset);
+    cause_ = load64(cp0Offset + 8);
+    epc_ = load64(cp0Offset + 16);
+    errorEpc_ = load64(cp0Offset + 24);
+    badVAddr_ = load64(cp0Offset + 32);
+    ebase_ = load64(cp0Offset + 40);
+    count_ = load64(cp0Offset + 48);
+    compare_ = load64(cp0Offset + 56);
     // Endianness is part of the snapshot so round trips preserve config.
     endianness_ = static_cast<Mips64Endianness>(data[5]);
     lastError_.clear();
@@ -777,18 +1511,25 @@ std::string Mips64Cpu::toString() const {
         << "\n";
     out << "  delayArmed: " << (delayArmed_ ? "yes" : "no");
     if (delayArmed_) {
-        out << "  delayTarget: " << hex64(delayTarget_);
+        out << "  delayTarget: " << hex64(delayTarget_)
+            << "  delayBranch: " << hex64(delayBranch_);
     }
     out << "\n";
+    out << "  CP0 Status: " << hex64(status_) << "  Cause: " << hex64(cause_)
+        << "  EPC: " << hex64(epc_) << "\n";
+    out << "  CP0 ErrorEPC: " << hex64(errorEpc_) << "  BadVAddr: " << hex64(badVAddr_)
+        << "  EBase: " << hex64(ebase_) << "\n";
+    out << "  CP0 Count: " << hex64(count_) << "  Compare: " << hex64(compare_)
+        << "  vector: " << hex64(exceptionVector()) << "\n";
     out << "  fault: " << faultName(fault_);
     if (!lastError_.empty()) {
         out << " (" << lastError_ << ")";
     }
     out << "\n";
     static const char* kNames[32] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
-                                    "t0",   "t1", "t2", "t3", "t4", "t5", "t6", "t7",
-                                    "s0",   "s1", "s2", "s3", "s4", "s5", "s6", "s7",
-                                    "t8",   "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
+                                     "t0",   "t1", "t2", "t3", "t4", "t5", "t6", "t7",
+                                     "s0",   "s1", "s2", "s3", "s4", "s5", "s6", "s7",
+                                     "t8",   "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
     for (unsigned i = 0; i < kNumGpr; ++i) {
         char line[96];
         std::snprintf(line, sizeof(line), "  $%-4s (%2u): %s\n", kNames[i], i,
@@ -811,6 +1552,10 @@ const char* Mips64Cpu::faultName(Mips64Fault fault) {
         case Mips64Fault::MemoryFaultStore: return "MemoryFaultStore";
         case Mips64Fault::BranchInDelaySlot: return "BranchInDelaySlot";
         case Mips64Fault::MisalignedBranchTarget: return "MisalignedBranchTarget";
+        case Mips64Fault::Cp0Violation: return "Cp0Violation";
+        case Mips64Fault::SyscallTrap: return "SyscallTrap";
+        case Mips64Fault::BreakTrap: return "BreakTrap";
+        case Mips64Fault::OverflowTrap: return "OverflowTrap";
         default: return "Unknown";
     }
 }
@@ -822,11 +1567,17 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Andi: return "andi";
         case Mips64Op::Xori: return "xori";
         case Mips64Op::Addiu: return "addiu";
+        case Mips64Op::Addi: return "addi";
         case Mips64Op::Daddiu: return "daddiu";
+        case Mips64Op::Daddi: return "daddi";
         case Mips64Op::Addu: return "addu";
+        case Mips64Op::Add: return "add";
         case Mips64Op::DaddU: return "daddu";
+        case Mips64Op::Dadd: return "dadd";
         case Mips64Op::Subu: return "subu";
+        case Mips64Op::Sub: return "sub";
         case Mips64Op::Dsubu: return "dsubu";
+        case Mips64Op::Dsub: return "dsub";
         case Mips64Op::And: return "and";
         case Mips64Op::Or: return "or";
         case Mips64Op::Xor: return "xor";
@@ -839,6 +1590,18 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dsll: return "dsll";
         case Mips64Op::Dsrl: return "dsrl";
         case Mips64Op::Dsra: return "dsra";
+        case Mips64Op::Mult: return "mult";
+        case Mips64Op::Multu: return "multu";
+        case Mips64Op::Div: return "div";
+        case Mips64Op::Divu: return "divu";
+        case Mips64Op::Dmult: return "dmult";
+        case Mips64Op::Dmultu: return "dmultu";
+        case Mips64Op::Ddiv: return "ddiv";
+        case Mips64Op::Ddivu: return "ddivu";
+        case Mips64Op::Mfhi: return "mfhi";
+        case Mips64Op::Mflo: return "mflo";
+        case Mips64Op::Mthi: return "mthi";
+        case Mips64Op::Mtlo: return "mtlo";
         case Mips64Op::Lb: return "lb";
         case Mips64Op::Lbu: return "lbu";
         case Mips64Op::Lh: return "lh";
@@ -852,10 +1615,29 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Sd: return "sd";
         case Mips64Op::Beq: return "beq";
         case Mips64Op::Bne: return "bne";
+        case Mips64Op::Bltz: return "bltz";
+        case Mips64Op::Bgez: return "bgez";
+        case Mips64Op::Bltzal: return "bltzal";
+        case Mips64Op::Bgezal: return "bgezal";
+        case Mips64Op::Bltzl: return "bltzl";
+        case Mips64Op::Bgezl: return "bgezl";
+        case Mips64Op::Bltzall: return "bltzall";
+        case Mips64Op::Bgezall: return "bgezall";
+        case Mips64Op::Blez: return "blez";
+        case Mips64Op::Bgtz: return "bgtz";
+        case Mips64Op::Blezl: return "blezl";
+        case Mips64Op::Bgtzl: return "bgtzl";
         case Mips64Op::J: return "j";
         case Mips64Op::Jal: return "jal";
         case Mips64Op::Jr: return "jr";
         case Mips64Op::Jalr: return "jalr";
+        case Mips64Op::Mfc0: return "mfc0";
+        case Mips64Op::Mtc0: return "mtc0";
+        case Mips64Op::Dmfc0: return "dmfc0";
+        case Mips64Op::Dmtc0: return "dmtc0";
+        case Mips64Op::Eret: return "eret";
+        case Mips64Op::Syscall: return "syscall";
+        case Mips64Op::Break: return "break";
         default: return "invalid";
     }
 }

@@ -1,11 +1,13 @@
 #pragma once
 
-// guideXOS Hypervisor — MIPS64 ISA plugin (Phase MIPS64-1).
+// guideXOS Hypervisor — MIPS64 ISA plugin (Phases MIPS64-1 + MIPS64-2).
 //
 // Adapts the isolated mips64::Mips64Cpu core to the repository's ia64::IISA
 // contract and self-registers the "MIPS64" ISA identity with the
 // ISAPluginRegistry. The plugin owns exactly one CPU instance; no IA-64
-// execution objects are involved.
+// execution objects are involved. CP0/exception state is exposed through
+// dumpState (Mips64Cpu::toString) and full-state serialization; clone and
+// restore preserve in-flight branch-delay state; reset is deterministic.
 
 #include <memory>
 #include <string>
@@ -48,7 +50,7 @@ public:
 
     // -- identity -------------------------------------------------------------
     std::string getName() const override { return "MIPS64"; }
-    std::string getVersion() const override { return "MIPS64r2 MIPS64-1"; }
+    std::string getVersion() const override { return "MIPS64r2 MIPS64-2"; }
 
     void reset() override;
 

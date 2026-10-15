@@ -216,7 +216,10 @@ static void testSetLessThan() {
     CHECK(cpu.readGpr(13) == 1);
 }
 
-// -- alignment failures -----------------------------------------------------------------------------------------
+// -- alignment failures raise real address-error exceptions ---------------------------------------
+// Since MIPS64-2, misaligned accesses perform genuine exception entry:
+// Cause.ExcCode (AdEL/AdES), BadVAddr, EPC/BD, Status.EXL and a vector
+// redirect. The faulting instruction does not retire.
 static void testAlignmentFailures() {
     ia64::Memory mem(64 * 1024);
     Mips64Cpu cpu;
@@ -229,20 +232,37 @@ static void testAlignmentFailures() {
     storeWord(mem, 16, encodeI(43, 8, 9, 2), true);
     storeWord(mem, 20, encodeI(63, 8, 9, 4), true);
     const Mips64Fault expected[6] = {Mips64Fault::MisalignedLoad, Mips64Fault::MisalignedLoad,
-                                     Mips64Fault::MisalignedLoad, Mips64Fault::MisalignedStore,
-                                     Mips64Fault::MisalignedStore, Mips64Fault::MisalignedStore};
+                                      Mips64Fault::MisalignedLoad, Mips64Fault::MisalignedStore,
+                                      Mips64Fault::MisalignedStore, Mips64Fault::MisalignedStore};
+    const uint32_t excExpected[6] = {4, 4, 4, 5, 5, 5};  // AdEL x3, AdES x3
+    const uint64_t badExpected[6] = {0x101, 0x102, 0x104, 0x101, 0x102, 0x104};
     for (int i = 0; i < 6; ++i) {
-        cpu.setPc(static_cast<uint64_t>(i) * 4);
+        const uint64_t addr = static_cast<uint64_t>(i) * 4;
+        cpu.reset();
+        cpu.writeGpr(8, 0x100);
+        cpu.setPc(addr);
         CHECK(stepFault(cpu, mem, expected[i]));
-        CHECK(cpu.pc() == static_cast<uint64_t>(i) * 4);  // faulting insn does not retire
+        CHECK(cpu.causeExcCode() == excExpected[i]);
+        CHECK(cpu.cp0BadVAddr() == badExpected[i]);
+        CHECK(cpu.cp0Epc() == addr);
+        CHECK(!cpu.causeBd());
+        CHECK(cpu.statusExl());
+        CHECK(cpu.pc() == cpu.exceptionVector());  // redirected, not retired
     }
-    // Misaligned fetch.
+    // Misaligned fetch -> AdEL with BadVAddr = faulting PC.
     Mips64Cpu cpu2;
     cpu2.setPc(2);
     CHECK(stepFault(cpu2, mem, Mips64Fault::MisalignedFetch));
+    CHECK(cpu2.causeExcCode() == 4);
+    CHECK(cpu2.cp0BadVAddr() == 2);
+    CHECK(cpu2.cp0Epc() == 2);
+    CHECK(cpu2.pc() == cpu2.exceptionVector());
 }
 
-// -- invalid memory failures ---------------------------------------------------------------------------------------
+// -- invalid memory failures raise bus-error exceptions ------------------------------------------
+// Since MIPS64-2, IMemory rejections perform genuine exception entry with
+// IBE (fetch) / DBE (data) codes. BadVAddr is only architecturally defined
+// for address errors, so bus errors leave it untouched.
 static void testInvalidMemoryFailures() {
     ia64::Memory mem(64);  // tiny guest: only 64 bytes mapped
     Mips64Cpu cpu;
@@ -251,21 +271,33 @@ static void testInvalidMemoryFailures() {
     storeWord(mem, 4, encodeI(43, 8, 9, 0), true);  // sw to unmapped
     cpu.setPc(0);
     CHECK(stepFault(cpu, mem, Mips64Fault::MemoryFaultLoad));
+    CHECK(cpu.causeExcCode() == 7);  // DBE
+    CHECK(cpu.cp0BadVAddr() == 0);
+    CHECK(cpu.cp0Epc() == 0);
+    CHECK(cpu.pc() == cpu.exceptionVector());
+    cpu.reset();
+    cpu.writeGpr(8, 0x1000);
     cpu.setPc(4);
     CHECK(stepFault(cpu, mem, Mips64Fault::MemoryFaultStore));
+    CHECK(cpu.causeExcCode() == 7);  // DBE
+    CHECK(cpu.cp0Epc() == 4);
+    CHECK(cpu.pc() == cpu.exceptionVector());
     // Fetch past the end of guest memory.
     Mips64Cpu cpu2;
     cpu2.setPc(0x10000);
     CHECK(stepFault(cpu2, mem, Mips64Fault::MemoryFaultFetch));
+    CHECK(cpu2.causeExcCode() == 6);  // IBE
+    CHECK(cpu2.cp0Epc() == 0x10000);
+    CHECK(cpu2.pc() == cpu2.exceptionVector());
 }
 
 // -- unsupported vs reserved ------------------------------------------------------------------------------------------
 static void testUnsupportedAndReserved() {
     ia64::Memory mem(64 * 1024);
     Mips64Cpu cpu;
-    storeWord(mem, 0, encodeR(8, 9, 10, 0, 0x18), true);  // mult: valid, unimplemented
-    storeWord(mem, 4, encodeI(0x01, 0, 8, 0), true);  // REGIMM bltz: valid, unimplemented
-    storeWord(mem, 8, encodeI(0x31, 0, 8, 0), true);  // lwc1: valid, unimplemented
+    storeWord(mem, 0, encodeI(0x31, 0, 8, 0), true);  // lwc1: valid, unimplemented
+    storeWord(mem, 4, encodeI(0x2F, 0, 8, 0), true);  // cache: valid, unimplemented
+    storeWord(mem, 8, encodeI(0x30, 8, 9, 0), true);  // ll: valid, unimplemented
     storeWord(mem, 12, encodeI(0x1D, 0, 0, 0), true);  // reserved primary opcode
     storeWord(mem, 16, encodeR(0, 0, 0, 0, 0x05), true);  // reserved SPECIAL funct
     cpu.setPc(0);
@@ -331,7 +363,7 @@ static void testDebugHelpers() {
     const Mips64Decoded decoded = decodeInstruction(encodeI(9, 0, 8, 10));
     CHECK(decoded.valid && decoded.op == Mips64Op::Addiu);
     CHECK(cpu.disassemble(decoded).find("addiu") != std::string::npos);
-    const Mips64Decoded bad = decodeInstruction(encodeR(8, 9, 10, 0, 0x18));
+    const Mips64Decoded bad = decodeInstruction(encodeI(0x31, 0, 8, 0));  // lwc1
     CHECK(!bad.valid && bad.fault == Mips64Fault::UnsupportedInstruction);
     CHECK(cpu.disassemble(bad).find("invalid") != std::string::npos);
     CHECK(std::string(Mips64Cpu::faultName(Mips64Fault::BranchInDelaySlot)) == "BranchInDelaySlot");

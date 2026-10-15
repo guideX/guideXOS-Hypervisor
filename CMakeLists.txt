@@ -782,3 +782,20 @@ endif()
 add_test(NAME Mips64CpuTests COMMAND test_mips64_cpu)
 add_test(NAME Mips64ExecutionTests COMMAND test_mips64_execution)
 add_test(NAME Mips64PluginTests COMMAND test_mips64_plugin)
+
+# MIPS64-2 tests: CP0/exception entry/return, trapping arithmetic, HI/LO
+# multiply/divide, extended branches, both byte orders, serialization and
+# a real encoded exception-handler demo. Self-contained (sparse test
+# memory); existing IA-64 targets are untouched.
+add_executable(test_mips64_cp0_exceptions
+    tests/test_mips64_cp0_exceptions.cpp
+    ${MIPS64_CORE_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_cp0_exceptions PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_cp0_exceptions PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME Mips64Cp0ExceptionTests COMMAND test_mips64_cp0_exceptions)

@@ -120,11 +120,11 @@ ia64::ISAExecutionResult Mips64ISAPlugin::execute(
 }
 
 ia64::ISAExecutionResult Mips64ISAPlugin::step(ia64::IMemory& memory) {
-    ia64::ISADecodeResult decoded = decode(memory);
-    if (!decoded.valid) {
-        return ia64::ISAExecutionResult::EXCEPTION;
-    }
-    return execute(memory, decoded);
+    // Retire exactly one instruction through the core so synchronous
+    // exception entry (CP0 update + vector redirect) behaves identically
+    // to direct Mips64Cpu stepping. Any cached decode is invalidated.
+    hasCachedInstruction_ = false;
+    return mapStepResult(state_.cpu().step(memory));
 }
 
 void Mips64ISAPlugin::setState(const ia64::ISAState& state) {
@@ -190,6 +190,14 @@ bool Mips64ISAPlugin::hasFeature(const std::string& feature) const {
     if (feature == "fixed_width_32") return true;
     if (feature == "load_store") return true;
     if (feature == "sign_extended_words") return true;
+    if (feature == "cp0") return true;
+    if (feature == "exceptions") return true;
+    if (feature == "eret") return true;
+    if (feature == "muldiv") return true;
+    if (feature == "hilo") return true;
+    if (feature == "regimm") return true;
+    if (feature == "branch_likely") return true;
+    if (feature == "trapping_arithmetic") return true;
     if (feature == "little_endian") return state_.cpu().isLittleEndian();
     if (feature == "big_endian") return !state_.cpu().isLittleEndian();
     return false;
