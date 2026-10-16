@@ -686,6 +686,7 @@ add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 add_test(NAME PPC64Phase1Tests COMMAND test_ppc64_phase1)
 add_test(NAME PPC64Phase2Tests COMMAND test_ppc64_phase2)
 add_test(NAME PPC64Phase3Tests COMMAND test_ppc64_phase3)
+add_test(NAME PPC64Phase4Tests COMMAND test_ppc64_phase4)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -749,6 +750,23 @@ if(MSVC)
     target_compile_options(test_ppc64_phase3 PRIVATE /W4)
 else()
     target_compile_options(test_ppc64_phase3 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# PPC64 Phase 4 Book III-S exception delivery test (standalone ISA plugin, real Memory)
+add_executable(test_ppc64_phase4
+    tests/test_ppc64_phase4.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase4 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase4 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase4 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # RISC-V CPU implementation

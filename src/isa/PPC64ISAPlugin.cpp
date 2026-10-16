@@ -1,5 +1,7 @@
 #include "PPC64ISAPlugin.h"
 #include "ISAPluginRegistry.h"
+#include "memory.h"
+#include "mmu.h"
 
 #include <cstring>
 #include <sstream>
@@ -97,6 +99,10 @@ void PPC64ISAState::reset() {
     cr = 0;
     xer = 0;
     msr = 0;
+    srr0 = 0;
+    srr1 = 0;
+    dar = 0;
+    dsisr = 0;
 }
 
 std::unique_ptr<ISAState> PPC64ISAState::clone() const {
@@ -108,7 +114,87 @@ std::unique_ptr<ISAState> PPC64ISAState::clone() const {
     copy->cr = cr;
     copy->xer = xer;
     copy->msr = msr;
+    copy->srr0 = srr0;
+    copy->srr1 = srr1;
+    copy->dar = dar;
+    copy->dsisr = dsisr;
     return copy;
+}
+
+void PPC64ISAState::serializeV2(uint8_t* buffer) const {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 serializeV2: null buffer");
+    }
+    size_t offset = 0;
+    putU32(buffer + offset, STATE_MAGIC);
+    offset += 4;
+    putU32(buffer + offset, STATE_VERSION_V2);
+    offset += 4;
+    for (size_t i = 0; i < NUM_GPR; ++i) {
+        putU64(buffer + offset, gpr[i]);
+        offset += 8;
+    }
+    putU64(buffer + offset, nip);
+    offset += 8;
+    putU64(buffer + offset, lr);
+    offset += 8;
+    putU64(buffer + offset, ctr);
+    offset += 8;
+    putU32(buffer + offset, cr);
+    offset += 4;
+    putU32(buffer + offset, xer);
+    offset += 4;
+    putU64(buffer + offset, msr);
+    offset += 8;
+    putU64(buffer + offset, srr0);
+    offset += 8;
+    putU64(buffer + offset, srr1);
+    offset += 8;
+    putU64(buffer + offset, dar);
+    offset += 8;
+    putU32(buffer + offset, dsisr);
+    offset += 4;
+}
+
+void PPC64ISAState::deserializeV2(const uint8_t* buffer) {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 deserializeV2: null buffer");
+    }
+    size_t offset = 0;
+    uint32_t magic = getU32(buffer + offset);
+    offset += 4;
+    uint32_t version = getU32(buffer + offset);
+    offset += 4;
+    if (magic != STATE_MAGIC) {
+        throw std::invalid_argument("PPC64 deserializeV2: bad magic");
+    }
+    if (version != STATE_VERSION_V2) {
+        throw std::invalid_argument("PPC64 deserializeV2: unsupported version");
+    }
+    for (size_t i = 0; i < NUM_GPR; ++i) {
+        gpr[i] = getU64(buffer + offset);
+        offset += 8;
+    }
+    nip = getU64(buffer + offset);
+    offset += 8;
+    lr = getU64(buffer + offset);
+    offset += 8;
+    ctr = getU64(buffer + offset);
+    offset += 8;
+    cr = getU32(buffer + offset);
+    offset += 4;
+    xer = getU32(buffer + offset);
+    offset += 4;
+    msr = getU64(buffer + offset);
+    offset += 8;
+    srr0 = getU64(buffer + offset);
+    offset += 8;
+    srr1 = getU64(buffer + offset);
+    offset += 8;
+    dar = getU64(buffer + offset);
+    offset += 8;
+    dsisr = getU32(buffer + offset);
+    offset += 4;
 }
 
 void PPC64ISAState::serialize(uint8_t* buffer) const {
@@ -169,17 +255,26 @@ void PPC64ISAState::deserialize(const uint8_t* buffer) {
     offset += 4;
     msr = getU64(buffer + offset);
     offset += 8;
+    // v1 has no privileged SRR0/SRR1/DAR/DSISR: deterministic defaults.
+    srr0 = 0;
+    srr1 = 0;
+    dar = 0;
+    dsisr = 0;
 }
 
 std::string PPC64ISAState::toString() const {
     std::ostringstream out;
-    out << "PPC64 State (BE, interpreter, phase 3):\n";
+    out << "PPC64 State (BE, interpreter, phase 4):\n";
     out << "  NIP: 0x" << std::hex << nip << std::dec << "\n";
     out << "  LR:  0x" << std::hex << lr << std::dec << "\n";
     out << "  CTR: 0x" << std::hex << ctr << std::dec << "\n";
     out << "  CR:  0x" << std::hex << cr << std::dec << "\n";
     out << "  XER: 0x" << std::hex << xer << std::dec << "\n";
     out << "  MSR: 0x" << std::hex << msr << std::dec << "\n";
+    out << "  SRR0: 0x" << std::hex << srr0 << std::dec << "\n";
+    out << "  SRR1: 0x" << std::hex << srr1 << std::dec << "\n";
+    out << "  DAR: 0x" << std::hex << dar << std::dec << "\n";
+    out << "  DSISR: 0x" << std::hex << dsisr << std::dec << "\n";
     for (size_t i = 0; i < NUM_GPR; ++i) {
         out << "  r" << i << ": 0x" << std::hex << gpr[i] << std::dec << "\n";
     }
@@ -255,6 +350,271 @@ void PPC64ISAPlugin::reset() {
     hasCachedInstruction_ = false;
     cachedAddress_ = 0;
     lastFault_ = PPC64Fault();
+    consecutiveGuestExceptions_ = 0;
+    justDelivered_ = false;
+    // Note: guestDeliveryEnabled_ is configuration, not architectural state,
+    // and is preserved across reset() so test harnesses can reset CPU state
+    // without re-selecting the delivery mode.
+}
+
+bool PPC64ISAPlugin::isPrivilegedSPR(uint16_t sprn) {
+    if (sprn == SPR_XER || sprn == SPR_LR || sprn == SPR_CTR) {
+        return false;
+    }
+    return true;
+}
+
+bool PPC64ISAPlugin::isUnimplementedValid(const DecodedInstruction& instr) {
+    // Valid-per-ISA but explicitly out of Phase 4 scope: these decode as
+    // UNSUPPORTED yet must stay terminal emulator EXCEPTIONs, never guest
+    // Program interrupts.
+    if (instr.kind != DecodedKind::UNSUPPORTED) {
+        // OE=1 on addc/adde/subfc are valid (addco/addeo/subfco) but out of
+        // scope; they decode as UNSUPPORTED with oe set. Detect via raw word:
+        // XO base 10/138/8 with OE set would have been rejected in decode.
+        return false;
+    }
+    uint32_t word = instr.raw;
+    uint8_t opcode = static_cast<uint8_t>((word >> 26) & 0x3F);
+    if (opcode != OPCODE_XO) {
+        return false;
+    }
+    uint16_t combined = static_cast<uint16_t>((word >> 1) & 0x3FFU);
+    // Update-indexed integer loads/stores (valid, deferred past Phase 4).
+    switch (combined) {
+        case 119:  // lbzux
+        case 311:  // lhzux
+        case 375:  // lhaux
+        case 55:   // lwzux
+        case 373:  // lwaux
+        case 53:   // ldux
+        case 247:  // stbux
+        case 439:  // sthux
+        case 183:  // stwux
+        case 181:  // stdux
+            return true;
+        default:
+            break;
+    }
+    // OE=1 on addc/adde/subfc (addco/addeo/subfco): combined values are
+    // base+512. Base values: ADDC=10, ADDE=138, SUBFC=8.
+    if (combined == (XO_ADDC + 512) || combined == (XO_ADDE + 512) ||
+        combined == (XO_SUBFC + 512)) {
+        return true;
+    }
+    // mtmsrd (XO 178) is valid-per-ISA but unsupported in this profile.
+    if (combined == XO_MTMSRD) {
+        return true;
+    }
+    return false;
+}
+
+bool PPC64ISAPlugin::validateDataRange(IMemory& memory, uint64_t ea, uint32_t width,
+                                       bool isStore, std::string& reason,
+                                       bool& failIsUnmapped, bool& failIsPermission) {
+    failIsUnmapped = false;
+    failIsPermission = false;
+    if (width == 0 || width > 8) {
+        reason = "validateDataRange: unsupported width";
+        return false;
+    }
+    if (static_cast<uint64_t>(width - 1) > (0xFFFFFFFFFFFFFFFFULL - ea)) {
+        reason = "effective range wraps past 2^64-1";
+        failIsUnmapped = true;
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    if (concrete == nullptr) {
+        // Non-Memory IMemory (mocks/devices): delegate to the single call.
+        return true;
+    }
+    const uint64_t totalSize = static_cast<uint64_t>(concrete->GetTotalSize());
+    if (!concrete->IsMMUEnabled()) {
+        if (static_cast<uint64_t>(width) > totalSize - ea &&
+            !(ea < totalSize && static_cast<uint64_t>(width) <= totalSize - ea)) {
+            // Careful unsigned check when ea >= totalSize.
+            if (ea >= totalSize || static_cast<uint64_t>(width) > totalSize - ea) {
+                std::ostringstream oss;
+                oss << "Memory address 0x" << std::hex << ea
+                    << " with size 0x" << width << " exceeds bounds (max: 0x"
+                    << totalSize << ")";
+                reason = oss.str();
+                failIsUnmapped = true;
+                return false;
+            }
+        }
+        return true;
+    }
+    const size_t pageSize = concrete->GetMMU().GetPageSize();
+    const uint64_t pageMask = ~(static_cast<uint64_t>(pageSize) - 1ULL);
+    const MemoryAccessType want =
+        isStore ? MemoryAccessType::WRITE : MemoryAccessType::READ;
+    for (uint64_t off = 0; off < width;) {
+        uint64_t cur = ea + off;
+        uint64_t pageBase = cur & pageMask;
+        uint64_t pageEnd = pageBase + static_cast<uint64_t>(pageSize);
+        uint64_t chunkEnd = ea + static_cast<uint64_t>(width);
+        if (chunkEnd < cur) {  // should be impossible (wrap checked above)
+            reason = "effective range wraps past 2^64-1";
+            failIsUnmapped = true;
+            return false;
+        }
+        uint64_t segEnd = (chunkEnd < pageEnd) ? chunkEnd : pageEnd;
+        // Physical-memory boundary: every touched byte must be within RAM.
+        // (MMIO-device ranges that bypass the MMU are documented as a
+        // non-transactional boundary; this check covers MMU-mapped RAM.)
+        if (cur >= totalSize || segEnd > totalSize) {
+            std::ostringstream oss;
+            oss << "Memory address 0x" << std::hex << cur
+                << " exceeds bounds (max: 0x" << totalSize << ")";
+            reason = oss.str();
+            failIsUnmapped = true;
+            return false;
+        }
+        const PageEntry* entry = concrete->GetMMU().GetPageEntry(pageBase);
+        if (entry == nullptr || !entry->present) {
+            std::ostringstream oss;
+            oss << "PAGE FAULT [NOT_MAPPED]: " << (isStore ? "WRITE" : "READ")
+                << " at virtual address 0x" << std::hex << cur << " (page 0x"
+                << pageBase << ")";
+            reason = oss.str();
+            failIsUnmapped = true;
+            return false;
+        }
+        // Phase 4 profile is real-address identity-mapped. A non-identity
+        // translation cannot be served by the single contiguous memcpy and
+        // is rejected as unsupported (terminal, not a guest DSI).
+        if (entry->physicalAddress != pageBase) {
+            std::ostringstream oss;
+            oss << "non-identity translation unsupported in Phase 4 profile"
+                << " at page 0x" << std::hex << pageBase;
+            reason = oss.str();
+            return false;
+        }
+        if (!concrete->GetMMU().CheckPermission(cur, want)) {
+            std::ostringstream oss;
+            oss << "PAGE FAULT [PERMISSION_" << (isStore ? "WRITE" : "READ")
+                << "]: " << (isStore ? "WRITE" : "READ")
+                << " at virtual address 0x" << std::hex << cur << " (page 0x"
+                << pageBase << ")";
+            reason = oss.str();
+            failIsPermission = true;
+            return false;
+        }
+        // Physical bounds for the translated chunk (identity => same).
+        uint64_t phys = entry->physicalAddress + (cur - pageBase);
+        uint64_t segLen = segEnd - cur;
+        if (phys + segLen > totalSize || phys + segLen < phys) {
+            std::ostringstream oss;
+            oss << "Memory address 0x" << std::hex << phys
+                << " exceeds physical bounds (max: 0x" << totalSize << ")";
+            reason = oss.str();
+            failIsUnmapped = true;
+            return false;
+        }
+        off += segLen;
+        if (segLen == 0) {
+            reason = "validateDataRange: zero progress (invalid page size)";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PPC64ISAPlugin::validateFetchRange(IMemory& memory, uint64_t addr,
+                                        std::string& reason,
+                                        bool& failIsUnmapped,
+                                        bool& failIsPermission) {
+    failIsUnmapped = false;
+    failIsPermission = false;
+    // Fixed 4-byte aligned fetch can never cross a 4KB (or any >=4, pow2)
+    // page boundary, but EXECUTE permission must still be validated
+    // separately from the READ check that Memory::Read performs.
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    if (concrete == nullptr) {
+        return true;
+    }
+    const uint64_t totalSize = static_cast<uint64_t>(concrete->GetTotalSize());
+    if (!concrete->IsMMUEnabled()) {
+        if (addr >= totalSize || 4 > totalSize - addr) {
+            std::ostringstream oss;
+            oss << "Memory address 0x" << std::hex << addr
+                << " exceeds bounds (max: 0x" << totalSize << ")";
+            reason = oss.str();
+            failIsUnmapped = true;
+            return false;
+        }
+        return true;
+    }
+    if (addr >= totalSize || 4 > totalSize - addr) {
+        std::ostringstream oss;
+        oss << "Memory address 0x" << std::hex << addr << " exceeds bounds (max: 0x"
+            << totalSize << ")";
+        reason = oss.str();
+        failIsUnmapped = true;
+        return false;
+    }
+    const PageEntry* entry = concrete->GetMMU().GetPageEntry(addr);
+    if (entry == nullptr || !entry->present) {
+        std::ostringstream oss;
+        oss << "PAGE FAULT [NOT_MAPPED]: EXECUTE at virtual address 0x" << std::hex
+            << addr;
+        reason = oss.str();
+        failIsUnmapped = true;
+        return false;
+    }
+    if (entry->physicalAddress != (addr & ~(static_cast<uint64_t>(
+                                         concrete->GetMMU().GetPageSize()) -
+                                         1ULL))) {
+        reason = "non-identity translation unsupported in Phase 4 profile";
+        return false;
+    }
+    if (!concrete->GetMMU().CheckPermission(addr, MemoryAccessType::EXECUTE)) {
+        std::ostringstream oss;
+        oss << "PAGE FAULT [PERMISSION_EXEC]: EXECUTE at virtual address 0x"
+            << std::hex << addr;
+        reason = oss.str();
+        failIsPermission = true;
+        return false;
+    }
+    return true;
+}
+
+ISAExecutionResult PPC64ISAPlugin::maybeDeliver(IMemory& memory,
+                                               ISAExecutionResult legacy,
+                                               uint64_t vecOffset, uint64_t srr0,
+                                               uint32_t srr1cause, bool updateDAR,
+                                               uint64_t dar, uint32_t dsisr) {
+    (void)memory;
+    if (!guestDeliveryEnabled_) {
+        justDelivered_ = false;
+        return legacy;
+    }
+    if (consecutiveGuestExceptions_ >= MAX_NESTED_EXCEPTIONS) {
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip, 0, false, 0,
+                    false, PPC64AccessType::NONE, 0,
+                    "nested exception limit exceeded; terminating to avoid "
+                    "non-progressing recursive faults",
+                    false);
+        consecutiveGuestExceptions_ = 0;
+        justDelivered_ = false;
+        return ISAExecutionResult::EXCEPTION;
+    }
+    const uint64_t oldMSR = state_.msr;
+    const uint64_t srr1 = (oldMSR & SRR1_MSR_MASK) | srr1cause;
+    state_.srr0 = srr0;
+    state_.srr1 = srr1;
+    if (updateDAR) {
+        state_.dar = dar;
+        state_.dsisr = dsisr;
+    }
+    // Book III-S entry: EE/PR/IR/DR/RI cleared; all else preserved.
+    state_.msr = oldMSR & ~(MSR_EE | MSR_PR | MSR_IR | MSR_DR | MSR_RI);
+    state_.nip = EXC_VECTOR_BASE + vecOffset;
+    hasCachedInstruction_ = false;
+    ++consecutiveGuestExceptions_;
+    justDelivered_ = true;
+    return ISAExecutionResult::CONTINUE;
 }
 
 void PPC64ISAPlugin::recordFault(PPC64FaultCategory category, uint64_t cia, uint32_t raw,
@@ -310,6 +670,20 @@ bool PPC64ISAPlugin::memLoadBE(IMemory& memory, uint64_t ea, uint32_t width, uin
         reason = "effective range wraps past 2^64-1";
         return false;
     }
+    // Phase 4 cross-page permission validation (RAM/MMIO boundary documented
+    // in the Phase 4 report): every touched page is checked for READ before
+    // the single IMemory::Read, so a later-page denial is reported without
+    // consuming partial bytes. Non-Memory IMemory impls delegate to the
+    // single call.
+    {
+        bool isUnmapped = false, isPerm = false;
+        std::string vreason;
+        if (!validateDataRange(memory, ea, width, false, vreason, isUnmapped,
+                               isPerm)) {
+            reason = vreason;
+            return false;
+        }
+    }
     uint8_t buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     try {
         memory.Read(ea, buf, width);
@@ -335,15 +709,27 @@ bool PPC64ISAPlugin::memStoreBE(IMemory& memory, uint64_t ea, uint32_t width, ui
         reason = "effective range wraps past 2^64-1";
         return false;
     }
+    // Phase 4 cross-page validation first: a later-page WRITE denial must be
+    // detected before committing any byte, preserving the first region.
+    {
+        bool isUnmapped = false, isPerm = false;
+        std::string vreason;
+        if (!validateDataRange(memory, ea, width, true, vreason, isUnmapped,
+                               isPerm)) {
+            reason = vreason;
+            return false;
+        }
+    }
     uint8_t buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     for (uint32_t i = 0; i < width; ++i) {
         buf[i] = static_cast<uint8_t>((value >> (8 * (width - 1 - i))) & 0xFF);
     }
     // Single IMemory::Write call: the Memory implementation bounds-checks
     // the whole range and throws before any byte is committed, so a failed
-    // store leaves guest memory untouched (no rollback needed). Cross-page
-    // MMU permission granularity is a Memory-implementation limitation and
-    // is documented, not worked around here.
+    // store leaves guest memory untouched (no rollback needed). Phase 4 adds
+    // the per-page WRITE pre-check above so cross-page permission granularity
+    // (a Memory-implementation limitation) is now enforced here without
+    // altering shared IA-64 memory behavior.
     try {
         memory.Write(ea, buf, width);
     } catch (const std::exception& e) {
@@ -404,6 +790,14 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.supported = true;
             break;
         case OPCODE_XL: {
+            // Phase 4: rfid is the exact XL-form word 0x4C000024 (opcode 19,
+            // XO 18, all other fields zero). Any other opcode-19/XO-18 word
+            // (BO/BI/LK set) is an invalid encoding, not rfid.
+            if (word == ENCODING_RFID) {
+                instr.kind = DecodedKind::RFID;
+                instr.supported = true;
+                break;
+            }
             const uint16_t xo = static_cast<uint16_t>((word >> 1) & 0x3FFU);
             instr.bo = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.bi = static_cast<uint8_t>((word >> 16) & 0x1F);
@@ -670,16 +1064,42 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                     instr.kind = DecodedKind::UNSUPPORTED;
                     instr.supported = false;
                 } else if (instr.sprn == SPR_XER || instr.sprn == SPR_LR ||
-                           instr.sprn == SPR_CTR) {
+                           instr.sprn == SPR_CTR || instr.sprn == SPR_DSISR ||
+                           instr.sprn == SPR_DAR || instr.sprn == SPR_SRR0 ||
+                           instr.sprn == SPR_SRR1) {
+                    // Phase 4: XER/LR/CTR remain unprivileged; DSISR/DAR/
+                    // SRR0/SRR1 decode as supported here and are privilege-
+                    // checked at execution (problem-state use faults).
                     instr.kind = (combined == XO_MFSPR) ? DecodedKind::MFSPR
                                                        : DecodedKind::MTSPR;
                     instr.supported = true;
                 } else {
-                    // Unsupported SPR numbers (including privileged ones)
-                    // are rejected rather than manufacturing values.
+                    // Unsupported SPR numbers are rejected rather than
+                    // manufacturing values. Privileged-vs-unimplemented is
+                    // distinguished at execution/diag time; unknown SPRs
+                    // stay INVALID_ENCODING here.
                     instr.kind = (combined == XO_MFSPR) ? DecodedKind::MFSPR
                                                        : DecodedKind::MTSPR;
                     instr.supported = false;
+                }
+            } else if (combined == XO_MFMSR || combined == XO_MTMSR ||
+                       combined == XO_MTMSRD) {
+                // Phase 4 MSR access: RA and RB field positions must be zero
+                // and Rc must be 0 (X-form with no record bit). mtmsrd
+                // (XO 178) is valid-per-ISA but explicitly unsupported.
+                const uint16_t raPos = static_cast<uint16_t>((word >> 16) & 0x1FU);
+                const uint16_t rbPos = static_cast<uint16_t>((word >> 11) & 0x1FU);
+                if (combined == XO_MTMSRD) {
+                    instr.kind = DecodedKind::UNSUPPORTED;
+                    instr.supported = false;
+                } else if (rc || raPos != 0 || rbPos != 0) {
+                    instr.kind = (combined == XO_MFMSR) ? DecodedKind::MFMSR
+                                                       : DecodedKind::MTMSR;
+                    instr.supported = false;
+                } else {
+                    instr.kind = (combined == XO_MFMSR) ? DecodedKind::MFMSR
+                                                       : DecodedKind::MTMSR;
+                    instr.supported = true;
                 }
             } else if (!rc && (combined == XO_LBZX || combined == XO_LHZX ||
                                combined == XO_LHAX || combined == XO_LWZX ||
@@ -943,6 +1363,28 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << "mtspr " << instr.sprn
                 << ",r" << static_cast<int>(instr.rt);
             break;
+        case DecodedKind::MFMSR:
+            if (!instr.supported) {
+                out << "mfmsr r" << static_cast<int>(instr.rt)
+                    << " ; invalid encoding";
+                break;
+            }
+            out << "mfmsr r" << static_cast<int>(instr.rt);
+            break;
+        case DecodedKind::MTMSR:
+            if (!instr.supported) {
+                out << "mtmsr r" << static_cast<int>(instr.rt)
+                    << " ; invalid encoding";
+                break;
+            }
+            out << "mtmsr r" << static_cast<int>(instr.rt);
+            break;
+        case DecodedKind::RFID:
+            out << "rfid";
+            if (!instr.supported) {
+                out << " ; invalid encoding";
+            }
+            break;
         case DecodedKind::LBZ:
         case DecodedKind::LBZU:
         case DecodedKind::LHZ:
@@ -1069,6 +1511,20 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
                     PPC64AccessType::FETCH, INSN_WIDTH, e.what(), true);
         return result;
     }
+    // Phase 4: separate EXECUTE validation (Memory::Read checks READ).
+    // A READ-passing but EXECUTE-denied page is still a fetch failure here
+    // (host record), delivered as ISI only in guest mode.
+    {
+        bool isUnmapped = false, isPerm = false;
+        std::string vreason;
+        if (!validateFetchRange(memory, state_.nip, vreason, isUnmapped, isPerm)) {
+            result.disassembly = std::string("<fetch fault: ") + vreason + ">";
+            hasCachedInstruction_ = false;
+            recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false, 0,
+                        false, PPC64AccessType::FETCH, INSN_WIDTH, vreason, true);
+            return result;
+        }
+    }
 
     // Big-endian assembly: first byte in memory is the most significant.
     uint32_t word = (static_cast<uint32_t>(bytes[0]) << 24) |
@@ -1105,11 +1561,82 @@ size_t PPC64ISAPlugin::getInstructionLength(IMemory&, uint64_t) {
     return INSN_WIDTH;
 }
 
+ISAExecutionResult PPC64ISAPlugin::step(IMemory& memory) {
+    ISADecodeResult dec = decode(memory);
+    // Always route through execute() so guest-delivery can classify
+    // fetch/decode faults. Legacy callers see identical EXCEPTION results
+    // because execute() preserves the decode fault when delivery is off.
+    return execute(memory, dec);
+}
+
 ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResult& decodeResult) {
-    (void)memory;
+    // Phase 4: an unsupported MSR mode (HV/IP/IR/DR/LE) can never execute;
+    // report terminal UNSUPPORTED_STATE without delivering or advancing.
+    if (msrHasUnsupportedMode()) {
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip,
+                    hasCachedInstruction_ ? cachedInstruction_.raw : 0,
+                    hasCachedInstruction_, 0, false, PPC64AccessType::NONE, 0,
+                    "MSR requests unsupported mode (HV/IP/IR/DR/LE must be 0 "
+                    "in Phase 4 real-address profile)",
+                    false);
+        hasCachedInstruction_ = false;
+        consecutiveGuestExceptions_ = 0;
+        justDelivered_ = false;
+        return ISAExecutionResult::EXCEPTION;
+    }
     if (!decodeResult.valid || !hasCachedInstruction_) {
         // decode() already recorded the fetch/invalid fault; preserve it.
+        // In guest-delivery mode, classified guest faults enter vectors.
+        const PPC64Fault saved = lastFault_;
         hasCachedInstruction_ = false;
+        if (!guestDeliveryEnabled_) {
+            justDelivered_ = false;
+            return ISAExecutionResult::EXCEPTION;
+        }
+        // Classify the recorded host fault for delivery. Host-internal
+        // failures (hooks, MMIO, non-identity translation) stay terminal.
+        if (saved.category == PPC64FaultCategory::ALIGNMENT) {
+            // Misaligned fetch -> Alignment vector; no DAR/DSISR update.
+            return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_ALIGN,
+                                saved.cia, 0, false, 0, 0);
+        }
+        if (saved.category == PPC64FaultCategory::FETCH_FAILURE) {
+            const std::string& r = saved.reason;
+            bool isPerm = (r.find("PERMISSION") != std::string::npos);
+            bool isUnmapped =
+                (r.find("NOT_MAPPED") != std::string::npos ||
+                 r.find("out of bounds") != std::string::npos ||
+                 r.find("exceeds bounds") != std::string::npos ||
+                 r.find("exceeds physical") != std::string::npos);
+            if (!isPerm && !isUnmapped) {
+                consecutiveGuestExceptions_ = 0;
+                justDelivered_ = false;
+                return ISAExecutionResult::EXCEPTION;
+            }
+            uint32_t cause =
+                isPerm ? SRR1_ISI_PROT : SRR1_ISI_NOPT;
+            return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_ISI,
+                                saved.cia, cause, false, 0, 0);
+        }
+        if (saved.category == PPC64FaultCategory::INVALID_ENCODING ||
+            saved.category == PPC64FaultCategory::INVALID_INSTRUCTION) {
+            // Valid-but-unimplemented ISA stays terminal (never Program).
+            DecodedInstruction probe = DecodedInstruction();
+            probe.raw = saved.hasRaw ? saved.raw : 0;
+            probe.kind = DecodedKind::UNSUPPORTED;
+            if (saved.hasRaw) {
+                probe = decodeWord(saved.raw);
+            }
+            if (isUnimplementedValid(probe)) {
+                consecutiveGuestExceptions_ = 0;
+                justDelivered_ = false;
+                return ISAExecutionResult::EXCEPTION;
+            }
+            return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_PROG,
+                                saved.cia, SRR1_PROGILL, false, 0, 0);
+        }
+        consecutiveGuestExceptions_ = 0;
+        justDelivered_ = false;
         return ISAExecutionResult::EXCEPTION;
     }
     if (decodeResult.instructionAddress != cachedAddress_ ||
@@ -1118,6 +1645,8 @@ ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResul
                     cachedInstruction_.raw, true, 0, false, PPC64AccessType::NONE, 0,
                     "stale decode: NIP moved between decode and execute", false);
         hasCachedInstruction_ = false;
+        consecutiveGuestExceptions_ = 0;
+        justDelivered_ = false;
         return ISAExecutionResult::EXCEPTION;
     }
     DecodedInstruction instr = cachedInstruction_;
@@ -1125,14 +1654,38 @@ ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResul
     if (!instr.supported) {
         // Defensive: decode() marks these invalid (and records the fault),
         // so reaching here means decode/execute were paired inconsistently.
+        // Preserve terminal behavior (no delivery) for this path.
         recordFault(instr.kind != DecodedKind::UNSUPPORTED
                         ? PPC64FaultCategory::INVALID_ENCODING
                         : PPC64FaultCategory::INVALID_INSTRUCTION,
                     state_.nip, instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
                     "unsupported instruction reached execute", false);
+        consecutiveGuestExceptions_ = 0;
+        justDelivered_ = false;
         return ISAExecutionResult::EXCEPTION;
     }
-    return executeDecoded(memory, instr);
+    // justDelivered_ tracks whether THIS step delivers (set by maybeDeliver
+    // inside executeDecoded). Clear the stale flag before the step; delivery
+    // paths set it again. Ordinary CONTINUE steps reset the nesting guard.
+    justDelivered_ = false;
+    ISAExecutionResult res = executeDecoded(memory, instr);
+    if (justDelivered_) {
+        // This step delivered (counter already bumped by maybeDeliver).
+        justDelivered_ = false;
+        return res;
+    }
+    if (res == ISAExecutionResult::CONTINUE) {
+        consecutiveGuestExceptions_ = 0;
+    } else if (res == ISAExecutionResult::EXCEPTION) {
+        // Terminal emulator faults (unsupported-state, host-internal) do not
+        // count as nested guest exceptions, but a terminal also breaks any
+        // in-progress nesting chain.
+        if (lastFault_.category == PPC64FaultCategory::UNSUPPORTED_STATE) {
+            consecutiveGuestExceptions_ = 0;
+        }
+    }
+    justDelivered_ = false;
+    return res;
 }
 
 void PPC64ISAPlugin::evaluateBranch(const DecodedInstruction& instr, bool& tookBranch) {
@@ -1249,7 +1802,10 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         recordFault(PPC64FaultCategory::ALIGNMENT, cia, instr.raw, true, ea, true,
                     PPC64AccessType::READ, width,
                     "lwa/lwax effective address is not word-aligned", true);
-        return ISAExecutionResult::EXCEPTION;
+        // Guest Alignment vector 0x600 with DAR=EA, DSISR=0 (load, no store
+        // bit; cause otherwise unimplemented in this profile).
+        return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_ALIGN, cia,
+                            0, true, ea, 0);
     }
 
     if (isLoad) {
@@ -1258,7 +1814,28 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         if (!memLoadBE(memory, ea, width, value, reason)) {
             recordFault(PPC64FaultCategory::DATA_LOAD_FAILURE, cia, instr.raw, true, ea,
                         true, PPC64AccessType::READ, width, reason, true);
-            return ISAExecutionResult::EXCEPTION;
+            // Classify for DSI delivery: only permission/unmapped-like host
+            // evidence becomes a guest DSI. Hook-denied, non-identity
+            // translation, and other host-internal failures stay terminal.
+            bool isPerm = (reason.find("PERMISSION") != std::string::npos);
+            bool isUnmapped =
+                (reason.find("NOT_MAPPED") != std::string::npos ||
+                 reason.find("out of bounds") != std::string::npos ||
+                 reason.find("exceeds bounds") != std::string::npos ||
+                 reason.find("exceeds physical") != std::string::npos ||
+                 reason.find("wraps past") != std::string::npos);
+            if (!isPerm && !isUnmapped) {
+                return ISAExecutionResult::EXCEPTION;
+            }
+            uint32_t dsisr = 0;
+            if (isPerm) {
+                dsisr |= DSISR_PROTFAULT;
+            } else {
+                dsisr |= DSISR_NOHPTE;
+            }
+            // Loads: ISSTORE bit clear.
+            return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI, cia,
+                                0, true, ea, dsisr);
         }
         if (signExtend) {
             value = (width == 2)
@@ -1286,7 +1863,24 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         if (!memStoreBE(memory, ea, width, source, reason)) {
             recordFault(PPC64FaultCategory::DATA_STORE_FAILURE, cia, instr.raw, true, ea,
                         true, PPC64AccessType::WRITE, width, reason, true);
-            return ISAExecutionResult::EXCEPTION;
+            bool isPerm = (reason.find("PERMISSION") != std::string::npos);
+            bool isUnmapped =
+                (reason.find("NOT_MAPPED") != std::string::npos ||
+                 reason.find("out of bounds") != std::string::npos ||
+                 reason.find("exceeds bounds") != std::string::npos ||
+                 reason.find("exceeds physical") != std::string::npos ||
+                 reason.find("wraps past") != std::string::npos);
+            if (!isPerm && !isUnmapped) {
+                return ISAExecutionResult::EXCEPTION;
+            }
+            uint32_t dsisr = DSISR_ISSTORE;
+            if (isPerm) {
+                dsisr |= DSISR_PROTFAULT;
+            } else {
+                dsisr |= DSISR_NOHPTE;
+            }
+            return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI, cia,
+                                0, true, ea, dsisr);
         }
     }
     if (isUpdate) {
@@ -1601,6 +2195,16 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             return ISAExecutionResult::CONTINUE;
         }
         case DecodedKind::MFSPR: {
+            // Privilege: XER/LR/CTR are unprivileged; SRR0/SRR1/DAR/DSISR
+            // require PR=0. No state is mutated before a rejected privileged
+            // operation (value is computed first, then committed).
+            if (isPrivilegedSPR(instr.sprn) && inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mfspr privileged SPR in problem state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
             uint64_t value = 0;
             if (instr.sprn == SPR_XER) {
                 value = static_cast<uint64_t>(state_.xer);
@@ -1608,14 +2212,36 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 value = state_.lr;
             } else if (instr.sprn == SPR_CTR) {
                 value = state_.ctr;
+            } else if (instr.sprn == SPR_SRR0) {
+                value = state_.srr0;
+            } else if (instr.sprn == SPR_SRR1) {
+                value = state_.srr1;
+            } else if (instr.sprn == SPR_DAR) {
+                value = state_.dar;
+            } else if (instr.sprn == SPR_DSISR) {
+                value = static_cast<uint64_t>(state_.dsisr);
             } else {
-                return ISAExecutionResult::EXCEPTION;
+                recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
+                            true, 0, false, PPC64AccessType::NONE, 0,
+                            "mfspr unsupported SPR", false);
+                if (isUnimplementedValid(instr)) {
+                    return ISAExecutionResult::EXCEPTION;
+                }
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGILL, false, 0, 0);
             }
             state_.gpr[instr.rt] = value;
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
         case DecodedKind::MTSPR: {
+            if (isPrivilegedSPR(instr.sprn) && inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtspr privileged SPR in problem state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
             // RT field position carries the source register for mtspr.
             const uint64_t value = state_.gpr[instr.rt];
             if (instr.sprn == SPR_XER) {
@@ -1624,20 +2250,104 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 state_.lr = value;
             } else if (instr.sprn == SPR_CTR) {
                 state_.ctr = value;
+            } else if (instr.sprn == SPR_SRR0) {
+                state_.srr0 = value;
+            } else if (instr.sprn == SPR_SRR1) {
+                state_.srr1 = value;
+            } else if (instr.sprn == SPR_DAR) {
+                state_.dar = value;
+            } else if (instr.sprn == SPR_DSISR) {
+                state_.dsisr = static_cast<uint32_t>(value & 0xFFFFFFFFULL);
             } else {
-                return ISAExecutionResult::EXCEPTION;
+                recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
+                            true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtspr unsupported SPR", false);
+                if (isUnimplementedValid(instr)) {
+                    return ISAExecutionResult::EXCEPTION;
+                }
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGILL, false, 0, 0);
             }
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
+        case DecodedKind::MFMSR: {
+            // mfmsr RT: privileged (requires PR=0). Reserved RA/RB/Rc already
+            // rejected at decode (INVALID_ENCODING).
+            if (inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mfmsr in problem state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
+            state_.gpr[instr.rt] = state_.msr;
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::MTMSR: {
+            // mtmsr RS: privileged. The proposed MSR value is validated
+            // before any mutation: HV/IP/IR/DR/LE must be 0 (SF may be 0/1
+            // for Phase 1-3 reset compatibility). Violations are terminal
+            // UNSUPPORTED_STATE, never guest Program interrupts.
+            if (inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtmsr in problem state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
+            const uint64_t proposed = state_.gpr[instr.rt];
+            if (!isProposedMSRValid(proposed)) {
+                recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtmsr requests unsupported MSR mode (HV/IP/IR/DR/LE "
+                            "must be 0)",
+                            false);
+                return ISAExecutionResult::EXCEPTION;
+            }
+            state_.msr = proposed;
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::RFID: {
+            // rfid: privileged (requires PR=0). Target from SRR0 (low 2 bits
+            // ignored, as on hardware); MSR restored from SRR1 masked by
+            // SRR1_MSR_MASK (cause bits 0x783F0000 cleared in this profile).
+            // SRR1 requesting HV/IP/IR/DR/LE is rejected with no mutation.
+            if (inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "rfid in problem state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
+            if ((state_.srr1 & MSR_MUST_BE_ZERO) != 0) {
+                recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "rfid SRR1 requests unsupported MSR mode (HV/IP/IR/DR/"
+                            "LE must be 0)",
+                            false);
+                return ISAExecutionResult::EXCEPTION;
+            }
+            const uint64_t newNIP = state_.srr0 & ~0x3ULL;
+            const uint64_t newMSR = state_.srr1 & SRR1_MSR_MASK;
+            state_.msr = newMSR;
+            state_.nip = newNIP;
+            hasCachedInstruction_ = false;
+            return ISAExecutionResult::CONTINUE;
+        }
         case DecodedKind::SC:
-            // System-call trap surface: record the trap address and report
-            // SYSCALL. No host syscall is dispatched, no guest privilege
-            // transition or SRR0/SRR1 update is performed here (a later
-            // privileged-architecture phase owns exception delivery).
+            // System-call trap: legacy SYSCALL preserved; guest mode enters
+            // the system-call vector 0xC00 with SRR0=cia+4 (continuation),
+            // SRR1=(MSR & mask), DAR/DSISR preserved, MSR entry transition.
             recordFault(PPC64FaultCategory::SYSCALL, cia, instr.raw, true, 0, false,
                         PPC64AccessType::NONE, 0, "sc system-call trap", true);
-            return ISAExecutionResult::SYSCALL;
+            if (!guestDeliveryEnabled_) {
+                return ISAExecutionResult::SYSCALL;
+            }
+            return maybeDeliver(memory, ISAExecutionResult::SYSCALL, VEC_SC,
+                                cia + INSN_WIDTH, 0, false, 0, 0);
         case DecodedKind::LBZ:
         case DecodedKind::LBZU:
         case DecodedKind::LHZ:
@@ -1682,6 +2392,8 @@ void PPC64ISAPlugin::setState(const ISAState& state) {
     }
     state_ = *ppcState;
     hasCachedInstruction_ = false;
+    consecutiveGuestExceptions_ = 0;
+    justDelivered_ = false;
 }
 
 void PPC64ISAPlugin::setPC(uint64_t pc) {
@@ -1690,21 +2402,57 @@ void PPC64ISAPlugin::setPC(uint64_t pc) {
 }
 
 std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
-    std::vector<uint8_t> data(STATE_SIZE);
-    state_.serialize(data.data());
+    // Compatible encoding: v1 (304 bytes) while privileged extension state
+    // is all zero (Phase 1-3 callers byte-identical); v2 (332 bytes) once
+    // SRR0/SRR1/DAR/DSISR carry guest state.
+    if (state_.srr0 == 0 && state_.srr1 == 0 && state_.dar == 0 &&
+        state_.dsisr == 0) {
+        std::vector<uint8_t> data(STATE_SIZE);
+        state_.serialize(data.data());
+        return data;
+    }
+    std::vector<uint8_t> data(STATE_SIZE_V2);
+    state_.serializeV2(data.data());
     return data;
 }
 
 bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
-    if (data.size() != STATE_SIZE) {
+    if (data.size() != STATE_SIZE && data.size() != STATE_SIZE_V2) {
         return false;
     }
     try {
-        state_.deserialize(data.data());
+        if (data.size() == STATE_SIZE) {
+            state_.deserialize(data.data());
+        } else {
+            state_.deserializeV2(data.data());
+        }
     } catch (...) {
         return false;
     }
     hasCachedInstruction_ = false;
+    consecutiveGuestExceptions_ = 0;
+    justDelivered_ = false;
+    return true;
+}
+
+std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v2() const {
+    std::vector<uint8_t> data(STATE_SIZE_V2);
+    state_.serializeV2(data.data());
+    return data;
+}
+
+bool PPC64ISAPlugin::deserialize_state_v2(const std::vector<uint8_t>& data) {
+    if (data.size() != STATE_SIZE_V2) {
+        return false;
+    }
+    try {
+        state_.deserializeV2(data.data());
+    } catch (...) {
+        return false;
+    }
+    hasCachedInstruction_ = false;
+    consecutiveGuestExceptions_ = 0;
+    justDelivered_ = false;
     return true;
 }
 

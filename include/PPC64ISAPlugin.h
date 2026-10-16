@@ -36,13 +36,106 @@ namespace ppc64 {
 constexpr size_t NUM_GPR = 32;
 constexpr size_t INSN_WIDTH = 4;
 
-// Serialization layout (explicit little-endian field encoding):
+// Serialization layout v1 (explicit little-endian field encoding, 304 bytes):
 //   magic[4] = {'P','P','C','1'} | version u32 = 1
 //   GPR[32] u64 | NIP u64 | LR u64 | CTR u64 | CR u32 | XER u32 | MSR u64
+// Serialization layout v2 (Phase 4, 332 bytes): v1 plus privileged state:
+//   SRR0 u64 | SRR1 u64 | DAR u64 | DSISR u32
+// v1 snapshots restore with new registers cleared to zero. v2 is produced
+// by serialize_state() only when new privileged state is non-zero (so
+// Phase 1-3 callers that never touch SRR0/SRR1/DAR/DSISR keep getting
+// byte-identical 304-byte v1 blobs); an explicit v2 API forces v2.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
     4 + 4 + (NUM_GPR * 8) + 8 + 8 + 8 + 4 + 4 + 8;  // = 304 bytes
+constexpr uint32_t STATE_VERSION_V2 = 2;
+constexpr size_t STATE_SIZE_V2 =
+    4 + 4 + (NUM_GPR * 8) + 8 + 8 + 8 + 4 + 4 + 8 + 8 + 8 + 8 + 4;  // = 332 bytes
+
+// ============================================================================
+// PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
+// ============================================================================
+//
+// Initial configuration: PowerPC 64-bit, big-endian, single processor,
+// real-address exception vectors (base 0x0, MSR[IP]=0), 64-bit execution.
+// No radix/hash page-table translation yet: MSR[IR]=MSR[DR]=0 is required;
+// any attempt to enable relocation, hypervisor state, little-endian mode,
+// or exception-prefix 0xFFF... is rejected as UNSUPPORTED_STATE (terminal,
+// never silently executed as identity-mapped with relocation claimed).
+//
+// MSR bit definitions below use Power ISA IBM bit numbering (0=MSB) with
+// Linux-compatible masks (1ULL << LG where LG = 63 - IBMbit):
+//   SF  IBM 0  mask 0x8000000000000000 (64-bit mode; stored, execution stays
+//                                       64-bit even when 0 for Phase 1-3
+//                                       reset compatibility)
+//   HV  IBM 3  mask 0x1000000000000000 (hypervisor; must be 0, unsupported)
+//   EE  IBM 48 mask 0x0000000000008000 (external interrupt enable)
+//   PR  IBM 49 mask 0x0000000000004000 (0=privileged, 1=problem)
+//   FP  IBM 50 mask 0x0000000000002000 (preserved, not interpreted)
+//   ME  IBM 51 mask 0x0000000000001000 (preserved, not interpreted)
+//   FE0 IBM 52 mask 0x0000000000000800 (preserved)
+//   SE  IBM 53 mask 0x0000000000000400 (preserved)
+//   BE  IBM 54 mask 0x0000000000000200 (preserved)
+//   FE1 IBM 55 mask 0x0000000000000100 (preserved)
+//   IP  IBM 57 mask 0x0000000000000040 (exception prefix; must be 0)
+//   IR  IBM 58 mask 0x0000000000000020 (instruction relocate; must be 0)
+//   DR  IBM 59 mask 0x0000000000000010 (data relocate; must be 0)
+//   RI  IBM 62 mask 0x0000000000000002 (recoverable interrupt)
+//   LE  IBM 63 mask 0x0000000000000001 (little-endian; must be 0, BE only)
+// On guest exception entry the new MSR is oldMSR with EE/PR/IR/DR/RI
+// cleared (enter privileged, non-recoverable, real-address, EE off);
+// all other bits preserved.
+constexpr uint64_t MSR_SF = 1ULL << 63;
+constexpr uint64_t MSR_HV = 1ULL << 60;
+constexpr uint64_t MSR_EE = 1ULL << 15;
+constexpr uint64_t MSR_PR = 1ULL << 14;
+constexpr uint64_t MSR_FP = 1ULL << 13;
+constexpr uint64_t MSR_ME = 1ULL << 12;
+constexpr uint64_t MSR_FE0 = 1ULL << 11;
+constexpr uint64_t MSR_SE = 1ULL << 10;
+constexpr uint64_t MSR_BE = 1ULL << 9;
+constexpr uint64_t MSR_FE1 = 1ULL << 8;
+constexpr uint64_t MSR_IP = 1ULL << 6;
+constexpr uint64_t MSR_IR = 1ULL << 5;
+constexpr uint64_t MSR_DR = 1ULL << 4;
+constexpr uint64_t MSR_RI = 1ULL << 1;
+constexpr uint64_t MSR_LE = 1ULL << 0;
+// Bits that must remain zero in this profile (unsupported when set).
+constexpr uint64_t MSR_MUST_BE_ZERO =
+    MSR_HV | MSR_IP | MSR_IR | MSR_DR | MSR_LE;
+// SRR1 mask: bits loaded from MSR upon interrupt (Linux SRR1_MSR_BITS).
+// Remaining low bits (0x783F0000) carry interrupt-specific cause.
+constexpr uint64_t SRR1_MSR_MASK = ~0x783F0000ULL;
+// SRR1 cause bits (spec-backed, Linux arch/powerpc/include/asm/reg.h):
+constexpr uint32_t SRR1_PROGILL = 0x00080000U;   // illegal instruction
+constexpr uint32_t SRR1_PROGPRIV = 0x00040000U;  // privileged instruction
+constexpr uint32_t SRR1_PROGTRAP = 0x00020000U;  // trap
+constexpr uint32_t SRR1_PROGADDR = 0x00010000U;  // SRR0 is subsequent addr
+constexpr uint32_t SRR1_ISI_NOPT = 0x40000000U;  // ISI: no translation found
+constexpr uint32_t SRR1_ISI_PROT = 0x08000000U;  // ISI: protection fault
+// DSISR cause bits (spec-backed, Linux reg.h):
+constexpr uint32_t DSISR_ISSTORE = 0x02000000U;   // access was a store
+constexpr uint32_t DSISR_PROTFAULT = 0x08000000U;  // protection fault
+constexpr uint32_t DSISR_NOHPTE = 0x40000000U;     // no translation found
+
+// Guest-visible privileged SPR numbers (architectural identities):
+//   DSISR SPR 18, DAR SPR 19, SRR0 SPR 26, SRR1 SPR 27.
+constexpr uint16_t SPR_DSISR = 18;
+constexpr uint16_t SPR_DAR = 19;
+constexpr uint16_t SPR_SRR0 = 26;
+constexpr uint16_t SPR_SRR1 = 27;
+
+// Book III-S vector offsets for the supported initial profile (base 0x0).
+constexpr uint64_t VEC_DSI = 0x300;
+constexpr uint64_t VEC_ISI = 0x400;
+constexpr uint64_t VEC_ALIGN = 0x600;
+constexpr uint64_t VEC_PROG = 0x700;
+constexpr uint64_t VEC_SC = 0xC00;
+// Real-address vector base for this profile (MSR[IP]=0).
+constexpr uint64_t EXC_VECTOR_BASE = 0x0ULL;
+// Bounded protection against non-progressing recursive faults.
+constexpr int MAX_NESTED_EXCEPTIONS = 16;
 
 // Primary opcodes (bits 26-31) covered by Phase 1 + Phase 2.
 constexpr uint8_t OPCODE_ADDI = 14;
@@ -103,6 +196,17 @@ constexpr uint16_t XO_MFSPR = 339;
 constexpr uint16_t XO_MTSPR = 467;
 constexpr uint16_t XO_BCLR = 16;
 constexpr uint16_t XO_BCCTR = 528;
+// Phase 4 X-form MSR access (opcode 31) and XL-form return (opcode 19).
+// mfmsr RT: opcode 31, XO 83, RA=RB=0, Rc=0 (AIX Appendix F; Linux reg.h).
+// mtmsr RS: opcode 31, XO 146, RA=RB=0, Rc=0. mtmsrd (XO 178) is valid per
+// ISA but explicitly unsupported in this profile (rejected, not delivered).
+// rfid: opcode 19, XO 18, exact encoding 0x4C000024 (all other XL fields 0;
+// instructionsets.com/powerisa/rfid: XL-form, privileged, SRR0->PC/MSR<-SRR1).
+constexpr uint16_t XO_MFMSR = 83;
+constexpr uint16_t XO_MTMSR = 146;
+constexpr uint16_t XO_MTMSRD = 178;
+constexpr uint16_t XO_RFID = 18;
+constexpr uint32_t ENCODING_RFID = 0x4C000024;
 
 // Phase 3 X-form indexed integer load/store extended opcodes (opcode 31).
 // Only the non-update forms are in scope; update-indexed XO values
@@ -181,6 +285,13 @@ enum class PPC64FaultCategory : uint8_t {
     DATA_STORE_FAILURE,  // Data-store memory access failed
     ALIGNMENT,           // Fetch or data alignment violation
     SYSCALL,             // System-call trap (sc)
+    PRIVILEGE_VIOLATION,  // Privileged instruction in problem state (Phase 4)
+    UNSUPPORTED_STATE,    // Valid encoding but unsupported MSR/mode/config
+                          // (Phase 4: HV/IR/DR/LE/IP set, non-identity
+                          // translation, unimplemented-valid ISA, hook-denied
+                          // host errors, rfid/mtmsr illegal mode, nested
+                          // overflow, vector-fetch terminal). Terminal:
+                          // never delivered as a guest interrupt.
 };
 
 struct PPC64Fault {
@@ -227,8 +338,11 @@ enum class DecodedKind {
     BC,         // bc/bca/bcl/bcla (B-form, opcode 16)
     BCLR,       // bclr/bclrl (XL-form, opcode 19, XO 16; target LR & ~3)
     BCCTR,      // bcctr/bcctrl (XL-form, opcode 19, XO 528; target CTR & ~3)
-    MFSPR,      // mfspr (XFX-form, XO 339; SPR in {1,8,9})
-    MTSPR,      // mtspr (XFX-form, XO 467; SPR in {1,8,9})
+    MFSPR,      // mfspr (XFX-form, XO 339; SPR in {1,8,9} + Phase 4 priv set)
+    MTSPR,      // mtspr (XFX-form, XO 467; SPR in {1,8,9} + Phase 4 priv set)
+    MFMSR,      // mfmsr (X-form, opcode 31 XO 83, privileged, Phase 4)
+    MTMSR,      // mtmsr (X-form, opcode 31 XO 146, privileged, Phase 4)
+    RFID,       // rfid (XL-form 0x4C000024, privileged, Phase 4)
     LBZ,        // lbz   (D-form, opcode 34)
     LBZU,       // lbzu  (D-form, opcode 35; invalid if RA==0 or RA==RT)
     LHZ,        // lhz   (D-form, opcode 40)
@@ -324,13 +438,25 @@ public:
     std::string toString() const override;
     void reset() override;
 
+    // Phase 4 explicit v2 helpers (332-byte layout, version 2). serialize()
+    // above remains v1 (304 bytes) for Phase 1-3 compatibility; these carry
+    // the privileged SRR0/SRR1/DAR/DSISR extension.
+    void serializeV2(uint8_t* buffer) const;
+    void deserializeV2(const uint8_t* buffer);
+    static constexpr size_t v2Size() { return STATE_SIZE_V2; }
+
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
     uint64_t lr = 0;   // Link Register
     uint64_t ctr = 0;  // Count Register
     uint32_t cr = 0;   // Condition Register
     uint32_t xer = 0;  // Fixed-Point Exception Register
-    uint64_t msr = 0;  // Machine State Register (stored, no Phase 1 semantics)
+    uint64_t msr = 0;  // Machine State Register (Phase 4 subset semantics)
+    // Phase 4 guest-visible privileged CPU state (Book III-S):
+    uint64_t srr0 = 0;   // Save/Restore Register 0 (SPR 26)
+    uint64_t srr1 = 0;   // Save/Restore Register 1 (SPR 27)
+    uint64_t dar = 0;    // Data Address Register (SPR 19)
+    uint32_t dsisr = 0;  // Data Storage Interrupt Status Register (SPR 18)
 };
 
 /**
@@ -347,13 +473,18 @@ public:
 
     // IISA identity
     std::string getName() const override { return "PPC64"; }
-    std::string getVersion() const override { return "3.0-phase3"; }
+    std::string getVersion() const override { return "4.0-phase4"; }
     void reset() override;
 
     // Decode / execute
     ISADecodeResult decode(IMemory& memory) override;
     size_t getInstructionLength(IMemory& memory, uint64_t address) override;
     ISAExecutionResult execute(IMemory& memory, const ISADecodeResult& decodeResult) override;
+    // Phase 4: step must invoke execute() even when decode() reports invalid
+    // so that guest-delivery mode can enter vectors for fetch/decode faults.
+    // Legacy mode still returns EXCEPTION (execute preserves the decode
+    // fault), so Phase 1-3 behavior is unchanged.
+    ISAExecutionResult step(IMemory& memory) override;
 
     // State management
     ISAState& getState() override { return state_; }
@@ -384,6 +515,34 @@ public:
     uint32_t getCR() const { return state_.cr; }
     uint32_t getXER() const { return state_.xer; }
     uint64_t getMSR() const { return state_.msr; }
+    // Phase 4 guest-visible privileged state accessors (direct state view;
+    // production code paths use mfspr/mtspr; these exist for tests/setup).
+    uint64_t getSRR0() const { return state_.srr0; }
+    uint64_t getSRR1() const { return state_.srr1; }
+    uint64_t getDAR() const { return state_.dar; }
+    uint32_t getDSISR() const { return state_.dsisr; }
+    void setSRR0(uint64_t v) { state_.srr0 = v; }
+    void setSRR1(uint64_t v) { state_.srr1 = v; }
+    void setDAR(uint64_t v) { state_.dar = v; }
+    void setDSISR(uint32_t v) { state_.dsisr = v; }
+    void setMSR(uint64_t v) { state_.msr = v; }
+
+    // Phase 4 exception-delivery compatibility mode. Default false (legacy):
+    // Phase 3 EXCEPTION/SYSCALL results with NIP held at the fault. When
+    // true, supported guest faults enter Book III-S vectors and return
+    // CONTINUE (see enterGuestInterrupt); host diagnostics stay in
+    // getLastFault(). Unsupported emulator operations never masquerade as
+    // guest interrupts in either mode.
+    void setGuestDeliveryEnabled(bool enabled) {
+        guestDeliveryEnabled_ = enabled;
+        consecutiveGuestExceptions_ = 0;
+    }
+    bool isGuestDeliveryEnabled() const { return guestDeliveryEnabled_; }
+    int getConsecutiveGuestExceptions() const { return consecutiveGuestExceptions_; }
+
+    // Phase 4 explicit v2 checkpoint helpers (332 bytes, version 2).
+    std::vector<uint8_t> serialize_state_v2() const;
+    bool deserialize_state_v2(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the
@@ -430,11 +589,65 @@ private:
     ISAExecutionResult executeLoadStore(IMemory& memory, const DecodedInstruction& instr,
                                        uint64_t cia);
 
+    // Phase 4 helpers.
+    // Privilege: true when running in problem state (MSR[PR]=1).
+    bool inProblemState() const { return (state_.msr & MSR_PR) != 0; }
+    // True when the SPR number names a privileged register (SRR0/SRR1/DAR/
+    // DSISR and any other SPR outside {XER,LR,CTR}).
+    static bool isPrivilegedSPR(uint16_t sprn);
+    // True when the current MSR holds an unsupported configuration for this
+    // profile (HV/IP/IR/DR/LE set). SF is stored but execution stays 64-bit
+    // for Phase 1-3 reset compatibility, so SF=0 is allowed.
+    bool msrHasUnsupportedMode() const {
+        return (state_.msr & MSR_MUST_BE_ZERO) != 0;
+    }
+    // Validate a proposed MSR value for mtmsr/rfid (HV/IP/IR/DR/LE must be
+    // 0; SF may be 0/1 for reset compatibility; all other bits preserved).
+    static bool isProposedMSRValid(uint64_t proposed) {
+        return (proposed & MSR_MUST_BE_ZERO) == 0;
+    }
+    // True for valid-per-ISA but explicitly unimplemented encodings that must
+    // stay terminal emulator EXCEPTIONs (never guest Program interrupts):
+    // update-indexed load/stores, OE=1 on addc/adde/subfc (addco/addeo/
+    // subfco), mtmsrd (XO 178). Determined from the decoded word/kind.
+    static bool isUnimplementedValid(const DecodedInstruction& instr);
+    // Per-page MMU permission validation for the full [ea,ea+width) range.
+    // Returns true when every touched page passes. On false, `reason`
+    // carries a host-style diagnostic naming the failing page and
+    // `failIsUnmapped`/`failIsPermission` classify it for DSI/ISI cause
+    // bits (bounds/wrap count as unmapped-like; hook/host errors count as
+    // neither, i.e. terminal, not guest-deliverable).
+    static bool validateDataRange(IMemory& memory, uint64_t ea, uint32_t width,
+                                  bool isStore, std::string& reason,
+                                  bool& failIsUnmapped, bool& failIsPermission);
+    static bool validateFetchRange(IMemory& memory, uint64_t addr,
+                                   std::string& reason, bool& failIsUnmapped,
+                                   bool& failIsPermission);
+    // Central guest-delivery dispatcher. Assumes the host fault was already
+    // recorded via recordFault (for getLastFault diagnostics). When guest
+    // delivery is disabled or the fault is terminal (unsupported-state,
+    // unimplemented-valid, host-internal), returns the legacy result
+    // (EXCEPTION, or SYSCALL for sc legacy). Otherwise updates SRR0/SRR1/
+    // DAR/DSISR/MSR/NIP per the vector rules, bumps the nesting counter,
+    // enforces MAX_NESTED_EXCEPTIONS, and returns CONTINUE. Vector-fetch
+    // failures are detected on the next decode; unbounded recursion ends in
+    // a terminal UNSUPPORTED_STATE EXCEPTION, never a silent loop.
+    ISAExecutionResult maybeDeliver(IMemory& memory, ISAExecutionResult legacy,
+                                    uint64_t vecOffset, uint64_t srr0,
+                                    uint32_t srr1cause, bool updateDAR,
+                                    uint64_t dar, uint32_t dsisr);
+    void markGuestProgress() { consecutiveGuestExceptions_ = 0; }
+    void countGuestDelivery() { ++consecutiveGuestExceptions_; }
+
     PPC64ISAState state_;
     DecodedInstruction cachedInstruction_;
     bool hasCachedInstruction_ = false;
     uint64_t cachedAddress_ = 0;
     PPC64Fault lastFault_;
+    // Phase 4 delivery mode + bounded nesting guard (per-CPU).
+    bool guestDeliveryEnabled_ = false;
+    int consecutiveGuestExceptions_ = 0;
+    bool justDelivered_ = false;
 };
 
 /**

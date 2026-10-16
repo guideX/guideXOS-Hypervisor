@@ -723,7 +723,9 @@ static void testSPR() {
     storeBE(mem, 0x40, encodeMTSPR(1008, 7));
     CHECK(cpu.step(mem) == ISAExecutionResult::EXCEPTION);
     CHECK(cpu.getPC() == 0x40);
-    storeBE(mem, 0x40, encodeMFSPR(7, 18));
+    // SPR 18/19/26/27 (DSISR/DAR/SRR0/SRR1) are Phase 4 privileged state;
+    // probe a still-unassigned SPR number here so Phase 2 intent is kept.
+    storeBE(mem, 0x40, encodeMFSPR(7, 999));
     CHECK(cpu.step(mem) == ISAExecutionResult::EXCEPTION);
 
     // mfspr with Rc=1 has no architectural meaning -> EXCEPTION.
@@ -956,7 +958,7 @@ static void testIsolationAndIllegal() {
         (static_cast<uint32_t>(10) << 26) | (1U << 22),  // cmpli reserved bit set
         encodeXL(16, 0, 528, false),                  // bcctr decrement form
         encodeMFSPR(3, 1008),                         // privileged SPR
-        encodeMTSPR(19, 3),                           // unassigned SPR
+        encodeMTSPR(999, 3),                          // unassigned SPR (19=DAR is Phase 4)
         encodeXO(3, 4, 5, false, 100, false),         // unknown arithmetic XO
     };
     for (uint32_t word : illegals) {
