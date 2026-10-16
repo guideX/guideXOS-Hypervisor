@@ -1,0 +1,195 @@
+guideXOS Hypervisor - Phase RISCV-2 Report
+==========================================
+Outcome: A (complete)
+Date (UTC): 2026-10-16
+Branch: RISCV (never switched, renamed, merged, rebased, reset, or cleaned)
+Remote: https://github.com/guideX/guideXOS-Hypervisor/tree/RISCV
+
+Starting state
+--------------
+- HEAD: ad3713d83fb2fc823c1c072f260fec94d608a510
+  ("Phase RISCV-1: recover RISC-V foundation, implement real RV64 execution")
+  Matches the expected RISCV-1 commit exactly.
+- Upstream: origin/RISCV, local exactly 1 ahead (the RISCV-1 commit itself),
+  working tree clean.
+- .phase-riscv: last_completed=RISCV-1, next_expected=RISCV-2.
+- Shared .phase untouched (still IA64-POST-MADT-6 / IA64-POST-MADT-7).
+- Baseline before semantic changes: ctest -R RiscV 3/3 passed
+  (decoder, fetch/decode, minimal execution with 173 checks).
+
+Mission result
+--------------
+Full RV64I integer execution, M/S/U privilege with reset in M, bounded CSR
+file with WARL behavior, synchronous trap routing with delegation,
+MRET/SRET, precise natural-alignment traps with fault atomicity, Bare-only
+satp, SBI Base (EID 0x10) firmware interception boundary, and a real
+supervisor-mode hello-world program executed from guest bytes through the
+production decoder. No Linux/OpenSBI boot attempted.
+
+Completed instruction families (all executed via RV64CPU::step)
+---------------------------------------------------------------
+- RV64I arithmetic/logic: SLT/SLTU, SLTI/SLTIU, XOR/XORI, OR/ORI, AND/ANDI,
+  SLL/SLLI, SRL/SRLI, SRA/SRAI (6-bit shamt, unsigned wraparound, explicit
+  arithmetic-shift sign fill, no host UB).
+- RV64I 32-bit: ADDIW, ADDW/SUBW, SLLIW/SLLW, SRLIW/SRLW, SRAIW/SRAW (5-bit
+  shamt, 32-bit result sign-extended; ADDW overflow verified:
+  0x7FFFFFFF+1 -> 0xFFFFFFFF80000000).
+- Loads/stores: LB/LBU, LH/LHU, LW/LWU, LD, SB/SH/SW/SD with correct
+  sign/zero extension, little-endian storage, fault containment.
+- Branches/jumps: all six BEQ/BNE/BLT/BGE/BLTU/BGEU conditions (signed vs
+  unsigned edges), JAL/JALR with link=PC+4 and low-bit clearing; misaligned
+  targets trap (cause 0) without writing rd.
+- FENCE/FENCE.I retire as documented no-ops for the single-hart,
+  cacheless, deterministic memory model (no multiprocessor/device ordering
+  claimed; FENCE.I has no icache work to do).
+- CSR: CSRRW/CSRRS/CSRRC/CSRRWI/CSRRSI/CSRRCI with rs1==x0 / zimm==0
+  no-write suppression and rd==x0 no-write.
+- SYSTEM: ECALL (causes 8/9/11 + SBI path), EBREAK (Halt or cause-3 trap),
+  MRET/SRET (mode restore, status stack, return PC). WFI is Unsupported
+  (no wake sources modeled, never silently executed).
+- Still decode-only (Unsupported, never Ok): all RV64M, all RV64A, all
+  compressed except C.EBREAK. F/D/V neither decoded nor executed.
+
+Privilege and CSR coverage
+--------------------------
+- Modes M/S/U with U=0/S=1/M=3 encodings; reset in M; PC=guest base.
+  Lower privilege entered architecturally (mstatus.MPP/SPP + mepc/sepc +
+  MRET/SRET); no test backdoor setter exists. RV64 code is independent of
+  IA-64 PSR/predicates/ICPU (unchanged standalone design).
+- CSR matrix (addresses/behavior):
+  mstatus 0x300 RW subset (MIE/MPIE/MPP/SPP/SPIE/SIE mask 0x19AA; MPP==2
+    WARL-mapped to U) | sstatus 0x100 view (mask 0x122) into mstatus |
+  misa 0x301 fixed 0x8000000000000100 (MXL=RV64, I only; writes ignored) |
+  medeleg 0x302 RW bits 0-9 (M ECALL bit 11 hardwired 0) |
+  mideleg 0x303 WARL 0 (no interrupts) |
+  mie 0x304 / mip 0x344 WARL 0, sie/sip views 0 |
+  mtvec 0x305 / stvec 0x105 Direct-only (low2!=0 writes ignored) |
+  mscratch 0x340 / sscratch 0x140 full RW |
+  mepc 0x341 / sepc 0x141 WARL 4B-aligned (low2 cleared) |
+  mcause 0x342 / scause 0x142, mtval 0x343 / stval 0x143 full RW |
+  mhartid 0xF14 read-only 0 |
+  satp 0x180 Bare-only (nonzero MODE ignored, value stays 0; Bare is a
+    direct byte-region mapping, not paging/PMP isolation).
+  Unknown/unavailable CSRs trap illegal (cause 2), never silently succeed.
+  Privilege (csr[9:8]) and read-only (csr[11:10]==3, honoring the
+  no-write suppression) enforced; violations preserve rd and trap.
+- Decoder fix: CSRRS/CSRRC with rs1==x0 now decode legal (were wrongly
+  illegal), enabling `csrr` reads.
+
+Trap/delegation behavior
+------------------------
+- Synchronous delivery with StepOutcome::Trap for: illegal instruction
+  (cause 2, tval=faulting word), breakpoint (cause 3), instruction address
+  misaligned (cause 0), instruction access fault (cause 1), load/store
+  address misaligned (causes 4/6), load/store access fault (causes 5/7),
+  ECALL from U/S/M (causes 8/9/11).
+- Routing: M-mode traps stay in M; S/U traps with the medeleg bit set go to
+  S (M ECALL never delegable). Entry saves xEPC (fault PC, WARL-aligned),
+  xCAUSE, xTVAL (fault PC/addr, word, or 0), stacks MIE->MPIE/SIE->SPIE,
+  records MPP/SPP, sets privilege and PC=tvec BASE. mtvec/stvec Direct only;
+  vectored interrupts not advertised or implemented.
+- MRET (M only): MIE=MPIE, MPIE=1, MPP=U, priv=MPP, PC=mepc. SRET (M/S,
+  TSR hardwired 0): SIE=SPIE, SPIE=1, SPP=U, priv=SPP, PC=sepc. Misuse
+  (MRET in S/U, SRET in U, nonzero rd/rs1 on SYSTEM ops) traps illegal.
+- RISCV-1 EBREAK/C.EBREAK Halt convention preserved behind
+  breakpointHaltEnabled (default true); when off, breakpoint traps flow
+  architecturally. Legacy Illegal/FetchFault/MemoryFault enum values are
+  retained for source compatibility but architectural faults now deliver
+  traps (returned only when no guest image is loaded).
+- Alignment policy (deterministic, documented): natural-width precise traps
+  (1B never traps; 2B/4B/8B require modulo alignment); 32-bit instructions
+  require 4B alignment (C execution disabled); failed instructions change
+  neither registers nor memory (verified: rd preserved, no partial stores,
+  JAL/JALR rd suppressed on misalignment, CSR rd/CSR suppressed on faults).
+
+SBI functionality
+-----------------
+- Distinct firmware interception boundary (ISbiProvider, replaceable):
+  S-mode ECALL first completes full M-mode trap entry (mepc/mcause/mtval,
+  priv M, PC=mtvec); only then does the attached provider supply a0
+  (error) / a1 (value). With no provider, the identical trap is delivered
+  and guest registers are untouched, so ordinary ECALL semantics are never
+  suppressed. Delegated (S-targeted) ECALLs never invoke SBI.
+- Calling convention honored: a7=EID, a6=FID, a0-a5=args, a0=error,
+  a1=value on return.
+- SbiBaseProvider (EID 0x10) implements FID 0 GetSpecVersion (0x2000000,
+  SBI v2.0), 1 GetImplID (0x47584F53 "GXOS"), 2 GetImplVersion (2),
+  3 ProbeExtension (1 for 0x10 else 0), 4 GetMVendorID (0), 5 GetMArchID
+  (0), 6 GetMImpID (0); other FIDs and non-Base EIDs return NotSupported
+  (-2) and supports() reports false, so unsupported extensions are never
+  advertised. No timer/IPI/fence/HSM/console/reset extension in this phase.
+
+S-mode hello-world results
+--------------------------
+- Deterministic guest image (~0x700 bytes at 0x80000000, hand-assembled via
+  in-test encoders, no toolchain at runtime): M setup installs mtvec/mepc/
+  mstatus/medeleg and MRETs into S; S code runs RV64I arithmetic, writes
+  "Hello from S-mode" (17 bytes) via 17x (ADDI+SB), performs four SBI Base
+  ECALLs (GetSpecVersion, GetImplID, Probe 0x10, Probe 0x11) through the
+  M-mode handler (mepc+=4; MRET, preserving SBI a0/a1), writes completion
+  marker 1, and halts on EBREAK (documented harness stop; UART not
+  required, harness reads guest memory).
+- Execution evidence: halt in S-mode after >=4 S ECALL traps (all
+  sbiHandled), S-mode entry observed, guest bytes "Hello from S-mode"
+  read back from 0x80000400, stored SBI version 0x2000000 / impl
+  0x47584F53 / probe 1 / probe-unsupported 0 / marker 1 all verified,
+  S-mode arithmetic survivor t5==42, >40 Ok retirements, bounded in 500
+  steps. Program runs from guest bytes through the production decoder
+  (no host-side result emulation).
+
+Test counts and commands
+------------------------
+- cmake -S . -B build-riscv2
+- cmake --build build-riscv2 --target test_riscv_decoder \
+    --target test_riscv_fetch_decode --target test_riscv_minimal_execution \
+    --target test_riscv_rv64i_full --target test_riscv_priv_sbi --config Debug
+- ctest --test-dir build-riscv2 -R "RiscV" --output-on-failure -> 5/5 passed:
+  RiscVDecoderSmokeTest PASS, RiscVFetchDecodeSmokeTest PASS,
+  RiscVMinimalExecutionTests PASS (180 explicit checks),
+  RiscVRv64iFullTests PASS (105 explicit checks),
+  RiscVPrivSbiTests PASS (266 explicit checks).
+  Total new explicit runtime checks: 551. All checks active runtime
+  comparisons (no assert()-only verification); failure and success paths
+  both exercised, including delegation, suppression, WARL, atomicity, and
+  the full hello-world trap/SBI round-trip.
+- git diff --check: clean.
+
+IA-64 regression results
+------------------------
+- No IA-64-specific implementation changes (git diff touches only
+  CMakeLists.txt RISC-V targets, include/riscv_cpu.h, src/decoder/
+  riscv_decoder.cpp CSRRS/CSRRC legality, src/riscv/riscv_cpu.cpp,
+  tests/test_riscv_minimal_execution.cpp trap evolution, plus two new
+  RISC-V test files and docs).
+- test_efi_memory_map PASS, test_ia64_sal PASS, test_new_instructions PASS
+  (same spot set as RISCV-1 plus the instruction suite; IA64 acpi sources
+  untouched).
+
+Files changed
+-------------
+- Modified: include/riscv_cpu.h (privilege/trap/CSR/SBI surface)
+- Modified: src/riscv/riscv_cpu.cpp (full RV64I + privilege + traps + SBI)
+- Modified: src/decoder/riscv_decoder.cpp (CSRRS/CSRRC rs1==x0 legality)
+- Modified: tests/test_riscv_minimal_execution.cpp (fault paths expect
+  traps; LW Unsupported probe replaced by MUL since LW now executes)
+- Modified: CMakeLists.txt (two new RISC-V targets + CTest entries only)
+- Created: tests/test_riscv_rv64i_full.cpp
+- Created: tests/test_riscv_priv_sbi.cpp (incl. hello-world fixture)
+- Modified: docs/riscv/rv64-decoder-status.txt (RV64I-vs-extension split)
+- Created: docs/riscv/phase-riscv-2-report.txt (this file)
+- Updated: .phase-riscv (last_completed=RISCV-2, next_expected=RISCV-3)
+- Untouched: shared .phase and all other phase markers, IA-64 sources,
+  other architecture branches/worktrees/build products/QEMU/ISO assets.
+
+Remaining blockers (not attempted)
+----------------------------------
+- Sv39/Sv48 page walking, TLB + SFENCE.VMA semantics, fault reporting
+  beyond Bare access faults.
+- Timer/interrupt delivery (CLINT/PLIC, mie/mip/sie/sip sources, vectored
+  vectors, SIE/MIE usage by hardware).
+- Real SBI/firmware compatibility (timer, IPI, RFENCE, HSM, DBCN, SRST),
+  device tree, UART/virtio platform devices.
+- RV64M/A/F/D/V and full C execution.
+- ELF loader + boot Hart state machine. Linux/OpenSBI boot not possible yet.
+
+Local commit SHA: (recorded after commit; no push performed)

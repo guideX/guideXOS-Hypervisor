@@ -274,26 +274,35 @@ void TestProgramCControlFlow() {
 
 void TestProgramDFailureContainment() {
     // D1: illegal encoding (all-zero word: opcode 0x00 is rejected by decoder).
+    // RISCV-2 delivers this architecturally as an illegal-instruction trap
+    // (mcause=2, mepc=fault PC, PC=mtvec) instead of the legacy Illegal outcome.
     {
         std::vector<uint8_t> prog;
         AppendWord(prog, 0x00000000U);
         RV64CPU cpu;
         cpu.loadProgram(kBase, prog);
         StepResult r = cpu.step();
-        ExpectOutcome("D1 illegal", StepOutcome::Illegal, r.outcome);
-        ExpectEq("D1 PC unchanged", kBase, cpu.getPC());
+        ExpectOutcome("D1 trap", StepOutcome::Trap, r.outcome);
+        Expect(r.trapTaken, "D1 trap taken");
+        Expect(r.trapCause == riscv::TrapCause::IllegalInstruction, "D1 cause 2");
         ExpectEq("D1 retired stays 0", 0ULL, cpu.instructionsRetired());
+        uint64_t mepc = 0, mcause = 0;
+        Expect(cpu.readCsr(0x341U, mepc), "D1 read mepc");
+        Expect(cpu.readCsr(0x342U, mcause), "D1 read mcause");
+        ExpectEq("D1 mepc", kBase, mepc);
+        ExpectEq("D1 mcause", 2ULL, mcause);
+        ExpectEq("D1 PC at mtvec", 0ULL, cpu.getPC());
     }
-    // D2: recognized-but-unsupported (LW decodes fine, no RISCV-1 execution).
+    // D2: recognized-but-unsupported (MUL decodes fine, no integer execution).
     {
         std::vector<uint8_t> prog;
-        AppendWord(prog, EncodeI(0x03, 1, 0x2, 0, 0));  // lw x1, 0(x0)
+        AppendWord(prog, EncodeR(0x33, 1, 0x0, 2, 3, 0x01));  // mul x1, x2, x3
         RV64CPU cpu;
         cpu.loadProgram(kBase, prog);
         StepResult r = cpu.step();
         ExpectOutcome("D2 unsupported", StepOutcome::Unsupported, r.outcome);
         ExpectEq("D2 PC unchanged", kBase, cpu.getPC());
-        Expect(r.insn.recognized && !r.insn.illegal, "D2 decoder recognized LW");
+        Expect(r.insn.recognized && !r.insn.illegal, "D2 decoder recognized MUL");
     }
     // D2b: compressed execution deferred (c.li decodes clean, never Ok).
     {
@@ -309,7 +318,7 @@ void TestProgramDFailureContainment() {
         ExpectOutcome("D2b compressed deferred", StepOutcome::Unsupported, r.outcome);
         ExpectEq("D2b PC unchanged", kBase, cpu.getPC());
     }
-    // D3a: truncated 32-bit fetch (2 bytes present, low bits demand 4).
+    // D3a: truncated 32-bit fetch -> instruction access-fault trap (cause 1).
     {
         std::vector<uint8_t> prog;
         prog.push_back(0x93U);
@@ -317,10 +326,10 @@ void TestProgramDFailureContainment() {
         RV64CPU cpu;
         cpu.loadProgram(kBase, prog);
         StepResult r = cpu.step();
-        ExpectOutcome("D3a truncated", StepOutcome::FetchFault, r.outcome);
-        ExpectEq("D3a PC unchanged", kBase, cpu.getPC());
+        ExpectOutcome("D3a truncated", StepOutcome::Trap, r.outcome);
+        Expect(r.trapCause == riscv::TrapCause::InstructionAccessFault, "D3a cause 1");
     }
-    // D3b: PC past the end of guest memory.
+    // D3b: PC past the end of guest memory -> instruction access-fault trap.
     {
         std::vector<uint8_t> prog;
         AppendWord(prog, EncodeI(0x13, 1, 0x0, 0, 1));
@@ -328,9 +337,11 @@ void TestProgramDFailureContainment() {
         cpu.loadProgram(kBase, prog);
         cpu.setPC(kBase + 4ULL);  // == image end
         StepResult r = cpu.step();
-        ExpectOutcome("D3b out-of-range", StepOutcome::FetchFault, r.outcome);
+        ExpectOutcome("D3b out-of-range", StepOutcome::Trap, r.outcome);
+        Expect(r.trapCause == riscv::TrapCause::InstructionAccessFault, "D3b cause 1");
     }
     // D4a: LD with out-of-bounds effective address; rd must not be written.
+    // RISCV-2 delivers a load access-fault trap (cause 5).
     {
         std::vector<uint8_t> prog;
         AppendWord(prog, EncodeI(0x03, 1, 0x3, 0, 0));  // ld x1, 0(x0) -> addr 0
@@ -338,11 +349,11 @@ void TestProgramDFailureContainment() {
         cpu.loadProgram(kBase, prog);
         cpu.writeGR(1, 0xDEADBEEFDEADBEEFULL);
         StepResult r = cpu.step();
-        ExpectOutcome("D4a ld fault", StepOutcome::MemoryFault, r.outcome);
-        ExpectEq("D4a PC unchanged", kBase, cpu.getPC());
+        ExpectOutcome("D4a ld fault", StepOutcome::Trap, r.outcome);
+        Expect(r.trapCause == riscv::TrapCause::LoadAccessFault, "D4a cause 5");
         ExpectEq("D4a rd preserved", 0xDEADBEEFDEADBEEFULL, cpu.readGR(1));
     }
-    // D4b: SD with out-of-bounds effective address.
+    // D4b: SD with out-of-bounds effective address -> store access trap (7).
     {
         std::vector<uint8_t> prog;
         AppendWord(prog, EncodeI(0x13, 1, 0x0, 0, 42));  // addi x1, x0, 42
@@ -353,8 +364,8 @@ void TestProgramDFailureContainment() {
         StepResult r0 = cpu.step();
         ExpectOutcome("D4b setup ok", StepOutcome::Ok, r0.outcome);
         StepResult r = cpu.step();
-        ExpectOutcome("D4b sd fault", StepOutcome::MemoryFault, r.outcome);
-        ExpectEq("D4b PC at store", kBase + 4ULL, cpu.getPC());
+        ExpectOutcome("D4b sd fault", StepOutcome::Trap, r.outcome);
+        Expect(r.trapCause == riscv::TrapCause::StoreAccessFault, "D4b cause 7");
         ExpectEq("D4b source intact", 42ULL, cpu.readGR(1));
     }
     std::cout << "PASS program D (failure containment)\n";

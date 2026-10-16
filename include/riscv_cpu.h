@@ -20,6 +20,64 @@ using reg_t = uint64_t;
 using addr_t = uint64_t;
 
 /**
+ * PrivilegeMode - RV64 architectural privilege state (Phase RISCV-2).
+ *
+ * Encodings match the RISC-V privileged specification (U=0, S=1, M=3).
+ * Encoding 2 is reserved and never reported by privilege().
+ * Reset state is Machine mode.
+ */
+enum class PrivilegeMode : uint8_t {
+    User = 0,
+    Supervisor = 1,
+    Machine = 3,
+};
+
+inline const char* PrivilegeModeToString(PrivilegeMode mode) {
+    switch (mode) {
+        case PrivilegeMode::User: return "U";
+        case PrivilegeMode::Supervisor: return "S";
+        case PrivilegeMode::Machine: return "M";
+    }
+    return "unknown";
+}
+
+/**
+ * TrapCause - synchronous exception causes implemented in RISCV-2.
+ * Values match the RISC-V privileged specification (mcause/scause code
+ * field with the interrupt bit clear).
+ */
+enum class TrapCause : uint64_t {
+    InstructionAddressMisaligned = 0,
+    InstructionAccessFault = 1,
+    IllegalInstruction = 2,
+    Breakpoint = 3,
+    LoadAddressMisaligned = 4,
+    LoadAccessFault = 5,
+    StoreAddressMisaligned = 6,
+    StoreAccessFault = 7,
+    EcallFromU = 8,
+    EcallFromS = 9,
+    EcallFromM = 11,
+};
+
+inline const char* TrapCauseToString(TrapCause cause) {
+    switch (cause) {
+        case TrapCause::InstructionAddressMisaligned: return "instr_addr_misaligned";
+        case TrapCause::InstructionAccessFault: return "instr_access_fault";
+        case TrapCause::IllegalInstruction: return "illegal_insn";
+        case TrapCause::Breakpoint: return "breakpoint";
+        case TrapCause::LoadAddressMisaligned: return "load_addr_misaligned";
+        case TrapCause::LoadAccessFault: return "load_access_fault";
+        case TrapCause::StoreAddressMisaligned: return "store_addr_misaligned";
+        case TrapCause::StoreAccessFault: return "store_access_fault";
+        case TrapCause::EcallFromU: return "ecall_from_u";
+        case TrapCause::EcallFromS: return "ecall_from_s";
+        case TrapCause::EcallFromM: return "ecall_from_m";
+    }
+    return "unknown";
+}
+
+/**
  * RV64CPUState - RISC-V CPU State
  *
  * Encapsulates all architectural registers and state for the RISC-V CPU:
@@ -56,19 +114,30 @@ private:
 /**
  * StepOutcome - explicit result of one RV64CPU::step() call.
  *
- * The CPU distinguishes successful execution from every failure mode:
+ * RISCV-1 outcomes are preserved:
  * - Ok: instruction fetched, decoded with the production decoder, executed
  *   with correct semantics; registers, guest memory and PC updated.
- * - Halt: EBREAK (32-bit) or C.EBREAK breakpoint/stop marker. PC points at
- *   the breakpoint instruction (not advanced).
+ * - Halt: EBREAK (32-bit) or C.EBREAK breakpoint/stop marker when
+ *   breakpoint-halt interception is enabled (default true, preserves
+ *   RISCV-1 deterministic tests). PC points at the breakpoint instruction
+ *   (not advanced).
  * - Unsupported: valid decoded instruction with no execution support in this
- *   phase (includes all compressed instructions except C.EBREAK). PC points
- *   at the unexecuted instruction (not advanced).
- * - Illegal: production decoder rejected the encoding. PC not advanced.
- * - FetchFault: PC out of bounds or truncated instruction bytes. PC not
- *   advanced and no architectural state changed.
- * - MemoryFault: LD/SD effective address out of guest-memory bounds. PC not
- *   advanced and destination register not written.
+ *   phase (includes all compressed instructions except C.EBREAK, plus M/A/F/D/V
+ *   and unimplemented privileged ops such as WFI). PC points at the
+ *   unexecuted instruction (not advanced).
+ * - Illegal / FetchFault / MemoryFault: retained for source compatibility.
+ *   In architectural RISCV-2 execution these conditions are delivered as
+ *   synchronous traps (outcome Trap, see below) whenever a guest image is
+ *   loaded. The legacy outcomes are returned only when no trap can be
+ *   delivered (e.g. step with no guest image loaded) or for the truncated
+ *   corner reported before CSR state exists. New tests must expect Trap.
+ * - Trap (new in RISCV-2): a synchronous exception was delivered
+ *   architecturally. CSRs (xEPC/xCAUSE/xTVAL, status stack) are updated,
+ *   privilege is updated, and PC points at the handler (mtvec/stvec BASE).
+ *   result.trapTaken is true and trapCause/trapTarget describe delivery.
+ *   This covers illegal instructions, breakpoints (when halt interception is
+ *   off), misaligned addresses, access faults, and ECALLs (including the
+ *   SBI interception path, which still performs full M-mode trap entry).
  */
 enum class StepOutcome {
     Ok,
@@ -77,6 +146,7 @@ enum class StepOutcome {
     Illegal,
     FetchFault,
     MemoryFault,
+    Trap,
 };
 
 inline const char* StepOutcomeToString(StepOutcome outcome) {
@@ -87,6 +157,7 @@ inline const char* StepOutcomeToString(StepOutcome outcome) {
         case StepOutcome::Illegal: return "illegal";
         case StepOutcome::FetchFault: return "fetch_fault";
         case StepOutcome::MemoryFault: return "memory_fault";
+        case StepOutcome::Trap: return "trap";
     }
     return "unknown";
 }
@@ -94,6 +165,9 @@ inline const char* StepOutcomeToString(StepOutcome outcome) {
 /**
  * StepResult - details of one executed step.
  * pc is the entry PC; nextPc is the architectural PC after the step.
+ * When outcome == Trap, trapTaken is true and trapCause/trapTarget/trapVector
+ * describe delivery; sbiHandled is true when the attached SBI Base provider
+ * supplied a0/a1 return values during M-mode trap entry for an S-mode ECALL.
  */
 struct StepResult {
     StepOutcome outcome = StepOutcome::FetchFault;
@@ -101,10 +175,69 @@ struct StepResult {
     uint64_t nextPc = 0;
     uint8_t length = 0;
     DecodedInstruction insn;
+    bool trapTaken = false;
+    TrapCause trapCause = TrapCause::IllegalInstruction;
+    PrivilegeMode trapTarget = PrivilegeMode::Machine;
+    uint64_t trapVector = 0;
+    bool sbiHandled = false;
+};
+
+// SBI error codes (SBI Base, returned in a0 as signed 64-bit values).
+constexpr uint64_t kSbiSuccess = 0ULL;
+constexpr uint64_t kSbiErrFailed = static_cast<uint64_t>(-1LL);
+constexpr uint64_t kSbiErrNotSupported = static_cast<uint64_t>(-2LL);
+constexpr uint64_t kSbiErrInvalidParam = static_cast<uint64_t>(-3LL);
+
+// SBI Base extension ID.
+constexpr uint64_t kSbiBaseEid = 0x10ULL;
+
+// Documented SBI version surface (SBI v2.0: major 2, minor 0).
+constexpr uint64_t kSbiSpecVersion = (2ULL << 24) | 0ULL;  // 0x2000000
+constexpr uint64_t kSbiImplId = 0x47584F53ULL;            // ASCII "GXOS"
+constexpr uint64_t kSbiImplVersion = 2ULL;
+
+struct SbiReturn {
+    uint64_t error = kSbiErrNotSupported;
+    uint64_t value = 0ULL;
 };
 
 /**
- * RV64CPU - standalone RISC-V RV64 CPU core (Phase RISCV-1).
+ * ISbiProvider - firmware interception boundary for S-mode ECALLs.
+ *
+ * The CPU performs full architectural trap entry to M-mode first (mepc,
+ * mcause, mtval, privilege, PC=mtvec) and then, only when the trap targets
+ * M-mode for an S-mode ECALL, invokes the attached provider to supply the
+ * a0 (error) / a1 (value) return registers. Ordinary ECALL trap semantics
+ * are never suppressed: with no provider attached the trap is still
+ * delivered and guest registers are untouched.
+ */
+class ISbiProvider {
+public:
+    virtual ~ISbiProvider() = default;
+    // Handle an S-mode ECALL trapped to M-mode. args holds guest a0-a5.
+    virtual SbiReturn handle(uint64_t eid, uint64_t fid, const uint64_t args[6]) = 0;
+    // True when eid is advertised by this provider.
+    virtual bool supports(uint64_t eid) const = 0;
+};
+
+/**
+ * SbiBaseProvider - deterministic test SBI Base extension (EID 0x10).
+ *
+ * Implements the SBI Base functions required by RISCV-2:
+ *   FID 0 GetSpecVersion, 1 GetImplID, 2 GetImplVersion,
+ *   3 ProbeExtension, 4 GetMVendorID, 5 GetMArchID, 6 GetMImpID.
+ * Any other Base FID returns NotSupported. Any non-Base EID reports
+ * unsupported (supports() false, handle() NotSupported) so tests can verify
+ * that unsupported extensions are never advertised.
+ */
+class SbiBaseProvider : public ISbiProvider {
+public:
+    SbiReturn handle(uint64_t eid, uint64_t fid, const uint64_t args[6]) override;
+    bool supports(uint64_t eid) const override;
+};
+
+/**
+ * RV64CPU - standalone RISC-V RV64 CPU core (Phase RISCV-2).
  *
  * Compatibility decision (deliberate, documented):
  * - RV64CPU is standalone and does NOT inherit ia64::ICPU. The IA-64
@@ -114,25 +247,35 @@ struct StepResult {
  *   search: only riscv_cpu.* and the RISC-V test reference RV64CPU), so no
  *   adapter is retained. The IA-64 ICPU interface is intentionally untouched.
  * - Guest memory is a single bounded byte region [base, base+size) covering
- *   both instruction fetch and LD/SD data access, little-endian.
+ *   both instruction fetch and data access, little-endian, single-hart with
+ *   no caches: FENCE/FENCE.I are documented no-ops that retire normally.
  * - Each step() fetches at the guest PC, determines length from the low two
- *   bits, decodes with the production riscv::Decoder, executes one of the
- *   Phase RISCV-1 subset (LUI, AUIPC, ADDI, ADD, SUB, LD, SD, BEQ, BNE, JAL,
- *   JALR, EBREAK-as-halt) and returns an explicit StepResult. Anything else
- *   valid-but-unimplemented yields Unsupported; rejected encodings yield
- *   Illegal. Compressed execution stays deferred (Unsupported, never Ok),
- *   except C.EBREAK which yields Halt.
+ *   bits, decodes with the production riscv::Decoder, and executes the full
+ *   RV64I integer set plus Zicsr CSR access and SYSTEM privileged
+ *   instructions with trap delivery. M/A/F/D/V and compressed execution stay
+ *   Unsupported (never Ok), except C.EBREAK which is Halt (halt interception
+ *   on) or a breakpoint trap (halt interception off).
+ * - Reset state: privilege Machine, PC = guest base (or 0 with no image),
+ *   GPRs zero, CSRs to their reset values (mtvec/stvec 0 Direct, mstatus 0,
+ *   medeleg/mideleg 0, mie/mip/sie/sip 0, mepc/sepc/mcause/scause/mtval/stval/
+ *   mscratch/sscratch 0, misa fixed, mhartid 0, satp Bare 0).
+ * - Tests enter lower privilege architecturally (mstatus.MPP + mepc + MRET,
+ *   or SPP + sepc + SRET); there is no test backdoor privilege setter.
+ * - satp supports Bare (MODE 0) only; other MODE writes are ignored (WARL).
+ *   Bare mode is a direct byte-region mapping, not paging or PMP isolation.
  */
 class RV64CPU {
 public:
     RV64CPU();
 
-    // Deterministic reset: registers/PC zeroed, counters cleared.
-    // Loaded guest memory is preserved across reset.
+    // Deterministic reset: registers/PC zeroed, privilege Machine, CSRs to
+    // reset values, counters cleared. Loaded guest memory is preserved across
+    // reset and PC restarts at its base.
     void reset();
 
     // Load a bounded guest-memory image at [base, base+bytes.size()).
-    // Replaces any previous image. Sets PC to base.
+    // Replaces any previous image. Resets CPU state (privilege Machine) and
+    // sets PC to base.
     void loadProgram(uint64_t base, const std::vector<uint8_t>& bytes);
 
     // Execute exactly one instruction at the current PC.
@@ -158,7 +301,26 @@ public:
     bool readMemory(uint64_t addr, uint8_t* dst, size_t size) const;
     bool readU64(uint64_t addr, uint64_t& value) const;
 
-    // Deterministic-harness counters
+    // Privilege and CSR access (architectural).
+    PrivilegeMode privilege() const { return priv_; }
+    bool readCsr(uint32_t csr, uint64_t& value) const;
+    // Direct CSR write for harness setup verification only; enforces WARL
+    // masks but not privilege checks. Prefer guest CSR instructions.
+    void debugWriteCsr(uint32_t csr, uint64_t value);
+
+    // Breakpoint-halt interception (default true for RISCV-1 compatibility).
+    // When true, EBREAK/C.EBREAK report Halt. When false, they deliver a
+    // breakpoint trap (cause 3) architecturally.
+    bool breakpointHaltEnabled() const { return breakpointHalt_; }
+    void setBreakpointHaltEnabled(bool enabled) { breakpointHalt_ = enabled; }
+
+    // SBI firmware interception boundary (non-owning; may be null).
+    void setSbiProvider(ISbiProvider* provider) { sbi_ = provider; }
+    ISbiProvider* sbiProvider() const { return sbi_; }
+
+    // Deterministic-harness counters. stepsTaken counts every step() call;
+    // instructionsRetired counts only Ok outcomes (traps/halts/faults do not
+    // retire).
     uint64_t stepsTaken() const { return stepsTaken_; }
     uint64_t instructionsRetired() const { return instructionsRetired_; }
 
@@ -166,8 +328,22 @@ public:
 
 private:
     bool fetchBytes(uint64_t addr, uint8_t* dst, size_t size) const;
-    bool storeU64(uint64_t addr, uint64_t value);
+    bool storeBytes(uint64_t addr, const uint8_t* src, size_t size);
     bool loadU64Internal(uint64_t addr, uint64_t& value) const;
+    bool storeU64(uint64_t addr, uint64_t value);
+    bool rangeInGuest(uint64_t addr, size_t size) const;
+
+    // CSR helpers.
+    bool csrSupported(uint32_t csr) const;
+    bool csrRead(uint32_t csr, uint64_t& value) const;
+    // Applies WARL masks; returns false for unknown CSRs.
+    bool csrWrite(uint32_t csr, uint64_t value);
+    static uint32_t csrPrivRequired(uint32_t csr);
+    static bool csrIsReadOnly(uint32_t csr);
+
+    // Deliver a synchronous trap: updates xEPC/xCAUSE/xTVAL, status stack,
+    // privilege and PC. Fills result trap fields with outcome Trap.
+    void deliverTrap(TrapCause cause, uint64_t tval, uint64_t faultPc, StepResult& result);
 
     RV64CPUState state_;
     Decoder decoder_;
@@ -176,6 +352,29 @@ private:
     bool memLoaded_ = false;
     uint64_t stepsTaken_ = 0;
     uint64_t instructionsRetired_ = 0;
+
+    PrivilegeMode priv_ = PrivilegeMode::Machine;
+    bool breakpointHalt_ = true;
+    ISbiProvider* sbi_ = nullptr;
+
+    // Machine state.
+    uint64_t mstatus_ = 0;
+    uint64_t medeleg_ = 0;
+    uint64_t mideleg_ = 0;
+    uint64_t mie_ = 0;
+    uint64_t mip_ = 0;
+    uint64_t mtvec_ = 0;
+    uint64_t mscratch_ = 0;
+    uint64_t mepc_ = 0;
+    uint64_t mcause_ = 0;
+    uint64_t mtval_ = 0;
+    // Supervisor state (sie/sip are views of mie/mip, sstatus of mstatus).
+    uint64_t stvec_ = 0;
+    uint64_t sscratch_ = 0;
+    uint64_t sepc_ = 0;
+    uint64_t scause_ = 0;
+    uint64_t stval_ = 0;
+    uint64_t satp_ = 0;
 };
 
 }  // namespace riscv

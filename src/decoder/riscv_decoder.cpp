@@ -688,16 +688,16 @@ DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
 			switch (insn.funct3) {
 			case 0x1: insn.mnemonic = Mnemonic::CSRRW; markLegal(); break;
 			case 0x2:
-				if (zimm != 0U) {
-					insn.mnemonic = Mnemonic::CSRRS;
-					markLegal();
-				}
+				// CSRRS with rs1==x0 is a legal read with no write side
+				// effect (required for e.g. `csrr t0, mepc`).
+				insn.mnemonic = Mnemonic::CSRRS;
+				markLegal();
 				break;
 			case 0x3:
-				if (zimm != 0U) {
-					insn.mnemonic = Mnemonic::CSRRC;
-					markLegal();
-				}
+				// CSRRC with rs1==x0 is a legal read with no write side
+				// effect.
+				insn.mnemonic = Mnemonic::CSRRC;
+				markLegal();
 				break;
 			case 0x5:
 				insn.mnemonic = Mnemonic::CSRRWI;

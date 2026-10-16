@@ -1,4 +1,4 @@
-RISC-V Decoder Status (updated Phase RISCV-1)
+RISC-V Decoder Status (updated Phase RISCV-2)
 
 Current decoded instruction families:
 - RV64I
@@ -19,65 +19,123 @@ Fetch/decode smoke harness:
 Byte-stream helper coverage:
 - Deterministic DecodeByteStream helper for little-endian in-memory byte sequences with 16-bit/32-bit selection and trailing-byte reporting
 
---- Phase RISCV-1: decoded vs actually executed ---
+--- Phase RISCV-1: decoded vs actually executed (preserved baseline) ---
 
-Instructions decoded (production riscv::Decoder, unchanged this phase):
+Instructions decoded (production riscv::Decoder):
 - Full RV64I/RV64M/Zicsr/SYSTEM/RV64A/RV64C decode coverage listed above.
   Decode-only coverage is NOT execution.
 
-Instructions actually executed (RV64CPU::step, genuine semantics):
+Instructions actually executed in RISCV-1 (RV64CPU::step, genuine semantics):
 - LUI, AUIPC, ADDI, ADD, SUB, LD, SD, BEQ, BNE, JAL, JALR
 - EBREAK (32-bit) and C.EBREAK are explicit Halt outcomes, not Ok.
 
-Tested CPU semantics (test_riscv_minimal_execution, 173 runtime checks):
-- x0 hardwired zero (direct writes and ADDI x0 ignored)
-- Signed immediates (ADDI -1/-2, S-immediate, B/J offsets incl. negative path via wraparound)
-- 64-bit wraparound arithmetic (0xFFFFFFFFFFFFFFFF + 10 = 9)
-- PC-relative addressing (AUIPC) and JAL/JALR link = PC+4
-- JALR low-bit clearing ((rs1+imm) & ~1, proven with odd offset 13)
-- Branch taken (BEQ skips) and not-taken (BNE falls through)
-- Little-endian LD/SD round-trip incl. sign-extended LUI patterns, raw byte verification
-- Reset determinism (PC=base, regs=0, counters=0; fresh CPU PC=0)
-- Failure containment: Illegal / Unsupported / FetchFault (truncated + out-of-range) /
-  MemoryFault (LD/SD OOB, rd preserved, PC unchanged)
-- Compressed instructions never report Ok (Unsupported; C.EBREAK reports Halt)
-- Instruction-count bounds (50-step infinite JAL x0,0 loop terminates by harness bound)
+--- Phase RISCV-2: decoder fix + completed RV64I execution ---
+
+Decoder fix (src/decoder/riscv_decoder.cpp):
+- CSRRS/CSRRC with rs1==x0 are now decoded legal (read with no write side
+  effect, e.g. `csrr t0, mepc`). Previously rejected as illegal, which
+  contradicted the privileged specification. No other decode changed.
+
+Instructions actually executed in RISCV-2 (RV64CPU::step, genuine semantics):
+- RV64I complete: LUI, AUIPC, JAL, JALR, BEQ, BNE, BLT, BGE, BLTU, BGEU,
+  LB, LH, LW, LD, LBU, LHU, LWU, SB, SH, SW, SD,
+  ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI,
+  ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND,
+  ADDIW, SLLIW, SRLIW, SRAIW, ADDW, SUBW, SLLW, SRLW, SRAW,
+  FENCE, FENCE.I (documented single-hart no-ops),
+  CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI (with privilege/read-only/
+  suppression rules), ECALL (trap + SBI interception), EBREAK (Halt when
+  breakpoint interception is on, else breakpoint trap), MRET, SRET.
+- W operations compute the 32-bit result and sign-extend to 64 bits; 64-bit
+  shifts mask to 6 bits and W shifts to 5 bits; no host UB on shifts,
+  signed overflow, or conversions (unsigned wraparound + explicit sign fill).
+- Compressed execution stays deferred (Unsupported, never Ok), except
+  C.EBREAK (Halt/trap as above). Compressed decode exists but executable
+  compressed support is NOT advertised.
+
+RV64I vs independently defined extensions (explicit split):
+- RV64I (executed): all of the above integer/branch/load/store/fence/CSR/
+  SYSTEM-privileged list.
+- Zicsr (executed subset): the six CSR instructions with the CSR matrix in
+  include/riscv_cpu.h (mstatus/misa/medeleg/mideleg/mie/mip/mtvec/mscratch/
+  mepc/mcause/mtval/mhartid, sstatus/sie/sip/stvec/sscratch/sepc/scause/
+  stval/satp). Unknown/unavailable CSRs trap illegal, never silently succeed.
+- SYSTEM privileged (executed): ECALL/MRET/SRET with full trap semantics;
+  WFI reports Unsupported (no wake sources modeled); SFENCE.VMA is not
+  produced by the decoder and Bare mode needs no flushing.
+- RV64M (decode only, still Unsupported): MUL/MULH/MULHSU/MULHU/DIV/DIVU/
+  REM/REMU/MULW/DIVW/DIVUW/REMW/REMUW.
+- RV64A (decode only, still Unsupported): LR.W/SC.W/AMO* and LR.D/SC.D/AMO*.
+- RV64F/D/V (not decoded, not executed).
+- RV64C (decode only, execution deferred as above).
+
+Tested CPU semantics:
+- test_riscv_minimal_execution (180 runtime checks, RISCV-1 programs A-D
+  preserved; fault paths now expect architectural traps: illegal/access
+  faults -> Trap with mcause/mepc/tval checks; MUL replaces LW for the
+  Unsupported probe).
+- test_riscv_rv64i_full (105 runtime checks): signed/unsigned compares,
+  32-bit sign-extension incl. ADDW overflow (0x7FFFFFFF+1 -> 0xFFFFFFFF80000000),
+  shift boundaries (63/32/0, register-shamt wraparound 64->0), SRA sign fill,
+  byte/half/word/doubleword round-trips with LE verification, natural-
+  alignment traps (cause 4/6) with rd/memory atomicity, JAL/JALR misalignment
+  (cause 0, rd preserved), JALR low-bit clearing, FENCE/FENCE.I retirement,
+  M/A still never Ok.
+- test_riscv_priv_sbi (266 runtime checks): reset state (M, CSRs zeroed,
+  misa fixed, mhartid 0), CSR RW/suppression/sstatus-view, read-only
+  (mhartid) and unknown-CSR traps with rd preservation, S/U privilege
+  enforcement via architectural MRET entry, satp Bare WARL, mtvec Direct
+  WARL, mepc alignment WARL, ECALL causes 8/9/11 with EPC/TVAL, medeleg
+  delegation to S-mode, MRET/SRET restoration and illegal-use traps,
+  breakpoint Halt vs trap modes, SBI Base FIDs 0-6 + probe/unsupported
+  behavior with and without a provider, full S-mode hello-world (see
+  phase-riscv-2-report.txt), deterministic step bounds.
 
 Explicitly unsupported operations (valid decode -> StepOutcome::Unsupported):
-- Every other decoded mnemonic: LB/LH/LW/LBU/LHU/LWU, SB/SH/SW, BLT/BGE/BLTU/BGEU,
-  SLTI/SLTIU/XORI/ORI/ANDI/SLLI/SRLI/SRAI, SLL/SLT/SLTU/XOR/SRL/SRA/OR/AND,
-  ADDIW/SLLIW/SRLIW/SRAIW, ADDW/SUBW/SLLW/SRLW/SRAW, all RV64M, all RV64A,
-  all CSR/ECALL/MRET/SRET/WFI/FENCE forms, all compressed except C.EBREAK.
+- All RV64M, all RV64A, WFI, all compressed except C.EBREAK.
 
-Remaining architectural requirements for Linux boot (NOT in RISCV-1):
-- Full CSR file + privileged traps (ecall/mret/sret/wfi semantics, trap vectors)
-- MMU/page tables (Sv39/Sv48), SFENCE.VMA behavior, fault reporting
-- SBI interface for the guest kernel
-- Full integer coverage (shifts, compares, word ops), F/D floating point, full C extension
+Synchronous traps (StepOutcome::Trap, never silent):
+- Illegal instruction (cause 2, tval = faulting word), breakpoint (cause 3),
+  instruction address misaligned (cause 0), instruction access fault
+  (cause 1), load/store address misaligned (causes 4/6), load/store access
+  fault (causes 5/7), ECALL from U/S/M (causes 8/9/11). Legacy Illegal/
+  FetchFault/MemoryFault outcomes are retained in the enum for source
+  compatibility and are returned only when no guest image is loaded;
+  architectural execution delivers traps.
+
+Remaining architectural requirements for Linux boot (NOT in RISCV-2):
+- Sv39/Sv48 page walking, SFENCE.VMA flushing with a TLB model
+- SBI timer/IPI/fence/HSM/debug-console/reset extensions + real firmware
 - PLIC/CLINT, UART/virtio device emulation, timer/interrupt delivery
+  (mie/mip/sie/sip hardwired 0; vectored mtvec/stvec not implemented)
+- RV64M/A/F/D/V execution, full C extension
 - ELF loader integration and boot Hart state machine
 
 Test command used:
-- cmake -S . -B build-riscv1
-- cmake --build build-riscv1 --target test_riscv_decoder --target test_riscv_fetch_decode --target test_riscv_minimal_execution --config Debug
-- ctest --test-dir build-riscv1 -R "RiscV" --output-on-failure
+- cmake -S . -B build-riscv2
+- cmake --build build-riscv2 --target test_riscv_decoder --target test_riscv_fetch_decode --target test_riscv_minimal_execution --target test_riscv_rv64i_full --target test_riscv_priv_sbi --config Debug
+- ctest --test-dir build-riscv2 -R "RiscV" --output-on-failure
 
 Latest test result:
 - PASS: RISC-V RV64I/RV64M/Zicsr/RV64A/RV64C decoder smoke tests passed
 - PASS: RISC-V guest-memory fetch/decode smoke harness passed
-- PASS: RISC-V minimal execution test passed (173 checks)
+- PASS: RISC-V minimal execution test passed (180 checks)
+- PASS: RV64I full execution test passed (105 checks)
+- PASS: Privilege/CSR/trap/SBI tests passed (266 checks)
+- PASS: IA-64 spot regressions (implementation untouched): test_efi_memory_map,
+  test_ia64_sal, test_new_instructions
 
 Next milestone runway:
-- RISCV-2 (proposed, not implemented): CSR/privilege skeleton, full RV64I execution,
-  byte/half/word loads and stores, remaining branches, misaligned-fault policy,
-  SBI stub surface for a hello-world supervisor binary. No ISO boot attempt yet.
+- RISCV-3 (proposed, not implemented): Sv39 MMU page walking with
+  SFENCE.VMA, timer/interrupt delivery (CLINT/PLIC stubs, mie/mip/sie/sip,
+  vectored vectors), expanded SBI (timer/IPI/fence/HSM), device tree +
+  UART/virtio platform devices, ELF boot path. No Linux/OpenSBI boot yet.
 
-Execution semantics: partial (12 instructions + EBREAK halt, see above)
+Execution semantics: full RV64I + Zicsr/SYSTEM privilege subset (see above)
 Runtime/plugin registration: deferred
 
 Audit notes:
 - IA-64 / Itanium modified: no
 - Windows-specific dependencies added to C++ core: no
-- IA-64 / Itanium modified: no
-- Execution semantics: partial (RISCV-1 subset)
+- Execution semantics: RV64I complete; M/A/F/D/V and C execution deferred
 - Runtime/plugin registration: deferred

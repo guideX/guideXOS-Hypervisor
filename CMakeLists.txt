@@ -683,6 +683,8 @@ add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 add_test(NAME RiscVFetchDecodeSmokeTest COMMAND test_riscv_fetch_decode)
 add_test(NAME RiscVMinimalExecutionTests COMMAND test_riscv_minimal_execution)
+add_test(NAME RiscVRv64iFullTests COMMAND test_riscv_rv64i_full)
+add_test(NAME RiscVPrivSbiTests COMMAND test_riscv_priv_sbi)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -713,4 +715,30 @@ if(MSVC)
     target_compile_options(test_riscv_minimal_execution PRIVATE /W4)
 else()
     target_compile_options(test_riscv_minimal_execution PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# RISCV-2 full RV64I execution coverage.
+add_executable(test_riscv_rv64i_full
+    tests/test_riscv_rv64i_full.cpp
+    src/riscv/riscv_cpu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_riscv_rv64i_full PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_rv64i_full PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# RISCV-2 privilege, CSR, trap/delegation, SBI, and S-mode hello-world.
+add_executable(test_riscv_priv_sbi
+    tests/test_riscv_priv_sbi.cpp
+    src/riscv/riscv_cpu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
+if(MSVC)
+    target_compile_options(test_riscv_priv_sbi PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_priv_sbi PRIVATE -Wall -Wextra -Wpedantic)
 endif()
