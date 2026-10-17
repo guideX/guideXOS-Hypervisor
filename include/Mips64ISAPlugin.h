@@ -1,6 +1,6 @@
 #pragma once
 
-// guideXOS Hypervisor — MIPS64 ISA plugin (Phases MIPS64-1 + MIPS64-2).
+// guideXOS Hypervisor — MIPS64 ISA plugin (Phases MIPS64-1 + MIPS64-2 + MIPS64-3).
 //
 // Adapts the isolated mips64::Mips64Cpu core to the repository's ia64::IISA
 // contract and self-registers the "MIPS64" ISA identity with the
@@ -50,7 +50,7 @@ public:
 
     // -- identity -------------------------------------------------------------
     std::string getName() const override { return "MIPS64"; }
-    std::string getVersion() const override { return "MIPS64r2 MIPS64-2"; }
+    std::string getVersion() const override { return "MIPS64r2 MIPS64-3"; }
 
     void reset() override;
 

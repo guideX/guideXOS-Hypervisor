@@ -24,6 +24,7 @@
 #include "SyscallDispatcher.h"
 #include "memory.h"
 #include "mips64/Mips64Cpu.h"
+#include "mips64_mmu_setup.h"
 
 namespace ia64 {
 
@@ -45,6 +46,7 @@ std::unique_ptr<IISA> createIA64ISA(IDecoder& decoder,
 }  // namespace ia64
 
 using namespace mips64;
+using namespace mips64_test;
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -118,18 +120,20 @@ static void testRealStepping() {
     storeWordLE(mem, 4, encodeR(8, 8, 10, 0, 33));
     storeWordLE(mem, 8, encodeI(43, 0, 10, 0x200));
     storeWordLE(mem, 12, encodeI(35, 0, 11, 0x200));
+    auto* plugin = dynamic_cast<Mips64ISAPlugin*>(isa.get());
+    CHECK(plugin != nullptr);
+    CHECK(setupKusegIdentityMap(plugin->core(), mem));
 
     for (int i = 0; i < 4; ++i) {
         CHECK(isa->step(mem) == ia64::ISAExecutionResult::CONTINUE);
     }
     CHECK(isa->getPC() == 16);
-    auto* plugin = dynamic_cast<Mips64ISAPlugin*>(isa.get());
-    CHECK(plugin != nullptr);
     CHECK(plugin->core().readGpr(10) == 20);
     CHECK(plugin->core().readGpr(11) == 20);
 
     // Delay-slot branch stepping through the plugin interface.
     isa->reset();
+    CHECK(setupKusegIdentityMap(plugin->core(), mem));
     CHECK(isa->getPC() == 0);
     // beq $8,$8,+2 (taken, skips one) ; addiu $12,$0,7 (delay) ; addiu $13,$0,9 (skipped) ; addiu $14,$0,3
     storeWordLE(mem, 0, encodeI(4, 8, 8, 2));
@@ -158,6 +162,7 @@ static void testRealStepping() {
 static void testDecodeExecuteSplit() {
     ia64::Memory mem(64 * 1024);
     auto isa = createMips64ISA(true);
+    CHECK(setupKusegIdentityMap(dynamic_cast<Mips64ISAPlugin*>(isa.get())->core(), mem));
     storeWordLE(mem, 0, encodeI(9, 0, 8, 42));
     ia64::ISADecodeResult decoded = isa->decode(mem);
     CHECK(decoded.valid);
@@ -231,8 +236,9 @@ static void testSerialization() {
     uint8_t beqBytes[4] = {static_cast<uint8_t>(beq >> 24), static_cast<uint8_t>(beq >> 16),
                            static_cast<uint8_t>(beq >> 8), static_cast<uint8_t>(beq)};
     mem.Write(0, beqBytes, 4);
-    CHECK(isa->step(mem) == ia64::ISAExecutionResult::CONTINUE);
     auto* plugin = dynamic_cast<Mips64ISAPlugin*>(isa.get());
+    CHECK(setupKusegIdentityMap(plugin->core(), mem));
+    CHECK(isa->step(mem) == ia64::ISAExecutionResult::CONTINUE);
     CHECK(plugin->core().delayArmed());
 
     const std::vector<uint8_t> blob = isa->serialize_state();
@@ -246,6 +252,7 @@ static void testSerialization() {
     auto* restoredPlugin = dynamic_cast<Mips64ISAPlugin*>(restored.get());
     CHECK(restoredPlugin->core().delayArmed());
     CHECK(restoredPlugin->core().delayTarget() == plugin->core().delayTarget());
+    CHECK(setupKusegIdentityMap(restoredPlugin->core(), mem));
 
     // Truncated blobs are rejected.
     CHECK(!restored->deserialize_state(std::vector<uint8_t>(blob.begin(), blob.end() - 1)));
@@ -268,6 +275,7 @@ static void testCapabilitiesAndIndependence() {
 
     ia64::Memory mem(64 * 1024);
     storeWordLE(mem, 0x80, encodeI(9, 0, 8, 5));
+    CHECK(setupKusegIdentityMap(dynamic_cast<Mips64ISAPlugin*>(le.get())->core(), mem));
     CHECK(le->disassemble(mem, 0x80).find("addiu") != std::string::npos);
     CHECK(le->disassemble(mem, 0x81) == "<misaligned>");
     CHECK(!le->disassemble(mem, 0xFFFFFF000ULL).empty());
@@ -276,6 +284,7 @@ static void testCapabilitiesAndIndependence() {
     auto a = createMips64ISA(true);
     auto b = createMips64ISA(true);
     storeWordLE(mem, 0, encodeI(9, 0, 8, 11));
+    CHECK(setupKusegIdentityMap(dynamic_cast<Mips64ISAPlugin*>(a.get())->core(), mem));
     CHECK(a->step(mem) == ia64::ISAExecutionResult::CONTINUE);
     CHECK(dynamic_cast<Mips64ISAPlugin*>(a.get())->core().readGpr(8) == 11);
     CHECK(dynamic_cast<Mips64ISAPlugin*>(b.get())->core().readGpr(8) == 0);

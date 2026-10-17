@@ -13,8 +13,10 @@
 #include "IMemory.h"
 #include "memory.h"
 #include "mips64/Mips64Cpu.h"
+#include "mips64_mmu_setup.h"
 
 using namespace mips64;
+using namespace mips64_test;
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -96,6 +98,7 @@ static void testZeroAndInvalidRegisters() {
     cpu.writeGpr(9, 2);
     storeWord(mem, 0, encodeI(9, 0, 0, 5), true);
     storeWord(mem, 4, encodeR(8, 9, 0, 0, 37), true);  // or $0,$t0,$t1
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(0) == 0);
@@ -116,6 +119,7 @@ static void testWordVsDoubleword() {
     storeWord(mem, 4, encodeR(8, 9, 11, 0, 45), true);
     storeWord(mem, 8, encodeR(9, 8, 12, 0, 35), true);
     storeWord(mem, 12, encodeR(9, 8, 13, 0, 47), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 4; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0);
     CHECK(cpu.readGpr(11) == 0x100000000ULL);
@@ -128,6 +132,7 @@ static void testWordVsDoubleword() {
     cpu2.writeGpr(8, 0x7FFFFFFFULL);
     cpu2.writeGpr(9, 1);
     ia64::Memory mem2(64 * 1024);
+    CHECK(setupKusegIdentityMap(cpu2, mem2));
     storeWord(mem2, 0, encodeR(8, 9, 10, 0, 33), true);
     CHECK(stepOk(cpu2, mem2));
     CHECK(cpu2.readGpr(10) == 0xFFFFFFFF80000000ULL);
@@ -146,6 +151,7 @@ static void testImmediateSignExtension() {
     storeWord(mem, 4, encodeI(25, 8, 11, 0x8000), true);
     storeWord(mem, 8, encodeI(13, 8, 12, 0xFFFF), true);
     storeWord(mem, 12, encodeI(15, 0, 13, 0x8000), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 4; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 4);
     CHECK(cpu.readGpr(11) == static_cast<uint64_t>(5 - 32768));
@@ -174,6 +180,7 @@ static void testShifts() {
     storeWord(mem, 16, encodeR(0, 9, 14, 31, 58), true);
     storeWord(mem, 20, encodeR(0, 9, 15, 31, 59), true);
     storeWord(mem, 24, encodeR(0, 8, 16, 0, 0), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 7; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0);
     CHECK(cpu.readGpr(11) == 0x40000000ULL);
@@ -198,6 +205,7 @@ static void testTakenBranchWithDelaySlot() {
     storeWord(mem, 4, encodeI(9, 0, 10, 1), true);
     storeWord(mem, 8, encodeI(9, 0, 11, 100), true);
     storeWord(mem, 12, encodeI(9, 0, 12, 2), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));  // beq
     CHECK(cpu.delayArmed());
     CHECK(cpu.pc() == 4);
@@ -222,6 +230,7 @@ static void testNotTakenBranchStillExecutesDelaySlot() {
     storeWord(mem, 0, encodeI(4, 8, 9, 2), true);
     storeWord(mem, 4, encodeI(9, 0, 10, 1), true);
     storeWord(mem, 8, encodeI(9, 0, 11, 3), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(cpu.delayArmed());
     CHECK(stepOk(cpu, mem));
@@ -244,6 +253,7 @@ static void testNegativeBranchOffset() {
     storeWord(mem, 4, encodeI(5, 8, 9, 0xFFFE), true);
     storeWord(mem, 8, encodeI(9, 0, 10, 9), true);
     storeWord(mem, 12, encodeI(9, 0, 11, 7), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 9; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(8) == 3);
     CHECK(cpu.readGpr(10) == 9);
@@ -267,6 +277,7 @@ static void testJalJrCallReturn() {
     storeWord(mem, 16, encodeI(9, 0, 12, 5), true);
     storeWord(mem, 20, encodeR(31, 0, 0, 0, 8), true);
     storeWord(mem, 24, encodeI(9, 0, 13, 6), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));  // jal
     CHECK(cpu.readGpr(31) == 8);
     CHECK(stepOk(cpu, mem));  // delay slot
@@ -289,6 +300,7 @@ static void testLittleEndianFetch() {
     CHECK(cpu.isLittleEndian());
     // addiu $8, $0, 0x1234 stored little-endian
     storeWord(mem, 0, encodeI(9, 0, 8, 0x1234), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(8) == 0x1234);
 }
@@ -299,6 +311,7 @@ static void testBigEndianFetchAndMem() {
     Mips64Cpu cpu(Mips64Endianness::Big);
     CHECK(!cpu.isLittleEndian());
     storeWord(mem, 0, encodeI(9, 0, 8, 0x1234), false);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(8) == 0x1234);
     // sw $8 to 0x100 then lw back; BE byte order must round-trip.
@@ -323,6 +336,7 @@ static void testSnapshotRoundTrip() {
     cpu.setLo(0x2222);
     storeWord(mem, 0, encodeI(4, 8, 9, 2), false);  // beq taken
     storeWord(mem, 4, encodeI(9, 0, 10, 1), false);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));  // branch retired; delay slot pending
     CHECK(cpu.delayArmed());
 
@@ -358,6 +372,7 @@ static void testSnapshotRoundTrip() {
 
     // Both copies retire the delay slot identically.
     CHECK(stepOk(clone, mem));
+    // `restored` already carries entry 0 from the serialized TLB state.
     CHECK(stepOk(restored, mem));
     CHECK(clone.pc() == restored.pc());
     CHECK(clone.readGpr(10) == 1 && restored.readGpr(10) == 1);
@@ -368,9 +383,11 @@ static void testIndependentInstances() {
     ia64::Memory mem(64 * 1024);
     storeWord(mem, 0, encodeI(9, 0, 8, 41), true);
     Mips64Cpu a, b;
+    CHECK(setupKusegIdentityMap(a, mem));
     CHECK(stepOk(a, mem));
     CHECK(a.readGpr(8) == 41);
     CHECK(b.readGpr(8) == 0 && b.pc() == 0);
+    CHECK(setupKusegIdentityMap(b, mem));
     b.setPc(0);
     CHECK(stepOk(b, mem));
     CHECK(b.readGpr(8) == 41);

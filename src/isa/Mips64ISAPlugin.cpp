@@ -156,14 +156,19 @@ bool Mips64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
 std::string Mips64ISAPlugin::dumpState() const { return state_.toString(); }
 
 std::string Mips64ISAPlugin::disassemble(ia64::IMemory& memory, uint64_t address) {
-    // Side-effect free: reads raw bytes directly so the CPU's fault state
-    // is not disturbed by disassembly.
+    // Side-effect free: translates the guest virtual address like a fetch
+    // but never enters exceptions, so the CPU's fault state is not
+    // disturbed by disassembly.
     if ((address & 0x3ULL) != 0) {
         return "<misaligned>";
     }
+    const Mips64Probe probe = state_.cpu().probeAddress(address, Mips64Access::Fetch);
+    if (!probe.ok) {
+        return std::string("<unmapped: ") + state_.cpu().faultName(probe.fault) + ">";
+    }
     uint8_t bytes[kInstructionSize] = {0, 0, 0, 0};
     try {
-        memory.Read(address, bytes, kInstructionSize);
+        memory.Read(probe.phys, bytes, kInstructionSize);
     } catch (const std::exception& ex) {
         return std::string("<unmapped: ") + ex.what() + ">";
     } catch (...) {
@@ -198,6 +203,10 @@ bool Mips64ISAPlugin::hasFeature(const std::string& feature) const {
     if (feature == "regimm") return true;
     if (feature == "branch_likely") return true;
     if (feature == "trapping_arithmetic") return true;
+    if (feature == "tlb") return true;
+    if (feature == "mmu") return true;
+    if (feature == "address_translation") return true;
+    if (feature == "privilege") return true;
     if (feature == "little_endian") return state_.cpu().isLittleEndian();
     if (feature == "big_endian") return !state_.cpu().isLittleEndian();
     return false;

@@ -11,8 +11,10 @@
 #include "IMemory.h"
 #include "memory.h"
 #include "mips64/Mips64Cpu.h"
+#include "mips64_mmu_setup.h"
 
 using namespace mips64;
+using namespace mips64_test;
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -84,6 +86,7 @@ static void testDemoProgram() {
     storeWord(mem, 32, encodeI(15, 0, 13, 0x1122), true);
     storeWord(mem, 36, encodeI(13, 13, 13, 0x3344), true);
 
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 9; ++i) {
         if (!stepOk(cpu, mem)) {
             CHECK(false);
@@ -119,6 +122,7 @@ static void testLoadExtensionLE() {
     storeWord(mem, 20, encodeI(35, 0, 13, 0x304), true);  // lw (positive high word)
     storeWord(mem, 24, encodeI(39, 0, 14, 0x300), true);  // lwu
     storeWord(mem, 28, encodeI(55, 0, 15, 0x300), true);  // ld
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 8; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(8) == 0xFFFFFFFFFFFFFFFFULL);
     CHECK(cpu.readGpr(9) == 0xFFULL);
@@ -139,6 +143,7 @@ static void testLoadExtensionBE() {
     storeWord(mem, 0, encodeI(33, 0, 10, 0x300), false);  // lh BE = 0xFF80 -> sign
     storeWord(mem, 4, encodeI(35, 0, 12, 0x300), false);  // lw BE = 0xFF80017F -> sign
     storeWord(mem, 8, encodeI(39, 0, 14, 0x300), false);  // lwu BE zero-extended
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 3; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0xFFFFFFFFFFFFFF80ULL);
     CHECK(cpu.readGpr(12) == 0xFFFFFFFFFF80017FULL);
@@ -156,6 +161,7 @@ static void testStoreRoundTrips() {
     storeWord(mem, 12, encodeI(32, 0, 10, 0x410), true);  // lb -> sign-extended
     storeWord(mem, 16, encodeI(41, 0, 8, 0x420), true);  // sh (low half 0x7788)
     storeWord(mem, 20, encodeI(33, 0, 11, 0x420), true);  // lh
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 6; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(9) == 0x1122334455667788ULL);
     CHECK(cpu.readGpr(10) == 0xFFFFFFFFFFFFFF88ULL);
@@ -172,6 +178,7 @@ static void testWordTruncation() {
     cpu.writeGpr(8, 0x1FFFFFFFFULL);  // low32 = all ones, high bit set above word
     storeWord(mem, 0, encodeI(9, 8, 10, 1), true);   // addiu: low32 0xFFFFFFFF+1 = 0
     storeWord(mem, 4, encodeI(25, 8, 11, 1), true);  // daddiu: full 64-bit +1
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0);
@@ -190,6 +197,7 @@ static void testLogicOps() {
     storeWord(mem, 12, encodeR(8, 9, 13, 0, 39), true);  // nor
     storeWord(mem, 16, encodeI(12, 8, 14, 0x00FF), true);  // andi (zero-extended imm)
     storeWord(mem, 20, encodeI(14, 8, 15, 0x00FF), true);  // xori
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 6; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0x00F000F000F000F0ULL);
     CHECK(cpu.readGpr(11) == 0xFFF0FFF0FFF0FFF0ULL);
@@ -209,6 +217,7 @@ static void testSetLessThan() {
     storeWord(mem, 4, encodeR(8, 9, 11, 0, 43), true);  // sltu: big > 1 -> 0
     storeWord(mem, 8, encodeR(9, 8, 12, 0, 42), true);  // slt: 1 < -1 -> 0
     storeWord(mem, 12, encodeR(9, 8, 13, 0, 43), true);  // sltu: 1 < big -> 1
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 4; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 1);
     CHECK(cpu.readGpr(11) == 0);
@@ -231,6 +240,7 @@ static void testAlignmentFailures() {
     storeWord(mem, 12, encodeI(41, 8, 9, 1), true);
     storeWord(mem, 16, encodeI(43, 8, 9, 2), true);
     storeWord(mem, 20, encodeI(63, 8, 9, 4), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     const Mips64Fault expected[6] = {Mips64Fault::MisalignedLoad, Mips64Fault::MisalignedLoad,
                                       Mips64Fault::MisalignedLoad, Mips64Fault::MisalignedStore,
                                       Mips64Fault::MisalignedStore, Mips64Fault::MisalignedStore};
@@ -239,6 +249,7 @@ static void testAlignmentFailures() {
     for (int i = 0; i < 6; ++i) {
         const uint64_t addr = static_cast<uint64_t>(i) * 4;
         cpu.reset();
+        CHECK(setupKusegIdentityMap(cpu, mem));
         cpu.writeGpr(8, 0x100);
         cpu.setPc(addr);
         CHECK(stepFault(cpu, mem, expected[i]));
@@ -251,6 +262,7 @@ static void testAlignmentFailures() {
     }
     // Misaligned fetch -> AdEL with BadVAddr = faulting PC.
     Mips64Cpu cpu2;
+    CHECK(setupKusegIdentityMap(cpu2, mem));
     cpu2.setPc(2);
     CHECK(stepFault(cpu2, mem, Mips64Fault::MisalignedFetch));
     CHECK(cpu2.causeExcCode() == 4);
@@ -266,28 +278,33 @@ static void testAlignmentFailures() {
 static void testInvalidMemoryFailures() {
     ia64::Memory mem(64);  // tiny guest: only 64 bytes mapped
     Mips64Cpu cpu;
-    cpu.writeGpr(8, 0x1000);  // unmapped base
-    storeWord(mem, 0, encodeI(35, 8, 9, 0), true);  // lw from unmapped
-    storeWord(mem, 4, encodeI(43, 8, 9, 0), true);  // sw to unmapped
-    cpu.setPc(0);
+    // Prologue occupies PA 0x00..0x27; test instructions live at PA 0x30/0x34.
+    CHECK(setupKusegIdentityMap(cpu, mem, 0));
+    cpu.writeGpr(8, 0x1000);  // base VA 0x1000 -> PA 0x1000, past the 64-byte guest
+    storeWord(mem, 0x30, encodeI(35, 8, 9, 0), true);  // lw $8, 0($8) at PA 0x30
+    storeWord(mem, 0x34, encodeI(43, 8, 9, 0), true);  // sw $8, 0($8) at PA 0x34
+    cpu.setPc(0x30);
     CHECK(stepFault(cpu, mem, Mips64Fault::MemoryFaultLoad));
-    CHECK(cpu.causeExcCode() == 7);  // DBE
-    CHECK(cpu.cp0BadVAddr() == 0);
-    CHECK(cpu.cp0Epc() == 0);
+    CHECK(cpu.causeExcCode() == 7);  // DBE: physical read past the guest
+    CHECK(cpu.cp0BadVAddr() == 0);   // bus errors leave BadVAddr untouched
+    CHECK(cpu.cp0Epc() == 0x30);
     CHECK(cpu.pc() == cpu.exceptionVector());
     cpu.reset();
     cpu.writeGpr(8, 0x1000);
-    cpu.setPc(4);
+    CHECK(setupKusegIdentityMap(cpu, mem, 0));
+    cpu.setPc(0x34);
     CHECK(stepFault(cpu, mem, Mips64Fault::MemoryFaultStore));
     CHECK(cpu.causeExcCode() == 7);  // DBE
-    CHECK(cpu.cp0Epc() == 4);
+    CHECK(cpu.cp0Epc() == 0x34);
     CHECK(cpu.pc() == cpu.exceptionVector());
-    // Fetch past the end of guest memory.
+    // Fetch past the end of guest memory: VA 0x40 translates to PA 0x40,
+    // which is outside the 64-byte guest -> IBE.
     Mips64Cpu cpu2;
-    cpu2.setPc(0x10000);
+    CHECK(setupKusegIdentityMap(cpu2, mem, 0));
+    cpu2.setPc(0x40);
     CHECK(stepFault(cpu2, mem, Mips64Fault::MemoryFaultFetch));
     CHECK(cpu2.causeExcCode() == 6);  // IBE
-    CHECK(cpu2.cp0Epc() == 0x10000);
+    CHECK(cpu2.cp0Epc() == 0x40);
     CHECK(cpu2.pc() == cpu2.exceptionVector());
 }
 
@@ -295,6 +312,7 @@ static void testInvalidMemoryFailures() {
 static void testUnsupportedAndReserved() {
     ia64::Memory mem(64 * 1024);
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     storeWord(mem, 0, encodeI(0x31, 0, 8, 0), true);  // lwc1: valid, unimplemented
     storeWord(mem, 4, encodeI(0x2F, 0, 8, 0), true);  // cache: valid, unimplemented
     storeWord(mem, 8, encodeI(0x30, 8, 9, 0), true);  // ll: valid, unimplemented
@@ -317,6 +335,7 @@ static void testUnsupportedAndReserved() {
 static void testBranchInDelaySlot() {
     ia64::Memory mem(64 * 1024);
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 1);
     cpu.writeGpr(9, 1);
     storeWord(mem, 0, encodeI(4, 8, 9, 8), true);  // beq taken
@@ -331,6 +350,7 @@ static void testBranchInDelaySlot() {
 static void testJalrAndJrEdges() {
     ia64::Memory mem(64 * 1024);
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(9, 0x40);
     // jalr $8, $9 at 0 ; delay slot addiu $10 ; target @0x40 addiu $11
     storeWord(mem, 0, encodeR(9, 0, 8, 0, 9), true);
@@ -348,6 +368,7 @@ static void testJalrAndJrEdges() {
     Mips64Cpu cpu2;
     cpu2.writeGpr(9, 0x43);
     ia64::Memory mem2(64 * 1024);
+    CHECK(setupKusegIdentityMap(cpu2, mem2));
     storeWord(mem2, 0, encodeR(9, 0, 0, 0, 8), true);
     CHECK(stepFault(cpu2, mem2, Mips64Fault::MisalignedBranchTarget));
     CHECK(cpu2.pc() == 0);

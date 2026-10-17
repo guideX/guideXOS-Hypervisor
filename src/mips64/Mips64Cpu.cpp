@@ -1,4 +1,4 @@
-// guideXOS Hypervisor — MIPS64r2 CPU core (Phases MIPS64-1 + MIPS64-2).
+// guideXOS Hypervisor — MIPS64r2 CPU core (Phases MIPS64-1 + MIPS64-2 + MIPS64-3).
 //
 // Real fetch/decode/execute with MIPS64 Release 2 semantics, bounded CP0,
 // genuine exception entry/return, trapping arithmetic, portable HI/LO
@@ -107,6 +107,11 @@ constexpr uint8_t kC0Mtc0 = 0x04;
 constexpr uint8_t kC0Dmtc0 = 0x05;
 constexpr uint8_t kC0Func = 0x10;
 constexpr uint8_t kC0FnEret = 0x18;
+// -- COP0 TLB function field (CO=1 class, MIPS64r2) -------------------------------
+constexpr uint8_t kC0FnTlbr = 0x01;
+constexpr uint8_t kC0FnTlbwi = 0x02;
+constexpr uint8_t kC0FnTlbwr = 0x06;
+constexpr uint8_t kC0FnTlbp = 0x08;
 
 // SPECIAL funct values that are genuinely reserved in MIPS64r2.
 // All other unimplemented funct values are allocated encodings outside
@@ -318,12 +323,40 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                     decoded.valid = true;
                     return decoded;
                 }
+                // TLB management: exact encodings TLBR/TLBWI/TLBWR/TLBP with
+                // rt, rd and sa zero (0x42000001/02/06/08). Malformed
+                // variants are reserved; other CO functions are valid but
+                // unimplemented (e.g. WAIT, DERET).
+                Mips64Op tlbOp = Mips64Op::Invalid;
+                switch (funct) {
+                    case kC0FnTlbr: tlbOp = Mips64Op::Tlbr; break;
+                    case kC0FnTlbwi: tlbOp = Mips64Op::Tlbwi; break;
+                    case kC0FnTlbwr: tlbOp = Mips64Op::Tlbwr; break;
+                    case kC0FnTlbp: tlbOp = Mips64Op::Tlbp; break;
+                    default: break;
+                }
+                if (tlbOp != Mips64Op::Invalid) {
+                    if (decoded.rt == 0 && decoded.rd == 0 && decoded.sa == 0) {
+                        decoded.op = tlbOp;
+                        decoded.valid = true;
+                        return decoded;
+                    }
+                    return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                "malformed TLB instruction encoding");
+                }
                 if (funct == kC0FnEret) {
                     return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
                                 "malformed ERET encoding");
                 }
-                return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
-                            "valid MIPS64 COP0 function outside the implemented subset");
+                // DERET (0x1F) and WAIT (0x20) are valid MIPS64r2 COP0
+                // functions outside the implemented subset; every other
+                // unclaimed CO funct is a reserved encoding (-> RI entry).
+                if (funct == 0x1FU || funct == 0x20U) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                "valid MIPS64 COP0 function outside the implemented subset");
+                }
+                return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                            "reserved COP0 function encoding");
             }
             return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
                         "reserved COP0 rs encoding");
@@ -414,6 +447,18 @@ void Mips64Cpu::reset() {
     ebase_ = kEBaseReset;
     count_ = 0;
     compare_ = 0;
+    // MIPS64-3 TLB state: deterministic power-on state with every entry
+    // invalid (a real JTLB powers up without valid mappings).
+    index_ = 0;
+    random_ = kTlbEntries - 1;
+    entryHi_ = 0;
+    entryLo0_ = 0;
+    entryLo1_ = 0;
+    pageMask_ = 0;
+    wired_ = 0;
+    context_ = 0;
+    xcontext_ = 0;
+    tlb_.fill(Mips64TlbEntry{});
     clearFault();
 }
 
@@ -438,13 +483,28 @@ bool Mips64Cpu::writeGpr(unsigned index, uint64_t value) {
     return true;
 }
 
-uint64_t Mips64Cpu::exceptionVector() const {
-    if ((status_ & kStatusBitBev) != 0) {
-        return kVectorBev1;
+uint64_t Mips64Cpu::exceptionVectorFor(bool bev, uint64_t ebase, uint64_t offset) {
+    if (bev) {
+        return kVectorBootBase + offset;
     }
-    const uint32_t base = static_cast<uint32_t>((ebase_ & kEBaseWritableMask) |
-                                                (kVectorOffsetGeneral & 0xFFFU));
+    const uint32_t base =
+        static_cast<uint32_t>((ebase & kEBaseWritableMask) | (offset & 0xFFFU));
     return signExtend32(base);
+}
+
+uint64_t Mips64Cpu::exceptionVector() const {
+    return exceptionVectorFor((status_ & kStatusBitBev) != 0, ebase_,
+                              kVectorOffsetGeneral);
+}
+
+uint64_t Mips64Cpu::refillVector(uint64_t faultVa) const {
+    // XTLB refill (offset 0x080) is selected for 64-bit-region faults once
+    // such regions are supported; all currently supported mapped regions
+    // are 32-bit compatibility segments, so offset 0x000 applies.
+    // The selection logic itself is implemented and unit-tested.
+    const bool is64BitRegion = (faultVa >> 32) != 0 && (faultVa >> 32) != 0xFFFFFFFFULL;
+    const uint64_t offset = is64BitRegion ? kVectorOffsetXtlb : kVectorOffsetRefill;
+    return exceptionVectorFor((status_ & kStatusBitBev) != 0, ebase_, offset);
 }
 
 void Mips64Cpu::setFault(Mips64Fault fault, const std::string& message) {
@@ -457,10 +517,9 @@ void Mips64Cpu::clearFault() {
     lastError_.clear();
 }
 
-void Mips64Cpu::raiseException(Mips64ExcCode code, Mips64Fault fault,
+void Mips64Cpu::enterException(Mips64ExcCode code, Mips64Fault fault,
                                const std::string& message, uint64_t faultPc,
-                               bool inDelaySlot, uint64_t branchPc,
-                               bool hasBadVAddr, uint64_t badVAddrValue) {
+                               bool inDelaySlot, uint64_t branchPc, uint64_t vector) {
     // Cause.ExcCode and Cause.BD are updated on every exception entry,
     // including nested entries taken while Status.EXL is already set.
     cause_ = (cause_ & ~kCauseExcCodeMask) |
@@ -469,9 +528,6 @@ void Mips64Cpu::raiseException(Mips64ExcCode code, Mips64Fault fault,
         cause_ |= kCauseBitBd;
     } else {
         cause_ &= ~kCauseBitBd;
-    }
-    if (hasBadVAddr) {
-        badVAddr_ = badVAddrValue;
     }
     // EPC captures the restart address only for the outermost exception;
     // a nested entry (EXL already set) must not clobber the outer EPC.
@@ -485,11 +541,117 @@ void Mips64Cpu::raiseException(Mips64ExcCode code, Mips64Fault fault,
     delayArmed_ = false;
     delayTarget_ = 0;
     delayBranch_ = 0;
-    pc_ = exceptionVector();
+    pc_ = vector;
     setFault(fault, message);
 }
 
+void Mips64Cpu::raiseException(Mips64ExcCode code, Mips64Fault fault,
+                               const std::string& message, uint64_t faultPc,
+                               bool inDelaySlot, uint64_t branchPc,
+                               bool hasBadVAddr, uint64_t badVAddrValue) {
+    if (hasBadVAddr) {
+        badVAddr_ = badVAddrValue;
+    }
+    enterException(code, fault, message, faultPc, inDelaySlot, branchPc,
+                   exceptionVector());
+}
+
+void Mips64Cpu::raiseTlbException(Mips64ExcCode code, Mips64Fault fault,
+                                  const std::string& message, uint64_t faultPc,
+                                  bool inDelaySlot, uint64_t branchPc,
+                                  uint64_t faultVa, bool isRefill) {
+    // TLB Refill/Invalid/Modified update BadVAddr, Context.BadVPN2,
+    // XContext.R/BadVPN2 and EntryHi.VPN2 (ASID preserved) on every entry,
+    // including nested entries.
+    badVAddr_ = faultVa;
+    context_ = (context_ & static_cast<uint32_t>(kContextWritableMask)) |
+               (static_cast<uint32_t>((faultVa >> 23) & 0x1FFU) << 23);
+    const uint64_t r = (faultVa >> 61) & 0x7ULL;
+    const uint64_t badVpn2 = (faultVa >> 13) & 0x3FFFFULL;
+    xcontext_ = (xcontext_ & kXContextPteBaseMask) | (r << 31) | (badVpn2 << 13);
+    entryHi_ = (entryHi_ & kEntryHiAsidMask) | (faultVa & kEntryHiVpn2Mask);
+    const bool exlBefore = (status_ & kStatusBitExl) != 0;
+    const uint64_t vector =
+        (isRefill && !exlBefore) ? refillVector(faultVa) : exceptionVector();
+    enterException(code, fault, message, faultPc, inDelaySlot, branchPc, vector);
+}
+
+void Mips64Cpu::raiseProbe(const Mips64Probe& probe, uint64_t faultPc,
+                           bool inDelaySlot, uint64_t branchPc, uint64_t faultVa) {
+    if (probe.isRefill) {
+        raiseTlbException(probe.code, probe.fault, "TLB refill: no matching entry",
+                          faultPc, inDelaySlot, branchPc, faultVa, true);
+        return;
+    }
+    switch (probe.fault) {
+        case Mips64Fault::TlbInvalidFetch:
+        case Mips64Fault::TlbInvalidLoad:
+        case Mips64Fault::TlbInvalidStore:
+            raiseTlbException(probe.code, probe.fault, "TLB invalid: matching entry not valid",
+                              faultPc, inDelaySlot, branchPc, faultVa, false);
+            return;
+        case Mips64Fault::TlbModified:
+            raiseTlbException(probe.code, probe.fault,
+                              "TLB modified: store to valid non-dirty mapping",
+                              faultPc, inDelaySlot, branchPc, faultVa, false);
+            return;
+        default:
+            break;
+    }
+    const bool isStore = probe.fault == Mips64Fault::AddressErrorStore;
+    raiseException(probe.code, probe.fault, "address error: illegal virtual address access",
+                   faultPc, inDelaySlot, branchPc, true, faultVa);
+    (void)isStore;
+}
+
+bool Mips64Cpu::requireKernel(uint64_t address, bool inDelaySlot, uint64_t branchPc,
+                              const char* what) {
+    if (isKernelMode()) {
+        return true;
+    }
+    std::string message = std::string("privileged operation in supervisor/user mode: ") + what;
+    raiseException(Mips64ExcCode::RI, Mips64Fault::PrivilegeViolation, message,
+                   address, inDelaySlot, branchPc, false, 0);
+    return false;
+}
+
 bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
+    if (rd == kCp0RegIndex && sel == kCp0SelIndex) {
+        out = index_ & kIndexWritableMask;
+        return true;
+    }
+    if (rd == kCp0RegRandom && sel == kCp0SelRandom) {
+        out = random_;
+        return true;
+    }
+    if (rd == kCp0RegEntryLo0 && sel == kCp0SelEntryLo0) {
+        out = entryLo0_;
+        return true;
+    }
+    if (rd == kCp0RegEntryLo1 && sel == kCp0SelEntryLo1) {
+        out = entryLo1_;
+        return true;
+    }
+    if (rd == kCp0RegContext && sel == kCp0SelContext) {
+        out = context_;
+        return true;
+    }
+    if (rd == kCp0RegPageMask && sel == kCp0SelPageMask) {
+        out = pageMask_;
+        return true;
+    }
+    if (rd == kCp0RegWired && sel == kCp0SelWired) {
+        out = wired_;
+        return true;
+    }
+    if (rd == kCp0RegEntryHi && sel == kCp0SelEntryHi) {
+        out = entryHi_;
+        return true;
+    }
+    if (rd == kCp0RegXContext && sel == kCp0SelXContext) {
+        out = xcontext_;
+        return true;
+    }
     if (rd == kCp0RegStatus && sel == kCp0SelStatus) {
         out = status_ & kStatusWritableMask;
         return true;
@@ -526,6 +688,56 @@ bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
 }
 
 bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
+    if (rd == kCp0RegIndex && sel == kCp0SelIndex) {
+        index_ = value & kIndexWritableMask;
+        return true;
+    }
+    if (rd == kCp0RegRandom && sel == kCp0SelRandom) {
+        // Random is read-only; writes are accepted and ignored.
+        return true;
+    }
+    if (rd == kCp0RegEntryLo0 && sel == kCp0SelEntryLo0) {
+        entryLo0_ = static_cast<uint32_t>(value & kEntryLoWritableMask);
+        return true;
+    }
+    if (rd == kCp0RegEntryLo1 && sel == kCp0SelEntryLo1) {
+        entryLo1_ = static_cast<uint32_t>(value & kEntryLoWritableMask);
+        return true;
+    }
+    if (rd == kCp0RegContext && sel == kCp0SelContext) {
+        // Only the PTEBase field (bits 22:4) is software-writable;
+        // BadVPN2 (bits 31:23) is written by hardware on TLB exceptions.
+        context_ = (context_ & ~static_cast<uint32_t>(kContextWritableMask)) |
+                   (static_cast<uint32_t>(value) &
+                    static_cast<uint32_t>(kContextWritableMask));
+        return true;
+    }
+    if (rd == kCp0RegPageMask && sel == kCp0SelPageMask) {
+        pageMask_ = static_cast<uint32_t>(value & kPageMaskWritableMask);
+        return true;
+    }
+    if (rd == kCp0RegWired && sel == kCp0SelWired) {
+        uint64_t wired = value & 0x1FULL;
+        if (wired > kTlbMaxWired) {
+            wired = kTlbMaxWired;  // deterministic clamp
+        }
+        wired_ = wired;
+        // Keep Random inside [Wired, N): deterministic re-seed when the
+        // range moved above the current Random value.
+        if (random_ < wired_ && wired_ < kTlbEntries) {
+            random_ = kTlbEntries - 1;
+        }
+        return true;
+    }
+    if (rd == kCp0RegEntryHi && sel == kCp0SelEntryHi) {
+        entryHi_ = value & kEntryHiWritableMask;
+        return true;
+    }
+    if (rd == kCp0RegXContext && sel == kCp0SelXContext) {
+        // Only the PTEBase field (bits 51:34) is software-writable.
+        xcontext_ = (xcontext_ & ~kXContextPteBaseMask) | (value & kXContextPteBaseMask);
+        return true;
+    }
     if (rd == kCp0RegStatus && sel == kCp0SelStatus) {
         status_ = (status_ & ~kStatusWritableMask) | (value & kStatusWritableMask);
         return true;
@@ -561,6 +773,179 @@ bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
     return false;
 }
 
+bool Mips64Cpu::tlbMatch(const Mips64TlbEntry& entry, uint64_t vpn2,
+                         uint8_t asid) const {
+    if (entry.badMask) {
+        return false;  // unsupported PageMask: deterministic never-match
+    }
+    if (!entry.g && entry.asid != asid) {
+        return false;
+    }
+    return ((entry.vpn2 ^ vpn2) & ~static_cast<uint64_t>(entry.mask)) == 0;
+}
+
+int Mips64Cpu::tlbProbe(uint64_t vpn2, uint8_t asid) const {
+    // Multiple matching entries are architecturally UNPREDICTABLE (TLB
+    // shutdown); this core deterministically reports the lowest index.
+    for (unsigned i = 0; i < kTlbEntries; ++i) {
+        if (tlbMatch(tlb_[i], vpn2, asid)) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool Mips64Cpu::tlbEntry(unsigned index, Mips64TlbEntry& out) const {
+    if (index >= kTlbEntries) {
+        return false;
+    }
+    out = tlb_[index];
+    return true;
+}
+
+Mips64Probe Mips64Cpu::probeAddress(uint64_t va, Mips64Access access) const {
+    Mips64Probe result;
+    const bool isStore = access == Mips64Access::Store;
+    const bool isFetch = access == Mips64Access::Fetch;
+
+    // -- 1. segment classification (never truncate: 64-bit VAs outside the
+    // --    compatibility segments are explicit address errors) -------------
+    enum class Segment {
+        KusegMapped,
+        CkSeg0Direct,
+        CkSeg1Direct,
+        CksSegMapped,
+        CkSeg3Mapped,
+        Bad,
+    };
+    Segment segment = Segment::Bad;
+    if ((va >> 32) == 0) {
+        segment = (va <= kKusegEnd) ? Segment::KusegMapped : Segment::Bad;
+    } else if ((va >> 32) == 0xFFFFFFFFULL) {
+        const uint32_t low = static_cast<uint32_t>(va);
+        if (low < 0x80000000U) {
+            // Reserved gap (0xFFFFFFFF00000000..0xFFFFFFFF7FFFFFFF): neither
+            // kuseg (wrong upper half) nor a kernel compatibility segment.
+            segment = Segment::Bad;
+        } else if (low <= 0x9FFFFFFFU) {
+            segment = Segment::CkSeg0Direct;
+        } else if (low <= 0xBFFFFFFFU) {
+            segment = Segment::CkSeg1Direct;
+        } else if (low <= 0xDFFFFFFFU) {
+            segment = Segment::CksSegMapped;
+        } else {
+            segment = Segment::CkSeg3Mapped;  // 0xE0000000..0xFFFFFFFF
+        }
+    }
+
+    const auto deny = [&](Mips64Fault fault, Mips64ExcCode code) {
+        result.ok = false;
+        result.fault = fault;
+        result.code = code;
+        result.isRefill = false;
+        return result;
+    };
+    if (segment == Segment::Bad) {
+        if (isFetch) {
+            return deny(Mips64Fault::AddressErrorFetch, Mips64ExcCode::AdEL);
+        }
+        if (isStore) {
+            return deny(Mips64Fault::AddressErrorStore, Mips64ExcCode::AdES);
+        }
+        return deny(Mips64Fault::AddressErrorLoad, Mips64ExcCode::AdEL);
+    }
+
+    // -- 2. privilege enforcement --------------------------------------------
+    const bool kernel = isKernelMode();
+    const bool supervisor = isSupervisorMode();
+    bool allowed = false;
+    switch (segment) {
+        case Segment::KusegMapped:
+            allowed = true;  // user, supervisor and kernel
+            break;
+        case Segment::CkSeg0Direct:
+        case Segment::CkSeg1Direct:
+        case Segment::CkSeg3Mapped:
+            allowed = kernel;
+            break;
+        case Segment::CksSegMapped:
+            allowed = kernel || supervisor;
+            break;
+        case Segment::Bad:
+            allowed = false;
+            break;
+    }
+    if (!allowed) {
+        if (isFetch) {
+            return deny(Mips64Fault::AddressErrorFetch, Mips64ExcCode::AdEL);
+        }
+        if (isStore) {
+            return deny(Mips64Fault::AddressErrorStore, Mips64ExcCode::AdES);
+        }
+        return deny(Mips64Fault::AddressErrorLoad, Mips64ExcCode::AdEL);
+    }
+
+    // -- 3. direct-mapped kernel segments (no TLB involvement) ----------------
+    if (segment == Segment::CkSeg0Direct || segment == Segment::CkSeg1Direct) {
+        result.ok = true;
+        result.phys = va & kDirectMapMask;
+        return result;
+    }
+
+    // -- 4. mapped segments require a valid matching TLB entry ---------------
+    const uint64_t vpn2 = va >> 13;
+    const uint8_t asid = static_cast<uint8_t>(entryHi_ & kEntryHiAsidMask);
+    const int hit = tlbProbe(vpn2, asid);
+    if (hit < 0) {
+        result.ok = false;
+        result.isRefill = true;
+        if (isFetch) {
+            result.fault = Mips64Fault::TlbRefillFetch;
+            result.code = Mips64ExcCode::TLBL;
+        } else if (isStore) {
+            result.fault = Mips64Fault::TlbRefillStore;
+            result.code = Mips64ExcCode::TLBS;
+        } else {
+            result.fault = Mips64Fault::TlbRefillLoad;
+            result.code = Mips64ExcCode::TLBL;
+        }
+        return result;
+    }
+    const Mips64TlbEntry& entry = tlb_[static_cast<unsigned>(hit)];
+    const uint64_t pageSize = 4096ULL * (static_cast<uint64_t>(entry.mask) + 1ULL);
+    const bool odd = (va & pageSize) != 0;
+    const bool valid = odd ? entry.v1 : entry.v0;
+    const bool dirty = odd ? entry.d1 : entry.d0;
+    if (!valid) {
+        result.ok = false;
+        result.isRefill = false;
+        result.code = isStore ? Mips64ExcCode::TLBS : Mips64ExcCode::TLBL;
+        if (isFetch) {
+            result.fault = Mips64Fault::TlbInvalidFetch;
+        } else if (isStore) {
+            result.fault = Mips64Fault::TlbInvalidStore;
+        } else {
+            result.fault = Mips64Fault::TlbInvalidLoad;
+        }
+        return result;
+    }
+    if (isStore && !dirty) {
+        result.ok = false;
+        result.isRefill = false;
+        result.code = Mips64ExcCode::Mod;
+        result.fault = Mips64Fault::TlbModified;
+        return result;
+    }
+    // PFN low bits covered by the PageMask are ignored (deterministic).
+    const uint32_t pfn = odd ? entry.pfn1 : entry.pfn0;
+    const uint32_t pfnEffective =
+        pfn & (~static_cast<uint32_t>(entry.mask) & kEntryLoPfnMask);
+    const uint64_t offset = va & (pageSize - 1ULL);
+    result.ok = true;
+    result.phys = (static_cast<uint64_t>(pfnEffective) << 12) | offset;
+    return result;
+}
+
 void Mips64Cpu::multiplyU64(uint64_t a, uint64_t b, uint64_t& hi, uint64_t& lo) {
     // Four 32x32 -> 64 partial products combined with wraparound unsigned
     // arithmetic only, so this is portable (no __int128) and has no UB.
@@ -577,21 +962,56 @@ void Mips64Cpu::multiplyU64(uint64_t a, uint64_t b, uint64_t& hi, uint64_t& lo) 
     hi = p3 + (p1 >> 32) + (p2 >> 32) + (mid >> 32);
 }
 
+namespace {
+
+// Raw physical-memory read with explicit error capture (no CPU state change).
+bool readPhysical(ia64::IMemory& memory, uint64_t phys, uint8_t* dest, std::size_t size,
+                  std::string& error) {
+    try {
+        memory.Read(phys, dest, size);
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    } catch (...) {
+        error = "unknown error";
+        return false;
+    }
+    return true;
+}
+
+bool writePhysical(ia64::IMemory& memory, uint64_t phys, const uint8_t* src,
+                   std::size_t size, std::string& error) {
+    try {
+        memory.Write(phys, src, size);
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        return false;
+    } catch (...) {
+        error = "unknown error";
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 bool Mips64Cpu::fetchWord(ia64::IMemory& memory, uint64_t address, uint32_t& out) {
+    // Side-effect-free fetch for decode/disassembly paths: translates the
+    // virtual address but records failures without entering exceptions.
     if ((address & 0x3ULL) != 0) {
         setFault(Mips64Fault::MisalignedFetch, "instruction fetch from misaligned address");
         return false;
     }
-    uint8_t bytes[kInstructionSize] = {0, 0, 0, 0};
-    try {
-        memory.Read(address, bytes, kInstructionSize);
-    } catch (const std::exception& ex) {
-        setFault(Mips64Fault::MemoryFaultFetch,
-                 std::string("instruction fetch rejected by memory: ") + ex.what());
+    const Mips64Probe probe = probeAddress(address, Mips64Access::Fetch);
+    if (!probe.ok) {
+        setFault(probe.fault, "instruction fetch address translation failed");
         return false;
-    } catch (...) {
+    }
+    uint8_t bytes[kInstructionSize] = {0, 0, 0, 0};
+    std::string error;
+    if (!readPhysical(memory, probe.phys, bytes, kInstructionSize, error)) {
         setFault(Mips64Fault::MemoryFaultFetch,
-                 "instruction fetch rejected by memory (unknown error)");
+                 std::string("instruction fetch rejected by memory: ") + error);
         return false;
     }
     out = static_cast<uint32_t>(assembleBytes(bytes, kInstructionSize, isLittleEndian()));
@@ -945,6 +1365,9 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             lo_ = readGpr(decoded.rs);
             break;
         case Mips64Op::Mfc0: {
+            if (!requireKernel(address, wasDelaySlot, branchPc, "MFC0")) {
+                return Mips64StepResult::Fault;
+            }
             uint64_t value = 0;
             if (!readCp0(decoded.rd, decoded.sel, value)) {
                 setFault(Mips64Fault::Cp0Violation, "MFC0 to unsupported CP0 register/selector");
@@ -955,6 +1378,9 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             break;
         }
         case Mips64Op::Dmfc0: {
+            if (!requireKernel(address, wasDelaySlot, branchPc, "DMFC0")) {
+                return Mips64StepResult::Fault;
+            }
             uint64_t value = 0;
             if (!readCp0(decoded.rd, decoded.sel, value)) {
                 setFault(Mips64Fault::Cp0Violation, "DMFC0 to unsupported CP0 register/selector");
@@ -964,6 +1390,9 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             break;
         }
         case Mips64Op::Mtc0: {
+            if (!requireKernel(address, wasDelaySlot, branchPc, "MTC0")) {
+                return Mips64StepResult::Fault;
+            }
             // 32-bit transfer: low word of the GPR, sign-extended, then
             // per-register writable masks applied.
             if (!writeCp0(decoded.rd, decoded.sel, signExtend32(low32(readGpr(decoded.rt))))) {
@@ -973,6 +1402,9 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             break;
         }
         case Mips64Op::Dmtc0: {
+            if (!requireKernel(address, wasDelaySlot, branchPc, "DMTC0")) {
+                return Mips64StepResult::Fault;
+            }
             if (!writeCp0(decoded.rd, decoded.sel, readGpr(decoded.rt))) {
                 setFault(Mips64Fault::Cp0Violation, "DMTC0 to unsupported CP0 register/selector");
                 return Mips64StepResult::Fault;
@@ -985,6 +1417,11 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Break:
             return trap(Mips64ExcCode::Bp, Mips64Fault::BreakTrap,
                         "BREAK exception");
+        case Mips64Op::Tlbp:
+        case Mips64Op::Tlbr:
+        case Mips64Op::Tlbwi:
+        case Mips64Op::Tlbwr:
+            return executeTlb(decoded, address, wasDelaySlot, branchPc);
         case Mips64Op::Lb:
         case Mips64Op::Lbu:
         case Mips64Op::Lh:
@@ -1059,18 +1496,21 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
         return Mips64StepResult::Fault;
     }
 
+    // Virtual-to-physical translation (privilege, segment, TLB). Failures
+    // enter their architectural exceptions here.
+    const Mips64Probe probe =
+        probeAddress(effective, isLoad ? Mips64Access::Load : Mips64Access::Store);
+    if (!probe.ok) {
+        raiseProbe(probe, address, inDelaySlot, branchPc, effective);
+        return Mips64StepResult::Fault;
+    }
+
     if (isLoad) {
         uint8_t bytes[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        try {
-            memory.Read(effective, bytes, accessSize);
-        } catch (const std::exception& ex) {
+        std::string error;
+        if (!readPhysical(memory, probe.phys, bytes, accessSize, error)) {
             raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
-                           std::string("load rejected by memory: ") + ex.what(), address,
-                           inDelaySlot, branchPc, false, 0);
-            return Mips64StepResult::Fault;
-        } catch (...) {
-            raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
-                           "load rejected by memory (unknown error)", address,
+                           std::string("load rejected by memory: ") + error, address,
                            inDelaySlot, branchPc, false, 0);
             return Mips64StepResult::Fault;
         }
@@ -1091,20 +1531,121 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
 
     uint8_t bytes[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     disassembleBytes(readGpr(decoded.rt), bytes, accessSize, isLittleEndian());
-    try {
-        memory.Write(effective, bytes, accessSize);
-    } catch (const std::exception& ex) {
+    std::string writeError;
+    if (!writePhysical(memory, probe.phys, bytes, accessSize, writeError)) {
         raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultStore,
-                       std::string("store rejected by memory: ") + ex.what(), address,
-                       inDelaySlot, branchPc, false, 0);
-        return Mips64StepResult::Fault;
-    } catch (...) {
-        raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultStore,
-                       "store rejected by memory (unknown error)", address,
+                       std::string("store rejected by memory: ") + writeError, address,
                        inDelaySlot, branchPc, false, 0);
         return Mips64StepResult::Fault;
     }
     return Mips64StepResult::Continue;
+}
+
+Mips64StepResult Mips64Cpu::executeTlb(const Mips64Decoded& decoded,
+                                       uint64_t address,
+                                       bool inDelaySlot,
+                                       uint64_t branchPc) {
+    if (!requireKernel(address, inDelaySlot, branchPc, opName(decoded.op))) {
+        return Mips64StepResult::Fault;
+    }
+    // Retire helper: TLB instructions never arm a delay slot; when executed
+    // in a delay slot they retire into the pending transfer target.
+    // (A control-flow instruction in a delay slot is rejected before this
+    // point; TLB ops are data-plane instructions.)
+    const auto retire = [&]() {
+        clearFault();
+        if (inDelaySlot) {
+            pc_ = delayTarget_;
+            delayArmed_ = false;
+            delayTarget_ = 0;
+            delayBranch_ = 0;
+        } else {
+            pc_ = address + kInstructionSize;
+        }
+        return Mips64StepResult::Continue;
+    };
+    const auto storeEntry = [&](unsigned idx) {
+        Mips64TlbEntry entry;
+        entry.vpn2 = entryHi_ >> 13;
+        entry.asid = static_cast<uint8_t>(entryHi_ & kEntryHiAsidMask);
+        entry.mask = static_cast<uint16_t>((pageMask_ >> kPageMaskShift) & 0xFFFU);
+        entry.badMask = !isSupportedPageMask(entry.mask);
+        entry.pfn0 = (entryLo0_ >> kEntryLoPfnShift) & kEntryLoPfnMask;
+        entry.c0 = static_cast<uint8_t>((entryLo0_ >> kEntryLoCShift) & 0x7U);
+        entry.d0 = (entryLo0_ & kEntryLoDBit) != 0;
+        entry.v0 = (entryLo0_ & kEntryLoVBit) != 0;
+        const bool g0 = (entryLo0_ & kEntryLoGBit) != 0;
+        entry.pfn1 = (entryLo1_ >> kEntryLoPfnShift) & kEntryLoPfnMask;
+        entry.c1 = static_cast<uint8_t>((entryLo1_ >> kEntryLoCShift) & 0x7U);
+        entry.d1 = (entryLo1_ & kEntryLoDBit) != 0;
+        entry.v1 = (entryLo1_ & kEntryLoVBit) != 0;
+        const bool g1 = (entryLo1_ & kEntryLoGBit) != 0;
+        // The TLB entry is global only when both EntryLo G bits are set;
+        // TLBR reports the entry G bit in both EntryLo images.
+        entry.g = g0 && g1;
+        tlb_[idx] = entry;
+    };
+    switch (decoded.op) {
+        case Mips64Op::Tlbp: {
+            const uint64_t vpn2 = entryHi_ >> 13;
+            const uint8_t asid = static_cast<uint8_t>(entryHi_ & kEntryHiAsidMask);
+            const int hit = tlbProbe(vpn2, asid);
+            if (hit >= 0) {
+                index_ = static_cast<uint64_t>(hit);  // P cleared
+            } else {
+                index_ |= kIndexPBit;  // P set, index field preserved
+            }
+            return retire();
+        }
+        case Mips64Op::Tlbr: {
+            // Probe-failed (P set) or out-of-range Index: deterministic
+            // no-op, no exception, no CP0 change.
+            if ((index_ & kIndexPBit) != 0) {
+                return retire();
+            }
+            const unsigned idx = static_cast<unsigned>(index_ & kIndexFieldMask);
+            if (idx >= kTlbEntries) {
+                return retire();
+            }
+            const Mips64TlbEntry& entry = tlb_[idx];
+            entryHi_ = (entry.vpn2 << 13) | entry.asid;
+            pageMask_ = static_cast<uint32_t>(entry.mask) << kPageMaskShift;
+            const uint32_t g = entry.g ? kEntryLoGBit : 0U;
+            entryLo0_ = ((entry.pfn0 & kEntryLoPfnMask) << kEntryLoPfnShift) |
+                        (static_cast<uint32_t>(entry.c0) << kEntryLoCShift) |
+                        (entry.d0 ? kEntryLoDBit : 0U) | (entry.v0 ? kEntryLoVBit : 0U) | g;
+            entryLo1_ = ((entry.pfn1 & kEntryLoPfnMask) << kEntryLoPfnShift) |
+                        (static_cast<uint32_t>(entry.c1) << kEntryLoCShift) |
+                        (entry.d1 ? kEntryLoDBit : 0U) | (entry.v1 ? kEntryLoVBit : 0U) | g;
+            return retire();
+        }
+        case Mips64Op::Tlbwi: {
+            if ((index_ & kIndexPBit) != 0) {
+                return retire();
+            }
+            const unsigned idx = static_cast<unsigned>(index_ & kIndexFieldMask);
+            if (idx >= kTlbEntries) {
+                return retire();
+            }
+            storeEntry(idx);
+            return retire();
+        }
+        case Mips64Op::Tlbwr: {
+            const unsigned idx =
+                static_cast<unsigned>(random_ % kTlbEntries);  // invariant: < N
+            storeEntry(idx);
+            // Deterministic Random advance within [Wired, N).
+            if (random_ <= wired_ || random_ >= kTlbEntries) {
+                random_ = kTlbEntries - 1;
+            } else {
+                --random_;
+            }
+            return retire();
+        }
+        default:
+            setFault(Mips64Fault::UnsupportedInstruction, "not a TLB operation");
+            return Mips64StepResult::Fault;
+    }
 }
 
 Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
@@ -1120,7 +1661,11 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
     }
 
     // ERET transfers control immediately and never has a delay slot.
+    // Reaching here means no delay slot is armed, so BD attribution is moot.
     if (decoded.op == Mips64Op::Eret) {
+        if (!requireKernel(address, false, 0, "ERET")) {
+            return Mips64StepResult::Fault;
+        }
         if ((status_ & kStatusBitErl) != 0) {
             pc_ = errorEpc_;
             status_ &= ~kStatusBitErl;
@@ -1250,30 +1795,42 @@ Mips64StepResult Mips64Cpu::step(ia64::IMemory& memory) {
     // Count is a simple deterministic tick: one increment per step call.
     // Compare match delivers no interrupt (Cause TI/IP stay 0); see docs.
     count_ = (count_ + 1) & 0xFFFFFFFFULL;
+    clearFault();
     const uint64_t address = pc_;
-    Mips64Decoded decoded = decodeAt(memory, address);
+    const bool inDelay = delayArmed_;
+    const uint64_t branchPc = delayBranch_;
+    // -- fetch: alignment, then virtual-to-physical translation, then the
+    // -- physical read. Each failure class enters its own exception. -------
+    if ((address & 0x3ULL) != 0) {
+        raiseException(Mips64ExcCode::AdEL, Mips64Fault::MisalignedFetch,
+                       "instruction fetch from misaligned address", address,
+                       inDelay, branchPc, true, address);
+        return Mips64StepResult::Fault;
+    }
+    const Mips64Probe probe = probeAddress(address, Mips64Access::Fetch);
+    if (!probe.ok) {
+        raiseProbe(probe, address, inDelay, branchPc, address);
+        return Mips64StepResult::Fault;
+    }
+    uint8_t bytes[kInstructionSize] = {0, 0, 0, 0};
+    std::string error;
+    if (!readPhysical(memory, probe.phys, bytes, kInstructionSize, error)) {
+        raiseException(Mips64ExcCode::IBE, Mips64Fault::MemoryFaultFetch,
+                       std::string("instruction fetch rejected by memory: ") + error,
+                       address, inDelay, branchPc, false, 0);
+        return Mips64StepResult::Fault;
+    }
+    Mips64Decoded decoded = decodeInstruction(
+        static_cast<uint32_t>(assembleBytes(bytes, kInstructionSize, isLittleEndian())));
     if (!decoded.valid) {
         if (decoded.fault == Mips64Fault::ReservedInstruction) {
-            const bool inDelay = delayArmed_;
-            const uint64_t branchPc = delayBranch_;
             raiseException(Mips64ExcCode::RI, decoded.fault, decoded.error, address,
                            inDelay, branchPc, false, 0);
             return Mips64StepResult::Fault;
         }
-        if (decoded.fault == Mips64Fault::MisalignedFetch) {
-            const bool inDelay = delayArmed_;
-            const uint64_t branchPc = delayBranch_;
-            raiseException(Mips64ExcCode::AdEL, decoded.fault, decoded.error, address,
-                           inDelay, branchPc, true, address);
-            return Mips64StepResult::Fault;
-        }
-        if (decoded.fault == Mips64Fault::MemoryFaultFetch) {
-            const bool inDelay = delayArmed_;
-            const uint64_t branchPc = delayBranch_;
-            raiseException(Mips64ExcCode::IBE, decoded.fault, decoded.error, address,
-                           inDelay, branchPc, false, 0);
-            return Mips64StepResult::Fault;
-        }
+        setFault(decoded.fault == Mips64Fault::None ? Mips64Fault::ReservedInstruction
+                                                    : decoded.fault,
+                 decoded.error.empty() ? "invalid instruction encoding" : decoded.error);
         return Mips64StepResult::Fault;
     }
     return executeDecoded(memory, decoded, address);
@@ -1395,6 +1952,10 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Eret:
         case Mips64Op::Syscall:
         case Mips64Op::Break:
+        case Mips64Op::Tlbp:
+        case Mips64Op::Tlbr:
+        case Mips64Op::Tlbwi:
+        case Mips64Op::Tlbwr:
             std::snprintf(buffer, sizeof(buffer), "%s", name);
             break;
         default:
@@ -1410,7 +1971,7 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     blob[1] = 'P';
     blob[2] = '6';
     blob[3] = '2';
-    blob[4] = 2;  // format version
+    blob[4] = 3;  // format version (MIPS64-3: TLB state appended)
     blob[5] = static_cast<uint8_t>(endianness_);
     // bytes 6..7 reserved (zero)
 
@@ -1444,17 +2005,57 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     store64(cp0Offset + 40, ebase_);
     store64(cp0Offset + 48, count_);
     store64(cp0Offset + 56, compare_);
+    // MIPS64-3 TLB management registers (offset 373, 9 x u64).
+    const std::size_t tlbOffset = cp0Offset + 64;
+    store64(tlbOffset, index_);
+    store64(tlbOffset + 8, random_);
+    store64(tlbOffset + 16, entryHi_);
+    store64(tlbOffset + 24, entryLo0_);
+    store64(tlbOffset + 32, entryLo1_);
+    store64(tlbOffset + 40, pageMask_);
+    store64(tlbOffset + 48, wired_);
+    store64(tlbOffset + 56, context_);
+    store64(tlbOffset + 64, xcontext_);
+    // TLB entries (offset 445, 16 x 32 bytes).
+    std::size_t entryOffset = tlbOffset + 72;
+    for (unsigned i = 0; i < kTlbEntries; ++i) {
+        const Mips64TlbEntry& entry = tlb_[i];
+        store64(entryOffset, entry.vpn2);
+        for (int b = 0; b < 4; ++b) {
+            blob[entryOffset + 8 + static_cast<std::size_t>(b)] =
+                static_cast<uint8_t>((entry.pfn0 >> (8 * b)) & 0xFFU);
+            blob[entryOffset + 12 + static_cast<std::size_t>(b)] =
+                static_cast<uint8_t>((entry.pfn1 >> (8 * b)) & 0xFFU);
+        }
+        blob[entryOffset + 16] = static_cast<uint8_t>(entry.mask & 0xFFU);
+        blob[entryOffset + 17] = static_cast<uint8_t>((entry.mask >> 8) & 0xFFU);
+        blob[entryOffset + 18] = entry.asid;
+        blob[entryOffset + 19] = entry.c0;
+        blob[entryOffset + 20] = entry.c1;
+        uint8_t flags = 0;
+        if (entry.v0) flags |= 0x01U;
+        if (entry.d0) flags |= 0x02U;
+        if (entry.v1) flags |= 0x04U;
+        if (entry.d1) flags |= 0x08U;
+        if (entry.g) flags |= 0x10U;
+        if (entry.badMask) flags |= 0x20U;
+        blob[entryOffset + 21] = flags;
+        // bytes 22..31 reserved (zero)
+        entryOffset += 32;
+    }
     return blob;
 }
 
 bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
+    // Staged validation: every field is checked before any live state is
+    // touched, so invalid or truncated blobs leave the CPU untouched.
     if (data == nullptr || size != kSerializedSize) {
         return false;
     }
     if (data[0] != 'M' || data[1] != 'P' || data[2] != '6' || data[3] != '2') {
         return false;
     }
-    if (data[4] != 2) {
+    if (data[4] != 3) {  // v1 ('MP61') and v2 blobs are rejected by size+version
         return false;
     }
     if (data[5] != static_cast<uint8_t>(Mips64Endianness::Little) &&
@@ -1470,34 +2071,153 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
         }
         return value;
     };
+    std::array<uint64_t, kNumGpr> gpr{};
     for (unsigned i = 0; i < kNumGpr; ++i) {
-        gpr_[i] = load64(8 + static_cast<std::size_t>(i) * 8);
+        gpr[i] = load64(8 + static_cast<std::size_t>(i) * 8);
     }
-    gpr_[kZeroReg] = 0;  // $zero is hardwired even across snapshots
-    pc_ = load64(8 + 32 * 8);
-    hi_ = load64(8 + 32 * 8 + 8);
-    lo_ = load64(8 + 32 * 8 + 16);
-    delayArmed_ = data[8 + 32 * 8 + 24] != 0;
-    delayTarget_ = load64(8 + 32 * 8 + 25);
-    delayBranch_ = load64(8 + 32 * 8 + 33);
+    gpr[kZeroReg] = 0;  // $zero is hardwired even across snapshots
+    const uint64_t pc = load64(8 + 32 * 8);
+    const uint64_t hi = load64(8 + 32 * 8 + 8);
+    const uint64_t lo = load64(8 + 32 * 8 + 16);
+    const bool delayArmed = data[8 + 32 * 8 + 24] == 1;
+    if (data[8 + 32 * 8 + 24] > 1) {
+        return false;
+    }
+    const uint64_t delayTarget = load64(8 + 32 * 8 + 25);
+    const uint64_t delayBranch = load64(8 + 32 * 8 + 33);
     const std::size_t faultOffset = 8 + 32 * 8 + 41;
     uint32_t fault = 0;
     for (int i = 0; i < 4; ++i) {
         fault |= static_cast<uint32_t>(data[faultOffset + static_cast<std::size_t>(i)])
                  << (8 * i);
     }
-    fault_ = fault <= static_cast<uint32_t>(Mips64Fault::OverflowTrap)
-                 ? static_cast<Mips64Fault>(fault)
-                 : Mips64Fault::None;
+    if (fault > static_cast<uint32_t>(Mips64Fault::TlbModified)) {
+        return false;
+    }
     const std::size_t cp0Offset = faultOffset + 4;
-    status_ = load64(cp0Offset);
-    cause_ = load64(cp0Offset + 8);
-    epc_ = load64(cp0Offset + 16);
-    errorEpc_ = load64(cp0Offset + 24);
-    badVAddr_ = load64(cp0Offset + 32);
-    ebase_ = load64(cp0Offset + 40);
-    count_ = load64(cp0Offset + 48);
-    compare_ = load64(cp0Offset + 56);
+    const uint64_t status = load64(cp0Offset);
+    const uint64_t cause = load64(cp0Offset + 8);
+    const uint64_t epc = load64(cp0Offset + 16);
+    const uint64_t errorEpc = load64(cp0Offset + 24);
+    const uint64_t badVAddr = load64(cp0Offset + 32);
+    const uint64_t ebase = load64(cp0Offset + 40);
+    const uint64_t count = load64(cp0Offset + 48);
+    const uint64_t compare = load64(cp0Offset + 56);
+    // TLB management registers.
+    const std::size_t tlbOffset = cp0Offset + 64;
+    const uint64_t index = load64(tlbOffset);
+    const uint64_t random = load64(tlbOffset + 8);
+    const uint64_t entryHi = load64(tlbOffset + 16);
+    const uint64_t entryLo0 = load64(tlbOffset + 24);
+    const uint64_t entryLo1 = load64(tlbOffset + 32);
+    const uint64_t pageMask = load64(tlbOffset + 40);
+    const uint64_t wired = load64(tlbOffset + 48);
+    const uint64_t context = load64(tlbOffset + 56);
+    const uint64_t xcontext = load64(tlbOffset + 64);
+    if ((index & ~kIndexWritableMask) != 0) {
+        return false;
+    }
+    if (random >= kTlbEntries) {
+        return false;
+    }
+    if ((entryHi & ~kEntryHiWritableMask) != 0) {
+        return false;
+    }
+    if ((entryLo0 & ~kEntryLoWritableMask) != 0 || (entryLo1 & ~kEntryLoWritableMask) != 0) {
+        return false;
+    }
+    if ((pageMask & ~kPageMaskWritableMask) != 0) {
+        return false;
+    }
+    if (wired > kTlbMaxWired) {
+        return false;
+    }
+    if ((context >> 32) != 0 || (context & 0xFULL) != 0) {
+        return false;
+    }
+    if ((xcontext & 0xFFFULL) != 0 || (xcontext >> 52) != 0) {
+        return false;
+    }
+    // TLB entries.
+    std::array<Mips64TlbEntry, kTlbEntries> tlb{};
+    std::size_t entryOffset = tlbOffset + 72;
+    for (unsigned i = 0; i < kTlbEntries; ++i) {
+        Mips64TlbEntry entry;
+        entry.vpn2 = load64(entryOffset);
+        if ((entry.vpn2 & ~kEntryHiVpn2Mask) != 0) {
+            return false;
+        }
+        uint32_t pfn0 = 0, pfn1 = 0;
+        for (int b = 0; b < 4; ++b) {
+            pfn0 |= static_cast<uint32_t>(data[entryOffset + 8 + static_cast<std::size_t>(b)])
+                    << (8 * b);
+            pfn1 |= static_cast<uint32_t>(data[entryOffset + 12 + static_cast<std::size_t>(b)])
+                    << (8 * b);
+        }
+        if ((pfn0 & ~kEntryLoPfnMask) != 0 || (pfn1 & ~kEntryLoPfnMask) != 0) {
+            return false;
+        }
+        entry.pfn0 = pfn0;
+        entry.pfn1 = pfn1;
+        entry.mask = static_cast<uint16_t>(data[entryOffset + 16]) |
+                     (static_cast<uint16_t>(data[entryOffset + 17]) << 8);
+        if ((entry.mask & ~0xFFFU) != 0) {
+            return false;
+        }
+        entry.asid = data[entryOffset + 18];
+        entry.c0 = data[entryOffset + 19];
+        entry.c1 = data[entryOffset + 20];
+        if (entry.c0 > 7 || entry.c1 > 7) {
+            return false;
+        }
+        const uint8_t flags = data[entryOffset + 21];
+        if ((flags & ~0x3FU) != 0) {
+            return false;
+        }
+        entry.v0 = (flags & 0x01U) != 0;
+        entry.d0 = (flags & 0x02U) != 0;
+        entry.v1 = (flags & 0x04U) != 0;
+        entry.d1 = (flags & 0x08U) != 0;
+        entry.g = (flags & 0x10U) != 0;
+        entry.badMask = (flags & 0x20U) != 0;
+        if (entry.badMask != !isSupportedPageMask(entry.mask)) {
+            return false;  // flag must agree with the stored mask
+        }
+        for (int b = 22; b < 32; ++b) {
+            if (data[entryOffset + static_cast<std::size_t>(b)] != 0) {
+                return false;
+            }
+        }
+        tlb[i] = entry;
+        entryOffset += 32;
+    }
+    // All checks passed: commit.
+    gpr_ = gpr;
+    pc_ = pc;
+    hi_ = hi;
+    lo_ = lo;
+    delayArmed_ = delayArmed;
+    delayTarget_ = delayTarget;
+    delayBranch_ = delayBranch;
+    fault_ = static_cast<Mips64Fault>(fault);
+    status_ = status;
+    cause_ = cause;
+    epc_ = epc;
+    errorEpc_ = errorEpc;
+    badVAddr_ = badVAddr;
+    ebase_ = ebase;
+    count_ = count;
+    compare_ = compare;
+    index_ = index;
+    random_ = random;
+    entryHi_ = entryHi;
+    entryLo0_ = static_cast<uint32_t>(entryLo0);
+    entryLo1_ = static_cast<uint32_t>(entryLo1);
+    pageMask_ = static_cast<uint32_t>(pageMask);
+    wired_ = wired;
+    context_ = static_cast<uint32_t>(context);
+    xcontext_ = xcontext;
+    tlb_ = tlb;
     // Endianness is part of the snapshot so round trips preserve config.
     endianness_ = static_cast<Mips64Endianness>(data[5]);
     lastError_.clear();
@@ -1519,6 +2239,14 @@ std::string Mips64Cpu::toString() const {
         << "  EPC: " << hex64(epc_) << "\n";
     out << "  CP0 ErrorEPC: " << hex64(errorEpc_) << "  BadVAddr: " << hex64(badVAddr_)
         << "  EBase: " << hex64(ebase_) << "\n";
+    out << "  CP0 Index: " << hex64(index_) << "  Random: " << hex64(random_)
+        << "  Wired: " << hex64(wired_) << "\n";
+    out << "  CP0 EntryHi: " << hex64(entryHi_) << "  PageMask: " << hex64(pageMask_)
+        << "\n";
+    out << "  CP0 EntryLo0: " << hex64(entryLo0_) << "  EntryLo1: " << hex64(entryLo1_)
+        << "\n";
+    out << "  CP0 Context: " << hex64(context_) << "  XContext: " << hex64(xcontext_)
+        << "\n";
     out << "  CP0 Count: " << hex64(count_) << "  Compare: " << hex64(compare_)
         << "  vector: " << hex64(exceptionVector()) << "\n";
     out << "  fault: " << faultName(fault_);
@@ -1556,6 +2284,17 @@ const char* Mips64Cpu::faultName(Mips64Fault fault) {
         case Mips64Fault::SyscallTrap: return "SyscallTrap";
         case Mips64Fault::BreakTrap: return "BreakTrap";
         case Mips64Fault::OverflowTrap: return "OverflowTrap";
+        case Mips64Fault::PrivilegeViolation: return "PrivilegeViolation";
+        case Mips64Fault::AddressErrorFetch: return "AddressErrorFetch";
+        case Mips64Fault::AddressErrorLoad: return "AddressErrorLoad";
+        case Mips64Fault::AddressErrorStore: return "AddressErrorStore";
+        case Mips64Fault::TlbRefillFetch: return "TlbRefillFetch";
+        case Mips64Fault::TlbRefillLoad: return "TlbRefillLoad";
+        case Mips64Fault::TlbRefillStore: return "TlbRefillStore";
+        case Mips64Fault::TlbInvalidFetch: return "TlbInvalidFetch";
+        case Mips64Fault::TlbInvalidLoad: return "TlbInvalidLoad";
+        case Mips64Fault::TlbInvalidStore: return "TlbInvalidStore";
+        case Mips64Fault::TlbModified: return "TlbModified";
         default: return "Unknown";
     }
 }
@@ -1638,6 +2377,10 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Eret: return "eret";
         case Mips64Op::Syscall: return "syscall";
         case Mips64Op::Break: return "break";
+        case Mips64Op::Tlbp: return "tlbp";
+        case Mips64Op::Tlbr: return "tlbr";
+        case Mips64Op::Tlbwi: return "tlbwi";
+        case Mips64Op::Tlbwr: return "tlbwr";
         default: return "invalid";
     }
 }

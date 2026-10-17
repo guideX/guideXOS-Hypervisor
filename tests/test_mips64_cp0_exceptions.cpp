@@ -15,8 +15,10 @@
 
 #include "IMemory.h"
 #include "mips64/Mips64Cpu.h"
+#include "mips64_mmu_setup.h"
 
 using namespace mips64;
+using namespace mips64_test;
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -102,7 +104,7 @@ static bool stepFault(Mips64Cpu& cpu, ia64::IMemory& mem, Mips64Fault expected) 
     return cpu.step(mem) == Mips64StepResult::Fault && cpu.fault() == expected;
 }
 
-static const uint64_t kBev1Vector = 0xFFFFFFFFBFC00180ULL;
+static const uint64_t kBev1Vector = 0xFFFFFFFFBFC00380ULL;  // BEV=1 general exception vector (base 0xBFC00200 + 0x180)
 static const uint64_t kBev0Vector = 0xFFFFFFFF80000180ULL;
 
 // -- 1. CP0 reset values ----------------------------------------------------------
@@ -140,6 +142,7 @@ static void testCp0WritableFields() {
     // MTC0 Status with all ones: only the writable mask sticks.
     cpu.writeGpr(8, 0xFFFFFFFFFFFFFFFFULL);
     storeWord(mem, 0, encodeCp0(4, 8, 12, 0), true);  // mtc0 $8, $12, 0
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(cpu.cp0Status() == 0x0040FFFFULL);
     // DMTC0 Status sets the same mask from a full 64-bit value.
@@ -208,6 +211,7 @@ static void testCp0TransferWidths() {
     storeWord(mem, 0, encodeCp0(5, 8, 14, 0), true);  // dmtc0 -> EPC
     storeWord(mem, 4, encodeCp0(0, 9, 14, 0), true);   // mfc0 $9, $14
     storeWord(mem, 8, encodeCp0(1, 10, 14, 0), true);  // dmfc0 $10, $14
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(stepOk(cpu, mem));
     CHECK(stepOk(cpu, mem));
@@ -235,12 +239,15 @@ static void testUnsupportedCp0() {
     Mips64Cpu cpu;
     cpu.writeGpr(8, 0xABC);
     cpu.writeGpr(9, 0x1234);  // sentinel: must not be overwritten
-    // Index (0,0), PRId (15,0), Status sel 1, Config (16,0), ErrorEPC sel 1.
-    const uint32_t words[5] = {
-        encodeCp0(0, 9, 0, 0), encodeCp0(0, 9, 15, 0), encodeCp0(0, 9, 12, 1),
-        encodeCp0(1, 9, 16, 0), encodeCp0(4, 8, 30, 1),
+    CHECK(setupKusegIdentityMap(cpu, mem));
+    // Genuinely unsupported CP0 register/selector pairs: PRId, Status sel 1,
+    // Config, ErrorEPC sel 1, Cause sel 1, BadVAddr sel 1. Index (0,0) is
+    // supported in MIPS64-3 and is exercised by testCp0TlbRegisters.
+    const uint32_t words[6] = {
+        encodeCp0(0, 9, 15, 0), encodeCp0(0, 9, 12, 1), encodeCp0(1, 9, 16, 0),
+        encodeCp0(4, 8, 30, 1), encodeCp0(0, 9, 13, 1), encodeCp0(0, 9, 8, 1),
     };
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         storeWord(mem, static_cast<uint64_t>(i) * 4, words[i], true);
         cpu.setPc(static_cast<uint64_t>(i) * 4);
         CHECK(stepFault(cpu, mem, Mips64Fault::Cp0Violation));
@@ -270,6 +277,7 @@ static void testTrappingOverflow() {
     cpu.writeGpr(9, 1);
     cpu.writeGpr(10, 0xDEADULL);  // sentinel
     storeWord(mem, 0, encodeR(8, 9, 10, 0, 0x20), true);  // add $10,$8,$9
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepFault(cpu, mem, Mips64Fault::OverflowTrap));
     CHECK(cpu.causeExcCode() == 12);
     CHECK(cpu.cp0Epc() == 0);
@@ -282,6 +290,7 @@ static void testTrappingOverflow() {
     // 0x40000000 + 0x3FFFFFFF = 0x7FFFFFFF (INT32_MAX, in range).
     // (0x40000000 + 0x40000000 would genuinely overflow signed 32-bit.)
     Mips64Cpu cpu2;
+    CHECK(setupKusegIdentityMap(cpu2, mem));
     cpu2.writeGpr(8, 0x40000000ULL);
     cpu2.writeGpr(9, 0x3FFFFFFFULL);
     storeWord(mem, 64, encodeR(8, 9, 10, 0, 0x20), true);
@@ -295,6 +304,7 @@ static void testTrappingOverflow2() {
     SparseMemory mem;
     // ADD INT32_MIN + (-1) overflows as well.
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0xFFFFFFFF80000000ULL);
     cpu.writeGpr(9, 0xFFFFFFFFFFFFFFFFULL);
     storeWord(mem, 0, encodeR(8, 9, 10, 0, 0x20), true);
@@ -305,23 +315,27 @@ static void testTrappingOverflow2() {
     Mips64Cpu c2;
     c2.writeGpr(8, 0x7FFF);
     storeWord(mem, 0, encodeI(0x08, 8, 10, 1), true);  // addi $10,$8,1
+    CHECK(setupKusegIdentityMap(c2, mem));
     CHECK(stepOk(c2, mem));
     CHECK(c2.readGpr(10) == 0x8000);
     Mips64Cpu c3;
     c3.writeGpr(8, 0x7FFFFFFF);
     storeWord(mem, 4, encodeI(0x08, 8, 10, 1), true);
     c3.setPc(4);
+    CHECK(setupKusegIdentityMap(c3, mem));
     CHECK(stepFault(c3, mem, Mips64Fault::OverflowTrap));
     CHECK(c3.cp0Epc() == 4);
 
     // SUB: INT32_MIN - 1 overflows; 5 - 10 is fine (-5).
     Mips64Cpu c4;
+    CHECK(setupKusegIdentityMap(c4, mem));
     c4.writeGpr(8, 0xFFFFFFFF80000000ULL);
     c4.writeGpr(9, 1);
     storeWord(mem, 8, encodeR(8, 9, 10, 0, 0x22), true);  // sub
     c4.setPc(8);
     CHECK(stepFault(c4, mem, Mips64Fault::OverflowTrap));
     Mips64Cpu c5;
+    CHECK(setupKusegIdentityMap(c5, mem));
     c5.writeGpr(8, 5);
     c5.writeGpr(9, 10);
     c5.setPc(8);
@@ -334,16 +348,19 @@ static void testTrappingOverflow2() {
     c6.writeGpr(9, 1);
     storeWord(mem, 12, encodeR(8, 9, 10, 0, 0x2C), true);  // dadd
     c6.setPc(12);
+    CHECK(setupKusegIdentityMap(c6, mem));
     CHECK(stepFault(c6, mem, Mips64Fault::OverflowTrap));
     CHECK(c6.causeExcCode() == 12);
 
     // DADDI: INT64_MIN + (-1) overflows; small adds retire.
     Mips64Cpu c7;
+    CHECK(setupKusegIdentityMap(c7, mem));
     c7.writeGpr(8, 0x8000000000000000ULL);
     storeWord(mem, 16, encodeI(0x18, 8, 10, 0xFFFF), true);  // daddi $10,$8,-1
     c7.setPc(16);
     CHECK(stepFault(c7, mem, Mips64Fault::OverflowTrap));
     Mips64Cpu c8;
+    CHECK(setupKusegIdentityMap(c8, mem));
     c8.writeGpr(8, 100);
     c8.setPc(16);
     CHECK(stepOk(c8, mem));
@@ -351,12 +368,14 @@ static void testTrappingOverflow2() {
 
     // DSUB: INT64_MIN - 1 overflows.
     Mips64Cpu c9;
+    CHECK(setupKusegIdentityMap(c9, mem));
     c9.writeGpr(8, 0x8000000000000000ULL);
     c9.writeGpr(9, 1);
     storeWord(mem, 20, encodeR(8, 9, 10, 0, 0x2E), true);  // dsub
     c9.setPc(20);
     CHECK(stepFault(c9, mem, Mips64Fault::OverflowTrap));
     Mips64Cpu c10;
+    CHECK(setupKusegIdentityMap(c10, mem));
     c10.writeGpr(8, 0);
     c10.writeGpr(9, 1);
     c10.setPc(20);
@@ -368,6 +387,7 @@ static void testTrappingOverflow2() {
 static void testSyscallBreak() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     storeWord(mem, 0, 0x0000000CU, true);  // syscall
     storeWord(mem, 4, 0x0000000DU, true);  // break
     CHECK(stepFault(cpu, mem, Mips64Fault::SyscallTrap));
@@ -379,6 +399,7 @@ static void testSyscallBreak() {
 
     // BREAK with a code field still traps as Bp (code ignored).
     Mips64Cpu cpu2;
+    CHECK(setupKusegIdentityMap(cpu2, mem));
     cpu2.setPc(4);
     CHECK(stepFault(cpu2, mem, Mips64Fault::BreakTrap));
     CHECK(cpu2.causeExcCode() == 9);
@@ -390,6 +411,7 @@ static void testSyscallBreak() {
 static void testReservedInstructionEntry() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     storeWord(mem, 0, encodeR(0, 0, 0, 0, 0x05), true);  // reserved SPECIAL
     storeWord(mem, 4, encodeI(0x1D, 0, 0, 0), true);     // reserved primary
     CHECK(stepFault(cpu, mem, Mips64Fault::ReservedInstruction));
@@ -400,6 +422,7 @@ static void testReservedInstructionEntry() {
     CHECK(cpu.pc() == kBev1Vector);
     // Second entry while EXL is set: nested, EPC preserved.
     Mips64Cpu cpu2;
+    CHECK(setupKusegIdentityMap(cpu2, mem));
     cpu2.setPc(4);
     CHECK(stepFault(cpu2, mem, Mips64Fault::ReservedInstruction));
     CHECK(cpu2.causeExcCode() == 10);
@@ -411,6 +434,7 @@ static void testMisalignedEntries() {
     SparseMemory mem;
     fillZeros(mem, 0, 64);
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.setPc(2);  // misaligned fetch
     CHECK(stepFault(cpu, mem, Mips64Fault::MisalignedFetch));
     CHECK(cpu.causeExcCode() == 4);
@@ -419,6 +443,7 @@ static void testMisalignedEntries() {
 
     // Misaligned LW: base 0x1000 + 1.
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0x1000);
     storeWord(mem, 0, encodeI(0x23, 8, 9, 1), true);  // lw $9, 1($8)
     CHECK(stepFault(c2, mem, Mips64Fault::MisalignedLoad));
@@ -429,6 +454,7 @@ static void testMisalignedEntries() {
 
     // Misaligned SW -> AdES.
     Mips64Cpu c3;
+    CHECK(setupKusegIdentityMap(c3, mem));
     c3.writeGpr(8, 0x1000);
     storeWord(mem, 4, encodeI(0x2B, 8, 9, 3), true);  // sw $9, 3($8)
     c3.setPc(4);
@@ -444,6 +470,7 @@ static void testEpcAndBd() {
     storeWord(mem, 0x100, encodeI(0x04, 0, 0, 1), true);  // beq $0,$0,1 -> 0x108
     storeWord(mem, 0x104, encodeI(0x21, 8, 9, 1), true);  // lh odd -> AdEL in slot
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0x1000);
     cpu.setPc(0x100);
     CHECK(stepOk(cpu, mem));
@@ -460,6 +487,7 @@ static void testEpcAndBd() {
     storeWord(mem, 0x200, encodeI(0x05, 8, 9, 1), true);  // bne (taken: 1 != 2)
     storeWord(mem, 0x204, 0x0000000CU, true);             // syscall in slot
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 1);
     c2.writeGpr(9, 2);
     c2.setPc(0x200);
@@ -473,6 +501,7 @@ static void testEpcAndBd() {
     storeWord(mem, 0x300, encodeI(0x04, 8, 9, 1), true);  // beq not taken
     storeWord(mem, 0x304, 0x0000000DU, true);             // break in slot
     Mips64Cpu c3;
+    CHECK(setupKusegIdentityMap(c3, mem));
     c3.writeGpr(8, 1);
     c3.writeGpr(9, 2);
     c3.setPc(0x300);
@@ -486,6 +515,7 @@ static void testEpcAndBd() {
     storeWord(mem, 0x400, encodeI(0x05, 8, 9, 1), true);  // bne taken
     storeWord(mem, 0x404, encodeR(10, 11, 12, 0, 0x20), true);  // add (overflows)
     Mips64Cpu c4;
+    CHECK(setupKusegIdentityMap(c4, mem));
     c4.writeGpr(8, 1);
     c4.writeGpr(9, 2);
     c4.writeGpr(10, 0x7FFFFFFF);
@@ -503,12 +533,14 @@ static void testVectorSelection() {
     SparseMemory mem;
     storeWord(mem, 0, 0x0000000CU, true);  // syscall
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(cpu.exceptionVector() == kBev1Vector);
     CHECK(stepFault(cpu, mem, Mips64Fault::SyscallTrap));
     CHECK(cpu.pc() == kBev1Vector);
 
     // Clear BEV via MTC0 Status -> EBase vector (reset EBase 0x80000000).
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0);
     storeWord(mem, 16, encodeCp0(4, 8, 12, 0), true);  // mtc0 Status = 0
     c2.setPc(16);
@@ -520,6 +552,7 @@ static void testVectorSelection() {
 
     // Reprogram EBase via DMTC0 -> vector follows.
     Mips64Cpu c3;
+    CHECK(setupKusegIdentityMap(c3, mem));
     c3.writeGpr(8, 0);
     c3.writeGpr(9, 0xA0000000ULL);
     storeWord(mem, 16, encodeCp0(4, 8, 12, 0), true);  // mtc0 Status = 0 (BEV=0)
@@ -542,9 +575,12 @@ static void testEret() {
     // prologue below does. Then take a SYSCALL entry and ERET: EXL path.
     storeWord(mem, 0, encodeCp0(4, 8, 12, 0), true);  // mtc0 $8, Status
     storeWord(mem, 4, 0x0000000CU, true);             // syscall
-    fillZeros(mem, kBev1Vector, 16);
-    storeWord(mem, kBev1Vector, 0x42000018U, true);  // eret
+    // The ERET at the BEV=1 general vector lives at CKSEG1, whose physical
+    // address is VA & 0x1FFFFFFF.
+    fillZeros(mem, kBev1Vector & kDirectMapMask, 16);
+    storeWordPhys(mem, kBev1Vector & kDirectMapMask, 0x42000018U, true);  // eret
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0x400000ULL);  // BEV only: clears ERL/EXL, keeps boot vectors
     CHECK(stepOk(cpu, mem));
     CHECK(!cpu.statusErl());
@@ -558,6 +594,7 @@ static void testEret() {
 
     // ERL path: set ERL + ErrorEPC, then ERET uses ErrorEPC and clears ERL.
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0x5000);
     c2.writeGpr(9, static_cast<uint32_t>(kStatusBitBev | kStatusBitErl | kStatusBitExl));
     storeWord(mem, 32, encodeCp0(5, 8, 30, 0), true);  // dmtc0 ErrorEPC
@@ -576,6 +613,7 @@ static void testEret() {
 
     // ERET inside a delay slot is explicitly rejected.
     Mips64Cpu c3;
+    CHECK(setupKusegIdentityMap(c3, mem));
     storeWord(mem, 64, encodeI(0x04, 0, 0, 1), true);  // beq taken
     storeWord(mem, 68, 0x42000018U, true);             // eret in slot
     c3.setPc(64);
@@ -588,6 +626,7 @@ static void testNestedException() {
     SparseMemory mem;
     storeWord(mem, 0, 0x0000000CU, true);  // syscall
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     CHECK(stepFault(cpu, mem, Mips64Fault::SyscallTrap));
     const uint64_t outerEpc = cpu.cp0Epc();
     CHECK(cpu.statusExl());
@@ -603,6 +642,7 @@ static void testNestedException() {
 
     // Equivalent via MTC0-set EXL (simulating handler context).
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0xABCDULL);
     c2.writeGpr(9, static_cast<uint32_t>(kStatusBitBev | kStatusBitExl));
     storeWord(mem, 32, encodeCp0(5, 8, 14, 0), true);  // dmtc0 EPC = 0xABCD
@@ -633,6 +673,7 @@ static void testMultDiv32() {
     storeWord(mem, 12, encodeR(8, 9, 0, 0, 0x19), true);  // multu
     storeWord(mem, 16, encodeR(0, 0, 12, 0, 0x12), true);
     storeWord(mem, 20, encodeR(0, 0, 13, 0, 0x10), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 6; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0xFFFFFFFFFFFFFFFAULL);  // -6 sign-extended
     CHECK(cpu.readGpr(11) == 0xFFFFFFFFFFFFFFFFULL);  // high word sign-extended
@@ -642,6 +683,7 @@ static void testMultDiv32() {
 
     // div -7,3 -> q -2 r -1 ; divu 7,3 -> q 2 r 1.
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0xFFFFFFFFFFFFFFF9ULL);  // -7
     c2.writeGpr(9, 3);
     storeWord(mem, 64, encodeR(8, 9, 0, 0, 0x1A), true);   // div
@@ -670,6 +712,7 @@ static void testDmult64() {
     storeWord(mem, 12, encodeR(8, 9, 0, 0, 0x1D), true);  // dmultu
     storeWord(mem, 16, encodeR(0, 0, 12, 0, 0x12), true);
     storeWord(mem, 20, encodeR(0, 0, 13, 0, 0x10), true);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     for (int i = 0; i < 6; ++i) CHECK(stepOk(cpu, mem));
     CHECK(cpu.readGpr(10) == 0xFFFFFFFFFFFFFFFEULL);  // -2
     CHECK(cpu.readGpr(11) == 0xFFFFFFFFFFFFFFFFULL);
@@ -678,6 +721,7 @@ static void testDmult64() {
 
     // Hand-computed 64x64 cases (portable partial-product implementation).
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0x100000000ULL);
     c2.writeGpr(9, 0x100000000ULL);
     storeWord(mem, 64, encodeR(8, 9, 0, 0, 0x1D), true);  // dmultu 2^32 * 2^32
@@ -695,6 +739,7 @@ static void testDmult64() {
     storeWord(mem, 100, encodeR(0, 0, 10, 0, 0x12), true);
     storeWord(mem, 104, encodeR(0, 0, 11, 0, 0x10), true);
     c3.setPc(96);
+    CHECK(setupKusegIdentityMap(c3, mem));
     for (int i = 0; i < 3; ++i) CHECK(stepOk(c3, mem));
     CHECK(c3.readGpr(10) == 0);
     CHECK(c3.readGpr(11) == 0x4000000000000000ULL);
@@ -710,6 +755,7 @@ static void testDivEdges() {
         storeWord(mem, 0, encodeR(8, 9, 0, 0, funct), true);
         storeWord(mem, 4, encodeR(0, 0, 10, 0, 0x12), true);
         storeWord(mem, 8, encodeR(0, 0, 11, 0, 0x10), true);
+        CHECK(setupKusegIdentityMap(cpu, mem));
         for (int i = 0; i < 3; ++i) {
             if (!stepOk(cpu, mem)) return std::make_pair(uint64_t(0), uint64_t(0));
         }
@@ -743,6 +789,7 @@ static void testDivEdges() {
 static void testHiLoMoves() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0x1111111111111111ULL);
     cpu.writeGpr(9, 0x2222222222222222ULL);
     storeWord(mem, 0, encodeR(8, 0, 0, 0, 0x11), true);  // mthi $8
@@ -770,6 +817,7 @@ static void testRegimmBranches() {
     storeWord(mem, 24, encodeI(0x01, 9, 0x01, 2), true);  // bgez $9(0), +2 (taken)
     // Full 64-bit condition: high bit set but low word zero is still negative.
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0xFFFFFFFFFFFFFFFFULL);
     cpu.writeGpr(9, 0);
     cpu.setPc(0);
@@ -778,17 +826,20 @@ static void testRegimmBranches() {
     CHECK(cpu.delayTarget() == 12 && cpu.delayBranch() == 0);
 
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0x8000000000000000ULL);  // negative via high bit only
     c2.setPc(8);
     CHECK(stepOk(c2, mem));  // bgez not taken -> delay 12, fallthrough 16
     CHECK(c2.delayArmed() && c2.delayTarget() == 16);
 
     Mips64Cpu c3;
+    CHECK(setupKusegIdentityMap(c3, mem));
     c3.writeGpr(9, 5);  // positive
     c3.setPc(16);
     CHECK(stepOk(c3, mem));  // bltz not taken
     CHECK(c3.delayArmed() && c3.delayTarget() == 24);
     Mips64Cpu c4;
+    CHECK(setupKusegIdentityMap(c4, mem));
     c4.writeGpr(9, 5);
     c4.setPc(24);
     CHECK(stepOk(c4, mem));  // bgez taken -> target 24+4+8 = 36
@@ -807,6 +858,7 @@ static void testRegimmLink() {
     storeWord(mem, 20, encodeI(0x09, 0, 12, 1), true);    // skipped
     storeWord(mem, 24, encodeI(0x09, 0, 13, 2), true);   // target
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0xFFFFFFFFFFFFFFFFULL);
     cpu.writeGpr(9, 0);
     CHECK(stepOk(cpu, mem));
@@ -822,6 +874,7 @@ static void testRegimmLink() {
 
     // Link is written even when the condition is false.
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 5);  // positive -> bltzal not taken
     storeWord(mem, 64, encodeI(0x01, 8, 0x10, 2), true);
     storeWord(mem, 68, encodeI(0x09, 0, 10, 3), true);
@@ -840,6 +893,7 @@ static void testBranchLikely() {
     storeWord(mem, 4, encodeI(0x09, 0, 10, 7), true);    // delay (must NOT run)
     storeWord(mem, 8, encodeI(0x09, 0, 11, 9), true);    // fallthrough
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 5);
     CHECK(stepOk(cpu, mem));
     CHECK(!cpu.delayArmed());
@@ -853,6 +907,7 @@ static void testBranchLikely() {
     storeWord(mem, 36, encodeI(0x09, 0, 10, 7), true);
     storeWord(mem, 44, encodeI(0x09, 0, 12, 1), true);
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 5);
     c2.setPc(32);
     CHECK(stepOk(c2, mem));
@@ -872,6 +927,7 @@ static void testBranchLikely2() {
     storeWord(mem, 72, encodeI(0x09, 0, 11, 5), true);
     storeWord(mem, 76, encodeI(0x09, 0, 12, 6), true);
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0);
     cpu.setPc(64);
     CHECK(stepOk(cpu, mem));
@@ -883,6 +939,7 @@ static void testBranchLikely2() {
     storeWord(mem, 96, encodeI(0x07, 8, 0, 2), true);  // bgtz $8(0) not taken
     storeWord(mem, 100, encodeI(0x09, 0, 10, 1), true);
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0);
     c2.setPc(96);
     CHECK(stepOk(c2, mem));
@@ -904,6 +961,7 @@ static void testBranchLikely3() {
     storeWord(mem, 20, encodeI(0x09, 0, 13, 1), true);  // fallthrough target (skipped)
     storeWord(mem, 24, encodeI(0x09, 0, 14, 2), true);  // land
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 0xFFFFFFFFFFFFFFFDULL);
     cpu.writeGpr(9, 0);
     CHECK(stepOk(cpu, mem));
@@ -921,6 +979,7 @@ static void testBranchLikely3() {
     storeWord(mem, 68, encodeI(0x09, 0, 10, 3), true);
     storeWord(mem, 72, encodeI(0x09, 0, 11, 4), true);
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0xFFFFFFFFFFFFFFFFULL);
     c2.setPc(64);
     CHECK(stepOk(c2, mem));
@@ -934,6 +993,7 @@ static void testBigEndianCoverage() {
     SparseMemory mem;
     Mips64Cpu cpu(Mips64Endianness::Big);
     CHECK(!cpu.isLittleEndian());
+    CHECK(setupKusegIdentityMap(cpu, mem));
     // dmtc0/mfc0 Status round trip in BE fetch (BEV cleared -> EBase vector).
     cpu.writeGpr(8, 0xFFFFULL);
     storeWord(mem, 0, encodeCp0(5, 8, 12, 0), false);  // dmtc0 Status
@@ -949,6 +1009,7 @@ static void testBigEndianCoverage() {
 
     // BE MULT + BLTZ.
     Mips64Cpu c2(Mips64Endianness::Big);
+    CHECK(setupKusegIdentityMap(c2, mem));
     c2.writeGpr(8, 0xFFFFFFFEULL);  // low32 = -2
     c2.writeGpr(9, 0xFFFFFFFBULL);  // low32 = -5
     storeWord(mem, 64, encodeR(8, 9, 0, 0, 0x18), false);  // mult -> 10
@@ -976,11 +1037,13 @@ static void testCountCompare() {
     storeWord(mem, 0, encodeI(0x09, 0, 8, 1), true);  // addiu (retires)
     Mips64Cpu cpu;
     CHECK(cpu.cp0Count() == 0);
+    CHECK(setupKusegIdentityMap(cpu, mem));
+    CHECK(cpu.cp0Count() == 10);  // prologue ticked the counter ten times
     CHECK(stepOk(cpu, mem));
-    CHECK(cpu.cp0Count() == 1);  // one tick per step
+    CHECK(cpu.cp0Count() == 11);  // one tick per step
     cpu.setPc(0);
     CHECK(stepOk(cpu, mem));
-    CHECK(cpu.cp0Count() == 2);
+    CHECK(cpu.cp0Count() == 12);
 
     // DMFC0 reads the ticking counter; MTC0 Compare arms no interrupt.
     cpu.writeGpr(9, 1);
@@ -997,6 +1060,7 @@ static void testCountCompare() {
         cpu.setPc(0);
         CHECK(stepOk(cpu, mem));
     }
+    CHECK(cpu.cp0Count() == 24);  // 10 prologue + 4 + 10 steps
     CHECK((cpu.cp0Cause() & 0xFC00ULL) == 0);
 }
 
@@ -1004,6 +1068,7 @@ static void testCountCompare() {
 static void testSerializationV2() {
     SparseMemory mem;
     Mips64Cpu cpu(Mips64Endianness::Big);
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.writeGpr(8, 7);
     cpu.writeGpr(9, 7);
     cpu.setHi(0x1111);
@@ -1015,9 +1080,9 @@ static void testSerializationV2() {
     CHECK(cpu.delayArmed());
     const std::vector<uint8_t> blob = cpu.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
-    CHECK(blob.size() == 373);
+    CHECK(blob.size() == 957);
     CHECK(blob[0] == 'M' && blob[1] == 'P' && blob[2] == '6' && blob[3] == '2');
-    CHECK(blob[4] == 2);
+    CHECK(blob[4] == 3);  // MIPS64-3 format (TLB state appended)
 
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));
@@ -1035,6 +1100,7 @@ static void testSerializationV2() {
     SparseMemory mem2;
     storeWord(mem2, 0, 0x0000000CU, true);
     Mips64Cpu c2;
+    CHECK(setupKusegIdentityMap(c2, mem2));
     CHECK(stepFault(c2, mem2, Mips64Fault::SyscallTrap));
     const std::vector<uint8_t> blob2 = c2.serialize();
     Mips64Cpu r2;
@@ -1063,13 +1129,14 @@ static void testIsolation() {
     fillZeros(mem, 0, 16);
     Mips64Cpu a, b;
     a.writeGpr(8, 1);
-    CHECK(stepOk(a, mem));  // ticks a.Count, executes nop-ish (addiu unmapped? no: zeros = sll $0,$0,0)
-    CHECK(a.cp0Count() == 1 && b.cp0Count() == 0);
+    CHECK(setupKusegIdentityMap(a, mem));  // prologue at PA 0x00..0x27; count = 10
+    CHECK(stepOk(a, mem));                  // VA 0 -> PA 0 -> prologue 1st insn -> count 11
+    CHECK(a.cp0Count() == 11 && b.cp0Count() == 0);
     a.setHi(0xAA);
     a.setLo(0xBB);
     CHECK(b.hi() == 0 && b.lo() == 0);
     // Divergent CP0: fault a into an exception; b stays pristine.
-    storeWord(mem, 0, 0x0000000CU, true);
+    storeWord(mem, 0, 0x0000000CU, true);  // syscall at PA 0
     a.setPc(0);
     CHECK(stepFault(a, mem, Mips64Fault::SyscallTrap));
     CHECK(a.statusExl() && !b.statusExl());
@@ -1104,27 +1171,29 @@ static void testHandlerDemo() {
     storeWord(mem, 0x1018, 0x0000000DU, true);
     storeWord(mem, 0x101C, encodeI(0x09, 0, 10, 30), true);
     storeWord(mem, 0x1020, encodeI(0x09, 0, 11, 40), true);
-    // Handler: $k0=26, $k1=27, $t8=24, $t9=25.
-    storeWord(mem, V + 0, encodeCp0(1, 26, 14, 0), true);   // dmfc0 $k0, EPC
-    storeWord(mem, V + 4, encodeCp0(0, 27, 13, 0), true);   // mfc0  $k1, Cause
-    storeWord(mem, V + 8, encodeI(0x23, 0, 24, 0x2010), true);  // lw $t8, count
-    storeWord(mem, V + 12, encodeI(0x09, 0, 25, 0x2000), true);  // $t9 = 0x2000
-    storeWord(mem, V + 16, encodeR(0, 24, 24, 3, 0x00), true);  // sll $t8, 3
-    storeWord(mem, V + 20, encodeR(25, 24, 25, 0, 0x2D), true);  // daddu $t9,$t9,$t8
-    storeWord(mem, V + 24, encodeI(0x2B, 25, 26, 0), true);     // sw $k0, 0($t9)
-    storeWord(mem, V + 28, encodeI(0x2B, 25, 27, 4), true);     // sw $k1, 4($t9)
-    storeWord(mem, V + 32, encodeI(0x23, 0, 24, 0x2010), true);  // lw $t8, count
-    storeWord(mem, V + 36, encodeI(0x09, 24, 24, 1), true);     // $t8++
-    storeWord(mem, V + 40, encodeI(0x2B, 0, 24, 0x2010), true);  // sw count
-    storeWord(mem, V + 44, encodeR(0, 27, 27, 31, 0x02), true);  // srl $k1, 31 (BD bit)
-    storeWord(mem, V + 48, encodeI(0x04, 27, 0, 2), true);      // beq $k1,$0,+2
-    storeWord(mem, V + 52, encodeI(0x19, 26, 26, 4), true);     // delay: $k0 += 4
-    storeWord(mem, V + 56, encodeI(0x19, 26, 26, 4), true);     // BD==1: $k0 += 4 more
-    storeWord(mem, V + 60, encodeCp0(5, 26, 14, 0), true);      // dmtc0 EPC = $k0
-    storeWord(mem, V + 64, 0x42000018U, true);                  // eret
+    // Handler: $k0=26, $k1=27, $t8=24, $t9=25. The handler lives at the
+    // BEV=1 general vector (CKSEG1), so its bytes go at VA & 0x1FFFFFFF.
+    storeWordPhys(mem, (V + 0) & kDirectMapMask, encodeCp0(1, 26, 14, 0), true);   // dmfc0 $k0, EPC
+    storeWordPhys(mem, (V + 4) & kDirectMapMask, encodeCp0(0, 27, 13, 0), true);   // mfc0  $k1, Cause
+    storeWordPhys(mem, (V + 8) & kDirectMapMask, encodeI(0x23, 0, 24, 0x2010), true);  // lw $t8, count
+    storeWordPhys(mem, (V + 12) & kDirectMapMask, encodeI(0x09, 0, 25, 0x2000), true);  // $t9 = 0x2000
+    storeWordPhys(mem, (V + 16) & kDirectMapMask, encodeR(0, 24, 24, 3, 0x00), true);  // sll $t8, 3
+    storeWordPhys(mem, (V + 20) & kDirectMapMask, encodeR(25, 24, 25, 0, 0x2D), true);  // daddu $t9,$t9,$t8
+    storeWordPhys(mem, (V + 24) & kDirectMapMask, encodeI(0x2B, 25, 26, 0), true);     // sw $k0, 0($t9)
+    storeWordPhys(mem, (V + 28) & kDirectMapMask, encodeI(0x2B, 25, 27, 4), true);     // sw $k1, 4($t9)
+    storeWordPhys(mem, (V + 32) & kDirectMapMask, encodeI(0x23, 0, 24, 0x2010), true);  // lw $t8, count
+    storeWordPhys(mem, (V + 36) & kDirectMapMask, encodeI(0x09, 24, 24, 1), true);     // $t8++
+    storeWordPhys(mem, (V + 40) & kDirectMapMask, encodeI(0x2B, 0, 24, 0x2010), true);  // sw count
+    storeWordPhys(mem, (V + 44) & kDirectMapMask, encodeR(0, 27, 27, 31, 0x02), true);  // srl $k1, 31 (BD bit)
+    storeWordPhys(mem, (V + 48) & kDirectMapMask, encodeI(0x04, 27, 0, 2), true);      // beq $k1,$0,+2
+    storeWordPhys(mem, (V + 52) & kDirectMapMask, encodeI(0x19, 26, 26, 4), true);     // delay: $k0 += 4
+    storeWordPhys(mem, (V + 56) & kDirectMapMask, encodeI(0x19, 26, 26, 4), true);     // BD==1: $k0 += 4 more
+    storeWordPhys(mem, (V + 60) & kDirectMapMask, encodeCp0(5, 26, 14, 0), true);      // dmtc0 EPC = $k0
+    storeWordPhys(mem, (V + 64) & kDirectMapMask, 0x42000018U, true);                  // eret
     fillZeros(mem, 0x2000, 32);
 
     Mips64Cpu cpu;
+    CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.setPc(0x1000);
     int steps = 0;
     while (cpu.pc() != 0x1024 && steps < 200) {

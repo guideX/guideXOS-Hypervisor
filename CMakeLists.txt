@@ -799,3 +799,63 @@ else()
 endif()
 
 add_test(NAME Mips64Cp0ExceptionTests COMMAND test_mips64_cp0_exceptions)
+
+# MIPS64-3 tests: bounded TLB + CP0 TLB management + genuine virtual memory
+# translation + privilege enforcement. All MIPS64 test targets share the
+# test-only MMU setup helpers (tests/support, never production code).
+target_include_directories(test_mips64_cpu PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+target_include_directories(test_mips64_execution PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+target_include_directories(test_mips64_plugin PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+target_include_directories(test_mips64_cp0_exceptions PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+
+# MIPS64-3 TLB tests: entry management, probe/ASID/global/even-odd,
+# Wired/Random, PageMask support, invalid-index handling, decode rules,
+# isolation, snapshots (TLB state) and invalid-restore rollback.
+add_executable(test_mips64_tlb
+    tests/test_mips64_tlb.cpp
+    ${MIPS64_CORE_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_tlb PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_tlb PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_include_directories(test_mips64_tlb PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+add_test(NAME Mips64TlbTests COMMAND test_mips64_tlb)
+
+# MIPS64-3 MMU tests: translation pipeline, direct-mapped segments, physical
+# bounds rejection, refill/Invalid/Modified routing and vectors, delay-slot
+# faults, ERET retry, genuine guest refill/Modified handler demos, snapshot
+# restore around TLB exceptions, endianness through translation.
+add_executable(test_mips64_mmu
+    tests/test_mips64_mmu.cpp
+    ${MIPS64_CORE_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_mmu PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_mmu PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_include_directories(test_mips64_mmu PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+add_test(NAME Mips64MmuTests COMMAND test_mips64_mmu)
+
+# MIPS64-3 privilege tests: KSU/EXL/ERL effective privilege, segment access
+# control, privileged-instruction rejection, UX/SX/KX handling, extended
+# region rejection without truncation.
+add_executable(test_mips64_privilege
+    tests/test_mips64_privilege.cpp
+    ${MIPS64_CORE_SOURCES}
+)
+
+if(MSVC)
+    target_compile_options(test_mips64_privilege PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_privilege PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_include_directories(test_mips64_privilege PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+add_test(NAME Mips64PrivilegeTests COMMAND test_mips64_privilege)
