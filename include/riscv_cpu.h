@@ -58,6 +58,10 @@ enum class TrapCause : uint64_t {
     EcallFromU = 8,
     EcallFromS = 9,
     EcallFromM = 11,
+    // RISCV-3: Sv39 page-fault causes.
+    InstructionPageFault = 12,
+    LoadPageFault = 13,
+    StorePageFault = 15,
 };
 
 inline const char* TrapCauseToString(TrapCause cause) {
@@ -73,9 +77,78 @@ inline const char* TrapCauseToString(TrapCause cause) {
         case TrapCause::EcallFromU: return "ecall_from_u";
         case TrapCause::EcallFromS: return "ecall_from_s";
         case TrapCause::EcallFromM: return "ecall_from_m";
+        case TrapCause::InstructionPageFault: return "instruction_page_fault";
+        case TrapCause::LoadPageFault: return "load_page_fault";
+        case TrapCause::StorePageFault: return "store_page_fault";
     }
     return "unknown";
 }
+
+// ---------------------------------------------------------------------------
+// mstatus fields (RV64; subset implemented in RISCV-2, extended in RISCV-3).
+// ---------------------------------------------------------------------------
+
+constexpr uint64_t kMstatusSie = 1ULL << 1;
+constexpr uint64_t kMstatusMie = 1ULL << 3;
+constexpr uint64_t kMstatusSpie = 1ULL << 5;
+constexpr uint64_t kMstatusMpie = 1ULL << 7;
+constexpr uint64_t kMstatusSpp = 1ULL << 8;
+constexpr uint64_t kMstatusMppMask = 3ULL << 11;
+constexpr uint64_t kMstatusMprv = 1ULL << 17;
+constexpr uint64_t kMstatusSum = 1ULL << 18;
+constexpr uint64_t kMstatusMxr = 1ULL << 19;
+constexpr uint64_t kMstatusTvm = 1ULL << 20;
+constexpr uint64_t kMstatusWritableMask =
+    kMstatusSie | kMstatusMie | kMstatusSpie | kMstatusMpie | kMstatusSpp |
+    kMstatusMppMask | kMstatusMprv | kMstatusSum | kMstatusMxr;
+constexpr uint64_t kSstatusMask = kMstatusSie | kMstatusSpie | kMstatusSpp;
+
+// ---------------------------------------------------------------------------
+// Sv39 virtual-memory constants (RISCV-3).
+// ---------------------------------------------------------------------------
+
+constexpr uint64_t kPageSize4K = 0x1000ULL;
+constexpr uint64_t kPageSize2M = 0x200000ULL;
+constexpr uint64_t kPageSize1G = 0x40000000ULL;
+
+constexpr unsigned kSv39VaddrBits = 39;
+constexpr uint64_t kSv39VaddrMask = (1ULL << kSv39VaddrBits) - 1ULL;
+constexpr unsigned kPageOffsetBits = 12;
+constexpr uint64_t kPageOffsetMask = kPageSize4K - 1ULL;
+constexpr unsigned kVpnBits = 9;
+constexpr uint64_t kVpnMask = 0x1FFULL;
+constexpr unsigned kPteSize = 8;
+constexpr unsigned kPteShift = 3;
+
+constexpr uint64_t kPteV   = 1ULL << 0;
+constexpr uint64_t kPteR   = 1ULL << 1;
+constexpr uint64_t kPteW   = 1ULL << 2;
+constexpr uint64_t kPteX   = 1ULL << 3;
+constexpr uint64_t kPteU   = 1ULL << 4;
+constexpr uint64_t kPteG   = 1ULL << 5;
+constexpr uint64_t kPteA   = 1ULL << 6;
+constexpr uint64_t kPteD   = 1ULL << 7;
+constexpr uint64_t kPtePPNMask = 0xFFFFFFFFFFFFULL << 10;
+constexpr uint64_t kPteReservedMask = 0x1FULL << 54;
+
+constexpr uint64_t kSatpModeShift = 60;
+constexpr uint64_t kSatpModeMask = 0xFULL << kSatpModeShift;
+constexpr uint64_t kSatpModeBare = 0ULL;
+constexpr uint64_t kSatpModeSv39 = 8ULL;
+constexpr uint64_t kSatpPpnMask = 0xFFFFFFFFFFFFULL;
+
+constexpr uint32_t kSfenceVmaOpcode = 0x00200073U;
+
+enum class AccessType : uint8_t { Fetch, Load, Store };
+
+struct Sv39Translation {
+    bool ok = false;
+    uint64_t paddr = 0;
+    uint64_t pageSize = 0;
+    TrapCause cause = TrapCause::InstructionAccessFault;
+};
+
+class Sv39Mmu;
 
 /**
  * RV64CPUState - RISC-V CPU State
@@ -265,8 +338,11 @@ public:
  *   Bare mode is a direct byte-region mapping, not paging or PMP isolation.
  */
 class RV64CPU {
+    friend class Sv39Mmu;
+    friend class Sv39TestHelper;
 public:
     RV64CPU();
+    ~RV64CPU();
 
     // Deterministic reset: registers/PC zeroed, privilege Machine, CSRs to
     // reset values, counters cleared. Loaded guest memory is preserved across
@@ -301,6 +377,29 @@ public:
     bool readMemory(uint64_t addr, uint8_t* dst, size_t size) const;
     bool readU64(uint64_t addr, uint64_t& value) const;
 
+    // Sv39 translation (RISCV-3). Translate a virtual address to a guest
+    // physical address; Bare mode is identity. Returns ok=false with a page
+    // fault cause on failure.
+    Sv39Translation translateFetch(uint64_t vaddr, size_t size) const;
+    Sv39Translation translateLoad(uint64_t vaddr, size_t size) const;
+    Sv39Translation translateStore(uint64_t vaddr, size_t size) const;
+
+    // Direct guest-physical read/write (bypasses translation). Used by the
+    // page-table walker and by M-mode accesses when paging is bypassed.
+    bool readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const;
+    bool writePhysical(uint64_t paddr, const uint8_t* src, size_t size);
+
+    // Transitional alias for tests (RISCV-3): storeBytes is now translated.
+    // Exposed as a public alias for backward compat.
+    bool storeBytes(uint64_t addr, const uint8_t* src, size_t size) {
+        return writePhysical(addr, src, size);
+    }
+
+    // MMU access and paging state.
+    Sv39Mmu* mmu() { return mmu_; }
+    const Sv39Mmu* mmu() const { return mmu_; }
+    bool pagingEnabled() const;
+
     // Privilege and CSR access (architectural).
     PrivilegeMode privilege() const { return priv_; }
     bool readCsr(uint32_t csr, uint64_t& value) const;
@@ -327,8 +426,7 @@ public:
     void dump() const;
 
 private:
-    bool fetchBytes(uint64_t addr, uint8_t* dst, size_t size) const;
-    bool storeBytes(uint64_t addr, const uint8_t* src, size_t size);
+    bool fetchBytes(uint64_t addr, uint8_t* dst, size_t size);
     bool loadU64Internal(uint64_t addr, uint64_t& value) const;
     bool storeU64(uint64_t addr, uint64_t value);
     bool rangeInGuest(uint64_t addr, size_t size) const;
@@ -356,6 +454,7 @@ private:
     PrivilegeMode priv_ = PrivilegeMode::Machine;
     bool breakpointHalt_ = true;
     ISbiProvider* sbi_ = nullptr;
+    Sv39Mmu* mmu_ = nullptr;
 
     // Machine state.
     uint64_t mstatus_ = 0;

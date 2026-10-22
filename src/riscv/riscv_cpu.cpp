@@ -1,5 +1,7 @@
 #include "riscv_cpu.h"
 
+#include "riscv/riscv_mmu.h"
+
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -31,19 +33,11 @@ constexpr uint32_t kCsrMtval = 0x343U;
 constexpr uint32_t kCsrMip = 0x344U;
 constexpr uint32_t kCsrMhartid = 0xF14U;
 
-// mstatus fields (RV64, subset implemented in RISCV-2).
-constexpr uint64_t kMstatusSie = 1ULL << 1;
-constexpr uint64_t kMstatusMie = 1ULL << 3;
-constexpr uint64_t kMstatusSpie = 1ULL << 5;
-constexpr uint64_t kMstatusMpie = 1ULL << 7;
-constexpr uint64_t kMstatusSpp = 1ULL << 8;
-constexpr uint64_t kMstatusMppMask = 3ULL << 11;
-constexpr uint64_t kMstatusWritableMask =
-    kMstatusSie | kMstatusMie | kMstatusSpie | kMstatusMpie | kMstatusSpp | kMstatusMppMask;
-constexpr uint64_t kSstatusMask = kMstatusSie | kMstatusSpie | kMstatusSpp;
+// mstatus fields and writable masks are declared in riscv_cpu.h.
 
 constexpr uint64_t kMisaValue = (2ULL << 62) | (1ULL << 8);  // MXL=RV64, extension I only.
-constexpr uint64_t kMedelegWritableMask = 0x3FFULL;  // causes 0-9; bit 11 (M ECALL) hardwired 0.
+constexpr uint64_t kMedelegWritableMask =
+    0x3FFULL | (1ULL << 12) | (1ULL << 13) | (1ULL << 15);  // causes 0-9 plus page faults; bit 11 hardwired 0.
 
 uint64_t SignExtendTo64(int32_t value) { return static_cast<uint64_t>(static_cast<int64_t>(value)); }
 
@@ -154,7 +148,11 @@ void RV64CPUState::Dump() const {
     }
 }
 
-RV64CPU::RV64CPU() : state_(), decoder_() {
+RV64CPU::~RV64CPU() {
+    delete mmu_;
+}
+
+RV64CPU::RV64CPU() : state_(), decoder_(), mmu_(new Sv39Mmu(this)) {
     reset();
 }
 
@@ -224,28 +222,28 @@ bool RV64CPU::rangeInGuest(uint64_t addr, size_t size) const {
     return static_cast<uint64_t>(size) <= remaining;
 }
 
-bool RV64CPU::fetchBytes(uint64_t addr, uint8_t* dst, size_t size) const {
+bool RV64CPU::readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const {
     if (!memLoaded_ || dst == nullptr) {
         return false;
     }
     if (size == 0) {
         return true;
     }
-    if (!rangeInGuest(addr, size)) {
+    if (!rangeInGuest(paddr, size)) {
         return false;
     }
-    const uint64_t offset = addr - memBase_;
+    const uint64_t offset = paddr - memBase_;
     std::memcpy(dst, mem_.data() + static_cast<size_t>(offset), size);
     return true;
 }
 
 bool RV64CPU::readMemory(uint64_t addr, uint8_t* dst, size_t size) const {
-    return fetchBytes(addr, dst, size);
+    return readPhysical(addr, dst, size);
 }
 
 bool RV64CPU::loadU64Internal(uint64_t addr, uint64_t& value) const {
     uint8_t bytes[8] = {0};
-    if (!fetchBytes(addr, bytes, sizeof(bytes))) {
+    if (!readPhysical(addr, bytes, sizeof(bytes))) {
         return false;
     }
     // Little-endian assembly without host aliasing or UB.
@@ -264,19 +262,62 @@ bool RV64CPU::readU64(uint64_t addr, uint64_t& value) const {
     return loadU64Internal(addr, value);
 }
 
-bool RV64CPU::storeBytes(uint64_t addr, const uint8_t* src, size_t size) {
+bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
     if (!memLoaded_ || src == nullptr) {
         return false;
     }
     if (size == 0) {
         return true;
     }
-    if (!rangeInGuest(addr, size)) {
+    if (!rangeInGuest(paddr, size)) {
         return false;
     }
-    const uint64_t offset = addr - memBase_;
+    const uint64_t offset = paddr - memBase_;
     std::memcpy(mem_.data() + static_cast<size_t>(offset), src, size);
     return true;
+}
+
+// Sv39-translated fetch. M-mode instruction fetch bypasses translation.
+// S/U mode walks page tables via the MMU; A/D bits may be updated in guest
+// memory, so this method is non-const.
+bool RV64CPU::fetchBytes(uint64_t vaddr, uint8_t* dst, size_t size) {
+    if (!memLoaded_ || dst == nullptr) {
+        return false;
+    }
+    if (size == 0) {
+        return true;
+    }
+    uint64_t paddr = vaddr;
+    if (priv_ != PrivilegeMode::Machine && pagingEnabled()) {
+        Sv39Translation xlt = mmu_->translate(vaddr, size, AccessType::Fetch, priv_, false);
+        if (!xlt.ok) {
+            return false;
+        }
+        paddr = xlt.paddr;
+    }
+    return readPhysical(paddr, dst, size);
+}
+
+// Sv39-translated store. M-mode stores bypass translation unless MPRV=1.
+// S/U mode and MPRV-modified M-mode accesses walk page tables.
+// (storeBytes defined inline in header)
+
+Sv39Translation RV64CPU::translateFetch(uint64_t vaddr, size_t size) const {
+    return mmu_->translate(vaddr, size, AccessType::Fetch, priv_, false);
+}
+
+Sv39Translation RV64CPU::translateLoad(uint64_t vaddr, size_t size) const {
+    const bool mprv = (mstatus_ & kMstatusMprv) != 0ULL;
+    return mmu_->translate(vaddr, size, AccessType::Load, priv_, mprv);
+}
+
+Sv39Translation RV64CPU::translateStore(uint64_t vaddr, size_t size) const {
+    const bool mprv = (mstatus_ & kMstatusMprv) != 0ULL;
+    return mmu_->translate(vaddr, size, AccessType::Store, priv_, mprv);
+}
+
+bool RV64CPU::pagingEnabled() const {
+    return mmu_->pagingEnabled();
 }
 
 bool RV64CPU::storeU64(uint64_t addr, uint64_t value) {
@@ -418,17 +459,26 @@ bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
         case kCsrMhartid:
             // Read-only.
             return true;
-        case kCsrSatp:
-            // Bare mode only (MODE field bits 63:60 must be 0). Any other
-            // MODE is ignored (WARL stays Bare). Bare values must be zero.
-            if (((value >> 60) & 0xFULL) != 0ULL) {
+        case kCsrSatp: {
+            // RISCV-3: Bare (MODE 0) and Sv39 (MODE 8). ASIDLEN=0: ASID field
+            // (bits 59:44) must be 0; nonzero ASID is ignored (WARL).
+            const uint64_t mode = (value >> kSatpModeShift) & 0xFULL;
+            const uint64_t asid = (value >> 44) & 0xFFFFULL;
+            const uint64_t ppn = value & kSatpPpnMask;
+            if (asid != 0ULL) {
+                return true;  // ASIDLEN=0: nonzero ASID not supported.
+            }
+            if (mode == kSatpModeBare) {
+                satp_ = 0;  // Bare: identity mapping, PPN ignored.
                 return true;
             }
-            if (value != 0ULL) {
+            if (mode == kSatpModeSv39) {
+                satp_ = (kSatpModeSv39 << kSatpModeShift) | ppn;
                 return true;
             }
-            satp_ = 0;
+            // Unsupported MODE: WARL, current value retained.
             return true;
+        }
         default:
             return false;
     }
@@ -525,11 +575,23 @@ StepResult RV64CPU::step() {
         return result;
     }
 
-    // Fetch the first halfword to determine instruction length. A PC that
-    // cannot supply 2 bytes is an instruction access fault (not a silent
-    // FetchFault) in architectural execution.
+    // Fetch the first halfword to determine instruction length. M-mode
+    // instruction fetch bypasses Sv39 translation; S/U mode translates the PC.
+    // A failed fetch delivers an instruction page fault (cause 12) with
+    // mtval/stval set to the faulting virtual address; the PC is not advanced
+    // and no instruction is retired.
     uint8_t half[2] = {0};
-    if (!fetchBytes(pc, half, sizeof(half))) {
+    uint64_t fetchPaddr = pc;
+    if (priv_ != PrivilegeMode::Machine && pagingEnabled()) {
+        Sv39Translation xlt = translateFetch(pc, sizeof(half));
+        if (!xlt.ok) {
+            result.insn = DecodedInstruction();
+            deliverTrap(xlt.cause, pc, pc, result);
+            return result;
+        }
+        fetchPaddr = xlt.paddr;
+    }
+    if (!readPhysical(fetchPaddr, half, sizeof(half))) {
         result.insn = DecodedInstruction();
         deliverTrap(TrapCause::InstructionAccessFault, pc, pc, result);
         return result;
@@ -570,8 +632,19 @@ StepResult RV64CPU::step() {
     }
 
     // 32-bit instruction: a short tail is an access fault (truncated fetch).
+    // Translate the PC again for the full word (idempotent A/D update).
     uint8_t word[4] = {0};
-    if (!fetchBytes(pc, word, sizeof(word))) {
+    uint64_t wordPaddr = pc;
+    if (priv_ != PrivilegeMode::Machine && pagingEnabled()) {
+        Sv39Translation xlt = translateFetch(pc, sizeof(word));
+        if (!xlt.ok) {
+            result.insn = DecodedInstruction();
+            deliverTrap(xlt.cause, pc, pc, result);
+            return result;
+        }
+        wordPaddr = xlt.paddr;
+    }
+    if (!readPhysical(wordPaddr, word, sizeof(word))) {
         result.insn = DecodedInstruction();
         deliverTrap(TrapCause::InstructionAccessFault, pc, pc, result);
         return result;
@@ -854,12 +927,24 @@ StepResult RV64CPU::step() {
             if (accessSize > 1 && (eff % accessSize) != 0ULL) {
                 return trapMisalignedLoad(eff);
             }
-            if (!rangeInGuest(eff, accessSize)) {
-                deliverTrap(TrapCause::LoadAccessFault, eff, pc, result);
-                return result;
+            // Translate the effective address unless M-mode with MPRV=0
+            // (physical access). A failed translation delivers a load page
+            // fault (cause 13) with stval = faulting virtual address; the
+            // destination register is not modified.
+            uint64_t loadPaddr = eff;
+            const bool loadMprv = (mstatus_ & kMstatusMprv) != 0ULL;
+            if ((priv_ != PrivilegeMode::Machine) || loadMprv) {
+                if (pagingEnabled()) {
+                    Sv39Translation xlt = translateLoad(eff, accessSize);
+                    if (!xlt.ok) {
+                        deliverTrap(xlt.cause, eff, pc, result);
+                        return result;
+                    }
+                    loadPaddr = xlt.paddr;
+                }
             }
             uint8_t bytes[8] = {0};
-            if (!fetchBytes(eff, bytes, accessSize)) {
+            if (!readPhysical(loadPaddr, bytes, accessSize)) {
                 deliverTrap(TrapCause::LoadAccessFault, eff, pc, result);
                 return result;
             }
@@ -905,16 +990,28 @@ StepResult RV64CPU::step() {
             if (accessSize > 1 && (eff % accessSize) != 0ULL) {
                 return trapMisalignedStore(eff);
             }
-            if (!rangeInGuest(eff, accessSize)) {
-                deliverTrap(TrapCause::StoreAccessFault, eff, pc, result);
-                return result;
+            // Translate the effective address unless M-mode with MPRV=0
+            // (physical access). A failed translation delivers a store page
+            // fault (cause 15) with stval = faulting virtual address; no
+            // guest data is partially modified.
+            uint64_t storePaddr = eff;
+            const bool storeMprv = (mstatus_ & kMstatusMprv) != 0ULL;
+            if ((priv_ != PrivilegeMode::Machine) || storeMprv) {
+                if (pagingEnabled()) {
+                    Sv39Translation xlt = translateStore(eff, accessSize);
+                    if (!xlt.ok) {
+                        deliverTrap(xlt.cause, eff, pc, result);
+                        return result;
+                    }
+                    storePaddr = xlt.paddr;
+                }
             }
             const uint64_t value = state_.GetGR(insn.rs2);
             uint8_t bytes[8] = {0};
             for (size_t i = 0; i < accessSize; ++i) {
                 bytes[i] = static_cast<uint8_t>((value >> (8U * i)) & 0xFFU);
             }
-            if (!storeBytes(eff, bytes, accessSize)) {
+            if (!writePhysical(storePaddr, bytes, accessSize)) {
                 deliverTrap(TrapCause::StoreAccessFault, eff, pc, result);
                 return result;
             }
@@ -1171,6 +1268,24 @@ StepResult RV64CPU::step() {
             mstatus_ |= kMstatusSpie;
             mstatus_ &= ~kMstatusSpp;  // SPP <- U.
             state_.SetPC(sepc_);
+            result.outcome = StepOutcome::Ok;
+            result.nextPc = state_.GetPC();
+            ++instructionsRetired_;
+            return result;
+        }
+        case Mnemonic::SFENCE_VMA: {
+            // SFENCE.VMA: synchronize instruction and data memory after
+            // page-table changes. Privileged: U-mode execution traps illegal.
+            // mstatus.TVM is hardwired 0, so S-mode execution never traps to M
+            // for TVM. Uncached walker: no translations to invalidate; the
+            // call is still recognized as the architectural sync point.
+            if (priv_ == PrivilegeMode::User) {
+                deliverTrap(TrapCause::IllegalInstruction, static_cast<uint64_t>(raw),
+                            pc, result);
+                return result;
+            }
+            mmu_->sfenceVma(state_.GetGR(insn.rs1), state_.GetGR(insn.rs2));
+            state_.SetPC(pc + 4U);
             result.outcome = StepOutcome::Ok;
             result.nextPc = state_.GetPC();
             ++instructionsRetired_;

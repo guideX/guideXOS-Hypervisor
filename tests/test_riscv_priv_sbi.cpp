@@ -288,9 +288,14 @@ void TestSatpAndVectors() {
         uint64_t v = 99;
         Expect(cpu.readCsr(kSatp, v), "satp read");
         ExpectEq("satp bare", 0ULL, v);
-        cpu.debugWriteCsr(kSatp, (8ULL << 60) | 0x1234ULL);  // Sv39 attempt
+        // RISCV-3: Sv39 (MODE=8) is now supported. ASID must be 0 (ASIDLEN=0).
+        cpu.debugWriteCsr(kSatp, (8ULL << 60) | 0x1234ULL);  // Sv39 mode, PPN=0x1234
         Expect(cpu.readCsr(kSatp, v), "satp reread");
-        ExpectEq("satp ignores Sv39", 0ULL, v);
+        ExpectEq("satp accepts Sv39", (8ULL << 60) | 0x1234ULL, v);
+        // Nonzero ASID is ignored (ASIDLEN=0).
+        cpu.debugWriteCsr(kSatp, (8ULL << 60) | (1ULL << 44) | 0x1234ULL);
+        Expect(cpu.readCsr(kSatp, v), "satp ASID ignored");
+        ExpectEq("satp ASIDLEN=0", (8ULL << 60) | 0x1234ULL, v);
     }
     // mtvec Direct-only: misaligned/mode writes ignored.
     {

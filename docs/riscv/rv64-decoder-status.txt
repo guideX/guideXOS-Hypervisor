@@ -1,4 +1,4 @@
-RISC-V Decoder Status (updated Phase RISCV-2)
+RISC-V Decoder Status (updated Phase RISCV-3)
 
 Current decoded instruction families:
 - RV64I
@@ -59,10 +59,15 @@ RV64I vs independently defined extensions (explicit split):
 - Zicsr (executed subset): the six CSR instructions with the CSR matrix in
   include/riscv_cpu.h (mstatus/misa/medeleg/mideleg/mie/mip/mtvec/mscratch/
   mepc/mcause/mtval/mhartid, sstatus/sie/sip/stvec/sscratch/sepc/scause/
-  stval/satp). Unknown/unavailable CSRs trap illegal, never silently succeed.
+  stval/satp). satp accepts Bare (0) and Sv39 (8); ASIDLEN=0 (hardwired);
+  other MODE values are WARL-ignored. mstatus SUM/MXR/MPRV are writable;
+  medeleg extends to bits 12/13/15. Unknown/unavailable CSRs trap illegal,
+  never silently succeed.
 - SYSTEM privileged (executed): ECALL/MRET/SRET with full trap semantics;
-  WFI reports Unsupported (no wake sources modeled); SFENCE.VMA is not
-  produced by the decoder and Bare mode needs no flushing.
+  WFI reports Unsupported (no wake sources modeled); SFENCE.VMA is now
+  decoded legal and executed as a TLB-sync no-op (the Sv39 walker is
+  uncached, so no cached translations exist to flush); U-mode SFENCE.VMA
+  traps illegal.
 - RV64M (decode only, still Unsupported): MUL/MULH/MULHSU/MULHU/DIV/DIVU/
   REM/REMU/MULW/DIVW/DIVUW/REMW/REMUW.
 - RV64A (decode only, still Unsupported): LR.W/SC.W/AMO* and LR.D/SC.D/AMO*.
@@ -84,12 +89,19 @@ Tested CPU semantics:
 - test_riscv_priv_sbi (266 runtime checks): reset state (M, CSRs zeroed,
   misa fixed, mhartid 0), CSR RW/suppression/sstatus-view, read-only
   (mhartid) and unknown-CSR traps with rd preservation, S/U privilege
-  enforcement via architectural MRET entry, satp Bare WARL, mtvec Direct
+  enforcement via architectural MRET entry, mtvec Direct
   WARL, mepc alignment WARL, ECALL causes 8/9/11 with EPC/TVAL, medeleg
   delegation to S-mode, MRET/SRET restoration and illegal-use traps,
   breakpoint Halt vs trap modes, SBI Base FIDs 0-6 + probe/unsupported
   behavior with and without a provider, full S-mode hello-world (see
   phase-riscv-2-report.txt), deterministic step bounds.
+- test_riscv_sv39 (164 runtime checks, RISCV-3): Bare identity
+  translation, canonical-address fault (cause 13), satp WARL (Sv39
+  accepted, ASIDLEN=0), guest hello-world through translated stores
+  with paging on, automatic A/D-bit updates on leaf PTEs, SFENCE.VMA
+  retirement, permission faults (U/SUM/MXR/store-to-read-only with
+  faulting VA in tval), and store-page-fault recovery (delegated to
+  S-mode handler that repairs the PTE, SFENCE.VMA, SRET, store retry).
 
 Explicitly unsupported operations (valid decode -> StepOutcome::Unsupported):
 - All RV64M, all RV64A, WFI, all compressed except C.EBREAK.
@@ -98,13 +110,17 @@ Synchronous traps (StepOutcome::Trap, never silent):
 - Illegal instruction (cause 2, tval = faulting word), breakpoint (cause 3),
   instruction address misaligned (cause 0), instruction access fault
   (cause 1), load/store address misaligned (causes 4/6), load/store access
-  fault (causes 5/7), ECALL from U/S/M (causes 8/9/11). Legacy Illegal/
+  fault (causes 5/7), ECALL from U/S/M (causes 8/9/11), instruction/load/
+  store page fault (causes 12/13/15, tval = faulting virtual address).
+  Translation failures raise page faults; physical-range failures after
+  translation (or in M-mode/Bare) raise access faults. Legacy Illegal/
   FetchFault/MemoryFault outcomes are retained in the enum for source
   compatibility and are returned only when no guest image is loaded;
   architectural execution delivers traps.
 
-Remaining architectural requirements for Linux boot (NOT in RISCV-2):
-- Sv39/Sv48 page walking, SFENCE.VMA flushing with a TLB model
+Remaining architectural requirements for Linux boot (NOT in RISCV-3):
+- Sv48 mode; TLB caching with real SFENCE.VMA invalidation (walker is
+  uncached; SFENCE.VMA is a sync no-op)
 - SBI timer/IPI/fence/HSM/debug-console/reset extensions + real firmware
 - PLIC/CLINT, UART/virtio device emulation, timer/interrupt delivery
   (mie/mip/sie/sip hardwired 0; vectored mtvec/stvec not implemented)
@@ -112,9 +128,9 @@ Remaining architectural requirements for Linux boot (NOT in RISCV-2):
 - ELF loader integration and boot Hart state machine
 
 Test command used:
-- cmake -S . -B build-riscv2
-- cmake --build build-riscv2 --target test_riscv_decoder --target test_riscv_fetch_decode --target test_riscv_minimal_execution --target test_riscv_rv64i_full --target test_riscv_priv_sbi --config Debug
-- ctest --test-dir build-riscv2 -R "RiscV" --output-on-failure
+- cmake -S . -B build-riscv3 -G "Visual Studio 18 2026" -A x64
+- cmake --build build-riscv3 --config Debug --target test_riscv_decoder --target test_riscv_fetch_decode --target test_riscv_minimal_execution --target test_riscv_rv64i_full --target test_riscv_priv_sbi --target test_riscv_sv39 -- /m:1
+- ctest --test-dir build-riscv3 -C Debug -R "RiscV" --output-on-failure
 
 Latest test result:
 - PASS: RISC-V RV64I/RV64M/Zicsr/RV64A/RV64C decoder smoke tests passed
@@ -122,14 +138,15 @@ Latest test result:
 - PASS: RISC-V minimal execution test passed (180 checks)
 - PASS: RV64I full execution test passed (105 checks)
 - PASS: Privilege/CSR/trap/SBI tests passed (266 checks)
+- PASS: Sv39 MMU/translation/page-fault tests passed (164 checks)
 - PASS: IA-64 spot regressions (implementation untouched): test_efi_memory_map,
   test_ia64_sal, test_new_instructions
 
 Next milestone runway:
-- RISCV-3 (proposed, not implemented): Sv39 MMU page walking with
-  SFENCE.VMA, timer/interrupt delivery (CLINT/PLIC stubs, mie/mip/sie/sip,
-  vectored vectors), expanded SBI (timer/IPI/fence/HSM), device tree +
-  UART/virtio platform devices, ELF boot path. No Linux/OpenSBI boot yet.
+- RISCV-4 (proposed, not implemented): timer/interrupt delivery
+  (CLINT/PLIC stubs, mie/mip/sie/sip, vectored vectors), expanded SBI
+  (timer/IPI/fence/HSM), device tree + UART/virtio platform devices,
+  ELF boot path. No Linux/OpenSBI boot yet.
 
 Execution semantics: full RV64I + Zicsr/SYSTEM privilege subset (see above)
 Runtime/plugin registration: deferred

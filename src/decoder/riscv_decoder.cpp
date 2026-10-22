@@ -674,6 +674,10 @@ DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
 				insn.mnemonic = Mnemonic::WFI;
 				markSystemExtension();
 				markLegal();
+			} else if (((rawWord >> 25) & 0x7FU) == 0x08U) {
+				insn.mnemonic = Mnemonic::SFENCE_VMA;
+				markSystemExtension();
+				markLegal();
 			}
 			break;
 		case 0x1:

@@ -1,0 +1,206 @@
+guideXOS Hypervisor - Phase RISCV-3 Report
+==========================================
+Outcome: A (complete)
+Date (UTC): 2026-10-22
+Branch: RISCV (never switched, renamed, merged, rebased, reset, or cleaned)
+Remote: https://github.com/guideX/guideXOS-Hypervisor/tree/RISCV
+
+Starting state
+--------------
+- HEAD: b71b0e592aa231f91a9809af6f0857e94013a77e
+  ("Phase RISCV-2: complete RV64I, privilege/CSR/traps, SBI Base,
+  S-mode hello-world"). Matches the expected RISCV-2 commit exactly.
+- .phase-riscv: last_completed=RISCV-2, next_expected=RISCV-3.
+- Shared .phase untouched (still IA64 phase markers).
+- Baseline before semantic changes: ctest -R RiscV 5/5 passed
+  (decoder, fetch/decode, minimal execution, rv64i full, priv/sbi).
+- IA-64 baseline spot set before changes: test_new_instructions,
+  test_efi_memory_map, test_ia64_sal all passed.
+
+Mission result
+--------------
+RISCV-3 Sv39 virtual memory is implemented and proven end-to-end: a
+three-level Sv39 MMU with real page walking, 4 KiB/2 MiB/1 GiB superpages,
+PTE validation, U/SUM/MXR/MPRV permission enforcement, automatic A/D-bit
+updates, canonical-address checking, and page-fault causes 12/13/15 with
+faulting-vaddr tval. satp now accepts Bare and Sv39 (WARL: other modes
+ignored, ASIDLEN=0). M-mode fetch and MPRV=0 accesses bypass translation;
+with MPRV=1, M-mode loads/stores translate at the effective privilege in
+mstatus.MPP. SFENCE.VMA is decoded and retires as a no-op TLB-sync point
+(our MMU is uncached, so no cached translations exist to flush; U-mode
+SFENCE.VMA traps illegal per the privileged spec). Three guest proof
+programs execute real S-mode code through the production decoder with
+paging enabled: (A) hello-world via translated stores, (B) A/D-bit proof,
+(C) store-page-fault handler that repairs the mapping, executes
+SFENCE.VMA, SRETs, and the store retries successfully.
+
+Sv39 MMU implementation (src/riscv/riscv_mmu.cpp, include/riscv/riscv_mmu.h)
+---------------------------------------------------------------------------
+- Sv39Mmu class: translate(), walk(), validatePte(), checkPermissions(),
+  updateADBits(), readPte()/writePte().
+- Three-level walk per the privileged spec: VPN[2]/VPN[1]/VPN[0] from the
+  39-bit virtual address; each level reads a PTE from guest physical
+  memory; non-leaf PTEs descend (PPN becomes next-level table base);
+  leaf PTEs terminate the walk.
+- Superpage support: leaf PTEs at level 2 (1 GiB) and level 1 (2 MiB)
+  are honored; misaligned superpage PTEs (PPN low bits nonzero) are
+  rejected as page faults per spec.
+- PTE validation: V=0 -> page fault; reserved encoding (W without R) ->
+  page fault; non-leaf PTEs with R/W/X set -> page fault; PTE pointing
+  out of guest physical range -> page fault (guarded before any access).
+- Canonical-address check: VA[63:39] must equal VA[38]; violation raises
+  the access-type-specific page fault (12/13/15), never an access fault.
+- Permission checks: U-bit vs privilege (S cannot access U pages; U
+  cannot access non-U pages), mstatus.SUM (S access to U pages requires
+  SUM=1, only for load/store, never fetch), mstatus.MXR (execute-readable
+  pages become readable when MXR=1), effective privilege via
+  mstatus.MPRV + MPP for load/store accesses.
+- Automatic A/D updates: A set on any successful translation, D set on
+  stores, written back through the MMU into guest physical memory with
+  the walker re-reading the PTE; if hardware A/D update is disabled the
+  spec-permitted fault-on-clear behavior is not taken (we always update,
+  which is architecturally permitted when the implementation owns the
+  bit updates).
+- Physical-bounds guard: the full access (paddr + size) must fit in
+  guest memory before the translation is committed.
+
+CPU integration (include/riscv_cpu.h, src/riscv/riscv_cpu.cpp)
+--------------------------------------------------------------
+- Sv39Translation result struct, AccessType enum, translateFetch/
+  translateLoad/ translateStore public entry points on RV64CPU.
+- step(): instruction fetch is translated when paging is enabled and
+  privilege is not M (or MPRV applies only to loads/stores); loads and
+  stores translate at effective privilege (MPRV-aware); translation
+  failure raises the page-fault cause (12 fetch / 13 load / 15 store)
+  with tval = faulting virtual address and NO architectural state change
+  (rd/memory/PC preserved; sepc/scause/stval/privilege/PC set by the
+  existing trap-entry path).
+- Translation-failure vs physical-access-failure distinction: a
+  translation miss is a page fault (12/13/15); a physical
+  read/write-range failure after successful translation (or in M-mode
+  Bare) is an access fault (1/5/7). This preserves RISCV-2 semantics for
+  Bare mode.
+- satp CSR (0x180): MODE field now accepts Bare (0) and Sv39 (8); ASID
+  bits are hardwired 0 (ASIDLEN=0, ignored); other MODE values are WARL-
+  ignored (write discarded, previous value kept). PPN is writable.
+- mstatus: SUM (bit 18), MXR (bit 19), MPRV (bit 17) are now writable;
+  the writable mask lives in riscv_cpu.h (kMstatusWritableMask) and
+  includes the previously ambiguous constants; all mstatus/sstatus
+  masks were consolidated into riscv_cpu.h to remove a namespace-scope
+  ambiguity that had produced an incorrect writable mask.
+- medeleg (0x302): writable bits extended from 0-9 to include 12, 13,
+  15 (instruction/load/store page fault) so S-mode can receive page
+  faults; bits 0-9 behavior unchanged.
+- SFENCE.VMA (funct7=0b0001000, funct3=0, opcode SYSTEM): now decoded
+  legal by the production decoder (was not produced at all in RISCV-2);
+  executed in RV64CPU::step as a TLB-sync no-op that ignores rs1/rs2
+  (no cached TLB exists; the walker always reads guest memory). In
+  U-mode it traps illegal (cause 2); TVM is hardwired 0 so S-mode
+  execution is always permitted.
+- M-mode fetch and MPRV=0 load/store never consult the MMU (physical
+  addresses); this keeps RISCV-2 M-mode programs and the SBI boundary
+  fully working with satp=Sv39 programmed.
+
+Guest proof programs (tests/test_riscv_sv39.cpp)
+-------------------------------------------------
+Hand-assembled via in-test encoders (no toolchain at runtime), run
+through RV64CPU::step and the production decoder with satp=Sv39 active.
+Memory layout: code at VA 0x40000000 -> PA 0x80010000 (R|X), data at
+VA 0x40001000 -> PA 0x80020000 (R|W), handler at VA 0x40002000 -> PA
+0x80030000 (R|X), page tables at PA 0x80001000/0x80002000/0x80003000
+with RW VA aliases at 0x40003000/0x40004000/0x40005000 so the S-mode
+handler can write PTEs through translated stores.
+- Program A (TestGuestHelloSv39): M-mode boot programs satp/medeleg/
+  stvec/mstatus and MRETs into S; S-mode writes "Hello from Sv39"
+  (15 bytes) via 15x (ADDI+SB) through translated stores plus a marker
+  byte, halts on EBREAK. Message and marker verified at DATA_PA.
+- Program B (TestADBits): S-mode store through a translation with the
+  leaf PTE A/D bits clear; after the access, the leaf PTE is read back
+  from guest physical memory and both A and D are verified set.
+- Program C (TestPageFaultRecovery): S-mode stores to an unmapped
+  DATA_VA -> StorePageFault (cause 15), delegated via medeleg to the
+  S-mode handler at stvec; the handler writes the missing leaf PTE
+  through a RW VA alias, executes SFENCE.VMA, and SRETs; the faulting
+  store retries and succeeds (value 77 verified at DATA_PA); the
+  program continues and halts. Trap cause, trap target (S), retry, and
+  final data are all asserted.
+
+Deterministic unit tests (same suite)
+-------------------------------------
+- TestBareMode: satp=0/Bare translation is identity; load/store/fetch
+  through translate* with paging off return the same address.
+- TestCanonicalFault: non-canonical VA (0x0000004000000000) and
+  unmapped-but-canonical VA both raise LoadPageFault (cause 13) with
+  ok=false, never an access fault.
+- TestSatpWarl: satp writes with unsupported MODE are ignored (value
+  unchanged); Bare (MODE=0) and Sv39 (MODE=8) writes are accepted; the
+  ASID field is hardwired 0 (ASIDLEN=0).
+- TestPermissionFaults: S-mode store to a U page without SUM, U-mode
+  fetch from a non-U page, and store to a read-only page each raise the
+  correct page-fault cause with the faulting VA in tval.
+
+Test counts and commands
+------------------------
+- cmake -S . -B build-riscv3 -G "Visual Studio 18 2026" -A x64
+- cmake --build build-riscv3 --config Debug --target test_riscv_decoder
+    --target test_riscv_fetch_decode --target test_riscv_minimal_execution
+    --target test_riscv_rv64i_full --target test_riscv_priv_sbi
+    --target test_riscv_sv39 -- /m:1
+- ctest --test-dir build-riscv3 -C Debug -R "RiscV" --output-on-failure
+  -> 6/6 passed:
+  RiscVDecoderSmokeTest PASS, RiscVFetchDecodeSmokeTest PASS,
+  RiscVMinimalExecutionTests PASS, RiscVRv64iFullTests PASS,
+  RiscVPrivSbiTests PASS (satp test extended for Sv39 acceptance +
+  ASIDLEN=0), RiscVSv39Tests PASS (164 explicit checks).
+  All checks are active runtime comparisons (no assert()-only
+  verification); success and fault paths both exercised, including
+  delegation, WARL behavior, A/D updates, and the fault-recovery
+  round-trip.
+- git diff --check: clean.
+
+IA-64 regression results
+------------------------
+- No IA-64-specific implementation changes (git diff touches only
+  CMakeLists.txt RISC-V targets + /FS MSVC flag, include/riscv_cpu.h,
+  include/riscv/riscv_mmu.h, src/decoder/riscv_decoder.cpp SFENCE.VMA
+  legality, src/riscv/riscv_cpu.cpp, src/riscv/riscv_mmu.cpp (new),
+  tests/test_riscv_priv_sbi.cpp, tests/test_riscv_sv39.cpp (new),
+  docs, and .phase-riscv).
+- test_new_instructions PASS, test_efi_memory_map PASS,
+  test_ia64_sal PASS (same spot set as RISCV-2).
+
+Files changed
+-------------
+- Modified: include/riscv_cpu.h (Sv39 constants, Sv39Translation,
+  AccessType, translateFetch/Load/Store, satp Sv39, mstatus SUM/MXR/
+  MPRV, medeleg extension, friend declarations, public storeBytes alias)
+- Modified: src/riscv/riscv_cpu.cpp (CSR WARL for satp/medeleg/mstatus,
+  step() translation integration, SFENCE.VMA case, access-fault vs
+  page-fault distinction)
+- Modified: src/decoder/riscv_decoder.cpp (SFENCE.VMA legality)
+- Modified: tests/test_riscv_priv_sbi.cpp (satp Sv39 + ASIDLEN=0)
+- Modified: CMakeLists.txt (/FS for MSVC PDB, riscv_mmu.cpp in all
+  RISC-V targets, test_riscv_sv39 target + CTest entry)
+- Created: include/riscv/riscv_mmu.h (Sv39Mmu class)
+- Created: src/riscv/riscv_mmu.cpp (Sv39 walk/validate/permissions/A-D)
+- Created: tests/test_riscv_sv39.cpp (8 tests, 164 checks)
+- Modified: docs/riscv/rv64-decoder-status.txt (SFENCE.VMA now decoded
+  and executed; satp Sv39; RISCV-3 execution list)
+- Created: docs/riscv/phase-riscv-3-report.txt (this file)
+- Updated: .phase-riscv (last_completed=RISCV-3, next_expected=RISCV-4)
+- Untouched: shared .phase and all other phase markers, IA-64 sources,
+  other architecture branches/worktrees/build products/QEMU/ISO assets.
+
+Remaining blockers (not attempted)
+----------------------------------
+- Sv48 mode; hardware A/D fault-on-clear option; TLB caching with real
+  invalidation (our walker is uncached, SFENCE.VMA is a sync no-op).
+- Timer/interrupt delivery (CLINT/PLIC, mie/mip/sie/sip sources,
+  vectored vectors, SIE/MIE usage by hardware).
+- Real SBI/firmware compatibility (timer, IPI, RFENCE, HSM, DBCN,
+  SRST), device tree, UART/virtio platform devices.
+- RV64M/A/F/D/V and full C execution.
+- ELF loader + boot Hart state machine. Linux/OpenSBI boot not possible
+  yet.
+
+Local commit SHA: (recorded after commit; no push performed)

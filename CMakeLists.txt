@@ -17,6 +17,8 @@ if(MSVC)
     add_compile_definitions(_CRT_NONSTDC_NO_WARNINGS=1)
     # Force include errno.h before any other headers
     add_compile_options(/FIerrno.h)
+    # Allow PDB sharing for parallel builds
+    add_compile_options(/FS)
 endif()
 
 # Set output directories
@@ -685,6 +687,7 @@ add_test(NAME RiscVFetchDecodeSmokeTest COMMAND test_riscv_fetch_decode)
 add_test(NAME RiscVMinimalExecutionTests COMMAND test_riscv_minimal_execution)
 add_test(NAME RiscVRv64iFullTests COMMAND test_riscv_rv64i_full)
 add_test(NAME RiscVPrivSbiTests COMMAND test_riscv_priv_sbi)
+add_test(NAME RiscVSv39Tests COMMAND test_riscv_sv39)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -708,6 +711,7 @@ set(RISCV_CPU_SOURCES
 add_executable(test_riscv_minimal_execution
     tests/test_riscv_minimal_execution.cpp
     src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
     src/decoder/riscv_decoder.cpp
 )
 
@@ -721,6 +725,7 @@ endif()
 add_executable(test_riscv_rv64i_full
     tests/test_riscv_rv64i_full.cpp
     src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
     src/decoder/riscv_decoder.cpp
 )
 
@@ -734,11 +739,20 @@ endif()
 add_executable(test_riscv_priv_sbi
     tests/test_riscv_priv_sbi.cpp
     src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
+# RISC-V Sv39 virtual-memory test
+add_executable(test_riscv_sv39
+    tests/test_riscv_sv39.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
     src/decoder/riscv_decoder.cpp
 )
 
 if(MSVC)
-    target_compile_options(test_riscv_priv_sbi PRIVATE /W4)
+    target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()
-    target_compile_options(test_riscv_priv_sbi PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_riscv_sv39 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
