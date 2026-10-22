@@ -12,8 +12,9 @@ namespace mips64 {
 namespace {
 
 ia64::ISAExecutionResult mapStepResult(Mips64StepResult result) {
-    return result == Mips64StepResult::Continue ? ia64::ISAExecutionResult::CONTINUE
-                                                : ia64::ISAExecutionResult::EXCEPTION;
+    if (result == Mips64StepResult::Continue) return ia64::ISAExecutionResult::CONTINUE;
+    if (result == Mips64StepResult::Interrupt) return ia64::ISAExecutionResult::INTERRUPT;
+    return ia64::ISAExecutionResult::EXCEPTION;
 }
 
 }  // namespace

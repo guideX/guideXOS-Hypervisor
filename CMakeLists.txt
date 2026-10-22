@@ -36,10 +36,13 @@ set(CORE_SOURCES
 )
 
 set(ISA_SOURCES
-    src/isa/IA64ISAPlugin.cpp
-    src/isa/ISAPluginRegistry.cpp
-    src/isa/ExampleISAPlugin.cpp
-)
+      src/isa/IA64ISAPlugin.cpp
+      src/isa/ISAPluginRegistry.cpp
+      src/isa/ExampleISAPlugin.cpp
+      src/mips64/Mips64Cpu.cpp
+      src/isa/Mips64ISAPlugin.cpp
+  )
+
 
 set(DECODER_SOURCES
     src/decoder/decoder.cpp

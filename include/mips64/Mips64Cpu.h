@@ -122,11 +122,13 @@ enum class Mips64Fault : uint32_t {
 enum class Mips64StepResult : uint8_t {
     Continue = 0,  // instruction retired; PC advanced per delay-slot rules
     Fault = 1,     // instruction did not retire; see fault()/lastError()
+    Interrupt = 2, // asynchronous interrupt delivered; PC redirected
 };
 
 // MIPS64r2 architectural exception codes (Cause.ExcCode) produced by this
 // core, including the MIPS64-3 TLB codes.
 enum class Mips64ExcCode : uint32_t {
+    Int = 0,    // interrupt (Count/Compare or software IP)
     Mod = 1,    // TLB modified (store to valid but non-dirty mapping)
     TLBL = 2,   // TLB refill/invalid on load or instruction fetch
     TLBS = 3,   // TLB refill/invalid on store
@@ -202,6 +204,10 @@ constexpr uint64_t kStatusReset = kStatusBitBev | kStatusBitErl;  // 0x00400004
 // software-writable; ExcCode/BD/TI/CE/IP[7:2] are managed by the core.
 constexpr uint64_t kCauseBitBd = 1ULL << 31;
 constexpr uint64_t kCauseIpSwMask = 0x00000300ULL;  // IP[1:0], bits 9:8
+constexpr uint64_t kCauseBitDc = 1ULL << 23;  // Disable Count (Release 2)
+constexpr uint64_t kCauseBitIv = 1ULL << 24;  // Interrupt Vector select
+constexpr uint64_t kCauseBitTi = 1ULL << 30;  // Timer Interrupt pending
+constexpr uint64_t kCauseIp7Bit = 1ULL << 15; // IP7 hardware-pending (timer)
 constexpr unsigned kCauseExcCodeShift = 2;
 constexpr uint64_t kCauseExcCodeMask = 0x7CULL;  // bits 6:2
 

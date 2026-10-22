@@ -657,7 +657,8 @@ bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
         return true;
     }
     if (rd == kCp0RegCause && sel == kCp0SelCause) {
-        out = cause_ & (kCauseBitBd | kCauseExcCodeMask | kCauseIpSwMask);
+        out = cause_ & (kCauseBitBd | kCauseExcCodeMask | kCauseIpSwMask |
+                        kCauseBitDc | kCauseBitIv | kCauseBitTi | kCauseIp7Bit);
         return true;
     }
     if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
@@ -743,7 +744,8 @@ bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
         return true;
     }
     if (rd == kCp0RegCause && sel == kCp0SelCause) {
-        cause_ = (cause_ & ~kCauseIpSwMask) | (value & kCauseIpSwMask);
+        cause_ = (cause_ & ~(kCauseIpSwMask | kCauseBitDc | kCauseBitIv)) |
+                 (value & (kCauseIpSwMask | kCauseBitDc | kCauseBitIv));
         return true;
     }
     if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
@@ -768,6 +770,8 @@ bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
     }
     if (rd == kCp0RegCompare && sel == kCp0SelCompare) {
         compare_ = value & 0xFFFFFFFFULL;
+        // Writing Compare acknowledges/clears the timer interrupt.
+        cause_ &= ~(kCauseBitTi | kCauseIp7Bit);
         return true;
     }
     return false;
@@ -1792,10 +1796,51 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
 }
 
 Mips64StepResult Mips64Cpu::step(ia64::IMemory& memory) {
-    // Count is a simple deterministic tick: one increment per step call.
-    // Compare match delivers no interrupt (Cause TI/IP stay 0); see docs.
-    count_ = (count_ + 1) & 0xFFFFFFFFULL;
+    // Deterministic virtual-cycle clock: one Count increment per step call,
+    // unless Cause.DC disables counting. Count wraps at 32 bits.
+    if ((cause_ & kCauseBitDc) == 0) {
+        const uint32_t prev = static_cast<uint32_t>(count_ & 0xFFFFFFFFULL);
+        count_ = (count_ + 1) & 0xFFFFFFFFULL;
+        if (static_cast<uint32_t>(count_ & 0xFFFFFFFFULL) == static_cast<uint32_t>(compare_ & 0xFFFFFFFFULL) &&
+            prev != static_cast<uint32_t>(compare_ & 0xFFFFFFFFULL)) {
+            // Count/Compare match latches the timer interrupt request.
+            cause_ |= (kCauseBitTi | kCauseIp7Bit);
+        }
+    }
+    // Also latch if already equal on a fresh match? Ensure equality sets pending.
+    if ((cause_ & kCauseBitDc) == 0 &&
+        static_cast<uint32_t>(count_ & 0xFFFFFFFFULL) == static_cast<uint32_t>(compare_ & 0xFFFFFFFFULL)) {
+        cause_ |= (kCauseBitTi | kCauseIp7Bit);
+    }
     clearFault();
+    // Asynchronous interrupt delivery at instruction boundary.
+    const bool timerPending = (cause_ & kCauseBitTi) != 0;
+    const bool sw0 = (cause_ & (1ULL << 8)) != 0;
+    const bool sw1 = (cause_ & (1ULL << 9)) != 0;
+    const bool im0 = (status_ & (1ULL << 8)) != 0;
+    const bool im1 = (status_ & (1ULL << 9)) != 0;
+    const bool im7 = (status_ & (1ULL << 15)) != 0;
+    const bool ie = (status_ & kStatusBitIe) != 0;
+    const bool exl = (status_ & kStatusBitExl) != 0;
+    const bool erl = (status_ & kStatusBitErl) != 0;
+    bool deliver = false;
+    if (ie && !exl && !erl) {
+        if (timerPending && im7) deliver = true;
+        if (sw0 && im0) deliver = true;
+        if (sw1 && im1) deliver = true;
+    }
+    if (deliver) {
+        const uint64_t address = pc_;
+        const bool inDelay = delayArmed_;
+        const uint64_t branchPc = delayBranch_;
+        const uint64_t vector = (cause_ & kCauseBitIv) != 0
+            ? exceptionVectorFor((status_ & kStatusBitBev) != 0, ebase_, 0x200)
+            : exceptionVector();
+        enterException(Mips64ExcCode::Int, Mips64Fault::None, "interrupt", address,
+                       inDelay, branchPc, vector);
+        // Count already incremented above.
+        return Mips64StepResult::Interrupt;
+    }
     const uint64_t address = pc_;
     const bool inDelay = delayArmed_;
     const uint64_t branchPc = delayBranch_;
