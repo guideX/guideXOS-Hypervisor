@@ -102,8 +102,18 @@ public:
     // ========================================================================
 
     size_t GetPageSize() const override { return pageSize_; }
-    void SetEnabled(bool enabled) override { enabled_ = enabled; }
+    void SetEnabled(bool enabled) override {
+        enabled_ = enabled;
+        ++mappingGeneration_;  // enabling/disabling changes the translation regime
+    }
     bool IsEnabled() const override { return enabled_; }
+
+    /**
+     * Monotonic counter advanced by every change that can alter translation
+     * or permissions (map/unmap/permission change/enable/table restore). The
+     * reservation layer compares it to detect remaps of reserved addresses.
+     */
+    uint64_t GetMappingGeneration() const { return mappingGeneration_; }
 
     // ========================================================================
     // Watchpoint Management (IMMU interface)
@@ -258,6 +268,9 @@ private:
     // Configuration
     size_t pageSize_;
     bool enabled_;
+    // Advanced by every translation/permission mutation (see
+    // GetMappingGeneration). Never decreases.
+    uint64_t mappingGeneration_ = 0;
 };
 
 } // namespace ia64

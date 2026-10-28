@@ -6,6 +6,9 @@
 // names remain usable.  Load the standard error constants first so later
 // <system_error>/<iostream> includes do not see an incomplete host errno set.
 #include <system_error>
+// <memory> pulls in <mutex> internals that reference host errno macros; load it
+// before linux_errno.h undefines them (IMemory.h now uses shared_ptr).
+#include <memory>
 #include "linux_errno.h"
 
 namespace ia64 {

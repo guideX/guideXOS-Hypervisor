@@ -89,11 +89,13 @@ void MMU::MapPage(uint64_t virtualAddr, uint64_t physicalAddr, PermissionFlags p
     
     // Insert or update in page table
     pageTable_[virtualPage] = entry;
+    ++mappingGeneration_;
 }
 
 void MMU::UnmapPage(uint64_t virtualAddr) {
     uint64_t pageAddr = AlignToPage(virtualAddr);
     pageTable_.erase(pageAddr);
+    ++mappingGeneration_;
 }
 
 const PageEntry* MMU::GetPageEntry(uint64_t virtualAddr) const {
@@ -119,6 +121,7 @@ void MMU::SetPagePermissions(uint64_t virtualAddr, PermissionFlags permissions) 
     }
     
     it->second.permissions = permissions;
+    ++mappingGeneration_;
 }
 
 // ============================================================================
@@ -317,10 +320,12 @@ void MMU::MapIdentityRange(uint64_t startAddr, size_t size, PermissionFlags perm
 
 void MMU::ClearPageTable() {
     pageTable_.clear();
+    ++mappingGeneration_;
 }
 
 void MMU::RestorePageTable(const std::map<uint64_t, PageEntry>& pageTable) {
     pageTable_ = pageTable;
+    ++mappingGeneration_;
 }
 
 std::string MMU::DumpPageTable(uint64_t startAddr, size_t count) const {

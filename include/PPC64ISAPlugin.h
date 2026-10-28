@@ -2,6 +2,7 @@
 
 #include "IISA.h"
 #include "IMemory.h"
+#include "MemoryReservation.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -31,6 +32,13 @@ namespace ppc64 {
 //   X-form indexed: lbzx, lhzx, lhax, lwzx, lwax, ldx,
 //                   stbx, sthx, stwx, stdx (Rc must be 0),
 //   SC-form: sc (LEV=0 only; other opcode-17 patterns rejected).
+// Phase 5 subset (Book II atomics and synchronization, Book I XL-form):
+//   lwarx, ldarx (EH hint accepted, functionally ignored),
+//   stwcx., stdcx. (Rc=1 mandatory; Rc=0 is an invalid form),
+//   sync (L=0 heavyweight), lwsync (L=1), isync, eieio.
+//   Only the exact documented encodings of sync/lwsync/isync/eieio are
+//   accepted; other words in those XO slots (ptesync, persistent-storage
+//   variants, reserved-field patterns) are deterministic emulator limitations.
 // Everything else decodes as unsupported and executes as EXCEPTION.
 
 constexpr size_t NUM_GPR = 32;
@@ -208,6 +216,29 @@ constexpr uint16_t XO_MTMSRD = 178;
 constexpr uint16_t XO_RFID = 18;
 constexpr uint32_t ENCODING_RFID = 0x4C000024;
 
+// Phase 5 atomic and synchronization opcodes (opcode 31 unless noted).
+// Load/store-conditional XO values are the 10-bit field (word bits 21-30).
+// EH (lwarx/ldarx) is bit 31 (LSB); stwcx./stdcx. require bit 31 = 1 (Rc).
+constexpr uint16_t XO_LWARX = 20;
+constexpr uint16_t XO_LDARX = 84;
+constexpr uint16_t XO_STWCX = 150;
+constexpr uint16_t XO_STDCX = 214;
+// sync/lwsync (XO 598), eieio (XO 854); isync is XL-form opcode 19 XO 150.
+constexpr uint16_t XO_SYNC = 598;
+constexpr uint16_t XO_EIEIO = 854;
+constexpr uint16_t XO_ISYNC = 150;
+constexpr uint32_t ENCODING_SYNC = 0x7C0004AC;   // sync (L=0)
+constexpr uint32_t ENCODING_LWSYNC = 0x7C2004AC; // lwsync (L=1)
+constexpr uint32_t ENCODING_EIEIO = 0x7C0006AC;  // eieio
+constexpr uint32_t ENCODING_ISYNC = 0x4C00012C;  // isync
+// Valid-per-ISA atomic forms outside the Phase 5 subset (terminal limits).
+constexpr uint16_t XO_LBARX = 52;
+constexpr uint16_t XO_LHARX = 116;
+constexpr uint16_t XO_STBCX = 694;
+constexpr uint16_t XO_STHCX = 726;
+constexpr uint16_t XO_LQARX = 276;
+constexpr uint16_t XO_STQCX = 182;
+
 // Phase 3 X-form indexed integer load/store extended opcodes (opcode 31).
 // Only the non-update forms are in scope; update-indexed XO values
 // (lbzux=119, lhzux=311, lhaux=375, lwzux=55, lwaux=373, ldux=53,
@@ -373,6 +404,13 @@ enum class DecodedKind {
     STWX,       // stwx  (X-form, opcode 31 XO 151)
     STDX,       // stdx  (X-form, opcode 31 XO 149)
     SC,         // sc    (SC-form, opcode 17, encoding 0x44000002 only)
+    LWARX,      // lwarx (X-form, opcode 31 XO 20; establishes reservation)
+    LDARX,      // ldarx (X-form, opcode 31 XO 84; establishes reservation)
+    STWCX,      // stwcx. (X-form, opcode 31 XO 150, Rc=1 required)
+    STDCX,      // stdcx. (X-form, opcode 31 XO 214, Rc=1 required)
+    SYNC,       // sync / lwsync (opcode 31 XO 598; exact encodings only)
+    ISYNC,      // isync (XL-form, opcode 19 XO 150; exact encoding only)
+    EIEIO,      // eieio (X-form, opcode 31 XO 854; exact encoding only)
     UNSUPPORTED
 };
 
@@ -471,9 +509,14 @@ public:
     PPC64ISAPlugin();
     ~PPC64ISAPlugin() override = default;
 
+    // A plugin owns its reservation record. Copying would alias one reservation
+    // between two CPUs, which the reservation model forbids.
+    PPC64ISAPlugin(const PPC64ISAPlugin&) = delete;
+    PPC64ISAPlugin& operator=(const PPC64ISAPlugin&) = delete;
+
     // IISA identity
     std::string getName() const override { return "PPC64"; }
-    std::string getVersion() const override { return "4.0-phase4"; }
+    std::string getVersion() const override { return "5.0-phase5"; }
     void reset() override;
 
     // Decode / execute
@@ -551,6 +594,14 @@ public:
     bool hasFault() const { return lastFault_.valid; }
     void clearFault() { lastFault_ = PPC64Fault(); }
 
+    // Phase 5 reservation diagnostics. The reservation is per-CPU execution
+    // state: it is never serialized and never a guest-visible SPR.
+    // hasReservation() is true only while the record is valid, its backend is
+    // alive, and no invalidating event has occurred since establishment.
+    bool hasReservation() const;
+    uint64_t getReservationAddress() const;
+    uint32_t getReservationWidth() const;
+
     // Pure decoder helpers (no state); also used by disassemble().
     static DecodedInstruction decodeWord(uint32_t word);
     static std::string disassembleDecoded(const DecodedInstruction& instr, uint64_t address);
@@ -564,8 +615,30 @@ public:
     static void setXEROverflow(PPC64ISAState& state, bool overflow);
 
 private:
+    // Single-instruction execution. execute() wraps it and drops the
+    // reservation on every non-CONTINUE outcome (exception/interrupt entry).
+    ISAExecutionResult executeInstruction(IMemory& memory, const ISADecodeResult& decodeResult);
     ISAExecutionResult executeDecoded(IMemory& memory, const DecodedInstruction& instr);
     void evaluateBranch(const DecodedInstruction& instr, bool& tookBranch);
+    // Phase 5 atomic reservation helpers (defined in PPC64ISAPlugin.cpp).
+    ISAExecutionResult executeReservation(IMemory& memory, const DecodedInstruction& instr,
+                                          uint64_t cia);
+    // Guest data-storage fault for reservation accesses: DSI for protection or
+    // unmapped storage (DAR=EA, DSISR per Phase 4 rules); terminal otherwise.
+    ISAExecutionResult reservationStorageFault(IMemory& memory, const DecodedInstruction& instr,
+                                               uint64_t cia, uint64_t ea, uint32_t width,
+                                               bool isStore, const std::string& reason);
+    // Replace this CPU's reservation with one established on `hub`.
+    void establishReservation(const std::shared_ptr<MemoryReservationHub>& hub, uint64_t ea,
+                              uint32_t width);
+    // True if this CPU's reservation is still held on `hub` for exactly
+    // [ea, ea+width).
+    bool reservationHeld(const std::shared_ptr<MemoryReservationHub>& hub, uint64_t ea,
+                         uint32_t width) const;
+    // Drop this CPU's reservation (record stays allocated for reuse).
+    void clearReservation();
+    // CR0 for stwcx./stdcx.: LT=GT=0, EQ=success, SO=XER.SO; other fields kept.
+    void setCR0Conditional(bool success);
     // Phase 3 helpers (defined in PPC64ISAPlugin.cpp).
     void recordFault(PPC64FaultCategory category, uint64_t cia, uint32_t raw, bool hasRaw,
                      uint64_t ea, bool hasEA, PPC64AccessType access, uint32_t width,
@@ -644,6 +717,8 @@ private:
     bool hasCachedInstruction_ = false;
     uint64_t cachedAddress_ = 0;
     PPC64Fault lastFault_;
+    // Phase 5 per-CPU reservation record (execution state, not serialized).
+    std::shared_ptr<ReservationRecord> reservation_;
     // Phase 4 delivery mode + bounded nesting guard (per-CPU).
     bool guestDeliveryEnabled_ = false;
     int consecutiveGuestExceptions_ = 0;

@@ -1,9 +1,13 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace ia64 {
+
+class MemoryReservationHub;
 
 /**
 * IMemory - Abstract interface for memory system operations
@@ -154,6 +158,24 @@ public:
      * @return Pointer to memory data, or nullptr if not supported
      */
     virtual const uint8_t* GetRawData() const = 0;
+
+    // ========================================================================
+    // Atomic Reservation Coherence (PPC64 lwarx/stwcx.)
+    // ========================================================================
+
+    /**
+     * Return the write-observation hub that can track reservations on
+     * [address, address+size), or nullptr when this backend cannot observe
+     * every mutation of that range. The default is nullptr: backends that do
+     * not override this (mocks, device-only views) reject reservation
+     * instructions deterministically instead of claiming coherence.
+     */
+    virtual std::shared_ptr<MemoryReservationHub> GetReservationHub(uint64_t address,
+                                                                    size_t size) {
+        (void)address;
+        (void)size;
+        return nullptr;
+    }
 
 protected:
     // Protected constructor - interface cannot be instantiated directly

@@ -347,6 +347,8 @@ PPC64ISAPlugin::PPC64ISAPlugin() = default;
 
 void PPC64ISAPlugin::reset() {
     state_.reset();
+    // CPU reset ends any reservation; the record is released entirely.
+    reservation_.reset();
     hasCachedInstruction_ = false;
     cachedAddress_ = 0;
     lastFault_ = PPC64Fault();
@@ -376,10 +378,14 @@ bool PPC64ISAPlugin::isUnimplementedValid(const DecodedInstruction& instr) {
     }
     uint32_t word = instr.raw;
     uint8_t opcode = static_cast<uint8_t>((word >> 26) & 0x3F);
+    uint16_t combined = static_cast<uint16_t>((word >> 1) & 0x3FFU);
+    if (opcode == OPCODE_XL) {
+        // isync-family words other than the exact isync encoding (XO 150).
+        return combined == XO_ISYNC;
+    }
     if (opcode != OPCODE_XO) {
         return false;
     }
-    uint16_t combined = static_cast<uint16_t>((word >> 1) & 0x3FFU);
     // Update-indexed integer loads/stores (valid, deferred past Phase 4).
     switch (combined) {
         case 119:  // lbzux
@@ -392,6 +398,19 @@ bool PPC64ISAPlugin::isUnimplementedValid(const DecodedInstruction& instr) {
         case 439:  // sthux
         case 183:  // stwux
         case 181:  // stdux
+            return true;
+        // Phase 5: valid atomic forms outside the bounded subset.
+        case XO_LBARX:
+        case XO_LHARX:
+        case XO_LQARX:
+        case XO_STQCX:
+        case XO_STBCX:
+        case XO_STHCX:
+            return true;
+        // Phase 5: sync/lwsync/eieio words other than the exact supported
+        // encodings (ptesync, persistent-storage variants, reserved fields).
+        case XO_SYNC:
+        case XO_EIEIO:
             return true;
         default:
             break;
@@ -611,6 +630,9 @@ ISAExecutionResult PPC64ISAPlugin::maybeDeliver(IMemory& memory,
     // Book III-S entry: EE/PR/IR/DR/RI cleared; all else preserved.
     state_.msr = oldMSR & ~(MSR_EE | MSR_PR | MSR_IR | MSR_DR | MSR_RI);
     state_.nip = EXC_VECTOR_BASE + vecOffset;
+    // Phase 5: guest exception entry ends any reservation. The handler must
+    // take its own reservation; it cannot consume one from the faulting code.
+    clearReservation();
     hasCachedInstruction_ = false;
     ++consecutiveGuestExceptions_;
     justDelivered_ = true;
@@ -795,6 +817,13 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             // (BO/BI/LK set) is an invalid encoding, not rfid.
             if (word == ENCODING_RFID) {
                 instr.kind = DecodedKind::RFID;
+                instr.supported = true;
+                break;
+            }
+            // Phase 5: isync is exactly 0x4C00012C (XL-form XO 150, all other
+            // fields zero). Other XO-150 words are outside the subset.
+            if (word == ENCODING_ISYNC) {
+                instr.kind = DecodedKind::ISYNC;
                 instr.supported = true;
                 break;
             }
@@ -1123,6 +1152,35 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                     default: instr.kind = DecodedKind::STDX; break;
                 }
                 instr.supported = true;
+            } else if (combined == XO_LWARX || combined == XO_LDARX) {
+                // Load and reserve. EH (bit 31, the LSB) is a hint about the
+                // expected outcome of the following store-conditional; the
+                // interpreter accepts both values and does not change behavior
+                // (hints may be ignored). No other field is reserved here.
+                instr.kind = (combined == XO_LWARX) ? DecodedKind::LWARX
+                                                    : DecodedKind::LDARX;
+                instr.supported = true;
+            } else if (combined == XO_STWCX || combined == XO_STDCX) {
+                // Store conditional. The record bit (bit 31) is architecturally
+                // always 1 for these forms; Rc=0 is an invalid encoding.
+                instr.kind = (combined == XO_STWCX) ? DecodedKind::STWCX
+                                                    : DecodedKind::STDCX;
+                instr.supported = rc;
+            } else if (word == ENCODING_SYNC || word == ENCODING_LWSYNC) {
+                // sync (L=0) and lwsync (L=1). All reserved and other fields are
+                // zero in these exact encodings; no CR/XER/register effect.
+                instr.kind = DecodedKind::SYNC;
+                instr.supported = true;
+            } else if (word == ENCODING_EIEIO) {
+                instr.kind = DecodedKind::EIEIO;
+                instr.supported = true;
+            } else if (combined == XO_SYNC || combined == XO_EIEIO) {
+                // Other sync/eieio words: ptesync (L=2), persistent-storage
+                // variants, or words with reserved fields set. Valid-per-ISA
+                // forms outside the subset are terminal emulator limits (see
+                // isUnimplementedValid), never silent NOPs.
+                instr.kind = DecodedKind::UNSUPPORTED;
+                instr.supported = false;
             } else {
                 // Covers: OE=1 on addc/adde/subfc (valid-per-ISA but out of
                 // Phase 2 scope), Rc=1 on cmp/cmpl, unknown XO values, and
@@ -1475,6 +1533,47 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
         case DecodedKind::SC:
             out << "sc";
             break;
+        case DecodedKind::LWARX:
+            out << "lwarx r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            if ((instr.raw & 0x1U) != 0) {
+                out << " ; EH=1";
+            }
+            break;
+        case DecodedKind::LDARX:
+            out << "ldarx r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            if ((instr.raw & 0x1U) != 0) {
+                out << " ; EH=1";
+            }
+            break;
+        case DecodedKind::STWCX:
+            out << "stwcx. r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            if (!instr.supported) {
+                out << " ; invalid encoding (Rc must be 1)";
+            }
+            break;
+        case DecodedKind::STDCX:
+            out << "stdcx. r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            if (!instr.supported) {
+                out << " ; invalid encoding (Rc must be 1)";
+            }
+            break;
+        case DecodedKind::SYNC:
+            out << (instr.raw == ENCODING_LWSYNC ? "lwsync" : "sync");
+            break;
+        case DecodedKind::ISYNC:
+            out << "isync";
+            break;
+        case DecodedKind::EIEIO:
+            out << "eieio";
+            break;
         case DecodedKind::UNSUPPORTED:
             out << "<unsupported ppc64 opcode " << static_cast<int>(instr.opcode) << ">";
             break;
@@ -1570,6 +1669,19 @@ ISAExecutionResult PPC64ISAPlugin::step(IMemory& memory) {
 }
 
 ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResult& decodeResult) {
+    // Phase 5: any outcome other than CONTINUE (exception, interrupt entry,
+    // system call, terminal limit) ends the reservation. Interrupts are not
+    // required to clear reservations by the VEA, but dropping them on entry
+    // guarantees a guest handler cannot consume a stale reservation.
+    const ISAExecutionResult result = executeInstruction(memory, decodeResult);
+    if (result != ISAExecutionResult::CONTINUE) {
+        clearReservation();
+    }
+    return result;
+}
+
+ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
+                                                     const ISADecodeResult& decodeResult) {
     // Phase 4: an unsupported MSR mode (HV/IP/IR/DR/LE) can never execute;
     // report terminal UNSUPPORTED_STATE without delivering or advancing.
     if (msrHasUnsupportedMode()) {
@@ -1886,6 +1998,178 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
     if (isUpdate) {
         state_.gpr[instr.ra] = ea;
     }
+    state_.nip = cia + INSN_WIDTH;
+    return ISAExecutionResult::CONTINUE;
+}
+
+// ============================================================================
+// Phase 5: load-and-reserve / store-conditional
+// ============================================================================
+
+bool PPC64ISAPlugin::hasReservation() const {
+    if (!reservation_ || !reservation_->valid) {
+        return false;
+    }
+    const std::shared_ptr<MemoryReservationHub> hub = reservation_->owner.lock();
+    return hub && reservation_->epoch == hub->epoch();
+}
+
+uint64_t PPC64ISAPlugin::getReservationAddress() const {
+    return hasReservation() ? reservation_->address : 0;
+}
+
+uint32_t PPC64ISAPlugin::getReservationWidth() const {
+    return hasReservation() ? reservation_->width : 0;
+}
+
+void PPC64ISAPlugin::clearReservation() {
+    if (reservation_) {
+        reservation_->valid = false;
+    }
+}
+
+bool PPC64ISAPlugin::reservationHeld(const std::shared_ptr<MemoryReservationHub>& hub,
+                                     uint64_t ea, uint32_t width) const {
+    return hub && reservation_ && hub->isHeld(*reservation_, ea, width);
+}
+
+void PPC64ISAPlugin::establishReservation(const std::shared_ptr<MemoryReservationHub>& hub,
+                                          uint64_t ea, uint32_t width) {
+    if (!reservation_ || reservation_->owner.lock() != hub) {
+        // First use, or the CPU moved to a different backend: a fresh record.
+        // The previous record is released, so the old backend can never
+        // validate or be affected by this CPU's new reservation.
+        reservation_ = std::make_shared<ReservationRecord>();
+    }
+    hub->establish(reservation_, ea, width);
+}
+
+void PPC64ISAPlugin::setCR0Conditional(bool success) {
+    // Conditional-store CR0: LT=0, GT=0, EQ=success, SO=XER.SO. Fields 1-7 are
+    // untouched, as the architecture requires for stwcx./stdcx.
+    uint8_t field = success ? 0x2U : 0x0U;
+    if ((state_.xer & XER_SO) != 0) {
+        field |= 0x1U;
+    }
+    state_.cr = crSetField(state_.cr, 0, field);
+}
+
+ISAExecutionResult PPC64ISAPlugin::reservationStorageFault(IMemory& memory,
+                                                           const DecodedInstruction& instr,
+                                                           uint64_t cia, uint64_t ea,
+                                                           uint32_t width, bool isStore,
+                                                           const std::string& reason) {
+    recordFault(isStore ? PPC64FaultCategory::DATA_STORE_FAILURE
+                        : PPC64FaultCategory::DATA_LOAD_FAILURE,
+                cia, instr.raw, true, ea, true,
+                isStore ? PPC64AccessType::WRITE : PPC64AccessType::READ, width, reason,
+                true);
+    // Same classification as ordinary loads/stores: protection and
+    // unmapped/bounds faults are guest DSIs; host-internal failures are not.
+    const bool isPerm = (reason.find("PERMISSION") != std::string::npos);
+    const bool isUnmapped =
+        (reason.find("NOT_MAPPED") != std::string::npos ||
+         reason.find("out of bounds") != std::string::npos ||
+         reason.find("exceeds bounds") != std::string::npos ||
+         reason.find("exceeds physical") != std::string::npos ||
+         reason.find("wraps past") != std::string::npos);
+    if (!isPerm && !isUnmapped) {
+        return ISAExecutionResult::EXCEPTION;
+    }
+    uint32_t dsisr = isStore ? DSISR_ISSTORE : 0U;
+    dsisr |= isPerm ? DSISR_PROTFAULT : DSISR_NOHPTE;
+    return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI, cia, 0, true, ea,
+                        dsisr);
+}
+
+ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
+                                                      const DecodedInstruction& instr,
+                                                      uint64_t cia) {
+    const bool isLoad =
+        (instr.kind == DecodedKind::LWARX || instr.kind == DecodedKind::LDARX);
+    const uint32_t width =
+        (instr.kind == DecodedKind::LWARX || instr.kind == DecodedKind::STWCX) ? 4U : 8U;
+    const PPC64AccessType access = isLoad ? PPC64AccessType::READ : PPC64AccessType::WRITE;
+    // Indexed form: RA=0 selects zero, RB is always an ordinary index register.
+    const uint64_t ea = eaXForm(instr.ra, instr.rb);
+
+    // Alignment: the EA must be a multiple of the operand size. A misaligned
+    // access takes the Alignment interrupt (DAR=EA, DSISR=0 per the Phase 4
+    // convention) and creates no reservation.
+    if ((ea % width) != 0) {
+        clearReservation();
+        recordFault(PPC64FaultCategory::ALIGNMENT, cia, instr.raw, true, ea, true, access,
+                    width, "larx/stcx effective address is not a multiple of the operand size",
+                    true);
+        return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_ALIGN, cia, 0, true,
+                            ea, 0);
+    }
+
+    // Reservations require a backend that observes every mutation of the
+    // target. Device-claimed ranges and mock/untracked backends are refused
+    // deterministically instead of claiming coherence.
+    const std::shared_ptr<MemoryReservationHub> hub = memory.GetReservationHub(ea, width);
+    if (!hub) {
+        clearReservation();
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia, instr.raw, true, ea, true,
+                    access, width,
+                    "reservation instruction targets storage this backend cannot track "
+                    "coherently (device-claimed range or backend without reservation support)",
+                    false);
+        return ISAExecutionResult::EXCEPTION;
+    }
+
+    if (isLoad) {
+        // A reserving load replaces the previous reservation whether or not it
+        // succeeds: a faulting lwarx/ldarx leaves this CPU with no reservation.
+        clearReservation();
+        uint64_t value = 0;
+        std::string reason;
+        if (!memLoadBE(memory, ea, width, value, reason)) {
+            return reservationStorageFault(memory, instr, cia, ea, width, false, reason);
+        }
+        // lwarx delivers the word zero-extended (the value is 4 bytes wide);
+        // ldarx delivers the full doubleword. The destination is written only
+        // after the read succeeded.
+        state_.gpr[instr.rt] = value;
+        // Reservation is established only after a successful load. In this
+        // real-address profile (identity translation enforced by
+        // validateDataRange) the real address equals the EA.
+        establishReservation(hub, ea, width);
+        state_.nip = cia + INSN_WIDTH;
+        return ISAExecutionResult::CONTINUE;
+    }
+
+    // Conditional store. Storage access checks (translation, protection,
+    // bounds) are performed first, so a protected or unmapped target raises DSI
+    // with or without a reservation and never becomes a CR0 result.
+    {
+        bool isUnmapped = false;
+        bool isPerm = false;
+        std::string reason;
+        if (!validateDataRange(memory, ea, width, true, reason, isUnmapped, isPerm)) {
+            clearReservation();
+            return reservationStorageFault(memory, instr, cia, ea, width, true, reason);
+        }
+    }
+
+    // Outcome is decided against the reservation as it stood before this
+    // instruction: held only if valid, same backend, current epoch, and the
+    // exact same address and width as the reserving access.
+    const bool held = reservationHeld(hub, ea, width);
+    // stwcx./stdcx. always clears the reservation, success or failure.
+    clearReservation();
+
+    if (held) {
+        const uint64_t source = state_.gpr[instr.rt];
+        std::string reason;
+        if (!memStoreBE(memory, ea, width, source, reason)) {
+            return reservationStorageFault(memory, instr, cia, ea, width, true, reason);
+        }
+    }
+    // Failed conditional store: no memory write at all, CR0 EQ=0. This is an
+    // ordinary architectural result, not an exception.
+    setCR0Conditional(held);
     state_.nip = cia + INSN_WIDTH;
     return ISAExecutionResult::CONTINUE;
 }
@@ -2334,9 +2618,33 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t newMSR = state_.srr1 & SRR1_MSR_MASK;
             state_.msr = newMSR;
             state_.nip = newNIP;
+            // Phase 5: exception return is a context alteration. Any reservation
+            // from the interrupted context (or the handler) is discarded.
+            clearReservation();
             hasCachedInstruction_ = false;
             return ISAExecutionResult::CONTINUE;
         }
+        case DecodedKind::LWARX:
+        case DecodedKind::LDARX:
+        case DecodedKind::STWCX:
+        case DecodedKind::STDCX:
+            return executeReservation(memory, instr, cia);
+        case DecodedKind::SYNC:
+        case DecodedKind::EIEIO:
+            // The interpreter has no store buffer or instruction reordering;
+            // each RAM access returns before the next step starts. Device
+            // callbacks are invoked in stream order, but this interface does
+            // not promise their completion or flushing. No register, CR, XER,
+            // or reservation effect (and no host hardware fence).
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        case DecodedKind::ISYNC:
+            // Context synchronization: the interpreter has already completed all
+            // prior instructions, and the next fetch re-reads memory. Drop the
+            // cached decode to make that explicit. No reservation effect.
+            hasCachedInstruction_ = false;
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
         case DecodedKind::SC:
             // System-call trap: legacy SYSCALL preserved; guest mode enters
             // the system-call vector 0xC00 with SRR0=cia+4 (continuation),
@@ -2391,6 +2699,9 @@ void PPC64ISAPlugin::setState(const ISAState& state) {
         throw std::invalid_argument("PPC64 setState: incompatible ISAState");
     }
     state_ = *ppcState;
+    // Replacing architectural state is a context alteration: no reservation
+    // taken in the previous execution context may succeed in this one.
+    reservation_.reset();
     hasCachedInstruction_ = false;
     consecutiveGuestExceptions_ = 0;
     justDelivered_ = false;
@@ -2398,6 +2709,7 @@ void PPC64ISAPlugin::setState(const ISAState& state) {
 
 void PPC64ISAPlugin::setPC(uint64_t pc) {
     state_.nip = pc;
+    reservation_.reset();
     hasCachedInstruction_ = false;
 }
 
@@ -2429,6 +2741,9 @@ bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
     } catch (...) {
         return false;
     }
+    // Snapshot reservations are never serialized. Restoring state drops any
+    // live reservation so a stale one cannot succeed against restored memory.
+    reservation_.reset();
     hasCachedInstruction_ = false;
     consecutiveGuestExceptions_ = 0;
     justDelivered_ = false;
@@ -2450,6 +2765,7 @@ bool PPC64ISAPlugin::deserialize_state_v2(const std::vector<uint8_t>& data) {
     } catch (...) {
         return false;
     }
+    reservation_.reset();
     hasCachedInstruction_ = false;
     consecutiveGuestExceptions_ = 0;
     justDelivered_ = false;

@@ -12,6 +12,7 @@
 #include <map>
 #include "IMemory.h"
 #include "IODevice.h"
+#include "MemoryReservation.h"
 #include "mmu.h"
 
 namespace ia64 {
@@ -109,6 +110,8 @@ public:
         checkBounds(address, sizeof(T));
         
         std::memcpy(&data_[address], &value, sizeof(T));
+        // Direct typed writes bypass Write(); they must still be observed.
+        reservations_->noteWrite(address, sizeof(T));
     }
 
     // IMemory interface implementation
@@ -119,6 +122,15 @@ public:
     size_t GetTotalSize() const override { return data_.size(); }
     void Clear() override;
     const uint8_t* GetRawData() const override { return data_.data(); }
+
+    /**
+     * Reservation hub for lwarx/stwcx. on [address, address+size). Returns
+     * nullptr when a registered memory-mapped device claims any byte of the
+     * range (device state can change outside Write(), so reservations on it
+     * cannot be tracked). Also synchronizes against MMU mapping changes.
+     */
+    std::shared_ptr<MemoryReservationHub> GetReservationHub(uint64_t address,
+                                                            size_t size) override;
 
     void RegisterDevice(IMemoryMappedDevice* device);
     bool UnregisterDevice(IMemoryMappedDevice* device);
@@ -175,10 +187,17 @@ void mmuWrite(uint64_t address, const uint8_t* src, size_t size);
 
  bool tryDeviceRead(uint64_t address, uint8_t* dest, size_t size) const;
  bool tryDeviceWrite(uint64_t address, const uint8_t* src, size_t size);
+ // True when a registered device claims any byte of [address, address+size).
+ bool deviceClaims(uint64_t address, size_t size) const;
+ // Invalidates reservations if the MMU mapping changed since the last sync.
+ void syncReservationMappingGeneration();
 
 std::vector<uint8_t> data_;      // Flat physical memory storage
 std::unique_ptr<MMU> mmu_;       // Memory Management Unit
  std::vector<IMemoryMappedDevice*> devices_;
+ // Per-backend reservation coherence hub (see MemoryReservation.h).
+ std::shared_ptr<MemoryReservationHub> reservations_;
+ uint64_t reservationMappingGeneration_ = 0;  // last MMU generation observed
 };
 
 // Legacy alias for compatibility
