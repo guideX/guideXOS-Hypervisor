@@ -79,6 +79,30 @@ as the cause of the `PREEMPT_ACTIVE` corruption.
 | `interruptFrameStack_` | Separate plugin vector using the same CFM + GR snapshot | Convenience interrupt preservation. It omits full RSE/NaT backing-store state and is restored around RFI by host code. |
 | Static/banked GR16–GR31 | Physical register banks in `CPUState`, selected by PSR.bn; checkpointed | Architectural and separate from stacked GR32+. Guest bank-switch/RFI operations affect it; the call snapshot omits these registers, so it is not a frame owner or a substitute for RSE state. |
 
+The architectural values in `CPUState` are the live machine state, not
+per-task objects. Calls/alloc/returns and interruption operations update CFM,
+PFS, BRs, BSP and related state as defined by IA-64. Guest software can save
+architectural values in its switch frame and use RSE backing-store operations
+to preserve stacked-register contents; the RSE also preserves NaT information
+through RNAT collections. Those values survive a task switch only through
+that guest-visible save/restore path or by remaining in the active physical
+window. The emulator has no separate full CPU image for each task. Today the
+guest can read/write the AR aliases, but its `flushrs` does not write stacked
+registers or NaT collections to memory, and its `loadrs` does not refill or
+invalidate the register window. Thus those registers are not yet actually
+preserved across task switches by this implementation.
+
+By contrast, the plugin's call and interrupt vectors are not saved/restored
+by guest instructions. Checkpoint serialization preserves the host vectors,
+which can make stale metadata survive a restore without making it belong to
+the resumed context. `completedCallFrames_` and `callFrameStack_` can therefore
+outlive the guest frame they describe; an address-only match can select them
+after another context becomes active. `pendingCallInputs_` is also host-owned,
+but only bridges ABI output values to the next call bundle; it is not a
+suspended architectural frame. The snapshot also lacks the `br.call`
+destination branch-register selector, full PFS/AR state, and per-register
+NaT values.
+
 The call path in `IA64ISAPlugin.cpp` executes the branch instruction, records a
 snapshot, bridges outgoing GRs to callee inputs, advances BSP by the caller's
 SOL, writes PFS from caller CFM, and publishes a callee CFM. The return path
