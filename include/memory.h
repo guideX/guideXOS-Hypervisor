@@ -10,6 +10,7 @@
 #include <memory>
 #include <utility>
 #include <map>
+#include <string>
 #include "IMemory.h"
 #include "IODevice.h"
 #include "MemoryReservation.h"
@@ -26,6 +27,11 @@ struct MemorySnapshot {
         : data()
         , pageTable()
         , mmuEnabled(true) {}
+};
+
+struct GuestRealWriteSegment {
+    uint64_t address = 0;
+    std::vector<uint8_t> bytes;
 };
 
 /**
@@ -131,6 +137,15 @@ public:
      */
     std::shared_ptr<MemoryReservationHub> GetReservationHub(uint64_t address,
                                                             size_t size) override;
+
+    // PPC64's explicitly configured flat partition backend. These operations
+    // address the backing RAM by host offset and intentionally bypass the
+    // legacy virtual MMU and its hooks. Device ranges are refused so callers
+    // can preflight complete transactions before committing any bytes.
+    bool ValidateGuestRealRange(uint64_t address, size_t size, bool isWrite,
+                                std::string& reason) const;
+    void ReadGuestReal(uint64_t address, uint8_t* dest, size_t size) const;
+    void WriteGuestRealTransaction(const std::vector<GuestRealWriteSegment>& segments);
 
     void RegisterDevice(IMemoryMappedDevice* device);
     bool UnregisterDevice(IMemoryMappedDevice* device);

@@ -149,6 +149,67 @@ std::shared_ptr<MemoryReservationHub> Memory::GetReservationHub(uint64_t address
     return reservations_;
 }
 
+bool Memory::ValidateGuestRealRange(uint64_t address, size_t size, bool isWrite,
+                                    std::string& reason) const {
+    if (size == 0) {
+        return true;
+    }
+    if (deviceClaims(address, size)) {
+        reason = "guest-real access overlaps unsupported MMIO";
+        return false;
+    }
+    try {
+        checkBounds(address, size);
+    } catch (const std::exception& e) {
+        reason = e.what();
+        return false;
+    }
+    (void)isWrite; // RAM has no second permission layer in the flat contract.
+    return true;
+}
+
+void Memory::ReadGuestReal(uint64_t address, uint8_t* dest, size_t size) const {
+    if (size == 0) {
+        return;
+    }
+    if (dest == nullptr) {
+        throw std::invalid_argument("ReadGuestReal: null destination");
+    }
+    std::string reason;
+    if (!ValidateGuestRealRange(address, size, false, reason)) {
+        throw std::runtime_error("ReadGuestReal: " + reason);
+    }
+    std::memcpy(dest, &data_[static_cast<size_t>(address)], size);
+}
+
+void Memory::WriteGuestRealTransaction(
+    const std::vector<GuestRealWriteSegment>& segments) {
+    // Validate every segment before touching storage. This is the commit
+    // guarantee used by translated cross-page PPC64 stores.
+    for (const GuestRealWriteSegment& segment : segments) {
+        if (segment.bytes.empty()) {
+            continue;
+        }
+        std::string reason;
+        if (!ValidateGuestRealRange(segment.address, segment.bytes.size(), true,
+                                    reason)) {
+            throw std::runtime_error("WriteGuestRealTransaction: " + reason);
+        }
+    }
+    for (const GuestRealWriteSegment& segment : segments) {
+        if (segment.bytes.empty()) {
+            continue;
+        }
+        std::memcpy(&data_[static_cast<size_t>(segment.address)],
+                    segment.bytes.data(), segment.bytes.size());
+    }
+    for (const GuestRealWriteSegment& segment : segments) {
+        if (!segment.bytes.empty()) {
+            reservations_->noteWrite(segment.address, segment.bytes.size());
+        }
+    }
+}
+
 void Memory::syncReservationMappingGeneration() {
     const uint64_t generation = mmu_->GetMappingGeneration();
     if (generation != reservationMappingGeneration_) {

@@ -40,6 +40,7 @@ set(ISA_SOURCES
     src/isa/ISAPluginRegistry.cpp
     src/isa/ExampleISAPlugin.cpp
     src/isa/PPC64ISAPlugin.cpp
+    src/isa/PPC64RadixMMU.cpp
 )
 
 set(DECODER_SOURCES
@@ -178,6 +179,7 @@ set(HEADERS
     include/ISAPluginRegistry.h
     include/ExampleISAPlugin.h
     include/PPC64ISAPlugin.h
+    include/PPC64RadixMMU.h
     include/riscv_decoder.h
     include/SyscallDispatcher.h
     include/CPUContext.h
@@ -689,6 +691,7 @@ add_test(NAME PPC64Phase2Tests COMMAND test_ppc64_phase2)
 add_test(NAME PPC64Phase3Tests COMMAND test_ppc64_phase3)
 add_test(NAME PPC64Phase4Tests COMMAND test_ppc64_phase4)
 add_test(NAME PPC64Phase5Tests COMMAND test_ppc64_phase5)
+add_test(NAME PPC64Phase6Tests COMMAND test_ppc64_phase6)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -786,6 +789,23 @@ if(MSVC)
     target_compile_options(test_ppc64_phase5 PRIVATE /W4)
 else()
     target_compile_options(test_ppc64_phase5 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# PPC64 Phase 6 POWER9 radix translation and translated execution tests.
+add_executable(test_ppc64_phase6
+    tests/test_ppc64_phase6.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase6 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase6 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase6 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # RISC-V CPU implementation

@@ -4,8 +4,11 @@
 #include "mmu.h"
 
 #include <cstring>
+#include <algorithm>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace ia64 {
 namespace ppc64 {
@@ -103,6 +106,7 @@ void PPC64ISAState::reset() {
     srr1 = 0;
     dar = 0;
     dsisr = 0;
+    pidr = 0;
 }
 
 std::unique_ptr<ISAState> PPC64ISAState::clone() const {
@@ -118,12 +122,16 @@ std::unique_ptr<ISAState> PPC64ISAState::clone() const {
     copy->srr1 = srr1;
     copy->dar = dar;
     copy->dsisr = dsisr;
+    copy->pidr = pidr;
     return copy;
 }
 
 void PPC64ISAState::serializeV2(uint8_t* buffer) const {
     if (buffer == nullptr) {
         throw std::invalid_argument("PPC64 serializeV2: null buffer");
+    }
+    if (pidr != 0) {
+        throw std::invalid_argument("PPC64 serializeV2: nonzero PIDR requires v3");
     }
     size_t offset = 0;
     putU32(buffer + offset, STATE_MAGIC);
@@ -195,11 +203,44 @@ void PPC64ISAState::deserializeV2(const uint8_t* buffer) {
     offset += 8;
     dsisr = getU32(buffer + offset);
     offset += 4;
+    pidr = 0;
+}
+
+void PPC64ISAState::serializeV3(uint8_t* buffer) const {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 serializeV3: null buffer");
+    }
+    PPC64ISAState legacy = *this;
+    legacy.pidr = 0;
+    legacy.serializeV2(buffer);
+    putU32(buffer + 4, STATE_VERSION_V3);
+    putU64(buffer + STATE_SIZE_V2, pidr);
+}
+
+void PPC64ISAState::deserializeV3(const uint8_t* buffer) {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 deserializeV3: null buffer");
+    }
+    if (getU32(buffer) != STATE_MAGIC || getU32(buffer + 4) != STATE_VERSION_V3) {
+        throw std::invalid_argument("PPC64 deserializeV3: bad magic or version");
+    }
+    const uint64_t restoredPid = getU64(buffer + STATE_SIZE_V2);
+    if (restoredPid > std::numeric_limits<uint32_t>::max()) {
+        throw std::invalid_argument("PPC64 deserializeV3: PIDR exceeds 32 bits");
+    }
+    std::array<uint8_t, STATE_SIZE_V2> v2{};
+    std::memcpy(v2.data(), buffer, STATE_SIZE_V2);
+    putU32(v2.data() + 4, STATE_VERSION_V2);
+    deserializeV2(v2.data());
+    pidr = static_cast<uint32_t>(restoredPid);
 }
 
 void PPC64ISAState::serialize(uint8_t* buffer) const {
     if (buffer == nullptr) {
         throw std::invalid_argument("PPC64 serialize: null buffer");
+    }
+    if (pidr != 0) {
+        throw std::invalid_argument("PPC64 serialize: nonzero PIDR requires v3");
     }
     size_t offset = 0;
     putU32(buffer + offset, STATE_MAGIC);
@@ -260,6 +301,7 @@ void PPC64ISAState::deserialize(const uint8_t* buffer) {
     srr1 = 0;
     dar = 0;
     dsisr = 0;
+    pidr = 0;
 }
 
 std::string PPC64ISAState::toString() const {
@@ -275,6 +317,7 @@ std::string PPC64ISAState::toString() const {
     out << "  SRR1: 0x" << std::hex << srr1 << std::dec << "\n";
     out << "  DAR: 0x" << std::hex << dar << std::dec << "\n";
     out << "  DSISR: 0x" << std::hex << dsisr << std::dec << "\n";
+    out << "  PIDR:  0x" << std::hex << pidr << std::dec << "\n";
     for (size_t i = 0; i < NUM_GPR; ++i) {
         out << "  r" << i << ": 0x" << std::hex << gpr[i] << std::dec << "\n";
     }
@@ -642,7 +685,9 @@ ISAExecutionResult PPC64ISAPlugin::maybeDeliver(IMemory& memory,
 void PPC64ISAPlugin::recordFault(PPC64FaultCategory category, uint64_t cia, uint32_t raw,
                                  bool hasRaw, uint64_t ea, bool hasEA,
                                  PPC64AccessType access, uint32_t width,
-                                 const std::string& reason, bool resumable) {
+                                 const std::string& reason, bool resumable,
+                                 PPC64TranslationFaultKind translationFault,
+                                 uint64_t translationContextIdentifier) {
     lastFault_.valid = true;
     lastFault_.cia = cia;
     lastFault_.raw = raw;
@@ -654,6 +699,8 @@ void PPC64ISAPlugin::recordFault(PPC64FaultCategory category, uint64_t cia, uint
     lastFault_.category = category;
     lastFault_.reason = reason;
     lastFault_.resumable = resumable;
+    lastFault_.translationFault = translationFault;
+    lastFault_.translationContextIdentifier = translationContextIdentifier;
 }
 
 int64_t PPC64ISAPlugin::signExtendDS(uint16_t dsField) {
@@ -1095,7 +1142,7 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 } else if (instr.sprn == SPR_XER || instr.sprn == SPR_LR ||
                            instr.sprn == SPR_CTR || instr.sprn == SPR_DSISR ||
                            instr.sprn == SPR_DAR || instr.sprn == SPR_SRR0 ||
-                           instr.sprn == SPR_SRR1) {
+                           instr.sprn == SPR_SRR1 || instr.sprn == SPR_PIDR) {
                     // Phase 4: XER/LR/CTR remain unprivileged; DSISR/DAR/
                     // SRR0/SRR1 decode as supported here and are privilege-
                     // checked at execution (problem-state use faults).
@@ -1599,21 +1646,58 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
     }
 
     uint8_t bytes[INSN_WIDTH] = {0, 0, 0, 0};
-    try {
-        memory.Read(state_.nip, bytes, INSN_WIDTH);
-    } catch (const std::exception& e) {
-        result.disassembly = std::string("<fetch fault: ") + e.what() + ">";
-        hasCachedInstruction_ = false;
-        // Host fetch failure (bounds, permission, hook, MMIO): recorded
-        // as observed, not claimed to be a guest ISI.
-        recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false, 0, false,
-                    PPC64AccessType::FETCH, INSN_WIDTH, e.what(), true);
-        return result;
-    }
-    // Phase 4: separate EXECUTE validation (Memory::Read checks READ).
-    // A READ-passing but EXECUTE-denied page is still a fetch failure here
-    // (host record), delivered as ISI only in guest mode.
-    {
+    if ((state_.msr & MSR_IR) != 0 || radixConfigured_) {
+        std::vector<TranslatedMemorySegment> segments;
+        PPC64TranslationResult translationFailure;
+        std::string reason;
+        const bool processTranslated = (state_.msr & MSR_IR) != 0;
+        const bool rangeValid = processTranslated
+            ? translateAccessRange(memory, state_.nip, INSN_WIDTH,
+                                   PPC64TranslationAccess::FETCH, segments,
+                                   translationFailure, reason)
+            : flatGuestRealAccessRange(memory, state_.nip, INSN_WIDTH,
+                                       PPC64TranslationAccess::FETCH, segments,
+                                       translationFailure, reason);
+        if (!rangeValid) {
+            result.disassembly = std::string("<guest-real fetch fault: ") + reason + ">";
+            hasCachedInstruction_ = false;
+            recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false,
+                        state_.nip, true, PPC64AccessType::FETCH, INSN_WIDTH,
+                        reason, true, translationFailure.fault,
+                        translationFailure.contextIdentifier);
+            return result;
+        }
+        Memory* concrete = dynamic_cast<Memory*>(&memory);
+        try {
+            concrete->ReadGuestReal(segments.front().hostBackingAddress,
+                                    bytes, INSN_WIDTH);
+        } catch (const std::exception& e) {
+            const std::string readReason = std::string(
+                processTranslated ? "translated instruction backing read failed: "
+                                  : "flat guest-real instruction backing read failed: ") +
+                e.what();
+            result.disassembly = std::string("<fetch fault: ") + readReason + ">";
+            hasCachedInstruction_ = false;
+            recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false,
+                        state_.nip, true, PPC64AccessType::FETCH, INSN_WIDTH,
+                        readReason, true,
+                        PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY);
+            return result;
+        }
+    } else {
+        try {
+            memory.Read(state_.nip, bytes, INSN_WIDTH);
+        } catch (const std::exception& e) {
+            result.disassembly = std::string("<fetch fault: ") + e.what() + ">";
+            hasCachedInstruction_ = false;
+            // Preserve the Phase 4 real-address guest-memory contract when IR=0.
+            recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false, 0, false,
+                        PPC64AccessType::FETCH, INSN_WIDTH, e.what(), true);
+            return result;
+        }
+        // Keep the Phase 4 real-address contract when no flat partition was
+        // configured. A configured guest-real partition uses its host backing
+        // map even with IR=0, such as during exception-vector execution.
         bool isUnmapped = false, isPerm = false;
         std::string vreason;
         if (!validateFetchRange(memory, state_.nip, vreason, isUnmapped, isPerm)) {
@@ -1682,14 +1766,27 @@ ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResul
 
 ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
                                                      const ISADecodeResult& decodeResult) {
-    // Phase 4: an unsupported MSR mode (HV/IP/IR/DR/LE) can never execute;
-    // report terminal UNSUPPORTED_STATE without delivering or advancing.
+    // HV/IP/LE remain unsupported. Relocation requires the explicitly
+    // configured radix context before the instruction stream can continue.
     if (msrHasUnsupportedMode()) {
         recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip,
                     hasCachedInstruction_ ? cachedInstruction_.raw : 0,
                     hasCachedInstruction_, 0, false, PPC64AccessType::NONE, 0,
-                    "MSR requests unsupported mode (HV/IP/IR/DR/LE must be 0 "
-                    "in Phase 4 real-address profile)",
+                    "MSR requests unsupported mode (HV/IP/LE must be 0 "
+                    "in the supported POWER9 radix profile)",
+                    false);
+        hasCachedInstruction_ = false;
+        consecutiveGuestExceptions_ = 0;
+        justDelivered_ = false;
+        return ISAExecutionResult::EXCEPTION;
+    }
+    std::string translationModeReason;
+    if (!translationModeReady(memory, state_.msr, translationModeReason)) {
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip,
+                    hasCachedInstruction_ ? cachedInstruction_.raw : 0,
+                    hasCachedInstruction_, 0, false, PPC64AccessType::NONE, 0,
+                    "MSR relocation has no valid translation context: " +
+                        translationModeReason,
                     false);
         hasCachedInstruction_ = false;
         consecutiveGuestExceptions_ = 0;
@@ -1713,6 +1810,34 @@ ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
                                 saved.cia, 0, false, 0, 0);
         }
         if (saved.category == PPC64FaultCategory::FETCH_FAILURE) {
+            if (saved.translationFault != PPC64TranslationFaultKind::NONE) {
+                uint32_t cause = 0;
+                switch (saved.translationFault) {
+                    case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
+                    case PPC64TranslationFaultKind::MISSING_PAGE_ENTRY:
+                        cause = SRR1_ISI_NOPT;
+                        break;
+                    case PPC64TranslationFaultKind::PERMISSION_FAILURE:
+                        cause = SRR1_ISI_PROT;
+                        break;
+                    case PPC64TranslationFaultKind::REFERENCE_CHANGE_REQUIRED:
+                        cause = SRR1_ATOMIC_RC;
+                        break;
+                    case PPC64TranslationFaultKind::INVALID_TABLE_CONFIGURATION:
+                        cause = SRR1_RADIX_BADCONFIG;
+                        break;
+                    case PPC64TranslationFaultKind::NONE:
+                        break;
+                    case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
+                    case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
+                    case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                        consecutiveGuestExceptions_ = 0;
+                        justDelivered_ = false;
+                        return ISAExecutionResult::EXCEPTION;
+                }
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_ISI,
+                                    saved.cia, cause, false, 0, 0);
+            }
             const std::string& r = saved.reason;
             bool isPerm = (r.find("PERMISSION") != std::string::npos);
             bool isUnmapped =
@@ -1923,9 +2048,45 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
     if (isLoad) {
         uint64_t value = 0;
         std::string reason;
-        if (!memLoadBE(memory, ea, width, value, reason)) {
+        PPC64TranslationResult translationFailure;
+        const bool loadSucceeded = (state_.msr & MSR_DR) != 0
+            ? translatedMemLoadBE(memory, ea, width, value,
+                                  translationFailure, reason)
+            : radixConfigured_
+                ? flatGuestRealMemLoadBE(memory, ea, width, value,
+                                         translationFailure, reason)
+                : memLoadBE(memory, ea, width, value, reason);
+        if (!loadSucceeded) {
             recordFault(PPC64FaultCategory::DATA_LOAD_FAILURE, cia, instr.raw, true, ea,
-                        true, PPC64AccessType::READ, width, reason, true);
+                        true, PPC64AccessType::READ, width, reason, true,
+                        translationFailure.fault,
+                        translationFailure.contextIdentifier);
+            if (translationFailure.fault != PPC64TranslationFaultKind::NONE) {
+                uint32_t dsisr = 0;
+                switch (translationFailure.fault) {
+                    case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
+                    case PPC64TranslationFaultKind::MISSING_PAGE_ENTRY:
+                        dsisr = DSISR_NOHPTE;
+                        break;
+                    case PPC64TranslationFaultKind::PERMISSION_FAILURE:
+                        dsisr = DSISR_PROTFAULT;
+                        break;
+                    case PPC64TranslationFaultKind::REFERENCE_CHANGE_REQUIRED:
+                        dsisr = DSISR_ATOMIC_RC;
+                        break;
+                    case PPC64TranslationFaultKind::INVALID_TABLE_CONFIGURATION:
+                        dsisr = DSISR_RADIX_BADCONFIG;
+                        break;
+                    case PPC64TranslationFaultKind::NONE:
+                        break;
+                    case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
+                    case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
+                    case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                        return ISAExecutionResult::EXCEPTION;
+                }
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
+                                    cia, 0, true, ea, dsisr);
+            }
             // Classify for DSI delivery: only permission/unmapped-like host
             // evidence becomes a guest DSI. Hook-denied, non-identity
             // translation, and other host-internal failures stay terminal.
@@ -1972,9 +2133,45 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
     const uint64_t source = state_.gpr[instr.rt];
     {
         std::string reason;
-        if (!memStoreBE(memory, ea, width, source, reason)) {
+        PPC64TranslationResult translationFailure;
+        const bool storeSucceeded = (state_.msr & MSR_DR) != 0
+            ? translatedMemStoreBE(memory, ea, width, source,
+                                   translationFailure, reason)
+            : radixConfigured_
+                ? flatGuestRealMemStoreBE(memory, ea, width, source,
+                                          translationFailure, reason)
+                : memStoreBE(memory, ea, width, source, reason);
+        if (!storeSucceeded) {
             recordFault(PPC64FaultCategory::DATA_STORE_FAILURE, cia, instr.raw, true, ea,
-                        true, PPC64AccessType::WRITE, width, reason, true);
+                        true, PPC64AccessType::WRITE, width, reason, true,
+                        translationFailure.fault,
+                        translationFailure.contextIdentifier);
+            if (translationFailure.fault != PPC64TranslationFaultKind::NONE) {
+                uint32_t dsisr = DSISR_ISSTORE;
+                switch (translationFailure.fault) {
+                    case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
+                    case PPC64TranslationFaultKind::MISSING_PAGE_ENTRY:
+                        dsisr |= DSISR_NOHPTE;
+                        break;
+                    case PPC64TranslationFaultKind::PERMISSION_FAILURE:
+                        dsisr |= DSISR_PROTFAULT;
+                        break;
+                    case PPC64TranslationFaultKind::REFERENCE_CHANGE_REQUIRED:
+                        dsisr |= DSISR_ATOMIC_RC;
+                        break;
+                    case PPC64TranslationFaultKind::INVALID_TABLE_CONFIGURATION:
+                        dsisr |= DSISR_RADIX_BADCONFIG;
+                        break;
+                    case PPC64TranslationFaultKind::NONE:
+                        break;
+                    case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
+                    case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
+                    case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                        return ISAExecutionResult::EXCEPTION;
+                }
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
+                                    cia, 0, true, ea, dsisr);
+            }
             bool isPerm = (reason.find("PERMISSION") != std::string::npos);
             bool isUnmapped =
                 (reason.find("NOT_MAPPED") != std::string::npos ||
@@ -2058,12 +2255,42 @@ ISAExecutionResult PPC64ISAPlugin::reservationStorageFault(IMemory& memory,
                                                            const DecodedInstruction& instr,
                                                            uint64_t cia, uint64_t ea,
                                                            uint32_t width, bool isStore,
-                                                           const std::string& reason) {
+                                                           const std::string& reason,
+                                                           const PPC64TranslationResult* translation) {
     recordFault(isStore ? PPC64FaultCategory::DATA_STORE_FAILURE
                         : PPC64FaultCategory::DATA_LOAD_FAILURE,
                 cia, instr.raw, true, ea, true,
                 isStore ? PPC64AccessType::WRITE : PPC64AccessType::READ, width, reason,
-                true);
+                true,
+                translation ? translation->fault : PPC64TranslationFaultKind::NONE,
+                translation ? translation->contextIdentifier : 0);
+    if (translation != nullptr &&
+        translation->fault != PPC64TranslationFaultKind::NONE) {
+        uint32_t dsisr = isStore ? DSISR_ISSTORE : 0;
+        switch (translation->fault) {
+            case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
+            case PPC64TranslationFaultKind::MISSING_PAGE_ENTRY:
+                dsisr |= DSISR_NOHPTE;
+                break;
+            case PPC64TranslationFaultKind::PERMISSION_FAILURE:
+                dsisr |= DSISR_PROTFAULT;
+                break;
+            case PPC64TranslationFaultKind::REFERENCE_CHANGE_REQUIRED:
+                dsisr |= DSISR_ATOMIC_RC;
+                break;
+            case PPC64TranslationFaultKind::INVALID_TABLE_CONFIGURATION:
+                dsisr |= DSISR_RADIX_BADCONFIG;
+                break;
+            case PPC64TranslationFaultKind::NONE:
+                break;
+            case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
+            case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
+            case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                return ISAExecutionResult::EXCEPTION;
+        }
+        return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI, cia, 0,
+                            true, ea, dsisr);
+    }
     // Same classification as ordinary loads/stores: protection and
     // unmapped/bounds faults are guest DSIs; host-internal failures are not.
     const bool isPerm = (reason.find("PERMISSION") != std::string::npos);
@@ -2105,10 +2332,45 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
                             ea, 0);
     }
 
+    const bool translated = (state_.msr & MSR_DR) != 0;
+    const bool flatRealMapped = !translated && radixConfigured_;
+    uint64_t reservationAddress = ea;
+    PPC64TranslationResult translationFailure;
+    std::vector<TranslatedMemorySegment> translatedSegments;
+    if (translated || flatRealMapped) {
+        std::string reason;
+        const PPC64TranslationAccess translationAccess = isLoad
+            ? PPC64TranslationAccess::READ : PPC64TranslationAccess::WRITE;
+        const bool rangeValid = translated
+            ? translateAccessRange(memory, ea, width, translationAccess,
+                                   translatedSegments, translationFailure, reason)
+            : flatGuestRealAccessRange(memory, ea, width, translationAccess,
+                                       translatedSegments, translationFailure, reason);
+        if (!rangeValid) {
+            clearReservation();
+            return reservationStorageFault(memory, instr, cia, ea, width,
+                                           !isLoad, reason, &translationFailure);
+        }
+        if (translatedSegments.size() != 1) {
+            clearReservation();
+            translationFailure.fault =
+                PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+            translationFailure.reason =
+                "atomic access spans multiple backing segments";
+            return reservationStorageFault(memory, instr, cia, ea, width,
+                                           !isLoad, translationFailure.reason,
+                                           &translationFailure);
+        }
+        // Reservations are keyed by the underlying backing storage address;
+        // translated aliases and flat guest-real accesses share the same
+        // reservation granule.
+        reservationAddress = translatedSegments.front().hostBackingAddress;
+    }
+
     // Reservations require a backend that observes every mutation of the
-    // target. Device-claimed ranges and mock/untracked backends are refused
-    // deterministically instead of claiming coherence.
-    const std::shared_ptr<MemoryReservationHub> hub = memory.GetReservationHub(ea, width);
+    // target. Device-claimed ranges and mock/untracked backends are refused.
+    const std::shared_ptr<MemoryReservationHub> hub =
+        memory.GetReservationHub(reservationAddress, width);
     if (!hub) {
         clearReservation();
         recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia, instr.raw, true, ea, true,
@@ -2125,17 +2387,26 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
         clearReservation();
         uint64_t value = 0;
         std::string reason;
-        if (!memLoadBE(memory, ea, width, value, reason)) {
-            return reservationStorageFault(memory, instr, cia, ea, width, false, reason);
+        const bool loadSucceeded = translated
+            ? translatedMemLoadBE(memory, ea, width, value,
+                                  translationFailure, reason)
+            : flatRealMapped
+                ? flatGuestRealMemLoadBE(memory, ea, width, value,
+                                         translationFailure, reason)
+                : memLoadBE(memory, ea, width, value, reason);
+        if (!loadSucceeded) {
+            return reservationStorageFault(memory, instr, cia, ea, width, false,
+                                           reason, (translated || flatRealMapped)
+                                                       ? &translationFailure : nullptr);
         }
         // lwarx delivers the word zero-extended (the value is 4 bytes wide);
         // ldarx delivers the full doubleword. The destination is written only
         // after the read succeeded.
         state_.gpr[instr.rt] = value;
         // Reservation is established only after a successful load. In this
-        // real-address profile (identity translation enforced by
-        // validateDataRange) the real address equals the EA.
-        establishReservation(hub, ea, width);
+        // Real-mode compatibility uses EA directly; translated mode keys the
+        // same memory hub by the backing address reached through radix.
+        establishReservation(hub, reservationAddress, width);
         state_.nip = cia + INSN_WIDTH;
         return ISAExecutionResult::CONTINUE;
     }
@@ -2144,27 +2415,49 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
     // bounds) are performed first, so a protected or unmapped target raises DSI
     // with or without a reservation and never becomes a CR0 result.
     {
-        bool isUnmapped = false;
-        bool isPerm = false;
-        std::string reason;
-        if (!validateDataRange(memory, ea, width, true, reason, isUnmapped, isPerm)) {
-            clearReservation();
-            return reservationStorageFault(memory, instr, cia, ea, width, true, reason);
+        if (!translated && !flatRealMapped) {
+            bool isUnmapped = false;
+            bool isPerm = false;
+            std::string reason;
+            if (!validateDataRange(memory, ea, width, true, reason, isUnmapped, isPerm)) {
+                clearReservation();
+                return reservationStorageFault(memory, instr, cia, ea, width, true,
+                                               reason);
+            }
+        } else if (flatRealMapped) {
+            std::string reason;
+            if (!flatGuestRealAccessRange(memory, ea, width,
+                                          PPC64TranslationAccess::WRITE,
+                                          translatedSegments, translationFailure,
+                                          reason)) {
+                clearReservation();
+                return reservationStorageFault(memory, instr, cia, ea, width,
+                                               true, reason, &translationFailure);
+            }
         }
     }
 
     // Outcome is decided against the reservation as it stood before this
     // instruction: held only if valid, same backend, current epoch, and the
     // exact same address and width as the reserving access.
-    const bool held = reservationHeld(hub, ea, width);
+    const bool held = reservationHeld(hub, reservationAddress, width);
     // stwcx./stdcx. always clears the reservation, success or failure.
     clearReservation();
 
     if (held) {
         const uint64_t source = state_.gpr[instr.rt];
         std::string reason;
-        if (!memStoreBE(memory, ea, width, source, reason)) {
-            return reservationStorageFault(memory, instr, cia, ea, width, true, reason);
+        const bool storeSucceeded = translated
+            ? translatedMemStoreBE(memory, ea, width, source,
+                                   translationFailure, reason)
+            : flatRealMapped
+                ? flatGuestRealMemStoreBE(memory, ea, width, source,
+                                          translationFailure, reason)
+                : memStoreBE(memory, ea, width, source, reason);
+        if (!storeSucceeded) {
+            return reservationStorageFault(memory, instr, cia, ea, width, true,
+                                           reason, (translated || flatRealMapped)
+                                                       ? &translationFailure : nullptr);
         }
     }
     // Failed conditional store: no memory write at all, CR0 EQ=0. This is an
@@ -2504,6 +2797,8 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 value = state_.dar;
             } else if (instr.sprn == SPR_DSISR) {
                 value = static_cast<uint64_t>(state_.dsisr);
+            } else if (instr.sprn == SPR_PIDR) {
+                value = state_.pidr;
             } else {
                 recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
                             true, 0, false, PPC64AccessType::NONE, 0,
@@ -2542,6 +2837,13 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 state_.dar = value;
             } else if (instr.sprn == SPR_DSISR) {
                 state_.dsisr = static_cast<uint32_t>(value & 0xFFFFFFFFULL);
+            } else if (instr.sprn == SPR_PIDR) {
+                const uint32_t newPid = static_cast<uint32_t>(value);
+                if (newPid != state_.pidr) {
+                    state_.pidr = newPid;
+                    clearReservation();
+                    hasCachedInstruction_ = false;
+                }
             } else {
                 recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
                             true, 0, false, PPC64AccessType::NONE, 0,
@@ -2570,10 +2872,8 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             return ISAExecutionResult::CONTINUE;
         }
         case DecodedKind::MTMSR: {
-            // mtmsr RS: privileged. The proposed MSR value is validated
-            // before any mutation: HV/IP/IR/DR/LE must be 0 (SF may be 0/1
-            // for Phase 1-3 reset compatibility). Violations are terminal
-            // UNSUPPORTED_STATE, never guest Program interrupts.
+            // mtmsr RS: privileged. HV/IP/LE remain unsupported; IR/DR are
+            // accepted only with an explicit valid radix configuration.
             if (inProblemState()) {
                 recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
@@ -2582,13 +2882,16 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                                     VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
             }
             const uint64_t proposed = state_.gpr[instr.rt];
-            if (!isProposedMSRValid(proposed)) {
+            std::string modeReason;
+            if (!isProposedMSRValid(proposed, memory, modeReason)) {
                 recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
-                            "mtmsr requests unsupported MSR mode (HV/IP/IR/DR/LE "
-                            "must be 0)",
+                            "mtmsr requests unsupported MSR mode: " + modeReason,
                             false);
                 return ISAExecutionResult::EXCEPTION;
+            }
+            if ((state_.msr & MSR_RELOCATION) != (proposed & MSR_RELOCATION)) {
+                clearReservation();
             }
             state_.msr = proposed;
             state_.nip = cia + INSN_WIDTH;
@@ -2598,7 +2901,7 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             // rfid: privileged (requires PR=0). Target from SRR0 (low 2 bits
             // ignored, as on hardware); MSR restored from SRR1 masked by
             // SRR1_MSR_MASK (cause bits 0x783F0000 cleared in this profile).
-            // SRR1 requesting HV/IP/IR/DR/LE is rejected with no mutation.
+            // HV/IP/LE and unconfigured relocation are rejected with no mutation.
             if (inProblemState()) {
                 recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
@@ -2606,16 +2909,16 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
                                     VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
             }
-            if ((state_.srr1 & MSR_MUST_BE_ZERO) != 0) {
+            const uint64_t newMSR = state_.srr1 & SRR1_MSR_MASK;
+            std::string modeReason;
+            if (!isProposedMSRValid(newMSR, memory, modeReason)) {
                 recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
-                            "rfid SRR1 requests unsupported MSR mode (HV/IP/IR/DR/"
-                            "LE must be 0)",
+                            "rfid SRR1 requests unsupported MSR mode: " + modeReason,
                             false);
                 return ISAExecutionResult::EXCEPTION;
             }
             const uint64_t newNIP = state_.srr0 & ~0x3ULL;
-            const uint64_t newMSR = state_.srr1 & SRR1_MSR_MASK;
             state_.msr = newMSR;
             state_.nip = newNIP;
             // Phase 5: exception return is a context alteration. Any reservation
@@ -2707,6 +3010,305 @@ void PPC64ISAPlugin::setState(const ISAState& state) {
     justDelivered_ = false;
 }
 
+bool PPC64ISAPlugin::configureRadixTranslation(
+    const PPC64RadixConfiguration& config, IMemory& memory,
+    std::string& reason) {
+    if (!PPC64RadixMMU::validateConfiguration(config, memory, reason)) {
+        return false;
+    }
+    radixConfiguration_ = config;
+    radixConfigured_ = true;
+    ++radixConfigurationGeneration_;
+    if (radixConfigurationGeneration_ == 0) {
+        ++radixConfigurationGeneration_;
+    }
+    clearReservation();
+    hasCachedInstruction_ = false;
+    return true;
+}
+
+void PPC64ISAPlugin::clearRadixTranslationConfiguration() {
+    radixConfiguration_ = PPC64RadixConfiguration();
+    radixConfigured_ = false;
+    ++radixConfigurationGeneration_;
+    if (radixConfigurationGeneration_ == 0) {
+        ++radixConfigurationGeneration_;
+    }
+    clearReservation();
+    hasCachedInstruction_ = false;
+}
+
+PPC64TranslationResult PPC64ISAPlugin::translateEffectiveAddress(
+    IMemory& memory, uint64_t effectiveAddress,
+    PPC64TranslationAccess access) const {
+    return PPC64RadixMMU::translate(memory, radixConfiguration_, state_.pidr,
+                                    radixConfigurationGeneration_,
+                                    effectiveAddress, access, inProblemState());
+}
+
+bool PPC64ISAPlugin::translationModeReady(IMemory& memory, uint64_t proposedMSR,
+                                           std::string& reason) const {
+    if ((proposedMSR & MSR_RELOCATION) == 0) {
+        return true;
+    }
+    if (!radixConfigured_) {
+        reason = "MSR[IR]/MSR[DR] requires an explicit POWER9 radix context";
+        return false;
+    }
+    return PPC64RadixMMU::validateConfiguration(radixConfiguration_, memory,
+                                                reason);
+}
+
+bool PPC64ISAPlugin::isProposedMSRValid(uint64_t proposed, IMemory& memory,
+                                       std::string& reason) const {
+    if ((proposed & MSR_MUST_BE_ZERO) != 0) {
+        reason = "MSR requests unsupported HV/IP/LE mode";
+        return false;
+    }
+    return translationModeReady(memory, proposed, reason);
+}
+
+bool PPC64ISAPlugin::translateAccessRange(
+    IMemory& memory, uint64_t effectiveAddress, uint32_t width,
+    PPC64TranslationAccess access,
+    std::vector<TranslatedMemorySegment>& segments,
+    PPC64TranslationResult& failure, std::string& reason) const {
+    segments.clear();
+    failure = PPC64TranslationResult();
+    if (width == 0 || width > 8) {
+        reason = "translated access width is outside the PPC64 subset";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    if (static_cast<uint64_t>(width - 1) >
+        std::numeric_limits<uint64_t>::max() - effectiveAddress) {
+        reason = "effective range wraps past 2^64-1";
+        failure.effectiveAddress = effectiveAddress;
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE;
+        failure.reason = reason;
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    if (concrete == nullptr) {
+        reason = "translated memory access requires the supported Memory backend";
+        failure.effectiveAddress = effectiveAddress;
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+
+    uint32_t done = 0;
+    while (done < width) {
+        const uint64_t currentEA = effectiveAddress + done;
+        PPC64TranslationResult translated = translateEffectiveAddress(
+            memory, currentEA, access);
+        if (!translated.success) {
+            failure = std::move(translated);
+            reason = failure.reason;
+            return false;
+        }
+        const uint64_t pageOffset = currentEA & (translated.pageSize - 1ULL);
+        const uint64_t bytesInPage = translated.pageSize - pageOffset;
+        const uint32_t chunk = static_cast<uint32_t>(
+            std::min<uint64_t>(width - done, bytesInPage));
+        std::string backingReason;
+        if (!concrete->ValidateGuestRealRange(translated.hostBackingAddress,
+                                              chunk,
+                                              access == PPC64TranslationAccess::WRITE,
+                                              backingReason)) {
+            failure = translated;
+            failure.success = false;
+            failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+            failure.reason = "flat partition backing access is unsupported: " +
+                             backingReason;
+            reason = failure.reason;
+            return false;
+        }
+        segments.push_back({currentEA, translated.guestRealAddress,
+                            translated.hostBackingAddress, chunk});
+        done += chunk;
+    }
+    return true;
+}
+
+bool PPC64ISAPlugin::translatedMemLoadBE(
+    IMemory& memory, uint64_t effectiveAddress, uint32_t width,
+    uint64_t& value, PPC64TranslationResult& failure,
+    std::string& reason) const {
+    std::vector<TranslatedMemorySegment> segments;
+    if (!translateAccessRange(memory, effectiveAddress, width,
+                              PPC64TranslationAccess::READ, segments,
+                              failure, reason)) {
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    uint8_t bytes[8] = {};
+    uint32_t offset = 0;
+    try {
+        for (const TranslatedMemorySegment& segment : segments) {
+            concrete->ReadGuestReal(segment.hostBackingAddress, bytes + offset,
+                                    segment.size);
+            offset += segment.size;
+        }
+    } catch (const std::exception& e) {
+        reason = std::string("translated backing read failed: ") + e.what();
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    uint64_t assembled = 0;
+    for (uint32_t i = 0; i < width; ++i) {
+        assembled = (assembled << 8) | bytes[i];
+    }
+    value = assembled;
+    return true;
+}
+
+bool PPC64ISAPlugin::translatedMemStoreBE(
+    IMemory& memory, uint64_t effectiveAddress, uint32_t width,
+    uint64_t value, PPC64TranslationResult& failure,
+    std::string& reason) const {
+    std::vector<TranslatedMemorySegment> segments;
+    if (!translateAccessRange(memory, effectiveAddress, width,
+                              PPC64TranslationAccess::WRITE, segments,
+                              failure, reason)) {
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    uint8_t bytes[8] = {};
+    for (uint32_t i = 0; i < width; ++i) {
+        bytes[i] = static_cast<uint8_t>(
+            (value >> (8U * (width - 1U - i))) & 0xFFU);
+    }
+    std::vector<GuestRealWriteSegment> writes;
+    writes.reserve(segments.size());
+    uint32_t offset = 0;
+    for (const TranslatedMemorySegment& segment : segments) {
+        GuestRealWriteSegment write;
+        write.address = segment.hostBackingAddress;
+        write.bytes.assign(bytes + offset, bytes + offset + segment.size);
+        writes.push_back(std::move(write));
+        offset += segment.size;
+    }
+    try {
+        concrete->WriteGuestRealTransaction(writes);
+    } catch (const std::exception& e) {
+        reason = std::string("translated backing write failed: ") + e.what();
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    return true;
+}
+
+bool PPC64ISAPlugin::flatGuestRealAccessRange(
+    IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+    PPC64TranslationAccess access,
+    std::vector<TranslatedMemorySegment>& segments,
+    PPC64TranslationResult& failure, std::string& reason) const {
+    segments.clear();
+    failure = PPC64TranslationResult();
+    failure.effectiveAddress = guestRealAddress;
+    if (width == 0 || width > 8) {
+        reason = "real-address access width is outside the PPC64 subset";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    if (static_cast<uint64_t>(width - 1) >
+        std::numeric_limits<uint64_t>::max() - guestRealAddress) {
+        reason = "guest-real range wraps past 2^64-1";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE;
+        failure.reason = reason;
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    if (concrete == nullptr) {
+        reason = "flat guest-real access requires the supported Memory backend";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    uint64_t hostBackingAddress = 0;
+    if (!PPC64RadixMMU::resolveGuestReal(radixConfiguration_, guestRealAddress,
+                                         width, hostBackingAddress, reason)) {
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    if (!concrete->ValidateGuestRealRange(
+            hostBackingAddress, width,
+            access == PPC64TranslationAccess::WRITE, reason)) {
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = "flat partition backing access is unsupported: " + reason;
+        reason = failure.reason;
+        return false;
+    }
+    failure.guestRealAddress = guestRealAddress;
+    failure.hostBackingAddress = hostBackingAddress;
+    segments.push_back({guestRealAddress, guestRealAddress, hostBackingAddress, width});
+    return true;
+}
+
+bool PPC64ISAPlugin::flatGuestRealMemLoadBE(
+    IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+    uint64_t& value, PPC64TranslationResult& failure,
+    std::string& reason) const {
+    std::vector<TranslatedMemorySegment> segments;
+    if (!flatGuestRealAccessRange(memory, guestRealAddress, width,
+                                  PPC64TranslationAccess::READ, segments,
+                                  failure, reason)) {
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    uint8_t bytes[8] = {};
+    try {
+        concrete->ReadGuestReal(segments.front().hostBackingAddress, bytes, width);
+    } catch (const std::exception& e) {
+        reason = std::string("flat guest-real backing read failed: ") + e.what();
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    uint64_t assembled = 0;
+    for (uint32_t i = 0; i < width; ++i) {
+        assembled = (assembled << 8) | bytes[i];
+    }
+    value = assembled;
+    return true;
+}
+
+bool PPC64ISAPlugin::flatGuestRealMemStoreBE(
+    IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+    uint64_t value, PPC64TranslationResult& failure,
+    std::string& reason) const {
+    std::vector<TranslatedMemorySegment> segments;
+    if (!flatGuestRealAccessRange(memory, guestRealAddress, width,
+                                  PPC64TranslationAccess::WRITE, segments,
+                                  failure, reason)) {
+        return false;
+    }
+    Memory* concrete = dynamic_cast<Memory*>(&memory);
+    uint8_t bytes[8] = {};
+    for (uint32_t i = 0; i < width; ++i) {
+        bytes[i] = static_cast<uint8_t>(
+            (value >> (8U * (width - 1U - i))) & 0xFFU);
+    }
+    GuestRealWriteSegment write;
+    write.address = segments.front().hostBackingAddress;
+    write.bytes.assign(bytes, bytes + width);
+    try {
+        concrete->WriteGuestRealTransaction({write});
+    } catch (const std::exception& e) {
+        reason = std::string("flat guest-real backing write failed: ") + e.what();
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    return true;
+}
+
 void PPC64ISAPlugin::setPC(uint64_t pc) {
     state_.nip = pc;
     reservation_.reset();
@@ -2714,9 +3316,11 @@ void PPC64ISAPlugin::setPC(uint64_t pc) {
 }
 
 std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
-    // Compatible encoding: v1 (304 bytes) while privileged extension state
-    // is all zero (Phase 1-3 callers byte-identical); v2 (332 bytes) once
-    // SRR0/SRR1/DAR/DSISR carry guest state.
+    // Keep legacy v1/v2 bytes when PIDR is zero. Guest-visible PIDR requires
+    // v3; hypervisor-owned radix configuration remains outside CPU snapshots.
+    if (state_.pidr != 0) {
+        return serialize_state_v3();
+    }
     if (state_.srr0 == 0 && state_.srr1 == 0 && state_.dar == 0 &&
         state_.dsisr == 0) {
         std::vector<uint8_t> data(STATE_SIZE);
@@ -2729,14 +3333,17 @@ std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
 }
 
 bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
-    if (data.size() != STATE_SIZE && data.size() != STATE_SIZE_V2) {
+    if (data.size() != STATE_SIZE && data.size() != STATE_SIZE_V2 &&
+        data.size() != STATE_SIZE_V3) {
         return false;
     }
     try {
         if (data.size() == STATE_SIZE) {
             state_.deserialize(data.data());
-        } else {
+        } else if (data.size() == STATE_SIZE_V2) {
             state_.deserializeV2(data.data());
+        } else {
+            state_.deserializeV3(data.data());
         }
     } catch (...) {
         return false;
@@ -2762,6 +3369,28 @@ bool PPC64ISAPlugin::deserialize_state_v2(const std::vector<uint8_t>& data) {
     }
     try {
         state_.deserializeV2(data.data());
+    } catch (...) {
+        return false;
+    }
+    reservation_.reset();
+    hasCachedInstruction_ = false;
+    consecutiveGuestExceptions_ = 0;
+    justDelivered_ = false;
+    return true;
+}
+
+std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v3() const {
+    std::vector<uint8_t> data(STATE_SIZE_V3);
+    state_.serializeV3(data.data());
+    return data;
+}
+
+bool PPC64ISAPlugin::deserialize_state_v3(const std::vector<uint8_t>& data) {
+    if (data.size() != STATE_SIZE_V3) {
+        return false;
+    }
+    try {
+        state_.deserializeV3(data.data());
     } catch (...) {
         return false;
     }

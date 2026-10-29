@@ -3,6 +3,7 @@
 #include "IISA.h"
 #include "IMemory.h"
 #include "MemoryReservation.h"
+#include "PPC64RadixMMU.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -49,10 +50,10 @@ constexpr size_t INSN_WIDTH = 4;
 //   GPR[32] u64 | NIP u64 | LR u64 | CTR u64 | CR u32 | XER u32 | MSR u64
 // Serialization layout v2 (Phase 4, 332 bytes): v1 plus privileged state:
 //   SRR0 u64 | SRR1 u64 | DAR u64 | DSISR u32
-// v1 snapshots restore with new registers cleared to zero. v2 is produced
-// by serialize_state() only when new privileged state is non-zero (so
-// Phase 1-3 callers that never touch SRR0/SRR1/DAR/DSISR keep getting
-// byte-identical 304-byte v1 blobs); an explicit v2 API forces v2.
+// Legacy v1/v2 restores initialize PIDR to zero. serialize_state() preserves
+// v1 when privileged state and PIDR are zero, emits v2 for nonzero privileged
+// state with PIDR=0, and emits v3 when PIDR is nonzero. Explicit v2/v3 APIs
+// select their respective layouts.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
@@ -60,6 +61,8 @@ constexpr size_t STATE_SIZE =
 constexpr uint32_t STATE_VERSION_V2 = 2;
 constexpr size_t STATE_SIZE_V2 =
     4 + 4 + (NUM_GPR * 8) + 8 + 8 + 8 + 4 + 4 + 8 + 8 + 8 + 8 + 4;  // = 332 bytes
+constexpr uint32_t STATE_VERSION_V3 = 3;
+constexpr size_t STATE_SIZE_V3 = STATE_SIZE_V2 + 8; // v2 plus guest-visible PIDR
 
 // ============================================================================
 // PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
@@ -67,10 +70,9 @@ constexpr size_t STATE_SIZE_V2 =
 //
 // Initial configuration: PowerPC 64-bit, big-endian, single processor,
 // real-address exception vectors (base 0x0, MSR[IP]=0), 64-bit execution.
-// No radix/hash page-table translation yet: MSR[IR]=MSR[DR]=0 is required;
-// any attempt to enable relocation, hypervisor state, little-endian mode,
-// or exception-prefix 0xFFF... is rejected as UNSUPPORTED_STATE (terminal,
-// never silently executed as identity-mapped with relocation claimed).
+// POWER9 process-scoped radix translation is supported only with an explicit
+// virtual-hypervisor process-table and flat partition configuration. HV/IP/LE
+// remain unsupported, and no PAPR partition table is implied.
 //
 // MSR bit definitions below use Power ISA IBM bit numbering (0=MSB) with
 // Linux-compatible masks (1ULL << LG where LG = 63 - IBMbit):
@@ -87,8 +89,8 @@ constexpr size_t STATE_SIZE_V2 =
 //   BE  IBM 54 mask 0x0000000000000200 (preserved)
 //   FE1 IBM 55 mask 0x0000000000000100 (preserved)
 //   IP  IBM 57 mask 0x0000000000000040 (exception prefix; must be 0)
-//   IR  IBM 58 mask 0x0000000000000020 (instruction relocate; must be 0)
-//   DR  IBM 59 mask 0x0000000000000010 (data relocate; must be 0)
+//   IR  IBM 58 mask 0x0000000000000020 (instruction relocate; radix profile)
+//   DR  IBM 59 mask 0x0000000000000010 (data relocate; radix profile)
 //   RI  IBM 62 mask 0x0000000000000002 (recoverable interrupt)
 //   LE  IBM 63 mask 0x0000000000000001 (little-endian; must be 0, BE only)
 // On guest exception entry the new MSR is oldMSR with EE/PR/IR/DR/RI
@@ -111,7 +113,8 @@ constexpr uint64_t MSR_RI = 1ULL << 1;
 constexpr uint64_t MSR_LE = 1ULL << 0;
 // Bits that must remain zero in this profile (unsupported when set).
 constexpr uint64_t MSR_MUST_BE_ZERO =
-    MSR_HV | MSR_IP | MSR_IR | MSR_DR | MSR_LE;
+    MSR_HV | MSR_IP | MSR_LE;
+constexpr uint64_t MSR_RELOCATION = MSR_IR | MSR_DR;
 // SRR1 mask: bits loaded from MSR upon interrupt (Linux SRR1_MSR_BITS).
 // Remaining low bits (0x783F0000) carry interrupt-specific cause.
 constexpr uint64_t SRR1_MSR_MASK = ~0x783F0000ULL;
@@ -122,10 +125,14 @@ constexpr uint32_t SRR1_PROGTRAP = 0x00020000U;  // trap
 constexpr uint32_t SRR1_PROGADDR = 0x00010000U;  // SRR0 is subsequent addr
 constexpr uint32_t SRR1_ISI_NOPT = 0x40000000U;  // ISI: no translation found
 constexpr uint32_t SRR1_ISI_PROT = 0x08000000U;  // ISI: protection fault
+constexpr uint32_t SRR1_RADIX_BADCONFIG = 0x00080000U;
+constexpr uint32_t SRR1_ATOMIC_RC = 0x00040000U;
 // DSISR cause bits (spec-backed, Linux reg.h):
 constexpr uint32_t DSISR_ISSTORE = 0x02000000U;   // access was a store
 constexpr uint32_t DSISR_PROTFAULT = 0x08000000U;  // protection fault
 constexpr uint32_t DSISR_NOHPTE = 0x40000000U;     // no translation found
+constexpr uint32_t DSISR_RADIX_BADCONFIG = 0x00080000U;
+constexpr uint32_t DSISR_ATOMIC_RC = 0x00040000U;
 
 // Guest-visible privileged SPR numbers (architectural identities):
 //   DSISR SPR 18, DAR SPR 19, SRR0 SPR 26, SRR1 SPR 27.
@@ -133,6 +140,7 @@ constexpr uint16_t SPR_DSISR = 18;
 constexpr uint16_t SPR_DAR = 19;
 constexpr uint16_t SPR_SRR0 = 26;
 constexpr uint16_t SPR_SRR1 = 27;
+constexpr uint16_t SPR_PIDR = 48;
 
 // Book III-S vector offsets for the supported initial profile (base 0x0).
 constexpr uint64_t VEC_DSI = 0x300;
@@ -340,6 +348,8 @@ struct PPC64Fault {
     // (e.g. mapping memory) could succeed. False for encodings that can
     // never execute (invalid opcode / reserved fields).
     bool resumable = false;
+    PPC64TranslationFaultKind translationFault = PPC64TranslationFaultKind::NONE;
+    uint64_t translationContextIdentifier = 0;
 };
 
 enum class DecodedKind {
@@ -481,7 +491,10 @@ public:
     // the privileged SRR0/SRR1/DAR/DSISR extension.
     void serializeV2(uint8_t* buffer) const;
     void deserializeV2(const uint8_t* buffer);
+    void serializeV3(uint8_t* buffer) const;
+    void deserializeV3(const uint8_t* buffer);
     static constexpr size_t v2Size() { return STATE_SIZE_V2; }
+    static constexpr size_t v3Size() { return STATE_SIZE_V3; }
 
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
@@ -495,6 +508,7 @@ public:
     uint64_t srr1 = 0;   // Save/Restore Register 1 (SPR 27)
     uint64_t dar = 0;    // Data Address Register (SPR 19)
     uint32_t dsisr = 0;  // Data Storage Interrupt Status Register (SPR 18)
+    uint32_t pidr = 0;   // Process Identifier Register (SPR 48)
 };
 
 /**
@@ -516,7 +530,7 @@ public:
 
     // IISA identity
     std::string getName() const override { return "PPC64"; }
-    std::string getVersion() const override { return "5.0-phase5"; }
+    std::string getVersion() const override { return "6.0-phase6"; }
     void reset() override;
 
     // Decode / execute
@@ -558,6 +572,21 @@ public:
     uint32_t getCR() const { return state_.cr; }
     uint32_t getXER() const { return state_.xer; }
     uint64_t getMSR() const { return state_.msr; }
+    uint32_t getPIDR() const { return state_.pidr; }
+    void setPIDR(uint32_t value) {
+        if (state_.pidr != value) {
+            state_.pidr = value;
+            clearReservation();
+            hasCachedInstruction_ = false;
+        }
+    }
+    bool configureRadixTranslation(const PPC64RadixConfiguration& config,
+                                   IMemory& memory, std::string& reason);
+    void clearRadixTranslationConfiguration();
+    bool hasRadixTranslationConfiguration() const { return radixConfigured_; }
+    PPC64TranslationResult translateEffectiveAddress(
+        IMemory& memory, uint64_t effectiveAddress,
+        PPC64TranslationAccess access) const;
     // Phase 4 guest-visible privileged state accessors (direct state view;
     // production code paths use mfspr/mtspr; these exist for tests/setup).
     uint64_t getSRR0() const { return state_.srr0; }
@@ -568,7 +597,13 @@ public:
     void setSRR1(uint64_t v) { state_.srr1 = v; }
     void setDAR(uint64_t v) { state_.dar = v; }
     void setDSISR(uint32_t v) { state_.dsisr = v; }
-    void setMSR(uint64_t v) { state_.msr = v; }
+    void setMSR(uint64_t v) {
+        if ((state_.msr & MSR_RELOCATION) != (v & MSR_RELOCATION)) {
+            clearReservation();
+            hasCachedInstruction_ = false;
+        }
+        state_.msr = v;
+    }
 
     // Phase 4 exception-delivery compatibility mode. Default false (legacy):
     // Phase 3 EXCEPTION/SYSCALL results with NIP held at the fault. When
@@ -586,6 +621,8 @@ public:
     // Phase 4 explicit v2 checkpoint helpers (332 bytes, version 2).
     std::vector<uint8_t> serialize_state_v2() const;
     bool deserialize_state_v2(const std::vector<uint8_t>& data);
+    std::vector<uint8_t> serialize_state_v3() const;
+    bool deserialize_state_v3(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the
@@ -627,7 +664,8 @@ private:
     // unmapped storage (DAR=EA, DSISR per Phase 4 rules); terminal otherwise.
     ISAExecutionResult reservationStorageFault(IMemory& memory, const DecodedInstruction& instr,
                                                uint64_t cia, uint64_t ea, uint32_t width,
-                                               bool isStore, const std::string& reason);
+                                               bool isStore, const std::string& reason,
+                                               const PPC64TranslationResult* translation = nullptr);
     // Replace this CPU's reservation with one established on `hub`.
     void establishReservation(const std::shared_ptr<MemoryReservationHub>& hub, uint64_t ea,
                               uint32_t width);
@@ -642,7 +680,9 @@ private:
     // Phase 3 helpers (defined in PPC64ISAPlugin.cpp).
     void recordFault(PPC64FaultCategory category, uint64_t cia, uint32_t raw, bool hasRaw,
                      uint64_t ea, bool hasEA, PPC64AccessType access, uint32_t width,
-                     const std::string& reason, bool resumable);
+                     const std::string& reason, bool resumable,
+                     PPC64TranslationFaultKind translationFault = PPC64TranslationFaultKind::NONE,
+                     uint64_t translationContextIdentifier = 0);
     // Sign-extend the DS-form 14-bit field (ds || 0b00) to 64 bits.
     static int64_t signExtendDS(uint16_t dsField);
     // Wrapping effective-address generation (mod 2^64, no host UB).
@@ -668,17 +708,18 @@ private:
     // True when the SPR number names a privileged register (SRR0/SRR1/DAR/
     // DSISR and any other SPR outside {XER,LR,CTR}).
     static bool isPrivilegedSPR(uint16_t sprn);
-    // True when the current MSR holds an unsupported configuration for this
-    // profile (HV/IP/IR/DR/LE set). SF is stored but execution stays 64-bit
-    // for Phase 1-3 reset compatibility, so SF=0 is allowed.
+    // True when the current MSR requests a mode this profile does not support
+    // (HV/IP/LE). IR/DR are separately checked against the configured radix
+    // context. SF is stored; execution remains 64-bit for reset compatibility.
     bool msrHasUnsupportedMode() const {
         return (state_.msr & MSR_MUST_BE_ZERO) != 0;
     }
-    // Validate a proposed MSR value for mtmsr/rfid (HV/IP/IR/DR/LE must be
-    // 0; SF may be 0/1 for reset compatibility; all other bits preserved).
-    static bool isProposedMSRValid(uint64_t proposed) {
-        return (proposed & MSR_MUST_BE_ZERO) == 0;
-    }
+    // Validate a proposed MSR value for mtmsr/rfid (HV/IP/LE must be 0;
+    // IR/DR require a valid radix context; all other bits are preserved).
+    bool isProposedMSRValid(uint64_t proposed, IMemory& memory,
+                            std::string& reason) const;
+    bool translationModeReady(IMemory& memory, uint64_t proposedMSR,
+                              std::string& reason) const;
     // True for valid-per-ISA but explicitly unimplemented encodings that must
     // stay terminal emulator EXCEPTIONs (never guest Program interrupts):
     // update-indexed load/stores, OE=1 on addc/adde/subfc (addco/addeo/
@@ -696,6 +737,38 @@ private:
     static bool validateFetchRange(IMemory& memory, uint64_t addr,
                                    std::string& reason, bool& failIsUnmapped,
                                    bool& failIsPermission);
+    struct TranslatedMemorySegment {
+        uint64_t effectiveAddress = 0;
+        uint64_t guestRealAddress = 0;
+        uint64_t hostBackingAddress = 0;
+        uint32_t size = 0;
+    };
+    bool translateAccessRange(IMemory& memory, uint64_t effectiveAddress,
+                              uint32_t width, PPC64TranslationAccess access,
+                              std::vector<TranslatedMemorySegment>& segments,
+                              PPC64TranslationResult& failure,
+                              std::string& reason) const;
+    bool translatedMemLoadBE(IMemory& memory, uint64_t effectiveAddress,
+                             uint32_t width, uint64_t& value,
+                             PPC64TranslationResult& failure,
+                             std::string& reason) const;
+    bool translatedMemStoreBE(IMemory& memory, uint64_t effectiveAddress,
+                              uint32_t width, uint64_t value,
+                              PPC64TranslationResult& failure,
+                              std::string& reason) const;
+    bool flatGuestRealAccessRange(
+        IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+        PPC64TranslationAccess access,
+        std::vector<TranslatedMemorySegment>& segments,
+        PPC64TranslationResult& failure, std::string& reason) const;
+    bool flatGuestRealMemLoadBE(IMemory& memory, uint64_t guestRealAddress,
+                                uint32_t width, uint64_t& value,
+                                PPC64TranslationResult& failure,
+                                std::string& reason) const;
+    bool flatGuestRealMemStoreBE(IMemory& memory, uint64_t guestRealAddress,
+                                 uint32_t width, uint64_t value,
+                                 PPC64TranslationResult& failure,
+                                 std::string& reason) const;
     // Central guest-delivery dispatcher. Assumes the host fault was already
     // recorded via recordFault (for getLastFault diagnostics). When guest
     // delivery is disabled or the fault is terminal (unsupported-state,
@@ -723,6 +796,9 @@ private:
     bool guestDeliveryEnabled_ = false;
     int consecutiveGuestExceptions_ = 0;
     bool justDelivered_ = false;
+    PPC64RadixConfiguration radixConfiguration_;
+    bool radixConfigured_ = false;
+    uint32_t radixConfigurationGeneration_ = 0;
 };
 
 /**
