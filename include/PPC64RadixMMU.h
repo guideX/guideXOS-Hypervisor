@@ -13,6 +13,14 @@ namespace ppc64 {
 // architectural partition radix stage lives in PPC64PartitionMMU.
 enum class PPC64TranslationAccess : uint8_t { FETCH, READ, WRITE };
 
+enum class PPC64TranslationStage : uint8_t {
+    NONE,
+    PROCESS,
+    PARTITION,
+    PARTITION_TABLE,
+    BACKEND,
+};
+
 enum class PPC64TranslationFaultKind : uint8_t {
     NONE,
     MISSING_PROCESS_ENTRY,
@@ -33,6 +41,7 @@ enum class PPC64TranslationFaultKind : uint8_t {
     UNSUPPORTED_PARTITION_FEATURE,
     PARTITION_BACKEND_FAILURE,
     PARTITION_RADIX_TABLE_ACCESS_FAILURE,
+    PARTITION_REFERENCE_CHANGE_REQUIRED,
 };
 
 struct PPC64RadixConfiguration {
@@ -63,6 +72,7 @@ struct PPC64TranslationResult {
     // bits are the effective PID. Quadrant 3 always uses PID 0.
     uint64_t contextIdentifier = 0;
     PPC64TranslationFaultKind fault = PPC64TranslationFaultKind::NONE;
+    PPC64TranslationStage stage = PPC64TranslationStage::NONE;
     std::string reason;
 
     bool isArchitecturalFault() const;

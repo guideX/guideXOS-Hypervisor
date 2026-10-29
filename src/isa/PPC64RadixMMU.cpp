@@ -86,6 +86,7 @@ bool PPC64TranslationResult::isArchitecturalFault() const {
         case PPC64TranslationFaultKind::INVALID_TABLE_CONFIGURATION:
         case PPC64TranslationFaultKind::PERMISSION_FAILURE:
         case PPC64TranslationFaultKind::REFERENCE_CHANGE_REQUIRED:
+        case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
             return true;
         case PPC64TranslationFaultKind::NONE:
         case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
@@ -127,6 +128,7 @@ const char* PPC64RadixMMU::faultName(PPC64TranslationFaultKind fault) {
         case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE: return "UNSUPPORTED_PARTITION_FEATURE";
         case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE: return "PARTITION_BACKEND_FAILURE";
         case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE: return "PARTITION_RADIX_TABLE_ACCESS_FAILURE";
+        case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED: return "PARTITION_REFERENCE_CHANGE_REQUIRED";
     }
     return "UNKNOWN";
 }

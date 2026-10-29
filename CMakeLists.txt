@@ -694,6 +694,7 @@ add_test(NAME PPC64Phase4Tests COMMAND test_ppc64_phase4)
 add_test(NAME PPC64Phase5Tests COMMAND test_ppc64_phase5)
 add_test(NAME PPC64Phase6Tests COMMAND test_ppc64_phase6)
 add_test(NAME PPC64Phase7Tests COMMAND test_ppc64_phase7)
+add_test(NAME PPC64Phase8Tests COMMAND test_ppc64_phase8)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -825,6 +826,23 @@ if(MSVC)
     target_compile_options(test_ppc64_phase7 PRIVATE /W4)
 else()
     target_compile_options(test_ppc64_phase7 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# PPC64 Phase 8 bounded POWER9 hypervisor storage exception and hrfid tests.
+add_executable(test_ppc64_phase8
+    tests/test_ppc64_phase8.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase8 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase8 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase8 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # RISC-V CPU implementation

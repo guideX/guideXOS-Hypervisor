@@ -107,6 +107,10 @@ void PPC64ISAState::reset() {
     dar = 0;
     dsisr = 0;
     pidr = 0;
+    hsrr0 = 0;
+    hsrr1 = 0;
+    hdar = 0;
+    hdsisr = 0;
 }
 
 std::unique_ptr<ISAState> PPC64ISAState::clone() const {
@@ -123,6 +127,10 @@ std::unique_ptr<ISAState> PPC64ISAState::clone() const {
     copy->dar = dar;
     copy->dsisr = dsisr;
     copy->pidr = pidr;
+    copy->hsrr0 = hsrr0;
+    copy->hsrr1 = hsrr1;
+    copy->hdar = hdar;
+    copy->hdsisr = hdsisr;
     return copy;
 }
 
@@ -204,6 +212,10 @@ void PPC64ISAState::deserializeV2(const uint8_t* buffer) {
     dsisr = getU32(buffer + offset);
     offset += 4;
     pidr = 0;
+    hsrr0 = 0;
+    hsrr1 = 0;
+    hdar = 0;
+    hdsisr = 0;
 }
 
 void PPC64ISAState::serializeV3(uint8_t* buffer) const {
@@ -233,6 +245,42 @@ void PPC64ISAState::deserializeV3(const uint8_t* buffer) {
     putU32(v2.data() + 4, STATE_VERSION_V2);
     deserializeV2(v2.data());
     pidr = static_cast<uint32_t>(restoredPid);
+    hsrr0 = 0;
+    hsrr1 = 0;
+    hdar = 0;
+    hdsisr = 0;
+}
+
+void PPC64ISAState::serializeV4(uint8_t* buffer) const {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 serializeV4: null buffer");
+    }
+    PPC64ISAState legacy = *this;
+    legacy.hsrr0 = legacy.hsrr1 = legacy.hdar = 0;
+    legacy.hdsisr = 0;
+    legacy.serializeV3(buffer);
+    putU32(buffer + 4, STATE_VERSION_V4);
+    size_t offset = STATE_SIZE_V3;
+    putU64(buffer + offset, hsrr0); offset += 8;
+    putU64(buffer + offset, hsrr1); offset += 8;
+    putU64(buffer + offset, hdar); offset += 8;
+    putU32(buffer + offset, hdsisr);
+}
+
+void PPC64ISAState::deserializeV4(const uint8_t* buffer) {
+    if (buffer == nullptr || getU32(buffer) != STATE_MAGIC ||
+        getU32(buffer + 4) != STATE_VERSION_V4) {
+        throw std::invalid_argument("PPC64 deserializeV4: bad magic or version");
+    }
+    std::array<uint8_t, STATE_SIZE_V3> v3{};
+    std::memcpy(v3.data(), buffer, STATE_SIZE_V3);
+    putU32(v3.data() + 4, STATE_VERSION_V3);
+    deserializeV3(v3.data());
+    size_t offset = STATE_SIZE_V3;
+    hsrr0 = getU64(buffer + offset); offset += 8;
+    hsrr1 = getU64(buffer + offset); offset += 8;
+    hdar = getU64(buffer + offset); offset += 8;
+    hdsisr = getU32(buffer + offset);
 }
 
 void PPC64ISAState::serialize(uint8_t* buffer) const {
@@ -302,6 +350,10 @@ void PPC64ISAState::deserialize(const uint8_t* buffer) {
     dar = 0;
     dsisr = 0;
     pidr = 0;
+    hsrr0 = 0;
+    hsrr1 = 0;
+    hdar = 0;
+    hdsisr = 0;
 }
 
 std::string PPC64ISAState::toString() const {
@@ -318,6 +370,10 @@ std::string PPC64ISAState::toString() const {
     out << "  DAR: 0x" << std::hex << dar << std::dec << "\n";
     out << "  DSISR: 0x" << std::hex << dsisr << std::dec << "\n";
     out << "  PIDR:  0x" << std::hex << pidr << std::dec << "\n";
+    out << "  HSRR0: 0x" << std::hex << hsrr0 << std::dec << "\n";
+    out << "  HSRR1: 0x" << std::hex << hsrr1 << std::dec << "\n";
+    out << "  HDAR:  0x" << std::hex << hdar << std::dec << "\n";
+    out << "  HDSISR: 0x" << std::hex << hdsisr << std::dec << "\n";
     for (size_t i = 0; i < NUM_GPR; ++i) {
         out << "  r" << i << ": 0x" << std::hex << gpr[i] << std::dec << "\n";
     }
@@ -388,6 +444,44 @@ void PPC64ISAPlugin::setXEROverflow(PPC64ISAState& state, bool overflow) {
 
 PPC64ISAPlugin::PPC64ISAPlugin() = default;
 
+namespace {
+bool isPartitionStorageStage(PPC64TranslationStage stage) {
+    return stage == PPC64TranslationStage::PARTITION ||
+           stage == PPC64TranslationStage::PARTITION_TABLE;
+}
+
+uint32_t hypervisorDataStorageCause(PPC64TranslationFaultKind fault,
+                                    bool isStore) {
+    uint32_t cause = isStore ? DSISR_ISSTORE : 0;
+    switch (fault) {
+        case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+            return cause | DSISR_NOHPTE;
+        case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+            return cause | DSISR_PROTFAULT;
+        case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
+            return cause | DSISR_SET_RC;
+        case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
+            return cause | DSISR_PRTABLE_FAULT;
+        default:
+            return 0;
+    }
+}
+
+uint32_t hypervisorInstructionStorageCause(PPC64TranslationFaultKind fault) {
+    switch (fault) {
+        case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+            return SRR1_ISI_NOPT;
+        case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+            return SRR1_ISI_NOEXEC_OR_G;
+        default:
+            return 0;
+    }
+}
+} // namespace
+
 void PPC64ISAPlugin::reset() {
     state_.reset();
     // CPU reset ends any reservation; the record is released entirely.
@@ -397,6 +491,9 @@ void PPC64ISAPlugin::reset() {
     lastFault_ = PPC64Fault();
     consecutiveGuestExceptions_ = 0;
     justDelivered_ = false;
+    hypervisorReturnValid_ = false;
+    hypervisorReturnHV_ = false;
+    repeatedHypervisorStorageFaults_ = 0;
     // Note: guestDeliveryEnabled_ is configuration, not architectural state,
     // and is preserved across reset() so test harnesses can reset CPU state
     // without re-selecting the delivery mode.
@@ -407,6 +504,11 @@ bool PPC64ISAPlugin::isPrivilegedSPR(uint16_t sprn) {
         return false;
     }
     return true;
+}
+
+bool PPC64ISAPlugin::isHypervisorOnlySPR(uint16_t sprn) {
+    return sprn == SPR_HDSISR || sprn == SPR_HDAR ||
+           sprn == SPR_HSRR0 || sprn == SPR_HSRR1;
 }
 
 bool PPC64ISAPlugin::isUnimplementedValid(const DecodedInstruction& instr) {
@@ -687,7 +789,8 @@ void PPC64ISAPlugin::recordFault(PPC64FaultCategory category, uint64_t cia, uint
                                  PPC64AccessType access, uint32_t width,
                                  const std::string& reason, bool resumable,
                                  PPC64TranslationFaultKind translationFault,
-                                 uint64_t translationContextIdentifier) {
+                                 uint64_t translationContextIdentifier,
+                                 PPC64TranslationStage translationStage) {
     lastFault_.valid = true;
     lastFault_.cia = cia;
     lastFault_.raw = raw;
@@ -700,6 +803,7 @@ void PPC64ISAPlugin::recordFault(PPC64FaultCategory category, uint64_t cia, uint
     lastFault_.reason = reason;
     lastFault_.resumable = resumable;
     lastFault_.translationFault = translationFault;
+    lastFault_.translationStage = translationStage;
     lastFault_.translationContextIdentifier = translationContextIdentifier;
 }
 
@@ -864,6 +968,11 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             // (BO/BI/LK set) is an invalid encoding, not rfid.
             if (word == ENCODING_RFID) {
                 instr.kind = DecodedKind::RFID;
+                instr.supported = true;
+                break;
+            }
+            if (word == ENCODING_HRFID) {
+                instr.kind = DecodedKind::HRFID;
                 instr.supported = true;
                 break;
             }
@@ -1145,7 +1254,9 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 } else if (instr.sprn == SPR_XER || instr.sprn == SPR_LR ||
                            instr.sprn == SPR_CTR || instr.sprn == SPR_DSISR ||
                            instr.sprn == SPR_DAR || instr.sprn == SPR_SRR0 ||
-                           instr.sprn == SPR_SRR1 || instr.sprn == SPR_PIDR) {
+                           instr.sprn == SPR_SRR1 || instr.sprn == SPR_PIDR ||
+                           instr.sprn == SPR_HDSISR || instr.sprn == SPR_HDAR ||
+                           instr.sprn == SPR_HSRR0 || instr.sprn == SPR_HSRR1) {
                     // Phase 4: XER/LR/CTR remain unprivileged; DSISR/DAR/
                     // SRR0/SRR1 decode as supported here and are privilege-
                     // checked at execution (problem-state use faults).
@@ -1493,6 +1604,12 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
                 out << " ; invalid encoding";
             }
             break;
+        case DecodedKind::HRFID:
+            out << "hrfid";
+            if (!instr.supported) {
+                out << " ; invalid encoding";
+            }
+            break;
         case DecodedKind::LBZ:
         case DecodedKind::LBZU:
         case DecodedKind::LHZ:
@@ -1652,7 +1769,18 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
     }
 
     uint8_t bytes[INSN_WIDTH] = {0, 0, 0, 0};
-    if ((state_.msr & MSR_IR) != 0 || radixConfigured_ ||
+    if (inHypervisorState()) {
+        std::string reason;
+        if (!hypervisorRealRead(memory, state_.nip, INSN_WIDTH, bytes, reason)) {
+            result.disassembly = std::string("<hypervisor fetch fault: ") + reason + ">";
+            hasCachedInstruction_ = false;
+            recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false,
+                        state_.nip, true, PPC64AccessType::FETCH, INSN_WIDTH,
+                        reason, false, PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE,
+                        0, PPC64TranslationStage::BACKEND);
+            return result;
+        }
+    } else if ((state_.msr & MSR_IR) != 0 || radixConfigured_ ||
         partitionContext_ != nullptr) {
         std::vector<TranslatedMemorySegment> segments;
         PPC64TranslationResult translationFailure;
@@ -1675,7 +1803,8 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
             recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false,
                         state_.nip, true, PPC64AccessType::FETCH, INSN_WIDTH,
                         reason, true, translationFailure.fault,
-                        translationFailure.contextIdentifier);
+                        translationFailure.contextIdentifier,
+                        translationFailure.stage);
             return result;
         }
         Memory* concrete = dynamic_cast<Memory*>(&memory);
@@ -1701,6 +1830,17 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
             return result;
         }
     } else {
+        if (guestAccessToProtectedMemory(memory, state_.nip, INSN_WIDTH)) {
+            const std::string reason =
+                "guest real-address fetch targets protected hypervisor memory";
+            result.disassembly = std::string("<fetch fault: ") + reason + ">";
+            hasCachedInstruction_ = false;
+            recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false,
+                        state_.nip, true, PPC64AccessType::FETCH, INSN_WIDTH,
+                        reason, true, PPC64TranslationFaultKind::PERMISSION_FAILURE,
+                        0, PPC64TranslationStage::PROCESS);
+            return result;
+        }
         try {
             memory.Read(state_.nip, bytes, INSN_WIDTH);
         } catch (const std::exception& e) {
@@ -1782,14 +1922,15 @@ ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResul
 
 ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
                                                      const ISADecodeResult& decodeResult) {
-    // HV/IP/LE remain unsupported. Relocation requires the explicitly
-    // configured radix context before the instruction stream can continue.
+    // IP/LE remain unsupported. HV is allowed only in the configured
+    // privileged, untranslated host-real handler profile. Guest relocation
+    // requires an explicitly configured radix context.
     if (msrHasUnsupportedMode()) {
         recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip,
                     hasCachedInstruction_ ? cachedInstruction_.raw : 0,
                     hasCachedInstruction_, 0, false, PPC64AccessType::NONE, 0,
-                    "MSR requests unsupported mode (HV/IP/LE must be 0 "
-                    "in the supported POWER9 radix profile)",
+                    "MSR requests unsupported IP/LE mode or HV execution "
+                    "outside the configured privileged host-real profile",
                     false);
         hasCachedInstruction_ = false;
         consecutiveGuestExceptions_ = 0;
@@ -1827,6 +1968,30 @@ ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
         }
         if (saved.category == PPC64FaultCategory::FETCH_FAILURE) {
             if (saved.translationFault != PPC64TranslationFaultKind::NONE) {
+                if (isPartitionStorageStage(saved.translationStage)) {
+                    if (saved.translationStage ==
+                        PPC64TranslationStage::PARTITION_TABLE) {
+                        const uint32_t hCause = hypervisorDataStorageCause(
+                            saved.translationFault, false);
+                        if (hCause != 0 && partitionContext_ != nullptr &&
+                            partitionContext_->lpid() != 0) {
+                            return deliverHypervisorStorageInterrupt(
+                                VEC_HDSI, saved.cia, saved.ea, hCause, true);
+                        }
+                    }
+                    const uint32_t hCause = hypervisorInstructionStorageCause(
+                        saved.translationFault);
+                    if (hCause != 0 && partitionContext_ != nullptr &&
+                        partitionContext_->lpid() != 0) {
+                        return deliverHypervisorStorageInterrupt(
+                            VEC_HISI, saved.cia, saved.ea, hCause, false);
+                    }
+                    // Unknown partition-stage instruction faults are not
+                    // re-labelled as guest ISI; retain a terminal diagnostic.
+                    consecutiveGuestExceptions_ = 0;
+                    justDelivered_ = false;
+                    return ISAExecutionResult::EXCEPTION;
+                }
                 uint32_t cause = 0;
                 switch (saved.translationFault) {
                     case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
@@ -1857,6 +2022,7 @@ ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
                     case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
                     case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
                     case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
                         consecutiveGuestExceptions_ = 0;
                         justDelivered_ = false;
                         return ISAExecutionResult::EXCEPTION;
@@ -2071,11 +2237,44 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                             0, true, ea, 0);
     }
 
+    if (!inHypervisorState() && (state_.msr & MSR_DR) == 0 &&
+        partitionContext_ == nullptr && !radixConfigured_ &&
+        guestAccessToProtectedMemory(memory, ea, width)) {
+        const bool isStore = !isLoad;
+        const uint32_t cause = DSISR_PROTFAULT |
+                               (isStore ? DSISR_ISSTORE : 0U);
+        const std::string reason =
+            "guest real-address data access targets protected hypervisor memory";
+        recordFault(isStore ? PPC64FaultCategory::DATA_STORE_FAILURE
+                            : PPC64FaultCategory::DATA_LOAD_FAILURE,
+                    cia, instr.raw, true, ea, true,
+                    isStore ? PPC64AccessType::WRITE : PPC64AccessType::READ,
+                    width, reason, true,
+                    PPC64TranslationFaultKind::PERMISSION_FAILURE, 0,
+                    PPC64TranslationStage::PROCESS);
+        return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
+                            cia, 0, true, ea, cause);
+    }
+
     if (isLoad) {
         uint64_t value = 0;
         std::string reason;
         PPC64TranslationResult translationFailure;
-        const bool loadSucceeded = (state_.msr & MSR_DR) != 0
+        bool loadSucceeded = false;
+        if (inHypervisorState()) {
+            uint8_t bytes[8] = {};
+            loadSucceeded = hypervisorRealRead(memory, ea, width, bytes, reason);
+            if (loadSucceeded) {
+                for (uint32_t i = 0; i < width; ++i) {
+                    value = (value << 8) | bytes[i];
+                }
+            } else {
+                translationFailure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
+                translationFailure.stage = PPC64TranslationStage::BACKEND;
+                translationFailure.reason = reason;
+            }
+        } else {
+            loadSucceeded = (state_.msr & MSR_DR) != 0
             ? translatedMemLoadBE(memory, ea, width, value,
                                   translationFailure, reason)
             : partitionContext_ != nullptr
@@ -2085,12 +2284,24 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                     ? flatGuestRealMemLoadBE(memory, ea, width, value,
                                              translationFailure, reason)
                     : memLoadBE(memory, ea, width, value, reason);
+        }
         if (!loadSucceeded) {
             recordFault(PPC64FaultCategory::DATA_LOAD_FAILURE, cia, instr.raw, true, ea,
                         true, PPC64AccessType::READ, width, reason, true,
                         translationFailure.fault,
-                        translationFailure.contextIdentifier);
+                        translationFailure.contextIdentifier,
+                        translationFailure.stage);
             if (translationFailure.fault != PPC64TranslationFaultKind::NONE) {
+                if (isPartitionStorageStage(translationFailure.stage)) {
+                    const uint32_t hCause = hypervisorDataStorageCause(
+                        translationFailure.fault, false);
+                    if (hCause != 0 && partitionContext_ != nullptr &&
+                        partitionContext_->lpid() != 0) {
+                        return deliverHypervisorStorageInterrupt(
+                            VEC_HDSI, cia, ea, hCause, true);
+                    }
+                    return ISAExecutionResult::EXCEPTION;
+                }
                 uint32_t dsisr = 0;
                 switch (translationFailure.fault) {
                     case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
@@ -2121,6 +2332,7 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                     case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
                     case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
                     case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
                         return ISAExecutionResult::EXCEPTION;
                 }
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
@@ -2173,7 +2385,21 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
     {
         std::string reason;
         PPC64TranslationResult translationFailure;
-        const bool storeSucceeded = (state_.msr & MSR_DR) != 0
+        bool storeSucceeded = false;
+        if (inHypervisorState()) {
+            uint8_t bytes[8] = {};
+            for (uint32_t i = 0; i < width; ++i) {
+                bytes[i] = static_cast<uint8_t>(
+                    (source >> (8U * (width - 1U - i))) & 0xFFU);
+            }
+            storeSucceeded = hypervisorRealWrite(memory, ea, width, bytes, reason);
+            if (!storeSucceeded) {
+                translationFailure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
+                translationFailure.stage = PPC64TranslationStage::BACKEND;
+                translationFailure.reason = reason;
+            }
+        } else {
+            storeSucceeded = (state_.msr & MSR_DR) != 0
             ? translatedMemStoreBE(memory, ea, width, source,
                                    translationFailure, reason)
             : partitionContext_ != nullptr
@@ -2183,12 +2409,24 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                     ? flatGuestRealMemStoreBE(memory, ea, width, source,
                                               translationFailure, reason)
                     : memStoreBE(memory, ea, width, source, reason);
+        }
         if (!storeSucceeded) {
             recordFault(PPC64FaultCategory::DATA_STORE_FAILURE, cia, instr.raw, true, ea,
                         true, PPC64AccessType::WRITE, width, reason, true,
                         translationFailure.fault,
-                        translationFailure.contextIdentifier);
+                        translationFailure.contextIdentifier,
+                        translationFailure.stage);
             if (translationFailure.fault != PPC64TranslationFaultKind::NONE) {
+                if (isPartitionStorageStage(translationFailure.stage)) {
+                    const uint32_t hCause = hypervisorDataStorageCause(
+                        translationFailure.fault, true);
+                    if (hCause != 0 && partitionContext_ != nullptr &&
+                        partitionContext_->lpid() != 0) {
+                        return deliverHypervisorStorageInterrupt(
+                            VEC_HDSI, cia, ea, hCause, true);
+                    }
+                    return ISAExecutionResult::EXCEPTION;
+                }
                 uint32_t dsisr = DSISR_ISSTORE;
                 switch (translationFailure.fault) {
                     case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
@@ -2219,6 +2457,7 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                     case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
                     case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
                     case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
                         return ISAExecutionResult::EXCEPTION;
                 }
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
@@ -2315,9 +2554,20 @@ ISAExecutionResult PPC64ISAPlugin::reservationStorageFault(IMemory& memory,
                 isStore ? PPC64AccessType::WRITE : PPC64AccessType::READ, width, reason,
                 true,
                 translation ? translation->fault : PPC64TranslationFaultKind::NONE,
-                translation ? translation->contextIdentifier : 0);
+                translation ? translation->contextIdentifier : 0,
+                translation ? translation->stage : PPC64TranslationStage::NONE);
     if (translation != nullptr &&
         translation->fault != PPC64TranslationFaultKind::NONE) {
+        if (isPartitionStorageStage(translation->stage)) {
+            const uint32_t hCause = hypervisorDataStorageCause(
+                translation->fault, isStore);
+            if (hCause != 0 && partitionContext_ != nullptr &&
+                partitionContext_->lpid() != 0) {
+                return deliverHypervisorStorageInterrupt(
+                    VEC_HDSI, cia, ea, hCause, true);
+            }
+            return ISAExecutionResult::EXCEPTION;
+        }
         uint32_t dsisr = isStore ? DSISR_ISSTORE : 0;
         switch (translation->fault) {
             case PPC64TranslationFaultKind::MISSING_PROCESS_ENTRY:
@@ -2348,6 +2598,7 @@ ISAExecutionResult PPC64ISAPlugin::reservationStorageFault(IMemory& memory,
             case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
             case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
             case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
+            case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
                 return ISAExecutionResult::EXCEPTION;
         }
         return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI, cia, 0,
@@ -2374,6 +2625,14 @@ ISAExecutionResult PPC64ISAPlugin::reservationStorageFault(IMemory& memory,
 ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
                                                       const DecodedInstruction& instr,
                                                       uint64_t cia) {
+    if (inHypervisorState()) {
+        clearReservation();
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia, instr.raw, true,
+                    0, false, PPC64AccessType::NONE, 0,
+                    "atomic reservations are unsupported in the bounded HV handler profile",
+                    false);
+        return ISAExecutionResult::EXCEPTION;
+    }
     const bool isLoad =
         (instr.kind == DecodedKind::LWARX || instr.kind == DecodedKind::LDARX);
     const uint32_t width =
@@ -2401,6 +2660,17 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
     uint64_t reservationAddress = ea;
     PPC64TranslationResult translationFailure;
     std::vector<TranslatedMemorySegment> translatedSegments;
+    if (!translated && !flatRealMapped && !partitionRealMapped &&
+        guestAccessToProtectedMemory(memory, ea, width)) {
+        translationFailure.fault = PPC64TranslationFaultKind::PERMISSION_FAILURE;
+        translationFailure.stage = PPC64TranslationStage::PROCESS;
+        translationFailure.reason =
+            "guest reservation targets protected hypervisor memory";
+        clearReservation();
+        return reservationStorageFault(memory, instr, cia, ea, width,
+                                       !isLoad, translationFailure.reason,
+                                       &translationFailure);
+    }
     if (translated || flatRealMapped || partitionRealMapped) {
         std::string reason;
         const PPC64TranslationAccess translationAccess = isLoad
@@ -2855,10 +3125,13 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             // Privilege: XER/LR/CTR are unprivileged; SRR0/SRR1/DAR/DSISR
             // require PR=0. No state is mutated before a rejected privileged
             // operation (value is computed first, then committed).
-            if (isPrivilegedSPR(instr.sprn) && inProblemState()) {
+            if ((isPrivilegedSPR(instr.sprn) && inProblemState()) ||
+                (isHypervisorOnlySPR(instr.sprn) && !inHypervisorState())) {
                 recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
-                            "mfspr privileged SPR in problem state", false);
+                            isHypervisorOnlySPR(instr.sprn)
+                                ? "mfspr hypervisor-only SPR outside HV state"
+                                : "mfspr privileged SPR in problem state", false);
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
                                     VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
             }
@@ -2879,6 +3152,14 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 value = static_cast<uint64_t>(state_.dsisr);
             } else if (instr.sprn == SPR_PIDR) {
                 value = state_.pidr;
+            } else if (instr.sprn == SPR_HDSISR) {
+                value = state_.hdsisr;
+            } else if (instr.sprn == SPR_HDAR) {
+                value = state_.hdar;
+            } else if (instr.sprn == SPR_HSRR0) {
+                value = state_.hsrr0;
+            } else if (instr.sprn == SPR_HSRR1) {
+                value = state_.hsrr1;
             } else {
                 recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
                             true, 0, false, PPC64AccessType::NONE, 0,
@@ -2894,10 +3175,13 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             return ISAExecutionResult::CONTINUE;
         }
         case DecodedKind::MTSPR: {
-            if (isPrivilegedSPR(instr.sprn) && inProblemState()) {
+            if ((isPrivilegedSPR(instr.sprn) && inProblemState()) ||
+                (isHypervisorOnlySPR(instr.sprn) && !inHypervisorState())) {
                 recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
-                            "mtspr privileged SPR in problem state", false);
+                            isHypervisorOnlySPR(instr.sprn)
+                                ? "mtspr hypervisor-only SPR outside HV state"
+                                : "mtspr privileged SPR in problem state", false);
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
                                     VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
             }
@@ -2924,6 +3208,14 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                     clearReservation();
                     hasCachedInstruction_ = false;
                 }
+            } else if (instr.sprn == SPR_HDSISR) {
+                state_.hdsisr = static_cast<uint32_t>(value);
+            } else if (instr.sprn == SPR_HDAR) {
+                state_.hdar = value;
+            } else if (instr.sprn == SPR_HSRR0) {
+                state_.hsrr0 = value;
+            } else if (instr.sprn == SPR_HSRR1) {
+                state_.hsrr1 = value;
             } else {
                 recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
                             true, 0, false, PPC64AccessType::NONE, 0,
@@ -2952,8 +3244,8 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             return ISAExecutionResult::CONTINUE;
         }
         case DecodedKind::MTMSR: {
-            // mtmsr RS: privileged. HV/IP/LE remain unsupported; IR/DR are
-            // accepted only with an explicit valid radix configuration.
+            // mtmsr RS: privileged. The instruction cannot change HV; IP/LE
+            // stay unsupported, and IR/DR require an explicit radix context.
             if (inProblemState()) {
                 recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
@@ -2981,7 +3273,8 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             // rfid: privileged (requires PR=0). Target from SRR0 (low 2 bits
             // ignored, as on hardware); MSR restored from SRR1 masked by
             // SRR1_MSR_MASK (cause bits 0x783F0000 cleared in this profile).
-            // HV/IP/LE and unconfigured relocation are rejected with no mutation.
+            // The instruction cannot change HV; IP/LE and unconfigured
+            // relocation are rejected with no mutation.
             if (inProblemState()) {
                 recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
                             instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
@@ -3003,6 +3296,41 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             state_.nip = newNIP;
             // Phase 5: exception return is a context alteration. Any reservation
             // from the interrupted context (or the handler) is discarded.
+            clearReservation();
+            hasCachedInstruction_ = false;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::HRFID: {
+            if (!inHypervisorState() || inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "hrfid requires hypervisor privileged state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
+            if (!hypervisorReturnValid_) {
+                recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "hrfid has no supported saved hypervisor return context",
+                            false);
+                return ISAExecutionResult::EXCEPTION;
+            }
+            const uint64_t newMSR = state_.hsrr1 & SRR1_MSR_MASK;
+            std::string modeReason;
+            if (!isHypervisorReturnMSRValid(newMSR, memory, modeReason)) {
+                recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "hrfid HSRR1 requests unsupported return state: " +
+                                modeReason,
+                            false);
+                return ISAExecutionResult::EXCEPTION;
+            }
+            const uint64_t newNIP = state_.hsrr0 & ~0x3ULL;
+            state_.msr = newMSR;
+            state_.nip = newNIP;
+            hypervisorReturnValid_ = false;
+            hypervisorReturnHV_ = false;
+            repeatedHypervisorStorageFaults_ = 0;
             clearReservation();
             hasCachedInstruction_ = false;
             return ISAExecutionResult::CONTINUE;
@@ -3102,13 +3430,30 @@ void PPC64ISAPlugin::setState(const ISAState& state) {
     if (ppcState == nullptr) {
         throw std::invalid_argument("PPC64 setState: incompatible ISAState");
     }
-    state_ = *ppcState;
+    if ((ppcState->msr & MSR_HV) != 0 &&
+        ((state_.msr & MSR_HV) == 0 || !hypervisorMemoryConfigured_)) {
+        throw std::invalid_argument(
+            "PPC64 setState: restoring HV requires existing HV authority and configured handler memory");
+    }
+    (void)restoreArchitecturalState(*ppcState);
+}
+
+bool PPC64ISAPlugin::restoreArchitecturalState(const PPC64ISAState& restored) {
+    if ((restored.msr & MSR_HV) != 0 &&
+        ((state_.msr & MSR_HV) == 0 || !hypervisorMemoryConfigured_)) {
+        return false;
+    }
+    state_ = restored;
     // Replacing architectural state is a context alteration: no reservation
     // taken in the previous execution context may succeed in this one.
     reservation_.reset();
     hasCachedInstruction_ = false;
     consecutiveGuestExceptions_ = 0;
     justDelivered_ = false;
+    hypervisorReturnValid_ = false;
+    hypervisorReturnHV_ = false;
+    repeatedHypervisorStorageFaults_ = 0;
+    return true;
 }
 
 bool PPC64ISAPlugin::configureRadixTranslation(
@@ -3137,6 +3482,170 @@ void PPC64ISAPlugin::clearRadixTranslationConfiguration() {
     }
     clearReservation();
     hasCachedInstruction_ = false;
+}
+
+bool PPC64ISAPlugin::configureHypervisorMemory(IMemory& memory,
+                                                uint64_t physicalBase,
+                                                uint64_t size,
+                                                std::string& reason) {
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    if (ram == nullptr || physicalBase != 0 || size < VEC_HISI + INSN_WIDTH ||
+        size > std::numeric_limits<uint64_t>::max() - physicalBase) {
+        reason = "the supported low-vector hypervisor region must use Memory, "
+                 "start at 0, and contain both 0xE00 and 0xE20 vectors";
+        return false;
+    }
+    if (!ram->ValidateGuestRealRange(physicalBase, static_cast<size_t>(size),
+                                     false, reason)) {
+        reason = "hypervisor handler region is not backed by host memory: " + reason;
+        return false;
+    }
+    hypervisorMemoryConfigured_ = true;
+    hypervisorMemoryBase_ = physicalBase;
+    hypervisorMemorySize_ = size;
+    hypervisorReturnValid_ = false;
+    repeatedHypervisorStorageFaults_ = 0;
+    clearReservation();
+    hasCachedInstruction_ = false;
+    return true;
+}
+
+void PPC64ISAPlugin::clearHypervisorMemoryConfiguration() {
+    hypervisorMemoryConfigured_ = false;
+    hypervisorMemoryBase_ = 0;
+    hypervisorMemorySize_ = 0;
+    hypervisorReturnValid_ = false;
+    hypervisorReturnHV_ = false;
+    repeatedHypervisorStorageFaults_ = 0;
+    clearReservation();
+    hasCachedInstruction_ = false;
+}
+
+bool PPC64ISAPlugin::hypervisorMemoryContains(uint64_t address,
+                                              uint64_t size) const {
+    if (!hypervisorMemoryConfigured_ || size == 0 ||
+        size > std::numeric_limits<uint64_t>::max() - address) {
+        return false;
+    }
+    const uint64_t end = address + size;
+    const uint64_t regionEnd = hypervisorMemoryBase_ + hypervisorMemorySize_;
+    return address >= hypervisorMemoryBase_ && end <= regionEnd;
+}
+
+bool PPC64ISAPlugin::guestBackingRangeProtected(uint64_t address,
+                                                uint64_t size) const {
+    if (!hypervisorMemoryConfigured_ || size == 0 ||
+        size > std::numeric_limits<uint64_t>::max() - address) {
+        return false;
+    }
+    const uint64_t end = address + size;
+    const uint64_t regionEnd = hypervisorMemoryBase_ + hypervisorMemorySize_;
+    return address < regionEnd && hypervisorMemoryBase_ < end;
+}
+
+bool PPC64ISAPlugin::guestAccessToProtectedMemory(IMemory& memory,
+                                                  uint64_t address,
+                                                  uint32_t size) const {
+    (void)memory;
+    return !inHypervisorState() && hypervisorMemoryContains(address, size);
+}
+
+bool PPC64ISAPlugin::hypervisorRealRead(IMemory& memory, uint64_t address,
+                                         uint32_t size, uint8_t* out,
+                                         std::string& reason) const {
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    if (!inHypervisorState() || ram == nullptr || out == nullptr ||
+        !hypervisorMemoryContains(address, size)) {
+        reason = "hypervisor real read is outside the configured host-owned region";
+        return false;
+    }
+    if (!ram->ValidateGuestRealRange(address, size, false, reason)) {
+        reason = "hypervisor handler read backing failure: " + reason;
+        return false;
+    }
+    try {
+        ram->ReadGuestReal(address, out, size);
+        return true;
+    } catch (const std::exception& e) {
+        reason = std::string("hypervisor handler read failed: ") + e.what();
+        return false;
+    }
+}
+
+bool PPC64ISAPlugin::hypervisorRealWrite(IMemory& memory, uint64_t address,
+                                          uint32_t size, const uint8_t* bytes,
+                                          std::string& reason) const {
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    if (!inHypervisorState() || ram == nullptr || bytes == nullptr ||
+        !hypervisorMemoryContains(address, size)) {
+        reason = "hypervisor real write is outside the configured host-owned region";
+        return false;
+    }
+    if (!ram->ValidateGuestRealRange(address, size, true, reason)) {
+        reason = "hypervisor handler write backing failure: " + reason;
+        return false;
+    }
+    GuestRealWriteSegment write;
+    write.address = address;
+    write.bytes.assign(bytes, bytes + size);
+    try {
+        ram->WriteGuestRealTransaction({write});
+        return true;
+    } catch (const std::exception& e) {
+        reason = std::string("hypervisor handler write failed: ") + e.what();
+        return false;
+    }
+}
+
+ISAExecutionResult PPC64ISAPlugin::deliverHypervisorStorageInterrupt(
+    uint64_t vector, uint64_t savedNIP, uint64_t effectiveAddress,
+    uint32_t cause,
+    bool updateHdarHdsisr) {
+    if (!guestDeliveryEnabled_ || !hypervisorMemoryConfigured_ ||
+        partitionContext_ == nullptr || partitionContext_->lpid() == 0 ||
+        inHypervisorState()) {
+        return ISAExecutionResult::EXCEPTION;
+    }
+    const uint32_t signature = updateHdarHdsisr ? cause : (cause | 0x80000000U);
+    if (lastHypervisorFaultNIP_ == savedNIP &&
+        lastHypervisorFaultEA_ == effectiveAddress &&
+        lastHypervisorFaultCause_ == signature) {
+        ++repeatedHypervisorStorageFaults_;
+    } else {
+        lastHypervisorFaultNIP_ = savedNIP;
+        lastHypervisorFaultEA_ = effectiveAddress;
+        lastHypervisorFaultCause_ = signature;
+        repeatedHypervisorStorageFaults_ = 1;
+    }
+    if (repeatedHypervisorStorageFaults_ > MAX_NESTED_EXCEPTIONS) {
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip, 0, false,
+                    effectiveAddress, updateHdarHdsisr, PPC64AccessType::NONE, 0,
+                    "repeated hypervisor storage fault made no forward progress",
+                    false, PPC64TranslationFaultKind::NONE,
+                    partitionContext_->lpid(), PPC64TranslationStage::PARTITION);
+        return ISAExecutionResult::EXCEPTION;
+    }
+
+    const uint64_t oldMSR = state_.msr;
+    state_.hsrr0 = savedNIP;
+    state_.hsrr1 = (oldMSR & SRR1_MSR_MASK) |
+                   (updateHdarHdsisr ? 0U : cause);
+    if (updateHdarHdsisr) {
+        state_.hdar = effectiveAddress;
+        state_.hdsisr = cause;
+    }
+    // POWER9 low-vector profile: handler MSR retains ME, sets SF and HV, and
+    // preserves RI. Other controls start clear; the interrupted values remain
+    // in HSRR1 for hrfid.
+    state_.msr = (oldMSR & (MSR_ME | MSR_RI)) | MSR_SF | MSR_HV;
+    hypervisorReturnValid_ = true;
+    hypervisorReturnHV_ = (oldMSR & MSR_HV) != 0;
+    state_.nip = EXC_VECTOR_BASE + vector;
+    clearReservation();
+    hasCachedInstruction_ = false;
+    consecutiveGuestExceptions_ = 0;
+    justDelivered_ = true;
+    return ISAExecutionResult::CONTINUE;
 }
 
 bool PPC64ISAPlugin::activatePartitionContext(
@@ -3168,9 +3677,14 @@ PPC64TranslationResult PPC64ISAPlugin::translateEffectiveAddress(
             radixConfigurationGeneration_, effectiveAddress, access,
             inProblemState());
     }
-    return PPC64RadixMMU::translate(memory, radixConfiguration_, state_.pidr,
-                                    radixConfigurationGeneration_,
-                                    effectiveAddress, access, inProblemState());
+    PPC64TranslationResult result = PPC64RadixMMU::translate(
+        memory, radixConfiguration_, state_.pidr,
+        radixConfigurationGeneration_, effectiveAddress, access,
+        inProblemState());
+    if (!result.success && result.fault != PPC64TranslationFaultKind::NONE) {
+        result.stage = PPC64TranslationStage::PROCESS;
+    }
+    return result;
 }
 
 bool PPC64ISAPlugin::translationModeReady(IMemory& memory, uint64_t proposedMSR,
@@ -3193,7 +3707,38 @@ bool PPC64ISAPlugin::translationModeReady(IMemory& memory, uint64_t proposedMSR,
 bool PPC64ISAPlugin::isProposedMSRValid(uint64_t proposed, IMemory& memory,
                                        std::string& reason) const {
     if ((proposed & MSR_MUST_BE_ZERO) != 0) {
-        reason = "MSR requests unsupported HV/IP/LE mode";
+        reason = "MSR requests unsupported IP/LE mode";
+        return false;
+    }
+    if (((proposed ^ state_.msr) & MSR_HV) != 0) {
+        reason = "mtmsr/rfid cannot change MSR[HV] authority";
+        return false;
+    }
+    if ((proposed & MSR_HV) != 0 &&
+        (!hypervisorMemoryConfigured_ ||
+         (proposed & (MSR_PR | MSR_RELOCATION)) != 0)) {
+        reason = "HV mode requires the configured privileged host-real profile";
+        return false;
+    }
+    return translationModeReady(memory, proposed, reason);
+}
+
+bool PPC64ISAPlugin::isHypervisorReturnMSRValid(uint64_t proposed,
+                                                IMemory& memory,
+                                                std::string& reason) const {
+    if (!inHypervisorState() || !hypervisorReturnValid_ ||
+        (((proposed & MSR_HV) != 0) != hypervisorReturnHV_)) {
+        reason = "HSRR1 does not name the saved interrupt privilege context";
+        return false;
+    }
+    if ((proposed & (MSR_IP | MSR_LE)) != 0) {
+        reason = "HSRR1 requests unsupported IP/LE mode";
+        return false;
+    }
+    if ((proposed & MSR_HV) != 0 &&
+        (!hypervisorMemoryConfigured_ ||
+         (proposed & (MSR_PR | MSR_RELOCATION)) != 0)) {
+        reason = "HSRR1 requests an unsupported hypervisor return mode";
         return false;
     }
     return translationModeReady(memory, proposed, reason);
@@ -3253,9 +3798,24 @@ bool PPC64ISAPlugin::translateAccessRange(
             failure.fault = partitionContext_ != nullptr
                 ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
                 : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+            failure.stage = PPC64TranslationStage::BACKEND;
             failure.reason = (partitionContext_ != nullptr
                 ? "partition backing access failed: "
                 : "flat partition backing access is unsupported: ") + backingReason;
+            reason = failure.reason;
+            return false;
+        }
+        if (!inHypervisorState() &&
+            guestBackingRangeProtected(translated.hostBackingAddress, chunk)) {
+            failure = translated;
+            failure.success = false;
+            failure.fault = partitionContext_ != nullptr
+                ? PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE
+                : PPC64TranslationFaultKind::PERMISSION_FAILURE;
+            failure.stage = partitionContext_ != nullptr
+                ? PPC64TranslationStage::PARTITION
+                : PPC64TranslationStage::PROCESS;
+            failure.reason = "guest translation aliases protected hypervisor backing memory";
             reason = failure.reason;
             return false;
         }
@@ -3383,6 +3943,13 @@ bool PPC64ISAPlugin::flatGuestRealAccessRange(
         reason = failure.reason;
         return false;
     }
+    if (!inHypervisorState() && guestBackingRangeProtected(hostBackingAddress, width)) {
+        failure.fault = PPC64TranslationFaultKind::PERMISSION_FAILURE;
+        failure.stage = PPC64TranslationStage::PROCESS;
+        failure.reason = "guest real-address mapping aliases protected hypervisor backing memory";
+        reason = failure.reason;
+        return false;
+    }
     failure.guestRealAddress = guestRealAddress;
     failure.hostBackingAddress = hostBackingAddress;
     segments.push_back({guestRealAddress, guestRealAddress, hostBackingAddress, width});
@@ -3486,6 +4053,11 @@ bool PPC64ISAPlugin::partitionGuestRealAccessRange(
             failure.guestRealAddress = current;
             failure.hostBackingAddress = translated.hostBackingAddress;
             failure.fault = PPC64PartitionMMU::translationFault(translated.fault);
+            failure.stage = translated.fault == PPC64PartitionFaultKind::BACKEND_FAILURE
+                ? PPC64TranslationStage::BACKEND
+                : (translated.fault == PPC64PartitionFaultKind::PARTITION_TABLE_ACCESS
+                       ? PPC64TranslationStage::PARTITION_TABLE
+                       : PPC64TranslationStage::PARTITION);
             failure.contextIdentifier = partitionContext_->lpid();
             failure.reason = translated.reason;
             reason = failure.reason;
@@ -3500,8 +4072,21 @@ bool PPC64ISAPlugin::partitionGuestRealAccessRange(
             failure.guestRealAddress = current;
             failure.hostBackingAddress = translated.hostBackingAddress;
             failure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
+            failure.stage = PPC64TranslationStage::BACKEND;
             failure.contextIdentifier = partitionContext_->lpid();
             failure.reason = "partition backing range is unavailable: " + reason;
+            reason = failure.reason;
+            return false;
+        }
+        if (!inHypervisorState() &&
+            guestBackingRangeProtected(translated.hostBackingAddress, chunk)) {
+            failure.effectiveAddress = current;
+            failure.guestRealAddress = current;
+            failure.hostBackingAddress = translated.hostBackingAddress;
+            failure.fault = PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE;
+            failure.stage = PPC64TranslationStage::PARTITION;
+            failure.contextIdentifier = partitionContext_->lpid();
+            failure.reason = "partition mapping aliases protected hypervisor backing memory";
             reason = failure.reason;
             return false;
         }
@@ -3586,8 +4171,13 @@ void PPC64ISAPlugin::setPC(uint64_t pc) {
 }
 
 std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
-    // Keep legacy v1/v2 bytes when PIDR is zero. Guest-visible PIDR requires
-    // v3; hypervisor-owned radix configuration remains outside CPU snapshots.
+    // Preserve legacy layouts until Phase 8 hypervisor architectural state is
+    // present. Hypervisor memory mappings and the pending return latch remain
+    // host-owned runtime state and are not checkpointed here.
+    if ((state_.msr & MSR_HV) != 0 || state_.hsrr0 != 0 || state_.hsrr1 != 0 ||
+        state_.hdar != 0 || state_.hdsisr != 0) {
+        return serialize_state_v4();
+    }
     if (state_.pidr != 0) {
         return serialize_state_v3();
     }
@@ -3604,27 +4194,24 @@ std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
 
 bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
     if (data.size() != STATE_SIZE && data.size() != STATE_SIZE_V2 &&
-        data.size() != STATE_SIZE_V3) {
+        data.size() != STATE_SIZE_V3 && data.size() != STATE_SIZE_V4) {
         return false;
     }
+    PPC64ISAState restored;
     try {
         if (data.size() == STATE_SIZE) {
-            state_.deserialize(data.data());
+            restored.deserialize(data.data());
         } else if (data.size() == STATE_SIZE_V2) {
-            state_.deserializeV2(data.data());
+            restored.deserializeV2(data.data());
+        } else if (data.size() == STATE_SIZE_V3) {
+            restored.deserializeV3(data.data());
         } else {
-            state_.deserializeV3(data.data());
+            restored.deserializeV4(data.data());
         }
     } catch (...) {
         return false;
     }
-    // Snapshot reservations are never serialized. Restoring state drops any
-    // live reservation so a stale one cannot succeed against restored memory.
-    reservation_.reset();
-    hasCachedInstruction_ = false;
-    consecutiveGuestExceptions_ = 0;
-    justDelivered_ = false;
-    return true;
+    return restoreArchitecturalState(restored);
 }
 
 std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v2() const {
@@ -3637,16 +4224,13 @@ bool PPC64ISAPlugin::deserialize_state_v2(const std::vector<uint8_t>& data) {
     if (data.size() != STATE_SIZE_V2) {
         return false;
     }
+    PPC64ISAState restored;
     try {
-        state_.deserializeV2(data.data());
+        restored.deserializeV2(data.data());
     } catch (...) {
         return false;
     }
-    reservation_.reset();
-    hasCachedInstruction_ = false;
-    consecutiveGuestExceptions_ = 0;
-    justDelivered_ = false;
-    return true;
+    return restoreArchitecturalState(restored);
 }
 
 std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v3() const {
@@ -3659,16 +4243,32 @@ bool PPC64ISAPlugin::deserialize_state_v3(const std::vector<uint8_t>& data) {
     if (data.size() != STATE_SIZE_V3) {
         return false;
     }
+    PPC64ISAState restored;
     try {
-        state_.deserializeV3(data.data());
+        restored.deserializeV3(data.data());
     } catch (...) {
         return false;
     }
-    reservation_.reset();
-    hasCachedInstruction_ = false;
-    consecutiveGuestExceptions_ = 0;
-    justDelivered_ = false;
-    return true;
+    return restoreArchitecturalState(restored);
+}
+
+std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v4() const {
+    std::vector<uint8_t> data(STATE_SIZE_V4);
+    state_.serializeV4(data.data());
+    return data;
+}
+
+bool PPC64ISAPlugin::deserialize_state_v4(const std::vector<uint8_t>& data) {
+    if (data.size() != STATE_SIZE_V4) {
+        return false;
+    }
+    PPC64ISAState restored;
+    try {
+        restored.deserializeV4(data.data());
+    } catch (...) {
+        return false;
+    }
+    return restoreArchitecturalState(restored);
 }
 
 std::string PPC64ISAPlugin::dumpState() const {

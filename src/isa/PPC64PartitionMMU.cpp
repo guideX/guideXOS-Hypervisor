@@ -162,6 +162,25 @@ PPC64TranslationResult processFailure(PPC64TranslationResult result,
                                       const std::string& detail) {
     result.success = false;
     result.fault = kind;
+    switch (kind) {
+        case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+        case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+        case PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED:
+            result.stage = PPC64TranslationStage::PARTITION;
+            break;
+        case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+            result.stage = PPC64TranslationStage::PARTITION_TABLE;
+            break;
+        case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
+            result.stage = PPC64TranslationStage::BACKEND;
+            break;
+        default:
+            result.stage = PPC64TranslationStage::PROCESS;
+            break;
+    }
     result.reason = std::string("RADIX_") +
                     PPC64RadixMMU::faultName(kind) + ": " + detail;
     return result;
@@ -432,6 +451,7 @@ PPC64TranslationFaultKind PPC64PartitionMMU::translationFault(
         case PPC64PartitionFaultKind::PERMISSION_FAILURE:
             return PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE;
         case PPC64PartitionFaultKind::REFERENCE_CHANGE_REQUIRED:
+            return PPC64TranslationFaultKind::PARTITION_REFERENCE_CHANGE_REQUIRED;
         case PPC64PartitionFaultKind::UNSUPPORTED_CONFIGURATION:
             return PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE;
         case PPC64PartitionFaultKind::PARTITION_TABLE_ACCESS:
