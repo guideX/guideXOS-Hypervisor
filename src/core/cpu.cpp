@@ -93,10 +93,14 @@ uint64_t skipRseRegisters(uint64_t address, int64_t registerCount) {
 uint64_t rseRegistersBetween(uint64_t bspstore, uint64_t bsp) {
     if (bsp < bspstore) return 0;
 
-    const uint64_t backingStoreWords = (bsp - bspstore) >> 3;
-    const uint64_t firstNatSlot = (bspstore >> 3) & 0x3FULL;
-    const uint64_t natCollectionWords = (firstNatSlot + backingStoreWords) / 64ULL;
-    return backingStoreWords - natCollectionWords;
+    uint64_t count = 0;
+    for (uint64_t address = bspstore; address < bsp; address += 8) {
+        if (((address >> 3) & 0x3FULL) != 0x3FULL) {
+            ++count;
+        }
+        if (address > UINT64_MAX - 8) break;
+    }
+    return count;
 }
 
 } // namespace
@@ -181,6 +185,9 @@ void CPUState::SetGR(size_t index, uint64_t value) {
         const size_t physical = MapGR(index);
         gr_[physical] = value;
         gr_nat_[physical] = false;
+        if (physical >= NUM_STATIC_GR && physical < NUM_GENERAL_REGISTERS) {
+            rse_.physicalPartition[physical - NUM_STATIC_GR] = RSERegisterPartition::DIRTY;
+        }
     }
 }
 
@@ -196,7 +203,11 @@ void CPUState::SetGRNaT(size_t index, bool value) {
         throw std::out_of_range("General register index out of range");
     }
     if (index != 0) {
-        gr_nat_[MapGR(index)] = value;
+        const size_t physical = MapGR(index);
+        gr_nat_[physical] = value;
+        if (physical >= NUM_STATIC_GR && physical < NUM_GENERAL_REGISTERS) {
+            rse_.physicalPartition[physical - NUM_STATIC_GR] = RSERegisterPartition::DIRTY;
+        }
     }
 }
 
@@ -214,6 +225,9 @@ void CPUState::SetGRPhysical(size_t index, uint64_t value) {
     if (index != 0) {
         gr_[index] = value;
         gr_nat_[index] = false;
+        if (index >= NUM_STATIC_GR && index < NUM_GENERAL_REGISTERS) {
+            rse_.physicalPartition[index - NUM_STATIC_GR] = RSERegisterPartition::DIRTY;
+        }
     }
 }
 
@@ -230,6 +244,9 @@ void CPUState::SetGRNaTPhysical(size_t index, bool value) {
     }
     if (index != 0) {
         gr_nat_[index] = value;
+        if (index >= NUM_STATIC_GR && index < NUM_GENERAL_REGISTERS) {
+            rse_.physicalPartition[index - NUM_STATIC_GR] = RSERegisterPartition::DIRTY;
+        }
     }
 }
 
@@ -648,6 +665,11 @@ void CPUState::SetAR(size_t index, uint64_t value) {
             rse_.rsc = value;
             break;
         case 17:
+            if (rse_.bsp == 0 && rse_.bspstore == 0 && rse_.bspLoad == 0) {
+                // Seed the internal load boundary on the first architectural
+                // BSP initialization; later pointer transitions are explicit.
+                rse_.bspLoad = value;
+            }
             rse_.bsp = value;
             break;
         case 18:
@@ -673,6 +695,21 @@ void CPUState::WriteBSPSTORE(uint64_t value) {
     const uint64_t newBspstore = value & ~0x7ULL;
     SetBSPSTORE(newBspstore);
     SetBSP(skipRseRegisters(newBspstore, static_cast<int64_t>(dirtyRegisters)));
+}
+
+RSERegisterPartition CPUState::GetRSEPhysicalPartition(size_t stackedIndex) const {
+    if (stackedIndex >= NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::out_of_range("Stacked register partition index out of range");
+    }
+    return rse_.physicalPartition[stackedIndex];
+}
+
+void CPUState::SetRSEPhysicalPartition(size_t stackedIndex,
+                                      RSERegisterPartition partition) {
+    if (stackedIndex >= NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::out_of_range("Stacked register partition index out of range");
+    }
+    rse_.physicalPartition[stackedIndex] = partition;
 }
 
 void CPUState::AdvanceBSPForCall() {

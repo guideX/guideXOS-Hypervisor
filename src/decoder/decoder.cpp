@@ -213,6 +213,71 @@ void writeIa64Data(CPUState& cpu,
     replayAddressTranslator().WriteData(cpu, memory, address, source, size);
 }
 
+bool isRseRnatSlot(uint64_t address) {
+    return ((address >> 3) & 0x3FULL) == 0x3FULL;
+}
+
+uint64_t rseBackingRegisterCount(uint64_t begin, uint64_t end) {
+    if (end < begin || ((begin | end) & 0x7ULL) != 0) {
+        throw std::runtime_error("IA-64 RSE backing-store range is invalid");
+    }
+    uint64_t count = 0;
+    for (uint64_t address = begin; address < end; address += 8) {
+        if (!isRseRnatSlot(address) && ++count > NUM_STACKED_GENERAL_REGISTERS) {
+            return count;
+        }
+        if (address > UINT64_MAX - 8) {
+            throw std::runtime_error("IA-64 RSE backing-store range wraps");
+        }
+    }
+    return count;
+}
+
+uint64_t rseCollectionAddress(uint64_t registerAddress) {
+    return (registerAddress & ~0x1FFULL) | 0x1F8ULL;
+}
+
+bool rseBigEndian(const CPUState& cpu) {
+    return (cpu.GetRSC() & (1ULL << 4)) != 0;
+}
+
+uint64_t readRseBackingWord(CPUState& cpu, const IMemory& memory, uint64_t address) {
+    uint8_t bytes[8] = {};
+    readIa64Data(cpu, memory, address, bytes, sizeof(bytes));
+    uint64_t value = 0;
+    if (rseBigEndian(cpu)) {
+        for (uint8_t byte : bytes) value = (value << 8) | byte;
+    } else {
+        for (size_t i = 0; i < sizeof(bytes); ++i) {
+            value |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+        }
+    }
+    return value;
+}
+
+void writeRseBackingWord(CPUState& cpu, IMemory& memory, uint64_t address,
+                         uint64_t value) {
+    uint8_t bytes[8] = {};
+    for (size_t i = 0; i < sizeof(bytes); ++i) {
+        const size_t shiftIndex = rseBigEndian(cpu) ? (sizeof(bytes) - 1 - i) : i;
+        bytes[i] = static_cast<uint8_t>(value >> (shiftIndex * 8));
+    }
+    writeIa64Data(cpu, memory, address, bytes, sizeof(bytes));
+}
+
+void invalidateStackedRegistersOutsideFrame(CPUState& cpu) {
+    const size_t currentFrameSize = cpu.GetSOF();
+    for (size_t i = 0; i < NUM_STACKED_GENERAL_REGISTERS; ++i) {
+        if (i < currentFrameSize) {
+            cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::CURRENT);
+            continue;
+        }
+        cpu.SetGRPhysical(NUM_STATIC_GR + i, 0);
+        cpu.SetGRNaTPhysical(NUM_STATIC_GR + i, false);
+        cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::INVALID);
+    }
+}
+
 }
 
 void InstructionEx::SetOperands(uint8_t dst, uint8_t src1, uint8_t src2) {
@@ -2157,20 +2222,169 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             break;
 
         case InstructionType::FLUSHRS:
-            // The architectural operation spills the dirty register-stack
-            // partition until AR.BSPSTORE reaches AR.BSP.  This emulator does
-            // not model backing-store register slots or RSE spill NaT words,
-            // but it does model the architectural pointers.  Keeping the
-            // pointers coherent preserves the observable post-flush state and
-            // lets subsequent mov-to-AR.BSPSTORE/loadrs code see the result.
-            cpu.SetBSPSTORE(cpu.GetBSP());
+            {
+                const uint64_t bspstore = cpu.GetBSPSTORE();
+                const uint64_t bsp = cpu.GetBSP();
+                if (bsp < bspstore) {
+                    throw std::runtime_error("IA-64 flushrs encountered an incomplete RSE frame");
+                }
+                const uint64_t dirtyRegisterCount =
+                    rseBackingRegisterCount(bspstore, bsp);
+                if (dirtyRegisterCount > NUM_STACKED_GENERAL_REGISTERS) {
+                    throw std::runtime_error("IA-64 flushrs dirty partition exceeds the physical register stack");
+                }
+
+                uint64_t address = bspstore;
+                uint64_t rnat = cpu.GetRNAT();
+                size_t registerIndex = 0;
+                while (address < bsp) {
+                    if (isRseRnatSlot(address)) {
+                        // RNAT collection slots are part of the address
+                        // distance, but do not consume a stacked GR.
+                        writeRseBackingWord(cpu, memory, address, rnat);
+                        address += 8;
+                        cpu.SetBSPSTORE(address);
+                        rnat = 0;
+                        continue;
+                    }
+
+                    if (registerIndex >= dirtyRegisterCount) {
+                        throw std::runtime_error("IA-64 flushrs register partition does not match BSP pointers");
+                    }
+                    const size_t logicalRegister = NUM_STATIC_GR + registerIndex;
+                    const uint64_t value = cpu.GetGR(logicalRegister);
+                    const uint64_t natMask = 1ULL << ((address >> 3) & 0x3FULL);
+                    if (cpu.GetGRNaT(logicalRegister)) rnat |= natMask;
+                    else rnat &= ~natMask;
+
+                    // Commit one mandatory transfer at a time. If the guest
+                    // translation or RAM access faults, BSPSTORE remains at
+                    // the first transfer that did not complete.
+                    writeRseBackingWord(cpu, memory, address, value);
+                    cpu.SetRSEPhysicalPartition(registerIndex,
+                                                RSERegisterPartition::CLEAN);
+                    address += 8;
+                    cpu.SetBSPSTORE(address);
+                    ++registerIndex;
+                }
+
+                if (registerIndex != dirtyRegisterCount) {
+                    throw std::runtime_error("IA-64 flushrs did not transfer the full dirty partition");
+                }
+                cpu.SetBSPSTORE(bsp);
+                cpu.SetRNAT(rnat);
+                cpu.SetRSELoadPointer(bsp);
+            }
             break;
 
         case InstructionType::LOADRS:
-            // With RSC.loadrs=0, loadrs invalidates stacked registers outside
-            // the current frame.  This CPU model has no backing-store load or
-            // per-register validity state, so there is no further observable
-            // state transition to perform here.
+            {
+                const uint64_t rsc = cpu.GetRSC();
+                const uint64_t requestedBytes = ((rsc >> 16) & 0x3FFFULL) & ~0x7ULL;
+                if ((rsc & 0x3ULL) != 0) {
+                    throw std::runtime_error("IA-64 loadrs requires enforced-lazy RSC mode");
+                }
+                if (cpu.GetSOF() != 0 && requestedBytes != 0) {
+                    throw std::runtime_error("IA-64 loadrs requires CFM.SOF=0 for a nonzero load range");
+                }
+
+                const uint64_t bsp = cpu.GetBSP();
+                if (requestedBytes > bsp) {
+                    throw std::runtime_error("IA-64 loadrs tear-point underflows the backing-store address");
+                }
+                const uint64_t tearPoint = bsp - requestedBytes;
+                if (requestedBytes == 0) {
+                    invalidateStackedRegistersOutsideFrame(cpu);
+                    cpu.SetBSPSTORE(bsp);
+                    cpu.SetRSELoadPointer(bsp);
+                    // AR.RNAT is architecturally undefined after loadrs.
+                    cpu.SetRNAT(0);
+                    break;
+                }
+
+                const uint64_t registerCount =
+                    rseBackingRegisterCount(tearPoint, bsp);
+                if (registerCount > NUM_STACKED_GENERAL_REGISTERS) {
+                    throw std::runtime_error("IA-64 loadrs range exceeds the physical register stack");
+                }
+
+                const bool needsMemoryLoads = tearPoint < cpu.GetRSELoadPointer();
+                if (needsMemoryLoads) {
+                    // Entries outside the preserved current frame cannot
+                    // retain values from the context that most recently used
+                    // this physical register file.
+                    invalidateStackedRegistersOutsideFrame(cpu);
+                } else {
+                    for (size_t i = 0; i < NUM_STACKED_GENERAL_REGISTERS; ++i) {
+                        if (i >= registerCount) {
+                            cpu.SetGRPhysical(NUM_STATIC_GR + i, 0);
+                            cpu.SetGRNaTPhysical(NUM_STATIC_GR + i, false);
+                            cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::INVALID);
+                        }
+                    }
+                }
+
+                if (needsMemoryLoads) {
+                    uint64_t address = tearPoint;
+                    uint64_t natCollection = 0;
+                    uint64_t natCollectionRegion = UINT64_MAX;
+                    size_t registerIndex = 0;
+                    while (address < bsp) {
+                        if (isRseRnatSlot(address)) {
+                            natCollection = readRseBackingWord(cpu, memory, address);
+                            natCollectionRegion = address & ~0x1FFULL;
+                            address += 8;
+                            continue;
+                        }
+
+                        const uint64_t region = address & ~0x1FFULL;
+                        if (natCollectionRegion != region) {
+                            const uint64_t rnatAddress = rseCollectionAddress(address);
+                            if (rnatAddress >= tearPoint && rnatAddress < bsp) {
+                                // The collection word may be later in this load
+                                // range than the first register that consumes it.
+                                natCollection = readRseBackingWord(cpu, memory,
+                                                                  rnatAddress);
+                            } else if (region == (cpu.GetBSPSTORE() & ~0x1FFULL)) {
+                                natCollection = cpu.GetRNAT();
+                            } else {
+                                natCollection = readRseBackingWord(cpu, memory, rnatAddress);
+                            }
+                            natCollectionRegion = region;
+                        }
+
+                        const uint64_t value = readRseBackingWord(cpu, memory, address);
+                        if (registerIndex >= registerCount) {
+                            throw std::runtime_error("IA-64 loadrs register range does not match RSC.loadrs");
+                        }
+                        const size_t physicalRegister = NUM_STATIC_GR + registerIndex;
+                        cpu.SetGRPhysical(physicalRegister, value);
+                        const uint64_t natMask = 1ULL << ((address >> 3) & 0x3FULL);
+                        cpu.SetGRNaTPhysical(physicalRegister,
+                                             (natCollection & natMask) != 0);
+                        cpu.SetRSEPhysicalPartition(registerIndex,
+                                                    RSERegisterPartition::DIRTY);
+                        ++registerIndex;
+                        address += 8;
+                    }
+
+                    if (registerIndex != registerCount) {
+                        throw std::runtime_error("IA-64 loadrs did not restore the requested register range");
+                    }
+                } else {
+                    // The tear-point has not moved past the existing load
+                    // boundary, so these entries are already resident. Keep
+                    // their physical values and only update their partition.
+                    for (size_t i = 0; i < registerCount; ++i) {
+                        cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::DIRTY);
+                    }
+                }
+                cpu.SetBSPSTORE(tearPoint);
+                cpu.SetRSELoadPointer(tearPoint);
+                // The ISA leaves AR.RNAT undefined here; values restored by
+                // this transfer already carry their per-register NaT bits.
+                cpu.SetRNAT(0);
+            }
             break;
 
         case InstructionType::INVALA:

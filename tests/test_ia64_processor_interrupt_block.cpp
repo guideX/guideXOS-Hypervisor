@@ -43,11 +43,9 @@ int main() {
         });
     memory.RegisterDevice(&pib);
 
-    // Interrupt delivery renames the register stack exactly like a call: the
-    // interrupted procedure's frame is spilled and the handler builds its own
-    // frame over GR32+.  This model has no RSE backing store, so the plugin
-    // must snapshot the interrupted CFM/stacked view at entry and restore it
-    // on rfi, or the interrupted procedure resumes with the handler's GR32+.
+    // The partial RSE backing-store model does not yet implement the
+    // interruption-time rename/transfer path. The plugin therefore still
+    // snapshots the interrupted CFM/stacked view around rfi in this test.
     {
         IA64ISAPlugin framePlugin(decoder);
         // Place the staged bundle inside the synthetic EFI handoff region so
@@ -217,10 +215,25 @@ int main() {
 
     plugin.reset();
     plugin.queueInterrupt(0x60);
+    plugin.getCPUState().SetRSELoadPointer(0x12345000ULL);
+    plugin.getCPUState().SetRSEPhysicalPartition(0,
+                                                RSERegisterPartition::CLEAN);
+    plugin.getCPUState().SetRSEPhysicalPartition(1,
+                                                RSERegisterPartition::DIRTY);
     const std::vector<uint8_t> snapshot = plugin.serialize_state();
     IA64ISAPlugin restored(decoder);
     require(restored.deserialize_state(snapshot) && restored.hasPendingInterrupt(),
             "pending IPI state survives ISA snapshot serialization");
+    require(restored.getCPUState().GetRSELoadPointer() == 0x12345000ULL &&
+                restored.getCPUState().GetRSEPhysicalPartition(0) ==
+                    RSERegisterPartition::CLEAN &&
+                restored.getCPUState().GetRSEPhysicalPartition(1) ==
+                    RSERegisterPartition::DIRTY,
+            "RSE load pointer and physical partitions survive ISA snapshot serialization");
+    const std::vector<uint8_t> legacyV5Checkpoint = {
+        'I', 'A', '6', '4', 5, 0, 0, 0};
+    require(!restored.deserializeCheckpointState(legacyV5Checkpoint),
+            "full checkpoint loader rejects a v5 blob missing RSE ownership state");
 
     std::cout << "IA-64 Processor Interrupt Block tests passed" << std::endl;
     return 0;

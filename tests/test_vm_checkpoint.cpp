@@ -27,6 +27,7 @@ void check(bool condition, const char* description) {
 bool sameRse(const ia64::RSEState& left, const ia64::RSEState& right) {
     return left.cfm == right.cfm && left.rsc == right.rsc && left.bsp == right.bsp &&
            left.bspstore == right.bspstore && left.rnat == right.rnat && left.pfs == right.pfs &&
+           left.bspLoad == right.bspLoad && left.physicalPartition == right.physicalPartition &&
            left.sof == right.sof && left.sol == right.sol && left.sor == right.sor;
 }
 
@@ -70,6 +71,11 @@ int main() {
     rse.sof = 5;
     rse.sol = 3;
     rse.sor = 1;
+    rse.bspLoad = 0x17800ULL;
+    rse.physicalPartition[0] = ia64::RSERegisterPartition::DIRTY;
+    rse.physicalPartition[1] = ia64::RSERegisterPartition::CLEAN;
+    rse.physicalPartition[2] = ia64::RSERegisterPartition::CURRENT;
+    rse.physicalPartition[3] = ia64::RSERegisterPartition::INVALID;
     cpu.SetRSEStateForCheckpoint(rse);
     const ia64::CPURuntimeStateSnapshot cpuSnapshot = context->cpu->createSnapshot();
     cpu.SetGRPhysical(32, 0);

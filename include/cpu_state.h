@@ -23,7 +23,18 @@ namespace ia64 {
 constexpr size_t NUM_GENERAL_REGISTERS = 128;
 constexpr size_t NUM_PHYSICAL_GENERAL_REGISTERS = NUM_GENERAL_REGISTERS + 16;
 constexpr size_t NUM_STATIC_GR = 32;
+constexpr size_t NUM_STACKED_GENERAL_REGISTERS = NUM_GENERAL_REGISTERS - NUM_STATIC_GR;
 constexpr uint64_t IA64_PSR_BN_MASK = 1ULL << 44;
+
+// The architectural register stack distinguishes values that have not yet
+// reached memory, values present in both the physical stack and memory, the
+// current frame, and physical entries that no longer represent guest state.
+enum class RSERegisterPartition : uint8_t {
+    INVALID = 0,
+    CLEAN = 1,
+    DIRTY = 2,
+    CURRENT = 3,
+};
 
 // IA-64 has 128 floating-point registers (FR0-FR127)
 // - FR0 and FR1 are special (FR0 = +0.0, FR1 = +1.0)
@@ -73,6 +84,10 @@ struct RSEState {
     uint64_t bspstore;
     uint64_t rnat;
     uint64_t pfs;
+    // RSE.BspLoad is internal implementation state, serialized with the CPU
+    // because it determines whether loadrs must fetch from guest memory.
+    uint64_t bspLoad;
+    std::array<RSERegisterPartition, NUM_STACKED_GENERAL_REGISTERS> physicalPartition;
     uint8_t sof;
     uint8_t sol;
     uint8_t sor;
@@ -84,6 +99,8 @@ struct RSEState {
         , bspstore(0)
         , rnat(0)
         , pfs(0)
+        , bspLoad(0)
+        , physicalPartition{}
         , sof(0)
         , sol(0)
         , sor(0) {}
@@ -242,6 +259,10 @@ public:
     void SetBSPSTORE(uint64_t value) { SetAR(18, value); }
     void SetRNAT(uint64_t value) { SetAR(19, value); }
     void SetPFS(uint64_t value) { SetAR(64, value); }
+    uint64_t GetRSELoadPointer() const { return rse_.bspLoad; }
+    void SetRSELoadPointer(uint64_t value) { rse_.bspLoad = value; }
+    RSERegisterPartition GetRSEPhysicalPartition(size_t stackedIndex) const;
+    void SetRSEPhysicalPartition(size_t stackedIndex, RSERegisterPartition partition);
     void WriteBSPSTORE(uint64_t value);
     void AdvanceBSPForCall();
     void RewindBSPForReturn(uint8_t callerSol);

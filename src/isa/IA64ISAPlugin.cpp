@@ -2011,6 +2011,13 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
         std::memcpy(buffer + offset, &val, sizeof(uint64_t));
         offset += sizeof(uint64_t);
     }
+
+    const RSEState& rse = cpuState_.GetRSEState();
+    std::memcpy(buffer + offset, &rse.bspLoad, sizeof(rse.bspLoad));
+    offset += sizeof(rse.bspLoad);
+    for (RSERegisterPartition partition : rse.physicalPartition) {
+        buffer[offset++] = static_cast<uint8_t>(partition);
+    }
     
     // Special registers
     uint64_t ip = cpuState_.GetIP();
@@ -2087,6 +2094,18 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
         cpuState_.SetAR(i, val);
         offset += sizeof(uint64_t);
     }
+
+    RSEState rse = cpuState_.GetRSEState();
+    std::memcpy(&rse.bspLoad, buffer + offset, sizeof(rse.bspLoad));
+    offset += sizeof(rse.bspLoad);
+    for (RSERegisterPartition& partition : rse.physicalPartition) {
+        const uint8_t encodedPartition = buffer[offset++];
+        if (encodedPartition > static_cast<uint8_t>(RSERegisterPartition::CURRENT)) {
+            throw std::invalid_argument("Invalid RSE partition in ISA state");
+        }
+        partition = static_cast<RSERegisterPartition>(encodedPartition);
+    }
+    cpuState_.SetRSEStateForCheckpoint(rse);
     
     // Special registers
     uint64_t ip;
@@ -2139,6 +2158,8 @@ size_t IA64ISAState::getStateSize() const {
     size += NUM_PREDICATE_REGISTERS;                   // PRs (padded to bytes)
     size += NUM_BRANCH_REGISTERS * sizeof(uint64_t);   // BRs
     size += NUM_APPLICATION_REGISTERS * sizeof(uint64_t); // ARs
+    size += sizeof(uint64_t);               // RSE.BspLoad
+    size += NUM_STACKED_GENERAL_REGISTERS;  // physical RSE partition
     size += 3 * sizeof(uint64_t);                      // IP, CFM, PSR
     
     // Runtime state
@@ -5465,7 +5486,7 @@ private:
     bool valid_;
 };
 
-constexpr uint32_t kIA64CheckpointBlobVersion = 5;
+constexpr uint32_t kIA64CheckpointBlobVersion = 6;
 constexpr size_t kMaxCheckpointVectorEntries = 1'000'000;
 constexpr size_t kMaxCheckpointStringBytes = 1'048'576;
 constexpr size_t kMaxCheckpointBlobBytes = 64 * 1024 * 1024;
@@ -5553,6 +5574,10 @@ std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
     writer.u8(rse.sof);
     writer.u8(rse.sol);
     writer.u8(rse.sor);
+    writer.u64(rse.bspLoad);
+    for (RSERegisterPartition partition : rse.physicalPartition) {
+        writer.u8(static_cast<uint8_t>(partition));
+    }
     writer.u64(cpu.GetIP());
     writer.u64(cpu.GetCFM());
     writer.u64(cpu.GetPSR());
@@ -5722,9 +5747,10 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
             if (reader.u8() != static_cast<uint8_t>(expected)) return false;
         }
         const uint32_t checkpointBlobVersion = reader.u32();
-        if (checkpointBlobVersion != 2 && checkpointBlobVersion != 3 &&
-            checkpointBlobVersion != 4 &&
-            checkpointBlobVersion != kIA64CheckpointBlobVersion) return false;
+        // Versions 2–5 do not contain RSE.BspLoad or the physical register
+        // partition. Those values cannot be reconstructed from the old
+        // ownerless call-frame snapshots or guest memory without guessing.
+        if (checkpointBlobVersion != kIA64CheckpointBlobVersion) return false;
 
         CPUState restoredCPU;
         const size_t serializedGRCount = checkpointBlobVersion >= 5
@@ -5806,6 +5832,14 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         rse.sof = reader.u8();
         rse.sol = reader.u8();
         rse.sor = reader.u8();
+        rse.bspLoad = reader.u64();
+        for (RSERegisterPartition& partition : rse.physicalPartition) {
+            const uint8_t encodedPartition = reader.u8();
+            if (encodedPartition > static_cast<uint8_t>(RSERegisterPartition::CURRENT)) {
+                return false;
+            }
+            partition = static_cast<RSERegisterPartition>(encodedPartition);
+        }
         const uint64_t ip = reader.u64();
         const uint64_t cfm = reader.u64();
         const uint64_t psr = reader.u64();

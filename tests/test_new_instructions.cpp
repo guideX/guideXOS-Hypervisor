@@ -4301,7 +4301,9 @@ void test_ia64_flushrs() {
                  0x1000, cpu.GetBSPSTORE());
     assert_equal("flushrs should preserve BSP", 0x1000, cpu.GetBSP());
     assert_equal("flushrs should preserve RSC", 0x3, cpu.GetRSC());
-    assert_equal("flushrs should preserve RNAT", 0x55, cpu.GetRNAT());
+    assert_equal("flushrs should retain the active post-boundary RNAT state", 0, cpu.GetRNAT());
+    assert_equal("flushrs should write the completed RNAT collection slot",
+                 0x55ULL, memory.read<uint64_t>(0x0ff8));
     assert_equal("flushrs should preserve CFM", 0x183, cpu.GetCFM());
 
     // The encoding is NO_PRED in Binutils.  A nonzero qp field is therefore
@@ -4332,6 +4334,260 @@ void test_ia64_flushrs() {
                  0x1800, cpu.GetBSPSTORE());
 
     std::cout << "  ? IA-64 flushrs decoding and execution passed" << std::endl;
+}
+
+void test_ia64_flushrs_spills_dirty_registers() {
+    std::cout << "Testing IA-64 flushrs backing-store transfer..." << std::endl;
+
+    InstructionDecoder decoder;
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    const InstructionEx flushrs = decoder.DecodeSlot(
+        0x60000000ULL, UnitType::M_UNIT, 0x28640);
+
+    cpu.SetRSC(0);
+    cpu.SetBSP(0x1010);
+    cpu.SetBSPSTORE(0x1000);
+    cpu.SetRNAT(0);
+    cpu.SetGR(32, 0x1122334455667788ULL);
+    cpu.SetGR(33, 0x8877665544332211ULL);
+    cpu.SetGRNaT(32, true);
+    cpu.SetGRNaT(33, false);
+
+    flushrs.Execute(cpu, memory);
+
+    assert_equal("flushrs stores the first dirty stacked register",
+                 0x1122334455667788ULL, memory.read<uint64_t>(0x1000));
+    assert_equal("flushrs stores the second dirty stacked register",
+                 0x8877665544332211ULL, memory.read<uint64_t>(0x1008));
+    assert_equal("flushrs records the first register NaT bit in RNAT",
+                 1ULL, cpu.GetRNAT());
+    assert_equal("flushrs advances BSPSTORE after all dirty registers",
+                 0x1010ULL, cpu.GetBSPSTORE());
+    assert_true("flushrs moves completed physical entries to the clean partition",
+                cpu.GetRSEPhysicalPartition(0) == RSERegisterPartition::CLEAN);
+
+    CPUState boundaryCpu;
+    Memory boundaryMemory(1024 * 1024);
+    boundaryCpu.SetBSP(0x1208);
+    boundaryCpu.SetBSPSTORE(0x11F0);
+    boundaryCpu.SetRNAT(0);
+    boundaryCpu.SetGR(32, 0xAABBCCDDEEFF0011ULL);
+    boundaryCpu.SetGR(33, 0x1100FFEEDDCCBBAAULL);
+    boundaryCpu.SetGRNaT(32, true);
+    boundaryCpu.SetGRNaT(33, false);
+    boundaryMemory.write<uint64_t>(0x11E8, 0xD15EA5E0D15EA5E0ULL);
+    boundaryMemory.write<uint64_t>(0x1208, 0x5A5A5A5A5A5A5A5AULL);
+    flushrs.Execute(boundaryCpu, boundaryMemory);
+    assert_equal("flushrs stores the last register before an RNAT boundary",
+                 0xAABBCCDDEEFF0011ULL, boundaryMemory.read<uint64_t>(0x11F0));
+    assert_equal("flushrs stores the RNAT collection at slot 63",
+                 1ULL << 62, boundaryMemory.read<uint64_t>(0x11F8));
+    assert_equal("flushrs resumes register slots in the next region",
+                 0x1100FFEEDDCCBBAAULL, boundaryMemory.read<uint64_t>(0x1200));
+    assert_equal("flushrs boundary crossing leaves BSPSTORE at BSP",
+                 0x1208ULL, boundaryCpu.GetBSPSTORE());
+    assert_equal("flushrs leaves the new partial RNAT collection clear",
+                 0ULL, boundaryCpu.GetRNAT());
+    assert_equal("flushrs does not alter the neighboring word before its range",
+                 0xD15EA5E0D15EA5E0ULL, boundaryMemory.read<uint64_t>(0x11E8));
+    assert_equal("flushrs does not alter the neighboring word after its range",
+                 0x5A5A5A5A5A5A5A5AULL, boundaryMemory.read<uint64_t>(0x1208));
+
+    CPUState emptyCpu;
+    Memory emptyMemory(1024 * 1024);
+    emptyCpu.SetBSP(0x2000);
+    emptyCpu.SetBSPSTORE(0x2000);
+    emptyMemory.write<uint64_t>(0x2000, 0x1234);
+    flushrs.Execute(emptyCpu, emptyMemory);
+    assert_equal("empty flushrs leaves backing-store memory untouched",
+                 0x1234ULL, emptyMemory.read<uint64_t>(0x2000));
+    assert_equal("empty flushrs preserves an empty partition",
+                 0x2000ULL, emptyCpu.GetBSPSTORE());
+
+    CPUState faultCpu;
+    Memory tooSmallMemory(0x800);
+    faultCpu.SetBSP(0x1008);
+    faultCpu.SetBSPSTORE(0x1000);
+    faultCpu.SetGR(32, 0xFACEFEEDFACEFEEDULL);
+    bool spillFaulted = false;
+    try {
+        flushrs.Execute(faultCpu, tooSmallMemory);
+    } catch (const std::out_of_range&) {
+        spillFaulted = true;
+    }
+    assert_true("flushrs propagates a mandatory backing-store write fault", spillFaulted);
+    assert_equal("flushrs leaves BSPSTORE at the failed transfer after a fault",
+                 0x1000ULL, faultCpu.GetBSPSTORE());
+
+    CPUState bigEndianCpu;
+    Memory bigEndianMemory(1024 * 1024);
+    bigEndianCpu.SetRSC(1ULL << 4);
+    bigEndianCpu.SetBSP(0x3008);
+    bigEndianCpu.SetBSPSTORE(0x3000);
+    bigEndianCpu.SetGR(32, 0x0102030405060708ULL);
+    flushrs.Execute(bigEndianCpu, bigEndianMemory);
+    uint8_t bigEndianBytes[8] = {};
+    bigEndianMemory.Read(0x3000, bigEndianBytes, sizeof(bigEndianBytes));
+    const uint8_t expectedBigEndian[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    assert_true("flushrs respects RSC big-endian backing-store format",
+                std::memcmp(bigEndianBytes, expectedBigEndian, sizeof(expectedBigEndian)) == 0);
+}
+
+void test_ia64_loadrs_restores_backing_store() {
+    std::cout << "Testing IA-64 loadrs backing-store restoration..." << std::endl;
+
+    InstructionDecoder decoder;
+    const InstructionEx loadrs = decoder.DecodeSlot(
+        0x50000000ULL, UnitType::M_UNIT, 0x28640);
+    assert_true("authentic loadrs should decode", loadrs.GetType() == InstructionType::LOADRS);
+
+    // A decoded flush/load round trip proves that loadrs uses guest bytes
+    // after the live physical registers have been overwritten.
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    cpu.SetBSP(0x9010);
+    cpu.SetBSPSTORE(0x9000);
+    cpu.SetRSC(0);
+    cpu.SetRNAT(0);
+    cpu.SetGR(32, 0x0123456789ABCDEFULL);
+    cpu.SetGR(33, 0xFEDCBA9876543210ULL);
+    cpu.SetGRNaT(32, true);
+    cpu.SetGRNaT(33, false);
+    const InstructionEx flushrs = decoder.DecodeSlot(
+        0x60000000ULL, UnitType::M_UNIT, 0x28640);
+    flushrs.Execute(cpu, memory);
+    cpu.SetGR(32, 0xAAAAAAAAAAAAAAAAULL);
+    cpu.SetGR(33, 0xBBBBBBBBBBBBBBBBULL);
+    cpu.SetGRNaT(32, false);
+    cpu.SetRSC(16ULL << 16);
+    cpu.SetCFM(0);
+    loadrs.Execute(cpu, memory);
+    assert_equal("loadrs restores GR32 from the backing-store bytes",
+                 0x0123456789ABCDEFULL, cpu.GetGR(32));
+    assert_equal("loadrs restores GR33 from the backing-store bytes",
+                 0xFEDCBA9876543210ULL, cpu.GetGR(33));
+    assert_true("loadrs restores the register NaT bit from RNAT",
+                cpu.GetGRNaT(32));
+    assert_true("loadrs restores a clear NaT bit", !cpu.GetGRNaT(33));
+    assert_equal("loadrs leaves the requested backing-store pointer at the tear-point",
+                 0x9000ULL, cpu.GetBSPSTORE());
+    assert_equal("loadrs updates the internal backing-store load pointer",
+                 0x9000ULL, cpu.GetRSELoadPointer());
+    assert_equal("loadrs preserves BSP", 0x9010ULL, cpu.GetBSP());
+    assert_equal("loadrs preserves the RSC loadrs field", 16ULL << 16, cpu.GetRSC());
+    assert_true("loadrs marks restored physical registers dirty",
+                cpu.GetRSEPhysicalPartition(0) == RSERegisterPartition::DIRTY);
+
+    // Cross the slot-63 collection word. The second register must use the
+    // next region's collection rather than reusing the first RNAT word.
+    CPUState boundaryCpu;
+    Memory boundaryMemory(1024 * 1024);
+    boundaryCpu.SetBSP(0x5208);
+    boundaryCpu.SetBSPSTORE(0x51F0);
+    boundaryCpu.SetRSC(24ULL << 16);
+    boundaryCpu.SetCFM(0);
+    boundaryCpu.SetGR(32, 0xDEAD0001ULL);
+    boundaryCpu.SetGR(33, 0xDEAD0002ULL);
+    boundaryMemory.write<uint64_t>(0x51F0, 0xA0A1A2A3A4A5A6A7ULL);
+    boundaryMemory.write<uint64_t>(0x51F8, 1ULL << 62);
+    boundaryMemory.write<uint64_t>(0x5200, 0xB0B1B2B3B4B5B6B7ULL);
+    loadrs.Execute(boundaryCpu, boundaryMemory);
+    assert_equal("loadrs crosses an RNAT collection slot without treating it as a GR",
+                 0xB0B1B2B3B4B5B6B7ULL, boundaryCpu.GetGR(33));
+    assert_true("loadrs restores NaT across a backing-store boundary",
+                boundaryCpu.GetGRNaT(32));
+    assert_true("loadrs marks the next loaded physical register dirty",
+                boundaryCpu.GetRSEPhysicalPartition(1) == RSERegisterPartition::DIRTY);
+    assert_equal("loadrs invalidates a physical register outside the loaded range",
+                 0ULL, boundaryCpu.GetGR(34));
+    assert_true("loadrs records an invalid physical entry",
+                boundaryCpu.GetRSEPhysicalPartition(2) == RSERegisterPartition::INVALID);
+    assert_equal("loadrs boundary tear-point is the start of the requested range",
+                 0x51F0ULL, boundaryCpu.GetBSPSTORE());
+    boundaryMemory.write<uint64_t>(0x51F0, 0x1111111111111111ULL);
+    boundaryMemory.write<uint64_t>(0x51F8, 0);
+    boundaryMemory.write<uint64_t>(0x5200, 0x2222222222222222ULL);
+    loadrs.Execute(boundaryCpu, boundaryMemory);
+    assert_equal("repeated loadrs keeps an already-resident GR32 value",
+                 0xA0A1A2A3A4A5A6A7ULL, boundaryCpu.GetGR(32));
+    assert_equal("repeated loadrs keeps an already-resident GR33 value",
+                 0xB0B1B2B3B4B5B6B7ULL, boundaryCpu.GetGR(33));
+
+    // A second backing-store region must source its values from its own guest
+    // bytes, rather than from the prior region's resident physical registers.
+    CPUState separateRegionCpu;
+    Memory separateRegionMemory(1024 * 1024);
+    separateRegionCpu.SetBSP(0xB008);
+    separateRegionCpu.SetBSPSTORE(0xB000);
+    separateRegionCpu.SetRSC(8ULL << 16);
+    separateRegionCpu.SetCFM(0);
+    separateRegionCpu.SetGR(32, 0xBAD0BAD0BAD0BAD0ULL);
+    separateRegionMemory.write<uint64_t>(0xB000, 0xC001D00DC001D00DULL);
+    loadrs.Execute(separateRegionCpu, separateRegionMemory);
+    assert_equal("loadrs reads a separate guest backing-store region",
+                 0xC001D00DC001D00DULL, separateRegionCpu.GetGR(32));
+    assert_equal("separate-region loadrs updates BSPSTORE to its tear-point",
+                 0xB000ULL, separateRegionCpu.GetBSPSTORE());
+
+    // Zero loadrs invalidates all registers outside the active frame and
+    // repositions both backing-store pointers at BSP.
+    CPUState zeroCpu;
+    Memory zeroMemory(1024 * 1024);
+    zeroCpu.SetBSP(0x7000);
+    zeroCpu.SetBSPSTORE(0x6FF8);
+    zeroCpu.SetGR(40, 0xCAFEBABECAFEBABEULL);
+    zeroCpu.SetRSC(0);
+    loadrs.Execute(zeroCpu, zeroMemory);
+    assert_equal("zero-length loadrs clears stale invalid register contents",
+                 0ULL, zeroCpu.GetGR(40));
+    assert_true("zero-length loadrs marks out-of-frame registers invalid",
+                zeroCpu.GetRSEPhysicalPartition(8) == RSERegisterPartition::INVALID);
+    assert_equal("zero-length loadrs sets BSPSTORE to BSP", 0x7000ULL, zeroCpu.GetBSPSTORE());
+    assert_equal("zero-length loadrs sets the internal load pointer to BSP",
+                 0x7000ULL, zeroCpu.GetRSELoadPointer());
+
+    auto expectIllegalLoad = [&](CPUState& invalidCpu, const char* label) {
+        bool threw = false;
+        try {
+            loadrs.Execute(invalidCpu, zeroMemory);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert_true(label, threw);
+    };
+    CPUState wrongMode;
+    wrongMode.SetBSP(0x8008);
+    wrongMode.SetBSPSTORE(0x8000);
+    wrongMode.SetRSC((8ULL << 16) | 1ULL);
+    expectIllegalLoad(wrongMode, "loadrs rejects non-enforced-lazy mode");
+    CPUState nonzeroFrame;
+    nonzeroFrame.SetBSP(0x9008);
+    nonzeroFrame.SetBSPSTORE(0x9000);
+    nonzeroFrame.SetCFM(1);
+    nonzeroFrame.SetRSC(8ULL << 16);
+    expectIllegalLoad(nonzeroFrame, "loadrs rejects a nonzero range with CFM.SOF set");
+
+    CPUState tooManyRegisters;
+    tooManyRegisters.SetBSP(0x20000);
+    tooManyRegisters.SetBSPSTORE(0x10000);
+    tooManyRegisters.SetRSC(0x3FF8ULL << 16);
+    expectIllegalLoad(tooManyRegisters, "loadrs rejects a request beyond physical stack capacity");
+
+    CPUState loadFaultCpu;
+    Memory tooSmallLoadMemory(0x800);
+    loadFaultCpu.SetBSP(0x1008);
+    loadFaultCpu.SetBSPSTORE(0x1000);
+    loadFaultCpu.SetRSC(8ULL << 16);
+    bool loadFaulted = false;
+    try {
+        loadrs.Execute(loadFaultCpu, tooSmallLoadMemory);
+    } catch (const std::out_of_range&) {
+        loadFaulted = true;
+    }
+    assert_true("loadrs propagates a mandatory backing-store read fault", loadFaulted);
+    assert_equal("loadrs leaves BSPSTORE unchanged when the first read faults",
+                 0x1000ULL, loadFaultCpu.GetBSPSTORE());
 }
 
 void test_ia64_brp_hint() {
@@ -5112,6 +5368,8 @@ int main() {
         test_ia64_virtual_ip_observation();
         test_ia64_bspstore_write();
         test_ia64_flushrs();
+        test_ia64_flushrs_spills_dirty_registers();
+        test_ia64_loadrs_restores_backing_store();
         test_ia64_brp_hint();
         test_ia64_invala();
         test_alloc_invalid_frame_size_fails_safe();
