@@ -13,7 +13,7 @@ evidence.
 | Branch | `IA64` | `IA64` |
 | HEAD | `235ebd3dd168b6d0d25c7953bd9cc9353c25e549` (`docs: record 9R3 closeout metadata`) | Recorded after the local report commit below |
 | `.phase` | `last_completed=IA64-POST-MADT-8`; `next_expected=IA64-POST-MADT-9` | Unchanged |
-| Upstream | `origin/IA64`; 7 ahead, 0 behind | No push; local commit adds one commit |
+| Upstream | `origin/IA64`; 7 ahead, 0 behind | No push; report and SHA metadata are local commits |
 | Tracked worktree | Clean | Report committed; no source changes |
 | Untracked build trees | `build-7r1/`, `build-9r2/`, `build-9r3/` | Preserved; `build-9r4/` added for this run |
 
@@ -213,7 +213,8 @@ artifact was modified.
 
 ## 9. Local commit
 
-The report was committed locally on `IA64`; no push was performed. The initial
-local report commit SHA is recorded in the commit history and final handoff.
-The final worktree contains no tracked source changes beyond this report; the
-untracked build trees remain preserved.
+The report was committed locally on `IA64`; no push was performed. Its initial
+local report commit is `2bd71be5e9cbe5e5d7edc47eb586cae9138d4b63`. A follow-up
+documentation commit records that SHA here. The final worktree contains no
+tracked source changes beyond this report; the untracked build trees remain
+preserved.
