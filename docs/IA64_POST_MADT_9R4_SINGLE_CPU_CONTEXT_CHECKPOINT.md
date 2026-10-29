@@ -214,7 +214,7 @@ artifact was modified.
 ## 9. Local commit
 
 The report was committed locally on `IA64`; no push was performed. Its initial
-local report commit is `2bd71be5e9cbe5e5d7edc47eb586cae9138d4b63`. A follow-up
+local report commit is `2bd71be42883aa20980399d3d58b3f3cec95ead6`. A follow-up
 documentation commit records that SHA here. The final worktree contains no
 tracked source changes beyond this report; the untracked build trees remain
 preserved.
