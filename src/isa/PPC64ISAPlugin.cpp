@@ -1914,6 +1914,14 @@ ISAExecutionResult PPC64ISAPlugin::execute(IMemory& memory, const ISADecodeResul
     // required to clear reservations by the VEA, but dropping them on entry
     // guarantees a guest handler cannot consume a stale reservation.
     const ISAExecutionResult result = executeInstruction(memory, decodeResult);
+    // Keep a repeated-storage-fault count across hrfid when the guest retries
+    // the exact same faulting instruction. Clear it once guest execution
+    // advances beyond the faulting NIP; that is evidence of forward progress.
+    if (result == ISAExecutionResult::CONTINUE && !inHypervisorState() &&
+        repeatedHypervisorStorageFaults_ != 0 &&
+        state_.nip != lastHypervisorFaultNIP_) {
+        repeatedHypervisorStorageFaults_ = 0;
+    }
     if (result != ISAExecutionResult::CONTINUE) {
         clearReservation();
     }
@@ -3330,7 +3338,6 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             state_.nip = newNIP;
             hypervisorReturnValid_ = false;
             hypervisorReturnHV_ = false;
-            repeatedHypervisorStorageFaults_ = 0;
             clearReservation();
             hasCachedInstruction_ = false;
             return ISAExecutionResult::CONTINUE;
@@ -3819,6 +3826,17 @@ bool PPC64ISAPlugin::translateAccessRange(
             reason = failure.reason;
             return false;
         }
+        if (!inHypervisorState() && partitionContext_ != nullptr &&
+            !partitionContext_->allowsGuestBackingRange(
+                translated.hostBackingAddress, chunk)) {
+            failure = translated;
+            failure.success = false;
+            failure.fault = PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE;
+            failure.stage = PPC64TranslationStage::PARTITION;
+            failure.reason = "partition mapping aliases backing memory private to another LPID";
+            reason = failure.reason;
+            return false;
+        }
         segments.push_back({currentEA, translated.guestRealAddress,
                             translated.hostBackingAddress, chunk});
         done += chunk;
@@ -4087,6 +4105,19 @@ bool PPC64ISAPlugin::partitionGuestRealAccessRange(
             failure.stage = PPC64TranslationStage::PARTITION;
             failure.contextIdentifier = partitionContext_->lpid();
             failure.reason = "partition mapping aliases protected hypervisor backing memory";
+            reason = failure.reason;
+            return false;
+        }
+        if (!inHypervisorState() &&
+            !partitionContext_->allowsGuestBackingRange(
+                translated.hostBackingAddress, chunk)) {
+            failure.effectiveAddress = current;
+            failure.guestRealAddress = current;
+            failure.hostBackingAddress = translated.hostBackingAddress;
+            failure.fault = PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE;
+            failure.stage = PPC64TranslationStage::PARTITION;
+            failure.contextIdentifier = partitionContext_->lpid();
+            failure.reason = "partition mapping aliases backing memory private to another LPID";
             reason = failure.reason;
             return false;
         }

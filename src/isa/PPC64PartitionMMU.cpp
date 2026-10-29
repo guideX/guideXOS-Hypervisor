@@ -2,6 +2,7 @@
 
 #include "memory.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
@@ -37,7 +38,8 @@ constexpr uint64_t DIRECTORY_ALLOWED = PTE_VALID | PTE_SW0 | PRTBE_RPDB |
     PTE_SW1 | PRTBE_RPDS;
 constexpr std::array<uint8_t, 4> SUPPORTED_NLS = {13, 9, 9, 9};
 constexpr uint32_t PARTITION_SNAPSHOT_MAGIC = 0x50343650U; // "P64P"
-constexpr uint32_t PARTITION_SNAPSHOT_VERSION = 1;
+constexpr uint32_t PARTITION_SNAPSHOT_VERSION = 2;
+constexpr uint32_t PARTITION_SNAPSHOT_LEGACY_VERSION = 1;
 constexpr size_t PARTITION_SNAPSHOT_SIZE = 32;
 constexpr uint64_t MAX_REGISTERED_PROCESS_TABLE_BYTES = 256ULL * 1024ULL * 1024ULL;
 
@@ -74,6 +76,18 @@ uint64_t readLE64(const uint8_t* bytes) {
         value |= static_cast<uint64_t>(bytes[i]) << (i * 8U);
     }
     return value;
+}
+
+bool validBackingRange(uint64_t base, uint64_t size) {
+    return size != 0 && size <= std::numeric_limits<uint64_t>::max() - base;
+}
+
+bool backingRangesOverlap(uint64_t baseA, uint64_t sizeA,
+                          uint64_t baseB, uint64_t sizeB) {
+    if (!validBackingRange(baseA, sizeA) || !validBackingRange(baseB, sizeB)) {
+        return false;
+    }
+    return baseA < baseB + sizeB && baseB < baseA + sizeA;
 }
 
 bool readPhysical(IMemory& memory, uint64_t address, uint8_t* bytes,
@@ -917,7 +931,14 @@ uint64_t PPC64PartitionMMU::registerProcessTable(
 }
 
 std::vector<uint8_t> PPC64PartitionContext::serializeSnapshot() const {
-    std::vector<uint8_t> data(PARTITION_SNAPSHOT_SIZE, 0);
+    std::vector<PPC64BackingMemoryRange> sharedRanges;
+    if (backingPolicy_ != nullptr) {
+        std::lock_guard<std::mutex> lock(backingPolicy_->mutex);
+        sharedRanges = backingPolicy_->sharedRanges;
+    }
+    std::vector<uint8_t> data(PARTITION_SNAPSHOT_SIZE +
+                              (privateBackingRanges_.size() +
+                               sharedRanges.size()) * 16U, 0);
     writeLE32(data.data(), PARTITION_SNAPSHOT_MAGIC);
     writeLE32(data.data() + 4, PARTITION_SNAPSHOT_VERSION);
     data[8] = static_cast<uint8_t>(lpid_ & 0xffU);
@@ -926,7 +947,41 @@ std::vector<uint8_t> PPC64PartitionContext::serializeSnapshot() const {
     data[11] = static_cast<uint8_t>((processTableRegistered_ ? 1U : 0U) |
                                     (gtseRequested_ ? 2U : 0U));
     writeLE64(data.data() + 16, partitionTableBase_);
+    writeLE32(data.data() + 24,
+              static_cast<uint32_t>(privateBackingRanges_.size()));
+    writeLE32(data.data() + 28,
+              static_cast<uint32_t>(sharedRanges.size()));
+    size_t offset = PARTITION_SNAPSHOT_SIZE;
+    for (const PPC64BackingMemoryRange& range : privateBackingRanges_) {
+        writeLE64(data.data() + offset, range.base);
+        writeLE64(data.data() + offset + 8U, range.size);
+        offset += 16U;
+    }
+    for (const PPC64BackingMemoryRange& range : sharedRanges) {
+        writeLE64(data.data() + offset, range.base);
+        writeLE64(data.data() + offset + 8U, range.size);
+        offset += 16U;
+    }
     return data;
+}
+
+bool PPC64PartitionContext::allowsGuestBackingRange(uint64_t base,
+                                                    uint64_t size) const {
+    if (!validBackingRange(base, size) || backingPolicy_ == nullptr) {
+        return validBackingRange(base, size);
+    }
+    std::lock_guard<std::mutex> lock(backingPolicy_->mutex);
+    for (const auto& owner : backingPolicy_->privateRanges) {
+        if (owner.first == lpid_) {
+            continue;
+        }
+        for (const PPC64BackingMemoryRange& range : owner.second) {
+            if (backingRangesOverlap(base, size, range.base, range.size)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool PPC64PartitionManager::configurePartitionTable(IMemory& memory,
@@ -985,6 +1040,7 @@ std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::createPartition(
     auto context = std::shared_ptr<PPC64PartitionContext>(
         new PPC64PartitionContext(lpid, partitionTableBase_,
                                   partitionTableSizeExponent_));
+    context->backingPolicy_ = backingPolicy_;
     partitions_.emplace(lpid, context);
     reason.clear();
     return context;
@@ -1015,6 +1071,10 @@ bool PPC64PartitionManager::destroyPartition(uint16_t lpid) {
     } catch (...) {
         return false;
     }
+    {
+        std::lock_guard<std::mutex> policyLock(backingPolicy_->mutex);
+        backingPolicy_->privateRanges.erase(lpid);
+    }
     found->second->active_ = false;
     partitions_.erase(found);
     return true;
@@ -1023,11 +1083,36 @@ bool PPC64PartitionManager::destroyPartition(uint16_t lpid) {
 std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::restorePartition(
     IMemory& memory, const std::vector<uint8_t>& snapshot,
     std::string& reason) {
-    if (snapshot.size() != PARTITION_SNAPSHOT_SIZE ||
+    if (snapshot.size() < PARTITION_SNAPSHOT_SIZE ||
         readLE32(snapshot.data()) != PARTITION_SNAPSHOT_MAGIC ||
-        readLE32(snapshot.data() + 4) != PARTITION_SNAPSHOT_VERSION ||
         (snapshot[11] & ~0x3U) != 0) {
         reason = "partition snapshot has an unsupported size, version, or flags";
+        return {};
+    }
+    const uint32_t version = readLE32(snapshot.data() + 4);
+    uint32_t privateRangeCount = 0;
+    uint32_t sharedRangeCount = 0;
+    if (version == PARTITION_SNAPSHOT_LEGACY_VERSION) {
+        if (snapshot.size() != PARTITION_SNAPSHOT_SIZE ||
+            readLE32(snapshot.data() + 24) != 0 ||
+            readLE32(snapshot.data() + 28) != 0) {
+            reason = "legacy partition snapshot has an invalid size or reserved fields";
+            return {};
+        }
+    } else if (version == PARTITION_SNAPSHOT_VERSION) {
+        privateRangeCount = readLE32(snapshot.data() + 24);
+        sharedRangeCount = readLE32(snapshot.data() + 28);
+        const uint64_t rangeCount = static_cast<uint64_t>(privateRangeCount) +
+                                    static_cast<uint64_t>(sharedRangeCount);
+        if (rangeCount >
+                (std::numeric_limits<size_t>::max() - PARTITION_SNAPSHOT_SIZE) / 16U ||
+            snapshot.size() != PARTITION_SNAPSHOT_SIZE +
+                                   static_cast<size_t>(rangeCount) * 16U) {
+            reason = "partition snapshot has an invalid private-range payload";
+            return {};
+        }
+    } else {
+        reason = "partition snapshot has an unsupported version";
         return {};
     }
     const uint16_t lpid = static_cast<uint16_t>(snapshot[8]) |
@@ -1047,6 +1132,70 @@ std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::restorePartition(
     }
     temporary->processTableRegistered_ = (snapshot[11] & 1U) != 0;
     temporary->gtseRequested_ = (snapshot[11] & 2U) != 0;
+    if ((temporary->processTableRegistered_ != (pate1 != 0)) ||
+        (temporary->gtseRequested_ && !temporary->processTableRegistered_)) {
+        reason = "partition metadata does not match the saved PATE process-table state";
+        return {};
+    }
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    for (uint32_t index = 0; index < privateRangeCount; ++index) {
+        const size_t offset = PARTITION_SNAPSHOT_SIZE +
+                              static_cast<size_t>(index) * 16U;
+        PPC64BackingMemoryRange range{readLE64(snapshot.data() + offset),
+                                      readLE64(snapshot.data() + offset + 8U)};
+        if (!validBackingRange(range.base, range.size) || ram == nullptr ||
+            range.size > std::numeric_limits<size_t>::max() ||
+            !ram->ValidateGuestRealRange(range.base,
+                                         static_cast<size_t>(range.size), false,
+                                         reason)) {
+            reason = "partition snapshot contains an invalid private backing range: " +
+                     reason;
+            return {};
+        }
+        for (size_t earlier = 0; earlier < temporary->privateBackingRanges_.size();
+             ++earlier) {
+            const PPC64BackingMemoryRange& previous =
+                temporary->privateBackingRanges_[earlier];
+            if (backingRangesOverlap(range.base, range.size,
+                                     previous.base, previous.size)) {
+                reason = "partition snapshot contains overlapping private ranges";
+                return {};
+            }
+        }
+        temporary->privateBackingRanges_.push_back(range);
+    }
+    std::vector<PPC64BackingMemoryRange> restoredSharedRanges;
+    for (uint32_t index = 0; index < sharedRangeCount; ++index) {
+        const size_t offset = PARTITION_SNAPSHOT_SIZE +
+                              (static_cast<size_t>(privateRangeCount) + index) * 16U;
+        PPC64BackingMemoryRange range{readLE64(snapshot.data() + offset),
+                                      readLE64(snapshot.data() + offset + 8U)};
+        if (!validBackingRange(range.base, range.size) || ram == nullptr ||
+            range.size > std::numeric_limits<size_t>::max() ||
+            !ram->ValidateGuestRealRange(range.base,
+                                         static_cast<size_t>(range.size), false,
+                                         reason)) {
+            reason = "partition snapshot contains an invalid shared backing range: " +
+                     reason;
+            return {};
+        }
+        for (const PPC64BackingMemoryRange& privateRange :
+             temporary->privateBackingRanges_) {
+            if (backingRangesOverlap(range.base, range.size,
+                                     privateRange.base, privateRange.size)) {
+                reason = "partition snapshot overlaps private and shared backing ranges";
+                return {};
+            }
+        }
+        for (const PPC64BackingMemoryRange& prior : restoredSharedRanges) {
+            if (backingRangesOverlap(range.base, range.size,
+                                     prior.base, prior.size)) {
+                reason = "partition snapshot contains overlapping shared ranges";
+                return {};
+            }
+        }
+        restoredSharedRanges.push_back(range);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (partitions_.find(lpid) != partitions_.end()) {
         reason = "cannot restore over an allocated LPID";
@@ -1057,6 +1206,62 @@ std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::restorePartition(
         reason = "cannot restore a partition with a different PTCR while contexts are active";
         return {};
     }
+    {
+        std::lock_guard<std::mutex> policyLock(backingPolicy_->mutex);
+        for (const PPC64BackingMemoryRange& range : temporary->privateBackingRanges_) {
+            for (const auto& owner : backingPolicy_->privateRanges) {
+                if (owner.first == lpid) {
+                    continue;
+                }
+                for (const PPC64BackingMemoryRange& existing : owner.second) {
+                    if (backingRangesOverlap(range.base, range.size,
+                                             existing.base, existing.size)) {
+                        reason = "restored private backing overlaps another LPID's allocation";
+                        return {};
+                    }
+                }
+            }
+            for (const PPC64BackingMemoryRange& shared : backingPolicy_->sharedRanges) {
+                if (backingRangesOverlap(range.base, range.size,
+                                         shared.base, shared.size)) {
+                    reason = "restored private backing overlaps declared shared memory";
+                    return {};
+                }
+            }
+        }
+        for (const PPC64BackingMemoryRange& shared : restoredSharedRanges) {
+            for (const auto& owner : backingPolicy_->privateRanges) {
+                for (const PPC64BackingMemoryRange& privateRange : owner.second) {
+                    if (backingRangesOverlap(shared.base, shared.size,
+                                             privateRange.base, privateRange.size)) {
+                        reason = "restored shared backing overlaps a private allocation";
+                        return {};
+                    }
+                }
+            }
+            for (const PPC64BackingMemoryRange& existing : backingPolicy_->sharedRanges) {
+                if (backingRangesOverlap(shared.base, shared.size,
+                                         existing.base, existing.size) &&
+                    (shared.base != existing.base || shared.size != existing.size)) {
+                    reason = "restored shared backing conflicts with declared shared memory";
+                    return {};
+                }
+            }
+        }
+        backingPolicy_->privateRanges[lpid] = temporary->privateBackingRanges_;
+        for (const PPC64BackingMemoryRange& range : restoredSharedRanges) {
+            const bool present = std::any_of(
+                backingPolicy_->sharedRanges.begin(),
+                backingPolicy_->sharedRanges.end(),
+                [&](const PPC64BackingMemoryRange& existing) {
+                    return existing.base == range.base && existing.size == range.size;
+                });
+            if (!present) {
+                backingPolicy_->sharedRanges.push_back(range);
+            }
+        }
+    }
+    temporary->backingPolicy_ = backingPolicy_;
     partitionTableBase_ = base;
     partitionTableSizeExponent_ = pats;
     memory_ = &memory;
@@ -1064,6 +1269,91 @@ std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::restorePartition(
     partitions_.emplace(lpid, temporary);
     reason.clear();
     return temporary;
+}
+
+bool PPC64PartitionManager::registerPrivateBackingRange(
+    const std::shared_ptr<PPC64PartitionContext>& context,
+    uint64_t base, uint64_t size, std::string& reason) {
+    if (!validBackingRange(base, size)) {
+        reason = "private backing range is empty or overflows address space";
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (context == nullptr || !context->active_ ||
+        partitions_.find(context->lpid_) == partitions_.end() ||
+        partitions_.at(context->lpid_) != context) {
+        reason = "private backing range requires a live context owned by this manager";
+        return false;
+    }
+    auto* ram = dynamic_cast<Memory*>(memory_);
+    if (ram == nullptr || size > std::numeric_limits<size_t>::max() ||
+        !ram->ValidateGuestRealRange(base, static_cast<size_t>(size), false,
+                                     reason)) {
+        reason = "private backing range is not host-backed RAM: " + reason;
+        return false;
+    }
+    std::lock_guard<std::mutex> policyLock(backingPolicy_->mutex);
+    for (const auto& owner : backingPolicy_->privateRanges) {
+        for (const PPC64BackingMemoryRange& range : owner.second) {
+            if (backingRangesOverlap(base, size, range.base, range.size)) {
+                if (owner.first == context->lpid_ && range.base == base &&
+                    range.size == size) {
+                    reason.clear();
+                    return true;
+                }
+                reason = "private backing range overlaps an existing private allocation";
+                return false;
+            }
+        }
+    }
+    for (const PPC64BackingMemoryRange& range : backingPolicy_->sharedRanges) {
+        if (backingRangesOverlap(base, size, range.base, range.size)) {
+            reason = "private backing range overlaps declared shared memory";
+            return false;
+        }
+    }
+    context->privateBackingRanges_.push_back({base, size});
+    backingPolicy_->privateRanges[context->lpid_] = context->privateBackingRanges_;
+    reason.clear();
+    return true;
+}
+
+bool PPC64PartitionManager::registerSharedBackingRange(
+    uint64_t base, uint64_t size, std::string& reason) {
+    if (!validBackingRange(base, size)) {
+        reason = "shared backing range is empty or overflows address space";
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto* ram = dynamic_cast<Memory*>(memory_);
+    if (ram == nullptr || size > std::numeric_limits<size_t>::max() ||
+        !ram->ValidateGuestRealRange(base, static_cast<size_t>(size), false,
+                                     reason)) {
+        reason = "shared backing range is not host-backed RAM: " + reason;
+        return false;
+    }
+    std::lock_guard<std::mutex> policyLock(backingPolicy_->mutex);
+    for (const auto& owner : backingPolicy_->privateRanges) {
+        for (const PPC64BackingMemoryRange& range : owner.second) {
+            if (backingRangesOverlap(base, size, range.base, range.size)) {
+                reason = "shared backing range overlaps a private allocation";
+                return false;
+            }
+        }
+    }
+    for (const PPC64BackingMemoryRange& range : backingPolicy_->sharedRanges) {
+        if (backingRangesOverlap(base, size, range.base, range.size)) {
+            if (range.base == base && range.size == size) {
+                reason.clear();
+                return true;
+            }
+            reason = "shared backing range overlaps an existing shared range";
+            return false;
+        }
+    }
+    backingPolicy_->sharedRanges.push_back({base, size});
+    reason.clear();
+    return true;
 }
 
 size_t PPC64PartitionManager::partitionCount() const {

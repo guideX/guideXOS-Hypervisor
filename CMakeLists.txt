@@ -42,6 +42,7 @@ set(ISA_SOURCES
     src/isa/PPC64ISAPlugin.cpp
     src/isa/PPC64RadixMMU.cpp
     src/isa/PPC64PartitionMMU.cpp
+    src/isa/PPC64PartitionCheckpoint.cpp
 )
 
 set(DECODER_SOURCES
@@ -181,6 +182,8 @@ set(HEADERS
     include/ExampleISAPlugin.h
     include/PPC64ISAPlugin.h
     include/PPC64RadixMMU.h
+    include/PPC64PartitionMMU.h
+    include/PPC64PartitionCheckpoint.h
     include/riscv_decoder.h
     include/SyscallDispatcher.h
     include/CPUContext.h

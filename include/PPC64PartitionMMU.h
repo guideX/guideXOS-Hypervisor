@@ -71,6 +71,19 @@ struct PPC64PartitionTranslationResult {
     std::string reason;
 };
 
+struct PPC64BackingMemoryRange {
+    uint64_t base = 0;
+    uint64_t size = 0;
+};
+
+// Host-owned policy shared by contexts created by one partition manager.
+// Ranges not declared private retain the Phase 7 shared/legacy behavior.
+struct PPC64PartitionBackingPolicy {
+    mutable std::mutex mutex;
+    std::unordered_map<uint16_t, std::vector<PPC64BackingMemoryRange>> privateRanges;
+    std::vector<PPC64BackingMemoryRange> sharedRanges;
+};
+
 class PPC64PartitionContext {
 public:
     uint16_t lpid() const { return lpid_; }
@@ -81,6 +94,10 @@ public:
     // Versioned hypervisor-owned metadata. PATE and page-table bytes remain in
     // the associated Memory snapshot; this blob contains no guest CPU state.
     std::vector<uint8_t> serializeSnapshot() const;
+
+    // Returns false when a guest mapping overlaps backing memory reserved as
+    // private to another LPID. Host table walks do not use this guest check.
+    bool allowsGuestBackingRange(uint64_t base, uint64_t size) const;
 
 private:
     friend class PPC64PartitionManager;
@@ -98,6 +115,8 @@ private:
     bool active_ = true;
     bool processTableRegistered_ = false;
     bool gtseRequested_ = false;
+    std::vector<PPC64BackingMemoryRange> privateBackingRanges_;
+    std::shared_ptr<PPC64PartitionBackingPolicy> backingPolicy_;
 };
 
 class PPC64PartitionManager {
@@ -112,6 +131,11 @@ public:
     std::shared_ptr<PPC64PartitionContext> restorePartition(
         IMemory& memory, const std::vector<uint8_t>& snapshot,
         std::string& reason);
+    bool registerPrivateBackingRange(
+        const std::shared_ptr<PPC64PartitionContext>& context,
+        uint64_t base, uint64_t size, std::string& reason);
+    bool registerSharedBackingRange(uint64_t base, uint64_t size,
+                                   std::string& reason);
     size_t partitionCount() const;
 
 private:
@@ -121,6 +145,8 @@ private:
     uint8_t partitionTableSizeExponent_ = 0;
     bool configured_ = false;
     std::unordered_map<uint16_t, std::shared_ptr<PPC64PartitionContext>> partitions_;
+    std::shared_ptr<PPC64PartitionBackingPolicy> backingPolicy_ =
+        std::make_shared<PPC64PartitionBackingPolicy>();
 };
 
 class PPC64PartitionMMU {
