@@ -14,7 +14,8 @@ The `.phase` gate remains at `IA64-POST-MADT-8` → `IA64-POST-MADT-9` as requir
 - Starting HEAD: `903930f792dcccdeb933b1e64e09359933f95d96`
 - Starting phase: `last_completed=IA64-POST-MADT-8`, `next_expected=IA64-POST-MADT-9`
 - Ending branch: `IA64`
-- Ending commit: recorded in the closeout below after the local commit
+- R5 implementation/test commit: `88c029f68a241916110aedfb87cbd73cd5866205`
+- The documentation closeout is committed immediately after that implementation commit. Its resulting SHA is reported in the final task response because a commit cannot contain its own resulting SHA.
 - Push status: not pushed
 - `.phase`: unchanged
 - No branch/worktree changes, merges, resets, or remote operations were made.
@@ -113,7 +114,8 @@ R5 proves guest-driven same-CPU context switching for the tested resident frames
 
 ## 11. Closeout
 
-- Ending commit: to be filled after local commit.
+- Ending implementation commit: `88c029f68a241916110aedfb87cbd73cd5866205`.
+- Final repository HEAD: the documentation closeout commit immediately following the implementation commit; its SHA is reported in the final task response.
 - Ending branch: `IA64`.
 - Worktree: tracked changes committed; pre-existing untracked build/scratch directories preserved, with `build-9r5/` retained as the R5 build and logs.
 - Push status: not pushed.
