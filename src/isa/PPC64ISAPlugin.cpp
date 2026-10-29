@@ -1,4 +1,5 @@
 #include "PPC64ISAPlugin.h"
+#include "PPC64Platform.h"
 #include "ISAPluginRegistry.h"
 #include "memory.h"
 #include "mmu.h"
@@ -1242,34 +1243,42 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                     instr.l = ((word >> 21) & 0x1U) != 0;
                     instr.supported = true;
                 }
-            } else if (combined == XO_MFSPR || combined == XO_MTSPR) {
+            } else if (combined == XO_MFSPR || combined == XO_MTSPR ||
+                       combined == 371U) {
                 // XFX-form: SPRN split across the RA/RB field positions.
                 const uint16_t raPos = static_cast<uint16_t>((word >> 16) & 0x1FU);
                 const uint16_t rbPos = static_cast<uint16_t>((word >> 11) & 0x1FU);
                 instr.sprn = static_cast<uint16_t>((rbPos << 5) | raPos);
+                const bool timeBaseRead =
+                    (combined == 371U || combined == XO_MFSPR) &&
+                    (instr.sprn == SPR_TBL || instr.sprn == SPR_TBU);
                 if (rc) {
                     // No record bit exists on mfspr/mtspr; Rc=1 is invalid.
                     instr.kind = DecodedKind::UNSUPPORTED;
+                    instr.supported = false;
+                } else if (combined == 371U && !timeBaseRead) {
+                    instr.kind = DecodedKind::MFSPR;
                     instr.supported = false;
                 } else if (instr.sprn == SPR_XER || instr.sprn == SPR_LR ||
                            instr.sprn == SPR_CTR || instr.sprn == SPR_DSISR ||
                            instr.sprn == SPR_DAR || instr.sprn == SPR_SRR0 ||
                            instr.sprn == SPR_SRR1 || instr.sprn == SPR_PIDR ||
                            instr.sprn == SPR_HDSISR || instr.sprn == SPR_HDAR ||
-                           instr.sprn == SPR_HSRR0 || instr.sprn == SPR_HSRR1) {
+                           instr.sprn == SPR_HSRR0 || instr.sprn == SPR_HSRR1 ||
+                           timeBaseRead) {
                     // Phase 4: XER/LR/CTR remain unprivileged; DSISR/DAR/
                     // SRR0/SRR1 decode as supported here and are privilege-
                     // checked at execution (problem-state use faults).
-                    instr.kind = (combined == XO_MFSPR) ? DecodedKind::MFSPR
-                                                       : DecodedKind::MTSPR;
+                    instr.kind = (combined == XO_MFSPR || combined == 371U)
+                        ? DecodedKind::MFSPR : DecodedKind::MTSPR;
                     instr.supported = true;
                 } else {
                     // Unsupported SPR numbers are rejected rather than
                     // manufacturing values. Privileged-vs-unimplemented is
                     // distinguished at execution/diag time; unknown SPRs
                     // stay INVALID_ENCODING here.
-                    instr.kind = (combined == XO_MFSPR) ? DecodedKind::MFSPR
-                                                       : DecodedKind::MTSPR;
+                    instr.kind = (combined == XO_MFSPR || combined == 371U)
+                        ? DecodedKind::MFSPR : DecodedKind::MTSPR;
                     instr.supported = false;
                 }
             } else if (combined == XO_MFMSR || combined == XO_MTMSR ||
@@ -3150,6 +3159,17 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 value = state_.lr;
             } else if (instr.sprn == SPR_CTR) {
                 value = state_.ctr;
+            } else if (instr.sprn == SPR_TBL || instr.sprn == SPR_TBU) {
+                if (virtualTimeBase_ == nullptr) {
+                    recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                                instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                                "PPC64 time-base read has no VM-owned clock", false);
+                    return ISAExecutionResult::EXCEPTION;
+                }
+                const uint64_t timebase = virtualTimeBase_->read();
+                value = instr.sprn == SPR_TBL
+                    ? static_cast<uint32_t>(timebase)
+                    : static_cast<uint32_t>(timebase >> 32);
             } else if (instr.sprn == SPR_SRR0) {
                 value = state_.srr0;
             } else if (instr.sprn == SPR_SRR1) {

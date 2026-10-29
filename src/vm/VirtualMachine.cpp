@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <algorithm>
+#include <limits>
 
 namespace ia64 {
 
@@ -150,6 +151,16 @@ try {
     }
 }
 
+VirtualMachine::VirtualMachine(
+    size_t memorySize, size_t numCPUs, const std::string& isaName,
+    const ppc64::PPC64PlatformConfiguration& platformConfiguration)
+    : VirtualMachine(memorySize, numCPUs, isaName) {
+    std::string reason;
+    if (!configurePPC64Platform(platformConfiguration, &reason)) {
+        throw std::invalid_argument("Invalid PPC64 platform configuration: " + reason);
+    }
+}
+
 VirtualMachine::~VirtualMachine() {
     // Halt execution if running
     if (state_ == VMState::RUNNING) {
@@ -269,6 +280,20 @@ bool VirtualMachine::reset() {
             plugin->deactivatePartitionContext();
             if (ppc64PartitionManager_) {
                 ppc64PartitionManager_->destroyAllPartitions();
+            }
+            if (ppc64VirtualTimeBase_) {
+                ppc64VirtualTimeBase_->reset();
+            }
+            if (ppc64PlatformPrepared_) {
+                GuestRealWriteSegment dtb;
+                dtb.address = ppc64GuestMemoryLayout_.fdtBase;
+                dtb.bytes = ppc64PlatformDTB_;
+                memory_->WriteGuestRealTransaction({dtb});
+                plugin->writeGPR(3, ppc64GuestMemoryLayout_.fdtBase);
+                plugin->writeGPR(4, ppc64GuestMemoryLayout_.imageBase);
+                plugin->writeGPR(5, 0);
+                plugin->setMSR(ppc64::MSR_SF);
+                plugin->setPC(ppc64PlatformEntryAddress_);
             }
         }
         
@@ -861,6 +886,262 @@ PPC64RegisterView VirtualMachine::getPPC64RegisterView(int cpuIndex) const {
     view.hdar = plugin->getHDAR();
     view.hdsisr = plugin->getHDSISR();
     return view;
+}
+
+bool VirtualMachine::configurePPC64Platform(
+    const ppc64::PPC64PlatformConfiguration& configuration,
+    std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || cpus_.size() != 1 ||
+        (state_ != VMState::CREATED && state_ != VMState::STOPPED) ||
+        ppc64PlatformPrepared_ || cyclesExecuted_ != 0) {
+        return reject("platform configuration requires a new, stopped PPC64 VM");
+    }
+    std::string reason;
+    if (!ppc64::validatePPC64PlatformConfiguration(
+            configuration, memory_->GetTotalSize(), reason)) {
+        return reject(reason);
+    }
+    std::unique_ptr<ppc64::PPC64VirtualTimeBase> clock;
+    try {
+        clock = std::make_unique<ppc64::PPC64VirtualTimeBase>(configuration);
+    } catch (const std::exception& exception) {
+        return reject(exception.what());
+    }
+    auto* plugin = getPPC64ISAPlugin();
+    ppc64PlatformConfiguration_ = configuration;
+    ppc64VirtualTimeBase_ = std::move(clock);
+    ppc64PlatformEnabled_ = true;
+    plugin->attachVirtualTimeBase(ppc64VirtualTimeBase_.get());
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::preparePPC64Platform(
+    const std::vector<uint8_t>& image, uint64_t imageAddress,
+    uint64_t entryAddress, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (!ppc64PlatformEnabled_ || ppc64VirtualTimeBase_ == nullptr ||
+        isaName_ != "PPC64" || cpus_.size() != 1 || state_ != VMState::STOPPED ||
+        ppc64PlatformPrepared_) {
+        return reject("platform preparation requires a configured, stopped PPC64 VM");
+    }
+    if (image.empty()) return reject("guest image is empty");
+    if (ppc64PlatformConfiguration_.entryMode !=
+        ppc64::PPC64GuestEntryMode::DIRECT_FDT) {
+        return reject("firmware-assisted entry is not implemented");
+    }
+    const uint64_t ramSize = memory_->GetTotalSize();
+    std::string reason;
+    if (!ppc64::validatePPC64PlatformConfiguration(
+            ppc64PlatformConfiguration_, ramSize, reason)) {
+        return reject(reason);
+    }
+    ppc64::PPC64ISAPlugin* plugin = getPPC64ISAPlugin();
+    if (plugin->hasActivePartitionContext()) {
+        return reject("direct-FDT preparation requires the root partition context");
+    }
+    if ((imageAddress & 3ULL) != 0 || (entryAddress & 3ULL) != 0 ||
+        image.size() > std::numeric_limits<uint64_t>::max() - imageAddress) {
+        return reject("guest image or entry alignment/range is invalid");
+    }
+
+    ppc64::PPC64GuestMemoryLayout layout;
+    layout.ramBase = 0;
+    layout.ramSize = ramSize;
+    layout.imageBase = imageAddress;
+    layout.imageSize = static_cast<uint64_t>(image.size());
+    layout.entryAddress = entryAddress;
+    if (ppc64PlatformConfiguration_.requestedFdtAddress != 0) {
+        layout.fdtBase = ppc64PlatformConfiguration_.requestedFdtAddress;
+    } else {
+        layout.fdtBase = (ramSize - ppc64PlatformConfiguration_.maximumFdtSize) & ~7ULL;
+    }
+    layout.fdtSize = ppc64PlatformConfiguration_.maximumFdtSize;
+    if (layout.fdtBase > ramSize ||
+        ppc64PlatformConfiguration_.maximumFdtSize > ramSize - layout.fdtBase) {
+        return reject("FDT placement is outside configured guest RAM");
+    }
+    layout.reservations = ppc64PlatformConfiguration_.reservedRanges;
+
+    const auto appendReservation = [&](uint64_t base, uint64_t size,
+                                       const std::string& purpose,
+                                       bool guestAccessible) -> bool {
+        if (size == 0 || size > std::numeric_limits<uint64_t>::max() - base ||
+            base > ramSize || size > ramSize - base) {
+            return false;
+        }
+        for (ppc64::PPC64MemoryRange& existing : layout.reservations) {
+            if (existing.base == base && existing.size == size) {
+                existing.guestAccessible = existing.guestAccessible && guestAccessible;
+                if (existing.purpose.empty()) existing.purpose = purpose;
+                return true;
+            }
+            if (base < existing.base + existing.size &&
+                existing.base < base + size) return false;
+        }
+        layout.reservations.push_back({base, size, purpose, guestAccessible});
+        return true;
+    };
+    if (ppc64PartitionManager_ && ppc64PartitionManager_->isConfigured()) {
+        const uint64_t tableSize = 1ULL << (
+            static_cast<unsigned>(ppc64PartitionManager_->partitionTableSizeExponent()) + 12U);
+        if (!appendReservation(ppc64PartitionManager_->partitionTableBase(),
+                               tableSize, "PAPR partition table", true)) {
+            return reject("partition-table reservation conflicts with another platform range");
+        }
+    }
+    if (plugin->hasRadixTranslationConfiguration()) {
+        const auto& radix = plugin->getRadixTranslationConfiguration();
+        const uint64_t processTableSize = 1ULL << (
+            static_cast<unsigned>(radix.processTableSizeExponent) + 12U);
+        if (!appendReservation(radix.processTableGuestRealBase, processTableSize,
+                               "PAPR process table", true)) {
+            return reject("process-table reservation conflicts with another platform range");
+        }
+    }
+    if (plugin->hasHypervisorMemoryConfiguration() &&
+        !appendReservation(plugin->getHypervisorMemoryBase(),
+                           plugin->getHypervisorMemorySize(),
+                           "protected hypervisor handler backing", false)) {
+        return reject("protected hypervisor handler conflicts with another platform range");
+    }
+    for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
+        if (imageAddress < reservation.base + reservation.size &&
+            reservation.base < imageAddress + static_cast<uint64_t>(image.size())) {
+            return reject("guest image overlaps a reserved or protected range");
+        }
+    }
+    if (!appendReservation(imageAddress, static_cast<uint64_t>(image.size()),
+                           "loaded guest image", true)) {
+        return reject("guest image overlaps a reserved or protected range");
+    }
+    for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
+        if (reservation.base < layout.fdtBase + layout.fdtSize &&
+            layout.fdtBase < reservation.base + reservation.size) {
+            return reject("maximum FDT placement overlaps a reserved guest range");
+        }
+    }
+
+    // Construct the FDT memory list by excluding backing that is explicitly
+    // inaccessible to the guest (not merely reserved from its allocator).
+    std::vector<ppc64::PPC64MemoryRange> inaccessible;
+    for (const auto& reservation : layout.reservations) {
+        if (!reservation.guestAccessible) inaccessible.push_back(reservation);
+    }
+    std::sort(inaccessible.begin(), inaccessible.end(), [](const auto& left, const auto& right) {
+        return left.base < right.base;
+    });
+    uint64_t memoryCursor = layout.ramBase;
+    for (const auto& hole : inaccessible) {
+        if (memoryCursor < hole.base) {
+            layout.guestMemoryRanges.push_back({memoryCursor, hole.base - memoryCursor,
+                                                "guest accessible RAM", true});
+        }
+        memoryCursor = hole.base + hole.size;
+    }
+    const uint64_t ramEnd = layout.ramBase + layout.ramSize;
+    if (memoryCursor < ramEnd) {
+        layout.guestMemoryRanges.push_back({memoryCursor, ramEnd - memoryCursor,
+                                            "guest accessible RAM", true});
+    }
+    if (layout.guestMemoryRanges.empty()) {
+        return reject("protected reservations leave no guest-visible RAM");
+    }
+    if (!ppc64::validatePPC64GuestMemoryLayout(layout, reason)) {
+        return reject(reason);
+    }
+
+    std::vector<uint8_t> dtb;
+    if (!ppc64::PPC64FDTBuilder::build(
+            ppc64PlatformConfiguration_, layout, dtb, reason)) {
+        return reject(reason);
+    }
+    layout.fdtSize = static_cast<uint64_t>(dtb.size());
+    if (!appendReservation(layout.fdtBase, layout.fdtSize, "flattened device tree", true)) {
+        return reject("FDT reservation conflicts with a reserved guest range");
+    }
+    if (!ppc64::validatePPC64GuestMemoryLayout(layout, reason) ||
+        !ppc64::PPC64FDTBuilder::build(
+            ppc64PlatformConfiguration_, layout, dtb, reason)) {
+        return reject(reason.empty() ? "final FDT validation failed" : reason);
+    }
+    if (layout.fdtSize != dtb.size()) {
+        layout.fdtSize = static_cast<uint64_t>(dtb.size());
+        for (auto& reservation : layout.reservations) {
+            if (reservation.purpose == "flattened device tree") {
+                reservation.size = layout.fdtSize;
+            }
+        }
+        if (!ppc64::validatePPC64GuestMemoryLayout(layout, reason) ||
+            !ppc64::PPC64FDTBuilder::build(
+                ppc64PlatformConfiguration_, layout, dtb, reason)) {
+            return reject(reason.empty() ? "FDT size did not stabilize" : reason);
+        }
+    }
+
+    std::vector<GuestRealWriteSegment> writes(2);
+    writes[0].address = imageAddress;
+    writes[0].bytes = image;
+    writes[1].address = layout.fdtBase;
+    writes[1].bytes = dtb;
+    try {
+        memory_->WriteGuestRealTransaction(writes);
+    } catch (const std::exception& exception) {
+        return reject(std::string("guest image/FDT staging failed: ") + exception.what());
+    }
+
+    // Commit architectural state only after all input, memory and FDT checks
+    // have succeeded. These direct plugin setters cannot fail.
+    ppc64VirtualTimeBase_->reset();
+    plugin->writeGPR(3, layout.fdtBase);
+    plugin->writeGPR(4, layout.imageBase);
+    plugin->writeGPR(5, 0);
+    plugin->setMSR(ppc64::MSR_SF);
+    plugin->setPC(entryAddress);
+    ppc64GuestMemoryLayout_ = std::move(layout);
+    ppc64PlatformDTB_ = std::move(dtb);
+    ppc64PlatformEntryAddress_ = entryAddress;
+    ppc64PlatformPrepared_ = true;
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+ppc64::PPC64PlatformConfiguration
+VirtualMachine::getPPC64PlatformConfiguration() const {
+    if (!ppc64PlatformEnabled_) {
+        throw std::logic_error("PPC64 platform is not configured for this VM");
+    }
+    return ppc64PlatformConfiguration_;
+}
+
+ppc64::PPC64PlatformSnapshot VirtualMachine::getPPC64PlatformSnapshot() const {
+    ppc64::PPC64PlatformSnapshot snapshot;
+    snapshot.enabled = ppc64PlatformEnabled_;
+    if (!snapshot.enabled) return snapshot;
+    snapshot.configuration = ppc64PlatformConfiguration_;
+    snapshot.prepared = ppc64PlatformPrepared_;
+    snapshot.memoryLayout = ppc64GuestMemoryLayout_;
+    snapshot.currentTimebase = ppc64VirtualTimeBase_->read();
+    return snapshot;
+}
+
+ppc64::PPC64PlatformCapabilities VirtualMachine::getPPC64PlatformCapabilities() const {
+    if (!ppc64PlatformEnabled_) return {};
+    return ppc64::getPPC64FoundationCapabilities();
+}
+
+uint64_t VirtualMachine::getPPC64Timebase() const {
+    if (!ppc64VirtualTimeBase_) {
+        throw std::logic_error("PPC64 time base is not configured for this VM");
+    }
+    return ppc64VirtualTimeBase_->read();
 }
 
 std::string VirtualMachine::getLastExecutionDiagnostic() const {
@@ -1483,6 +1764,10 @@ if (!isValidCPUIndex(cpuIndex)) {
             ++ctx.cyclesExecuted;
             ++ctx.instructionsExecuted;
             ++cyclesExecuted_;
+            if (cpu->getArchitecture() == ISAArchitecture::PPC64 &&
+                ppc64VirtualTimeBase_) {
+                ppc64VirtualTimeBase_->advanceInstruction();
+            }
             scheduler_->onCPUExecuted(cpuIndex, 1);
             if (timerDevice_ && cpu->getArchitecture() != ISAArchitecture::PPC64) {
                 timerDevice_->Tick(1);
@@ -1851,6 +2136,7 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
             snapshot.ppc64RadixConfiguration =
                 plugin->getRadixTranslationConfiguration();
         }
+        snapshot.ppc64Platform = getPPC64PlatformSnapshot();
     }
     
     return snapshot;
@@ -1926,6 +2212,104 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             return reject("radix configuration is inconsistent");
         }
 
+        if (snapshot.ppc64Platform.enabled != ppc64PlatformEnabled_) {
+            return reject("PPC64 platform profile does not match the destination VM");
+        }
+        std::vector<uint8_t> canonicalDTB;
+        if (snapshot.ppc64Platform.enabled) {
+            const auto& platform = snapshot.ppc64Platform;
+            std::string platformReason;
+            if (!ppc64::samePPC64PlatformConfiguration(
+                    platform.configuration, ppc64PlatformConfiguration_) ||
+                !ppc64::validatePPC64PlatformConfiguration(
+                    platform.configuration, snapshot.memoryState.data.size(),
+                    platformReason)) {
+                return reject(platformReason.empty()
+                    ? "PPC64 platform configuration mismatch" : platformReason);
+            }
+            if (platform.prepared) {
+                const auto& layout = platform.memoryLayout;
+                if (layout.ramBase != 0 ||
+                    layout.ramSize != snapshot.memoryState.data.size() ||
+                    layout.initrdBase != 0 || layout.initrdSize != 0 ||
+                    layout.fdtSize > platform.configuration.maximumFdtSize ||
+                    layout.fdtBase > snapshot.memoryState.data.size() ||
+                    layout.fdtSize > snapshot.memoryState.data.size() - layout.fdtBase ||
+                    !ppc64::validatePPC64GuestMemoryLayout(layout, platformReason)) {
+                    return reject(platformReason.empty()
+                        ? "PPC64 platform memory layout is inconsistent" : platformReason);
+                }
+                const auto hasRange = [&layout](uint64_t base, uint64_t size,
+                                                bool guestAccessible) {
+                    return std::any_of(layout.reservations.begin(),
+                        layout.reservations.end(), [&](const auto& range) {
+                            return range.base == base && range.size == size &&
+                                   range.guestAccessible == guestAccessible;
+                        });
+                };
+                if (!hasRange(layout.imageBase, layout.imageSize, true) ||
+                    !hasRange(layout.fdtBase, layout.fdtSize, true)) {
+                    return reject("platform checkpoint omits its image or FDT reservation");
+                }
+                for (const auto& configured : platform.configuration.reservedRanges) {
+                    if (!hasRange(configured.base, configured.size,
+                                  configured.guestAccessible)) {
+                        return reject("platform checkpoint lost a configured memory reservation");
+                    }
+                }
+                if (snapshot.ppc64HypervisorMemoryConfigured &&
+                    !hasRange(snapshot.ppc64HypervisorMemoryBase,
+                               snapshot.ppc64HypervisorMemorySize, false)) {
+                    return reject("platform checkpoint omits protected handler backing");
+                }
+                if (snapshot.ppc64RadixConfigured) {
+                    const auto& radix = snapshot.ppc64RadixConfiguration;
+                    if (radix.processTableSizeExponent > 31 ||
+                        !hasRange(radix.processTableGuestRealBase,
+                            1ULL << (static_cast<unsigned>(radix.processTableSizeExponent) + 12U),
+                            true)) {
+                        return reject("platform checkpoint process-table reservation is inconsistent");
+                    }
+                }
+                if (snapshot.ppc64PartitionTableConfigured) {
+                    if (snapshot.ppc64PartitionTableSizeExponent !=
+                        ppc64::PPC64_POWER9_PARTITION_TABLE_PATS) {
+                        return reject("platform checkpoint partition-table geometry is unsupported");
+                    }
+                    const uint64_t tableSize = 1ULL << (
+                        static_cast<unsigned>(snapshot.ppc64PartitionTableSizeExponent) + 12U);
+                    if (!hasRange(snapshot.ppc64PartitionTableBase, tableSize, true)) {
+                        return reject("platform checkpoint partition-table reservation is inconsistent");
+                    }
+                }
+                if (!ppc64::PPC64FDTBuilder::validate(
+                        snapshot.memoryState.data.data() + layout.fdtBase,
+                        static_cast<size_t>(layout.fdtSize), platformReason) ||
+                    !ppc64::PPC64FDTBuilder::build(
+                        platform.configuration, layout, canonicalDTB, platformReason) ||
+                    canonicalDTB.size() != layout.fdtSize ||
+                    !std::equal(canonicalDTB.begin(), canonicalDTB.end(),
+                        snapshot.memoryState.data.begin() +
+                            static_cast<std::ptrdiff_t>(layout.fdtBase))) {
+                    return reject(platformReason.empty()
+                        ? "platform checkpoint DTB bytes or metadata are inconsistent"
+                        : platformReason);
+                }
+            } else if (platform.memoryLayout.ramBase != 0 ||
+                       platform.memoryLayout.ramSize != 0 ||
+                       platform.memoryLayout.imageBase != 0 ||
+                       platform.memoryLayout.imageSize != 0 ||
+                       platform.memoryLayout.fdtBase != 0 ||
+                       platform.memoryLayout.fdtSize != 0 ||
+                       platform.memoryLayout.entryAddress != 0 ||
+                       platform.memoryLayout.initrdBase != 0 ||
+                       platform.memoryLayout.initrdSize != 0 ||
+                       !platform.memoryLayout.reservations.empty() ||
+                       !platform.memoryLayout.guestMemoryRanges.empty()) {
+                return reject("unprepared platform checkpoint contains entry metadata");
+            }
+        }
+
         const size_t pageSize = memory_->GetMMU().GetPageSize();
         for (const auto& mapping : snapshot.memoryState.pageTable) {
             const uint64_t virtualAddress = mapping.first;
@@ -1949,8 +2333,18 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         std::unique_ptr<VirtualConsole> stagedConsole;
         std::unique_ptr<VirtualTimer> stagedTimer;
         std::unique_ptr<BasicInterruptController> stagedInterruptController;
+        std::unique_ptr<ppc64::PPC64VirtualTimeBase> stagedTimeBase;
+        std::vector<uint8_t> stagedDTB = std::move(canonicalDTB);
         try {
             stagedMemory->RestoreSnapshot(snapshot.memoryState);
+            if (snapshot.ppc64Platform.enabled) {
+                stagedTimeBase = std::make_unique<ppc64::PPC64VirtualTimeBase>(
+                    snapshot.ppc64Platform.configuration);
+                if (!stagedTimeBase->restore(
+                        snapshot.ppc64Platform.currentTimebase)) {
+                    return reject("platform time-base restore failed");
+                }
+            }
             stagedManager = std::make_unique<ppc64::PPC64PartitionManager>();
 
             stagedConsole = std::make_unique<VirtualConsole>(
@@ -2014,6 +2408,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             if (stagedPlugin == nullptr) {
                 return reject("PPC64 ISA factory returned an incompatible plugin");
             }
+            stagedPlugin->attachVirtualTimeBase(stagedTimeBase.get());
             stagedCPU = std::make_unique<CPU>(*stagedMemory, *stagedPlugin);
 
             std::string reason;
@@ -2091,6 +2486,22 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
 
         memory_ = std::move(stagedMemory);
         ppc64PartitionManager_ = std::move(stagedManager);
+        ppc64VirtualTimeBase_ = std::move(stagedTimeBase);
+        ppc64PlatformEnabled_ = snapshot.ppc64Platform.enabled;
+        ppc64PlatformPrepared_ = snapshot.ppc64Platform.enabled &&
+            snapshot.ppc64Platform.prepared;
+        if (ppc64PlatformEnabled_) {
+            ppc64PlatformConfiguration_ = snapshot.ppc64Platform.configuration;
+            ppc64GuestMemoryLayout_ = snapshot.ppc64Platform.memoryLayout;
+            ppc64PlatformEntryAddress_ = snapshot.ppc64Platform.prepared
+                ? snapshot.ppc64Platform.memoryLayout.entryAddress : 0;
+            ppc64PlatformDTB_ = std::move(stagedDTB);
+        } else {
+            ppc64PlatformConfiguration_ = {};
+            ppc64GuestMemoryLayout_ = {};
+            ppc64PlatformEntryAddress_ = 0;
+            ppc64PlatformDTB_.clear();
+        }
         cpus_[0].isaPlugin = std::move(stagedPluginOwner);
         cpus_[0].cpu = std::move(stagedCPU);
         consoleDevice_ = std::move(stagedConsole);

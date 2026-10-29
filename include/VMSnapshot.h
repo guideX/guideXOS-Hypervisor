@@ -5,6 +5,7 @@
 #include "memory.h"
 #include "InterruptController.h"
 #include "PPC64RadixMMU.h"
+#include "PPC64Platform.h"
 #include <cstdint>
 #include <vector>
 #include <map>
@@ -232,6 +233,7 @@ struct VMStateSnapshot {
     uint64_t ppc64HypervisorMemorySize;
     bool ppc64RadixConfigured;
     ppc64::PPC64RadixConfiguration ppc64RadixConfiguration;
+    ppc64::PPC64PlatformSnapshot ppc64Platform;
     
     VMStateSnapshot()
         : metadata()
@@ -256,7 +258,8 @@ struct VMStateSnapshot {
         , ppc64HypervisorMemoryBase(0)
         , ppc64HypervisorMemorySize(0)
         , ppc64RadixConfigured(false)
-        , ppc64RadixConfiguration() {}
+        , ppc64RadixConfiguration()
+        , ppc64Platform() {}
 };
 
 /**

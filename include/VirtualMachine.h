@@ -18,6 +18,7 @@
 #include "BootTraceSystem.h"
 #include "KernelPanic.h"
 #include "FramebufferDevice.h"
+#include "PPC64Platform.h"
 #include <memory>
 #include <vector>
 #include <set>
@@ -234,6 +235,8 @@ public:
     explicit VirtualMachine(size_t memorySize = 16 * 1024 * 1024, 
                           size_t numCPUs = 1,
                           const std::string& isaName = "IA-64");
+    VirtualMachine(size_t memorySize, size_t numCPUs, const std::string& isaName,
+                   const ppc64::PPC64PlatformConfiguration& platformConfiguration);
 
     /**
      * Destructor - cleans up all subsystems
@@ -667,6 +670,19 @@ public:
     ppc64::PPC64PartitionManager* getPPC64PartitionManager();
     const ppc64::PPC64PartitionManager* getPPC64PartitionManager() const;
     PPC64RegisterView getPPC64RegisterView(int cpuIndex = 0) const;
+    bool configurePPC64Platform(
+        const ppc64::PPC64PlatformConfiguration& configuration,
+        std::string* error = nullptr);
+    bool preparePPC64Platform(const std::vector<uint8_t>& image,
+                              uint64_t imageAddress, uint64_t entryAddress,
+                              std::string* error = nullptr);
+    bool isPPC64PlatformConfigured() const { return ppc64PlatformEnabled_; }
+    bool isPPC64PlatformPrepared() const { return ppc64PlatformPrepared_; }
+    ppc64::PPC64PlatformConfiguration getPPC64PlatformConfiguration() const;
+    ppc64::PPC64PlatformSnapshot getPPC64PlatformSnapshot() const;
+    ppc64::PPC64PlatformCapabilities getPPC64PlatformCapabilities() const;
+    uint64_t getPPC64Timebase() const;
+    std::vector<uint8_t> getPPC64FDT() const { return ppc64PlatformDTB_; }
     std::string getLastExecutionDiagnostic() const;
     std::string getArchitectureName() const { return isaName_; }
 
@@ -693,6 +709,13 @@ private:
 
     std::unique_ptr<Memory> memory_;                // Memory system (shared)
     std::unique_ptr<ppc64::PPC64PartitionManager> ppc64PartitionManager_;
+    ppc64::PPC64PlatformConfiguration ppc64PlatformConfiguration_;
+    std::unique_ptr<ppc64::PPC64VirtualTimeBase> ppc64VirtualTimeBase_;
+    ppc64::PPC64GuestMemoryLayout ppc64GuestMemoryLayout_;
+    std::vector<uint8_t> ppc64PlatformDTB_;
+    uint64_t ppc64PlatformEntryAddress_ = 0;
+    bool ppc64PlatformEnabled_ = false;
+    bool ppc64PlatformPrepared_ = false;
     std::unique_ptr<class ProcessorInterruptBlock> processorInterruptBlock_;
     std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder (shared)
     std::vector<CPUContext> cpus_;                  // CPU contexts (isolated state)

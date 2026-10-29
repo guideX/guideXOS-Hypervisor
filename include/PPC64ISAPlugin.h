@@ -14,6 +14,8 @@
 namespace ia64 {
 namespace ppc64 {
 
+class PPC64VirtualTimeBase;
+
 // ============================================================================
 // PPC64 Phase 1 + Phase 2 constants
 // ============================================================================
@@ -291,6 +293,8 @@ constexpr uint8_t DS_XO_STORE_U = 1;  // stdu (opcode 62)
 constexpr uint16_t SPR_XER = 1;
 constexpr uint16_t SPR_LR = 8;
 constexpr uint16_t SPR_CTR = 9;
+constexpr uint16_t SPR_TBL = 268;
+constexpr uint16_t SPR_TBU = 269;
 
 // XER bit positions within the stored u32. Power ISA numbers the 64-bit XER
 // with SO=XER[32], OV=XER[33], CA=XER[34]; the low 32 bits (XER[32:63]) are
@@ -664,6 +668,9 @@ public:
     uint64_t getHSRR1() const { return state_.hsrr1; }
     uint64_t getHDAR() const { return state_.hdar; }
     uint32_t getHDSISR() const { return state_.hdsisr; }
+    void attachVirtualTimeBase(PPC64VirtualTimeBase* timeBase) {
+        virtualTimeBase_ = timeBase;
+    }
     void setSRR0(uint64_t v) { state_.srr0 = v; }
     void setSRR1(uint64_t v) { state_.srr1 = v; }
     void setDAR(uint64_t v) { state_.dar = v; }
@@ -919,6 +926,7 @@ private:
     bool radixConfigured_ = false;
     uint32_t radixConfigurationGeneration_ = 0;
     std::shared_ptr<PPC64PartitionContext> partitionContext_;
+    PPC64VirtualTimeBase* virtualTimeBase_ = nullptr; // owned by the containing VM
 };
 
 /**
