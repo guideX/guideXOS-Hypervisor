@@ -218,6 +218,14 @@ The `test_ppc64_phase9` target builds and links successfully. No unrelated
 linker repair was made. The starting configured full CTest baseline was 14/20
 passing with the same six absent executables.
 
+Two additional standalone targets requested for regression review are not
+registered in CTest and could not be qualified in this build: `test_watchpoint`
+fails to link because its target omits project object implementations, and
+`test_cpu_execution` fails to link on unresolved MinGW WinSock imports from the
+REST and web UI server objects. These target-specific failures were observed
+after the Phase 9 changes; without a before-change target build, they are not
+attributed to this work.
+
 ### Remaining platform limits and first pSeries boot dependencies
 
 Phase 9 provides hosted instruction execution and host-managed partition
