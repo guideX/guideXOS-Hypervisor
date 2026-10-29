@@ -102,8 +102,18 @@ std::string VMSnapshotManager::createDeltaSnapshot(
     
     // Estimate sizes
     size_t deltaSize = 0;
-    deltaSize += delta.memoryDelta.totalChangedBytes;
-    deltaSize += delta.cpuDeltas.size() * 512;  // Approximate per-CPU delta size
+    if (delta.ppc64Replacement) {
+        deltaSize += delta.ppc64Replacement->memoryState.data.size();
+        for (const CPUSnapshotRecord& cpu : delta.ppc64Replacement->cpus) {
+            deltaSize += cpu.isaState.size();
+        }
+        for (const auto& partition : delta.ppc64Replacement->ppc64PartitionSnapshots) {
+            deltaSize += partition.size();
+        }
+    } else {
+        deltaSize += delta.memoryDelta.totalChangedBytes;
+        deltaSize += delta.cpuDeltas.size() * 512;  // Approximate per-CPU delta size
+    }
     delta.metadata.deltaSize = deltaSize;
     delta.metadata.fullSnapshotSize = currentSnapshot.metadata.fullSnapshotSize;
     
@@ -130,12 +140,7 @@ VMStateSnapshot snapshot = resolveSnapshot(snapshotId);
         return false;  // Snapshot not found
     }
     
-    // Restore VM state (implementation delegates to VirtualMachine)
-    // Note: This requires VirtualMachine to have a restoreFromSnapshot method
-    // For now, we'll return true - actual restoration will be implemented
-    // in the VirtualMachine integration step
-    
-    return true;
+    return vm.restoreVMSnapshot(snapshot);
 }
 
 bool VMSnapshotManager::restoreLatestSnapshot(VirtualMachine& vm) {
@@ -277,6 +282,14 @@ VMStateSnapshotDelta VMSnapshotManager::computeDelta(
     const VMStateSnapshot& parent) {
 
     VMStateSnapshotDelta delta;
+
+    if (current.architecture != parent.architecture ||
+        current.architecture == "PPC64") {
+        // Preserve complete plugin and partition state. PPC64 snapshots use
+        // their own versioned state format rather than IA-64 register diffs.
+        delta.ppc64Replacement = std::make_shared<VMStateSnapshot>(current);
+        return delta;
+    }
     
     // Compute memory delta
     delta.memoryDelta = computeMemoryDelta(current.memoryState, parent.memoryState);
@@ -340,6 +353,13 @@ VMStateSnapshotDelta VMSnapshotManager::computeDelta(
 VMStateSnapshot VMSnapshotManager::applyDelta(
     const VMStateSnapshot& base,
     const VMStateSnapshotDelta& delta) {
+
+    if (delta.ppc64Replacement) {
+        VMStateSnapshot result = *delta.ppc64Replacement;
+        result.metadata = delta.metadata;
+        result.metadata.isDelta = false;
+        return result;
+    }
 
     VMStateSnapshot result = base;
     
@@ -412,63 +432,7 @@ std::string VMSnapshotManager::generateSnapshotId() {
 }
 
 VMStateSnapshot VMSnapshotManager::captureFullSnapshot(const VirtualMachine& vm) const {
-    VMStateSnapshot snapshot;
-    
-    // Capture CPU states
-    for (size_t i = 0; i < vm.getCPUCount(); ++i) {
-        CPUSnapshotRecord cpuRecord;
-        cpuRecord.cpuId = static_cast<uint32_t>(i);
-        
-        const CPUContext* ctx = vm.getCPUContext(static_cast<int>(i));
-        if (ctx && ctx->cpu) {
-            cpuRecord.architecturalState = ctx->cpu->getState();
-            cpuRecord.executionState = ctx->state;
-            cpuRecord.cyclesExecuted = ctx->cyclesExecuted;
-            cpuRecord.instructionsExecuted = ctx->instructionsExecuted;
-            cpuRecord.idleCycles = ctx->idleCycles;
-            cpuRecord.enabled = ctx->enabled;
-            cpuRecord.lastActivationTime = ctx->lastActivationTime;
-            
-            // Capture runtime state
-            auto runtimeSnapshot = ctx->cpu->createSnapshot();
-            cpuRecord.currentBundle = std::vector<uint8_t>(16);  // Bundle size
-            cpuRecord.currentSlot = runtimeSnapshot.currentSlot;
-            cpuRecord.bundleValid = runtimeSnapshot.bundleValid;
-            cpuRecord.pendingInterrupts = runtimeSnapshot.pendingInterrupts;
-            cpuRecord.interruptVectorBase = runtimeSnapshot.interruptVectorBase;
-        }
-        
-        snapshot.cpus.push_back(cpuRecord);
-    }
-    
-    snapshot.activeCPUIndex = vm.getActiveCPUIndex();
-    
-    // Capture memory state
-    // Note: getMemory() returns IMemory&, but we need Memory* to call CreateSnapshot
-    // We can safely cast since VirtualMachine uses Memory internally
-    const Memory* memory = dynamic_cast<const Memory*>(&vm.getMemory());
-    if (memory) {
-        snapshot.memoryState = memory->CreateSnapshot();
-    }
-    
-    // Capture device states
-    if (vm.getConsoleBaseAddress() != 0) {
-        // Console state would be captured here if we had access
-        // For now, create empty state
-        snapshot.consoleState.baseAddress = vm.getConsoleBaseAddress();
-    }
-    
-    if (vm.getTimerBaseAddress() != 0) {
-        // Timer state would be captured here if we had access
-        snapshot.timerState.baseAddress = vm.getTimerBaseAddress();
-    }
-    
-    // Capture VM state
-    snapshot.vmStateValue = static_cast<uint32_t>(vm.getState());
-    snapshot.totalCyclesExecuted = 0;  // Would need to be exposed by VM
-    snapshot.quantumSize = vm.getQuantumSize();
-    
-    return snapshot;
+    return vm.captureVMSnapshot();
 }
 
 MemoryDelta VMSnapshotManager::computeMemoryDelta(

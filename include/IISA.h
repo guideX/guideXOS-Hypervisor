@@ -82,6 +82,19 @@ enum class ISAExecutionResult {
     BREAKPOINT      // Debug breakpoint hit
 };
 
+// Architecture identity and scheduling units are explicit so shared VM code
+// never has to infer architectural state from an unrelated CPUState object.
+enum class ISAArchitecture : uint8_t {
+    UNKNOWN = 0,
+    IA64,
+    PPC64
+};
+
+enum class ISAExecutionUnit : uint8_t {
+    INSTRUCTION = 0,
+    BUNDLE
+};
+
 /**
  * ISADecodeResult - Result of decoding an instruction
  */
@@ -139,6 +152,21 @@ struct ISADecodeResult {
 class IISA {
 public:
     virtual ~IISA() = default;
+
+    virtual ISAArchitecture getArchitecture() const {
+        return ISAArchitecture::UNKNOWN;
+    }
+    virtual ISAExecutionUnit getExecutionUnit() const {
+        return ISAExecutionUnit::INSTRUCTION;
+    }
+
+    // Optional architecture-neutral general-register access. Implementations
+    // return false when the requested architectural view is not supported.
+    virtual bool readGeneralRegister(size_t, uint64_t&) const { return false; }
+    virtual bool writeGeneralRegister(size_t, uint64_t) { return false; }
+
+    // Host diagnostic for the last terminal execution result, when available.
+    virtual std::string getLastExecutionDiagnostic() const { return {}; }
     
     // ========================================================================
     // Core ISA Operations

@@ -4,6 +4,7 @@
 #include "CPUContext.h"
 #include "memory.h"
 #include "InterruptController.h"
+#include "PPC64RadixMMU.h"
 #include <cstdint>
 #include <vector>
 #include <map>
@@ -122,7 +123,10 @@ struct FramebufferDeviceState {
  */
 struct CPUSnapshotRecord {
     uint32_t cpuId;                      // CPU identifier
+    std::string architecture;            // Architecture identity for typed state
     CPUState architecturalState;         // Full architectural state (registers)
+    std::vector<uint8_t> isaState;        // Plugin-owned architectural state
+    std::string lastExecutionDiagnostic; // Host-side fault detail
     CPUExecutionState executionState;    // Execution state (IDLE, RUNNING, etc.)
     uint64_t cyclesExecuted;             // Total cycles executed
     uint64_t instructionsExecuted;       // Total instructions executed
@@ -134,12 +138,17 @@ struct CPUSnapshotRecord {
     std::vector<uint8_t> currentBundle;  // Current instruction bundle
     size_t currentSlot;                  // Current slot in bundle
     bool bundleValid;                    // Is bundle valid?
+    bool halted;                         // CPU wrapper terminal state
     std::vector<uint8_t> pendingInterrupts;  // Pending interrupts
     uint64_t interruptVectorBase;        // Interrupt vector base
+    std::vector<uint64_t> pendingCallInputs;
     
     CPUSnapshotRecord()
         : cpuId(0)
+        , architecture()
         , architecturalState()
+        , isaState()
+        , lastExecutionDiagnostic()
         , executionState(CPUExecutionState::IDLE)
         , cyclesExecuted(0)
         , instructionsExecuted(0)
@@ -149,8 +158,10 @@ struct CPUSnapshotRecord {
         , currentBundle()
         , currentSlot(0)
         , bundleValid(false)
+        , halted(false)
         , pendingInterrupts()
-        , interruptVectorBase(0) {}
+        , interruptVectorBase(0)
+        , pendingCallInputs() {}
 };
 
 /**
@@ -191,6 +202,7 @@ struct VMSnapshotMetadata {
  */
 struct VMStateSnapshot {
     VMSnapshotMetadata metadata;         // Snapshot metadata
+    std::string architecture;            // VM architecture identity
     
     // CPU state
     std::vector<CPUSnapshotRecord> cpus; // All CPU states
@@ -209,9 +221,21 @@ struct VMStateSnapshot {
     uint32_t vmStateValue;               // VM state enum value
     uint64_t totalCyclesExecuted;        // Total cycles executed
     uint64_t quantumSize;                // Scheduler quantum size
+    std::vector<std::vector<uint8_t>> ppc64PartitionSnapshots;
+    bool ppc64PartitionTableConfigured;
+    uint64_t ppc64PartitionTableBase;
+    uint8_t ppc64PartitionTableSizeExponent;
+    bool ppc64HasActiveLPID;
+    uint16_t ppc64ActiveLPID;
+    bool ppc64HypervisorMemoryConfigured;
+    uint64_t ppc64HypervisorMemoryBase;
+    uint64_t ppc64HypervisorMemorySize;
+    bool ppc64RadixConfigured;
+    ppc64::PPC64RadixConfiguration ppc64RadixConfiguration;
     
     VMStateSnapshot()
         : metadata()
+        , architecture()
         , cpus()
         , activeCPUIndex(-1)
         , memoryState()
@@ -221,7 +245,18 @@ struct VMStateSnapshot {
         , additionalDevices()
         , vmStateValue(0)
         , totalCyclesExecuted(0)
-        , quantumSize(0) {}
+        , quantumSize(0)
+        , ppc64PartitionSnapshots()
+        , ppc64PartitionTableConfigured(false)
+        , ppc64PartitionTableBase(0)
+        , ppc64PartitionTableSizeExponent(0)
+        , ppc64HasActiveLPID(false)
+        , ppc64ActiveLPID(0)
+        , ppc64HypervisorMemoryConfigured(false)
+        , ppc64HypervisorMemoryBase(0)
+        , ppc64HypervisorMemorySize(0)
+        , ppc64RadixConfigured(false)
+        , ppc64RadixConfiguration() {}
 };
 
 /**
@@ -360,6 +395,9 @@ struct VMStateSnapshotDelta {
     
     bool quantumChanged;
     uint64_t newQuantumSize;
+    // PPC64's compact, versioned CPU/partition state is replaced as a whole
+    // in a delta because its plugin state is not an IA-64 register diff.
+    std::shared_ptr<VMStateSnapshot> ppc64Replacement;
     
     VMStateSnapshotDelta()
         : metadata()
@@ -379,7 +417,8 @@ struct VMStateSnapshotDelta {
         , cyclesChanged(false)
         , newTotalCyclesExecuted(0)
         , quantumChanged(false)
-        , newQuantumSize(0) {}
+        , newQuantumSize(0)
+        , ppc64Replacement(nullptr) {}
 };
 
 /**

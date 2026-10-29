@@ -12,6 +12,9 @@
 #include "logger.h"
 #include "ISAPluginRegistry.h"
 #include "IA64ISAPlugin.h"
+#include "PPC64ISAPlugin.h"
+#include "PPC64PartitionMMU.h"
+#include "PPC64RadixMMU.h"
 #include "VMSnapshot.h"
 #include "VMSnapshotManager.h"
 #include "VMCheckpoint.h"
@@ -28,6 +31,7 @@ namespace ia64 {
 
 VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::string& isaName)
 : memory_(nullptr),
+  ppc64PartitionManager_(nullptr),
   processorInterruptBlock_(nullptr),
   decoder_(nullptr),
   scheduler_(nullptr),
@@ -44,10 +48,17 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::str
   nextMemoryBreakpointId_(1),
   maxSnapshotHistory_(256),
   cyclesExecuted_(0),
+  isaName_(isaName),
   snapshotManager_(std::make_unique<VMSnapshotManager>()) {
     
 if (numCPUs == 0) {
     throw std::invalid_argument("VM must have at least 1 CPU");
+}
+if (isaName == "PPC64" && numCPUs != 1) {
+    throw std::invalid_argument("PPC64 VM profile currently supports exactly one virtual CPU");
+}
+if (!ISAPluginRegistry::instance().isRegistered(isaName)) {
+    throw std::invalid_argument("Unsupported or unregistered VM ISA: " + isaName);
 }
     
 try {
@@ -57,6 +68,9 @@ try {
     // Create shared subsystems
     memory_ = std::make_unique<Memory>(memorySize);
     decoder_ = std::make_unique<InstructionDecoder>();
+    if (isaName == "PPC64") {
+        ppc64PartitionManager_ = std::make_unique<ppc64::PPC64PartitionManager>();
+    }
         
     // Create CPU scheduler
     scheduler_ = std::make_unique<SimpleCPUScheduler>();
@@ -72,7 +86,8 @@ try {
     // Create framebuffer device (default 640x480 at standard VGA region)
     framebufferDevice_ = std::make_unique<FramebufferDevice>();
 
-    processorInterruptBlock_ = std::make_unique<ProcessorInterruptBlock>(
+    if (isaName != "PPC64") {
+      processorInterruptBlock_ = std::make_unique<ProcessorInterruptBlock>(
         [this](uint8_t id, uint8_t eid, uint8_t vector, uint8_t deliveryMode,
                bool redirect) {
             if (redirect || deliveryMode != ProcessorInterruptBlock::kDeliveryModeInt) {
@@ -103,10 +118,11 @@ try {
             return false;
         });
 
-    memory_->RegisterDevice(consoleDevice_.get());
-    memory_->RegisterDevice(timerDevice_.get());
-    memory_->RegisterDevice(framebufferDevice_.get());
-    memory_->RegisterDevice(processorInterruptBlock_.get());
+      memory_->RegisterDevice(consoleDevice_.get());
+      memory_->RegisterDevice(timerDevice_.get());
+      memory_->RegisterDevice(framebufferDevice_.get());
+      memory_->RegisterDevice(processorInterruptBlock_.get());
+    }
         
     // Create CPU contexts with specified ISA
     if (!createCPUs(numCPUs, isaName)) {
@@ -138,6 +154,13 @@ VirtualMachine::~VirtualMachine() {
     // Halt execution if running
     if (state_ == VMState::RUNNING) {
         halt();
+    }
+
+    if (isaName_ == "PPC64") {
+        getPPC64ISAPlugin()->deactivatePartitionContext();
+    }
+    if (ppc64PartitionManager_) {
+        ppc64PartitionManager_->destroyAllPartitions();
     }
     
     // Subsystems are automatically destroyed in reverse order:
@@ -240,6 +263,14 @@ bool VirtualMachine::reset() {
                 ctx.idleCycles = 0;
             }
         }
+
+        if (isaName_ == "PPC64") {
+            auto* plugin = getPPC64ISAPlugin();
+            plugin->deactivatePartitionContext();
+            if (ppc64PartitionManager_) {
+                ppc64PartitionManager_->destroyAllPartitions();
+            }
+        }
         
         // Re-enable first CPU
         if (!cpus_.empty()) {
@@ -278,6 +309,7 @@ bool VirtualMachine::reset() {
         cyclesExecuted_ = 0;
         snapshotHistory_.clear();
         lastBreakReason_.clear();
+        lastExecutionDiagnostic_.clear();
         
         // Keep instruction breakpoints and debugger attachment
         // as they represent debugging configuration, not runtime state
@@ -302,7 +334,7 @@ bool VirtualMachine::reset() {
 }
 
 void VirtualMachine::halt() {
-if (state_ == VMState::RUNNING) {
+if (state_ == VMState::RUNNING || state_ == VMState::PAUSED) {
     LOG_INFO("Halting VirtualMachine execution");
     state_ = VMState::STOPPED;
         
@@ -313,6 +345,34 @@ if (state_ == VMState::RUNNING) {
             }
         }
     }
+}
+
+bool VirtualMachine::pause() {
+    if (state_ != VMState::RUNNING) {
+        return false;
+    }
+    state_ = VMState::PAUSED;
+    return true;
+}
+
+bool VirtualMachine::resume() {
+    if (state_ != VMState::PAUSED && state_ != VMState::STOPPED) {
+        return false;
+    }
+    for (CPUContext& context : cpus_) {
+        if (context.enabled && context.state != CPUExecutionState::HALTED &&
+            context.state != CPUExecutionState::ERROR) {
+            context.state = CPUExecutionState::RUNNING;
+        }
+    }
+    if (activeCPUIndex_ < 0 && !cpus_.empty()) {
+        activeCPUIndex_ = 0;
+    }
+    state_ = VMState::RUNNING;
+    if (lastBreakReason_ != "instruction breakpoint") {
+        lastBreakReason_.clear();
+    }
+    return true;
 }
 
 // ============================================================================
@@ -446,6 +506,9 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
 }
 
 void VirtualMachine::setEntryPoint(uint64_t address) {
+if (isaName_ == "PPC64" && (address & 3ULL) != 0) {
+    throw std::invalid_argument("PPC64 entry point must be 4-byte aligned");
+}
 std::ostringstream oss;
 oss << "Setting entry point to 0x" << std::hex << address << std::dec;
 LOG_INFO(oss.str());
@@ -532,6 +595,10 @@ void VirtualMachine::detach_debugger() {
 bool VirtualMachine::setBreakpoint(uint64_t address) {
     if (!debuggerAttached_) {
         LOG_ERROR("Cannot set breakpoint - no debugger attached");
+        return false;
+    }
+    if (isaName_ == "PPC64" && (address & 3ULL) != 0) {
+        LOG_ERROR("PPC64 instruction breakpoints must be 4-byte aligned");
         return false;
     }
     
@@ -660,6 +727,10 @@ void VirtualMachine::setIP(int cpuIndex, uint64_t address) {
     if (!cpus_[cpuIndex].cpu) {
         throw std::runtime_error("CPU not initialized");
     }
+    if (cpus_[cpuIndex].cpu->getArchitecture() == ISAArchitecture::PPC64 &&
+        (address & 3ULL) != 0) {
+        throw std::invalid_argument("PPC64 NIP must be 4-byte aligned");
+    }
     cpus_[cpuIndex].cpu->setIP(address);
 }
 
@@ -734,6 +805,73 @@ void VirtualMachine::dump() const {
 
 IMemory& VirtualMachine::getMemory() {
     return *memory_;
+}
+
+ppc64::PPC64ISAPlugin* VirtualMachine::getPPC64ISAPlugin(int cpuIndex) {
+    if (isaName_ != "PPC64") {
+        throw std::logic_error("PPC64 CPU access requested from a non-PPC64 VM");
+    }
+    if (!isValidCPUIndex(cpuIndex) || !cpus_[cpuIndex].isaPlugin) {
+        throw std::out_of_range("PPC64 CPU index is invalid or uninitialized");
+    }
+    auto* plugin = dynamic_cast<ppc64::PPC64ISAPlugin*>(cpus_[cpuIndex].isaPlugin.get());
+    if (!plugin) {
+        throw std::logic_error("VM architecture identity does not match its ISA plugin");
+    }
+    return plugin;
+}
+
+const ppc64::PPC64ISAPlugin* VirtualMachine::getPPC64ISAPlugin(int cpuIndex) const {
+    return const_cast<VirtualMachine*>(this)->getPPC64ISAPlugin(cpuIndex);
+}
+
+ppc64::PPC64PartitionManager* VirtualMachine::getPPC64PartitionManager() {
+    if (!ppc64PartitionManager_) {
+        throw std::logic_error("PPC64 partition manager is unavailable for this VM");
+    }
+    return ppc64PartitionManager_.get();
+}
+
+const ppc64::PPC64PartitionManager* VirtualMachine::getPPC64PartitionManager() const {
+    if (!ppc64PartitionManager_) {
+        throw std::logic_error("PPC64 partition manager is unavailable for this VM");
+    }
+    return ppc64PartitionManager_.get();
+}
+
+PPC64RegisterView VirtualMachine::getPPC64RegisterView(int cpuIndex) const {
+    const ppc64::PPC64ISAPlugin* plugin = getPPC64ISAPlugin(cpuIndex);
+    PPC64RegisterView view;
+    for (size_t i = 0; i < 32; ++i) {
+        view.gpr[i] = plugin->readGPR(i);
+    }
+    view.nip = plugin->getNIP();
+    view.lr = plugin->getLR();
+    view.ctr = plugin->getCTR();
+    view.cr = plugin->getCR();
+    view.xer = plugin->getXER();
+    view.msr = plugin->getMSR();
+    view.pidr = plugin->getPIDR();
+    view.srr0 = plugin->getSRR0();
+    view.srr1 = plugin->getSRR1();
+    view.dar = plugin->getDAR();
+    view.dsisr = plugin->getDSISR();
+    view.hsrr0 = plugin->getHSRR0();
+    view.hsrr1 = plugin->getHSRR1();
+    view.hdar = plugin->getHDAR();
+    view.hdsisr = plugin->getHDSISR();
+    return view;
+}
+
+std::string VirtualMachine::getLastExecutionDiagnostic() const {
+    if (isaName_ == "PPC64" && !cpus_.empty() && cpus_[0].isaPlugin) {
+        const std::string pluginDiagnostic =
+            cpus_[0].isaPlugin->getLastExecutionDiagnostic();
+        if (!pluginDiagnostic.empty()) {
+            return pluginDiagnostic;
+        }
+    }
+    return lastExecutionDiagnostic_;
 }
 
 const IMemory& VirtualMachine::getMemory() const {
@@ -886,6 +1024,11 @@ const uint16_t* VirtualMachine::getFramebuffer() const {
 }
 
 bool VirtualMachine::setConditionalBreakpoint(uint64_t address, const DebugCondition& condition) {
+    if (isaName_ == "PPC64" &&
+        (condition.target == DebugConditionTarget::PREDICATE_REGISTER ||
+         condition.target == DebugConditionTarget::GENERAL_REGISTER && condition.index >= 32)) {
+        return false;
+    }
     if (!setBreakpoint(address)) {
         return false;
     }
@@ -930,6 +1073,9 @@ bool VirtualMachine::clearMemoryBreakpoint(size_t breakpointId) {
 }
 
 bool VirtualMachine::stepBundle() {
+    if (isaName_ == "PPC64") {
+        return false;
+    }
     if (!isValidCPUIndex(activeCPUIndex_)) {
         if (cpus_.empty()) {
             return false;
@@ -983,6 +1129,9 @@ DebuggerControlFlowState VirtualMachine::inspectControlFlow() const {
     const CPU* cpu = getCPUForIndex(activeCPUIndex_);
     if (cpu == nullptr) {
         throw std::runtime_error("No active CPU");
+    }
+    if (cpu->getArchitecture() == ISAArchitecture::PPC64) {
+        throw std::logic_error("IA-64 CFM/bundle control-flow inspection is unavailable for PPC64; use getPPC64RegisterView()");
     }
 
     DebuggerControlFlowState controlFlow;
@@ -1064,6 +1213,33 @@ bool VirtualMachine::checkBreakpoint(uint64_t address) const {
 }
 
 bool VirtualMachine::evaluateCondition(const DebugCondition& condition, const CPU& cpu) const {
+    if (cpu.getArchitecture() == ISAArchitecture::PPC64) {
+        uint64_t lhs = 0;
+        switch (condition.target) {
+            case DebugConditionTarget::NONE:
+                return true;
+            case DebugConditionTarget::GENERAL_REGISTER:
+                lhs = cpu.readGR(condition.index);
+                break;
+            case DebugConditionTarget::INSTRUCTION_POINTER:
+                lhs = cpu.getIP();
+                break;
+            case DebugConditionTarget::PREDICATE_REGISTER:
+                return false;
+        }
+        switch (condition.op) {
+            case DebugConditionOperator::ANY: return true;
+            case DebugConditionOperator::EQUAL: return lhs == condition.value;
+            case DebugConditionOperator::NOT_EQUAL: return lhs != condition.value;
+            case DebugConditionOperator::GREATER: return lhs > condition.value;
+            case DebugConditionOperator::GREATER_OR_EQUAL: return lhs >= condition.value;
+            case DebugConditionOperator::LESS: return lhs < condition.value;
+            case DebugConditionOperator::LESS_OR_EQUAL: return lhs <= condition.value;
+            case DebugConditionOperator::IS_TRUE: return lhs != 0;
+            case DebugConditionOperator::IS_FALSE: return lhs == 0;
+        }
+        return false;
+    }
     return evaluateCondition(condition, cpu.getState());
 }
 
@@ -1198,38 +1374,33 @@ bool VirtualMachine::createCPUs(size_t numCPUs) {
 
 bool VirtualMachine::createCPUs(size_t numCPUs, const std::string& isaName) {
     try {
+        if (!ISAPluginRegistry::instance().isRegistered(isaName)) {
+            LOG_ERROR("Requested ISA is not registered: " + isaName);
+            return false;
+        }
+        if (isaName == "PPC64" && numCPUs != 1) {
+            LOG_ERROR("PPC64 VM profile requires exactly one CPU");
+            return false;
+        }
         cpus_.reserve(numCPUs);
-        
-        // Check if we should use ISA plugin architecture
-        bool usePlugin = ISAPluginRegistry::instance().isRegistered(isaName);
         
         for (size_t i = 0; i < numCPUs; i++) {
             CPUContext ctx(static_cast<uint32_t>(i));
-            
-            if (usePlugin) {
-                // Create ISA plugin instance
-                IA64FactoryData factoryData(decoder_.get());
-                auto isaPlugin = ISAPluginRegistry::instance().createISA(isaName, &factoryData);
-                
-                if (!isaPlugin) {
-                    LOG_ERROR("Failed to create ISA plugin: " + isaName);
-                    return false;
-                }
-                
-                ctx.isaPlugin = std::move(isaPlugin);
-                ctx.cpu = std::make_unique<CPU>(*memory_, *ctx.isaPlugin);
-                
-                std::ostringstream oss;
-                oss << "Created CPU " << i << " with ISA: " << isaName << " (using plugin)";
-                LOG_INFO(oss.str());
-            } else {
-                // Create CPU instance with shared memory and decoder (legacy mode)
-                ctx.cpu = std::make_unique<CPU>(*memory_, *decoder_);
-                
-                std::ostringstream oss;
-                oss << "Created CPU " << i << " (legacy mode)";
-                LOG_INFO(oss.str());
+
+            IA64FactoryData ia64FactoryData(decoder_.get());
+            void* factoryData = isaName == "IA-64" ? &ia64FactoryData : nullptr;
+            auto isaPlugin = ISAPluginRegistry::instance().createISA(isaName, factoryData);
+            if (!isaPlugin) {
+                LOG_ERROR("Failed to create ISA plugin: " + isaName);
+                return false;
             }
+
+            ctx.isaPlugin = std::move(isaPlugin);
+            ctx.cpu = std::make_unique<CPU>(*memory_, *ctx.isaPlugin);
+
+            std::ostringstream oss;
+            oss << "Created CPU " << i << " with ISA: " << isaName << " (using plugin)";
+            LOG_INFO(oss.str());
             
             ctx.enabled = false;  // Will be enabled in init()
             ctx.state = CPUExecutionState::IDLE;
@@ -1283,13 +1454,14 @@ if (!isValidCPUIndex(cpuIndex)) {
         }
 
         activeCPUIndex_ = cpuIndex;
-        memory_->GetMMU().SetCPUStateReference(&cpu->getState());
+        if (cpu->getArchitecture() != ISAArchitecture::PPC64) {
+            memory_->GetMMU().SetCPUStateReference(&cpu->getState());
+        }
 
         captureSnapshotIfBoundary(cpuIndex);
 
         const uint64_t currentIP = cpu->getIP();
         const bool bypassInstructionBreakpoint =
-            state_ == VMState::PAUSED &&
             lastBreakReason_ == "instruction breakpoint" &&
             cpu->isAtBundleBoundary();
 
@@ -1305,40 +1477,57 @@ if (!isValidCPUIndex(cpuIndex)) {
             state_ = VMState::RUNNING;
         }
 
-        const bool success = cpu->step();
-        if (!success) {
-            if (cpu->isHalted()) {
-                ctx.state = CPUExecutionState::HALTED;
-                state_ = VMState::STOPPED;
-                LOG_INFO("CPU " + std::to_string(cpuIndex) + " halted cleanly");
-                return false;
+        const ISAExecutionResult executionResult = cpu->stepDetailed();
+        const bool attemptedInstruction = executionResult != ISAExecutionResult::BREAKPOINT;
+        if (attemptedInstruction) {
+            ++ctx.cyclesExecuted;
+            ++ctx.instructionsExecuted;
+            ++cyclesExecuted_;
+            scheduler_->onCPUExecuted(cpuIndex, 1);
+            if (timerDevice_ && cpu->getArchitecture() != ISAArchitecture::PPC64) {
+                timerDevice_->Tick(1);
             }
+        }
 
-            // CPU step failed - this could be a kernel panic condition
-            // Capture panic state
-            KernelPanic panic = panicDetector_.captureExceptionPanic(
-                "CPU execution failed", cpu->getState(), Bundle(), 0,
-                cyclesExecuted_, cyclesExecuted_
-            );
-            lastPanic_ = std::make_unique<KernelPanic>(panic);
-            
+        if (const IISA* plugin = cpu->getISAPlugin()) {
+            const std::string diagnostic = plugin->getLastExecutionDiagnostic();
+            if (!diagnostic.empty()) {
+                lastExecutionDiagnostic_ = diagnostic;
+            }
+        }
+
+        if (executionResult == ISAExecutionResult::HALT) {
+            ctx.state = CPUExecutionState::HALTED;
+            state_ = VMState::STOPPED;
+            LOG_INFO("CPU " + std::to_string(cpuIndex) + " halted cleanly");
+            return false;
+        }
+        if (executionResult == ISAExecutionResult::EXCEPTION) {
+            const std::string diagnostic = cpu->getISAPlugin()
+                ? cpu->getISAPlugin()->getLastExecutionDiagnostic()
+                : std::string("CPU execution failed");
+            lastExecutionDiagnostic_ = diagnostic.empty() ? "CPU execution failed" : diagnostic;
+            ctx.state = CPUExecutionState::ERROR;
             state_ = VMState::ERROR;
-            bootStateMachine_.transition(VMBootState::KERNEL_PANIC, "CPU execution failed");
+            if (cpu->getArchitecture() == ISAArchitecture::IA64) {
+                KernelPanic panic = panicDetector_.captureExceptionPanic(
+                    lastExecutionDiagnostic_, cpu->getState(), Bundle(), 0,
+                    cyclesExecuted_, cyclesExecuted_);
+                lastPanic_ = std::make_unique<KernelPanic>(panic);
+                bootStateMachine_.transition(VMBootState::KERNEL_PANIC,
+                                             "CPU execution failed");
+            }
+            return false;
+        }
+        if (executionResult == ISAExecutionResult::BREAKPOINT) {
+            state_ = VMState::PAUSED;
+            lastBreakReason_ = "ISA breakpoint";
             return false;
         }
 
-        ctx.cyclesExecuted++;
-        ctx.instructionsExecuted++;
-        cyclesExecuted_++;
-        scheduler_->onCPUExecuted(cpuIndex, 1);
-        
         // Record instruction milestone every 10000 instructions
         if (bootTraceSystem_.isEnabled() && ctx.instructionsExecuted % 10000 == 0) {
             bootTraceSystem_.recordInstructionMilestone(ctx.instructionsExecuted, cyclesExecuted_, currentIP);
-        }
-
-        if (timerDevice_) {
-            timerDevice_->Tick(1);
         }
 
         if (state_ == VMState::PAUSED) {
@@ -1350,19 +1539,19 @@ if (!isValidCPUIndex(cpuIndex)) {
 
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during stepCPU: " + std::string(e.what()));
-        
-        // Capture exception as kernel panic
+        lastExecutionDiagnostic_ = e.what();
         CPU* cpu = getCPUForIndex(cpuIndex);
-        if (cpu) {
+        if (cpu && cpu->getArchitecture() == ISAArchitecture::IA64) {
             KernelPanic panic = panicDetector_.captureExceptionPanic(
                 e.what(), cpu->getState(), Bundle(), 0,
                 cyclesExecuted_, cyclesExecuted_
             );
             lastPanic_ = std::make_unique<KernelPanic>(panic);
+            bootStateMachine_.transition(VMBootState::KERNEL_PANIC,
+                                         std::string("Exception: ") + e.what());
         }
         
         state_ = VMState::ERROR;
-        bootStateMachine_.transition(VMBootState::KERNEL_PANIC, std::string("Exception: ") + e.what());
         return false;
     }
 }
@@ -1435,6 +1624,22 @@ uint64_t VirtualMachine::stepQuantum(int cpuIndex, uint64_t bundleCount) {
 
         activeCPUIndex_ = cpuIndex;
 
+        if (isaName_ == "PPC64") {
+            uint64_t instructionsExecuted = 0;
+            while (instructionsExecuted < bundleCount) {
+                const uint64_t cyclesBefore = cyclesExecuted_;
+                const bool keepGoing = stepCPU(cpuIndex);
+                const bool executed = cyclesExecuted_ != cyclesBefore;
+                if (executed) {
+                    ++instructionsExecuted;
+                }
+                if (!executed || !keepGoing) {
+                    break;
+                }
+            }
+            return instructionsExecuted;
+        }
+
         uint64_t bundlesExecuted = 0;
         for (; bundlesExecuted < bundleCount; ++bundlesExecuted) {
             if (!stepBundle()) {
@@ -1472,8 +1677,12 @@ void VirtualMachine::setQuantumSize(uint64_t bundleCount) {
     scheduler_->setQuantumSize(bundleCount);
     
     std::ostringstream oss;
-    oss << "Quantum size set to " << bundleCount << " bundles (" 
-        << (bundleCount * 3) << " instructions)";
+    if (isaName_ == "PPC64") {
+        oss << "PPC64 instruction quantum set to " << bundleCount << " instructions";
+    } else {
+        oss << "Quantum size set to " << bundleCount << " bundles ("
+            << (bundleCount * 3) << " instructions)";
+    }
     LOG_INFO(oss.str());
 }
 
@@ -1558,15 +1767,25 @@ VMStateSnapshot snapshot = snapshotManager_->resolveSnapshot(snapshotId);
 
 VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
     VMStateSnapshot snapshot;
+    snapshot.architecture = isaName_;
     
     // Capture CPU states
     for (size_t i = 0; i < cpus_.size(); ++i) {
         CPUSnapshotRecord cpuRecord;
         cpuRecord.cpuId = static_cast<uint32_t>(i);
+        cpuRecord.architecture = cpus_[i].isaPlugin
+            ? cpus_[i].isaPlugin->getName() : "legacy-IA-64";
         
         const CPUContext& ctx = cpus_[i];
         if (ctx.cpu) {
-            cpuRecord.architecturalState = ctx.cpu->getState();
+            if (ctx.cpu->getArchitecture() != ISAArchitecture::PPC64) {
+                cpuRecord.architecturalState = ctx.cpu->getState();
+            }
+            if (ctx.isaPlugin) {
+                cpuRecord.isaState = ctx.isaPlugin->serialize_state();
+                cpuRecord.lastExecutionDiagnostic =
+                    ctx.isaPlugin->getLastExecutionDiagnostic();
+            }
             cpuRecord.executionState = ctx.state;
             cpuRecord.cyclesExecuted = ctx.cyclesExecuted;
             cpuRecord.instructionsExecuted = ctx.instructionsExecuted;
@@ -1580,6 +1799,8 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
             cpuRecord.bundleValid = runtimeSnapshot.bundleValid;
             cpuRecord.pendingInterrupts = runtimeSnapshot.pendingInterrupts;
             cpuRecord.interruptVectorBase = runtimeSnapshot.interruptVectorBase;
+            cpuRecord.halted = runtimeSnapshot.halted;
+            cpuRecord.pendingCallInputs = runtimeSnapshot.pendingCallInputs;
         }
         
         snapshot.cpus.push_back(cpuRecord);
@@ -1611,11 +1832,301 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
     snapshot.vmStateValue = static_cast<uint32_t>(state_);
     snapshot.totalCyclesExecuted = cyclesExecuted_;
     snapshot.quantumSize = getQuantumSize();
+
+    if (isaName_ == "PPC64" && ppc64PartitionManager_) {
+        snapshot.ppc64PartitionTableConfigured = ppc64PartitionManager_->isConfigured();
+        snapshot.ppc64PartitionTableBase = ppc64PartitionManager_->partitionTableBase();
+        snapshot.ppc64PartitionTableSizeExponent =
+            ppc64PartitionManager_->partitionTableSizeExponent();
+        snapshot.ppc64PartitionSnapshots = ppc64PartitionManager_->serializePartitions();
+        const ppc64::PPC64ISAPlugin* plugin = getPPC64ISAPlugin();
+        snapshot.ppc64HasActiveLPID = plugin->hasActivePartitionContext();
+        snapshot.ppc64ActiveLPID = plugin->getActiveLPID();
+        snapshot.ppc64HypervisorMemoryConfigured =
+            plugin->hasHypervisorMemoryConfiguration();
+        snapshot.ppc64HypervisorMemoryBase = plugin->getHypervisorMemoryBase();
+        snapshot.ppc64HypervisorMemorySize = plugin->getHypervisorMemorySize();
+        snapshot.ppc64RadixConfigured = plugin->hasRadixTranslationConfiguration();
+        if (snapshot.ppc64RadixConfigured) {
+            snapshot.ppc64RadixConfiguration =
+                plugin->getRadixTranslationConfiguration();
+        }
+    }
     
     return snapshot;
 }
 
 bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot) {
+    return restoreVMSnapshot(snapshot, false);
+}
+
+bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
+                                       bool authorizeHypervisorState) {
+    if (isaName_ == "PPC64") {
+        const auto reject = [](const std::string& reason) {
+            LOG_ERROR("Rejected PPC64 VM snapshot: " + reason);
+            return false;
+        };
+        if (snapshot.architecture != "PPC64") {
+            return reject("architecture identity mismatch");
+        }
+        if (cpus_.size() != 1 || snapshot.cpus.size() != 1 ||
+            snapshot.activeCPUIndex < -1 || snapshot.activeCPUIndex >= 1) {
+            return reject("unsupported CPU count or active CPU index");
+        }
+        if (snapshot.consoleState.baseAddress != consoleDevice_->GetBaseAddress() ||
+            snapshot.timerState.baseAddress != timerDevice_->GetBaseAddress()) {
+            return reject("VM device configuration mismatch");
+        }
+        const CPUSnapshotRecord& cpuRecord = snapshot.cpus[0];
+        if (cpuRecord.cpuId != 0 || cpuRecord.architecture != "PPC64" ||
+            cpuRecord.isaState.empty() || cpuRecord.currentSlot != 0 ||
+            cpuRecord.bundleValid) {
+            return reject("missing or mismatched PPC64 CPU state");
+        }
+        if (snapshot.memoryState.data.size() != memory_->GetTotalSize()) {
+            return reject("RAM size mismatch");
+        }
+        if (snapshot.vmStateValue > static_cast<uint32_t>(VMState::RESTORING) ||
+            static_cast<uint32_t>(cpuRecord.executionState) >
+                static_cast<uint32_t>(CPUExecutionState::ERROR)) {
+            return reject("invalid VM or CPU lifecycle state");
+        }
+        if (snapshot.quantumSize == 0) {
+            return reject("instruction quantum must be nonzero");
+        }
+        if (snapshot.ppc64HasActiveLPID &&
+            (!snapshot.ppc64PartitionTableConfigured ||
+             snapshot.ppc64ActiveLPID > ppc64::PPC64_POWER9_MAX_LPID)) {
+            return reject("active LPID has no valid partition table");
+        }
+        if (!snapshot.ppc64PartitionTableConfigured &&
+            !snapshot.ppc64PartitionSnapshots.empty()) {
+            return reject("partition metadata exists without a configured table");
+        }
+        if (!snapshot.ppc64PartitionTableConfigured &&
+            (snapshot.ppc64PartitionTableBase != 0 ||
+             snapshot.ppc64PartitionTableSizeExponent != 0)) {
+            return reject("partition table fields exist without a configured table");
+        }
+        if (!snapshot.ppc64HasActiveLPID && snapshot.ppc64ActiveLPID != 0) {
+            return reject("inactive partition state contains an active LPID");
+        }
+        if (!snapshot.ppc64HypervisorMemoryConfigured &&
+            (snapshot.ppc64HypervisorMemoryBase != 0 ||
+             snapshot.ppc64HypervisorMemorySize != 0)) {
+            return reject("hypervisor memory range is inconsistent");
+        }
+        if (!snapshot.ppc64RadixConfigured &&
+            (snapshot.ppc64RadixConfiguration.size != 0 ||
+             snapshot.ppc64RadixConfiguration.processTableSizeExponent != 0 ||
+             snapshot.ppc64RadixConfiguration.processTableGuestRealBase != 0 ||
+             snapshot.ppc64RadixConfiguration.guestRealBase != 0 ||
+             snapshot.ppc64RadixConfiguration.hostBackingBase != 0)) {
+            return reject("radix configuration is inconsistent");
+        }
+
+        const size_t pageSize = memory_->GetMMU().GetPageSize();
+        for (const auto& mapping : snapshot.memoryState.pageTable) {
+            const uint64_t virtualAddress = mapping.first;
+            const PageEntry& entry = mapping.second;
+            if ((virtualAddress & (pageSize - 1U)) != 0 ||
+                (entry.physicalAddress & (pageSize - 1U)) != 0 ||
+                static_cast<uint64_t>(entry.permissions) & ~0x7ULL ||
+                entry.physicalAddress > snapshot.memoryState.data.size() ||
+                pageSize > snapshot.memoryState.data.size() - entry.physicalAddress) {
+                return reject("memory page table contains an invalid mapping");
+            }
+        }
+
+        // Restore into isolated objects first. The plugin, wrapper, memory and
+        // partition manager are all disposable until every cross-reference and
+        // serialized field has passed validation.
+        auto stagedMemory = std::make_unique<Memory>(snapshot.memoryState.data.size());
+        std::unique_ptr<ppc64::PPC64PartitionManager> stagedManager;
+        std::unique_ptr<IISA> stagedPluginOwner;
+        std::unique_ptr<CPU> stagedCPU;
+        std::unique_ptr<VirtualConsole> stagedConsole;
+        std::unique_ptr<VirtualTimer> stagedTimer;
+        std::unique_ptr<BasicInterruptController> stagedInterruptController;
+        try {
+            stagedMemory->RestoreSnapshot(snapshot.memoryState);
+            stagedManager = std::make_unique<ppc64::PPC64PartitionManager>();
+
+            stagedConsole = std::make_unique<VirtualConsole>(
+                snapshot.consoleState.baseAddress);
+            stagedConsole->restoreSnapshot(snapshot.consoleState);
+            stagedInterruptController =
+                std::make_unique<BasicInterruptController>();
+            stagedInterruptController->restoreSnapshot(
+                snapshot.interruptControllerState);
+            stagedTimer = std::make_unique<VirtualTimer>(
+                snapshot.timerState.baseAddress);
+            stagedTimer->AttachInterruptController(
+                stagedInterruptController.get());
+            stagedTimer->restoreSnapshot(snapshot.timerState);
+            stagedInterruptController->RegisterDeliveryCallback(
+                [this](uint8_t vector) {
+                    const int targetCPU = activeCPUIndex_ >= 0
+                        ? activeCPUIndex_ : 0;
+                    if (isValidCPUIndex(targetCPU) && cpus_[targetCPU].cpu) {
+                        cpus_[targetCPU].cpu->queueInterrupt(vector);
+                        if (cpus_[targetCPU].state ==
+                            CPUExecutionState::WAITING) {
+                            cpus_[targetCPU].state = CPUExecutionState::RUNNING;
+                        }
+                    }
+                });
+
+            if (snapshot.ppc64PartitionTableConfigured &&
+                snapshot.ppc64PartitionSnapshots.empty()) {
+                std::string reason;
+                if (snapshot.ppc64PartitionTableSizeExponent !=
+                        ppc64::PPC64_POWER9_PARTITION_TABLE_PATS ||
+                    !stagedManager->configurePartitionTable(
+                        *stagedMemory, snapshot.ppc64PartitionTableBase,
+                        snapshot.ppc64PartitionTableSizeExponent, reason)) {
+                    return reject("partition table restore failed: " + reason);
+                }
+            }
+
+            for (const auto& partitionSnapshot : snapshot.ppc64PartitionSnapshots) {
+                std::string reason;
+                if (!stagedManager->restorePartition(*stagedMemory,
+                                                     partitionSnapshot, reason)) {
+                    return reject("partition metadata restore failed: " + reason);
+                }
+                if (stagedManager->partitionTableBase() !=
+                        snapshot.ppc64PartitionTableBase ||
+                    stagedManager->partitionTableSizeExponent() !=
+                        snapshot.ppc64PartitionTableSizeExponent) {
+                    return reject("partition metadata disagrees with VM table configuration");
+                }
+            }
+            if (stagedManager->isConfigured() !=
+                    snapshot.ppc64PartitionTableConfigured) {
+                return reject("partition table configuration was not restored");
+            }
+
+            stagedPluginOwner = ISAPluginRegistry::instance().createISA("PPC64");
+            auto* stagedPlugin = dynamic_cast<ppc64::PPC64ISAPlugin*>(
+                stagedPluginOwner.get());
+            if (stagedPlugin == nullptr) {
+                return reject("PPC64 ISA factory returned an incompatible plugin");
+            }
+            stagedCPU = std::make_unique<CPU>(*stagedMemory, *stagedPlugin);
+
+            std::string reason;
+            if (snapshot.ppc64HypervisorMemoryConfigured &&
+                !stagedPlugin->configureHypervisorMemory(
+                    *stagedMemory, snapshot.ppc64HypervisorMemoryBase,
+                    snapshot.ppc64HypervisorMemorySize, reason)) {
+                return reject("hypervisor memory restore failed: " + reason);
+            }
+            if (snapshot.ppc64RadixConfigured &&
+                !stagedPlugin->configureRadixTranslation(
+                    snapshot.ppc64RadixConfiguration, *stagedMemory, reason)) {
+                return reject("radix configuration restore failed: " + reason);
+            }
+
+            std::shared_ptr<ppc64::PPC64PartitionContext> activeContext;
+            for (const auto& partitionSnapshot : snapshot.ppc64PartitionSnapshots) {
+                // The metadata has already been validated and installed above.
+                // The LPID is encoded in bytes 8..9 in the versioned Phase 8
+                // partition metadata format.
+                if (partitionSnapshot.size() < 10) {
+                    return reject("partition metadata is truncated");
+                }
+                const uint16_t lpid = static_cast<uint16_t>(partitionSnapshot[8]) |
+                    (static_cast<uint16_t>(partitionSnapshot[9]) << 8);
+                if (snapshot.ppc64HasActiveLPID &&
+                    lpid == snapshot.ppc64ActiveLPID) {
+                    activeContext = stagedManager->findPartition(lpid);
+                }
+            }
+            if (snapshot.ppc64HasActiveLPID) {
+                if (!activeContext ||
+                    !stagedPlugin->activatePartitionContext(activeContext, reason)) {
+                    return reject("active LPID restore failed: " + reason);
+                }
+            } else if (snapshot.ppc64ActiveLPID != 0) {
+                return reject("snapshot active LPID relationship is invalid");
+            }
+
+            if (authorizeHypervisorState) {
+                if (!snapshot.ppc64HypervisorMemoryConfigured) {
+                    return reject("HV authorization requires configured handler memory");
+                }
+                stagedPlugin->setMSR(ppc64::MSR_HV | ppc64::MSR_SF);
+            }
+            if (!stagedPlugin->deserialize_state(cpuRecord.isaState)) {
+                return reject("PPC64 architectural state failed restore validation or HV authorization");
+            }
+            const auto* restoredState = dynamic_cast<const ppc64::PPC64ISAState*>(
+                &stagedPlugin->getState());
+            if (restoredState == nullptr ||
+                ((restoredState->msr & (ppc64::MSR_IR | ppc64::MSR_DR)) != 0 &&
+                 !snapshot.ppc64RadixConfigured)) {
+                return reject("restored MSR requires an unavailable radix configuration");
+            }
+            if (snapshot.ppc64HasActiveLPID !=
+                stagedPlugin->hasActivePartitionContext()) {
+                return reject("active partition binding does not match snapshot metadata");
+            }
+        } catch (const std::exception& exception) {
+            return reject(std::string("staged restore failed: ") + exception.what());
+        } catch (...) {
+            return reject("staged restore failed with an unknown error");
+        }
+
+        // Commit. Drop the wrapper before its non-owning plugin, then release
+        // the old partition manager while its old memory is still alive.
+        cpus_[0].cpu.reset();
+        cpus_[0].isaPlugin.reset();
+        auto oldManager = std::move(ppc64PartitionManager_);
+        auto oldMemory = std::move(memory_);
+        if (oldManager) {
+            oldManager->destroyAllPartitions();
+        }
+
+        memory_ = std::move(stagedMemory);
+        ppc64PartitionManager_ = std::move(stagedManager);
+        cpus_[0].isaPlugin = std::move(stagedPluginOwner);
+        cpus_[0].cpu = std::move(stagedCPU);
+        consoleDevice_ = std::move(stagedConsole);
+        interruptController_ = std::move(stagedInterruptController);
+        timerDevice_ = std::move(stagedTimer);
+        cpus_[0].state = cpuRecord.executionState;
+        cpus_[0].cyclesExecuted = cpuRecord.cyclesExecuted;
+        cpus_[0].instructionsExecuted = cpuRecord.instructionsExecuted;
+        cpus_[0].idleCycles = cpuRecord.idleCycles;
+        cpus_[0].enabled = cpuRecord.enabled;
+        cpus_[0].lastActivationTime = cpuRecord.lastActivationTime;
+
+        CPURuntimeStateSnapshot runtimeState;
+        runtimeState.currentSlot = cpuRecord.currentSlot;
+        runtimeState.bundleValid = cpuRecord.bundleValid;
+        runtimeState.pendingInterrupts = cpuRecord.pendingInterrupts;
+        runtimeState.interruptVectorBase = cpuRecord.interruptVectorBase;
+        runtimeState.halted = cpuRecord.halted;
+        runtimeState.pendingCallInputs = cpuRecord.pendingCallInputs;
+        cpus_[0].cpu->restoreSnapshot(runtimeState);
+
+        activeCPUIndex_ = snapshot.activeCPUIndex;
+        state_ = static_cast<VMState>(snapshot.vmStateValue);
+        cyclesExecuted_ = snapshot.totalCyclesExecuted;
+        lastExecutionDiagnostic_ = cpuRecord.lastExecutionDiagnostic;
+        lastBreakReason_.clear();
+        if (scheduler_) {
+            scheduler_->setQuantumSize(snapshot.quantumSize);
+        }
+        return true;
+    }
+
+    if (!snapshot.architecture.empty() && snapshot.architecture != "IA-64") {
+        LOG_ERROR("Rejected IA-64 VM snapshot with a different architecture identity");
+        return false;
+    }
     // Validate snapshot
     if (snapshot.cpus.size() != cpus_.size()) {
         LOG_ERROR("Snapshot CPU count mismatch");
@@ -1690,8 +2201,10 @@ bool VirtualMachine::writeDiagnosticCheckpoint(const std::string& path,
 
 bool VirtualMachine::readDiagnosticCheckpoint(const std::string& path,
                                               const std::string& expectedGuestIdentity,
-                                              std::string* error) {
-    return VMCheckpointCodec::read(*this, path, expectedGuestIdentity, error);
+                                               std::string* error,
+                                               bool authorizeHypervisorState) {
+    return VMCheckpointCodec::read(*this, path, expectedGuestIdentity, error,
+                                   authorizeHypervisorState);
 }
 
 // ============================================================================

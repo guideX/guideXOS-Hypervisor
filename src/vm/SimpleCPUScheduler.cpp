@@ -136,8 +136,37 @@ uint64_t SimpleCPUScheduler::stepQuantum(std::vector<CPUContext*>& cpus, int cpu
     }
     
     CPUContext* ctx = cpus[cpuIndex];
-    if (!ctx || !ctx->enabled || !ctx->isRunning()) {
+    if (!ctx || !ctx->enabled || !ctx->isRunning() || !ctx->cpu) {
         return 0;
+    }
+
+    if (ctx->cpu->usesInstructionQuantum()) {
+        uint64_t instructionsExecuted = 0;
+        for (; instructionsExecuted < bundleCount;) {
+            if (!invokeBeforeScheduleCallbacks(cpuIndex, cpus)) {
+                invokeQuantumExpiredCallbacks(cpuIndex, instructionsExecuted);
+                return instructionsExecuted;
+            }
+            const uint64_t before = ctx->instructionsExecuted;
+            const bool keepGoing = executeSingleInstruction(ctx, cpuIndex);
+            if (ctx->instructionsExecuted != before) {
+                ++instructionsExecuted;
+                const size_t counterIndex = static_cast<size_t>(cpuIndex);
+                if (counterIndex < cpuBundleCounters_.size()) {
+                    ++cpuBundleCounters_[counterIndex];
+                }
+                if (!invokeAfterInstructionCallbacks(cpuIndex, instructionsExecuted)) {
+                    invokeQuantumExpiredCallbacks(cpuIndex, instructionsExecuted);
+                    return instructionsExecuted;
+                }
+            }
+            if (!keepGoing || !ctx->isRunning()) {
+                invokeQuantumExpiredCallbacks(cpuIndex, instructionsExecuted);
+                return instructionsExecuted;
+            }
+        }
+        invokeQuantumExpiredCallbacks(cpuIndex, instructionsExecuted);
+        return instructionsExecuted;
     }
     
     uint64_t bundlesExecuted = 0;
@@ -246,6 +275,18 @@ bool SimpleCPUScheduler::restoreSnapshot(const SimpleCPUSchedulerState& snapshot
 bool SimpleCPUScheduler::executeSingleInstruction(CPUContext* ctx, int cpuIndex) {
     if (!ctx || !ctx->cpu) {
         return false;
+    }
+
+    if (ctx->cpu->usesInstructionQuantum()) {
+        const ISAExecutionResult result = ctx->cpu->stepDetailed();
+        if (result != ISAExecutionResult::BREAKPOINT) {
+            ++ctx->cyclesExecuted;
+            ++ctx->instructionsExecuted;
+            onCPUExecuted(cpuIndex, 1);
+        }
+        return result == ISAExecutionResult::CONTINUE ||
+               result == ISAExecutionResult::INTERRUPT ||
+               result == ISAExecutionResult::SYSCALL;
     }
     
     // Execute one instruction

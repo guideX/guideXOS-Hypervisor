@@ -23,8 +23,11 @@ namespace ia64 {
 namespace {
 
 constexpr char kMagic[] = "GXIA64VM";
+constexpr char kPPC64Magic[] = "GXPPC64V";
 constexpr size_t kMagicSize = sizeof(kMagic) - 1;
 constexpr uint32_t kPayloadVersion = 1;
+constexpr uint32_t kPPC64FormatVersion = 1;
+constexpr uint32_t kPPC64PayloadVersion = 1;
 constexpr size_t kMaxHeaderString = 1U << 20;
 constexpr size_t kMaxPayloadBytes = (2ULL << 30);
 constexpr size_t kMaxPageEntries = 16U * 1024U * 1024U;
@@ -32,6 +35,7 @@ constexpr size_t kMaxCpuCount = 64;
 constexpr size_t kMaxDeviceBytes = 256U * 1024U * 1024U;
 constexpr uint32_t kLittleEndianMarker = 0x01020304U;
 constexpr const char* kCheckpointBuildIdentity = "guideXOS-Hypervisor/IA64-checkpoint-v1";
+constexpr const char* kPPC64CheckpointBuildIdentity = "guideXOS-Hypervisor/PPC64-VM-checkpoint-v1";
 
 void setError(std::string* error, const std::string& message) {
     if (error != nullptr) *error = message;
@@ -259,8 +263,9 @@ struct Header {
     std::string buildIdentity;
 };
 
-void writeHeader(Writer& writer, const Header& header) {
-    writer.raw(reinterpret_cast<const uint8_t*>(kMagic), kMagicSize);
+void writeHeader(Writer& writer, const Header& header,
+                 const char* magic = kMagic) {
+    writer.raw(reinterpret_cast<const uint8_t*>(magic), kMagicSize);
     writer.u32(header.version);
     writer.u32(0); // patched after variable-length fields are written
     writer.u64(header.payloadSize);
@@ -316,17 +321,19 @@ bool readString(std::istream& input, std::string& value, size_t maximum) {
     return readExact(input, reinterpret_cast<uint8_t*>(value.data()), value.size());
 }
 
-bool readHeader(std::istream& input, Header& header, std::string* error) {
+bool readHeader(std::istream& input, Header& header, std::string* error,
+                const char* expectedMagic = kMagic,
+                uint32_t expectedVersion = VMCheckpointCodec::kFormatVersion) {
     const std::streampos headerStart = input.tellg();
     std::array<uint8_t, kMagicSize> magic{};
     if (!readExact(input, magic.data(), magic.size()) ||
-        std::memcmp(magic.data(), kMagic, kMagicSize) != 0) {
+        std::memcmp(magic.data(), expectedMagic, kMagicSize) != 0) {
         setError(error, "invalid checkpoint magic or truncated header");
         return false;
     }
     uint32_t headerSize = 0;
     if (!readU32(input, header.version) || !readU32(input, headerSize) ||
-        header.version != VMCheckpointCodec::kFormatVersion) {
+        header.version != expectedVersion) {
         setError(error, "unsupported checkpoint format version");
         return false;
     }
@@ -441,6 +448,162 @@ bool readInterrupts(Reader& reader, InterruptControllerState& state) {
     return reader.valid();
 }
 
+bool readFlag(Reader& reader, bool& value) {
+    const uint8_t encoded = reader.u8();
+    if (!reader.valid() || encoded > 1) return false;
+    value = encoded != 0;
+    return true;
+}
+
+void writePPC64SnapshotPayload(Writer& writer,
+                               const VMStateSnapshot& snapshot) {
+    writer.u32(kPPC64PayloadVersion);
+    writer.string(snapshot.architecture);
+    writer.u32(snapshot.vmStateValue);
+    writer.u64(snapshot.totalCyclesExecuted);
+    writer.u64(snapshot.quantumSize);
+    writer.u32(static_cast<uint32_t>(snapshot.activeCPUIndex));
+    writer.u32(static_cast<uint32_t>(snapshot.cpus.size()));
+    for (const CPUSnapshotRecord& cpu : snapshot.cpus) {
+        writer.u32(cpu.cpuId);
+        writer.string(cpu.architecture);
+        writer.u32(static_cast<uint32_t>(cpu.executionState));
+        writer.u64(cpu.cyclesExecuted);
+        writer.u64(cpu.instructionsExecuted);
+        writer.u64(cpu.idleCycles);
+        writer.u8(cpu.enabled ? 1 : 0);
+        writer.u64(cpu.lastActivationTime);
+        writer.u64(static_cast<uint64_t>(cpu.currentSlot));
+        writer.u8(cpu.bundleValid ? 1 : 0);
+        writer.u8(cpu.halted ? 1 : 0);
+        writer.bytes(cpu.pendingInterrupts);
+        writer.u64(cpu.interruptVectorBase);
+        writer.u64(static_cast<uint64_t>(cpu.pendingCallInputs.size()));
+        for (uint64_t value : cpu.pendingCallInputs) writer.u64(value);
+        writer.bytes(cpu.isaState);
+        writer.string(cpu.lastExecutionDiagnostic);
+    }
+
+    writer.bytes(snapshot.memoryState.data);
+    writer.u64(static_cast<uint64_t>(snapshot.memoryState.pageTable.size()));
+    for (const auto& [virtualAddress, entry] : snapshot.memoryState.pageTable) {
+        writer.u64(virtualAddress);
+        writer.u64(entry.physicalAddress);
+        writer.u8(static_cast<uint8_t>(entry.permissions));
+        writer.u8(entry.present ? 1 : 0);
+        writer.u8(entry.accessed ? 1 : 0);
+        writer.u8(entry.dirty ? 1 : 0);
+    }
+    writeConsole(writer, snapshot.consoleState);
+    writeTimer(writer, snapshot.timerState);
+    writeInterrupts(writer, snapshot.interruptControllerState);
+
+    writer.u8(snapshot.ppc64PartitionTableConfigured ? 1 : 0);
+    writer.u64(snapshot.ppc64PartitionTableBase);
+    writer.u8(snapshot.ppc64PartitionTableSizeExponent);
+    writer.u8(snapshot.ppc64HasActiveLPID ? 1 : 0);
+    writer.u32(snapshot.ppc64ActiveLPID);
+    writer.u8(snapshot.ppc64HypervisorMemoryConfigured ? 1 : 0);
+    writer.u64(snapshot.ppc64HypervisorMemoryBase);
+    writer.u64(snapshot.ppc64HypervisorMemorySize);
+    writer.u8(snapshot.ppc64RadixConfigured ? 1 : 0);
+    writer.u64(snapshot.ppc64RadixConfiguration.processTableGuestRealBase);
+    writer.u8(snapshot.ppc64RadixConfiguration.processTableSizeExponent);
+    writer.u64(snapshot.ppc64RadixConfiguration.guestRealBase);
+    writer.u64(snapshot.ppc64RadixConfiguration.hostBackingBase);
+    writer.u64(snapshot.ppc64RadixConfiguration.size);
+    writer.u64(static_cast<uint64_t>(snapshot.ppc64PartitionSnapshots.size()));
+    for (const auto& partition : snapshot.ppc64PartitionSnapshots) {
+        writer.bytes(partition);
+    }
+}
+
+bool readPPC64SnapshotPayload(Reader& reader, const Header& header,
+                              VMStateSnapshot& snapshot) {
+    if (reader.u32() != kPPC64PayloadVersion) return false;
+    snapshot.architecture = reader.string(kMaxHeaderString);
+    snapshot.vmStateValue = reader.u32();
+    snapshot.totalCyclesExecuted = reader.u64();
+    snapshot.quantumSize = reader.u64();
+    snapshot.activeCPUIndex = static_cast<int32_t>(reader.u32());
+    const uint64_t cpuCount = reader.u32();
+    if (!reader.valid() || cpuCount != header.cpuCount || cpuCount != 1) return false;
+    snapshot.cpus.reserve(static_cast<size_t>(cpuCount));
+    for (uint64_t i = 0; i < cpuCount; ++i) {
+        CPUSnapshotRecord cpu;
+        cpu.cpuId = reader.u32();
+        cpu.architecture = reader.string(kMaxHeaderString);
+        cpu.executionState = static_cast<CPUExecutionState>(reader.u32());
+        cpu.cyclesExecuted = reader.u64();
+        cpu.instructionsExecuted = reader.u64();
+        cpu.idleCycles = reader.u64();
+        if (!readFlag(reader, cpu.enabled)) return false;
+        cpu.lastActivationTime = reader.u64();
+        const uint64_t slot = reader.u64();
+        if (!reader.valid() || slot > std::numeric_limits<size_t>::max()) return false;
+        cpu.currentSlot = static_cast<size_t>(slot);
+        if (!readFlag(reader, cpu.bundleValid) ||
+            !readFlag(reader, cpu.halted)) return false;
+        cpu.pendingInterrupts = reader.bytes(1'000'000);
+        cpu.interruptVectorBase = reader.u64();
+        const uint64_t inputCount = reader.u64();
+        if (!reader.valid() || inputCount > 1'000'000) return false;
+        cpu.pendingCallInputs.reserve(static_cast<size_t>(inputCount));
+        for (uint64_t n = 0; n < inputCount; ++n) {
+            cpu.pendingCallInputs.push_back(reader.u64());
+        }
+        cpu.isaState = reader.bytes(64U * 1024U * 1024U);
+        cpu.lastExecutionDiagnostic = reader.string(kMaxHeaderString);
+        if (!reader.valid()) return false;
+        snapshot.cpus.push_back(std::move(cpu));
+    }
+
+    snapshot.memoryState.data = reader.bytes(kMaxPayloadBytes);
+    if (!reader.valid() || snapshot.memoryState.data.size() != header.ramSize) return false;
+    snapshot.memoryState.mmuEnabled = header.mmuEnabled;
+    const uint64_t pageCount = reader.u64();
+    if (!reader.valid() || pageCount > kMaxPageEntries) return false;
+    for (uint64_t i = 0; i < pageCount; ++i) {
+        const uint64_t virtualAddress = reader.u64();
+        PageEntry entry;
+        entry.physicalAddress = reader.u64();
+        entry.permissions = static_cast<PermissionFlags>(reader.u8());
+        if (!readFlag(reader, entry.present) || !readFlag(reader, entry.accessed) ||
+            !readFlag(reader, entry.dirty) ||
+            !snapshot.memoryState.pageTable.emplace(virtualAddress, entry).second) {
+            return false;
+        }
+    }
+    if (!readConsole(reader, snapshot.consoleState) ||
+        !readTimer(reader, snapshot.timerState) ||
+        !readInterrupts(reader, snapshot.interruptControllerState)) return false;
+
+    if (!readFlag(reader, snapshot.ppc64PartitionTableConfigured)) return false;
+    snapshot.ppc64PartitionTableBase = reader.u64();
+    snapshot.ppc64PartitionTableSizeExponent = reader.u8();
+    if (!readFlag(reader, snapshot.ppc64HasActiveLPID)) return false;
+    const uint32_t activeLPID = reader.u32();
+    if (!reader.valid() || activeLPID > std::numeric_limits<uint16_t>::max()) return false;
+    snapshot.ppc64ActiveLPID = static_cast<uint16_t>(activeLPID);
+    if (!readFlag(reader, snapshot.ppc64HypervisorMemoryConfigured)) return false;
+    snapshot.ppc64HypervisorMemoryBase = reader.u64();
+    snapshot.ppc64HypervisorMemorySize = reader.u64();
+    if (!readFlag(reader, snapshot.ppc64RadixConfigured)) return false;
+    snapshot.ppc64RadixConfiguration.processTableGuestRealBase = reader.u64();
+    snapshot.ppc64RadixConfiguration.processTableSizeExponent = reader.u8();
+    snapshot.ppc64RadixConfiguration.guestRealBase = reader.u64();
+    snapshot.ppc64RadixConfiguration.hostBackingBase = reader.u64();
+    snapshot.ppc64RadixConfiguration.size = reader.u64();
+    const uint64_t partitionCount = reader.u64();
+    if (!reader.valid() || partitionCount > 65'536) return false;
+    snapshot.ppc64PartitionSnapshots.reserve(static_cast<size_t>(partitionCount));
+    for (uint64_t i = 0; i < partitionCount; ++i) {
+        snapshot.ppc64PartitionSnapshots.push_back(
+            reader.bytes(64U * 1024U * 1024U));
+    }
+    return reader.valid();
+}
+
 struct ParsedCPU {
     uint32_t id = 0;
     CPUExecutionState executionState = CPUExecutionState::IDLE;
@@ -465,6 +628,87 @@ bool VMCheckpointCodec::write(const VirtualMachine& vm,
                               const std::string& guestIdentity,
                               std::string* error) {
     try {
+        if (vm.isaName_ == "PPC64") {
+            if (guestIdentity.empty()) {
+                setError(error, "guest identity is required");
+                return false;
+            }
+            if (vm.cpus_.size() != 1 || !vm.cpus_[0].cpu ||
+                !vm.cpus_[0].isaPlugin || !vm.memory_ ||
+                !vm.consoleDevice_ || !vm.timerDevice_ ||
+                !vm.interruptController_) {
+                setError(error, "PPC64 checkpoint machine is incomplete");
+                return false;
+            }
+            if (dynamic_cast<const SimpleCPUScheduler*>(vm.scheduler_.get()) == nullptr) {
+                setError(error, "unsupported scheduler for PPC64 checkpoint");
+                return false;
+            }
+
+            const VMStateSnapshot snapshot = vm.captureVMSnapshot();
+            if (snapshot.architecture != "PPC64" || snapshot.cpus.size() != 1 ||
+                !snapshot.additionalDevices.empty() ||
+                snapshot.cpus[0].architecture != "PPC64" ||
+                snapshot.cpus[0].isaState.empty() ||
+                snapshot.cpus[0].currentSlot != 0 ||
+                snapshot.cpus[0].bundleValid ||
+                !snapshot.cpus[0].currentBundle.empty()) {
+                setError(error, "PPC64 VM state is not at a supported instruction boundary");
+                return false;
+            }
+            if (snapshot.memoryState.data.empty() ||
+                snapshot.memoryState.data.size() != vm.memory_->GetTotalSize() ||
+                snapshot.memoryState.data.size() > kMaxPayloadBytes) {
+                setError(error, "PPC64 checkpoint RAM size is invalid");
+                return false;
+            }
+
+            Writer payload;
+            writePPC64SnapshotPayload(payload, snapshot);
+            if (payload.data.size() > kMaxPayloadBytes) {
+                setError(error, "checkpoint payload is too large");
+                return false;
+            }
+            Header header;
+            header.version = kPPC64FormatVersion;
+            header.payloadSize = payload.data.size();
+            header.payloadHash = sha256(payload.data);
+            header.ramSize = snapshot.memoryState.data.size();
+            header.cpuCount = 1;
+            header.endianMarker = kLittleEndianMarker;
+            header.pageSize = vm.memory_->GetMMU().GetPageSize();
+            header.mmuEnabled = snapshot.memoryState.mmuEnabled;
+            header.consoleBase = snapshot.consoleState.baseAddress;
+            header.timerBase = snapshot.timerState.baseAddress;
+            header.checkpointCycles = snapshot.totalCyclesExecuted;
+            header.checkpointIP = vm.cpus_[0].cpu->getIP();
+            header.checkpointSlot = 0;
+            header.guestIdentity = guestIdentity;
+            header.architecture = "PPC64";
+            header.checkpointKind = "complete-vm-snapshot";
+            header.buildIdentity = kPPC64CheckpointBuildIdentity;
+            Writer headerBytes;
+            writeHeader(headerBytes, header, kPPC64Magic);
+
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            if (!output) {
+                setError(error, "cannot open checkpoint for writing");
+                return false;
+            }
+            output.write(reinterpret_cast<const char*>(headerBytes.data.data()),
+                         static_cast<std::streamsize>(headerBytes.data.size()));
+            output.write(reinterpret_cast<const char*>(payload.data.data()),
+                         static_cast<std::streamsize>(payload.data.size()));
+            if (!output.good()) {
+                setError(error, "checkpoint write failed");
+                return false;
+            }
+            return true;
+        }
+        if (vm.isaName_ != "IA-64") {
+            setError(error, "diagnostic checkpoint codec supports IA-64 and PPC64 only");
+            return false;
+        }
         if (guestIdentity.empty()) { setError(error, "guest identity is required"); return false; }
         if (vm.cpus_.empty() || vm.cpus_.size() > kMaxCpuCount || !vm.memory_ ||
             !vm.consoleDevice_ || !vm.timerDevice_ || !vm.interruptController_ || !vm.framebufferDevice_) {
@@ -558,10 +802,77 @@ bool VMCheckpointCodec::write(const VirtualMachine& vm,
 bool VMCheckpointCodec::read(VirtualMachine& vm,
                              const std::string& path,
                              const std::string& expectedGuestIdentity,
-                             std::string* error) {
+                             std::string* error,
+                             bool authorizeHypervisorState) {
     try {
         std::ifstream input(path, std::ios::binary);
         if (!input) { setError(error, "cannot open checkpoint for reading"); return false; }
+
+        std::array<uint8_t, kMagicSize> fileMagic{};
+        const bool hasMagic = readExact(input, fileMagic.data(), fileMagic.size());
+        input.clear();
+        input.seekg(0);
+        if (hasMagic && std::memcmp(fileMagic.data(), kPPC64Magic, kMagicSize) == 0) {
+            Header ppcHeader;
+            if (!readHeader(input, ppcHeader, error, kPPC64Magic,
+                            kPPC64FormatVersion)) return false;
+            if (vm.isaName_ != "PPC64" || ppcHeader.architecture != "PPC64" ||
+                ppcHeader.buildIdentity != kPPC64CheckpointBuildIdentity ||
+                ppcHeader.checkpointKind != "complete-vm-snapshot" ||
+                (!expectedGuestIdentity.empty() &&
+                 ppcHeader.guestIdentity != expectedGuestIdentity)) {
+                setError(error, "checkpoint guest identity or architecture mismatch");
+                return false;
+            }
+            if (!vm.memory_ || vm.cpus_.size() != 1 ||
+                !vm.consoleDevice_ || !vm.timerDevice_ ||
+                !vm.interruptController_ ||
+                ppcHeader.ramSize != vm.memory_->GetTotalSize() ||
+                ppcHeader.cpuCount != 1 ||
+                ppcHeader.pageSize != vm.memory_->GetMMU().GetPageSize() ||
+                ppcHeader.consoleBase != vm.consoleDevice_->GetBaseAddress() ||
+                ppcHeader.timerBase != vm.timerDevice_->GetBaseAddress() ||
+                ppcHeader.framebufferBase != 0 || ppcHeader.framebufferSize != 0 ||
+                ppcHeader.checkpointSlot != 0 ||
+                ppcHeader.payloadSize > kMaxPayloadBytes) {
+                setError(error, "PPC64 checkpoint machine configuration mismatch");
+                return false;
+            }
+
+            std::vector<uint8_t> payload(static_cast<size_t>(ppcHeader.payloadSize));
+            if (!readExact(input, payload.data(), payload.size())) {
+                setError(error, "checkpoint payload is truncated");
+                return false;
+            }
+            if (input.peek() != std::char_traits<char>::eof()) {
+                setError(error, "checkpoint contains trailing bytes after payload");
+                return false;
+            }
+            if (sha256(payload) != ppcHeader.payloadHash) {
+                setError(error, "checkpoint payload hash mismatch");
+                return false;
+            }
+
+            Reader ppcReader(payload);
+            VMStateSnapshot snapshot;
+            if (!readPPC64SnapshotPayload(ppcReader, ppcHeader, snapshot) ||
+                ppcReader.remaining() != 0 ||
+                snapshot.architecture != "PPC64" ||
+                snapshot.totalCyclesExecuted != ppcHeader.checkpointCycles ||
+                snapshot.consoleState.baseAddress != ppcHeader.consoleBase ||
+                snapshot.timerState.baseAddress != ppcHeader.timerBase) {
+                setError(error, "PPC64 checkpoint payload is invalid");
+                return false;
+            }
+            if (!vm.restoreVMSnapshot(snapshot, authorizeHypervisorState)) {
+                setError(error, "PPC64 checkpoint restore validation failed");
+                return false;
+            }
+            return true;
+        }
+
+        input.clear();
+        input.seekg(0);
         Header header;
         if (!readHeader(input, header, error)) return false;
         if (header.architecture != "IA-64" ||

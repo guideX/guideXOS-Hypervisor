@@ -50,8 +50,10 @@ CPUContext::CPUContext(CPUContext&& other) noexcept
 
 CPUContext& CPUContext::operator=(CPUContext&& other) noexcept {
     if (this != &other) {
-        isaPlugin = std::move(other.isaPlugin);
+        // CPU holds a non-owning reference to the plugin. Destroy/release the
+        // old wrapper before replacing its owner.
         cpu = std::move(other.cpu);
+        isaPlugin = std::move(other.isaPlugin);
         cpuId = other.cpuId;
         state = other.state;
         cyclesExecuted = other.cyclesExecuted;

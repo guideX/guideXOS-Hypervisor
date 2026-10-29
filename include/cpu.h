@@ -159,6 +159,9 @@ public:
     // ICPU interface implementation
     void reset() override;
     bool step() override;
+    // Typed plugin result used by architecture-aware VM execution. The legacy
+    // bool step() API remains for existing ICPU clients.
+    ISAExecutionResult stepDetailed();
     void executeInstruction(const InstructionEx& instr) override;
     
     // Register access interface (ICPU implementation)
@@ -208,6 +211,15 @@ public:
     // ISA plugin support
     bool isUsingISAPlugin() const { return isaPlugin_ != nullptr; }
     IISA* getISAPlugin() const { return isaPlugin_; }
+    ISAArchitecture getArchitecture() const {
+        return isaPlugin_ ? isaPlugin_->getArchitecture() : ISAArchitecture::IA64;
+    }
+    ISAExecutionUnit getExecutionUnit() const {
+        return isaPlugin_ ? isaPlugin_->getExecutionUnit() : ISAExecutionUnit::BUNDLE;
+    }
+    bool usesInstructionQuantum() const {
+        return getExecutionUnit() == ISAExecutionUnit::INSTRUCTION;
+    }
     bool isHalted() const { return halted_; }
 
     void queueInterrupt(uint8_t vector);

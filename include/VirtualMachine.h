@@ -29,6 +29,11 @@
 
 namespace ia64 {
 
+namespace ppc64 {
+class PPC64ISAPlugin;
+class PPC64PartitionManager;
+}
+
 // Forward declarations
 class CPU;
 class Memory;
@@ -148,6 +153,25 @@ struct DebuggerSnapshot {
         , cyclesExecuted(0) {}
 };
 
+struct PPC64RegisterView {
+    uint64_t gpr[32]{};
+    uint64_t nip = 0;
+    uint64_t lr = 0;
+    uint64_t ctr = 0;
+    uint32_t cr = 0;
+    uint32_t xer = 0;
+    uint64_t msr = 0;
+    uint32_t pidr = 0;
+    uint64_t srr0 = 0;
+    uint64_t srr1 = 0;
+    uint64_t dar = 0;
+    uint32_t dsisr = 0;
+    uint64_t hsrr0 = 0;
+    uint64_t hsrr1 = 0;
+    uint64_t hdar = 0;
+    uint32_t hdsisr = 0;
+};
+
 /**
  * VirtualMachine - Complete IA-64 virtual machine implementation
  * 
@@ -229,6 +253,8 @@ public:
     bool init() override;
     bool reset() override;
     void halt() override;
+    bool pause();
+    bool resume();
 
     // ========================================================================
     // IVirtualMachine Implementation - Execution
@@ -631,18 +657,32 @@ public:
      * @return true if restoration succeeded
      */
     bool restoreVMSnapshot(const VMStateSnapshot& snapshot);
+    bool restoreVMSnapshot(const VMStateSnapshot& snapshot,
+                           bool authorizeHypervisorState);
+
+    // PPC64 host configuration and inspection. These return null/throw when
+    // called on a VM with another architecture.
+    ppc64::PPC64ISAPlugin* getPPC64ISAPlugin(int cpuIndex = 0);
+    const ppc64::PPC64ISAPlugin* getPPC64ISAPlugin(int cpuIndex = 0) const;
+    ppc64::PPC64PartitionManager* getPPC64PartitionManager();
+    const ppc64::PPC64PartitionManager* getPPC64PartitionManager() const;
+    PPC64RegisterView getPPC64RegisterView(int cpuIndex = 0) const;
+    std::string getLastExecutionDiagnostic() const;
+    std::string getArchitectureName() const { return isaName_; }
 
     /**
      * Write/read the optional, full-state on-disk diagnostic checkpoint.
-     * The checkpoint can only be written at the post-ExitBootServices kernel
-     * handoff boundary exposed by IA64ISAPlugin.
+     * IA-64 diagnostic checkpoints retain their post-ExitBootServices
+     * handoff restriction. PPC64 uses an architecture-discriminated complete
+     * VM snapshot; restoring HV state requires explicit host authorization.
      */
     bool writeDiagnosticCheckpoint(const std::string& path,
                                    const std::string& guestIdentity,
                                    std::string* error = nullptr) const;
     bool readDiagnosticCheckpoint(const std::string& path,
                                   const std::string& expectedGuestIdentity,
-                                  std::string* error = nullptr);
+                                  std::string* error = nullptr,
+                                  bool authorizeHypervisorState = false);
     uint64_t getCyclesExecuted() const { return cyclesExecuted_; }
 
 private:
@@ -652,6 +692,7 @@ private:
     // ========================================================================
 
     std::unique_ptr<Memory> memory_;                // Memory system (shared)
+    std::unique_ptr<ppc64::PPC64PartitionManager> ppc64PartitionManager_;
     std::unique_ptr<class ProcessorInterruptBlock> processorInterruptBlock_;
     std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder (shared)
     std::vector<CPUContext> cpus_;                  // CPU contexts (isolated state)
@@ -679,6 +720,8 @@ private:
     size_t maxSnapshotHistory_;
     uint64_t cyclesExecuted_;                       // Total cycles executed (all CPUs)
     std::string lastBreakReason_;
+    std::string lastExecutionDiagnostic_;
+    std::string isaName_;
     
     // VM Snapshot Manager
     std::unique_ptr<class VMSnapshotManager> snapshotManager_;

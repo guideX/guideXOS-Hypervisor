@@ -1361,5 +1361,52 @@ size_t PPC64PartitionManager::partitionCount() const {
     return partitions_.size();
 }
 
+bool PPC64PartitionManager::isConfigured() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return configured_;
+}
+
+uint64_t PPC64PartitionManager::partitionTableBase() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return partitionTableBase_;
+}
+
+uint8_t PPC64PartitionManager::partitionTableSizeExponent() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return partitionTableSizeExponent_;
+}
+
+std::vector<std::vector<uint8_t>> PPC64PartitionManager::serializePartitions() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<uint16_t, std::vector<uint8_t>>> ordered;
+    ordered.reserve(partitions_.size());
+    for (const auto& entry : partitions_) {
+        ordered.emplace_back(entry.first, entry.second->serializeSnapshot());
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) {
+        return left.first < right.first;
+    });
+    std::vector<std::vector<uint8_t>> snapshots;
+    snapshots.reserve(ordered.size());
+    for (auto& entry : ordered) {
+        snapshots.push_back(std::move(entry.second));
+    }
+    return snapshots;
+}
+
+void PPC64PartitionManager::destroyAllPartitions() {
+    std::vector<uint16_t> lpids;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        lpids.reserve(partitions_.size());
+        for (const auto& entry : partitions_) {
+            lpids.push_back(entry.first);
+        }
+    }
+    for (uint16_t lpid : lpids) {
+        destroyPartition(lpid);
+    }
+}
+
 } // namespace ppc64
 } // namespace ia64

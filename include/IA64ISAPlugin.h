@@ -182,6 +182,8 @@ public:
     
     std::string getName() const override { return "IA-64"; }
     std::string getVersion() const override { return "1.0"; }
+    ISAArchitecture getArchitecture() const override { return ISAArchitecture::IA64; }
+    ISAExecutionUnit getExecutionUnit() const override { return ISAExecutionUnit::BUNDLE; }
     
     void reset() override;
     

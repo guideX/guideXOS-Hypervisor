@@ -137,6 +137,11 @@ public:
     bool registerSharedBackingRange(uint64_t base, uint64_t size,
                                    std::string& reason);
     size_t partitionCount() const;
+    bool isConfigured() const;
+    uint64_t partitionTableBase() const;
+    uint8_t partitionTableSizeExponent() const;
+    std::vector<std::vector<uint8_t>> serializePartitions() const;
+    void destroyAllPartitions();
 
 private:
     mutable std::mutex mutex_;

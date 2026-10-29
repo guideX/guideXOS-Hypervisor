@@ -23,7 +23,8 @@ public:
     static bool read(VirtualMachine& vm,
                      const std::string& path,
                      const std::string& expectedGuestIdentity,
-                     std::string* error);
+                     std::string* error,
+                     bool authorizeHypervisorState = false);
 };
 
 } // namespace ia64

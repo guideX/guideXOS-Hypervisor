@@ -204,46 +204,10 @@ state_.Reset();
 bool CPU::step() {
     // If using ISA plugin, delegate execution to it
     if (isaPlugin_) {
-        if (halted_) {
-            return false;
-        }
-        servicePendingInterrupt();
-        
-        ISAExecutionResult result = isaPlugin_->step(memory_);
-
-        const auto advanceITC = [this]() {
-            if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
-                ia64->advanceITC();
-            } else {
-                getState().AdvanceITC();
-            }
-        };
-        
-        switch (result) {
-        case ISAExecutionResult::CONTINUE:
-            advanceITC();
-            return true;
-        case ISAExecutionResult::HALT:
-            halted_ = true;
-            return false;
-        case ISAExecutionResult::EXCEPTION:
-            std::cerr << "Exception during execution\n";
-            return false;
-        case ISAExecutionResult::INTERRUPT:
-            // Interrupt was handled, continue
-            advanceITC();
-            return true;
-        case ISAExecutionResult::SYSCALL:
-            // Syscall was handled, continue
-            advanceITC();
-            return true;
-        case ISAExecutionResult::BREAKPOINT:
-            // Breakpoint hit, pause execution
-            return false;
-        default:
-            advanceITC();
-            return true;
-        }
+        const ISAExecutionResult result = stepDetailed();
+        return result == ISAExecutionResult::CONTINUE ||
+               result == ISAExecutionResult::INTERRUPT ||
+               result == ISAExecutionResult::SYSCALL;
     }
     
     // Legacy implementation
@@ -721,6 +685,9 @@ uint64_t CPU::getInterruptVectorBase() const {
 }
 
 bool CPU::isAtBundleBoundary() const {
+    if (usesInstructionQuantum()) {
+        return true;
+    }
     return !bundleValid_ || currentSlot_ == 0 || currentSlot_ >= currentBundle_.instructions.size();
 }
 
@@ -730,7 +697,9 @@ size_t CPU::getCurrentSlot() const {
 
 CPURuntimeStateSnapshot CPU::createSnapshot() const {
     CPURuntimeStateSnapshot snapshot;
-    snapshot.architecturalState = getState();
+    if (!isaPlugin_ || isaPlugin_->getArchitecture() == ISAArchitecture::IA64) {
+        snapshot.architecturalState = getState();
+    }
     snapshot.currentBundle = currentBundle_;
     snapshot.currentSlot = currentSlot_;
     snapshot.bundleValid = bundleValid_;
@@ -776,13 +745,67 @@ bool CPU::servicePendingInterrupt() {
     return true;
 }
 
+ISAExecutionResult CPU::stepDetailed() {
+    if (!isaPlugin_) {
+        if (step()) {
+            return ISAExecutionResult::CONTINUE;
+        }
+        return halted_ ? ISAExecutionResult::HALT : ISAExecutionResult::EXCEPTION;
+    }
+    if (halted_) {
+        return ISAExecutionResult::HALT;
+    }
+
+    const bool isIA64 = isaPlugin_->getArchitecture() == ISAArchitecture::IA64;
+    if (isIA64) {
+        servicePendingInterrupt();
+    }
+    const ISAExecutionResult result = isaPlugin_->step(memory_);
+
+    // ITC belongs to IA-64 architectural state. A plugin CPU must never
+    // advance the wrapper's legacy CPUState as a fallback.
+    const auto advanceIA64ITC = [this, isIA64]() {
+        if (!isIA64) {
+            return;
+        }
+        if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
+            ia64->advanceITC();
+        }
+    };
+
+    switch (result) {
+    case ISAExecutionResult::CONTINUE:
+    case ISAExecutionResult::INTERRUPT:
+    case ISAExecutionResult::SYSCALL:
+        advanceIA64ITC();
+        break;
+    case ISAExecutionResult::HALT:
+        halted_ = true;
+        break;
+    case ISAExecutionResult::EXCEPTION:
+        std::cerr << "Exception during execution\n";
+        break;
+    case ISAExecutionResult::BREAKPOINT:
+        break;
+    default:
+        advanceIA64ITC();
+        break;
+    }
+    return result;
+}
+
 // Register access methods (delegates to CPUState)
 
 uint64_t CPU::readGR(size_t index) const {
     if (isaPlugin_) {
+        uint64_t value = 0;
+        if (isaPlugin_->readGeneralRegister(index, value)) {
+            return value;
+        }
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->readGR(index);
         }
+        throw std::logic_error("ISA plugin does not expose general registers through ICPU");
     }
 
     // Profile register read
@@ -795,10 +818,14 @@ uint64_t CPU::readGR(size_t index) const {
 
 void CPU::writeGR(size_t index, uint64_t value) {
     if (isaPlugin_) {
+        if (isaPlugin_->writeGeneralRegister(index, value)) {
+            return;
+        }
         if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
             ia64->writeGR(index, value);
             return;
         }
+        throw std::logic_error("ISA plugin does not expose writable general registers through ICPU");
     }
 
     // Profile register write
@@ -814,6 +841,7 @@ bool CPU::readPR(size_t index) const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->readPR(index);
         }
+        throw std::logic_error("predicate registers are not supported by this ISA");
     }
 
     // Profile register read
@@ -830,6 +858,7 @@ void CPU::writePR(size_t index, bool value) {
             ia64->writePR(index, value);
             return;
         }
+        throw std::logic_error("predicate registers are not supported by this ISA");
     }
 
     // Profile register write
@@ -845,6 +874,7 @@ uint64_t CPU::readBR(size_t index) const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->readBR(index);
         }
+        throw std::logic_error("branch registers are not supported by this ISA");
     }
 
     // Branch registers are never rotated
@@ -863,6 +893,7 @@ void CPU::writeBR(size_t index, uint64_t value) {
             ia64->writeBR(index, value);
             return;
         }
+        throw std::logic_error("branch registers are not supported by this ISA");
     }
 
     // Profile register write
@@ -897,6 +928,7 @@ uint64_t CPU::getCFM() const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->getCFM();
         }
+        throw std::logic_error("CFM is not architectural state for this ISA");
     }
 
     return state_.GetCFM();
@@ -908,6 +940,7 @@ void CPU::setCFM(uint64_t value) {
             ia64->setCFM(value);
             return;
         }
+        throw std::logic_error("CFM is not architectural state for this ISA");
     }
 
     state_.SetCFM(value);
@@ -918,6 +951,7 @@ const CPUState& CPU::getState() const {
         if (const auto* ia64State = dynamic_cast<const IA64ISAState*>(&isaPlugin_->getState())) {
             return ia64State->getCPUState();
         }
+        throw std::logic_error("CPUState view is not supported for this ISA");
     }
     return state_;
 }
@@ -927,6 +961,7 @@ CPUState& CPU::getState() {
         if (auto* ia64State = dynamic_cast<IA64ISAState*>(&isaPlugin_->getState())) {
             return ia64State->getCPUState();
         }
+        throw std::logic_error("CPUState view is not supported for this ISA");
     }
     return state_;
 }

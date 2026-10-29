@@ -560,6 +560,19 @@ public:
     // IISA identity
     std::string getName() const override { return "PPC64"; }
     std::string getVersion() const override { return "8.0-phase8-partial"; }
+    ISAArchitecture getArchitecture() const override { return ISAArchitecture::PPC64; }
+    ISAExecutionUnit getExecutionUnit() const override { return ISAExecutionUnit::INSTRUCTION; }
+    bool readGeneralRegister(size_t index, uint64_t& value) const override {
+        value = readGPR(index);
+        return true;
+    }
+    bool writeGeneralRegister(size_t index, uint64_t value) override {
+        writeGPR(index, value);
+        return true;
+    }
+    std::string getLastExecutionDiagnostic() const override {
+        return lastFault_.valid ? lastFault_.reason : std::string();
+    }
     void reset() override;
 
     // Decode / execute
@@ -620,8 +633,13 @@ public:
     bool hasHypervisorMemoryConfiguration() const {
         return hypervisorMemoryConfigured_;
     }
+    uint64_t getHypervisorMemoryBase() const { return hypervisorMemoryBase_; }
+    uint64_t getHypervisorMemorySize() const { return hypervisorMemorySize_; }
     void clearRadixTranslationConfiguration();
     bool hasRadixTranslationConfiguration() const { return radixConfigured_; }
+    const PPC64RadixConfiguration& getRadixTranslationConfiguration() const {
+        return radixConfiguration_;
+    }
     PPC64TranslationResult translateEffectiveAddress(
         IMemory& memory, uint64_t effectiveAddress,
         PPC64TranslationAccess access) const;
