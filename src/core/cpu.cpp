@@ -373,11 +373,21 @@ size_t CPUState::MapGR(size_t logical) const {
         return logical;
     }
     const size_t rotatingSize = static_cast<size_t>(GetSOR()) * 8;
-    if (rotatingSize == 0 || logical >= NUM_STATIC_GR + rotatingSize) {
-        return logical;
+    size_t stackedOffset = logical - NUM_STATIC_GR;
+    if (rotatingSize != 0 && stackedOffset < rotatingSize) {
+        stackedOffset = (stackedOffset + GetRRB_GR()) % rotatingSize;
     }
     return NUM_STATIC_GR +
-           ((logical - NUM_STATIC_GR + GetRRB_GR()) % rotatingSize);
+           ((static_cast<size_t>(rse_.bof) + stackedOffset) %
+            NUM_STACKED_GENERAL_REGISTERS);
+}
+
+size_t CPUState::GetRSEPhysicalIndex(size_t stackedOffset) const {
+    if (stackedOffset >= NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::out_of_range("RSE stacked register offset out of range");
+    }
+    return (static_cast<size_t>(rse_.bof) + stackedOffset) %
+           NUM_STACKED_GENERAL_REGISTERS;
 }
 
 size_t CPUState::MapFR(size_t logical) const {
@@ -680,10 +690,6 @@ void CPUState::SetAR(size_t index, uint64_t value) {
             break;
         case 64:
             rse_.pfs = value;
-            rse_.cfm = value;
-            rse_.sof = static_cast<uint8_t>(value & 0x7F);
-            rse_.sol = static_cast<uint8_t>((value >> 7) & 0x7F);
-            rse_.sor = static_cast<uint8_t>((value >> 14) & 0xF);
             break;
         default:
             break;
@@ -691,10 +697,23 @@ void CPUState::SetAR(size_t index, uint64_t value) {
 }
 
 void CPUState::WriteBSPSTORE(uint64_t value) {
+    if ((GetRSC() & 0x3ULL) != 0) {
+        throw std::runtime_error("IA-64 BSPSTORE write requires enforced-lazy RSC mode");
+    }
     const uint64_t dirtyRegisters = rseRegistersBetween(GetBSPSTORE(), GetBSP());
     const uint64_t newBspstore = value & ~0x7ULL;
     SetBSPSTORE(newBspstore);
     SetBSP(skipRseRegisters(newBspstore, static_cast<int64_t>(dirtyRegisters)));
+    rse_.bspLoad = newBspstore;
+    rse_.loadReg = rse_.storeReg;
+    SetRNAT(0);
+    for (size_t i = 0; i < NUM_STACKED_GENERAL_REGISTERS; ++i) {
+        if (rse_.physicalPartition[i] == RSERegisterPartition::CLEAN) {
+            rse_.physicalPartition[i] = RSERegisterPartition::INVALID;
+            gr_[NUM_STATIC_GR + i] = 0;
+            gr_nat_[NUM_STATIC_GR + i] = false;
+        }
+    }
 }
 
 RSERegisterPartition CPUState::GetRSEPhysicalPartition(size_t stackedIndex) const {
@@ -713,20 +732,48 @@ void CPUState::SetRSEPhysicalPartition(size_t stackedIndex,
 }
 
 void CPUState::AdvanceBSPForCall() {
-    SetBSP(skipRseRegisters(GetBSP(), static_cast<int64_t>(GetSOL())));
+    const uint64_t callerCfm = GetCFM();
+    const uint8_t callerSof = GetSOF();
+    const uint8_t callerSol = GetSOL();
+    if (callerSol > callerSof || callerSof > NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::runtime_error("IA-64 br.call encountered an invalid caller CFM");
+    }
+    const uint8_t outputCount = static_cast<uint8_t>(callerSof - callerSol);
+    const uint8_t oldBof = rse_.bof;
+    for (size_t offset = 0; offset < callerSol; ++offset) {
+        const size_t physical = (static_cast<size_t>(oldBof) + offset) %
+                                NUM_STACKED_GENERAL_REGISTERS;
+        if (rse_.physicalPartition[physical] != RSERegisterPartition::INVALID) {
+            rse_.physicalPartition[physical] = RSERegisterPartition::DIRTY;
+        }
+    }
+    rse_.bof = static_cast<uint8_t>((static_cast<size_t>(oldBof) + callerSol) %
+                                    NUM_STACKED_GENERAL_REGISTERS);
+    SetBSP(skipRseRegisters(GetBSP(), static_cast<int64_t>(callerSol)));
+    SetPFS(callerCfm);
+    SetCFM(outputCount);
+    for (size_t offset = 0; offset < outputCount; ++offset) {
+        const size_t physical = (static_cast<size_t>(rse_.bof) + offset) %
+                                NUM_STACKED_GENERAL_REGISTERS;
+        rse_.physicalPartition[physical] = RSERegisterPartition::CURRENT;
+    }
 }
 
-void CPUState::RewindBSPForReturn(uint8_t callerSol) {
-    const uint64_t returnedBsp =
-        skipRseRegisters(GetBSP(), -static_cast<int64_t>(callerSol));
-    SetBSP(returnedBsp);
-    if (GetBSPSTORE() > returnedBsp) {
-        // A return to a frame below the current spill pointer requires the RSE
-        // to refill that frame. Backing-store fills are not modeled here, but
-        // the call-frame snapshot restores the registers; move the store
-        // boundary back to the returned frame rather than leaving an
-        // architecturally incomplete (BSPSTORE > BSP) RSE state.
-        SetBSPSTORE(returnedBsp);
+void CPUState::RewindBSPForReturn() {
+    const uint64_t callerCfm = GetPFS();
+    const uint8_t callerSol = static_cast<uint8_t>((callerCfm >> 7) & 0x7FULL);
+    if (callerSol > NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::runtime_error("IA-64 br.ret encountered an invalid PFS.SOL");
+    }
+    rse_.bof = static_cast<uint8_t>((static_cast<size_t>(rse_.bof) +
+                                    NUM_STACKED_GENERAL_REGISTERS - callerSol) %
+                                    NUM_STACKED_GENERAL_REGISTERS);
+    SetBSP(skipRseRegisters(GetBSP(), -static_cast<int64_t>(callerSol)));
+    SetCFM(callerCfm);
+    for (size_t offset = 0; offset < GetSOF(); ++offset) {
+        const size_t physical = (static_cast<size_t>(rse_.bof) + offset) %
+                                NUM_STACKED_GENERAL_REGISTERS;
+        rse_.physicalPartition[physical] = RSERegisterPartition::CURRENT;
     }
 }
 

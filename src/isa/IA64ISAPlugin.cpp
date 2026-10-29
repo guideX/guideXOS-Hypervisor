@@ -2015,6 +2015,9 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
     const RSEState& rse = cpuState_.GetRSEState();
     std::memcpy(buffer + offset, &rse.bspLoad, sizeof(rse.bspLoad));
     offset += sizeof(rse.bspLoad);
+    buffer[offset++] = rse.bof;
+    buffer[offset++] = rse.storeReg;
+    buffer[offset++] = rse.loadReg;
     for (RSERegisterPartition partition : rse.physicalPartition) {
         buffer[offset++] = static_cast<uint8_t>(partition);
     }
@@ -2098,6 +2101,14 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
     RSEState rse = cpuState_.GetRSEState();
     std::memcpy(&rse.bspLoad, buffer + offset, sizeof(rse.bspLoad));
     offset += sizeof(rse.bspLoad);
+    rse.bof = buffer[offset++];
+    rse.storeReg = buffer[offset++];
+    rse.loadReg = buffer[offset++];
+    if (rse.bof >= NUM_STACKED_GENERAL_REGISTERS ||
+        rse.storeReg >= NUM_STACKED_GENERAL_REGISTERS ||
+        rse.loadReg >= NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::invalid_argument("Invalid RSE ring position in ISA state");
+    }
     for (RSERegisterPartition& partition : rse.physicalPartition) {
         const uint8_t encodedPartition = buffer[offset++];
         if (encodedPartition > static_cast<uint8_t>(RSERegisterPartition::CURRENT)) {
@@ -2159,6 +2170,7 @@ size_t IA64ISAState::getStateSize() const {
     size += NUM_BRANCH_REGISTERS * sizeof(uint64_t);   // BRs
     size += NUM_APPLICATION_REGISTERS * sizeof(uint64_t); // ARs
     size += sizeof(uint64_t);               // RSE.BspLoad
+    size += 3;                               // RSE.BOF/store/load ring indices
     size += NUM_STACKED_GENERAL_REGISTERS;  // physical RSE partition
     size += 3 * sizeof(uint64_t);                      // IP, CFM, PSR
     
@@ -2224,7 +2236,6 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , profiler_(nullptr)
     , cachedInstruction_()
     , hasCachedInstruction_(false)
-    , pendingCallInputs_()
     , efiCurrentTpl_(4)
     , lastEfiDescriptorFieldAddress_(0)
     , efiProtocolAttachments_()
@@ -2293,8 +2304,6 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder)
     , efiBootImageFromVmManager_(false)
     , efiHandoffLayoutMemorySize_(0)
     , efiHandoffLayoutInitialized_(false)
-    , callFrameStack_()
-    , completedCallFrames_()
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
     , pendingRegisterConfigEntryArmed_(false)
@@ -2313,7 +2322,6 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , profiler_(profiler)
     , cachedInstruction_()
     , hasCachedInstruction_(false)
-    , pendingCallInputs_()
     , efiCurrentTpl_(4)
     , lastEfiDescriptorFieldAddress_(0)
     , efiProtocolAttachments_()
@@ -2382,8 +2390,6 @@ IA64ISAPlugin::IA64ISAPlugin(IDecoder& decoder,
     , efiBootImageFromVmManager_(false)
     , efiHandoffLayoutMemorySize_(0)
     , efiHandoffLayoutInitialized_(false)
-    , callFrameStack_()
-    , completedCallFrames_()
     , pendingRegisterConfigEntryTarget_(0)
     , pendingRegisterConfigEntryCallsite_(0)
     , pendingRegisterConfigEntryArmed_(false)
@@ -2787,8 +2793,6 @@ void IA64ISAPlugin::reset() {
     interruptTelemetry_ = IA64InterruptTelemetry();
     lastInterruptTransactionValid_ = false;
     hasCachedInstruction_ = false;
-    pendingCallInputs_.clear();
-    interruptFrameStack_.clear();
     recentInstructions_.clear();
     recentTrackedRegisterWrites_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
@@ -2865,8 +2869,6 @@ void IA64ISAPlugin::reset() {
     efiBootImageFromVmManager_ = false;
     efiHandoffLayoutMemorySize_ = 0;
     efiHandoffLayoutInitialized_ = false;
-    callFrameStack_.clear();
-    completedCallFrames_.clear();
     pendingRegisterConfigEntryTarget_ = 0;
     pendingRegisterConfigEntryCallsite_ = 0;
     pendingRegisterConfigEntryArmed_ = false;
@@ -3298,14 +3300,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             if (executeInstruction(memory, cachedInstruction_, true)) {
                 hasCachedInstruction_ = false;
                 return ISAExecutionResult::CONTINUE;
-            }
-            if (!interruptFrameStack_.empty()) {
-                const CallFrameSnapshot frame = interruptFrameStack_.back();
-                interruptFrameStack_.pop_back();
-                cpu.SetCFM(frame.cfm);
-                for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
-                    cpu.SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
-                }
             }
             const uint64_t normalizedIP = normalizeRfiEntryIP(cpu.GetIP());
             const size_t restoredSlot = static_cast<size_t>((restoredPSR >> 41) & 0x3ULL);
@@ -4721,31 +4715,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                     readCallerOutputRegister(state_.getCPUState(), i);
                             }
                         }
-                        saveCallFrame(currentIP + 16);
-                        captureCallOutputRegisters();
-                        // A real br.call performs the register-stack rename
-                        // before control reaches the callee: the caller's
-                        // output area becomes callee r32+, and the callee's
-                        // initial frame consists only of that output area.
-                        // The legacy bridge above copies those values into
-                        // the logical r32+ view; publish the corresponding
-                        // PFS/CFM transition as well so the callee's alloc
-                        // sees the caller CFM in ar.pfs and the correct
-                        // output-area frame size.
-                        const uint64_t callerCfm = state_.getCPUState().GetCFM();
-                        const size_t callerOutputCount =
-                            static_cast<size_t>(state_.getCPUState().GetSOF()) >
-                                static_cast<size_t>(state_.getCPUState().GetSOL())
-                            ? static_cast<size_t>(state_.getCPUState().GetSOF()) -
-                                  static_cast<size_t>(state_.getCPUState().GetSOL())
-                            : 0;
-                        // br.call moves the caller's local area from the
-                        // current frame into the dirty partition. The BSP
-                        // advances by CFM.sol, skipping each RNAT collection
-                        // slot as specified by the RSE.
-                        state_.getCPUState().AdvanceBSPForCall();
-                        state_.getCPUState().SetPFS(callerCfm);
-                        state_.getCPUState().SetCFM(static_cast<uint64_t>(callerOutputCount));
                         if (traceRegisterConfigCallsite) {
                             const CPUState& callCpu = state_.getCPUState();
                             std::ostringstream trace;
@@ -4947,9 +4916,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     }
                 }
             }
-            if (cachedInstruction_.GetType() == InstructionType::ALLOC) {
-                applyPendingCallInputRegisters();
-            }
         }
 
         if (traceA5d && cachedInstruction_.GetType() == InstructionType::POPCNT) {
@@ -5083,14 +5049,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             if (branchEntryIP == 0x10) {
                 emitPalTrace("target-0x10", branchTarget, branchEntryIP);
-            }
-            if (cachedInstruction_.GetType() == InstructionType::BR_RET && livePredicateTrue) {
-                // IA-64 virtual-mode helpers can return through the canonical
-                // kernel alias even when the call frame was entered through
-                // the flat replay address.  Call-frame keys are stored at the
-                // normalized bundle address, so normalize the return before
-                // looking up the saved frame.
-                restoreCallFrame(normalizeBranchEntryIP(branchTarget));
             }
             rememberBranchTarget(branchEntryIP);
             if (traceA5d) {
@@ -5331,8 +5289,6 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     interruptTelemetry_ = IA64InterruptTelemetry();
     lastInterruptTransactionValid_ = false;
     hasCachedInstruction_ = false;
-    pendingCallInputs_.clear();
-    interruptFrameStack_.clear();
     resetEfiProtocolAttachments();
     efiTextOutputCalls_ = 0;
     efiTextOutputMirrored_ = 0;
@@ -5397,8 +5353,6 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     efiBootImage_.clear();
     efiBootFat_.reset();
     efiBootImageFromVmManager_ = false;
-    callFrameStack_.clear();
-    completedCallFrames_.clear();
 }
 
 namespace {
@@ -5486,7 +5440,7 @@ private:
     bool valid_;
 };
 
-constexpr uint32_t kIA64CheckpointBlobVersion = 6;
+constexpr uint32_t kIA64CheckpointBlobVersion = 7;
 constexpr size_t kMaxCheckpointVectorEntries = 1'000'000;
 constexpr size_t kMaxCheckpointStringBytes = 1'048'576;
 constexpr size_t kMaxCheckpointBlobBytes = 64 * 1024 * 1024;
@@ -5575,6 +5529,9 @@ std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
     writer.u8(rse.sol);
     writer.u8(rse.sor);
     writer.u64(rse.bspLoad);
+    writer.u8(rse.bof);
+    writer.u8(rse.storeReg);
+    writer.u8(rse.loadReg);
     for (RSERegisterPartition partition : rse.physicalPartition) {
         writer.u8(static_cast<uint8_t>(partition));
     }
@@ -5588,27 +5545,6 @@ std::vector<uint8_t> IA64ISAPlugin::serializeCheckpointState() const {
     for (bool predicate : state_.predicateGroupSnapshot_) writer.u8(predicate ? 1 : 0);
     writer.u64(state_.interruptVectorBase_);
     writer.bytes(state_.pendingInterrupts_);
-    writer.u64(static_cast<uint64_t>(pendingCallInputs_.size()));
-    for (uint64_t value : pendingCallInputs_) writer.u64(value);
-
-    writer.u64(static_cast<uint64_t>(callFrameStack_.size()));
-    for (const CallFrameSnapshot& frame : callFrameStack_) {
-        for (uint64_t value : frame.stackedRegisters) writer.u64(value);
-        writer.u64(frame.cfm);
-        writer.u64(frame.returnAddress);
-    }
-    std::vector<uint64_t> completedKeys;
-    completedKeys.reserve(completedCallFrames_.size());
-    for (const auto& entry : completedCallFrames_) completedKeys.push_back(entry.first);
-    std::sort(completedKeys.begin(), completedKeys.end());
-    writer.u64(static_cast<uint64_t>(completedKeys.size()));
-    for (uint64_t key : completedKeys) {
-        const CallFrameSnapshot& frame = completedCallFrames_.at(key);
-        writer.u64(key);
-        for (uint64_t value : frame.stackedRegisters) writer.u64(value);
-        writer.u64(frame.cfm);
-        writer.u64(frame.returnAddress);
-    }
 
     writer.u64(efiCurrentTpl_);
     writer.u64(static_cast<uint64_t>(efiExitBootServicesCalls_));
@@ -5833,6 +5769,12 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         rse.sol = reader.u8();
         rse.sor = reader.u8();
         rse.bspLoad = reader.u64();
+        rse.bof = reader.u8();
+        rse.storeReg = reader.u8();
+        rse.loadReg = reader.u8();
+        if (rse.bof >= NUM_STACKED_GENERAL_REGISTERS ||
+            rse.storeReg >= NUM_STACKED_GENERAL_REGISTERS ||
+            rse.loadReg >= NUM_STACKED_GENERAL_REGISTERS) return false;
         for (RSERegisterPartition& partition : rse.physicalPartition) {
             const uint8_t encodedPartition = reader.u8();
             if (encodedPartition > static_cast<uint8_t>(RSERegisterPartition::CURRENT)) {
@@ -5870,32 +5812,6 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         for (bool& predicate : predicateSnapshot) predicate = reader.u8() != 0;
         const uint64_t interruptVectorBase = reader.u64();
         const std::vector<uint8_t> pendingInterrupts = reader.bytes(kMaxCheckpointVectorEntries);
-        const uint64_t pendingInputCount = reader.u64();
-        if (!reader.valid() || pendingInputCount > kMaxCheckpointVectorEntries) return false;
-        std::vector<uint64_t> pendingInputs;
-        pendingInputs.reserve(static_cast<size_t>(pendingInputCount));
-        for (uint64_t i = 0; i < pendingInputCount; ++i) pendingInputs.push_back(reader.u64());
-
-        const uint64_t callFrameCount = reader.u64();
-        if (!reader.valid() || callFrameCount > kMaxCheckpointVectorEntries) return false;
-        std::vector<CallFrameSnapshot> callFrames;
-        callFrames.resize(static_cast<size_t>(callFrameCount));
-        for (CallFrameSnapshot& frame : callFrames) {
-            for (uint64_t& value : frame.stackedRegisters) value = reader.u64();
-            frame.cfm = reader.u64();
-            frame.returnAddress = reader.u64();
-        }
-        const uint64_t completedCount = reader.u64();
-        if (!reader.valid() || completedCount > kMaxCheckpointVectorEntries) return false;
-        std::unordered_map<uint64_t, CallFrameSnapshot> completed;
-        for (uint64_t i = 0; i < completedCount; ++i) {
-            const uint64_t key = reader.u64();
-            CallFrameSnapshot frame;
-            for (uint64_t& value : frame.stackedRegisters) value = reader.u64();
-            frame.cfm = reader.u64();
-            frame.returnAddress = reader.u64();
-            completed.emplace(key, frame);
-        }
 
         const uint64_t restoredTpl = reader.u64();
         const uint64_t restoredExitCount = reader.u64();
@@ -6140,9 +6056,6 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         state_.predicateGroupSnapshot_ = predicateSnapshot;
         state_.interruptVectorBase_ = interruptVectorBase;
         state_.pendingInterrupts_ = pendingInterrupts;
-        pendingCallInputs_ = std::move(pendingInputs);
-        callFrameStack_ = std::move(callFrames);
-        completedCallFrames_ = std::move(completed);
         efiCurrentTpl_ = restoredTpl;
         efiExitBootServicesCalls_ = static_cast<size_t>(restoredExitCount);
         efiTotalFileBytesRead_ = restoredFileBytes;
@@ -6695,98 +6608,6 @@ void IA64ISAPlugin::fetchBundle(IMemory& memory) {
 void IA64ISAPlugin::capturePredicateGroupSnapshot() {
     for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
         state_.predicateGroupSnapshot_[i] = state_.getCPUState().GetPR(i);
-    }
-}
-
-void IA64ISAPlugin::captureCallOutputRegisters() {
-    pendingCallInputs_.clear();
-
-    const uint8_t sof = state_.getCPUState().GetSOF();
-    const uint8_t sol = state_.getCPUState().GetSOL();
-    if (sof <= sol) {
-        return;
-    }
-
-    const size_t outputCount = static_cast<size_t>(sof - sol);
-    const size_t firstOutput = 32 + sol;
-    for (size_t i = 0; i < outputCount && firstOutput + i < NUM_GENERAL_REGISTERS; ++i) {
-        const uint64_t value = state_.getCPUState().GetGR(firstOutput + i);
-        pendingCallInputs_.push_back(value);
-    }
-
-    // A call exposes only the caller's output area to the callee.  The
-    // remaining stacked-register view must not retain values from the caller
-    // frame.  Model the architecturally undefined newly visible registers as
-    // zero so an out-of-frame read cannot consume stale caller state.
-    for (size_t i = 0; i < NUM_GENERAL_REGISTERS - NUM_STATIC_GR; ++i) {
-        state_.getCPUState().SetGR(NUM_STATIC_GR + i, 0);
-    }
-    for (size_t i = 0; i < pendingCallInputs_.size(); ++i) {
-        state_.getCPUState().SetGR(NUM_STATIC_GR + i, pendingCallInputs_[i]);
-    }
-}
-
-void IA64ISAPlugin::applyPendingCallInputRegisters() {
-    if (pendingCallInputs_.empty()) {
-        return;
-    }
-
-    for (size_t i = 0; i < pendingCallInputs_.size() && 32 + i < NUM_GENERAL_REGISTERS; ++i) {
-        state_.getCPUState().SetGR(32 + i, pendingCallInputs_[i]);
-    }
-
-    pendingCallInputs_.clear();
-}
-
-void IA64ISAPlugin::saveCallFrame(uint64_t returnAddress) {
-    CallFrameSnapshot frame{};
-    frame.cfm = state_.getCPUState().GetCFM();
-    frame.returnAddress = returnAddress;
-    for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
-        frame.stackedRegisters[i] = state_.getCPUState().GetGR(NUM_STATIC_GR + i);
-    }
-    callFrameStack_.push_back(frame);
-}
-
-void IA64ISAPlugin::restoreCallFrame(uint64_t branchTarget) {
-    size_t matchIndex = callFrameStack_.size();
-    while (matchIndex > 0) {
-        --matchIndex;
-        if (callFrameStack_[matchIndex].returnAddress == branchTarget) {
-            break;
-        }
-    }
-    if (matchIndex < callFrameStack_.size() &&
-        callFrameStack_[matchIndex].returnAddress == branchTarget) {
-        const CallFrameSnapshot frame = callFrameStack_[matchIndex];
-        completedCallFrames_[frame.returnAddress] = frame;
-        callFrameStack_.erase(callFrameStack_.begin() + matchIndex, callFrameStack_.end());
-
-        CPUState& returnCpu = state_.getCPUState();
-        const uint8_t callerSol = static_cast<uint8_t>((frame.cfm >> 7) & 0x7FULL);
-        returnCpu.RewindBSPForReturn(callerSol);
-        state_.getCPUState().SetCFM(frame.cfm);
-        // The snapshot contains logical stacked-register values from the caller
-        // frame.  Restore that frame's CFM before writing them so the active RRB
-        // mapping addresses the caller's physical backing registers.
-        for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
-            state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
-        }
-        return;
-    }
-
-    // setjmp returns normally once, so its active call frame is removed.  A
-    // later longjmp re-enters the saved continuation without an active frame;
-    // recover the most recent completed snapshot for that return address.
-    const auto completedFrame = completedCallFrames_.find(branchTarget);
-    if (completedFrame != completedCallFrames_.end()) {
-        const CallFrameSnapshot& frame = completedFrame->second;
-
-        state_.getCPUState().SetCFM(frame.cfm);
-        for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
-            state_.getCPUState().SetGR(NUM_STATIC_GR + i, frame.stackedRegisters[i]);
-        }
-        return;
     }
 }
 
@@ -9380,17 +9201,6 @@ bool IA64ISAPlugin::servicePendingInterrupt() {
     const uint64_t handlerAddress = normalizeKernelEntryIP(
         (iva != 0 ? iva : state_.interruptVectorBase_) +
         ia64IvtEntryOffset(IA64_EXTERNAL_INTERRUPT_VECTOR));
-    // The interrupted frame must survive the handler's own register-stack use.
-    // Snapshot the CFM and the logical GR32+ view now; rfi restores it.
-    {
-        CallFrameSnapshot frame{};
-        frame.cfm = cpu.GetCFM();
-        frame.returnAddress = cpu.GetCR(IA64_CR_IIP);
-        for (size_t i = 0; i < frame.stackedRegisters.size(); ++i) {
-            frame.stackedRegisters[i] = cpu.GetGR(NUM_STATIC_GR + i);
-        }
-        interruptFrameStack_.push_back(frame);
-    }
     cpu.SetIP(handlerAddress);
     state_.bundleValid_ = false;
     state_.currentSlot_ = 0;

@@ -66,6 +66,14 @@ int main() {
         require(framePlugin.hasInServiceInterrupt(),
                 "interrupt frame test marks the vector in service");
 
+        // The handler saves the interrupted register frame architecturally
+        // before using the stacked-register ring. RFI consumes CR.IFS; no
+        // plugin-owned register snapshot participates in this path.
+        InstructionEx cover(InstructionType::COVER, UnitType::B_UNIT);
+        cover.Execute(framePlugin.getCPUState(), frameMemory);
+        require(framePlugin.getCPUState().GetRSEBOF() == 4,
+                "interrupt handler cover advances the physical register-stack base");
+
         // The handler clobbers the register stack with its own frame.
         framePlugin.getCPUState().SetCFM(0x895);
         framePlugin.getCPUState().SetGR(32, 0xDEAD'BEEF'DEAD'BEEFULL);

@@ -172,7 +172,6 @@ if (isaPlugin_) {
     bundleValid_ = false;
     currentBundle_ = Bundle();
     pendingInterrupts_.clear();
-    pendingCallInputs_.clear();
     interruptVectorBase_ = 0;
     return;
 }
@@ -186,7 +185,6 @@ state_.Reset();
     bundleValid_ = false;
     currentBundle_ = Bundle();
     pendingInterrupts_.clear();
-    pendingCallInputs_.clear();
     interruptVectorBase_ = 0;
     
     // IA-64 specific initialization:
@@ -397,7 +395,6 @@ void CPU::executeInstruction(const InstructionEx& instr) {
                         ? instr.GetBranchTarget()
                         : state_.GetBR(instr.GetSrc1());
                     isBranch = true;
-                    captureCallOutputRegisters();
                 }
                 break;
                 
@@ -456,10 +453,6 @@ void CPU::executeInstruction(const InstructionEx& instr) {
             instr.Execute(state_, memory_);
         }
 
-        if (instr.GetType() == InstructionType::ALLOC && predicateTrue) {
-            applyPendingCallInputRegisters();
-        }
-        
         // Handle branch after execution (so br.call can save return address)
         if (isBranch) {
             const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
@@ -482,98 +475,6 @@ void CPU::executeInstruction(const InstructionEx& instr) {
         LOG_WARN(oss.str());
         std::cerr << oss.str() << std::endl;
     }
-}
-
-void CPU::captureCallOutputRegisters() {
-    pendingCallInputs_.clear();
-
-    const uint8_t sof = state_.GetSOF();
-    const uint8_t sol = state_.GetSOL();
-    if (sof <= sol) {
-        return;
-    }
-
-    const size_t outputCount = static_cast<size_t>(sof - sol);
-    const size_t firstOutput = 32 + sol;
-    for (size_t i = 0; i < outputCount && firstOutput + i < NUM_GENERAL_REGISTERS; ++i) {
-        const uint64_t value = state_.GetGR(firstOutput + i);
-        pendingCallInputs_.push_back(value);
-        state_.SetGR(32 + i, value);
-    }
-
-    const uint64_t currentIP = state_.GetIP();
-    bool traceBridge = false;
-    for (const uint64_t value : pendingCallInputs_) {
-        if (value >= 0x5E000ULL && value <= 0x5E080ULL) {
-            traceBridge = true;
-            break;
-        }
-    }
-    if (!traceBridge) {
-        traceBridge = currentIP == 0x1D30ULL ||
-                      currentIP == 0x33CA0ULL ||
-                      currentIP == 0x34D40ULL ||
-                      currentIP == 0x1CC0ULL ||
-                      currentIP == 0x1A50ULL;
-    }
-    if (traceBridge) {
-        std::ostringstream oss;
-        oss << "[IA64-RSE] capture-call-inputs ip=0x" << std::hex << currentIP
-            << " sof=" << std::dec << static_cast<int>(sof)
-            << " sol=" << static_cast<int>(sol)
-            << " outputCount=" << outputCount
-            << " firstOutput=r" << firstOutput
-            << " mapped=[";
-        for (size_t i = 0; i < pendingCallInputs_.size(); ++i) {
-            if (i != 0) {
-                oss << ',';
-            }
-            oss << "r" << (32 + i) << "=0x" << std::hex << pendingCallInputs_[i];
-        }
-        oss << "]";
-        std::cout << oss.str() << std::endl;
-    }
-}
-
-void CPU::applyPendingCallInputRegisters() {
-    if (pendingCallInputs_.empty()) {
-        return;
-    }
-
-    for (size_t i = 0; i < pendingCallInputs_.size() && 32 + i < NUM_GENERAL_REGISTERS; ++i) {
-        state_.SetGR(32 + i, pendingCallInputs_[i]);
-    }
-
-    const uint64_t currentIP = state_.GetIP();
-    bool traceBridge = false;
-    for (const uint64_t value : pendingCallInputs_) {
-        if (value >= 0x5E000ULL && value <= 0x5E080ULL) {
-            traceBridge = true;
-            break;
-        }
-    }
-    if (!traceBridge) {
-        traceBridge = currentIP == 0x1D30ULL ||
-                      currentIP == 0x33C80ULL ||
-                      currentIP == 0x33CA0ULL ||
-                      currentIP == 0x34D40ULL ||
-                      currentIP == 0x2EDF0ULL;
-    }
-    if (traceBridge) {
-        std::ostringstream oss;
-        oss << "[IA64-RSE] apply-call-inputs ip=0x" << std::hex << currentIP
-            << " mapped=[";
-        for (size_t i = 0; i < pendingCallInputs_.size(); ++i) {
-            if (i != 0) {
-                oss << ',';
-            }
-            oss << "r" << (32 + i) << "=0x" << std::hex << pendingCallInputs_[i];
-        }
-        oss << "]";
-        std::cout << oss.str() << std::endl;
-    }
-
-    pendingCallInputs_.clear();
 }
 
 void CPU::fetchBundle() {
@@ -737,7 +638,6 @@ CPURuntimeStateSnapshot CPU::createSnapshot() const {
     snapshot.pendingInterrupts.assign(pendingInterrupts_.begin(), pendingInterrupts_.end());
     snapshot.interruptVectorBase = interruptVectorBase_;
     snapshot.halted = halted_;
-    snapshot.pendingCallInputs = pendingCallInputs_;
     return snapshot;
 }
 
@@ -757,7 +657,6 @@ void CPU::restoreSnapshot(const CPURuntimeStateSnapshot& snapshot) {
     pendingInterrupts_.assign(snapshot.pendingInterrupts.begin(), snapshot.pendingInterrupts.end());
     interruptVectorBase_ = snapshot.interruptVectorBase;
     halted_ = snapshot.halted;
-    pendingCallInputs_ = snapshot.pendingCallInputs;
 }
 
 bool CPU::servicePendingInterrupt() {

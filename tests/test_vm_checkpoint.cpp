@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -27,16 +28,29 @@ void check(bool condition, const char* description) {
 bool sameRse(const ia64::RSEState& left, const ia64::RSEState& right) {
     return left.cfm == right.cfm && left.rsc == right.rsc && left.bsp == right.bsp &&
            left.bspstore == right.bspstore && left.rnat == right.rnat && left.pfs == right.pfs &&
-           left.bspLoad == right.bspLoad && left.physicalPartition == right.physicalPartition &&
+           left.bspLoad == right.bspLoad && left.bof == right.bof &&
+           left.storeReg == right.storeReg && left.loadReg == right.loadReg &&
+           left.physicalPartition == right.physicalPartition &&
            left.sof == right.sof && left.sol == right.sol && left.sor == right.sor;
 }
 
 } // namespace
 
+namespace ia64 {
+struct IA64ISAPluginCheckpointTestAccess {
+    static void markPostHandoffCheckpointBoundary(IA64ISAPlugin& plugin) {
+        plugin.efiHandoffCheckpointConsumed_ = true;
+    }
+    static void clearPostHandoffCheckpointBoundary(IA64ISAPlugin& plugin) {
+        plugin.efiHandoffCheckpointConsumed_ = false;
+    }
+};
+} // namespace ia64
+
 int main() {
-    ia64::VirtualMachine vm(1 * 1024 * 1024, 1, "IA-64");
-    check(vm.init(), "minimal IA-64 VM initializes");
-    ia64::CPUContext* context = vm.getCPUContext(0);
+    auto vm = std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
+    check(vm->init(), "minimal IA-64 VM initializes");
+    ia64::CPUContext* context = vm->getCPUContext(0);
     check(context != nullptr && context->cpu != nullptr, "CPU context is available");
     if (context == nullptr || context->cpu == nullptr) return failures == 0 ? 1 : failures;
 
@@ -72,6 +86,9 @@ int main() {
     rse.sol = 3;
     rse.sor = 1;
     rse.bspLoad = 0x17800ULL;
+    rse.bof = 7;
+    rse.storeReg = 91;
+    rse.loadReg = 19;
     rse.physicalPartition[0] = ia64::RSERegisterPartition::DIRTY;
     rse.physicalPartition[1] = ia64::RSERegisterPartition::CLEAN;
     rse.physicalPartition[2] = ia64::RSERegisterPartition::CURRENT;
@@ -199,14 +216,80 @@ int main() {
 
     std::vector<uint8_t> expectedMemory(256);
     for (size_t i = 0; i < expectedMemory.size(); ++i) expectedMemory[i] = static_cast<uint8_t>(i ^ 0x5A);
-    vm.getMemory().loadBuffer(0x4000, expectedMemory);
-    const ia64::MemorySnapshot memorySnapshot = dynamic_cast<ia64::Memory&>(vm.getMemory()).CreateSnapshot();
+    vm->getMemory().loadBuffer(0x4000, expectedMemory);
+    const ia64::MemorySnapshot memorySnapshot = dynamic_cast<ia64::Memory&>(vm->getMemory()).CreateSnapshot();
     std::vector<uint8_t> zeroes(expectedMemory.size(), 0);
-    vm.getMemory().loadBuffer(0x4000, zeroes);
-    dynamic_cast<ia64::Memory&>(vm.getMemory()).RestoreSnapshot(memorySnapshot);
+    vm->getMemory().loadBuffer(0x4000, zeroes);
+    dynamic_cast<ia64::Memory&>(vm->getMemory()).RestoreSnapshot(memorySnapshot);
     std::vector<uint8_t> restoredMemory(expectedMemory.size(), 0);
-    vm.getMemory().Read(0x4000, restoredMemory.data(), restoredMemory.size());
+    vm->getMemory().Read(0x4000, restoredMemory.data(), restoredMemory.size());
     check(restoredMemory == expectedMemory, "guest RAM survives byte-for-byte memory round trip");
+
+    auto* plugin = dynamic_cast<ia64::IA64ISAPlugin*>(context->cpu->getISAPlugin());
+    check(plugin != nullptr, "IA-64 plugin is available for a full checkpoint round trip");
+    if (plugin != nullptr) {
+        // The friend only satisfies the plugin's normal post-handoff gate for
+        // this unit fixture. The production VM checkpoint writer and reader
+        // still process the complete plugin payload and guest RAM.
+        ia64::IA64ISAPluginCheckpointTestAccess::markPostHandoffCheckpointBoundary(*plugin);
+        vm->getMemory().loadBuffer(0x6000, expectedMemory);
+        const std::filesystem::path roundTrip =
+            std::filesystem::temp_directory_path() / "guidexos-checkpoint-rse-roundtrip.gxcp";
+        std::string roundTripError;
+        check(vm->writeDiagnosticCheckpoint(roundTrip.string(), "test-identity", &roundTripError),
+              "full checkpoint writer captures plugin state and guest RAM");
+        ia64::CPUState uninterruptedReference = cpu;
+        vm.reset(); // The serialized source VM and its live CPU are destroyed.
+
+        vm = std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
+        check(vm->init(), "fresh VM initializes for checkpoint restore");
+        ia64::CPUContext* restoredContext = vm->getCPUContext(0);
+        check(restoredContext != nullptr && restoredContext->cpu != nullptr,
+              "fresh VM exposes a CPU context");
+        roundTripError.clear();
+        check(vm->readDiagnosticCheckpoint(roundTrip.string(), "test-identity", &roundTripError),
+              "full checkpoint reader restores the production payload into a fresh VM");
+        ia64::CPUState& restoredCpu = restoredContext->cpu->getState();
+        check(restoredCpu.GetGRPhysical(32) == 0x1122334455667788ULL,
+              "full checkpoint restores physical GR state");
+        check(sameRse(restoredCpu.GetRSEState(), rse),
+              "full checkpoint restores RSE ring and partition state");
+        std::vector<uint8_t> checkpointMemory(expectedMemory.size(), 0);
+        vm->getMemory().Read(0x6000, checkpointMemory.data(), checkpointMemory.size());
+        check(checkpointMemory == expectedMemory,
+              "full checkpoint restores guest RAM byte-for-byte");
+
+        ia64::Memory continuationMemory(1 * 1024 * 1024);
+        ia64::InstructionEx continuationCall(ia64::InstructionType::BR_CALL,
+                                             ia64::UnitType::B_UNIT);
+        continuationCall.SetOperands(0, 0, 0);
+        continuationCall.Execute(uninterruptedReference, continuationMemory);
+        continuationCall.Execute(restoredCpu, continuationMemory);
+        bool samePhysicalRegisters = true;
+        for (size_t i = 0; i < ia64::NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
+            samePhysicalRegisters = samePhysicalRegisters &&
+                uninterruptedReference.GetGRPhysical(i) == restoredCpu.GetGRPhysical(i) &&
+                uninterruptedReference.GetGRNaTPhysical(i) == restoredCpu.GetGRNaTPhysical(i);
+        }
+        check(samePhysicalRegisters &&
+                  uninterruptedReference.GetBR(0) == restoredCpu.GetBR(0) &&
+                  uninterruptedReference.GetCFM() == restoredCpu.GetCFM() &&
+                  uninterruptedReference.GetPFS() == restoredCpu.GetPFS() &&
+                  sameRse(uninterruptedReference.GetRSEState(), restoredCpu.GetRSEState()),
+              "fresh checkpoint continuation matches uninterrupted br.call execution");
+
+        auto* restoredPlugin = dynamic_cast<ia64::IA64ISAPlugin*>(
+            restoredContext->cpu->getISAPlugin());
+        if (restoredPlugin != nullptr) {
+            const std::vector<uint8_t> unknownPluginVersion = {
+                'I', 'A', '6', '4', 0xFF, 0xFF, 0xFF, 0x7F};
+            check(!restoredPlugin->deserializeCheckpointState(unknownPluginVersion),
+                  "unknown IA-64 plugin checkpoint version is rejected explicitly");
+            ia64::IA64ISAPluginCheckpointTestAccess::clearPostHandoffCheckpointBoundary(
+                *restoredPlugin);
+        }
+        std::filesystem::remove(roundTrip);
+    }
 
     const std::filesystem::path malformed =
         std::filesystem::temp_directory_path() / "guidexos-checkpoint-truncated.gxcp";
@@ -215,7 +298,7 @@ int main() {
         output.write("GXIA64VM", 8);
     }
     std::string error;
-    check(!vm.readDiagnosticCheckpoint(malformed.string(), "test-identity", &error),
+    check(!vm->readDiagnosticCheckpoint(malformed.string(), "test-identity", &error),
           "truncated checkpoint is rejected");
     check(!error.empty(), "truncated checkpoint reports an error");
     std::filesystem::remove(malformed);
@@ -223,7 +306,7 @@ int main() {
     const std::filesystem::path unsupported =
         std::filesystem::temp_directory_path() / "guidexos-checkpoint-before-handoff.gxcp";
     error.clear();
-    check(!vm.writeDiagnosticCheckpoint(unsupported.string(), "test-identity", &error),
+    check(!vm->writeDiagnosticCheckpoint(unsupported.string(), "test-identity", &error),
           "checkpoint before the real EFI handoff is rejected");
     check(!error.empty(), "pre-handoff checkpoint rejection reports an error");
     std::filesystem::remove(unsupported);

@@ -26,6 +26,8 @@ struct CPURuntimeStateSnapshot {
     std::vector<uint8_t> pendingInterrupts;
     uint64_t interruptVectorBase;
     bool halted;
+    // Deprecated checkpoint slot retained for the outer v1 payload layout.
+    // Architectural call inputs are represented by the RSE rename state.
     std::vector<uint64_t> pendingCallInputs;
 
     CPURuntimeStateSnapshot()
@@ -237,7 +239,6 @@ size_t currentSlot_;                // Which instruction slot (0-2) we're execut
 bool bundleValid_;                  // Is currentBundle_ loaded?
     std::deque<uint8_t> pendingInterrupts_;
     uint64_t interruptVectorBase_;
-    std::vector<uint64_t> pendingCallInputs_;
     
     /**
      * fetchBundle() - Fetch and decode the bundle at current IP
@@ -261,8 +262,6 @@ bool bundleValid_;                  // Is currentBundle_ loaded?
      */
     bool checkPredicate(size_t predicateReg) const;
     bool servicePendingInterrupt();
-    void captureCallOutputRegisters();
-    void applyPendingCallInputRegisters();
 };
 
 } // namespace ia64

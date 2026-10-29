@@ -394,6 +394,8 @@ public:
     bool isProfilingEnabled() const;
     
 private:
+    friend struct IA64ISAPluginCheckpointTestAccess;
+
     // ========================================================================
     // Internal Helper Methods
     // ========================================================================
@@ -403,10 +405,6 @@ private:
      */
     void fetchBundle(IMemory& memory);
     void capturePredicateGroupSnapshot();
-    void captureCallOutputRegisters();
-    void applyPendingCallInputRegisters();
-    void saveCallFrame(uint64_t returnAddress);
-    void restoreCallFrame(uint64_t branchTarget);
     void rememberBranchTarget(uint64_t target);
     void logEfiServiceCall(IMemory& memory,
                            const char* serviceName,
@@ -502,7 +500,6 @@ private:
     // Cached decoded instruction for execute()
     InstructionEx cachedInstruction_;
     bool hasCachedInstruction_;
-    std::vector<uint64_t> pendingCallInputs_;
     uint64_t efiCurrentTpl_;
     uint64_t lastEfiDescriptorFieldAddress_;
     struct EfiProtocolAttachment {
@@ -646,24 +643,6 @@ private:
     bool efiBootImageFromVmManager_;
     uint64_t efiHandoffLayoutMemorySize_;
     bool efiHandoffLayoutInitialized_;
-
-    struct CallFrameSnapshot {
-        std::array<uint64_t, NUM_GENERAL_REGISTERS - NUM_STATIC_GR> stackedRegisters;
-        uint64_t cfm;
-        uint64_t returnAddress;
-    };
-    std::vector<CallFrameSnapshot> callFrameStack_;
-    // A non-local return (for example IA-64 setjmp/longjmp) can target a
-    // call site whose ordinary return already removed its active frame.
-    // Retain the latest completed snapshot for each return address so the
-    // return can restore the caller's stacked-register view as the RSE would.
-    std::unordered_map<uint64_t, CallFrameSnapshot> completedCallFrames_;
-    // Interrupt delivery uses the same stacked-register rename/transfer
-    // machinery as procedure calls. The current partial RSE model does not
-    // implement that interruption-time path, so the plugin preserves the
-    // interrupted CFM and stacked-register view around rfi with this host-side
-    // compatibility snapshot. It is not an architectural frame owner.
-    std::vector<CallFrameSnapshot> interruptFrameStack_;
 
     // Narrow diagnostics for register_config_options only.
     uint64_t pendingRegisterConfigEntryTarget_;

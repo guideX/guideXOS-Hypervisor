@@ -4152,11 +4152,10 @@ void test_alloc_instruction() {
     alloc.Execute(cpu, memory);
     
     // Check saved CFM
-    assert_equal("ALLOC: saved CFM", 0x12345678, cpu.GetGR(10));
+    assert_equal("ALLOC: saves prior AR.PFS exactly", 0, cpu.GetGR(10));
     assert_equal("ALLOC: ar.pfs should preserve previous frame state", 0x12345678, cpu.GetPFS());
-    assert_equal("ALLOC: ar.pfs alias should update with CFM",
-                 (2ULL << 14) | (5ULL << 7) | 10ULL,
-                 cpu.GetRSEState().pfs);
+    assert_equal("ALLOC: CFM and PFS remain distinct",
+                 0x12345678, cpu.GetRSEState().pfs);
     
     // Check new CFM fields
     uint64_t new_cfm = cpu.GetCFM();
@@ -4187,9 +4186,9 @@ void test_rse_state_aliases() {
     assert_equal("RSE: RNAT alias", 0xdeadbeef, cpu.GetRNAT());
     assert_equal("RSE: PFS alias", 0x1234 | (static_cast<uint64_t>(7) << 7) | (static_cast<uint64_t>(1) << 14), cpu.GetPFS());
     assert_equal("RSE: explicit CFM remains independent from PFS", 0, cpu.GetCFM());
-    assert_equal("RSE: frame size fields updated", 0x34, cpu.GetRSEState().sof);
-    assert_equal("RSE: local size fields updated", 0x27, cpu.GetRSEState().sol);
-    assert_equal("RSE: rotating size fields updated", 0x01, cpu.GetRSEState().sor);
+    assert_equal("RSE: frame size fields remain CFM-owned", 0, cpu.GetRSEState().sof);
+    assert_equal("RSE: local size fields remain CFM-owned", 0, cpu.GetRSEState().sol);
+    assert_equal("RSE: rotating size fields remain CFM-owned", 0, cpu.GetRSEState().sor);
 
     std::cout << "  ? RSE state aliases passed" << std::endl;
 }
@@ -4223,6 +4222,140 @@ void test_ia64_virtual_ip_observation() {
                  kernelPhysicalIP + 16, cpu.GetBR(0));
 
     std::cout << "  ? IA-64 IP reads and call links reflect translation mode" << std::endl;
+}
+
+void test_ia64_rse_call_return_backing_store_isolation() {
+    std::cout << "Testing IA-64 RSE call/return isolation across independent CPU states..."
+              << std::endl;
+
+    Memory memory(0x4000);
+    InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
+    call.SetOperands(0, 0, 0);
+    InstructionEx alloc(InstructionType::ALLOC, UnitType::I_UNIT);
+    alloc.SetOperands(31, 0, 0);
+    alloc.SetImmediate((6ULL) | (3ULL << 7));
+    InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+    ret.SetOperands(0, 0, 0);
+
+    CPUState contextA;
+    CPUState contextB;
+    const auto initialize = [](CPUState& cpu, uint64_t backingBase,
+                               uint64_t valueBase) {
+        cpu.SetRSC(0);
+        cpu.SetBSP(backingBase);
+        cpu.SetBSPSTORE(backingBase);
+        cpu.SetCFM(4ULL | (2ULL << 7)); // two locals, two outgoing registers
+        cpu.SetGR(32, valueBase + 0x20);
+        cpu.SetGR(33, valueBase + 0x21);
+        cpu.SetGR(34, valueBase + 0x40);
+        cpu.SetGR(35, valueBase + 0x41);
+        cpu.SetGRNaT(32, true);
+        cpu.SetGRNaT(34, true);
+        cpu.SetIP(0x4000); // Both calls use the same return address.
+    };
+    const auto enterCallee = [&](CPUState& cpu, uint64_t expectedInput) {
+        call.Execute(cpu, memory);
+        assert_equal("br.call exposes the caller output via rename",
+                     expectedInput, cpu.GetGR(32));
+        assert_true("br.call carries the output NaT bit through rename",
+                    cpu.GetGRNaT(32));
+        assert_equal("br.call records the caller CFM in PFS",
+                     4ULL | (2ULL << 7), cpu.GetPFS());
+        assert_equal("br.call sets the callee frame to the output area",
+                     2, cpu.GetCFM());
+        assert_equal("br.call advances the physical rename base", 2,
+                     cpu.GetRSEBOF());
+        assert_equal("br.call advances BSP by caller SOL", 0x10,
+                     cpu.GetBSP() - cpu.GetBSPSTORE());
+
+        alloc.Execute(cpu, memory);
+        assert_equal("alloc saves the previous PFS exactly",
+                     4ULL | (2ULL << 7), cpu.GetGR(31));
+        assert_equal("alloc installs callee CFM without aliasing PFS",
+                     6ULL | (3ULL << 7), cpu.GetCFM());
+        assert_equal("alloc preserves the entry CFM in PFS",
+                     2, cpu.GetPFS());
+    };
+
+    const InstructionEx flushrs = InstructionDecoder().DecodeSlot(
+        0x60000000ULL, UnitType::M_UNIT, 0x4000);
+    for (uint64_t round = 0; round < 8; ++round) {
+        const uint64_t valueA = 0xA000 + round * 0x100;
+        const uint64_t valueB = 0xB000 + round * 0x100;
+        initialize(contextA, 0x1000, valueA);
+        initialize(contextB, 0x2000, valueB);
+
+        enterCallee(contextA, valueA + 0x40);
+        enterCallee(contextB, valueB + 0x40);
+        assert_equal("independent contexts share the same return target",
+                     contextA.GetBR(0), contextB.GetBR(0));
+
+        const auto enterNestedCallee = [&](CPUState& cpu, uint64_t nestedInput) {
+            cpu.SetGR(35, nestedInput);
+            cpu.SetGRNaT(35, true);
+            cpu.SetIP(0x4000);
+            call.Execute(cpu, memory);
+            assert_equal("nested br.call renames its caller output area",
+                         nestedInput, cpu.GetGR(32));
+            assert_true("nested br.call preserves the output NaT bit",
+                        cpu.GetGRNaT(32));
+            assert_equal("nested br.call records the parent CFM",
+                         6ULL | (3ULL << 7), cpu.GetPFS());
+            assert_equal("nested br.call advances BOF by the parent SOL", 5,
+                         cpu.GetRSEBOF());
+            assert_equal("nested br.call advances BSP by the parent SOL",
+                         0x28, cpu.GetBSP() - cpu.GetBSPSTORE());
+        };
+        enterNestedCallee(contextA, valueA + 0x80);
+        enterNestedCallee(contextB, valueB + 0x80);
+
+        ret.Execute(contextA, memory);
+        ret.Execute(contextB, memory);
+        assert_equal("nested return restores the parent frame marker",
+                     6ULL | (3ULL << 7), contextA.GetCFM());
+        assert_equal("nested return rewinds only its frame's BSP range",
+                     0x1010, contextA.GetBSP());
+
+        flushrs.Execute(contextA, memory);
+        flushrs.Execute(contextB, memory);
+
+        // The backing store is the authority for spilled caller locals.
+        // Change those guest bytes after flushrs; return must refill from the
+        // updated bytes instead of a host snapshot or stale physical values.
+        const uint64_t expectedA0 = 0xA0A0A0A0A0A0A001ULL + round;
+        const uint64_t expectedA1 = 0xA0A0A0A0A0A0A002ULL + round;
+        const uint64_t expectedB0 = 0xB0B0B0B0B0B0B001ULL + round;
+        memory.write<uint64_t>(0x1000, expectedA0);
+        memory.write<uint64_t>(0x1008, expectedA1);
+        memory.write<uint64_t>(0x11F8, 1ULL);
+        memory.write<uint64_t>(0x2000, expectedB0);
+        memory.write<uint64_t>(0x2008, 0xB0B0B0B0B0B0B002ULL + round);
+        memory.write<uint64_t>(0x21F8, 1ULL);
+
+        contextA.SetPFS(contextA.GetGR(31));
+        contextB.SetPFS(contextB.GetGR(31));
+        ret.Execute(contextA, memory);
+        ret.Execute(contextB, memory);
+        assert_equal("context A return restores its own caller CFM",
+                     4ULL | (2ULL << 7), contextA.GetCFM());
+        assert_equal("context A return refills caller local r32 from guest memory",
+                     expectedA0, contextA.GetGR(32));
+        assert_equal("context A return refills caller local r33 from guest memory",
+                     expectedA1, contextA.GetGR(33));
+        assert_true("context A return restores local NaT from RNAT",
+                    contextA.GetGRNaT(32));
+
+        assert_equal("context B return restores its own caller CFM",
+                     4ULL | (2ULL << 7), contextB.GetCFM());
+        assert_equal("context B return refills its own backing-store values",
+                     expectedB0, contextB.GetGR(32));
+        assert_equal("context B BSP is independent from context A",
+                     0x2000ULL, contextB.GetBSP());
+        assert_equal("context A BSP is independent from context B",
+                     0x1000ULL, contextA.GetBSP());
+    }
+
+    std::cout << "  ? independent CPU states retain their own RSE backing-store values" << std::endl;
 }
 
 void test_ia64_bspstore_write() {
@@ -4463,13 +4596,14 @@ void test_ia64_loadrs_restores_backing_store() {
     cpu.SetRSC(16ULL << 16);
     cpu.SetCFM(0);
     loadrs.Execute(cpu, memory);
-    assert_equal("loadrs restores GR32 from the backing-store bytes",
-                 0x0123456789ABCDEFULL, cpu.GetGR(32));
-    assert_equal("loadrs restores GR33 from the backing-store bytes",
-                 0xFEDCBA9876543210ULL, cpu.GetGR(33));
+    assert_equal("loadrs restores the register before BOF from backing memory",
+                 0x0123456789ABCDEFULL, cpu.GetGRPhysical(32 + 94));
+    assert_equal("loadrs restores the next register before BOF",
+                 0xFEDCBA9876543210ULL, cpu.GetGRPhysical(32 + 95));
     assert_true("loadrs restores the register NaT bit from RNAT",
-                cpu.GetGRNaT(32));
-    assert_true("loadrs restores a clear NaT bit", !cpu.GetGRNaT(33));
+                cpu.GetGRNaTPhysical(32 + 94));
+    assert_true("loadrs restores a clear NaT bit",
+                !cpu.GetGRNaTPhysical(32 + 95));
     assert_equal("loadrs leaves the requested backing-store pointer at the tear-point",
                  0x9000ULL, cpu.GetBSPSTORE());
     assert_equal("loadrs updates the internal backing-store load pointer",
@@ -4477,7 +4611,7 @@ void test_ia64_loadrs_restores_backing_store() {
     assert_equal("loadrs preserves BSP", 0x9010ULL, cpu.GetBSP());
     assert_equal("loadrs preserves the RSC loadrs field", 16ULL << 16, cpu.GetRSC());
     assert_true("loadrs marks restored physical registers dirty",
-                cpu.GetRSEPhysicalPartition(0) == RSERegisterPartition::DIRTY);
+                cpu.GetRSEPhysicalPartition(94) == RSERegisterPartition::DIRTY);
 
     // Cross the slot-63 collection word. The second register must use the
     // next region's collection rather than reusing the first RNAT word.
@@ -4494,11 +4628,12 @@ void test_ia64_loadrs_restores_backing_store() {
     boundaryMemory.write<uint64_t>(0x5200, 0xB0B1B2B3B4B5B6B7ULL);
     loadrs.Execute(boundaryCpu, boundaryMemory);
     assert_equal("loadrs crosses an RNAT collection slot without treating it as a GR",
-                 0xB0B1B2B3B4B5B6B7ULL, boundaryCpu.GetGR(33));
+                 0xB0B1B2B3B4B5B6B7ULL,
+                 boundaryCpu.GetGRPhysical(32 + 95));
     assert_true("loadrs restores NaT across a backing-store boundary",
-                boundaryCpu.GetGRNaT(32));
+                boundaryCpu.GetGRNaTPhysical(32 + 94));
     assert_true("loadrs marks the next loaded physical register dirty",
-                boundaryCpu.GetRSEPhysicalPartition(1) == RSERegisterPartition::DIRTY);
+                boundaryCpu.GetRSEPhysicalPartition(95) == RSERegisterPartition::DIRTY);
     assert_equal("loadrs invalidates a physical register outside the loaded range",
                  0ULL, boundaryCpu.GetGR(34));
     assert_true("loadrs records an invalid physical entry",
@@ -4509,10 +4644,12 @@ void test_ia64_loadrs_restores_backing_store() {
     boundaryMemory.write<uint64_t>(0x51F8, 0);
     boundaryMemory.write<uint64_t>(0x5200, 0x2222222222222222ULL);
     loadrs.Execute(boundaryCpu, boundaryMemory);
-    assert_equal("repeated loadrs keeps an already-resident GR32 value",
-                 0xA0A1A2A3A4A5A6A7ULL, boundaryCpu.GetGR(32));
-    assert_equal("repeated loadrs keeps an already-resident GR33 value",
-                 0xB0B1B2B3B4B5B6B7ULL, boundaryCpu.GetGR(33));
+    assert_equal("repeated loadrs keeps an already-resident prior-frame register",
+                 0xA0A1A2A3A4A5A6A7ULL,
+                 boundaryCpu.GetGRPhysical(32 + 94));
+    assert_equal("repeated loadrs keeps an already-resident next prior-frame register",
+                 0xB0B1B2B3B4B5B6B7ULL,
+                 boundaryCpu.GetGRPhysical(32 + 95));
 
     // A second backing-store region must source its values from its own guest
     // bytes, rather than from the prior region's resident physical registers.
@@ -4526,7 +4663,8 @@ void test_ia64_loadrs_restores_backing_store() {
     separateRegionMemory.write<uint64_t>(0xB000, 0xC001D00DC001D00DULL);
     loadrs.Execute(separateRegionCpu, separateRegionMemory);
     assert_equal("loadrs reads a separate guest backing-store region",
-                 0xC001D00DC001D00DULL, separateRegionCpu.GetGR(32));
+                 0xC001D00DC001D00DULL,
+                 separateRegionCpu.GetGRPhysical(32 + 95));
     assert_equal("separate-region loadrs updates BSPSTORE to its tear-point",
                  0xB000ULL, separateRegionCpu.GetBSPSTORE());
 
@@ -5327,6 +5465,53 @@ void test_ia64_banked_context_survives_interruption_return() {
               << std::endl;
 }
 
+void test_ia64_cover_rfi_restores_rse_frame() {
+    std::cout << "Testing IA-64 cover/rfi frame restoration without host snapshots..."
+              << std::endl;
+
+    CPUState cpu;
+    Memory memory(0x4000);
+    cpu.SetBSP(0x1000);
+    cpu.SetBSPSTORE(0x1000);
+    cpu.SetCFM(3ULL | (1ULL << 7)); // Two locals, one outgoing register.
+    cpu.SetGR(32, 0x1111222233334444ULL);
+    cpu.SetGR(33, 0x5555666677778888ULL);
+    cpu.SetGR(34, 0x9999AAAABBBBCCCCULL);
+    cpu.SetGRNaT(32, true);
+    cpu.SetPSR(0); // PSR.ic=0 makes cover record CR.IFS.
+
+    InstructionEx cover(InstructionType::COVER, UnitType::B_UNIT);
+    cover.Execute(cpu, memory);
+    assert_equal("cover saves the interrupted CFM in CR.IFS",
+                 (1ULL << 63) | (3ULL | (1ULL << 7)), cpu.GetCR(23));
+    assert_equal("cover advances BOF past the interrupted frame", 3,
+                 cpu.GetRSEBOF());
+    assert_equal("cover advances BSP by SOF", 0x1018, cpu.GetBSP());
+    assert_equal("cover starts a zero-size handler frame", 0, cpu.GetCFM());
+
+    // Handler writes occupy the new physical ring positions. They must not
+    // replace the interrupted frame that rfi will reactivate.
+    cpu.SetGR(32, 0xDEADBEEFDEADBEEFULL);
+    cpu.SetCR(16, 1ULL << 14);
+    cpu.SetCR(19, 0x2400);
+    InstructionEx rfi(InstructionType::RFI, UnitType::B_UNIT);
+    rfi.Execute(cpu, memory);
+
+    assert_equal("rfi restores the interrupted CFM from CR.IFS",
+                 3ULL | (1ULL << 7), cpu.GetCFM());
+    assert_equal("rfi restores the interrupted BOF", 0, cpu.GetRSEBOF());
+    assert_equal("rfi restores the interrupted BSP", 0x1000, cpu.GetBSP());
+    assert_equal("rfi resumes the interrupted local register",
+                 0x1111222233334444ULL, cpu.GetGR(32));
+    assert_equal("rfi resumes the interrupted output register",
+                 0x9999AAAABBBBCCCCULL, cpu.GetGR(34));
+    assert_true("rfi resumes the interrupted NaT bit", cpu.GetGRNaT(32));
+    assert_equal("rfi clears the consumed CR.IFS valid bit", 0,
+                 cpu.GetCR(23) >> 63);
+
+    std::cout << "  ? cover/rfi restores the architectural frame" << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "IA-64 Instruction Set Tests" << std::endl;
@@ -5366,6 +5551,7 @@ int main() {
         test_alloc_instruction();
         test_rse_state_aliases();
         test_ia64_virtual_ip_observation();
+        test_ia64_rse_call_return_backing_store_isolation();
         test_ia64_bspstore_write();
         test_ia64_flushrs();
         test_ia64_flushrs_spills_dirty_registers();
@@ -5386,6 +5572,7 @@ int main() {
         test_ia64_rotating_register_mapping();
         test_ia64_static_register_banks();
         test_ia64_banked_context_survives_interruption_return();
+        test_ia64_cover_rfi_restores_rse_frame();
         
         std::cout << std::endl;
         std::cout << "========================================" << std::endl;

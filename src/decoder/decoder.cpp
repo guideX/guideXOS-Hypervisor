@@ -217,6 +217,25 @@ bool isRseRnatSlot(uint64_t address) {
     return ((address >> 3) & 0x3FULL) == 0x3FULL;
 }
 
+uint64_t advanceRsePointer(uint64_t address, int64_t registerCount) {
+    if (registerCount == 0) return address;
+    int64_t slot = static_cast<int64_t>((address >> 3) & 0x3FULL) + registerCount;
+    int64_t collectionWords = 0;
+    if (registerCount < 0) slot -= 0x3E;
+    if (slot < 0) {
+        while (slot <= -0x3F) {
+            --collectionWords;
+            slot += 0x3F;
+        }
+    } else {
+        while (slot >= 0x3F) {
+            ++collectionWords;
+            slot -= 0x3F;
+        }
+    }
+    return address + static_cast<uint64_t>(registerCount + collectionWords) * 8ULL;
+}
+
 uint64_t rseBackingRegisterCount(uint64_t begin, uint64_t end) {
     if (end < begin || ((begin | end) & 0x7ULL) != 0) {
         throw std::runtime_error("IA-64 RSE backing-store range is invalid");
@@ -267,15 +286,68 @@ void writeRseBackingWord(CPUState& cpu, IMemory& memory, uint64_t address,
 
 void invalidateStackedRegistersOutsideFrame(CPUState& cpu) {
     const size_t currentFrameSize = cpu.GetSOF();
-    for (size_t i = 0; i < NUM_STACKED_GENERAL_REGISTERS; ++i) {
-        if (i < currentFrameSize) {
-            cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::CURRENT);
+    const size_t bof = cpu.GetRSEBOF();
+    for (size_t offset = 0; offset < NUM_STACKED_GENERAL_REGISTERS; ++offset) {
+        const size_t physical = (bof + offset) % NUM_STACKED_GENERAL_REGISTERS;
+        if (offset < currentFrameSize) {
+            cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::CURRENT);
             continue;
         }
-        cpu.SetGRPhysical(NUM_STATIC_GR + i, 0);
-        cpu.SetGRNaTPhysical(NUM_STATIC_GR + i, false);
-        cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::INVALID);
+        cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
+        cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
+        cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::INVALID);
     }
+}
+
+void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
+    const uint64_t callerCfm = cpu.GetPFS();
+    const uint8_t callerSol = static_cast<uint8_t>((callerCfm >> 7) & 0x7FULL);
+    if (callerSol > NUM_STACKED_GENERAL_REGISTERS) {
+        throw std::runtime_error("IA-64 br.ret encountered an invalid PFS.SOL");
+    }
+    const uint64_t currentBsp = cpu.GetBSP();
+    const uint64_t returnBsp = advanceRsePointer(
+        currentBsp, -static_cast<int64_t>(callerSol));
+    const uint64_t oldBspstore = cpu.GetBSPSTORE();
+    const uint8_t returnBof = static_cast<uint8_t>(
+        (static_cast<size_t>(cpu.GetRSEBOF()) +
+         NUM_STACKED_GENERAL_REGISTERS - callerSol) %
+        NUM_STACKED_GENERAL_REGISTERS);
+
+    if (returnBsp < oldBspstore) {
+        uint64_t rnat = 0;
+        uint64_t rnatRegion = UINT64_MAX;
+        for (size_t offset = 0; offset < callerSol; ++offset) {
+            uint64_t address = advanceRsePointer(returnBsp,
+                                                 static_cast<int64_t>(offset));
+            if (address >= oldBspstore) continue;
+            if (isRseRnatSlot(address)) {
+                rnat = readRseBackingWord(cpu, memory, address);
+                rnatRegion = address & ~0x1FFULL;
+                continue;
+            }
+            const uint64_t region = address & ~0x1FFULL;
+            if (rnatRegion != region) {
+                const uint64_t collectionAddress = rseCollectionAddress(address);
+                rnat = readRseBackingWord(cpu, memory, collectionAddress);
+                rnatRegion = region;
+            }
+            const uint64_t value = readRseBackingWord(cpu, memory, address);
+            const size_t physical = (static_cast<size_t>(returnBof) + offset) %
+                                    NUM_STACKED_GENERAL_REGISTERS;
+            cpu.SetGRPhysical(NUM_STATIC_GR + physical, value);
+            cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical,
+                                 (rnat & (1ULL << ((address >> 3) & 0x3FULL))) != 0);
+            cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::CLEAN);
+        }
+        cpu.SetBSPSTORE(returnBsp);
+        cpu.SetRSELoadPointer(returnBsp);
+        cpu.SetRSEStoreRegForCheckpoint(returnBof);
+        cpu.SetRSELoadRegForCheckpoint(returnBof);
+        const uint64_t collectionAddress = rseCollectionAddress(returnBsp);
+        cpu.SetRNAT(readRseBackingWord(cpu, memory, collectionAddress));
+    }
+    cpu.RewindBSPForReturn();
 }
 
 }
@@ -2251,17 +2323,20 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     if (registerIndex >= dirtyRegisterCount) {
                         throw std::runtime_error("IA-64 flushrs register partition does not match BSP pointers");
                     }
-                    const size_t logicalRegister = NUM_STATIC_GR + registerIndex;
-                    const uint64_t value = cpu.GetGR(logicalRegister);
+                    const size_t physical =
+                        (static_cast<size_t>(cpu.GetRSEStoreReg()) + registerIndex) %
+                        NUM_STACKED_GENERAL_REGISTERS;
+                    const size_t physicalRegister = NUM_STATIC_GR + physical;
+                    const uint64_t value = cpu.GetGRPhysical(physicalRegister);
                     const uint64_t natMask = 1ULL << ((address >> 3) & 0x3FULL);
-                    if (cpu.GetGRNaT(logicalRegister)) rnat |= natMask;
+                    if (cpu.GetGRNaTPhysical(physicalRegister)) rnat |= natMask;
                     else rnat &= ~natMask;
 
                     // Commit one mandatory transfer at a time. If the guest
                     // translation or RAM access faults, BSPSTORE remains at
                     // the first transfer that did not complete.
                     writeRseBackingWord(cpu, memory, address, value);
-                    cpu.SetRSEPhysicalPartition(registerIndex,
+                    cpu.SetRSEPhysicalPartition(physical,
                                                 RSERegisterPartition::CLEAN);
                     address += 8;
                     cpu.SetBSPSTORE(address);
@@ -2274,6 +2349,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 cpu.SetBSPSTORE(bsp);
                 cpu.SetRNAT(rnat);
                 cpu.SetRSELoadPointer(bsp);
+                cpu.SetRSEStoreRegForCheckpoint(cpu.GetRSEBOF());
+                cpu.SetRSELoadRegForCheckpoint(cpu.GetRSEBOF());
             }
             break;
 
@@ -2297,6 +2374,8 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     invalidateStackedRegistersOutsideFrame(cpu);
                     cpu.SetBSPSTORE(bsp);
                     cpu.SetRSELoadPointer(bsp);
+                    cpu.SetRSEStoreRegForCheckpoint(cpu.GetRSEBOF());
+                    cpu.SetRSELoadRegForCheckpoint(cpu.GetRSEBOF());
                     // AR.RNAT is architecturally undefined after loadrs.
                     cpu.SetRNAT(0);
                     break;
@@ -2308,6 +2387,11 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     throw std::runtime_error("IA-64 loadrs range exceeds the physical register stack");
                 }
 
+                const size_t loadStart =
+                    (static_cast<size_t>(cpu.GetRSELoadReg()) +
+                     NUM_STACKED_GENERAL_REGISTERS -
+                     (registerCount % NUM_STACKED_GENERAL_REGISTERS)) %
+                    NUM_STACKED_GENERAL_REGISTERS;
                 const bool needsMemoryLoads = tearPoint < cpu.GetRSELoadPointer();
                 if (needsMemoryLoads) {
                     // Entries outside the preserved current frame cannot
@@ -2315,11 +2399,20 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     // this physical register file.
                     invalidateStackedRegistersOutsideFrame(cpu);
                 } else {
-                    for (size_t i = 0; i < NUM_STACKED_GENERAL_REGISTERS; ++i) {
-                        if (i >= registerCount) {
-                            cpu.SetGRPhysical(NUM_STATIC_GR + i, 0);
-                            cpu.SetGRNaTPhysical(NUM_STATIC_GR + i, false);
-                            cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::INVALID);
+                    for (size_t offset = 0; offset < NUM_STACKED_GENERAL_REGISTERS; ++offset) {
+                        bool inLoadRange = false;
+                        for (size_t i = 0; i < registerCount; ++i) {
+                            if ((loadStart + i) % NUM_STACKED_GENERAL_REGISTERS == offset) {
+                                inLoadRange = true;
+                                break;
+                            }
+                        }
+                        if (!inLoadRange) {
+                            const size_t physical = offset;
+                            cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
+                            cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
+                            cpu.SetRSEPhysicalPartition(physical,
+                                                       RSERegisterPartition::INVALID);
                         }
                     }
                 }
@@ -2357,12 +2450,14 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                         if (registerIndex >= registerCount) {
                             throw std::runtime_error("IA-64 loadrs register range does not match RSC.loadrs");
                         }
-                        const size_t physicalRegister = NUM_STATIC_GR + registerIndex;
+                        const size_t physical = (loadStart + registerIndex) %
+                                                NUM_STACKED_GENERAL_REGISTERS;
+                        const size_t physicalRegister = NUM_STATIC_GR + physical;
                         cpu.SetGRPhysical(physicalRegister, value);
                         const uint64_t natMask = 1ULL << ((address >> 3) & 0x3FULL);
                         cpu.SetGRNaTPhysical(physicalRegister,
                                              (natCollection & natMask) != 0);
-                        cpu.SetRSEPhysicalPartition(registerIndex,
+                        cpu.SetRSEPhysicalPartition(physical,
                                                     RSERegisterPartition::DIRTY);
                         ++registerIndex;
                         address += 8;
@@ -2376,11 +2471,16 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     // boundary, so these entries are already resident. Keep
                     // their physical values and only update their partition.
                     for (size_t i = 0; i < registerCount; ++i) {
-                        cpu.SetRSEPhysicalPartition(i, RSERegisterPartition::DIRTY);
+                        const size_t physical = (loadStart + i) %
+                                                NUM_STACKED_GENERAL_REGISTERS;
+                        cpu.SetRSEPhysicalPartition(physical,
+                                                   RSERegisterPartition::DIRTY);
                     }
                 }
                 cpu.SetBSPSTORE(tearPoint);
                 cpu.SetRSELoadPointer(tearPoint);
+                cpu.SetRSEStoreRegForCheckpoint(loadStart);
+                cpu.SetRSELoadRegForCheckpoint(cpu.GetRSEBOF());
                 // The ISA leaves AR.RNAT undefined here; values restored by
                 // this transfer already carry their per-register NaT bits.
                 cpu.SetRNAT(0);
@@ -2473,8 +2573,36 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // the interruption machinery.  The IA-64 plugin maps the restored
             // virtual IP into this emulator's flat guest address space before
             // fetching the target bundle.
+            {
+            constexpr uint64_t kIfsValid = 1ULL << 63;
+            constexpr uint64_t kFrameMarkerMask = 0x3FFFFFFFFFULL;
+            const uint64_t ifs = cpu.GetCR(23);
+            if ((ifs & kIfsValid) != 0) {
+                const uint64_t restoredCfm = ifs & kFrameMarkerMask;
+                const uint8_t restoredSof = static_cast<uint8_t>(restoredCfm & 0x7FULL);
+                if (restoredSof > NUM_STACKED_GENERAL_REGISTERS) {
+                    throw std::runtime_error("IA-64 rfi encountered an invalid CR.IFS frame");
+                }
+                const uint8_t restoredBof = static_cast<uint8_t>(
+                    (static_cast<size_t>(cpu.GetRSEBOF()) +
+                     NUM_STACKED_GENERAL_REGISTERS - restoredSof) %
+                    NUM_STACKED_GENERAL_REGISTERS);
+                cpu.SetRSEBOFForCheckpoint(restoredBof);
+                const uint64_t restoredBsp = advanceRsePointer(
+                    cpu.GetBSP(), -static_cast<int64_t>(restoredSof));
+                cpu.SetBSP(restoredBsp);
+                cpu.SetCFM(restoredCfm);
+                for (size_t offset = 0; offset < restoredSof; ++offset) {
+                    cpu.SetRSEPhysicalPartition(
+                        (static_cast<size_t>(restoredBof) + offset) %
+                            NUM_STACKED_GENERAL_REGISTERS,
+                        RSERegisterPartition::CURRENT);
+                }
+                cpu.SetCR(23, ifs & ~kIfsValid);
+            }
             cpu.SetPSR(cpu.GetCR(16));
             cpu.SetIP(cpu.GetCR(19) & ~0xFULL);
+            }
             break;
 
         case InstructionType::BSW:
@@ -2495,6 +2623,21 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 if ((cpu.GetPSR() & kPsrInterruptionCollection) == 0) {
                     cpu.SetCR(23, (cfm & kFrameMarkerMask) | kIfsValid);
                 }
+                const uint8_t sof = cpu.GetSOF();
+                const uint8_t oldBof = cpu.GetRSEBOF();
+                for (size_t offset = 0; offset < sof; ++offset) {
+                    const size_t physical = (static_cast<size_t>(oldBof) + offset) %
+                                            NUM_STACKED_GENERAL_REGISTERS;
+                    if (cpu.GetRSEPhysicalPartition(physical) !=
+                        RSERegisterPartition::INVALID) {
+                        cpu.SetRSEPhysicalPartition(physical,
+                                                    RSERegisterPartition::DIRTY);
+                    }
+                }
+                cpu.SetRSEBOFForCheckpoint(static_cast<uint8_t>(
+                    (static_cast<size_t>(oldBof) + sof) %
+                    NUM_STACKED_GENERAL_REGISTERS));
+                cpu.SetBSP(advanceRsePointer(cpu.GetBSP(), static_cast<int64_t>(sof)));
                 cpu.SetCFM(cfm & ~kFrameMarkerMask);
             }
             break;
@@ -2522,10 +2665,12 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
             // br.call saves return address
             if (type_ == InstructionType::BR_CALL) {
                 cpu.SetBR(dst_, architecturalInstructionPointer(cpu) + 16);
+                cpu.AdvanceBSPForCall();
             }
             break;
             
         case InstructionType::BR_RET:
+            restoreRseReturnFrame(cpu, memory);
             break;
 
         case InstructionType::BRP:
@@ -2566,7 +2711,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
 
                 const uint64_t old_cfm = cpu.GetCFM();
                 const uint64_t old_pfs = cpu.GetAR(64);
-                cpu.SetGR(dst_, old_pfs == 0 ? old_cfm : old_pfs);
+                cpu.SetGR(dst_, old_pfs);
                 cpu.SetAR(64, old_cfm);
                 cpu.SetCFM(sof | (static_cast<uint64_t>(sol) << 7) |
                            (static_cast<uint64_t>(sor) << 14));

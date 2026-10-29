@@ -87,6 +87,12 @@ struct RSEState {
     // RSE.BspLoad is internal implementation state, serialized with the CPU
     // because it determines whether loadrs must fetch from guest memory.
     uint64_t bspLoad;
+    // Physical stacked-register indices for the RSE rename and transfer
+    // boundaries. These are processor-internal ring positions, not guest
+    // context identifiers.
+    uint8_t bof;
+    uint8_t storeReg;
+    uint8_t loadReg;
     std::array<RSERegisterPartition, NUM_STACKED_GENERAL_REGISTERS> physicalPartition;
     uint8_t sof;
     uint8_t sol;
@@ -100,6 +106,9 @@ struct RSEState {
         , rnat(0)
         , pfs(0)
         , bspLoad(0)
+        , bof(0)
+        , storeReg(0)
+        , loadReg(0)
         , physicalPartition{}
         , sof(0)
         , sol(0)
@@ -261,11 +270,18 @@ public:
     void SetPFS(uint64_t value) { SetAR(64, value); }
     uint64_t GetRSELoadPointer() const { return rse_.bspLoad; }
     void SetRSELoadPointer(uint64_t value) { rse_.bspLoad = value; }
+    uint8_t GetRSEBOF() const { return rse_.bof; }
+    uint8_t GetRSEStoreReg() const { return rse_.storeReg; }
+    uint8_t GetRSELoadReg() const { return rse_.loadReg; }
+    void SetRSEBOFForCheckpoint(uint8_t value) { rse_.bof = value % NUM_STACKED_GENERAL_REGISTERS; }
+    void SetRSEStoreRegForCheckpoint(uint8_t value) { rse_.storeReg = value % NUM_STACKED_GENERAL_REGISTERS; }
+    void SetRSELoadRegForCheckpoint(uint8_t value) { rse_.loadReg = value % NUM_STACKED_GENERAL_REGISTERS; }
+    size_t GetRSEPhysicalIndex(size_t stackedOffset) const;
     RSERegisterPartition GetRSEPhysicalPartition(size_t stackedIndex) const;
     void SetRSEPhysicalPartition(size_t stackedIndex, RSERegisterPartition partition);
     void WriteBSPSTORE(uint64_t value);
     void AdvanceBSPForCall();
-    void RewindBSPForReturn(uint8_t callerSol);
+    void RewindBSPForReturn();
 
     // Instruction pointer (IP/PC)
     uint64_t GetIP() const { return ip_; }
@@ -283,10 +299,15 @@ public:
     void SetCFM(uint64_t value) {
         cfm_ = value;
         rse_.cfm = value;
-        rse_.pfs = value;
         rse_.sof = static_cast<uint8_t>(value & 0x7F);
         rse_.sol = static_cast<uint8_t>((value >> 7) & 0x7F);
         rse_.sor = static_cast<uint8_t>((value >> 14) & 0xF);
+        for (size_t offset = 0; offset < rse_.sof; ++offset) {
+            const size_t physical =
+                (static_cast<size_t>(rse_.bof) + offset) %
+                NUM_STACKED_GENERAL_REGISTERS;
+            rse_.physicalPartition[physical] = RSERegisterPartition::CURRENT;
+        }
     }
     
     // Helper methods to extract CFM fields
