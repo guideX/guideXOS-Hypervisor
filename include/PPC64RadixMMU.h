@@ -8,8 +8,9 @@ namespace ia64 {
 class Memory;
 namespace ppc64 {
 
-// POWER9 Book III-S process-scoped radix translation, with the partition
-// scoped stage represented by an explicit flat guest-real to backing map.
+// Phase 6's standalone POWER9 process-scoped radix mode. Its compatibility
+// partition stage is an explicit flat guest-real to backing map; Phase 7's
+// architectural partition radix stage lives in PPC64PartitionMMU.
 enum class PPC64TranslationAccess : uint8_t { FETCH, READ, WRITE };
 
 enum class PPC64TranslationFaultKind : uint8_t {
@@ -22,6 +23,16 @@ enum class PPC64TranslationFaultKind : uint8_t {
     UNSUPPORTED_ADDRESS_SPACE,
     PAGE_TABLE_MEMORY_FAILURE,
     UNSUPPORTED_EMULATOR_FUNCTIONALITY,
+    INVALID_PARTITION_CONFIGURATION,
+    PARTITION_STAGE_FAILURE,
+    PARTITION_TABLE_ACCESS_FAILURE,
+    PARTITION_UNMAPPED,
+    PARTITION_PERMISSION_FAILURE,
+    PROCESS_TABLE_ACCESS_FAILURE,
+    PROCESS_RADIX_TABLE_ACCESS_FAILURE,
+    UNSUPPORTED_PARTITION_FEATURE,
+    PARTITION_BACKEND_FAILURE,
+    PARTITION_RADIX_TABLE_ACCESS_FAILURE,
 };
 
 struct PPC64RadixConfiguration {

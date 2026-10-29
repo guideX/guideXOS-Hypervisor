@@ -473,7 +473,6 @@ static void testInvalidEncodings() {
         encodeX(3, 4, 5, 119),             // lbzux: update-indexed, out of scope
         encodeX(3, 4, 5, 53),              // ldux: update-indexed, out of scope
         encodeX(3, 4, 5, 181),             // stdux: update-indexed, out of scope
-        0x44000022U,                       // sc with LEV=1 (unsupported level)
         0x44000006U,                       // sc with reserved bits set
         0x44000000U,                       // opcode 17, jabber (missing sc bit 1)
     };
@@ -491,6 +490,18 @@ static void testInvalidEncodings() {
         CHECK(!cpu.getLastFault().resumable);
         CHECK(!cpu.getLastFault().reason.empty());
     }
+    // Phase 7 assigns the authentic LEV=1 encoding to PAPR's `sc 1`.
+    setState(cpu, 0x90);
+    storeBE(mem, 0x90, ppc64::ENCODING_SC_HCALL);
+    cpu.setPC(0x90);
+    const auto hcall = cpu.decode(mem);
+    CHECK(hcall.valid);
+    CHECK(hcall.instructionLength == 4);
+    CHECK(hcall.disassembly == "sc 1");
+    CHECK(hcall.internalData != nullptr);
+    CHECK(cpu.step(mem) == ISAExecutionResult::CONTINUE);
+    CHECK(cpu.readGPR(3) == ppc64::PPC64_H_FUNCTION);
+    CHECK(cpu.getPC() == 0x94U);
     // A truly unknown primary opcode is INVALID_INSTRUCTION (not ENCODING).
     setState(cpu, 0x90);
     storeBE(mem, 0x90, 0xFFFFFFFFU);

@@ -91,6 +91,16 @@ bool PPC64TranslationResult::isArchitecturalFault() const {
         case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
         case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
         case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+        case PPC64TranslationFaultKind::INVALID_PARTITION_CONFIGURATION:
+        case PPC64TranslationFaultKind::PARTITION_STAGE_FAILURE:
+        case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+        case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+        case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+        case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
+        case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
+        case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
             return false;
     }
     return false;
@@ -107,6 +117,16 @@ const char* PPC64RadixMMU::faultName(PPC64TranslationFaultKind fault) {
         case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE: return "UNSUPPORTED_ADDRESS_SPACE";
         case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE: return "PAGE_TABLE_MEMORY_FAILURE";
         case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY: return "UNSUPPORTED_FUNCTIONALITY";
+        case PPC64TranslationFaultKind::INVALID_PARTITION_CONFIGURATION: return "INVALID_PARTITION_CONFIGURATION";
+        case PPC64TranslationFaultKind::PARTITION_STAGE_FAILURE: return "PARTITION_STAGE_FAILURE";
+        case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE: return "PARTITION_TABLE_ACCESS_FAILURE";
+        case PPC64TranslationFaultKind::PARTITION_UNMAPPED: return "PARTITION_UNMAPPED";
+        case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE: return "PARTITION_PERMISSION_FAILURE";
+        case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE: return "PROCESS_TABLE_ACCESS_FAILURE";
+        case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE: return "PROCESS_RADIX_TABLE_ACCESS_FAILURE";
+        case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE: return "UNSUPPORTED_PARTITION_FEATURE";
+        case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE: return "PARTITION_BACKEND_FAILURE";
+        case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE: return "PARTITION_RADIX_TABLE_ACCESS_FAILURE";
     }
     return "UNKNOWN";
 }

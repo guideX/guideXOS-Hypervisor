@@ -41,6 +41,7 @@ set(ISA_SOURCES
     src/isa/ExampleISAPlugin.cpp
     src/isa/PPC64ISAPlugin.cpp
     src/isa/PPC64RadixMMU.cpp
+    src/isa/PPC64PartitionMMU.cpp
 )
 
 set(DECODER_SOURCES
@@ -692,6 +693,7 @@ add_test(NAME PPC64Phase3Tests COMMAND test_ppc64_phase3)
 add_test(NAME PPC64Phase4Tests COMMAND test_ppc64_phase4)
 add_test(NAME PPC64Phase5Tests COMMAND test_ppc64_phase5)
 add_test(NAME PPC64Phase6Tests COMMAND test_ppc64_phase6)
+add_test(NAME PPC64Phase7Tests COMMAND test_ppc64_phase7)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -806,6 +808,23 @@ if(MSVC)
     target_compile_options(test_ppc64_phase6 PRIVATE /W4)
 else()
     target_compile_options(test_ppc64_phase6 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# PPC64 Phase 7 PAPR partition contexts and partition-scoped radix tests.
+add_executable(test_ppc64_phase7
+    tests/test_ppc64_phase7.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase7 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase7 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase7 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # RISC-V CPU implementation

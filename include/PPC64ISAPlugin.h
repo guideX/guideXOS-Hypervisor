@@ -3,6 +3,7 @@
 #include "IISA.h"
 #include "IMemory.h"
 #include "MemoryReservation.h"
+#include "PPC64PartitionMMU.h"
 #include "PPC64RadixMMU.h"
 #include <array>
 #include <cstdint>
@@ -292,6 +293,8 @@ constexpr uint32_t ENCODING_NOP = 0x60000000;
 // SC-form bits zero (Power ISA Book I §4.6.14 / Book III). Any other
 // word with primary opcode 17 is rejected as an invalid encoding.
 constexpr uint32_t ENCODING_SC = 0x44000002;
+// SC-form LEV=1 is the PAPR hypercall instruction; it remains separate from sc 0.
+constexpr uint32_t ENCODING_SC_HCALL = 0x44000022;
 
 // Phase 3 per-CPU architectural fault/exception record.
 //
@@ -413,7 +416,8 @@ enum class DecodedKind {
     STHX,       // sthx  (X-form, opcode 31 XO 407)
     STWX,       // stwx  (X-form, opcode 31 XO 151)
     STDX,       // stdx  (X-form, opcode 31 XO 149)
-    SC,         // sc    (SC-form, opcode 17, encoding 0x44000002 only)
+    SC,         // sc 0 (system-call encoding 0x44000002)
+    SC_HCALL,   // sc 1 (PAPR hypercall encoding 0x44000022)
     LWARX,      // lwarx (X-form, opcode 31 XO 20; establishes reservation)
     LDARX,      // ldarx (X-form, opcode 31 XO 84; establishes reservation)
     STWCX,      // stwcx. (X-form, opcode 31 XO 150, Rc=1 required)
@@ -530,7 +534,7 @@ public:
 
     // IISA identity
     std::string getName() const override { return "PPC64"; }
-    std::string getVersion() const override { return "6.0-phase6"; }
+    std::string getVersion() const override { return "7.0-phase7"; }
     void reset() override;
 
     // Decode / execute
@@ -587,6 +591,17 @@ public:
     PPC64TranslationResult translateEffectiveAddress(
         IMemory& memory, uint64_t effectiveAddress,
         PPC64TranslationAccess access) const;
+    // Hypervisor-owned activation API; guest instructions cannot select LPIDs.
+    bool activatePartitionContext(
+        const std::shared_ptr<PPC64PartitionContext>& context,
+        std::string& reason);
+    void deactivatePartitionContext();
+    bool hasActivePartitionContext() const {
+        return partitionContext_ != nullptr && partitionContext_->isActive();
+    }
+    uint16_t getActiveLPID() const {
+        return hasActivePartitionContext() ? partitionContext_->lpid() : 0;
+    }
     // Phase 4 guest-visible privileged state accessors (direct state view;
     // production code paths use mfspr/mtspr; these exist for tests/setup).
     uint64_t getSRR0() const { return state_.srr0; }
@@ -769,6 +784,19 @@ private:
                                  uint32_t width, uint64_t value,
                                  PPC64TranslationResult& failure,
                                  std::string& reason) const;
+    bool partitionGuestRealAccessRange(
+        IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+        PPC64TranslationAccess access,
+        std::vector<TranslatedMemorySegment>& segments,
+        PPC64TranslationResult& failure, std::string& reason) const;
+    bool partitionGuestRealMemLoadBE(IMemory& memory, uint64_t guestRealAddress,
+                                     uint32_t width, uint64_t& value,
+                                     PPC64TranslationResult& failure,
+                                     std::string& reason) const;
+    bool partitionGuestRealMemStoreBE(IMemory& memory, uint64_t guestRealAddress,
+                                      uint32_t width, uint64_t value,
+                                      PPC64TranslationResult& failure,
+                                      std::string& reason) const;
     // Central guest-delivery dispatcher. Assumes the host fault was already
     // recorded via recordFault (for getLastFault diagnostics). When guest
     // delivery is disabled or the fault is terminal (unsupported-state,
@@ -799,6 +827,7 @@ private:
     PPC64RadixConfiguration radixConfiguration_;
     bool radixConfigured_ = false;
     uint32_t radixConfigurationGeneration_ = 0;
+    std::shared_ptr<PPC64PartitionContext> partitionContext_;
 };
 
 /**

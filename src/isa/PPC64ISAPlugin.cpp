@@ -964,9 +964,12 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.supported = true;
             break;
         case OPCODE_SC:
-            // SC-form: only LEV=0 with all reserved bits zero is supported.
+            // Keep PAPR sc 1 separate from the existing sc 0 system-call path.
             if (word == ENCODING_SC) {
                 instr.kind = DecodedKind::SC;
+                instr.supported = true;
+            } else if (word == ENCODING_SC_HCALL) {
+                instr.kind = DecodedKind::SC_HCALL;
                 instr.supported = true;
             } else {
                 instr.kind = DecodedKind::UNSUPPORTED;
@@ -1580,6 +1583,9 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
         case DecodedKind::SC:
             out << "sc";
             break;
+        case DecodedKind::SC_HCALL:
+            out << "sc 1";
+            break;
         case DecodedKind::LWARX:
             out << "lwarx r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.ra)
@@ -1646,7 +1652,8 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
     }
 
     uint8_t bytes[INSN_WIDTH] = {0, 0, 0, 0};
-    if ((state_.msr & MSR_IR) != 0 || radixConfigured_) {
+    if ((state_.msr & MSR_IR) != 0 || radixConfigured_ ||
+        partitionContext_ != nullptr) {
         std::vector<TranslatedMemorySegment> segments;
         PPC64TranslationResult translationFailure;
         std::string reason;
@@ -1655,9 +1662,13 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
             ? translateAccessRange(memory, state_.nip, INSN_WIDTH,
                                    PPC64TranslationAccess::FETCH, segments,
                                    translationFailure, reason)
-            : flatGuestRealAccessRange(memory, state_.nip, INSN_WIDTH,
-                                       PPC64TranslationAccess::FETCH, segments,
-                                       translationFailure, reason);
+            : partitionContext_ != nullptr
+                ? partitionGuestRealAccessRange(memory, state_.nip, INSN_WIDTH,
+                    PPC64TranslationAccess::FETCH, segments,
+                    translationFailure, reason)
+                : flatGuestRealAccessRange(memory, state_.nip, INSN_WIDTH,
+                    PPC64TranslationAccess::FETCH, segments,
+                    translationFailure, reason);
         if (!rangeValid) {
             result.disassembly = std::string("<guest-real fetch fault: ") + reason + ">";
             hasCachedInstruction_ = false;
@@ -1672,16 +1683,21 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
             concrete->ReadGuestReal(segments.front().hostBackingAddress,
                                     bytes, INSN_WIDTH);
         } catch (const std::exception& e) {
+            const bool partitionRealFetch = !processTranslated &&
+                                            partitionContext_ != nullptr;
             const std::string readReason = std::string(
                 processTranslated ? "translated instruction backing read failed: "
-                                  : "flat guest-real instruction backing read failed: ") +
-                e.what();
+                : partitionRealFetch ? "partition guest-real instruction read failed: "
+                                     : "flat guest-real instruction backing read failed: ") + e.what();
             result.disassembly = std::string("<fetch fault: ") + readReason + ">";
             hasCachedInstruction_ = false;
             recordFault(PPC64FaultCategory::FETCH_FAILURE, state_.nip, 0, false,
                         state_.nip, true, PPC64AccessType::FETCH, INSN_WIDTH,
                         readReason, true,
-                        PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY);
+                        partitionRealFetch
+                            ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
+                            : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY,
+                        partitionRealFetch ? partitionContext_->lpid() : 0);
             return result;
         }
     } else {
@@ -1831,6 +1847,16 @@ ISAExecutionResult PPC64ISAPlugin::executeInstruction(IMemory& memory,
                     case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
                     case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
                     case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                    case PPC64TranslationFaultKind::INVALID_PARTITION_CONFIGURATION:
+                    case PPC64TranslationFaultKind::PARTITION_STAGE_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+                    case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+                    case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
+                    case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
                         consecutiveGuestExceptions_ = 0;
                         justDelivered_ = false;
                         return ISAExecutionResult::EXCEPTION;
@@ -2052,10 +2078,13 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         const bool loadSucceeded = (state_.msr & MSR_DR) != 0
             ? translatedMemLoadBE(memory, ea, width, value,
                                   translationFailure, reason)
-            : radixConfigured_
-                ? flatGuestRealMemLoadBE(memory, ea, width, value,
-                                         translationFailure, reason)
-                : memLoadBE(memory, ea, width, value, reason);
+            : partitionContext_ != nullptr
+                ? partitionGuestRealMemLoadBE(memory, ea, width, value,
+                                              translationFailure, reason)
+                : radixConfigured_
+                    ? flatGuestRealMemLoadBE(memory, ea, width, value,
+                                             translationFailure, reason)
+                    : memLoadBE(memory, ea, width, value, reason);
         if (!loadSucceeded) {
             recordFault(PPC64FaultCategory::DATA_LOAD_FAILURE, cia, instr.raw, true, ea,
                         true, PPC64AccessType::READ, width, reason, true,
@@ -2082,6 +2111,16 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                     case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
                     case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
                     case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                    case PPC64TranslationFaultKind::INVALID_PARTITION_CONFIGURATION:
+                    case PPC64TranslationFaultKind::PARTITION_STAGE_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+                    case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+                    case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
+                    case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
                         return ISAExecutionResult::EXCEPTION;
                 }
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
@@ -2137,10 +2176,13 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         const bool storeSucceeded = (state_.msr & MSR_DR) != 0
             ? translatedMemStoreBE(memory, ea, width, source,
                                    translationFailure, reason)
-            : radixConfigured_
-                ? flatGuestRealMemStoreBE(memory, ea, width, source,
-                                          translationFailure, reason)
-                : memStoreBE(memory, ea, width, source, reason);
+            : partitionContext_ != nullptr
+                ? partitionGuestRealMemStoreBE(memory, ea, width, source,
+                                               translationFailure, reason)
+                : radixConfigured_
+                    ? flatGuestRealMemStoreBE(memory, ea, width, source,
+                                              translationFailure, reason)
+                    : memStoreBE(memory, ea, width, source, reason);
         if (!storeSucceeded) {
             recordFault(PPC64FaultCategory::DATA_STORE_FAILURE, cia, instr.raw, true, ea,
                         true, PPC64AccessType::WRITE, width, reason, true,
@@ -2167,6 +2209,16 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
                     case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
                     case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
                     case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+                    case PPC64TranslationFaultKind::INVALID_PARTITION_CONFIGURATION:
+                    case PPC64TranslationFaultKind::PARTITION_STAGE_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+                    case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+                    case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+                    case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
+                    case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
+                    case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
                         return ISAExecutionResult::EXCEPTION;
                 }
                 return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI,
@@ -2286,6 +2338,16 @@ ISAExecutionResult PPC64ISAPlugin::reservationStorageFault(IMemory& memory,
             case PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE:
             case PPC64TranslationFaultKind::PAGE_TABLE_MEMORY_FAILURE:
             case PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY:
+            case PPC64TranslationFaultKind::INVALID_PARTITION_CONFIGURATION:
+            case PPC64TranslationFaultKind::PARTITION_STAGE_FAILURE:
+            case PPC64TranslationFaultKind::PARTITION_TABLE_ACCESS_FAILURE:
+            case PPC64TranslationFaultKind::PARTITION_UNMAPPED:
+            case PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE:
+            case PPC64TranslationFaultKind::PROCESS_TABLE_ACCESS_FAILURE:
+            case PPC64TranslationFaultKind::PROCESS_RADIX_TABLE_ACCESS_FAILURE:
+            case PPC64TranslationFaultKind::UNSUPPORTED_PARTITION_FEATURE:
+            case PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE:
+            case PPC64TranslationFaultKind::PARTITION_RADIX_TABLE_ACCESS_FAILURE:
                 return ISAExecutionResult::EXCEPTION;
         }
         return maybeDeliver(memory, ISAExecutionResult::EXCEPTION, VEC_DSI, cia, 0,
@@ -2333,19 +2395,25 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
     }
 
     const bool translated = (state_.msr & MSR_DR) != 0;
-    const bool flatRealMapped = !translated && radixConfigured_;
+    const bool partitionRealMapped = !translated && partitionContext_ != nullptr;
+    const bool flatRealMapped = !translated && radixConfigured_ &&
+                                partitionContext_ == nullptr;
     uint64_t reservationAddress = ea;
     PPC64TranslationResult translationFailure;
     std::vector<TranslatedMemorySegment> translatedSegments;
-    if (translated || flatRealMapped) {
+    if (translated || flatRealMapped || partitionRealMapped) {
         std::string reason;
         const PPC64TranslationAccess translationAccess = isLoad
             ? PPC64TranslationAccess::READ : PPC64TranslationAccess::WRITE;
         const bool rangeValid = translated
             ? translateAccessRange(memory, ea, width, translationAccess,
                                    translatedSegments, translationFailure, reason)
-            : flatGuestRealAccessRange(memory, ea, width, translationAccess,
-                                       translatedSegments, translationFailure, reason);
+            : partitionRealMapped
+                ? partitionGuestRealAccessRange(memory, ea, width,
+                    translationAccess, translatedSegments,
+                    translationFailure, reason)
+                : flatGuestRealAccessRange(memory, ea, width, translationAccess,
+                    translatedSegments, translationFailure, reason);
         if (!rangeValid) {
             clearReservation();
             return reservationStorageFault(memory, instr, cia, ea, width,
@@ -2390,13 +2458,17 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
         const bool loadSucceeded = translated
             ? translatedMemLoadBE(memory, ea, width, value,
                                   translationFailure, reason)
-            : flatRealMapped
-                ? flatGuestRealMemLoadBE(memory, ea, width, value,
-                                         translationFailure, reason)
-                : memLoadBE(memory, ea, width, value, reason);
+            : partitionRealMapped
+                ? partitionGuestRealMemLoadBE(memory, ea, width, value,
+                                              translationFailure, reason)
+                : flatRealMapped
+                    ? flatGuestRealMemLoadBE(memory, ea, width, value,
+                                             translationFailure, reason)
+                    : memLoadBE(memory, ea, width, value, reason);
         if (!loadSucceeded) {
             return reservationStorageFault(memory, instr, cia, ea, width, false,
-                                           reason, (translated || flatRealMapped)
+                                           reason, (translated || flatRealMapped ||
+                                                    partitionRealMapped)
                                                        ? &translationFailure : nullptr);
         }
         // lwarx delivers the word zero-extended (the value is 4 bytes wide);
@@ -2415,7 +2487,7 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
     // bounds) are performed first, so a protected or unmapped target raises DSI
     // with or without a reservation and never becomes a CR0 result.
     {
-        if (!translated && !flatRealMapped) {
+        if (!translated && !flatRealMapped && !partitionRealMapped) {
             bool isUnmapped = false;
             bool isPerm = false;
             std::string reason;
@@ -2424,12 +2496,16 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
                 return reservationStorageFault(memory, instr, cia, ea, width, true,
                                                reason);
             }
-        } else if (flatRealMapped) {
+        } else if (flatRealMapped || partitionRealMapped) {
             std::string reason;
-            if (!flatGuestRealAccessRange(memory, ea, width,
-                                          PPC64TranslationAccess::WRITE,
-                                          translatedSegments, translationFailure,
-                                          reason)) {
+            const bool rangeValid = partitionRealMapped
+                ? partitionGuestRealAccessRange(memory, ea, width,
+                    PPC64TranslationAccess::WRITE, translatedSegments,
+                    translationFailure, reason)
+                : flatGuestRealAccessRange(memory, ea, width,
+                    PPC64TranslationAccess::WRITE, translatedSegments,
+                    translationFailure, reason);
+            if (!rangeValid) {
                 clearReservation();
                 return reservationStorageFault(memory, instr, cia, ea, width,
                                                true, reason, &translationFailure);
@@ -2450,13 +2526,17 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
         const bool storeSucceeded = translated
             ? translatedMemStoreBE(memory, ea, width, source,
                                    translationFailure, reason)
-            : flatRealMapped
-                ? flatGuestRealMemStoreBE(memory, ea, width, source,
-                                          translationFailure, reason)
-                : memStoreBE(memory, ea, width, source, reason);
+            : partitionRealMapped
+                ? partitionGuestRealMemStoreBE(memory, ea, width, source,
+                                               translationFailure, reason)
+                : flatRealMapped
+                    ? flatGuestRealMemStoreBE(memory, ea, width, source,
+                                              translationFailure, reason)
+                    : memStoreBE(memory, ea, width, source, reason);
         if (!storeSucceeded) {
             return reservationStorageFault(memory, instr, cia, ea, width, true,
-                                           reason, (translated || flatRealMapped)
+                                           reason, (translated || flatRealMapped ||
+                                                    partitionRealMapped)
                                                        ? &translationFailure : nullptr);
         }
     }
@@ -2959,6 +3039,27 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             }
             return maybeDeliver(memory, ISAExecutionResult::SYSCALL, VEC_SC,
                                 cia + INSN_WIDTH, 0, false, 0, 0);
+        case DecodedKind::SC_HCALL: {
+            // Bounded synchronous PAPR service. This models the sc 1 ABI at
+            // the CPU/platform boundary but deliberately does not claim an
+            // HV-mode transition or HSRR/vector execution.
+            uint64_t status = PPC64_H_FUNCTION;
+            if (inProblemState()) {
+                status = PPC64_H_PRIVILEGE;
+            } else if (partitionContext_ != nullptr &&
+                       state_.gpr[3] == PPC64_H_REGISTER_PROC_TBL) {
+                status = PPC64PartitionMMU::registerProcessTable(
+                    memory, *partitionContext_, state_.gpr[4], state_.gpr[5],
+                    state_.gpr[6], state_.gpr[7]);
+                if (status == PPC64_H_SUCCESS) {
+                    clearReservation();
+                    hasCachedInstruction_ = false;
+                }
+            }
+            state_.gpr[3] = status;
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
         case DecodedKind::LBZ:
         case DecodedKind::LBZU:
         case DecodedKind::LHZ:
@@ -3038,9 +3139,35 @@ void PPC64ISAPlugin::clearRadixTranslationConfiguration() {
     hasCachedInstruction_ = false;
 }
 
+bool PPC64ISAPlugin::activatePartitionContext(
+    const std::shared_ptr<PPC64PartitionContext>& context,
+    std::string& reason) {
+    if (context == nullptr || !context->isActive()) {
+        reason = "cannot activate a missing or destroyed partition context";
+        return false;
+    }
+    partitionContext_ = context;
+    clearReservation();
+    hasCachedInstruction_ = false;
+    reason.clear();
+    return true;
+}
+
+void PPC64ISAPlugin::deactivatePartitionContext() {
+    partitionContext_.reset();
+    clearReservation();
+    hasCachedInstruction_ = false;
+}
+
 PPC64TranslationResult PPC64ISAPlugin::translateEffectiveAddress(
     IMemory& memory, uint64_t effectiveAddress,
     PPC64TranslationAccess access) const {
+    if (partitionContext_ != nullptr) {
+        return PPC64PartitionMMU::translateEffectiveAddress(
+            memory, *partitionContext_, state_.pidr,
+            radixConfigurationGeneration_, effectiveAddress, access,
+            inProblemState());
+    }
     return PPC64RadixMMU::translate(memory, radixConfiguration_, state_.pidr,
                                     radixConfigurationGeneration_,
                                     effectiveAddress, access, inProblemState());
@@ -3050,6 +3177,10 @@ bool PPC64ISAPlugin::translationModeReady(IMemory& memory, uint64_t proposedMSR,
                                            std::string& reason) const {
     if ((proposedMSR & MSR_RELOCATION) == 0) {
         return true;
+    }
+    if (partitionContext_ != nullptr) {
+        return PPC64PartitionMMU::validateForRelocation(
+            memory, *partitionContext_, reason);
     }
     if (!radixConfigured_) {
         reason = "MSR[IR]/MSR[DR] requires an explicit POWER9 radix context";
@@ -3119,9 +3250,12 @@ bool PPC64ISAPlugin::translateAccessRange(
                                               backingReason)) {
             failure = translated;
             failure.success = false;
-            failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
-            failure.reason = "flat partition backing access is unsupported: " +
-                             backingReason;
+            failure.fault = partitionContext_ != nullptr
+                ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
+                : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+            failure.reason = (partitionContext_ != nullptr
+                ? "partition backing access failed: "
+                : "flat partition backing access is unsupported: ") + backingReason;
             reason = failure.reason;
             return false;
         }
@@ -3153,7 +3287,9 @@ bool PPC64ISAPlugin::translatedMemLoadBE(
         }
     } catch (const std::exception& e) {
         reason = std::string("translated backing read failed: ") + e.what();
-        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.fault = partitionContext_ != nullptr
+            ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
+            : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
         failure.reason = reason;
         return false;
     }
@@ -3195,7 +3331,9 @@ bool PPC64ISAPlugin::translatedMemStoreBE(
         concrete->WriteGuestRealTransaction(writes);
     } catch (const std::exception& e) {
         reason = std::string("translated backing write failed: ") + e.what();
-        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.fault = partitionContext_ != nullptr
+            ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
+            : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
         failure.reason = reason;
         return false;
     }
@@ -3303,6 +3441,138 @@ bool PPC64ISAPlugin::flatGuestRealMemStoreBE(
     } catch (const std::exception& e) {
         reason = std::string("flat guest-real backing write failed: ") + e.what();
         failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    return true;
+}
+
+bool PPC64ISAPlugin::partitionGuestRealAccessRange(
+    IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+    PPC64TranslationAccess access,
+    std::vector<TranslatedMemorySegment>& segments,
+    PPC64TranslationResult& failure, std::string& reason) const {
+    segments.clear();
+    failure = PPC64TranslationResult();
+    failure.effectiveAddress = guestRealAddress;
+    if (width == 0 || width > 8) {
+        reason = "partition real-address access width is outside the PPC64 subset";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    if (static_cast<uint64_t>(width - 1U) >
+        std::numeric_limits<uint64_t>::max() - guestRealAddress) {
+        reason = "guest-real range wraps past 2^64-1";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_ADDRESS_SPACE;
+        failure.reason = reason;
+        return false;
+    }
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    if (ram == nullptr || partitionContext_ == nullptr) {
+        reason = "partition real-address access requires an active partition and Memory";
+        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.reason = reason;
+        return false;
+    }
+    uint32_t done = 0;
+    while (done < width) {
+        const uint64_t current = guestRealAddress + done;
+        PPC64PartitionTranslationResult translated =
+            PPC64PartitionMMU::translateGuestReal(
+                memory, *partitionContext_, current, access, false);
+        if (!translated.success) {
+            failure.effectiveAddress = current;
+            failure.guestRealAddress = current;
+            failure.hostBackingAddress = translated.hostBackingAddress;
+            failure.fault = PPC64PartitionMMU::translationFault(translated.fault);
+            failure.contextIdentifier = partitionContext_->lpid();
+            failure.reason = translated.reason;
+            reason = failure.reason;
+            return false;
+        }
+        const uint64_t pageOffset = current & (translated.pageSize - 1ULL);
+        const uint32_t chunk = static_cast<uint32_t>(std::min<uint64_t>(
+            width - done, translated.pageSize - pageOffset));
+        if (!ram->ValidateGuestRealRange(translated.hostBackingAddress, chunk,
+                access == PPC64TranslationAccess::WRITE, reason)) {
+            failure.effectiveAddress = current;
+            failure.guestRealAddress = current;
+            failure.hostBackingAddress = translated.hostBackingAddress;
+            failure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
+            failure.contextIdentifier = partitionContext_->lpid();
+            failure.reason = "partition backing range is unavailable: " + reason;
+            reason = failure.reason;
+            return false;
+        }
+        segments.push_back({current, current, translated.hostBackingAddress, chunk});
+        done += chunk;
+    }
+    return true;
+}
+
+bool PPC64ISAPlugin::partitionGuestRealMemLoadBE(
+    IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+    uint64_t& value, PPC64TranslationResult& failure,
+    std::string& reason) const {
+    std::vector<TranslatedMemorySegment> segments;
+    if (!partitionGuestRealAccessRange(memory, guestRealAddress, width,
+            PPC64TranslationAccess::READ, segments, failure, reason)) {
+        return false;
+    }
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    uint8_t bytes[8] = {};
+    uint32_t done = 0;
+    try {
+        for (const TranslatedMemorySegment& segment : segments) {
+            ram->ReadGuestReal(segment.hostBackingAddress, bytes + done,
+                               segment.size);
+            done += segment.size;
+        }
+    } catch (const std::exception& e) {
+        reason = std::string("partition backing read failed: ") + e.what();
+        failure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
+        failure.reason = reason;
+        return false;
+    }
+    uint64_t assembled = 0;
+    for (uint32_t i = 0; i < width; ++i) {
+        assembled = (assembled << 8) | bytes[i];
+    }
+    value = assembled;
+    return true;
+}
+
+bool PPC64ISAPlugin::partitionGuestRealMemStoreBE(
+    IMemory& memory, uint64_t guestRealAddress, uint32_t width,
+    uint64_t value, PPC64TranslationResult& failure,
+    std::string& reason) const {
+    std::vector<TranslatedMemorySegment> segments;
+    if (!partitionGuestRealAccessRange(memory, guestRealAddress, width,
+            PPC64TranslationAccess::WRITE, segments, failure, reason)) {
+        return false;
+    }
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    uint8_t bytes[8] = {};
+    for (uint32_t i = 0; i < width; ++i) {
+        bytes[i] = static_cast<uint8_t>(
+            (value >> (8U * (width - 1U - i))) & 0xffU);
+    }
+    std::vector<GuestRealWriteSegment> writes;
+    writes.reserve(segments.size());
+    uint32_t done = 0;
+    for (const TranslatedMemorySegment& segment : segments) {
+        GuestRealWriteSegment write;
+        write.address = segment.hostBackingAddress;
+        write.bytes.assign(bytes + done, bytes + done + segment.size);
+        writes.push_back(std::move(write));
+        done += segment.size;
+    }
+    try {
+        ram->WriteGuestRealTransaction(writes);
+    } catch (const std::exception& e) {
+        reason = std::string("partition backing write failed: ") + e.what();
+        failure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
         failure.reason = reason;
         return false;
     }
