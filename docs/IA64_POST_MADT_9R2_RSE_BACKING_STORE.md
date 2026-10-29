@@ -320,5 +320,7 @@ No phase advancement is justified. `.phase` remains
 `last_completed=IA64-POST-MADT-8` and `next_expected=IA64-POST-MADT-9`.
 
 - Ending branch: `IA64`.
-- Final commit SHA: **filled in after local commit**.
+- Primary implementation and test commit SHA:
+  `2813d2a9ed9d9d95231d968de20378caf9dc2817`. This report's final SHA is a
+  documentation-only follow-up and is reported in the closeout response.
 - Push status: not pushed.
