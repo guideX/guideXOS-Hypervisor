@@ -299,12 +299,70 @@ void invalidateStackedRegistersOutsideFrame(CPUState& cpu) {
     }
 }
 
+void spillRseRegisters(CPUState& cpu, IMemory& memory, uint64_t registerCount) {
+    if (registerCount == 0) return;
+
+    const uint64_t begin = cpu.GetBSPSTORE();
+    const uint64_t bsp = cpu.GetBSP();
+    const uint64_t dirtyCount = rseBackingRegisterCount(begin, bsp);
+    if (dirtyCount > NUM_STACKED_GENERAL_REGISTERS || registerCount > dirtyCount) {
+        throw std::runtime_error("IA-64 mandatory RSE spill exceeds the dirty partition");
+    }
+
+    uint64_t address = begin;
+    const uint64_t end = advanceRsePointer(begin, static_cast<int64_t>(registerCount));
+    uint64_t rnat = cpu.GetRNAT();
+    uint64_t transferred = 0;
+    size_t storeReg = cpu.GetRSEStoreReg();
+
+    while (address < end) {
+        if (isRseRnatSlot(address)) {
+            writeRseBackingWord(cpu, memory, address, rnat & ~(1ULL << 63));
+            address += 8;
+            cpu.SetBSPSTORE(address);
+            rnat = 0;
+            cpu.SetRNAT(rnat);
+            continue;
+        }
+
+        const size_t physical = (storeReg + transferred) %
+                                NUM_STACKED_GENERAL_REGISTERS;
+        if (cpu.GetRSEPhysicalPartition(physical) != RSERegisterPartition::DIRTY) {
+            throw std::runtime_error(
+                "IA-64 mandatory RSE spill encountered a non-dirty physical register");
+        }
+
+        const size_t physicalRegister = NUM_STATIC_GR + physical;
+        const uint64_t natMask = 1ULL << ((address >> 3) & 0x3FULL);
+        if (cpu.GetGRNaTPhysical(physicalRegister)) rnat |= natMask;
+        else rnat &= ~natMask;
+        writeRseBackingWord(cpu, memory, address,
+                            cpu.GetGRPhysical(physicalRegister));
+
+        cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::CLEAN);
+        ++transferred;
+        address += 8;
+        cpu.SetBSPSTORE(address);
+        cpu.SetRSEStoreRegForCheckpoint(
+            static_cast<uint8_t>((storeReg + transferred) %
+                                 NUM_STACKED_GENERAL_REGISTERS));
+        cpu.SetRNAT(rnat);
+    }
+
+    if (transferred != registerCount) {
+        throw std::runtime_error("IA-64 mandatory RSE spill transferred an incomplete range");
+    }
+}
+
 void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
     const uint64_t callerCfm = cpu.GetPFS();
+    const uint8_t callerSof = static_cast<uint8_t>(callerCfm & 0x7FULL);
     const uint8_t callerSol = static_cast<uint8_t>((callerCfm >> 7) & 0x7FULL);
-    if (callerSol > NUM_STACKED_GENERAL_REGISTERS) {
+    if (callerSol > callerSof || callerSof > NUM_STACKED_GENERAL_REGISTERS) {
         throw std::runtime_error("IA-64 br.ret encountered an invalid PFS.SOL");
     }
+    const uint8_t returnedFromBof = cpu.GetRSEBOF();
+    const uint8_t returnedFromSof = cpu.GetSOF();
     const uint64_t currentBsp = cpu.GetBSP();
     const uint64_t returnBsp = advanceRsePointer(
         currentBsp, -static_cast<int64_t>(callerSol));
@@ -361,6 +419,28 @@ void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
             const uint64_t collectionAddress = rseCollectionAddress(returnBsp);
             cpu.SetRNAT(readRseBackingWord(cpu, memory, collectionAddress));
         }
+    }
+
+    // Preserve every physical slot in the returned-to frame (including slots
+    // that overlap the callee ring window after wrap). Other callee entries
+    // have been deallocated by br.ret and must not remain DIRTY. Caller locals
+    // that were displaced have already been filled above.
+    const uint8_t returnedToBof = static_cast<uint8_t>(
+        (static_cast<size_t>(returnedFromBof) +
+         NUM_STACKED_GENERAL_REGISTERS - callerSol) %
+        NUM_STACKED_GENERAL_REGISTERS);
+    std::array<bool, NUM_STACKED_GENERAL_REGISTERS> returnedToFrame{};
+    for (size_t offset = 0; offset < callerSof; ++offset) {
+        returnedToFrame[(static_cast<size_t>(returnedToBof) + offset) %
+                        NUM_STACKED_GENERAL_REGISTERS] = true;
+    }
+    for (size_t offset = 0; offset < returnedFromSof; ++offset) {
+        const size_t physical = (static_cast<size_t>(returnedFromBof) + offset) %
+                                NUM_STACKED_GENERAL_REGISTERS;
+        if (returnedToFrame[physical]) continue;
+        cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
+        cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
+        cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::INVALID);
     }
     cpu.RewindBSPForReturn();
 }
@@ -2726,6 +2806,52 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
 
                 const uint64_t old_cfm = cpu.GetCFM();
                 const uint64_t old_pfs = cpu.GetAR(64);
+
+                // In enforced-lazy mode, alloc is the point at which the RSE
+                // must make room for a frame that does not fit alongside the
+                // resident caller state. Spill only the oldest dirty entries
+                // needed to make the new frame fit; clean entries are already
+                // recoverable from backing-store memory and may be reused.
+                const uint64_t dirtyCount = rseBackingRegisterCount(
+                    cpu.GetBSPSTORE(), cpu.GetBSP());
+                if (dirtyCount > NUM_STACKED_GENERAL_REGISTERS) {
+                    throw std::runtime_error(
+                        "IA-64 alloc encountered a dirty partition larger than the physical register stack");
+                }
+                const uint64_t requiredSpill =
+                    dirtyCount + sof > NUM_STACKED_GENERAL_REGISTERS
+                        ? dirtyCount + sof - NUM_STACKED_GENERAL_REGISTERS
+                        : 0;
+                spillRseRegisters(cpu, memory, requiredSpill);
+
+                // Newly exposed frame entries have undefined architectural
+                // contents. Clear the emulator's physical slot so a prior
+                // context's value cannot leak into the new frame. Registers
+                // in the old frame prefix, including call inputs, remain live.
+                const size_t bof = cpu.GetRSEBOF();
+                const uint8_t oldSof = cpu.GetSOF();
+                for (size_t offset = sof; offset < oldSof; ++offset) {
+                    const size_t physical = (bof + offset) %
+                                            NUM_STACKED_GENERAL_REGISTERS;
+                    cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
+                    cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
+                    cpu.SetRSEPhysicalPartition(physical,
+                                                RSERegisterPartition::INVALID);
+                }
+                for (size_t offset = oldSof; offset < sof; ++offset) {
+                    const size_t physical = (bof + offset) %
+                                            NUM_STACKED_GENERAL_REGISTERS;
+                    // A physical DIRTY label outside the pointer-defined
+                    // dirty range can be left by an explicit backing-store
+                    // context switch. Only the BSPSTORE..BSP range names
+                    // architectural caller state that must be spilled; all
+                    // other entries beyond the old current frame are stale.
+                    cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
+                    cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
+                    cpu.SetRSEPhysicalPartition(physical,
+                                                RSERegisterPartition::CURRENT);
+                }
+
                 cpu.SetGR(dst_, old_pfs);
                 cpu.SetAR(64, old_cfm);
                 cpu.SetCFM(sof | (static_cast<uint64_t>(sol) << 7) |

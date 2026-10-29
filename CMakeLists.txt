@@ -533,6 +533,24 @@ else()
     target_compile_options(test_ia64_single_cpu_context_switch PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Automatic IA-64 Register Stack Engine capacity spill/fill regression through
+# the production guest decoder and execution path.
+add_executable(test_ia64_rse_automatic_pressure
+    tests/test_ia64_rse_automatic_pressure.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ia64_rse_automatic_pressure PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ia64_rse_automatic_pressure PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_rse_automatic_pressure PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # VMManager test
 add_executable(test_vmmanager
     tests/test_vmmanager.cpp
@@ -697,6 +715,7 @@ add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)
 add_test(NAME FuzzerTests COMMAND test_fuzzer)
 add_test(NAME VMIsolationTests COMMAND test_vm_isolation)
+add_test(NAME IA64AutomaticRSEPressureTests COMMAND test_ia64_rse_automatic_pressure)
 add_test(NAME RiscVDecoderSmokeTest COMMAND test_riscv_decoder)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 

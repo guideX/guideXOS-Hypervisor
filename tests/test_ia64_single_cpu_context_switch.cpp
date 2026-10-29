@@ -35,6 +35,8 @@ constexpr uint64_t kPressureF1 = 0x15000;
 constexpr uint64_t kPressureF2 = 0x16000;
 constexpr uint64_t kPressureBacking = 0xA000;
 constexpr uint64_t kPressureVerify = 0xB000;
+constexpr uint64_t kSwitchPressureF1 = 0x17000;
+constexpr uint64_t kSwitchPressureF2 = 0x17100;
 
 constexpr uint8_t kMiiStop = 0x01;
 constexpr uint8_t kMibStop = 0x11;
@@ -252,7 +254,9 @@ void emitNop(IMemory& memory, uint64_t ip) {
 }
 
 void emitNestedFunction(IMemory& memory) {
-    emitM(memory, kNested + 0x00, alloc(38, 6, 4));
+    // Keep the alloc destination inside the six-register frame. r38 would be
+    // the seventh stacked register and sits outside CFM.SOF=6.
+    emitM(memory, kNested + 0x00, alloc(37, 6, 4));
     emitI(memory, kNested + 0x10, movGR(34, 26));
     emitI(memory, kNested + 0x20, movGR(35, 27));
     emitB(memory, kNested + 0x50,
@@ -595,21 +599,11 @@ void testBoundedAutomaticRSEPressureProbe() {
         }
     }
 
-    if (!completed || !mainValuesRestored) {
-        std::cout << "automatic RSE pressure probe reproduced the bounded gap: "
-                  << "completed=" << (completed ? "yes" : "no")
-                  << " spillObserved=" << ((maximumBspstore > kPressureBacking ||
-                                              backingStoreChanged) ? "yes" : "no")
-                  << " fillRestored=" << (mainValuesRestored ? "yes" : "no")
-                  << " bsp=0x" << std::hex << state.GetBSP()
-                  << " bspstore=0x" << state.GetBSPSTORE()
-                  << " maxBspstore=0x" << maximumBspstore << std::dec
-                  << " steps=" << steps;
-        if (!failure.empty()) std::cout << " reason=\"" << failure << "\"";
-        std::cout << '\n';
-        return;
-    }
-
+    require(completed,
+            "automatic RSE pressure probe did not return to the caller continuation" +
+                (failure.empty() ? std::string{} : ": " + failure));
+    require(mainValuesRestored,
+            "automatic RSE pressure probe did not restore the distinguished caller registers");
     require(maximumBspstore > kPressureBacking || backingStoreChanged,
             "pressure values survived without any evidence of backing-store transfer");
     std::cout << "automatic RSE pressure probe passed: spill and return fill restored "
@@ -843,6 +837,117 @@ void testGuestDrivenSingleCPUContextSwitch() {
               << ", trace instructions=" << trace.size() << '\n';
 }
 
+void testPressureSurvivesGuestContextSwitch() {
+    VirtualMachine vm(kGuestRamSize, 1, "IA-64");
+    require(vm.init(), "pressure-switch VM initialization failed");
+    CPU& cpu = vm.getCPU();
+    auto* plugin = dynamic_cast<IA64ISAPlugin*>(cpu.getISAPlugin());
+    require(plugin != nullptr, "pressure-switch VM did not select IA64ISAPlugin");
+    plugin->reset();
+    installGuest(vm);
+
+    IMemory& memory = vm.getMemory();
+    emitB(memory, kAMain,
+          directBranch(5, 0, kAMain, kSwitchPressureF1));
+    emitM(memory, kAMain + 0x10, store8(28, 32, 8));
+    emitM(memory, kAMain + 0x20, store8(28, 95, 8));
+    emitNop(memory, kAMain + 0x30);
+
+    emitM(memory, kSwitchPressureF1, alloc(40, 64, 64));
+    emitB(memory, kSwitchPressureF1 + 0x10,
+          directBranch(5, 1, kSwitchPressureF1 + 0x10, kSwitchPressureF2));
+    emitM(memory, kSwitchPressureF1 + 0x20, movToAR(64, 40));
+    emitB(memory, kSwitchPressureF1 + 0x30, indirectReturn(0));
+
+    emitM(memory, kSwitchPressureF2, alloc(41, 64, 64));
+    emitI(memory, kSwitchPressureF2 + 0x10, movFromBR(46, 1));
+    emitB(memory, kSwitchPressureF2 + 0x20,
+          directBranch(5, 1, kSwitchPressureF2 + 0x20, kSwitcher));
+    emitI(memory, kSwitchPressureF2 + 0x30, movToBR(1, 46));
+    emitM(memory, kSwitchPressureF2 + 0x40, movToAR(64, 41));
+    emitB(memory, kSwitchPressureF2 + 0x50, indirectReturn(1));
+
+    // B is deliberately shallow and uses its own record and backing-store
+    // region. It switches back to A from guest code after one return.
+    emitB(memory, kBMain,
+          directBranch(5, 1, kBMain, kSwitcher));
+    emitNop(memory, kBMain + 0x10);
+    emitSwitcher(memory);
+
+    for (uint64_t offset = 0; offset < 0x800; offset += 8) {
+        writeU64(memory, kBackingA + offset, 0xABABABABABABABABULL);
+    }
+    CPUState& state = cpu.getState();
+    state.SetCFM(64ULL | (64ULL << 7));
+    state.SetPFS(0);
+    state.SetRSC(0);
+    state.SetBSP(kBackingA);
+    state.SetBSPSTORE(kBackingA);
+    state.SetRNAT((1ULL << 3) | (1ULL << 62));
+    state.SetRSEBOFForCheckpoint(0);
+    state.SetGR(30, kRecordA);
+    state.SetGR(31, kRecordB);
+    state.SetGR(28, kVerify);
+    state.SetGR(26, 0xA4A4A4A4A4A4A4A4ULL);
+    state.SetGR(27, 0xA5A5A5A5A5A5A5A5ULL);
+    state.SetGR(1, 0xA100000000000001ULL);
+    state.SetGR(12, 0xA200000000000002ULL);
+    state.SetGR(13, 0xA300000000000003ULL);
+    for (size_t index = 0; index < 64; ++index) {
+        state.SetGR(32 + index, 0xC100000000000000ULL + index);
+    }
+    state.SetGRNaT(35, true);
+    state.SetGRNaT(94, true);
+    state.SetGRNaT(95, true);
+    cpu.setIP(kAMain);
+
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    require(ram != nullptr, "pressure-switch test requires MMU-aware guest memory");
+    std::vector<uint64_t> readFromA;
+    const size_t readHook = ram->GetMMU().RegisterReadHook(
+        [&](HookContext& context, uint8_t*) {
+            if (context.address >= kBackingA && context.address < kBackingA + 0x800) {
+                readFromA.push_back(context.address);
+            }
+        });
+
+    constexpr uint64_t completionIP = kAMain + 0x30;
+    bool completed = false;
+    std::string failure;
+    for (size_t step = 0; step < 3000; ++step) {
+        if (state.GetIP() == completionIP) {
+            completed = true;
+            break;
+        }
+        if (!vm.stepCPU(0)) {
+            failure = "VM stopped at IP=" + hex(state.GetIP());
+            break;
+        }
+    }
+    ram->GetMMU().UnregisterReadHook(readHook);
+
+    require(completed,
+            "pressure context did not resume and unwind A" +
+                (failure.empty() ? std::string{} : ": " + failure));
+    require(readU64(memory, kVerify) == 0xC100000000000000ULL &&
+                readU64(memory, kVerify + 8) == 0xC10000000000003FULL,
+            "pressure context switch did not restore A's distinguished root registers");
+    require(state.GetGRNaT(35) && state.GetGRNaT(94) && state.GetGRNaT(95),
+            "pressure context switch lost A's NaT state across RNAT collections");
+    require(std::find(readFromA.begin(), readFromA.end(), kBackingA) != readFromA.end(),
+            "A resumed without a guest-memory read of its spilled root frame");
+    require(readU64(memory, kBackingA) == 0xC100000000000000ULL,
+            "A's spilled root value was not present in A's guest backing store");
+    require(readU64(memory, kBackingB) == 0xB0B0B0B0B0B0B0B0ULL &&
+                readU64(memory, kBackingB + 24) == 0xB3B3B3B3B3B3B3B3ULL,
+            "A's automatic spill or fill contaminated B's backing-store region");
+    require(state.GetBSP() == kBackingA && state.GetBSPSTORE() == kBackingA,
+            "pressure context unwind did not restore A's original BSP boundary");
+
+    std::cout << "pressure context switch passed: A spilled, guest-switched to B, "
+              << "resumed from A backing memory, and unwound\n";
+}
+
 } // namespace
 
 int main() {
@@ -850,6 +955,7 @@ int main() {
         testReturnFillUsesLiveRnatCollection();
         testGuestDrivenSingleCPUContextSwitch();
         testBoundedAutomaticRSEPressureProbe();
+        testPressureSurvivesGuestContextSwitch();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "single-CPU guest context switch test failed: "
