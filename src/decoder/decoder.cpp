@@ -309,14 +309,21 @@ void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
     const uint64_t returnBsp = advanceRsePointer(
         currentBsp, -static_cast<int64_t>(callerSol));
     const uint64_t oldBspstore = cpu.GetBSPSTORE();
+    const uint64_t liveRnat = cpu.GetRNAT();
+    const uint64_t liveRnatRegion = oldBspstore & ~0x1FFULL;
     const uint8_t returnBof = static_cast<uint8_t>(
         (static_cast<size_t>(cpu.GetRSEBOF()) +
          NUM_STACKED_GENERAL_REGISTERS - callerSol) %
         NUM_STACKED_GENERAL_REGISTERS);
 
     if (returnBsp < oldBspstore) {
-        uint64_t rnat = 0;
-        uint64_t rnatRegion = UINT64_MAX;
+        // AR.RNAT is the live collection for the current BSPSTORE region.
+        // A flushrs can write register words below BSPSTORE without writing
+        // that collection slot to memory, so a return fill in the same
+        // region must consult the architectural register instead of an
+        // unwritten backing-store collection.
+        uint64_t rnat = liveRnat;
+        uint64_t rnatRegion = liveRnatRegion;
         for (size_t offset = 0; offset < callerSol; ++offset) {
             uint64_t address = advanceRsePointer(returnBsp,
                                                  static_cast<int64_t>(offset));
@@ -328,8 +335,12 @@ void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
             }
             const uint64_t region = address & ~0x1FFULL;
             if (rnatRegion != region) {
-                const uint64_t collectionAddress = rseCollectionAddress(address);
-                rnat = readRseBackingWord(cpu, memory, collectionAddress);
+                if (region == liveRnatRegion) {
+                    rnat = liveRnat;
+                } else {
+                    const uint64_t collectionAddress = rseCollectionAddress(address);
+                    rnat = readRseBackingWord(cpu, memory, collectionAddress);
+                }
                 rnatRegion = region;
             }
             const uint64_t value = readRseBackingWord(cpu, memory, address);
@@ -344,8 +355,12 @@ void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
         cpu.SetRSELoadPointer(returnBsp);
         cpu.SetRSEStoreRegForCheckpoint(returnBof);
         cpu.SetRSELoadRegForCheckpoint(returnBof);
-        const uint64_t collectionAddress = rseCollectionAddress(returnBsp);
-        cpu.SetRNAT(readRseBackingWord(cpu, memory, collectionAddress));
+        if ((returnBsp & ~0x1FFULL) == liveRnatRegion) {
+            cpu.SetRNAT(liveRnat);
+        } else {
+            const uint64_t collectionAddress = rseCollectionAddress(returnBsp);
+            cpu.SetRNAT(readRseBackingWord(cpu, memory, collectionAddress));
+        }
     }
     cpu.RewindBSPForReturn();
 }

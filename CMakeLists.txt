@@ -516,6 +516,23 @@ else()
     target_compile_options(test_isa_plugin PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Same-CPU IA-64 guest-managed RSE backing-store context switch regression.
+add_executable(test_ia64_single_cpu_context_switch
+    tests/test_ia64_single_cpu_context_switch.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ia64_single_cpu_context_switch PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ia64_single_cpu_context_switch PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_single_cpu_context_switch PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # VMManager test
 add_executable(test_vmmanager
     tests/test_vmmanager.cpp
