@@ -228,8 +228,10 @@ stays closed until those two architectural/checkpoint tests pass.
   of the commit.
 - EFI, Linux, and accepted checkpoint artifacts were not used for replay or
   modified during this turn.
-- Outcome D commit and remote status are recorded in the repository closeout
-  after commit.
+- Tested implementation commit:
+  `70860647cddfd502b129a7336a4940834d9ec3ec` (`IA64: integrate RSE frame
+  ownership and checkpoint state`). At that commit, local `IA64` was six
+  commits ahead and zero behind `origin/IA64`; no push was performed.
 
 Next, implement a deterministic guest-instruction save/restore sequence that
 suspends A and resumes B on the **same** `CPUState`, then alternates A→B→A→B→A
