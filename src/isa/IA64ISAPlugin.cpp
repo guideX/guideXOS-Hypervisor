@@ -5785,6 +5785,17 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         const uint64_t ip = reader.u64();
         const uint64_t cfm = reader.u64();
         const uint64_t psr = reader.u64();
+        const uint8_t cfmSof = static_cast<uint8_t>(cfm & 0x7FU);
+        const uint8_t cfmSol = static_cast<uint8_t>((cfm >> 7) & 0x7FU);
+        const uint8_t cfmSor = static_cast<uint8_t>((cfm >> 14) & 0x0FU);
+        if (rse.cfm != cfm || rse.sof != cfmSof || rse.sol != cfmSol ||
+            rse.sor != cfmSor || cfmSof > NUM_STACKED_GENERAL_REGISTERS ||
+            cfmSol > cfmSof || rse.rsc != restoredCPU.GetRSC() ||
+            rse.bsp != restoredCPU.GetBSP() ||
+            rse.bspstore != restoredCPU.GetBSPSTORE() ||
+            rse.rnat != restoredCPU.GetRNAT() || rse.pfs != restoredCPU.GetPFS()) {
+            return false;
+        }
         restoredCPU.SetIP(ip);
         restoredCPU.SetCFM(cfm);
         if (checkpointBlobVersion < 5) {

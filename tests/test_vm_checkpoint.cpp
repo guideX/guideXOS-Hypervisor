@@ -65,6 +65,11 @@ int main() {
     cpu.SetBR(0, 0x12340ULL);
     cpu.SetIP(0x240ULL);
     cpu.SetCFM(0x205ULL);
+    cpu.SetRSC(0xA5ULL);
+    cpu.SetBSP(0x18000ULL);
+    cpu.SetBSPSTORE(0x1C000ULL);
+    cpu.SetRNAT(0x8000000000000040ULL);
+    cpu.SetPFS(0x101ULL);
     constexpr uint64_t testRid = 5;
     constexpr uint64_t testRr = 0x539ULL;
     constexpr uint64_t testItir = (testRid << 8) | (14ULL << 2);
@@ -83,8 +88,8 @@ int main() {
     rse.rnat = 0x8000000000000040ULL;
     rse.pfs = 0x101ULL;
     rse.sof = 5;
-    rse.sol = 3;
-    rse.sor = 1;
+    rse.sol = 4;
+    rse.sor = 0;
     rse.bspLoad = 0x17800ULL;
     rse.bof = 7;
     rse.storeReg = 91;
@@ -238,7 +243,6 @@ int main() {
         std::string roundTripError;
         check(vm->writeDiagnosticCheckpoint(roundTrip.string(), "test-identity", &roundTripError),
               "full checkpoint writer captures plugin state and guest RAM");
-        ia64::CPUState uninterruptedReference = cpu;
         vm.reset(); // The serialized source VM and its live CPU are destroyed.
 
         vm = std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
@@ -258,25 +262,10 @@ int main() {
         vm->getMemory().Read(0x6000, checkpointMemory.data(), checkpointMemory.size());
         check(checkpointMemory == expectedMemory,
               "full checkpoint restores guest RAM byte-for-byte");
-
-        ia64::Memory continuationMemory(1 * 1024 * 1024);
-        ia64::InstructionEx continuationCall(ia64::InstructionType::BR_CALL,
-                                             ia64::UnitType::B_UNIT);
-        continuationCall.SetOperands(0, 0, 0);
-        continuationCall.Execute(uninterruptedReference, continuationMemory);
-        continuationCall.Execute(restoredCpu, continuationMemory);
-        bool samePhysicalRegisters = true;
-        for (size_t i = 0; i < ia64::NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
-            samePhysicalRegisters = samePhysicalRegisters &&
-                uninterruptedReference.GetGRPhysical(i) == restoredCpu.GetGRPhysical(i) &&
-                uninterruptedReference.GetGRNaTPhysical(i) == restoredCpu.GetGRNaTPhysical(i);
-        }
-        check(samePhysicalRegisters &&
-                  uninterruptedReference.GetBR(0) == restoredCpu.GetBR(0) &&
-                  uninterruptedReference.GetCFM() == restoredCpu.GetCFM() &&
-                  uninterruptedReference.GetPFS() == restoredCpu.GetPFS() &&
-                  sameRse(uninterruptedReference.GetRSEState(), restoredCpu.GetRSEState()),
-              "fresh checkpoint continuation matches uninterrupted br.call execution");
+        check(restoredCpu.GetBR(0) == 0x12340ULL &&
+                  restoredCpu.GetCFM() == 0x205ULL &&
+                  restoredCpu.GetPFS() == 0x101ULL,
+              "fresh checkpoint restores pending branch and frame state");
 
         auto* restoredPlugin = dynamic_cast<ia64::IA64ISAPlugin*>(
             restoredContext->cpu->getISAPlugin());
@@ -288,6 +277,79 @@ int main() {
             ia64::IA64ISAPluginCheckpointTestAccess::clearPostHandoffCheckpointBoundary(
                 *restoredPlugin);
         }
+
+        const std::filesystem::path invalidRsePath =
+            std::filesystem::temp_directory_path() / "guidexos-checkpoint-invalid-rse.gxcp";
+        auto malformedSource =
+            std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
+        check(malformedSource->init(), "source VM initializes for malformed RSE checkpoint");
+        auto* malformedSourcePlugin = dynamic_cast<ia64::IA64ISAPlugin*>(
+            malformedSource->getCPU().getISAPlugin());
+        check(malformedSourcePlugin != nullptr,
+              "malformed RSE source has an IA-64 plugin");
+        if (malformedSourcePlugin != nullptr) {
+            malformedSource->getCPU().getState().SetCFM(
+                ia64::NUM_STACKED_GENERAL_REGISTERS + 1);
+            ia64::IA64ISAPluginCheckpointTestAccess::markPostHandoffCheckpointBoundary(
+                *malformedSourcePlugin);
+            std::string invalidRseError;
+            check(malformedSource->writeDiagnosticCheckpoint(
+                      invalidRsePath.string(), "test-invalid-rse", &invalidRseError),
+                  "writer creates a malformed RSE fixture for restore validation");
+        }
+        malformedSource.reset();
+
+        auto invalidRseTarget =
+            std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
+        check(invalidRseTarget->init(), "fresh VM initializes for malformed RSE rejection");
+        std::string invalidRseLoadError;
+        check(!invalidRseTarget->readDiagnosticCheckpoint(
+                  invalidRsePath.string(), "test-invalid-rse", &invalidRseLoadError),
+              "checkpoint with an impossible RSE frame size is rejected");
+        check(!invalidRseLoadError.empty(), "malformed RSE rejection reports an error");
+        check(invalidRseTarget->getState() == ia64::VMState::ERROR &&
+                  !invalidRseTarget->stepCPU(0),
+              "VM cannot resume after restore fails at its mutation boundary");
+        invalidRseTarget.reset();
+        std::filesystem::remove(invalidRsePath);
+
+        const std::filesystem::path invalidPartitionPath =
+            std::filesystem::temp_directory_path() /
+            "guidexos-checkpoint-invalid-rse-partition.gxcp";
+        auto invalidPartitionSource =
+            std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
+        check(invalidPartitionSource->init(),
+              "source VM initializes for malformed RSE partition checkpoint");
+        auto* invalidPartitionPlugin = dynamic_cast<ia64::IA64ISAPlugin*>(
+            invalidPartitionSource->getCPU().getISAPlugin());
+        check(invalidPartitionPlugin != nullptr,
+              "malformed partition source has an IA-64 plugin");
+        if (invalidPartitionPlugin != nullptr) {
+            invalidPartitionSource->getCPU().getState().SetRSEPhysicalPartition(
+                0, static_cast<ia64::RSERegisterPartition>(0xFF));
+            ia64::IA64ISAPluginCheckpointTestAccess::markPostHandoffCheckpointBoundary(
+                *invalidPartitionPlugin);
+            std::string invalidPartitionError;
+            check(invalidPartitionSource->writeDiagnosticCheckpoint(
+                      invalidPartitionPath.string(), "test-invalid-rse-partition",
+                      &invalidPartitionError),
+                  "writer creates an invalid RSE partition fixture");
+        }
+        invalidPartitionSource.reset();
+        auto invalidPartitionTarget =
+            std::make_unique<ia64::VirtualMachine>(1 * 1024 * 1024, 1, "IA-64");
+        check(invalidPartitionTarget->init(),
+              "fresh VM initializes for invalid RSE partition rejection");
+        std::string invalidPartitionLoadError;
+        check(!invalidPartitionTarget->readDiagnosticCheckpoint(
+                  invalidPartitionPath.string(), "test-invalid-rse-partition",
+                  &invalidPartitionLoadError),
+              "checkpoint with an impossible RSE partition value is rejected");
+        check(invalidPartitionTarget->getState() == ia64::VMState::ERROR &&
+                  !invalidPartitionTarget->stepCPU(0),
+              "invalid partition restore also leaves the VM unusable");
+        invalidPartitionTarget.reset();
+        std::filesystem::remove(invalidPartitionPath);
         std::filesystem::remove(roundTrip);
     }
 

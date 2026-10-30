@@ -551,6 +551,24 @@ else()
     target_compile_options(test_ia64_rse_automatic_pressure PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Full fresh-VM checkpoint continuation for guest-managed IA-64 contexts with
+# outstanding calls, automatic RSE spills, and RNAT state.
+add_executable(test_ia64_checkpoint_context_continuation
+    tests/test_ia64_checkpoint_context_continuation.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ia64_checkpoint_context_continuation PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ia64_checkpoint_context_continuation PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_checkpoint_context_continuation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # VMManager test
 add_executable(test_vmmanager
     tests/test_vmmanager.cpp
@@ -710,6 +728,7 @@ add_test(NAME NewInstructionTests COMMAND test_new_instructions)
 add_test(NAME EfiMemoryMapTests COMMAND test_efi_memory_map)
 add_test(NAME IA64SalTests COMMAND test_ia64_sal)
 add_test(NAME VMCheckpointTests COMMAND test_vm_checkpoint)
+add_test(NAME IA64CheckpointContextContinuationTests COMMAND test_ia64_checkpoint_context_continuation)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)

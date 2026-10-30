@@ -559,6 +559,14 @@ bool VMCheckpointCodec::read(VirtualMachine& vm,
                              const std::string& path,
                              const std::string& expectedGuestIdentity,
                              std::string* error) {
+    bool restoreStarted = false;
+    const auto failPartialRestore = [&vm, &restoreStarted]() {
+        if (restoreStarted) {
+            vm.state_ = VMState::ERROR;
+            if (!vm.cpus_.empty()) vm.cpus_[0].state = CPUExecutionState::ERROR;
+        }
+        return false;
+    };
     try {
         std::ifstream input(path, std::ios::binary);
         if (!input) { setError(error, "cannot open checkpoint for reading"); return false; }
@@ -689,8 +697,11 @@ bool VMCheckpointCodec::read(VirtualMachine& vm,
 
         if (vm.cpus_.size() != 1) { setError(error, "current diagnostic restore supports one IA-64 CPU"); return false; }
         auto* plugin = dynamic_cast<IA64ISAPlugin*>(vm.cpus_[0].isaPlugin.get());
+        restoreStarted = true;
+        vm.state_ = VMState::RESTORING;
         if (plugin == nullptr || !plugin->deserializeCheckpointState(parsedCPUs[0].plugin)) {
-            setError(error, "IA-64 plugin rejected checkpoint state"); return false;
+            setError(error, "IA-64 plugin rejected checkpoint state");
+            return failPartialRestore();
         }
         vm.memory_->loadBuffer(0, ram.data(), ram.size());
         vm.memory_->GetMMU().RestorePageTable(pageTable);
@@ -698,7 +709,10 @@ bool VMCheckpointCodec::read(VirtualMachine& vm,
         vm.consoleDevice_->restoreSnapshot(console);
         vm.timerDevice_->restoreSnapshot(timer);
         vm.interruptController_->restoreSnapshot(interrupts);
-        if (!vm.framebufferDevice_->restoreSnapshot(framebuffer)) { setError(error, "framebuffer restore failed"); return false; }
+        if (!vm.framebufferDevice_->restoreSnapshot(framebuffer)) {
+            setError(error, "framebuffer restore failed");
+            return failPartialRestore();
+        }
 
         CPURuntimeStateSnapshot runtime = vm.cpus_[0].cpu->createSnapshot();
         runtime.currentSlot = parsedCPUs[0].slot; runtime.bundleValid = parsedCPUs[0].bundleValid;
@@ -710,12 +724,16 @@ bool VMCheckpointCodec::read(VirtualMachine& vm,
         vm.cpus_[0].enabled = parsedCPUs[0].enabled; vm.cpus_[0].lastActivationTime = parsedCPUs[0].lastActivation;
         vm.activeCPUIndex_ = activeCPU; vm.state_ = vmState; vm.cyclesExecuted_ = cycles;
         auto* scheduler = dynamic_cast<SimpleCPUScheduler*>(vm.scheduler_.get());
-        if (scheduler == nullptr || !scheduler->restoreSnapshot(schedulerState)) { setError(error, "scheduler restore failed"); return false; }
+        if (scheduler == nullptr || !scheduler->restoreSnapshot(schedulerState)) {
+            setError(error, "scheduler restore failed");
+            return failPartialRestore();
+        }
         vm.bootStateMachine_.restoreCheckpointState(bootState, previousBootState);
         vm.memory_->GetMMU().SetCPUStateReference(&vm.cpus_[0].cpu->getState());
         return true;
     } catch (const std::exception& exception) {
         setError(error, std::string("checkpoint restore exception: ") + exception.what());
+        failPartialRestore();
         return false;
     }
 }
