@@ -3,6 +3,7 @@
 #include "IISA.h"
 #include "IMemory.h"
 #include "MemoryReservation.h"
+#include "PPC64Platform.h"
 #include "PPC64PartitionMMU.h"
 #include "PPC64RadixMMU.h"
 #include <array>
@@ -55,9 +56,9 @@ constexpr size_t INSN_WIDTH = 4;
 // Serialization layout v2 (Phase 4, 332 bytes): v1 plus privileged state:
 //   SRR0 u64 | SRR1 u64 | DAR u64 | DSISR u32
 // Legacy v1/v2 restores initialize PIDR to zero. serialize_state() preserves
-// v1 when privileged state and PIDR are zero, emits v2 for nonzero privileged
-// state with PIDR=0, and emits v3 when PIDR is nonzero. Explicit v2/v3 APIs
-// select their respective layouts.
+// the smallest compatible layout, emits v3 for a nonzero PIDR, v4 for
+// hypervisor architectural state, and v5 when DEC is armed. Explicit version
+// APIs select their respective layouts; older readers remain supported.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
@@ -69,6 +70,8 @@ constexpr uint32_t STATE_VERSION_V3 = 3;
 constexpr size_t STATE_SIZE_V3 = STATE_SIZE_V2 + 8; // v2 plus guest-visible PIDR
 constexpr uint32_t STATE_VERSION_V4 = 4;
 constexpr size_t STATE_SIZE_V4 = STATE_SIZE_V3 + 8 + 8 + 8 + 4;
+constexpr uint32_t STATE_VERSION_V5 = 5;
+constexpr size_t STATE_SIZE_V5 = STATE_SIZE_V4 + 8;
 
 // ============================================================================
 // PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
@@ -294,6 +297,7 @@ constexpr uint8_t DS_XO_STORE_U = 1;  // stdu (opcode 62)
 constexpr uint16_t SPR_XER = 1;
 constexpr uint16_t SPR_LR = 8;
 constexpr uint16_t SPR_CTR = 9;
+constexpr uint16_t SPR_DEC = 22;
 constexpr uint16_t SPR_TBL = 268;
 constexpr uint16_t SPR_TBU = 269;
 
@@ -522,9 +526,12 @@ public:
     void deserializeV3(const uint8_t* buffer);
     void serializeV4(uint8_t* buffer) const;
     void deserializeV4(const uint8_t* buffer);
+    void serializeV5(uint8_t* buffer) const;
+    void deserializeV5(const uint8_t* buffer);
     static constexpr size_t v2Size() { return STATE_SIZE_V2; }
     static constexpr size_t v3Size() { return STATE_SIZE_V3; }
     static constexpr size_t v4Size() { return STATE_SIZE_V4; }
+    static constexpr size_t v5Size() { return STATE_SIZE_V5; }
 
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
@@ -543,6 +550,8 @@ public:
     uint64_t hsrr1 = 0;  // Hypervisor Save/Restore Register 1 (SPR 315)
     uint64_t hdar = 0;   // Hypervisor Data Address Register (SPR 307)
     uint32_t hdsisr = 0; // Hypervisor DSI Status Register (SPR 306)
+    uint32_t dec = 0;    // POWER9 ordinary 32-bit decrementer mode (LPCR[LD]=0)
+    bool decArmed = false;
 };
 
 /**
@@ -620,6 +629,7 @@ public:
     uint32_t getXER() const { return state_.xer; }
     uint64_t getMSR() const { return state_.msr; }
     uint32_t getPIDR() const { return state_.pidr; }
+    uint32_t getDEC() const { return state_.dec; }
     void setPIDR(uint32_t value) {
         if (state_.pidr != value) {
             state_.pidr = value;
@@ -672,6 +682,18 @@ public:
     void attachVirtualTimeBase(PPC64VirtualTimeBase* timeBase) {
         virtualTimeBase_ = timeBase;
     }
+    void advanceDecrementer(uint64_t ticks);
+    bool requestExternalInterrupt(uint16_t lpid, std::string& reason);
+    bool deassertExternalInterrupt(uint16_t lpid, std::string& reason);
+    enum class InterruptBoundaryResult : uint8_t { NONE, DELIVERED, FAILED };
+    InterruptBoundaryResult deliverPendingInterrupt(IMemory& memory,
+                                                    std::string& reason);
+    const PPC64VirtualInterruptSnapshot& getInterruptSnapshot() const {
+        return interruptState_;
+    }
+    bool restoreInterruptSnapshot(
+        const PPC64VirtualInterruptSnapshot& snapshot,
+        std::string& reason);
     void attachVirtualTerminal(PPC64VirtualTerminal* terminal) {
         virtualTerminal_ = terminal;
     }
@@ -711,6 +733,8 @@ public:
     bool deserialize_state_v3(const std::vector<uint8_t>& data);
     std::vector<uint8_t> serialize_state_v4() const;
     bool deserialize_state_v4(const std::vector<uint8_t>& data);
+    std::vector<uint8_t> serialize_state_v5() const;
+    bool deserialize_state_v5(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the
@@ -932,6 +956,7 @@ private:
     std::shared_ptr<PPC64PartitionContext> partitionContext_;
     PPC64VirtualTimeBase* virtualTimeBase_ = nullptr; // owned by the containing VM
     PPC64VirtualTerminal* virtualTerminal_ = nullptr; // owned by the containing VM
+    PPC64VirtualInterruptSnapshot interruptState_;
 };
 
 /**

@@ -113,6 +113,8 @@ void PPC64ISAState::reset() {
     hsrr1 = 0;
     hdar = 0;
     hdsisr = 0;
+    dec = 0;
+    decArmed = false;
 }
 
 std::unique_ptr<ISAState> PPC64ISAState::clone() const {
@@ -133,6 +135,8 @@ std::unique_ptr<ISAState> PPC64ISAState::clone() const {
     copy->hsrr1 = hsrr1;
     copy->hdar = hdar;
     copy->hdsisr = hdsisr;
+    copy->dec = dec;
+    copy->decArmed = decArmed;
     return copy;
 }
 
@@ -218,6 +222,8 @@ void PPC64ISAState::deserializeV2(const uint8_t* buffer) {
     hsrr1 = 0;
     hdar = 0;
     hdsisr = 0;
+    dec = 0;
+    decArmed = false;
 }
 
 void PPC64ISAState::serializeV3(uint8_t* buffer) const {
@@ -251,6 +257,8 @@ void PPC64ISAState::deserializeV3(const uint8_t* buffer) {
     hsrr1 = 0;
     hdar = 0;
     hdsisr = 0;
+    dec = 0;
+    decArmed = false;
 }
 
 void PPC64ISAState::serializeV4(uint8_t* buffer) const {
@@ -283,6 +291,39 @@ void PPC64ISAState::deserializeV4(const uint8_t* buffer) {
     hsrr1 = getU64(buffer + offset); offset += 8;
     hdar = getU64(buffer + offset); offset += 8;
     hdsisr = getU32(buffer + offset);
+    dec = 0;
+    decArmed = false;
+}
+
+void PPC64ISAState::serializeV5(uint8_t* buffer) const {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 serializeV5: null buffer");
+    }
+    serializeV4(buffer);
+    putU32(buffer + 4, STATE_VERSION_V5);
+    putU32(buffer + STATE_SIZE_V4, dec);
+    putU32(buffer + STATE_SIZE_V4 + 4, decArmed ? 1U : 0U);
+}
+
+void PPC64ISAState::deserializeV5(const uint8_t* buffer) {
+    if (buffer == nullptr || getU32(buffer) != STATE_MAGIC ||
+        getU32(buffer + 4) != STATE_VERSION_V5) {
+        throw std::invalid_argument("PPC64 deserializeV5: bad magic or version");
+    }
+    std::array<uint8_t, STATE_SIZE_V4> v4{};
+    std::memcpy(v4.data(), buffer, STATE_SIZE_V4);
+    putU32(v4.data() + 4, STATE_VERSION_V4);
+    deserializeV4(v4.data());
+    dec = getU32(buffer + STATE_SIZE_V4);
+    const uint32_t armed = getU32(buffer + STATE_SIZE_V4 + 4);
+    if (armed > 1U) {
+        throw std::invalid_argument("PPC64 deserializeV5: invalid DEC armed flag");
+    }
+    decArmed = armed != 0;
+    if (!decArmed && dec != 0) {
+        throw std::invalid_argument(
+            "PPC64 deserializeV5: unarmed DEC has a nonzero value");
+    }
 }
 
 void PPC64ISAState::serialize(uint8_t* buffer) const {
@@ -356,6 +397,8 @@ void PPC64ISAState::deserialize(const uint8_t* buffer) {
     hsrr1 = 0;
     hdar = 0;
     hdsisr = 0;
+    dec = 0;
+    decArmed = false;
 }
 
 std::string PPC64ISAState::toString() const {
@@ -376,6 +419,7 @@ std::string PPC64ISAState::toString() const {
     out << "  HSRR1: 0x" << std::hex << hsrr1 << std::dec << "\n";
     out << "  HDAR:  0x" << std::hex << hdar << std::dec << "\n";
     out << "  HDSISR: 0x" << std::hex << hdsisr << std::dec << "\n";
+    out << "  DEC: 0x" << std::hex << dec << std::dec << "\n";
     for (size_t i = 0; i < NUM_GPR; ++i) {
         out << "  r" << i << ": 0x" << std::hex << gpr[i] << std::dec << "\n";
     }
@@ -496,9 +540,157 @@ void PPC64ISAPlugin::reset() {
     hypervisorReturnValid_ = false;
     hypervisorReturnHV_ = false;
     repeatedHypervisorStorageFaults_ = 0;
+    interruptState_ = PPC64VirtualInterruptSnapshot{};
     // Note: guestDeliveryEnabled_ is configuration, not architectural state,
     // and is preserved across reset() so test harnesses can reset CPU state
     // without re-selecting the delivery mode.
+}
+
+void PPC64ISAPlugin::advanceDecrementer(uint64_t ticks) {
+    if (ticks == 0 || !state_.decArmed) {
+        return;
+    }
+    // The ordinary POWER9 DEC profile is a 32-bit modulo counter. Its
+    // architected pending level is the sign bit; no periodic reload occurs.
+    state_.dec -= static_cast<uint32_t>(ticks);
+    interruptState_.decrementerPending = state_.decArmed &&
+        (state_.dec & 0x80000000U) != 0;
+}
+
+bool PPC64ISAPlugin::requestExternalInterrupt(uint16_t lpid,
+                                              std::string& reason) {
+    if ((state_.msr & MSR_HV) != 0) {
+        reason = "guest external injection is unsupported while MSR[HV] is set";
+        return false;
+    }
+    const uint16_t activeLPID = getActiveLPID();
+    if (lpid != activeLPID) {
+        reason = "guest external injection LPID does not match the authorized active guest";
+        return false;
+    }
+    if (interruptState_.externalAsserted &&
+        interruptState_.externalLPID != lpid) {
+        reason = "a level-asserted external source is already bound to another LPID";
+        return false;
+    }
+    interruptState_.externalAsserted = true;
+    interruptState_.externalPending = true;
+    interruptState_.externalLPID = lpid;
+    interruptState_.externalRoutingProfile = PPC64_EXTERNAL_ROUTE_GUEST_SRR;
+    reason.clear();
+    return true;
+}
+
+bool PPC64ISAPlugin::deassertExternalInterrupt(uint16_t lpid,
+                                               std::string& reason) {
+    if (interruptState_.externalAsserted &&
+        interruptState_.externalLPID != lpid) {
+        reason = "external deassertion LPID does not own the asserted source";
+        return false;
+    }
+    if (!interruptState_.externalAsserted && lpid != getActiveLPID()) {
+        reason = "external deassertion LPID is not an authorized guest";
+        return false;
+    }
+    interruptState_.externalAsserted = false;
+    interruptState_.externalPending = false;
+    interruptState_.externalLPID = 0;
+    reason.clear();
+    return true;
+}
+
+PPC64ISAPlugin::InterruptBoundaryResult
+PPC64ISAPlugin::deliverPendingInterrupt(IMemory& memory, std::string& reason) {
+    reason.clear();
+    const bool external = interruptState_.externalPending &&
+                          interruptState_.externalAsserted;
+    const bool decrementer = interruptState_.decrementerPending;
+    if ((!external && !decrementer) || (state_.msr & MSR_EE) == 0) {
+        return InterruptBoundaryResult::NONE;
+    }
+    if ((state_.msr & MSR_HV) != 0) {
+        reason = "pending guest interrupt cannot be routed while MSR[HV] is set";
+        return InterruptBoundaryResult::FAILED;
+    }
+
+    const uint8_t source = external ? PPC64_INTERRUPT_SOURCE_EXTERNAL
+                                    : PPC64_INTERRUPT_SOURCE_DECREMENTER;
+    const uint64_t vector = external ? 0x500ULL : 0x900ULL;
+    const uint16_t targetLPID = external ? interruptState_.externalLPID
+                                         : getActiveLPID();
+    if (targetLPID != getActiveLPID()) {
+        // Keep a partition-bound source pending until its authorized context
+        // is active on this vCPU again.
+        return InterruptBoundaryResult::NONE;
+    }
+    if (consecutiveGuestExceptions_ >= MAX_NESTED_EXCEPTIONS) {
+        recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, state_.nip, 0,
+                    false, 0, false, PPC64AccessType::NONE, 0,
+                    "asynchronous interrupt made no bounded guest progress",
+                    false);
+        reason = lastFault_.reason;
+        return InterruptBoundaryResult::FAILED;
+    }
+
+    // An asynchronous interrupt saves the already-established next NIP. It
+    // never advances or replays an instruction and does not touch DAR/DSISR
+    // or the hypervisor save/restore registers.
+    const uint64_t oldMSR = state_.msr;
+    state_.srr0 = state_.nip;
+    state_.srr1 = oldMSR & SRR1_MSR_MASK;
+    state_.msr = oldMSR & ~(MSR_EE | MSR_PR | MSR_IR | MSR_DR | MSR_RI);
+    state_.nip = EXC_VECTOR_BASE + vector;
+    clearReservation();
+    hasCachedInstruction_ = false;
+    ++consecutiveGuestExceptions_;
+    interruptState_.lastDeliverySource = source;
+    interruptState_.lastDeliveryVector = vector;
+    interruptState_.lastDeliverySRR0 = state_.srr0;
+    interruptState_.lastDeliveryLPID = targetLPID;
+    ++interruptState_.deliveryCount;
+    (void)memory;
+    return InterruptBoundaryResult::DELIVERED;
+}
+
+bool PPC64ISAPlugin::restoreInterruptSnapshot(
+    const PPC64VirtualInterruptSnapshot& snapshot, std::string& reason) {
+    if (snapshot.version != PPC64_INTERRUPT_SNAPSHOT_VERSION ||
+        snapshot.externalPending != snapshot.externalAsserted ||
+        snapshot.externalRoutingProfile != PPC64_EXTERNAL_ROUTE_GUEST_SRR ||
+        snapshot.decrementerPending !=
+            (state_.decArmed && (state_.dec & 0x80000000U) != 0)) {
+        reason = "PPC64 interrupt checkpoint state is inconsistent";
+        return false;
+    }
+    if (snapshot.externalAsserted &&
+        (snapshot.externalLPID != getActiveLPID() ||
+         (state_.msr & MSR_HV) != 0)) {
+        reason = "PPC64 external source is not bound to the restored guest context";
+        return false;
+    }
+    if (!snapshot.externalAsserted && snapshot.externalLPID != 0) {
+        reason = "PPC64 deasserted source contains a stale LPID";
+        return false;
+    }
+    if (snapshot.lastDeliverySource == PPC64_INTERRUPT_SOURCE_NONE) {
+        if (snapshot.deliveryCount != 0 || snapshot.lastDeliveryVector != 0 ||
+            snapshot.lastDeliverySRR0 != 0 || snapshot.lastDeliveryLPID != 0) {
+            reason = "PPC64 empty delivery metadata is inconsistent";
+            return false;
+        }
+    } else if ((snapshot.lastDeliverySource == PPC64_INTERRUPT_SOURCE_EXTERNAL &&
+                snapshot.lastDeliveryVector != 0x500ULL) ||
+               (snapshot.lastDeliverySource == PPC64_INTERRUPT_SOURCE_DECREMENTER &&
+                snapshot.lastDeliveryVector != 0x900ULL) ||
+               (snapshot.lastDeliverySource != PPC64_INTERRUPT_SOURCE_EXTERNAL &&
+                snapshot.lastDeliverySource != PPC64_INTERRUPT_SOURCE_DECREMENTER) ||
+               snapshot.deliveryCount == 0) {
+        reason = "PPC64 interrupt delivery metadata is invalid";
+        return false;
+    }
+    interruptState_ = snapshot;
+    reason.clear();
+    return true;
 }
 
 bool PPC64ISAPlugin::isPrivilegedSPR(uint16_t sprn) {
@@ -1261,7 +1453,8 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                     instr.kind = DecodedKind::MFSPR;
                     instr.supported = false;
                 } else if (instr.sprn == SPR_XER || instr.sprn == SPR_LR ||
-                           instr.sprn == SPR_CTR || instr.sprn == SPR_DSISR ||
+                           instr.sprn == SPR_CTR || instr.sprn == SPR_DEC ||
+                           instr.sprn == SPR_DSISR ||
                            instr.sprn == SPR_DAR || instr.sprn == SPR_SRR0 ||
                            instr.sprn == SPR_SRR1 || instr.sprn == SPR_PIDR ||
                            instr.sprn == SPR_HDSISR || instr.sprn == SPR_HDAR ||
@@ -3160,6 +3353,8 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 value = state_.lr;
             } else if (instr.sprn == SPR_CTR) {
                 value = state_.ctr;
+            } else if (instr.sprn == SPR_DEC) {
+                value = state_.dec;
             } else if (instr.sprn == SPR_TBL || instr.sprn == SPR_TBU) {
                 if (virtualTimeBase_ == nullptr) {
                     recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
@@ -3222,6 +3417,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 state_.lr = value;
             } else if (instr.sprn == SPR_CTR) {
                 state_.ctr = value;
+            } else if (instr.sprn == SPR_DEC) {
+                state_.dec = static_cast<uint32_t>(value);
+                state_.decArmed = true;
+                interruptState_.decrementerPending = state_.decArmed &&
+                    (state_.dec & 0x80000000U) != 0;
             } else if (instr.sprn == SPR_SRR0) {
                 state_.srr0 = value;
             } else if (instr.sprn == SPR_SRR1) {
@@ -3533,6 +3733,9 @@ bool PPC64ISAPlugin::restoreArchitecturalState(const PPC64ISAState& restored) {
         return false;
     }
     state_ = restored;
+    interruptState_ = PPC64VirtualInterruptSnapshot{};
+    interruptState_.decrementerPending = state_.decArmed &&
+        (state_.dec & 0x80000000U) != 0;
     // Replacing architectural state is a context alteration: no reservation
     // taken in the previous execution context may succeed in this one.
     reservation_.reset();
@@ -4287,6 +4490,9 @@ std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
     // Preserve legacy layouts until Phase 8 hypervisor architectural state is
     // present. Hypervisor memory mappings and the pending return latch remain
     // host-owned runtime state and are not checkpointed here.
+    if (state_.decArmed) {
+        return serialize_state_v5();
+    }
     if ((state_.msr & MSR_HV) != 0 || state_.hsrr0 != 0 || state_.hsrr1 != 0 ||
         state_.hdar != 0 || state_.hdsisr != 0) {
         return serialize_state_v4();
@@ -4307,7 +4513,8 @@ std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
 
 bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
     if (data.size() != STATE_SIZE && data.size() != STATE_SIZE_V2 &&
-        data.size() != STATE_SIZE_V3 && data.size() != STATE_SIZE_V4) {
+        data.size() != STATE_SIZE_V3 && data.size() != STATE_SIZE_V4 &&
+        data.size() != STATE_SIZE_V5) {
         return false;
     }
     PPC64ISAState restored;
@@ -4318,8 +4525,10 @@ bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
             restored.deserializeV2(data.data());
         } else if (data.size() == STATE_SIZE_V3) {
             restored.deserializeV3(data.data());
-        } else {
+        } else if (data.size() == STATE_SIZE_V4) {
             restored.deserializeV4(data.data());
+        } else {
+            restored.deserializeV5(data.data());
         }
     } catch (...) {
         return false;
@@ -4378,6 +4587,25 @@ bool PPC64ISAPlugin::deserialize_state_v4(const std::vector<uint8_t>& data) {
     PPC64ISAState restored;
     try {
         restored.deserializeV4(data.data());
+    } catch (...) {
+        return false;
+    }
+    return restoreArchitecturalState(restored);
+}
+
+std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v5() const {
+    std::vector<uint8_t> data(STATE_SIZE_V5);
+    state_.serializeV5(data.data());
+    return data;
+}
+
+bool PPC64ISAPlugin::deserialize_state_v5(const std::vector<uint8_t>& data) {
+    if (data.size() != STATE_SIZE_V5) {
+        return false;
+    }
+    PPC64ISAState restored;
+    try {
+        restored.deserializeV5(data.data());
     } catch (...) {
         return false;
     }

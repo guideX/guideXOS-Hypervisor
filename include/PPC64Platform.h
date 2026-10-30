@@ -66,6 +66,29 @@ struct PPC64PlatformSnapshot {
     uint64_t currentTimebase = 0;
 };
 
+// Host-owned state for the deliberately small PPC64 interrupt input profile.
+// DEC pending follows the POWER9 level condition (DEC[0] == 1 with LPCR[LD]=0)
+// and the external input remains asserted until the host deasserts it.
+inline constexpr uint32_t PPC64_INTERRUPT_SNAPSHOT_VERSION = 1;
+inline constexpr uint8_t PPC64_EXTERNAL_ROUTE_GUEST_SRR = 1;
+inline constexpr uint8_t PPC64_INTERRUPT_SOURCE_NONE = 0;
+inline constexpr uint8_t PPC64_INTERRUPT_SOURCE_EXTERNAL = 1;
+inline constexpr uint8_t PPC64_INTERRUPT_SOURCE_DECREMENTER = 2;
+
+struct PPC64VirtualInterruptSnapshot {
+    uint32_t version = PPC64_INTERRUPT_SNAPSHOT_VERSION;
+    bool decrementerPending = false;
+    bool externalPending = false;
+    bool externalAsserted = false;
+    uint16_t externalLPID = 0;
+    uint8_t externalRoutingProfile = PPC64_EXTERNAL_ROUTE_GUEST_SRR;
+    uint8_t lastDeliverySource = PPC64_INTERRUPT_SOURCE_NONE;
+    uint64_t lastDeliveryVector = 0;
+    uint64_t lastDeliverySRR0 = 0;
+    uint16_t lastDeliveryLPID = 0;
+    uint64_t deliveryCount = 0;
+};
+
 struct PPC64PlatformCapabilities {
     bool power9FoundationProfile = false;
     bool directFdtEntry = false;

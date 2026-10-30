@@ -705,6 +705,7 @@ add_test(NAME PPC64Phase8Tests COMMAND test_ppc64_phase8)
 add_test(NAME PPC64Phase9Tests COMMAND test_ppc64_phase9)
 add_test(NAME PPC64Phase10Tests COMMAND test_ppc64_phase10)
 add_test(NAME PPC64Phase11Tests COMMAND test_ppc64_phase11)
+add_test(NAME PPC64Phase12Tests COMMAND test_ppc64_phase12)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -898,6 +899,23 @@ add_executable(test_ppc64_phase11
 
 if(WIN32)
     target_link_libraries(test_ppc64_phase11 PRIVATE ws2_32)
+endif()
+
+# PPC64 Phase 12 production DEC and asynchronous interrupt acceptance tests.
+add_executable(test_ppc64_phase12
+    tests/test_ppc64_phase12.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase12 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase12 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase12 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

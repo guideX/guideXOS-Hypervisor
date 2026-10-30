@@ -682,6 +682,11 @@ public:
     ppc64::PPC64PlatformSnapshot getPPC64PlatformSnapshot() const;
     ppc64::PPC64PlatformCapabilities getPPC64PlatformCapabilities() const;
     uint64_t getPPC64Timebase() const;
+    bool assertPPC64ExternalInterrupt(uint16_t lpid = 0,
+                                     std::string* error = nullptr);
+    bool deassertPPC64ExternalInterrupt(uint16_t lpid = 0,
+                                       std::string* error = nullptr);
+    ppc64::PPC64VirtualInterruptSnapshot getPPC64InterruptSnapshot() const;
     std::vector<uint8_t> getPPC64FDT() const { return ppc64PlatformDTB_; }
     uint32_t getPPC64VirtualTerminalId() const;
     ppc64::PPC64VirtualTerminalSnapshot getPPC64TerminalSnapshot() const;

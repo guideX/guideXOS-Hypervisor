@@ -1245,6 +1245,65 @@ uint64_t VirtualMachine::getPPC64Timebase() const {
     return ppc64VirtualTimeBase_->read();
 }
 
+bool VirtualMachine::assertPPC64ExternalInterrupt(uint16_t lpid,
+                                                 std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || cpus_.size() != 1 ||
+        !cpus_[0].isaPlugin || state_ == VMState::CREATED ||
+        state_ == VMState::TERMINATING || state_ == VMState::TERMINATED ||
+        state_ == VMState::ERROR || state_ == VMState::CRASHED ||
+        !cpus_[0].enabled || cpus_[0].state == CPUExecutionState::HALTED ||
+        cpus_[0].state == CPUExecutionState::ERROR) {
+        return reject("external interrupt target is not a live PPC64 VM");
+    }
+    auto* plugin = dynamic_cast<ppc64::PPC64ISAPlugin*>(cpus_[0].isaPlugin.get());
+    if (plugin == nullptr) {
+        return reject("external interrupt target has no PPC64 vCPU");
+    }
+    std::string reason;
+    if (!plugin->requestExternalInterrupt(lpid, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::deassertPPC64ExternalInterrupt(uint16_t lpid,
+                                                    std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || cpus_.size() != 1 ||
+        !cpus_[0].isaPlugin || state_ == VMState::TERMINATING ||
+        state_ == VMState::TERMINATED || state_ == VMState::ERROR ||
+        state_ == VMState::CRASHED) {
+        return reject("external interrupt target is not a live PPC64 VM");
+    }
+    auto* plugin = dynamic_cast<ppc64::PPC64ISAPlugin*>(cpus_[0].isaPlugin.get());
+    if (plugin == nullptr) {
+        return reject("external interrupt target has no PPC64 vCPU");
+    }
+    std::string reason;
+    if (!plugin->deassertExternalInterrupt(lpid, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+ppc64::PPC64VirtualInterruptSnapshot
+VirtualMachine::getPPC64InterruptSnapshot() const {
+    const auto* plugin = getPPC64ISAPlugin();
+    if (plugin == nullptr) {
+        throw std::logic_error("PPC64 interrupt state is unavailable");
+    }
+    return plugin->getInterruptSnapshot();
+}
+
 std::string VirtualMachine::getLastExecutionDiagnostic() const {
     if (isaName_ == "PPC64" && !cpus_.empty() && cpus_[0].isaPlugin) {
         const std::string pluginDiagnostic =
@@ -1859,6 +1918,27 @@ if (!isValidCPUIndex(cpuIndex)) {
             state_ = VMState::RUNNING;
         }
 
+        if (cpu->getArchitecture() == ISAArchitecture::PPC64) {
+            auto* plugin = dynamic_cast<ppc64::PPC64ISAPlugin*>(ctx.isaPlugin.get());
+            if (plugin == nullptr) {
+                throw std::runtime_error("PPC64 CPU has no PPC64 ISA plugin");
+            }
+            std::string interruptReason;
+            const auto interruptResult = plugin->deliverPendingInterrupt(
+                *memory_, interruptReason);
+            if (interruptResult == ppc64::PPC64ISAPlugin::InterruptBoundaryResult::FAILED) {
+                lastExecutionDiagnostic_ = interruptReason;
+                ctx.state = CPUExecutionState::ERROR;
+                state_ = VMState::ERROR;
+                return false;
+            }
+            if (interruptResult == ppc64::PPC64ISAPlugin::InterruptBoundaryResult::DELIVERED) {
+                // Exception entry is a boundary event, not an executed guest
+                // instruction: preserve Phase 9 counters and do not tick TB.
+                return true;
+            }
+        }
+
         const ISAExecutionResult executionResult = cpu->stepDetailed();
         const bool attemptedInstruction = executionResult != ISAExecutionResult::BREAKPOINT;
         if (attemptedInstruction) {
@@ -1867,7 +1947,14 @@ if (!isValidCPUIndex(cpuIndex)) {
             ++cyclesExecuted_;
             if (cpu->getArchitecture() == ISAArchitecture::PPC64 &&
                 ppc64VirtualTimeBase_) {
+                const uint64_t timebaseBefore = ppc64VirtualTimeBase_->read();
                 ppc64VirtualTimeBase_->advanceInstruction();
+                const uint64_t elapsedTicks =
+                    ppc64VirtualTimeBase_->read() - timebaseBefore;
+                if (auto* plugin = dynamic_cast<ppc64::PPC64ISAPlugin*>(
+                        ctx.isaPlugin.get())) {
+                    plugin->advanceDecrementer(elapsedTicks);
+                }
             }
             scheduler_->onCPUExecuted(cpuIndex, 1);
             if (timerDevice_ && cpu->getArchitecture() != ISAArchitecture::PPC64) {
@@ -2242,6 +2329,7 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
             snapshot.ppc64VirtualTerminal =
                 ppc64VirtualTerminal_->createSnapshot();
         }
+        snapshot.ppc64Interrupts = plugin->getInterruptSnapshot();
     }
     
     return snapshot;
@@ -2594,6 +2682,10 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             if (snapshot.ppc64HasActiveLPID !=
                 stagedPlugin->hasActivePartitionContext()) {
                 return reject("active partition binding does not match snapshot metadata");
+            }
+            if (!stagedPlugin->restoreInterruptSnapshot(
+                    snapshot.ppc64Interrupts, reason)) {
+                return reject("interrupt state restore failed: " + reason);
             }
         } catch (const std::exception& exception) {
             return reject(std::string("staged restore failed: ") + exception.what());
