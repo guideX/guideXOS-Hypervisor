@@ -5195,8 +5195,21 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
         return ISAExecutionResult::HALT;
     }
 
-    // Service interrupts first
-    servicePendingInterrupt();
+    // Service interrupts first. An external interrupt may itself defer an
+    // incomplete return fill until the handler returns through rfi.
+    const bool interruptDelivered = servicePendingInterrupt();
+    CPUState& cpu = state_.getCPUState();
+    if (!interruptDelivered && cpu.GetBSPSTORE() > cpu.GetBSP() &&
+        cpu.GetIP() == cpu.GetCR(IA64_CR_IIP)) {
+        const uint64_t targetIP = cpu.GetIP();
+        const uint64_t targetPsr = cpu.GetPSR();
+        try {
+            ResumeIncompleteRseReturnFrame(cpu, memory);
+        } catch (const IA64TranslationFault& fault) {
+            enterTranslationFault(fault, true, true, targetIP, targetPsr);
+            return ISAExecutionResult::CONTINUE;
+        }
+    }
     
     // Decode and execute
     const uint64_t ipBeforeDecode = state_.getCPUState().GetIP();
@@ -8423,6 +8436,72 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
     return EFI_STATUS_SUCCESS;
 }
 
+void IA64ISAPlugin::enterTranslationFault(
+    const IA64TranslationFault& fault,
+    bool mandatoryRseTransfer,
+    bool incompleteTargetFrame,
+    uint64_t faultingInstructionIP,
+    uint64_t interruptedPsr) {
+    CPUState& cpu = state_.getCPUState();
+    const uint64_t faultVa = fault.GetVirtualAddress();
+    const uint64_t rr = cpu.GetRR((faultVa >> 61) & 0x7ULL);
+    const uint64_t rid = (rr >> 8) & 0xFFFFFFULL;
+    const uint64_t pageShift = (rr >> 2) & 0x3FULL;
+    const bool nestedTlbMiss =
+        fault.GetKind() == IA64TranslationFaultKind::NESTED_TLB_MISS;
+    if (!nestedTlbMiss) {
+        uint64_t isr = 0;
+        switch (fault.GetAccessType()) {
+            case MemoryAccessType::READ: isr = 1ULL << 34; break;
+            case MemoryAccessType::WRITE: isr = 1ULL << 33; break;
+            case MemoryAccessType::EXECUTE: isr = 1ULL << 32; break;
+            case MemoryAccessType::NON_ACCESS: isr = 1ULL << 35; break;
+        }
+        // ISR.rs marks a mandatory RSE transfer. ISR.ir records the
+        // incomplete-current-frame condition created by a br.ret/rfi fill.
+        if (mandatoryRseTransfer) isr |= 1ULL << 37;
+        if (incompleteTargetFrame) isr |= 1ULL << 38;
+
+        cpu.SetCR(19, faultingInstructionIP & ~0xFULL);
+        cpu.SetCR(16, interruptedPsr);
+        cpu.SetCR(17, isr);
+        cpu.SetCR(20, faultVa);
+        cpu.SetCR(21, (rid << 8) | (pageShift << 2));
+        cpu.SetCR(25, fault.GetHashAddress());
+        if ((interruptedPsr & (1ULL << 13)) != 0) {
+            cpu.SetCR(23, cpu.GetCR(23) & ~(1ULL << 63));
+        }
+    }
+
+    cpu.SetPSR(interruptedPsr & ~((1ULL << 13) | (1ULL << 14) |
+                                  (3ULL << 41) | IA64_PSR_BN_MASK));
+    const uint64_t vectorBase = cpu.GetCR(2) != 0
+        ? cpu.GetCR(2) : state_.interruptVectorBase_;
+    const uint64_t rawHandler = normalizeKernelEntryIP(
+        vectorBase + fault.GetVectorOffset());
+    cpu.SetIP(rawHandler);
+    state_.currentSlot_ = 0;
+    state_.bundleValid_ = false;
+    capturePredicateGroupSnapshot();
+    hasCachedInstruction_ = false;
+
+    std::ostringstream trace;
+    trace << "ip=" << BootStageTrace::Hex(faultingInstructionIP)
+          << " vector=" << BootStageTrace::Hex(fault.GetVectorOffset())
+          << " handler=" << BootStageTrace::Hex(rawHandler)
+          << " va=" << BootStageTrace::Hex(faultVa)
+          << " iha=" << BootStageTrace::Hex(fault.GetHashAddress())
+          << " rr=" << BootStageTrace::Hex(rr)
+          << " pta=" << BootStageTrace::Hex(cpu.GetCR(8))
+          << " kind=" << static_cast<unsigned>(fault.GetKind())
+          << " access=" << static_cast<unsigned>(fault.GetAccessType())
+          << " rse=" << (mandatoryRseTransfer ? 1 : 0)
+          << " incomplete=" << (incompleteTargetFrame ? 1 : 0)
+          << " reason=\"" << fault.what() << '\"';
+    BootStageTrace::Event("IA64_TRANSLATION_FAULT", trace.str());
+    std::cerr << "[IA64-TRANSLATION-FAULT] " << trace.str() << std::endl;
+}
+
 bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& instr, bool ignorePredicate) {
     try {
         CPUState& cpu = state_.getCPUState();
@@ -8948,62 +9027,27 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
     } catch (const IA64TranslationFault& fault) {
         CPUState& cpu = state_.getCPUState();
         const uint64_t interruptedPsr = cpu.GetPSR();
-        const uint64_t faultingInstructionIP =
+        uint64_t faultingInstructionIP =
             canonicalizeKernelInstructionPointer(cpu.GetIP()) & ~0xFULL;
-        const uint64_t faultVa = fault.GetVirtualAddress();
-        const uint64_t rr = cpu.GetRR((faultVa >> 61) & 0x7ULL);
-        const uint64_t rid = (rr >> 8) & 0xFFFFFFULL;
-        const uint64_t pageShift = (rr >> 2) & 0x3FULL;
-        const bool nestedTlbMiss =
-            fault.GetKind() == IA64TranslationFaultKind::NESTED_TLB_MISS;
-        if (!nestedTlbMiss) {
-            uint64_t isr = 0;
-            switch (fault.GetAccessType()) {
-                case MemoryAccessType::READ: isr = 1ULL << 34; break;
-                case MemoryAccessType::WRITE: isr = 1ULL << 33; break;
-                case MemoryAccessType::EXECUTE: isr = 1ULL << 32; break;
-                case MemoryAccessType::NON_ACCESS: isr = 1ULL << 35; break;
-            }
-            // Ordinary interruptions collect their interruption frame and
-            // fault-address resources.  The Data Nested TLB vector is the
-            // architectural exception: it preserves IIP/IPSR/IIPA/IFS, IFA,
-            // ITIR, IHA, and ISR so the nested handler can use the original
-            // TLB-miss context plus the OS-defined address register.
-            cpu.SetCR(19, faultingInstructionIP);
-            cpu.SetCR(16, interruptedPsr);
-            cpu.SetCR(17, isr);
-            cpu.SetCR(20, faultVa);
-            cpu.SetCR(21, (rid << 8) | (pageShift << 2));
-            cpu.SetCR(25, fault.GetHashAddress());
+        const InstructionType faultingType = instr.GetType();
+        const bool mandatoryRseTransfer =
+            faultingType == InstructionType::ALLOC ||
+            faultingType == InstructionType::FLUSHRS ||
+            faultingType == InstructionType::LOADRS ||
+            faultingType == InstructionType::BR_RET;
+        bool incompleteTargetFrame = false;
+        uint64_t interruptedPsrForFault =
+            (interruptedPsr & ~(3ULL << 41)) |
+            ((static_cast<uint64_t>(state_.currentSlot_) & 0x3ULL) << 41);
+        if (faultingType == InstructionType::BR_RET) {
+            faultingInstructionIP = normalizeBranchEntryIP(
+                cpu.GetBR(instr.GetSrc1())) & ~0xFULL;
+            interruptedPsrForFault &= ~(3ULL << 41); // br.ret target starts at RI 0
+            incompleteTargetFrame = cpu.GetBSPSTORE() > cpu.GetBSP();
         }
-        cpu.SetPSR(interruptedPsr & ~((1ULL << 13) | (1ULL << 14) |
-                                      (3ULL << 41) | IA64_PSR_BN_MASK));
-
-        const uint64_t vectorBase = cpu.GetCR(2) != 0
-            ? cpu.GetCR(2) : state_.interruptVectorBase_;
-        const uint64_t rawHandler = normalizeKernelEntryIP(
-            vectorBase + fault.GetVectorOffset());
-        // Even for a nested DTLB fault, internal IP vectors to the handler;
-        // the architecturally visible interruption registers remain untouched.
-        cpu.SetIP(rawHandler);
-        state_.currentSlot_ = 0;
-        state_.bundleValid_ = false;
-        capturePredicateGroupSnapshot();
-        hasCachedInstruction_ = false;
-
-        std::ostringstream trace;
-        trace << "ip=" << BootStageTrace::Hex(faultingInstructionIP)
-              << " vector=" << BootStageTrace::Hex(fault.GetVectorOffset())
-              << " handler=" << BootStageTrace::Hex(rawHandler)
-              << " va=" << BootStageTrace::Hex(faultVa)
-              << " iha=" << BootStageTrace::Hex(fault.GetHashAddress())
-              << " rr=" << BootStageTrace::Hex(rr)
-              << " pta=" << BootStageTrace::Hex(cpu.GetCR(8))
-              << " kind=" << static_cast<unsigned>(fault.GetKind())
-              << " access=" << static_cast<unsigned>(fault.GetAccessType())
-              << " reason=\"" << fault.what() << '\"';
-        BootStageTrace::Event("IA64_TRANSLATION_FAULT", trace.str());
-        std::cerr << "[IA64-TRANSLATION-FAULT] " << trace.str() << std::endl;
+        enterTranslationFault(fault, mandatoryRseTransfer,
+                              incompleteTargetFrame, faultingInstructionIP,
+                              interruptedPsrForFault);
         return true;
     } catch (const std::exception& e) {
         CPUState& cpu = state_.getCPUState();

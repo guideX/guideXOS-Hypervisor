@@ -17,6 +17,8 @@
 
 namespace ia64 {
 
+class IA64TranslationFault;
+
 // IA-64 control-register selectors used by the interrupt and interval-timer
 // paths.  These are the values carried in the indirect MOV_FROM_CR/
 // MOV_TO_CR cr3 field.  Linux's ia64_getreg constants are a separate magic
@@ -474,6 +476,11 @@ private:
      * Service pending interrupts
      */
     bool servicePendingInterrupt();
+    void enterTranslationFault(const IA64TranslationFault& fault,
+                              bool mandatoryRseTransfer,
+                              bool incompleteTargetFrame,
+                              uint64_t faultingInstructionIP,
+                              uint64_t interruptedPsr);
     bool isInterruptEligible(uint8_t vector) const;
     int findHighestEligibleInterrupt() const;
     void updateIntervalTimer();

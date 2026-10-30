@@ -354,6 +354,70 @@ void spillRseRegisters(CPUState& cpu, IMemory& memory, uint64_t registerCount) {
     }
 }
 
+void continueIncompleteRseReturnFill(CPUState& cpu, IMemory& memory) {
+    const uint64_t bsp = cpu.GetBSP();
+    const uint64_t end = cpu.GetBSPSTORE();
+    uint64_t address = cpu.GetRSELoadPointer();
+    if (end <= bsp) return;
+    if (address < bsp || address > end) {
+        throw std::runtime_error("IA-64 incomplete return fill has an invalid load frontier");
+    }
+
+    const uint64_t liveRnatRegion = end & ~0x1FFULL;
+    size_t loadReg = cpu.GetRSELoadReg();
+    while (address < end) {
+        if (isRseRnatSlot(address)) {
+            (void)readRseBackingWord(cpu, memory, address);
+            address += 8;
+            cpu.SetRSELoadPointer(address);
+            continue;
+        }
+
+        const uint64_t region = address & ~0x1FFULL;
+        uint64_t rnat = 0;
+        if (region == liveRnatRegion) {
+            rnat = cpu.GetRNAT();
+        } else {
+            const uint64_t collectionAddress = rseCollectionAddress(address);
+            if (collectionAddress >= end) {
+                throw std::runtime_error(
+                    "IA-64 return fill requires an RNAT collection beyond BSPSTORE");
+            }
+            rnat = readRseBackingWord(cpu, memory, collectionAddress);
+        }
+
+        const uint64_t value = readRseBackingWord(cpu, memory, address);
+        const size_t physical = loadReg % NUM_STACKED_GENERAL_REGISTERS;
+        const size_t physicalRegister = NUM_STATIC_GR + physical;
+        cpu.SetGRPhysical(physicalRegister, value);
+        cpu.SetGRNaTPhysical(physicalRegister,
+                             (rnat & (1ULL << ((address >> 3) & 0x3FULL))) != 0);
+        cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::CLEAN);
+        ++loadReg;
+        address += 8;
+        cpu.SetRSELoadRegForCheckpoint(static_cast<uint8_t>(
+            loadReg % NUM_STACKED_GENERAL_REGISTERS));
+        cpu.SetRSELoadPointer(address);
+    }
+
+    const uint8_t targetBof = cpu.GetRSEBOF();
+    const uint64_t targetBsp = cpu.GetBSP();
+    const uint64_t targetRegion = targetBsp & ~0x1FFULL;
+    if (targetRegion != liveRnatRegion) {
+        cpu.SetRNAT(readRseBackingWord(cpu, memory,
+                                      rseCollectionAddress(targetBsp)));
+    }
+    for (size_t offset = 0; offset < cpu.GetSOF(); ++offset) {
+        const size_t physical = (static_cast<size_t>(targetBof) + offset) %
+                                NUM_STACKED_GENERAL_REGISTERS;
+        cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::CURRENT);
+    }
+    cpu.SetBSPSTORE(targetBsp);
+    cpu.SetRSELoadPointer(targetBsp);
+    cpu.SetRSEStoreRegForCheckpoint(targetBof);
+    cpu.SetRSELoadRegForCheckpoint(targetBof);
+}
+
 void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
     const uint64_t callerCfm = cpu.GetPFS();
     const uint8_t callerSof = static_cast<uint8_t>(callerCfm & 0x7FULL);
@@ -363,68 +427,14 @@ void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
     }
     const uint8_t returnedFromBof = cpu.GetRSEBOF();
     const uint8_t returnedFromSof = cpu.GetSOF();
-    const uint64_t currentBsp = cpu.GetBSP();
     const uint64_t returnBsp = advanceRsePointer(
-        currentBsp, -static_cast<int64_t>(callerSol));
+        cpu.GetBSP(), -static_cast<int64_t>(callerSol));
     const uint64_t oldBspstore = cpu.GetBSPSTORE();
-    const uint64_t liveRnat = cpu.GetRNAT();
-    const uint64_t liveRnatRegion = oldBspstore & ~0x1FFULL;
     const uint8_t returnBof = static_cast<uint8_t>(
         (static_cast<size_t>(cpu.GetRSEBOF()) +
          NUM_STACKED_GENERAL_REGISTERS - callerSol) %
         NUM_STACKED_GENERAL_REGISTERS);
 
-    if (returnBsp < oldBspstore) {
-        // AR.RNAT is the live collection for the current BSPSTORE region.
-        // A flushrs can write register words below BSPSTORE without writing
-        // that collection slot to memory, so a return fill in the same
-        // region must consult the architectural register instead of an
-        // unwritten backing-store collection.
-        uint64_t rnat = liveRnat;
-        uint64_t rnatRegion = liveRnatRegion;
-        for (size_t offset = 0; offset < callerSol; ++offset) {
-            uint64_t address = advanceRsePointer(returnBsp,
-                                                 static_cast<int64_t>(offset));
-            if (address >= oldBspstore) continue;
-            if (isRseRnatSlot(address)) {
-                rnat = readRseBackingWord(cpu, memory, address);
-                rnatRegion = address & ~0x1FFULL;
-                continue;
-            }
-            const uint64_t region = address & ~0x1FFULL;
-            if (rnatRegion != region) {
-                if (region == liveRnatRegion) {
-                    rnat = liveRnat;
-                } else {
-                    const uint64_t collectionAddress = rseCollectionAddress(address);
-                    rnat = readRseBackingWord(cpu, memory, collectionAddress);
-                }
-                rnatRegion = region;
-            }
-            const uint64_t value = readRseBackingWord(cpu, memory, address);
-            const size_t physical = (static_cast<size_t>(returnBof) + offset) %
-                                    NUM_STACKED_GENERAL_REGISTERS;
-            cpu.SetGRPhysical(NUM_STATIC_GR + physical, value);
-            cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical,
-                                 (rnat & (1ULL << ((address >> 3) & 0x3FULL))) != 0);
-            cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::CLEAN);
-        }
-        cpu.SetBSPSTORE(returnBsp);
-        cpu.SetRSELoadPointer(returnBsp);
-        cpu.SetRSEStoreRegForCheckpoint(returnBof);
-        cpu.SetRSELoadRegForCheckpoint(returnBof);
-        if ((returnBsp & ~0x1FFULL) == liveRnatRegion) {
-            cpu.SetRNAT(liveRnat);
-        } else {
-            const uint64_t collectionAddress = rseCollectionAddress(returnBsp);
-            cpu.SetRNAT(readRseBackingWord(cpu, memory, collectionAddress));
-        }
-    }
-
-    // Preserve every physical slot in the returned-to frame (including slots
-    // that overlap the callee ring window after wrap). Other callee entries
-    // have been deallocated by br.ret and must not remain DIRTY. Caller locals
-    // that were displaced have already been filled above.
     const uint8_t returnedToBof = static_cast<uint8_t>(
         (static_cast<size_t>(returnedFromBof) +
          NUM_STACKED_GENERAL_REGISTERS - callerSol) %
@@ -434,17 +444,53 @@ void restoreRseReturnFrame(CPUState& cpu, IMemory& memory) {
         returnedToFrame[(static_cast<size_t>(returnedToBof) + offset) %
                         NUM_STACKED_GENERAL_REGISTERS] = true;
     }
-    for (size_t offset = 0; offset < returnedFromSof; ++offset) {
-        const size_t physical = (static_cast<size_t>(returnedFromBof) + offset) %
-                                NUM_STACKED_GENERAL_REGISTERS;
-        if (returnedToFrame[physical]) continue;
-        cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
-        cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
-        cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::INVALID);
-    }
+    const auto discardReturnedFromFrame = [&]() {
+        for (size_t offset = 0; offset < returnedFromSof; ++offset) {
+            const size_t physical = (static_cast<size_t>(returnedFromBof) + offset) %
+                                    NUM_STACKED_GENERAL_REGISTERS;
+            if (returnedToFrame[physical]) continue;
+            cpu.SetGRPhysical(NUM_STATIC_GR + physical, 0);
+            cpu.SetGRNaTPhysical(NUM_STATIC_GR + physical, false);
+            cpu.SetRSEPhysicalPartition(physical, RSERegisterPartition::INVALID);
+        }
+    };
+
+    // Commit the target frame before mandatory loads. If a load faults, the
+    // architecture exposes an incomplete current frame with BSPSTORE above
+    // BSP; the RSE load pointer records exactly which transfer remains.
+    const uint64_t oldCfm = cpu.GetCFM();
+    const uint64_t oldBsp = cpu.GetBSP();
+    const uint64_t oldLoadPointer = cpu.GetRSELoadPointer();
+    const uint8_t oldBof = cpu.GetRSEBOF();
+    const uint8_t oldLoadReg = cpu.GetRSELoadReg();
     cpu.RewindBSPForReturn();
+    if (returnBsp < oldBspstore) {
+        cpu.SetRSELoadPointer(returnBsp);
+        cpu.SetRSELoadRegForCheckpoint(returnBof);
+        try {
+            continueIncompleteRseReturnFill(cpu, memory);
+        } catch (const IA64TranslationFault&) {
+            discardReturnedFromFrame();
+            throw;
+        } catch (...) {
+            // Only a typed guest translation fault becomes an architectural
+            // interruption. Keep host memory and emulator failures on their
+            // established error path and do not commit br.ret's frame move.
+            cpu.SetCFM(oldCfm);
+            cpu.SetBSP(oldBsp);
+            cpu.SetRSEBOFForCheckpoint(oldBof);
+            cpu.SetRSELoadPointer(oldLoadPointer);
+            cpu.SetRSELoadRegForCheckpoint(oldLoadReg);
+            throw;
+        }
+    }
+    discardReturnedFromFrame();
 }
 
+}
+
+void ResumeIncompleteRseReturnFrame(CPUState& cpu, IMemory& memory) {
+    continueIncompleteRseReturnFill(cpu, memory);
 }
 
 void InstructionEx::SetOperands(uint8_t dst, uint8_t src1, uint8_t src2) {
@@ -2404,6 +2450,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                 uint64_t address = bspstore;
                 uint64_t rnat = cpu.GetRNAT();
                 size_t registerIndex = 0;
+                const size_t storeReg = cpu.GetRSEStoreReg();
                 while (address < bsp) {
                     if (isRseRnatSlot(address)) {
                         // RNAT collection slots are part of the address
@@ -2412,6 +2459,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                         address += 8;
                         cpu.SetBSPSTORE(address);
                         rnat = 0;
+                        cpu.SetRNAT(rnat);
                         continue;
                     }
 
@@ -2419,7 +2467,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                         throw std::runtime_error("IA-64 flushrs register partition does not match BSP pointers");
                     }
                     const size_t physical =
-                        (static_cast<size_t>(cpu.GetRSEStoreReg()) + registerIndex) %
+                        (storeReg + registerIndex) %
                         NUM_STACKED_GENERAL_REGISTERS;
                     const size_t physicalRegister = NUM_STATIC_GR + physical;
                     const uint64_t value = cpu.GetGRPhysical(physicalRegister);
@@ -2436,6 +2484,10 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     address += 8;
                     cpu.SetBSPSTORE(address);
                     ++registerIndex;
+                    cpu.SetRSEStoreRegForCheckpoint(static_cast<uint8_t>(
+                        (storeReg + registerIndex) %
+                        NUM_STACKED_GENERAL_REGISTERS));
+                    cpu.SetRNAT(rnat);
                 }
 
                 if (registerIndex != dirtyRegisterCount) {

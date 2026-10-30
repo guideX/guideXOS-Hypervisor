@@ -9,6 +9,14 @@
 
 // Forward declare format structures and decoders
 namespace ia64 {
+class CPUState;
+class IMemory;
+
+// Complete a fault-interrupted mandatory RSE fill before the target
+// instruction is allowed to execute. The progress frontier is kept in the
+// already serialized RSE load pointer.
+void ResumeIncompleteRseReturnFrame(CPUState& cpu, IMemory& memory);
+
 namespace formats {
     struct AFormat;
     struct IFormat;

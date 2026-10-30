@@ -563,6 +563,21 @@ if(WIN32)
     target_link_libraries(test_ia64_checkpoint_context_continuation PRIVATE ws2_32)
 endif()
 
+add_executable(test_ia64_rse_fault_restart
+    tests/test_ia64_rse_fault_restart.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+target_include_directories(test_ia64_rse_fault_restart PRIVATE include)
+if(WIN32)
+    target_link_libraries(test_ia64_rse_fault_restart PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_ia64_rse_fault_restart PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_rse_fault_restart PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_ia64_checkpoint_context_continuation PRIVATE /W4)
 else()
@@ -729,6 +744,7 @@ add_test(NAME EfiMemoryMapTests COMMAND test_efi_memory_map)
 add_test(NAME IA64SalTests COMMAND test_ia64_sal)
 add_test(NAME VMCheckpointTests COMMAND test_vm_checkpoint)
 add_test(NAME IA64CheckpointContextContinuationTests COMMAND test_ia64_checkpoint_context_continuation)
+add_test(NAME IA64RSEFaultRestartTests COMMAND test_ia64_rse_fault_restart)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)
