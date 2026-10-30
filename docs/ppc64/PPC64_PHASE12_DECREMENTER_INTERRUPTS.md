@@ -117,12 +117,12 @@ as `PPC64Phase12Tests`:
 | D | Expiry remains pending under EE=0 and delivers after guest code enables EE. |
 | E | Host line assertion and source snapshot restore, LPID validation, vector `0x500`, real handler, host deassertion, and `rfid`. |
 | F | External-before-DEC ordering, pending-source preservation, independent deassert/rearm, and eventual DEC service. |
-| G | Pause/time isolation, deterministic snapshot replay, pending masked checkpoint restore, and corrupt-checkpoint rejection. |
+| G | Pause/time isolation and serialized checkpoint replay immediately before expiry, while masked-pending, in-handler, and after return; corrupt-checkpoint rejection. |
 | H | Independent VM clocks/DEC/source state and rejection of non-active LPID injection. |
 | I | Timer handler emits `PPC64 timer interrupt handled` using guest `ld`, `sc 1`, and `H_PUT_TERM_CHAR`; host captures the terminal bytes. |
 | J | DEC pending through recoverable DSI and `sc 0`, and through PAPR `sc 1`; delivery after EE is restored; invalid-vector and repeated-DSI termination. |
 
-Phase 12 passed **557 checks, 0 failures**. Rebuilt and ran PPC64 Phases 1–11;
+Phase 12 passed **563 checks, 0 failures**. Rebuilt and ran PPC64 Phases 1–11;
 all passed their prior counts, totaling **4,491 checks** (148, 399, 535, 378,
 496, 183, 194, 721, 231, 232, and 974 respectively). This preserves the
 pre-change PPC64 regression count.

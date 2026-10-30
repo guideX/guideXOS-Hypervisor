@@ -463,20 +463,33 @@ void programG_PauseSnapshotAndCheckpoint() {
     const VMStateSnapshot beforeExpiry = vm.captureVMSnapshot();
     const uint64_t frozenTB = vm.getPPC64Timebase();
     CHECK(vm.pause());
+    const auto path = std::filesystem::temp_directory_path() /
+                      "guidexos-phase12-dec.gxcp";
+    const auto corruptPath = std::filesystem::temp_directory_path() /
+                             "guidexos-phase12-dec-corrupt.gxcp";
+    const auto beforePath = std::filesystem::temp_directory_path() /
+                            "guidexos-phase12-dec-before.gxcp";
+    const auto handlerPath = std::filesystem::temp_directory_path() /
+                             "guidexos-phase12-dec-handler.gxcp";
+    const auto returnedPath = std::filesystem::temp_directory_path() /
+                              "guidexos-phase12-dec-returned.gxcp";
+    std::string error;
+    CHECK(vm.writeDiagnosticCheckpoint(beforePath.string(), "phase12-before",
+                                       &error));
 
     VirtualMachine other(kRamSize, 1, "PPC64", config(7, 200));
     CHECK(prepare(other, {encodeAddi(10, 10, 1)}));
     CHECK(steps(other, 5));
     CHECK(vm.getPPC64Timebase() == frozenTB);
+    CHECK(vm.readDiagnosticCheckpoint(beforePath.string(), "phase12-before",
+                                      &error));
+    plugin = vm.getPPC64ISAPlugin();
+    CHECK(vm.getPPC64Timebase() == frozenTB);
+    CHECK(vm.getState() == VMState::PAUSED);
     CHECK(vm.resume());
     CHECK(steps(vm, 2));
     CHECK(plugin->getInterruptSnapshot().decrementerPending);
     CHECK((plugin->getMSR() & MSR_EE) == 0);
-    const auto path = std::filesystem::temp_directory_path() /
-                      "guidexos-phase12-dec.gxcp";
-    const auto corruptPath = std::filesystem::temp_directory_path() /
-                             "guidexos-phase12-dec-corrupt.gxcp";
-    std::string error;
     CHECK(vm.writeDiagnosticCheckpoint(path.string(), "phase12-dec", &error));
     std::ifstream in(path, std::ios::binary);
     std::vector<char> file((std::istreambuf_iterator<char>(in)),
@@ -500,18 +513,24 @@ void programG_PauseSnapshotAndCheckpoint() {
     CHECK(step(vm));
     CHECK(plugin->getNIP() == 0x900U);
     const VMStateSnapshot inHandler = vm.captureVMSnapshot();
+    CHECK(vm.writeDiagnosticCheckpoint(handlerPath.string(), "phase12-handler",
+                                       &error));
     CHECK(steps(vm, 7));
     CHECK(readBE32(vm.getMemory(), kCounter) == 1U);
     CHECK(plugin->getNIP() == kEntry + 28U);
     CHECK(plugin->getDEC() == 98U);
     const VMStateSnapshot afterReturn = vm.captureVMSnapshot();
-    CHECK(vm.restoreVMSnapshot(inHandler));
+    CHECK(vm.writeDiagnosticCheckpoint(returnedPath.string(), "phase12-returned",
+                                       &error));
+    CHECK(vm.readDiagnosticCheckpoint(handlerPath.string(), "phase12-handler",
+                                      &error));
     plugin = vm.getPPC64ISAPlugin();
     CHECK(plugin->getNIP() == 0x900U);
     CHECK(readBE32(vm.getMemory(), kCounter) == 0U);
     CHECK(steps(vm, 7));
     CHECK(readBE32(vm.getMemory(), kCounter) == 1U);
-    CHECK(vm.restoreVMSnapshot(afterReturn));
+    CHECK(vm.readDiagnosticCheckpoint(returnedPath.string(), "phase12-returned",
+                                      &error));
     plugin = vm.getPPC64ISAPlugin();
     CHECK(plugin->getNIP() == kEntry + 28U);
     CHECK(plugin->getDEC() == 98U);
@@ -528,6 +547,9 @@ void programG_PauseSnapshotAndCheckpoint() {
     VMStateSnapshot impossible = vm.captureVMSnapshot();
     impossible.ppc64Interrupts.decrementerPending = false;
     CHECK(!vm.restoreVMSnapshot(impossible));
+    std::filesystem::remove(beforePath, ignored);
+    std::filesystem::remove(handlerPath, ignored);
+    std::filesystem::remove(returnedPath, ignored);
 }
 
 void programH_TwoVMIsolationAndLPIDBinding() {
