@@ -1,4 +1,5 @@
 #include "PPC64ISAPlugin.h"
+#include "PPC64VirtualTerminal.h"
 #include "PPC64Platform.h"
 #include "ISAPluginRegistry.h"
 #include "memory.h"
@@ -3409,6 +3410,67 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 if (status == PPC64_H_SUCCESS) {
                     clearReservation();
                     hasCachedInstruction_ = false;
+                }
+            } else if (virtualTerminal_ != nullptr &&
+                       state_.gpr[3] == PPC64_H_PUT_TERM_CHAR) {
+                if (state_.gpr[4] > std::numeric_limits<uint32_t>::max() ||
+                    state_.gpr[5] > 16U) {
+                    status = PPC64_H_PARAMETER;
+                } else {
+                    std::array<uint8_t, 16> payload{};
+                    const size_t count = static_cast<size_t>(state_.gpr[5]);
+                    for (size_t i = 0; i < count; ++i) {
+                        const uint64_t word = i < 8U ? state_.gpr[6] : state_.gpr[7];
+                        const size_t byteInWord = i & 7U;
+                        payload[i] = static_cast<uint8_t>(
+                            word >> (56U - static_cast<unsigned>(byteInWord * 8U)));
+                    }
+                    const PPC64TerminalResult result = virtualTerminal_->put(
+                        static_cast<uint32_t>(state_.gpr[4]), getActiveLPID(),
+                        payload.data(), count);
+                    switch (result) {
+                        case PPC64TerminalResult::SUCCESS:
+                            status = PPC64_H_SUCCESS;
+                            clearReservation();
+                            hasCachedInstruction_ = false;
+                            break;
+                        case PPC64TerminalResult::BUSY:
+                            status = PPC64_H_BUSY;
+                            break;
+                        case PPC64TerminalResult::RESOURCE:
+                            status = PPC64_H_RESOURCE;
+                            break;
+                        case PPC64TerminalResult::PARAMETER:
+                            status = PPC64_H_PARAMETER;
+                            break;
+                    }
+                }
+            } else if (virtualTerminal_ != nullptr &&
+                       state_.gpr[3] == PPC64_H_GET_TERM_CHAR) {
+                if (state_.gpr[4] > std::numeric_limits<uint32_t>::max()) {
+                    status = PPC64_H_PARAMETER;
+                } else {
+                    std::array<uint8_t, 16> payload{};
+                    size_t count = 0;
+                    const PPC64TerminalResult result = virtualTerminal_->get(
+                        static_cast<uint32_t>(state_.gpr[4]), getActiveLPID(),
+                        payload, count);
+                    if (result == PPC64TerminalResult::SUCCESS) {
+                        uint64_t first = 0;
+                        uint64_t second = 0;
+                        for (size_t i = 0; i < 8U; ++i) {
+                            first = (first << 8) | payload[i];
+                            second = (second << 8) | payload[i + 8U];
+                        }
+                        state_.gpr[4] = count;
+                        state_.gpr[5] = first;
+                        state_.gpr[6] = second;
+                        status = PPC64_H_SUCCESS;
+                        clearReservation();
+                        hasCachedInstruction_ = false;
+                    } else {
+                        status = PPC64_H_PARAMETER;
+                    }
                 }
             }
             state_.gpr[3] = status;

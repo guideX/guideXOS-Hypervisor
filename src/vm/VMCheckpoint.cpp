@@ -27,9 +27,11 @@ constexpr char kPPC64Magic[] = "GXPPC64V";
 constexpr size_t kMagicSize = sizeof(kMagic) - 1;
 constexpr uint32_t kPayloadVersion = 1;
 constexpr uint32_t kPPC64LegacyFormatVersion = 1;
-constexpr uint32_t kPPC64FormatVersion = 2;
+constexpr uint32_t kPPC64PreviousFormatVersion = 2;
+constexpr uint32_t kPPC64FormatVersion = 3;
 constexpr uint32_t kPPC64LegacyPayloadVersion = 1;
-constexpr uint32_t kPPC64PayloadVersion = 2;
+constexpr uint32_t kPPC64PreviousPayloadVersion = 2;
+constexpr uint32_t kPPC64PayloadVersion = 3;
 constexpr size_t kMaxHeaderString = 1U << 20;
 constexpr size_t kMaxPayloadBytes = (2ULL << 30);
 constexpr size_t kMaxPageEntries = 16U * 1024U * 1024U;
@@ -39,6 +41,7 @@ constexpr uint32_t kLittleEndianMarker = 0x01020304U;
 constexpr const char* kCheckpointBuildIdentity = "guideXOS-Hypervisor/IA64-checkpoint-v1";
 constexpr const char* kPPC64CheckpointBuildIdentityV1 = "guideXOS-Hypervisor/PPC64-VM-checkpoint-v1";
 constexpr const char* kPPC64CheckpointBuildIdentityV2 = "guideXOS-Hypervisor/PPC64-VM-checkpoint-v2";
+constexpr const char* kPPC64CheckpointBuildIdentityV3 = "guideXOS-Hypervisor/PPC64-VM-checkpoint-v3";
 
 void setError(std::string* error, const std::string& message) {
     if (error != nullptr) *error = message;
@@ -487,7 +490,8 @@ bool readPPC64Ranges(Reader& reader,
 }
 
 void writePPC64Platform(Writer& writer,
-                        const ppc64::PPC64PlatformSnapshot& platform) {
+                        const ppc64::PPC64PlatformSnapshot& platform,
+                        uint32_t payloadVersion) {
     writer.u8(platform.enabled ? 1 : 0);
     if (!platform.enabled) return;
     const auto& config = platform.configuration;
@@ -501,6 +505,10 @@ void writePPC64Platform(Writer& writer,
     writer.u64(config.maximumFdtSize);
     writer.string(config.bootArguments);
     writePPC64Ranges(writer, config.reservedRanges);
+    if (payloadVersion >= 3U) {
+        writer.u8(config.virtualTerminalEnabled ? 1 : 0);
+        writer.u32(config.virtualTerminalId);
+    }
     writer.u8(platform.prepared ? 1 : 0);
     writer.u64(platform.currentTimebase);
     if (!platform.prepared) return;
@@ -519,9 +527,10 @@ void writePPC64Platform(Writer& writer,
 }
 
 bool readPPC64Platform(Reader& reader,
-                       ppc64::PPC64PlatformSnapshot& platform) {
+                       ppc64::PPC64PlatformSnapshot& platform,
+                       uint32_t payloadVersion) {
     if (!readFlag(reader, platform.enabled)) return false;
-    if (!platform.enabled) return false;
+    if (!platform.enabled) return reader.valid();
     auto& config = platform.configuration;
     config.profile = static_cast<ppc64::PPC64PlatformProfile>(reader.u32());
     config.entryMode = static_cast<ppc64::PPC64GuestEntryMode>(reader.u32());
@@ -532,8 +541,14 @@ bool readPPC64Platform(Reader& reader,
     config.requestedFdtAddress = reader.u64();
     config.maximumFdtSize = reader.u64();
     config.bootArguments = reader.string(kMaxHeaderString);
-    if (!reader.valid() || !readPPC64Ranges(reader, config.reservedRanges) ||
-        !readFlag(reader, platform.prepared)) return false;
+    if (!reader.valid() || !readPPC64Ranges(reader, config.reservedRanges)) {
+        return false;
+    }
+    if (payloadVersion >= 3U &&
+        (!readFlag(reader, config.virtualTerminalEnabled) ||
+         !reader.valid())) return false;
+    if (payloadVersion >= 3U) config.virtualTerminalId = reader.u32();
+    if (!reader.valid() || !readFlag(reader, platform.prepared)) return false;
     platform.currentTimebase = reader.u64();
     if (!platform.prepared) return reader.valid();
     auto& layout = platform.memoryLayout;
@@ -548,6 +563,45 @@ bool readPPC64Platform(Reader& reader,
     layout.initrdSize = reader.u64();
     return readPPC64Ranges(reader, layout.reservations) &&
            readPPC64Ranges(reader, layout.guestMemoryRanges) && reader.valid();
+}
+
+void writePPC64Terminal(Writer& writer,
+                        const ppc64::PPC64VirtualTerminalSnapshot& terminal) {
+    writer.u32(terminal.version);
+    writer.u32(terminal.terminalId);
+    writer.u8(terminal.enabled ? 1 : 0);
+    writer.u32(static_cast<uint32_t>(terminal.channels.size()));
+    for (const auto& channel : terminal.channels) {
+        writer.u32(channel.lpid);
+        writer.bytes(channel.input);
+        writer.bytes(channel.output);
+    }
+}
+
+bool readPPC64Terminal(Reader& reader,
+                       ppc64::PPC64VirtualTerminalSnapshot& terminal) {
+    terminal.version = reader.u32();
+    terminal.terminalId = reader.u32();
+    if (!readFlag(reader, terminal.enabled)) return false;
+    const uint32_t channelCount = reader.u32();
+    if (!reader.valid() || channelCount > ppc64::PPC64_TERMINAL_MAX_CHANNELS) {
+        return false;
+    }
+    terminal.channels.clear();
+    terminal.channels.reserve(channelCount);
+    for (uint32_t i = 0; i < channelCount; ++i) {
+        const uint32_t lpid = reader.u32();
+        if (!reader.valid() || lpid > std::numeric_limits<uint16_t>::max()) {
+            return false;
+        }
+        ppc64::PPC64VirtualTerminalChannelSnapshot channel;
+        channel.lpid = static_cast<uint16_t>(lpid);
+        channel.input = reader.bytes(ppc64::PPC64_TERMINAL_QUEUE_CAPACITY);
+        channel.output = reader.bytes(ppc64::PPC64_TERMINAL_QUEUE_CAPACITY);
+        if (!reader.valid()) return false;
+        terminal.channels.push_back(std::move(channel));
+    }
+    return reader.valid();
 }
 
 void writePPC64SnapshotPayload(Writer& writer,
@@ -612,8 +666,11 @@ void writePPC64SnapshotPayload(Writer& writer,
     for (const auto& partition : snapshot.ppc64PartitionSnapshots) {
         writer.bytes(partition);
     }
+    if (payloadVersion >= kPPC64PreviousPayloadVersion) {
+        writePPC64Platform(writer, snapshot.ppc64Platform, payloadVersion);
+    }
     if (payloadVersion >= kPPC64PayloadVersion) {
-        writePPC64Platform(writer, snapshot.ppc64Platform);
+        writePPC64Terminal(writer, snapshot.ppc64VirtualTerminal);
     }
 }
 
@@ -622,9 +679,12 @@ bool readPPC64SnapshotPayload(Reader& reader, const Header& header,
     const uint32_t payloadVersion = reader.u32();
     if ((header.version == kPPC64LegacyFormatVersion &&
          payloadVersion != kPPC64LegacyPayloadVersion) ||
+        (header.version == kPPC64PreviousFormatVersion &&
+         payloadVersion != kPPC64PreviousPayloadVersion) ||
         (header.version == kPPC64FormatVersion &&
          payloadVersion != kPPC64PayloadVersion) ||
         (header.version != kPPC64LegacyFormatVersion &&
+         header.version != kPPC64PreviousFormatVersion &&
          header.version != kPPC64FormatVersion)) return false;
     snapshot.architecture = reader.string(kMaxHeaderString);
     snapshot.vmStateValue = reader.u32();
@@ -706,8 +766,18 @@ bool readPPC64SnapshotPayload(Reader& reader, const Header& header,
         snapshot.ppc64PartitionSnapshots.push_back(
             reader.bytes(64U * 1024U * 1024U));
     }
-    if (payloadVersion >= kPPC64PayloadVersion &&
-        !readPPC64Platform(reader, snapshot.ppc64Platform)) return false;
+    if (payloadVersion >= kPPC64PreviousPayloadVersion &&
+        !readPPC64Platform(reader, snapshot.ppc64Platform, payloadVersion)) {
+        return false;
+    }
+    if (payloadVersion >= kPPC64PayloadVersion) {
+        if (!readPPC64Terminal(reader, snapshot.ppc64VirtualTerminal)) return false;
+    } else if (snapshot.ppc64Platform.enabled) {
+        snapshot.ppc64VirtualTerminal.terminalId =
+            snapshot.ppc64Platform.configuration.virtualTerminalId;
+        snapshot.ppc64VirtualTerminal.enabled =
+            snapshot.ppc64Platform.configuration.virtualTerminalEnabled;
+    }
     return reader.valid();
 }
 
@@ -771,11 +841,8 @@ bool VMCheckpointCodec::write(const VirtualMachine& vm,
             }
 
             Writer payload;
-            const uint32_t ppc64FormatVersion = snapshot.ppc64Platform.enabled
-                ? kPPC64FormatVersion : kPPC64LegacyFormatVersion;
-            writePPC64SnapshotPayload(payload, snapshot,
-                snapshot.ppc64Platform.enabled
-                    ? kPPC64PayloadVersion : kPPC64LegacyPayloadVersion);
+            const uint32_t ppc64FormatVersion = kPPC64FormatVersion;
+            writePPC64SnapshotPayload(payload, snapshot, kPPC64PayloadVersion);
             if (payload.data.size() > kMaxPayloadBytes) {
                 setError(error, "checkpoint payload is too large");
                 return false;
@@ -797,9 +864,7 @@ bool VMCheckpointCodec::write(const VirtualMachine& vm,
             header.guestIdentity = guestIdentity;
             header.architecture = "PPC64";
             header.checkpointKind = "complete-vm-snapshot";
-            header.buildIdentity = ppc64FormatVersion == kPPC64FormatVersion
-                ? kPPC64CheckpointBuildIdentityV2
-                : kPPC64CheckpointBuildIdentityV1;
+            header.buildIdentity = kPPC64CheckpointBuildIdentityV3;
             Writer headerBytes;
             writeHeader(headerBytes, header, kPPC64Magic);
 
@@ -929,11 +994,15 @@ bool VMCheckpointCodec::read(VirtualMachine& vm,
             Header ppcHeader;
             if (!readHeader(input, ppcHeader, error, kPPC64Magic,
                             0)) return false;
-            const char* expectedPpcIdentity = ppcHeader.version == kPPC64FormatVersion
-                ? kPPC64CheckpointBuildIdentityV2
-                : kPPC64CheckpointBuildIdentityV1;
+            const char* expectedPpcIdentity =
+                ppcHeader.version == kPPC64FormatVersion
+                    ? kPPC64CheckpointBuildIdentityV3
+                    : ppcHeader.version == kPPC64PreviousFormatVersion
+                        ? kPPC64CheckpointBuildIdentityV2
+                        : kPPC64CheckpointBuildIdentityV1;
             if (vm.isaName_ != "PPC64" || ppcHeader.architecture != "PPC64" ||
                 (ppcHeader.version != kPPC64LegacyFormatVersion &&
+                 ppcHeader.version != kPPC64PreviousFormatVersion &&
                  ppcHeader.version != kPPC64FormatVersion) ||
                 ppcHeader.buildIdentity != expectedPpcIdentity ||
                 ppcHeader.checkpointKind != "complete-vm-snapshot" ||

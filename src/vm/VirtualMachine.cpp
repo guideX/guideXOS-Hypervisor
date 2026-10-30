@@ -15,6 +15,7 @@
 #include "PPC64ISAPlugin.h"
 #include "PPC64PartitionMMU.h"
 #include "PPC64RadixMMU.h"
+#include "PPC64VirtualTerminal.h"
 #include "VMSnapshot.h"
 #include "VMSnapshotManager.h"
 #include "VMCheckpoint.h"
@@ -71,6 +72,7 @@ try {
     decoder_ = std::make_unique<InstructionDecoder>();
     if (isaName == "PPC64") {
         ppc64PartitionManager_ = std::make_unique<ppc64::PPC64PartitionManager>();
+        ppc64VirtualTerminal_ = std::make_unique<ppc64::PPC64VirtualTerminal>();
     }
         
     // Create CPU scheduler
@@ -128,6 +130,9 @@ try {
     // Create CPU contexts with specified ISA
     if (!createCPUs(numCPUs, isaName)) {
         throw std::runtime_error("Failed to create CPU contexts with ISA: " + isaName);
+    }
+    if (isaName == "PPC64") {
+        getPPC64ISAPlugin()->attachVirtualTerminal(ppc64VirtualTerminal_.get());
     }
 
         interruptController_->RegisterDeliveryCallback([this](uint8_t vector) {
@@ -283,6 +288,9 @@ bool VirtualMachine::reset() {
             }
             if (ppc64VirtualTimeBase_) {
                 ppc64VirtualTimeBase_->reset();
+            }
+            if (ppc64VirtualTerminal_) {
+                ppc64VirtualTerminal_->reset();
             }
             if (ppc64PlatformPrepared_) {
                 GuestRealWriteSegment dtb;
@@ -912,6 +920,11 @@ bool VirtualMachine::configurePPC64Platform(
         return reject(exception.what());
     }
     auto* plugin = getPPC64ISAPlugin();
+    if (!ppc64VirtualTerminal_ ||
+        !ppc64VirtualTerminal_->reconfigure(configuration.virtualTerminalId,
+                                             configuration.virtualTerminalEnabled)) {
+        return reject("virtual-terminal identity cannot change while channel state exists");
+    }
     ppc64PlatformConfiguration_ = configuration;
     ppc64VirtualTimeBase_ = std::move(clock);
     ppc64PlatformEnabled_ = true;
@@ -1132,9 +1145,97 @@ ppc64::PPC64PlatformSnapshot VirtualMachine::getPPC64PlatformSnapshot() const {
     return snapshot;
 }
 
+uint32_t VirtualMachine::getPPC64VirtualTerminalId() const {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_) {
+        throw std::logic_error("PAPRvty is only available on PPC64 VMs");
+    }
+    return ppc64VirtualTerminal_->terminalId();
+}
+
+ppc64::PPC64VirtualTerminalSnapshot
+VirtualMachine::getPPC64TerminalSnapshot() const {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_) {
+        throw std::logic_error("PAPRvty is only available on PPC64 VMs");
+    }
+    return ppc64VirtualTerminal_->createSnapshot();
+}
+
+bool VirtualMachine::injectPPC64TerminalInput(
+    const std::vector<uint8_t>& bytes, uint16_t lpid) {
+    return injectPPC64TerminalInputWithStatus(bytes, lpid) ==
+           ppc64::PPC64TerminalResult::SUCCESS;
+}
+
+ppc64::PPC64TerminalResult
+VirtualMachine::injectPPC64TerminalInputWithStatus(
+    const std::vector<uint8_t>& bytes, uint16_t lpid) {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
+        (lpid != 0 && (!ppc64PartitionManager_ ||
+                       !ppc64PartitionManager_->findPartition(lpid)))) {
+        return ppc64::PPC64TerminalResult::PARAMETER;
+    }
+    return ppc64VirtualTerminal_->injectInputWithStatus(
+        lpid, bytes.data(), bytes.size());
+}
+
+std::vector<uint8_t> VirtualMachine::readPPC64TerminalOutput(
+    uint16_t lpid, size_t maximumCount) const {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
+        (lpid != 0 && (!ppc64PartitionManager_ ||
+                       !ppc64PartitionManager_->findPartition(lpid)))) {
+        return {};
+    }
+    return ppc64VirtualTerminal_->readOutput(lpid, maximumCount);
+}
+
+std::vector<uint8_t> VirtualMachine::drainPPC64TerminalOutput(
+    uint16_t lpid, size_t maximumCount) {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
+        (lpid != 0 && (!ppc64PartitionManager_ ||
+                       !ppc64PartitionManager_->findPartition(lpid)))) {
+        return {};
+    }
+    return ppc64VirtualTerminal_->drainOutput(lpid, maximumCount);
+}
+
+size_t VirtualMachine::getPPC64TerminalPendingInputBytes(uint16_t lpid) const {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
+        (lpid != 0 && (!ppc64PartitionManager_ ||
+                       !ppc64PartitionManager_->findPartition(lpid)))) {
+        return 0;
+    }
+    return ppc64VirtualTerminal_->pendingInputBytes(lpid);
+}
+
+size_t VirtualMachine::getPPC64TerminalPendingOutputBytes(uint16_t lpid) const {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
+        (lpid != 0 && (!ppc64PartitionManager_ ||
+                       !ppc64PartitionManager_->findPartition(lpid)))) {
+        return 0;
+    }
+    return ppc64VirtualTerminal_->pendingOutputBytes(lpid);
+}
+
+size_t VirtualMachine::getPPC64TerminalQueueCapacity() const {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_) {
+        throw std::logic_error("PAPRvty is only available on PPC64 VMs");
+    }
+    return ppc64::PPC64_TERMINAL_QUEUE_CAPACITY;
+}
+
+void VirtualMachine::clearPPC64TerminalState() {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_) {
+        throw std::logic_error("PAPRvty is only available on PPC64 VMs");
+    }
+    ppc64VirtualTerminal_->reset();
+}
+
 ppc64::PPC64PlatformCapabilities VirtualMachine::getPPC64PlatformCapabilities() const {
     if (!ppc64PlatformEnabled_) return {};
-    return ppc64::getPPC64FoundationCapabilities();
+    auto capabilities = ppc64::getPPC64FoundationCapabilities();
+    capabilities.virtualTerminal =
+        ppc64PlatformConfiguration_.virtualTerminalEnabled;
+    return capabilities;
 }
 
 uint64_t VirtualMachine::getPPC64Timebase() const {
@@ -2137,6 +2238,10 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
                 plugin->getRadixTranslationConfiguration();
         }
         snapshot.ppc64Platform = getPPC64PlatformSnapshot();
+        if (ppc64VirtualTerminal_) {
+            snapshot.ppc64VirtualTerminal =
+                ppc64VirtualTerminal_->createSnapshot();
+        }
     }
     
     return snapshot;
@@ -2214,6 +2319,19 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
 
         if (snapshot.ppc64Platform.enabled != ppc64PlatformEnabled_) {
             return reject("PPC64 platform profile does not match the destination VM");
+        }
+        if (!ppc64VirtualTerminal_) {
+            return reject("PPC64 VM has no virtual-terminal backend");
+        }
+        const uint32_t expectedTerminalId = snapshot.ppc64Platform.enabled
+            ? ppc64PlatformConfiguration_.virtualTerminalId
+            : ppc64VirtualTerminal_->terminalId();
+        const bool expectedTerminalEnabled = snapshot.ppc64Platform.enabled
+            ? ppc64PlatformConfiguration_.virtualTerminalEnabled
+            : ppc64VirtualTerminal_->isEnabled();
+        if (snapshot.ppc64VirtualTerminal.terminalId != expectedTerminalId ||
+            snapshot.ppc64VirtualTerminal.enabled != expectedTerminalEnabled) {
+            return reject("virtual-terminal identity or exposure disagrees with the destination FDT profile");
         }
         std::vector<uint8_t> canonicalDTB;
         if (snapshot.ppc64Platform.enabled) {
@@ -2334,6 +2452,8 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         std::unique_ptr<VirtualTimer> stagedTimer;
         std::unique_ptr<BasicInterruptController> stagedInterruptController;
         std::unique_ptr<ppc64::PPC64VirtualTimeBase> stagedTimeBase;
+        auto stagedTerminal = std::make_unique<ppc64::PPC64VirtualTerminal>(
+            expectedTerminalId, expectedTerminalEnabled);
         std::vector<uint8_t> stagedDTB = std::move(canonicalDTB);
         try {
             stagedMemory->RestoreSnapshot(snapshot.memoryState);
@@ -2409,6 +2529,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                 return reject("PPC64 ISA factory returned an incompatible plugin");
             }
             stagedPlugin->attachVirtualTimeBase(stagedTimeBase.get());
+            stagedPlugin->attachVirtualTerminal(stagedTerminal.get());
             stagedCPU = std::make_unique<CPU>(*stagedMemory, *stagedPlugin);
 
             std::string reason;
@@ -2425,6 +2546,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             }
 
             std::shared_ptr<ppc64::PPC64PartitionContext> activeContext;
+            std::vector<uint16_t> authorizedTerminalLPIDs;
             for (const auto& partitionSnapshot : snapshot.ppc64PartitionSnapshots) {
                 // The metadata has already been validated and installed above.
                 // The LPID is encoded in bytes 8..9 in the versioned Phase 8
@@ -2434,10 +2556,15 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                 }
                 const uint16_t lpid = static_cast<uint16_t>(partitionSnapshot[8]) |
                     (static_cast<uint16_t>(partitionSnapshot[9]) << 8);
+                authorizedTerminalLPIDs.push_back(lpid);
                 if (snapshot.ppc64HasActiveLPID &&
                     lpid == snapshot.ppc64ActiveLPID) {
                     activeContext = stagedManager->findPartition(lpid);
                 }
+            }
+            if (!stagedTerminal->restoreSnapshot(snapshot.ppc64VirtualTerminal,
+                                                 authorizedTerminalLPIDs)) {
+                return reject("virtual-terminal checkpoint state is invalid or belongs to an unknown LPID");
             }
             if (snapshot.ppc64HasActiveLPID) {
                 if (!activeContext ||
@@ -2486,6 +2613,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
 
         memory_ = std::move(stagedMemory);
         ppc64PartitionManager_ = std::move(stagedManager);
+        ppc64VirtualTerminal_ = std::move(stagedTerminal);
         ppc64VirtualTimeBase_ = std::move(stagedTimeBase);
         ppc64PlatformEnabled_ = snapshot.ppc64Platform.enabled;
         ppc64PlatformPrepared_ = snapshot.ppc64Platform.enabled &&

@@ -27,10 +27,14 @@ constexpr uint64_t PPC64_PATE1_PRTB = 0x0FFFFFFFFFFFF000ULL;
 constexpr uint64_t PPC64_PATE1_PRTS = 0x000000000000001FULL;
 
 constexpr uint64_t PPC64_H_REGISTER_PROC_TBL = 0x37cULL;
+constexpr uint64_t PPC64_H_GET_TERM_CHAR = 0x54ULL;
+constexpr uint64_t PPC64_H_PUT_TERM_CHAR = 0x58ULL;
 constexpr uint64_t PPC64_H_SUCCESS = 0;
+constexpr uint64_t PPC64_H_BUSY = 1;
 constexpr uint64_t PPC64_H_FUNCTION = static_cast<uint64_t>(-2LL);
 constexpr uint64_t PPC64_H_PRIVILEGE = static_cast<uint64_t>(-3LL);
 constexpr uint64_t PPC64_H_PARAMETER = static_cast<uint64_t>(-4LL);
+constexpr uint64_t PPC64_H_RESOURCE = static_cast<uint64_t>(-16LL);
 constexpr uint64_t PPC64_H_P2 = static_cast<uint64_t>(-55LL);
 constexpr uint64_t PPC64_H_P3 = static_cast<uint64_t>(-56LL);
 constexpr uint64_t PPC64_H_P4 = static_cast<uint64_t>(-57LL);

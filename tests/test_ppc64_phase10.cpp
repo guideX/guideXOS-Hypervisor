@@ -469,7 +469,7 @@ void testProgramDthroughFTimebaseLifecycleAndCheckpoint() {
     input.read(reinterpret_cast<char*>(header.data()), header.size());
     CHECK(input.good());
     CHECK(std::string(reinterpret_cast<char*>(header.data()), 8) == "GXPPC64V");
-    CHECK(header[8] == 2 && header[9] == 0 && header[10] == 0 && header[11] == 0);
+    CHECK(header[8] == 3 && header[9] == 0 && header[10] == 0 && header[11] == 0);
     vm->writeGR(21, 0x1234);
     CHECK(vm->step());
     CHECK(vm->readDiagnosticCheckpoint(path.string(), "phase10-platform", &error));

@@ -683,6 +683,20 @@ public:
     ppc64::PPC64PlatformCapabilities getPPC64PlatformCapabilities() const;
     uint64_t getPPC64Timebase() const;
     std::vector<uint8_t> getPPC64FDT() const { return ppc64PlatformDTB_; }
+    uint32_t getPPC64VirtualTerminalId() const;
+    ppc64::PPC64VirtualTerminalSnapshot getPPC64TerminalSnapshot() const;
+    bool injectPPC64TerminalInput(const std::vector<uint8_t>& bytes,
+                                  uint16_t lpid = 0);
+    ppc64::PPC64TerminalResult injectPPC64TerminalInputWithStatus(
+        const std::vector<uint8_t>& bytes, uint16_t lpid = 0);
+    std::vector<uint8_t> readPPC64TerminalOutput(
+        uint16_t lpid = 0, size_t maximumCount = 0) const;
+    std::vector<uint8_t> drainPPC64TerminalOutput(
+        uint16_t lpid = 0, size_t maximumCount = 0);
+    size_t getPPC64TerminalPendingInputBytes(uint16_t lpid = 0) const;
+    size_t getPPC64TerminalPendingOutputBytes(uint16_t lpid = 0) const;
+    size_t getPPC64TerminalQueueCapacity() const;
+    void clearPPC64TerminalState();
     std::string getLastExecutionDiagnostic() const;
     std::string getArchitectureName() const { return isaName_; }
 
@@ -709,6 +723,7 @@ private:
 
     std::unique_ptr<Memory> memory_;                // Memory system (shared)
     std::unique_ptr<ppc64::PPC64PartitionManager> ppc64PartitionManager_;
+    std::unique_ptr<ppc64::PPC64VirtualTerminal> ppc64VirtualTerminal_;
     ppc64::PPC64PlatformConfiguration ppc64PlatformConfiguration_;
     std::unique_ptr<ppc64::PPC64VirtualTimeBase> ppc64VirtualTimeBase_;
     ppc64::PPC64GuestMemoryLayout ppc64GuestMemoryLayout_;

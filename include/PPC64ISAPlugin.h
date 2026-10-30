@@ -15,6 +15,7 @@ namespace ia64 {
 namespace ppc64 {
 
 class PPC64VirtualTimeBase;
+class PPC64VirtualTerminal;
 
 // ============================================================================
 // PPC64 Phase 1 + Phase 2 constants
@@ -671,6 +672,9 @@ public:
     void attachVirtualTimeBase(PPC64VirtualTimeBase* timeBase) {
         virtualTimeBase_ = timeBase;
     }
+    void attachVirtualTerminal(PPC64VirtualTerminal* terminal) {
+        virtualTerminal_ = terminal;
+    }
     void setSRR0(uint64_t v) { state_.srr0 = v; }
     void setSRR1(uint64_t v) { state_.srr1 = v; }
     void setDAR(uint64_t v) { state_.dar = v; }
@@ -927,6 +931,7 @@ private:
     uint32_t radixConfigurationGeneration_ = 0;
     std::shared_ptr<PPC64PartitionContext> partitionContext_;
     PPC64VirtualTimeBase* virtualTimeBase_ = nullptr; // owned by the containing VM
+    PPC64VirtualTerminal* virtualTerminal_ = nullptr; // owned by the containing VM
 };
 
 /**

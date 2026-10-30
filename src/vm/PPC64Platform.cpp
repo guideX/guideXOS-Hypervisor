@@ -254,7 +254,32 @@ bool buildStructure(const PPC64PlatformConfiguration& configuration,
         setReason(reason, "boot arguments contain an invalid string");
         return false;
     }
+    if (configuration.virtualTerminalEnabled) {
+        std::ostringstream path;
+        path << "/vdevice/vty@" << std::hex << configuration.virtualTerminalId;
+        if (!builder.string("stdout-path", path.str())) {
+            setReason(reason, "failed to encode the hvterm1 stdout path");
+            return false;
+        }
+    }
     builder.endNode();
+
+    if (configuration.virtualTerminalEnabled) {
+        std::ostringstream nodeName;
+        nodeName << "vty@" << std::hex << configuration.virtualTerminalId;
+        if (!builder.node("vdevice") ||
+            !builder.string("compatible", "IBM,spapr-vio") ||
+            !property("#address-cells", 1) || !property("#size-cells", 0) ||
+            !builder.node(nodeName.str()) ||
+            !builder.string("device_type", "serial") ||
+            !builder.string("compatible", "hvterm1") ||
+            !property("reg", configuration.virtualTerminalId)) {
+            setReason(reason, "failed to encode the PAPR hvterm1 node");
+            return false;
+        }
+        builder.endNode();
+        builder.endNode();
+    }
     builder.endNode();
     builder.word(kFdtEnd);
     return true;
@@ -330,6 +355,11 @@ bool validatePPC64PlatformConfiguration(
         setReason(reason, "boot arguments contain an embedded NUL byte");
         return false;
     }
+    if (!PPC64VirtualTerminal::validTerminalId(
+            configuration.virtualTerminalId)) {
+        setReason(reason, "virtual-terminal ID is outside the pSeries VIO vty range");
+        return false;
+    }
     for (size_t i = 0; i < configuration.reservedRanges.size(); ++i) {
         const PPC64MemoryRange& range = configuration.reservedRanges[i];
         uint64_t end = 0;
@@ -364,6 +394,8 @@ bool samePPC64PlatformConfiguration(
         left.initialTimebase != right.initialTimebase ||
         left.requestedFdtAddress != right.requestedFdtAddress ||
         left.maximumFdtSize != right.maximumFdtSize ||
+        left.virtualTerminalEnabled != right.virtualTerminalEnabled ||
+        left.virtualTerminalId != right.virtualTerminalId ||
         left.bootArguments != right.bootArguments ||
         left.reservedRanges.size() != right.reservedRanges.size()) {
         return false;

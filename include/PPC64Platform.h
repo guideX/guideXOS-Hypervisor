@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "PPC64VirtualTerminal.h"
 
 namespace ia64::ppc64 {
 
@@ -34,6 +35,9 @@ struct PPC64PlatformConfiguration {
     uint64_t initialTimebase = 0;
     uint64_t requestedFdtAddress = 0; // zero selects deterministic top-of-RAM placement
     uint64_t maximumFdtSize = 64 * 1024;
+    // Expose the VM-owned PAPR hvterm1 through the guest FDT when requested.
+    bool virtualTerminalEnabled = false;
+    uint32_t virtualTerminalId = PPC64_DEFAULT_VIRTUAL_TERMINAL_ID;
     std::string bootArguments;
     // Host-supplied reservations for page tables and other guest RAM objects
     // whose ownership is not inferable from the PPC64 MMU configuration.
