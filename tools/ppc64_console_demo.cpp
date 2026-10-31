@@ -25,6 +25,7 @@ constexpr uint64_t kRamSize = 2ULL << 20;
 constexpr uint64_t kEntry = 0x10000;
 constexpr uint32_t kSc1 = ENCODING_SC_HCALL;
 constexpr uint32_t kRfid = 0x4c000024U;
+constexpr uint32_t kHBusy = 1U;
 constexpr size_t kEchoReadsPerInterrupt = PPC64_TERMINAL_QUEUE_CAPACITY / 16U;
 
 uint32_t addi(uint8_t rt, uint8_t ra, int16_t immediate) {
@@ -67,9 +68,20 @@ std::vector<uint32_t> guestEchoHandler() {
         words.insert(words.end(), {
             addis(4, 0, 0x3000), addi(3, 0, PPC64_H_GET_TERM_CHAR), kSc1,
             addi(9, 4, 0), addi(10, 5, 0), addi(11, 6, 0),
+        });
+        const size_t putStart = words.size();
+        words.insert(words.end(), {
             addis(4, 0, 0x3000), addi(5, 9, 0), addi(6, 10, 0),
             addi(7, 11, 0), addi(3, 0, PPC64_H_PUT_TERM_CHAR), kSc1,
+            // Keep the GET result live and retry it if the bounded terminal
+            // FIFO reports H_BUSY. bridge.poll() runs between guest steps, so
+            // a resumed host reader can make progress without losing bytes.
+            (11U << 26) | (3U << 16) | kHBusy,
         });
+        const int32_t branchDisplacement = -static_cast<int32_t>(
+            (words.size() - putStart) * 4U);
+        words.push_back((16U << 26) | (12U << 21) | (2U << 16) |
+                        (static_cast<uint32_t>(branchDisplacement) & 0xfffcU));
     }
     words.insert(words.end(), {addi(4, 8, 0), addi(3, 0, PPC64_H_EOI),
                                kSc1, kRfid});

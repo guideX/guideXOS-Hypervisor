@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -29,6 +30,59 @@ struct HostConsoleIOResult {
     HostConsoleIOStatus status = HostConsoleIOStatus::WOULD_BLOCK;
     size_t bytes = 0;
     int systemError = 0;
+};
+
+enum class HostConsoleOutputWorkerState : uint8_t {
+    IDLE,
+    QUEUED,
+    WRITING,
+    COMPLETED,
+    FAILED,
+    STOPPING,
+    STOPPED,
+};
+
+struct HostConsoleOutputSubmission {
+    HostConsoleIOStatus status = HostConsoleIOStatus::WOULD_BLOCK;
+    size_t queuedBytes = 0;
+    int systemError = 0;
+};
+
+struct HostConsoleOutputCompletion {
+    bool ready = false;
+    size_t confirmedBytes = 0;
+    size_t uncertainBytes = 0;
+    size_t notAttemptedBytes = 0;
+    HostConsoleIOStatus status = HostConsoleIOStatus::WOULD_BLOCK;
+    int systemError = 0;
+};
+
+struct HostConsoleOutputWorkerSnapshot {
+    HostConsoleOutputWorkerState state = HostConsoleOutputWorkerState::IDLE;
+    size_t capacity = 0;
+    size_t bufferedBytes = 0;
+};
+
+struct HostConsoleOutputStopResult {
+    bool completed = false;
+    bool cancellationRequested = false;
+    int cancellationError = 0;
+};
+
+// Optional output path for transports whose sink may block. Submission only
+// copies into the bounded handoff; the completion reports sink-confirmed,
+// uncertain, and never-attempted prefixes separately.
+class IAsyncHostConsoleOutput {
+public:
+    virtual ~IAsyncHostConsoleOutput() = default;
+    virtual bool usesAsyncOutput() const noexcept = 0;
+    virtual HostConsoleOutputSubmission submitOutput(
+        const uint8_t* source, size_t maximumBytes) = 0;
+    virtual HostConsoleOutputCompletion pollOutputCompletion() = 0;
+    virtual HostConsoleOutputWorkerSnapshot outputWorkerSnapshot() const noexcept = 0;
+    virtual HostConsoleOutputStopResult stopOutput(
+        bool cancel, std::chrono::milliseconds timeout) noexcept = 0;
+    virtual bool waitForOutputCompletion(std::chrono::milliseconds timeout) = 0;
 };
 
 // Host transports are nonblocking and own no VM or guest state.
@@ -93,9 +147,11 @@ private:
 // Windows console/stdio adapter. Console reads are key-polled; redirected
 // pipes and regular files use bounded Win32 reads. It does not change console
 // modes and never starts a worker thread.
-class StdioHostConsoleTransport final : public IHostConsoleTransport {
+class StdioHostConsoleTransport final : public IHostConsoleTransport,
+                                        public IAsyncHostConsoleOutput {
 public:
-    StdioHostConsoleTransport();
+    explicit StdioHostConsoleTransport(size_t outputQueueCapacity = 4096);
+    ~StdioHostConsoleTransport() override;
     bool attach(std::string& error) override;
     void detach() noexcept override;
     void resetInput() noexcept override;
@@ -106,13 +162,26 @@ public:
     void shutdown() noexcept override;
     bool isAttached() const noexcept override { return attached_; }
     const std::string& capabilityNote() const noexcept { return capabilityNote_; }
+    bool usesAsyncOutput() const noexcept override { return outputIsPipe_; }
+    HostConsoleOutputSubmission submitOutput(
+        const uint8_t* source, size_t maximumBytes) override;
+    HostConsoleOutputCompletion pollOutputCompletion() override;
+    HostConsoleOutputWorkerSnapshot outputWorkerSnapshot() const noexcept override;
+    HostConsoleOutputStopResult stopOutput(
+        bool cancel, std::chrono::milliseconds timeout) noexcept override;
+    bool waitForOutputCompletion(std::chrono::milliseconds timeout) override;
 
 private:
+    struct OutputWorker;
     void* inputHandle_ = nullptr;
     void* outputHandle_ = nullptr;
+    std::shared_ptr<OutputWorker> outputWorker_;
+    size_t outputQueueCapacity_ = 0;
     bool attached_ = false;
     bool inputIsConsole_ = false;
     bool inputIsDisk_ = false;
+    bool outputIsConsole_ = false;
+    bool outputIsPipe_ = false;
     uint64_t inputDiscardRemaining_ = 0;
     int inputResetError_ = 0;
     std::string capabilityNote_;
@@ -128,6 +197,7 @@ enum class PPC64ConsoleSessionState : uint8_t {
     VM_DESTROYED,
     INVALID_BINDING,
     FAILED,
+    OUTPUT_STOP_PENDING,
     SHUTDOWN,
 };
 
@@ -139,7 +209,19 @@ struct PPC64ConsoleBridgeStatus {
     size_t inputCapacity = 0;
     uint64_t hostInputBytesRead = 0;
     uint64_t guestInputBytesAccepted = 0;
+    // Output byte totals are cumulative. Terminal and handoff fields are
+    // pending counts and exclude the in-flight prefix from the terminal FIFO.
     uint64_t guestOutputBytesAcceptedByHost = 0;
+    uint64_t outputBytesHandedToWorker = 0;
+    uint64_t outputBytesWithUncertainDelivery = 0;
+    // Sum of worker-reported not-attempted bytes across completions.
+    uint64_t outputBytesReportedNotAttempted = 0;
+    uint64_t staleGenerationOutputCompletions = 0;
+    size_t terminalOutputBytesPending = 0;
+    size_t outputHandoffCapacity = 0;
+    size_t outputHandoffBytesPending = 0;
+    HostConsoleOutputWorkerState outputWorkerState =
+        HostConsoleOutputWorkerState::IDLE;
     HostConsoleIOStatus lastInputStatus = HostConsoleIOStatus::WOULD_BLOCK;
     HostConsoleIOStatus lastOutputStatus = HostConsoleIOStatus::WOULD_BLOCK;
     int lastSystemError = 0;
@@ -176,6 +258,8 @@ private:
     void noticeGenerationChange(ia64::VirtualMachine& vm);
     void transferInput(ia64::VirtualMachine& vm);
     void transferOutput(ia64::VirtualMachine& vm, size_t maximumBytes);
+    bool reconcileAsyncOutput(ia64::VirtualMachine& vm);
+    bool stopAsyncOutput(ia64::VirtualMachine& vm, std::string* error);
     void updateCheckpointReady(ia64::VirtualMachine& vm);
     void fail(PPC64ConsoleSessionState state, const std::string& diagnostic);
 
@@ -191,6 +275,10 @@ private:
     PPC64ConsoleBridgeStatus status_;
     bool attached_ = false;
     bool inputEOF_ = false;
+    size_t outputSubmissionBytes_ = 0;
+    uint64_t outputSubmissionGeneration_ = 0;
+    bool outputStopRequested_ = false;
+    std::chrono::steady_clock::time_point outputRetryAfter_{};
 };
 
 } // namespace ia64::ppc64

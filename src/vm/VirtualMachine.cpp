@@ -460,6 +460,12 @@ bool VirtualMachine::step() {
         return false;
     }
 
+    // A paused VM is a control boundary: manual single-step calls must not
+    // advance guest state or virtual time until the caller explicitly resumes.
+    if (state_ == VMState::PAUSED) {
+        return false;
+    }
+
     if (state_ == VMState::ERROR) {
         LOG_ERROR("Cannot step - VM in error state");
         return false;
@@ -3459,7 +3465,7 @@ bool VirtualMachine::writeDiagnosticCheckpoint(const std::string& path,
         (void)lpid;
         if (!lease.second) {
             if (error != nullptr) {
-                *error = "PPC64 console has accepted input staged outside the VM; pump or detach before checkpoint";
+                *error = "PPC64 console has staged input or unresolved host output; reconcile or detach before checkpoint";
             }
             return false;
         }
@@ -3484,7 +3490,7 @@ bool VirtualMachine::readDiagnosticCheckpoint(const std::string& path,
         (void)lpid;
         if (!lease.second) {
             if (error != nullptr) {
-                *error = "PPC64 console has accepted input staged outside the VM; pump or detach before restore";
+                *error = "PPC64 console has staged input or unresolved host output; reconcile or detach before restore";
             }
             return false;
         }

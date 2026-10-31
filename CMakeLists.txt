@@ -948,6 +948,7 @@ endif()
 # PPC64 Phase 15 host-console transport, backpressure, and lifecycle tests.
 add_executable(test_ppc64_phase15
     tests/test_ppc64_phase15.cpp
+    tests/test_ppc64_phase16.cpp
     ${ALL_SOURCES}
     ${HEADERS}
 )
@@ -962,12 +963,23 @@ else()
     target_compile_options(test_ppc64_phase15 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# The Phase 16 acceptance entry point shares the production integration object
+# set with Phase 15 to keep the repository's per-phase build topology bounded.
+add_custom_target(test_ppc64_phase16 DEPENDS test_ppc64_phase15)
+add_test(NAME PPC64Phase16Tests
+    COMMAND $<TARGET_FILE:test_ppc64_phase15> --phase16
+        $<TARGET_FILE:ppc64_console_demo>
+)
+set_tests_properties(PPC64Phase16Tests PROPERTIES TIMEOUT 90)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp
     ${ALL_SOURCES}
     ${HEADERS}
 )
+
+add_dependencies(test_ppc64_phase16 ppc64_console_demo)
 
 if(WIN32)
     target_link_libraries(ppc64_console_demo PRIVATE ws2_32)

@@ -607,7 +607,12 @@ void programJ_StdioAdapterAndProgramK_Compatibility() {
 
 } // namespace
 
-int main() {
+int runPPC64Phase16Tests(const char* demoPath = nullptr);
+
+int main(int argc, char** argv) {
+    if ((argc == 2 || argc == 3) && std::string(argv[1]) == "--phase16")
+        return runPPC64Phase16Tests(argc == 3 ? argv[2] : nullptr);
+    if (argc != 1) return 2;
     std::puts("PPC64 Phase 15 host console bridge acceptance");
     programA_HostToGuestEcho();
     programB_PartialGuestAcceptance();
