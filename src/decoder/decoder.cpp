@@ -2904,8 +2904,9 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                                                 RSERegisterPartition::CURRENT);
                 }
 
+                // alloc copies AR.PFS to its destination and updates only
+                // CFM; AR.PFS itself is unchanged by the instruction.
                 cpu.SetGR(dst_, old_pfs);
-                cpu.SetAR(64, old_cfm);
                 cpu.SetCFM(sof | (static_cast<uint64_t>(sol) << 7) |
                            (static_cast<uint64_t>(sor) << 14));
                 if (!suppressVerboseRseDiagnostics()) {

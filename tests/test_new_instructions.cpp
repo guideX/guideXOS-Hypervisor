@@ -4141,6 +4141,7 @@ void test_alloc_instruction() {
     
     // Set initial CFM
     cpu.SetCFM(0x12345678);
+    cpu.SetPFS(0x87654321);
     
     // ALLOC: sof=10, sol=5, sor=2
     // immediate = (sor << 14) | (sol << 7) | sof
@@ -4152,10 +4153,10 @@ void test_alloc_instruction() {
     alloc.Execute(cpu, memory);
     
     // Check saved CFM
-    assert_equal("ALLOC: saves prior AR.PFS exactly", 0, cpu.GetGR(10));
-    assert_equal("ALLOC: ar.pfs should preserve previous frame state", 0x12345678, cpu.GetPFS());
+    assert_equal("ALLOC: saves prior AR.PFS exactly", 0x87654321, cpu.GetGR(10));
+    assert_equal("ALLOC: ar.pfs is unchanged", 0x87654321, cpu.GetPFS());
     assert_equal("ALLOC: CFM and PFS remain distinct",
-                 0x12345678, cpu.GetRSEState().pfs);
+                 0x87654321, cpu.GetRSEState().pfs);
     
     // Check new CFM fields
     uint64_t new_cfm = cpu.GetCFM();
@@ -4167,6 +4168,47 @@ void test_alloc_instruction() {
     assert_equal("ALLOC: explicit RSE SOR should track CFM", 2, cpu.GetRSEState().sor);
     
     std::cout << "  ? ALLOC instruction passed" << std::endl;
+}
+
+void test_efi_entry_alloc_preserves_handoff_arguments() {
+    std::cout << "Testing authentic EFI entry frame and alloc..." << std::endl;
+
+    // Raw MII bundle at BOOTIA64.EFI's entry point: alloc r34=ar.pfs,6,4,0;
+    // mov r35=b0; nop. The two EFI entry parameters are in out0/out1 before
+    // this first instruction executes.
+    const uint8_t efiEntryBundle[16] = {
+        0x00, 0x10, 0x19, 0x08, 0x80, 0x05, 0x30, 0x02,
+        0x00, 0x62, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00
+    };
+    InstructionDecoder decoder;
+    const Bundle bundle = decoder.DecodeBundleAt(efiEntryBundle, 0x1FD53000ULL);
+    assert_true("EFI entry fixture should decode its authentic alloc",
+                bundle.instructions.size() == 3 &&
+                    bundle.instructions[0].GetType() == InstructionType::ALLOC);
+    assert_string("EFI entry fixture alloc decode",
+                  "alloc r34 = ar.pfs, 6, 4, 0",
+                  bundle.instructions[0].GetDisassembly());
+
+    CPUState cpu;
+    Memory memory(1024 * 1024);
+    constexpr uint64_t imageHandle = 1;
+    constexpr uint64_t systemTable = 0x1FDB0000ULL;
+
+    // UEFI's IA-64 handoff calls the image with two output registers. The
+    // callee initially sees SOF=2 and expands that frame in its alloc.
+    cpu.SetCFM(2);
+    cpu.SetGR(32, imageHandle);
+    cpu.SetGR(33, systemTable);
+    bundle.instructions[0].Execute(cpu, memory);
+
+    assert_equal("EFI alloc should retain ImageHandle in in0", imageHandle,
+                 cpu.GetGR(32));
+    assert_equal("EFI alloc should retain SystemTable in in1", systemTable,
+                 cpu.GetGR(33));
+    assert_equal("EFI alloc should establish the authentic entry frame",
+                 0x206, cpu.GetCFM());
+
+    std::cout << "  ? authentic EFI entry arguments survive alloc" << std::endl;
 }
 
 void test_rse_state_aliases() {
@@ -4273,8 +4315,8 @@ void test_ia64_rse_call_return_backing_store_isolation() {
                      4ULL | (2ULL << 7), cpu.GetGR(31));
         assert_equal("alloc installs callee CFM without aliasing PFS",
                      6ULL | (3ULL << 7), cpu.GetCFM());
-        assert_equal("alloc preserves the entry CFM in PFS",
-                     2, cpu.GetPFS());
+        assert_equal("alloc leaves the entry PFS unchanged",
+                     4ULL | (2ULL << 7), cpu.GetPFS());
     };
 
     const InstructionEx flushrs = InstructionDecoder().DecodeSlot(
@@ -5549,6 +5591,7 @@ int main() {
         test_memory_operations();
         test_predicated_execution();
         test_alloc_instruction();
+        test_efi_entry_alloc_preserves_handoff_arguments();
         test_rse_state_aliases();
         test_ia64_virtual_ip_observation();
         test_ia64_rse_call_return_backing_store_isolation();

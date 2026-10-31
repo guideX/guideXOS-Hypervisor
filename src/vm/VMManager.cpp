@@ -592,6 +592,23 @@ uint64_t SetupMinimalEfiStack(VMInstance* instance, std::ostringstream& oss) {
     return stackTop;
 }
 
+void prepareEfiEntryCallState(VMInstance* instance,
+                              uint64_t imageHandle,
+                              uint64_t systemTable) {
+    if (!instance || !instance->vm) {
+        return;
+    }
+
+    // EFI enters an IA-64 image as a call with two output registers. Establish
+    // that incoming frame before writing out0/out1 so the image's first alloc
+    // preserves the arguments instead of treating them as newly exposed
+    // registers with undefined contents.
+    constexpr uint64_t kEfiEntryOutputRegisterCount = 2;
+    instance->vm->getCPU().setCFM(kEfiEntryOutputRegisterCount);
+    instance->vm->writeGR(0, 32, imageHandle);
+    instance->vm->writeGR(0, 33, systemTable);
+}
+
 void WriteIa64Bundle(VMInstance* instance,
                      uint64_t address,
                      uint8_t templateId,
@@ -1856,8 +1873,7 @@ bool VMManager::startVM(const std::string& vmId) {
                                                 initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : 0ULL);
                                             instance->vm->writeGR(
                                                 0, 1, initialImageInfo.hasGlobalPointer ? initialImageInfo.globalPointer : 0ULL);
-                                            instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
-                                            instance->vm->writeGR(0, 33, layout.base);
+                                            prepareEfiEntryCallState(instance, EFI_IMAGE_HANDLE, layout.base);
                                             std::ostringstream efiEntryOss;
                                             const uint64_t efiStackTop =
                                                 SetupMinimalEfiStack(instance, efiEntryOss);
@@ -2766,9 +2782,8 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     LOG_INFO(oss.str());
                                                                 }
 
-                                                                // Set EFI entry arguments: r32=ImageHandle, r33=SystemTable
-                                                                instance->vm->writeGR(0, 32, EFI_IMAGE_HANDLE);
-                                                                instance->vm->writeGR(0, 33, EFI_STUB_ADDR);
+                                                                // Set the EFI entry frame and its r32/r33 arguments.
+                                                                prepareEfiEntryCallState(instance, EFI_IMAGE_HANDLE, EFI_STUB_ADDR);
                                                                 const uint64_t efiStackTop = SetupMinimalEfiStack(instance, oss);
                                                                 oss.str("");
                                                                 oss << "  Set r32=ImageHandle=0x" << std::hex << EFI_IMAGE_HANDLE

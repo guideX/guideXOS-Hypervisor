@@ -2859,7 +2859,7 @@ void testIA64LegacyCallOutputInputs() {
 }
 
 void testIA64LegacyAllocPreservesPreviousFrameState() {
-    std::cout << "Testing IA-64 legacy alloc preserves previous frame state...\n";
+    std::cout << "Testing IA-64 alloc preserves AR.PFS and updates CFM...\n";
 
     Memory memory(64 * 1024);
     InstructionDecoder decoder;
@@ -2874,7 +2874,7 @@ void testIA64LegacyAllocPreservesPreviousFrameState() {
     cpu.executeInstruction(alloc);
 
     assert(cpu.getState().GetGR(60) == (6 | (static_cast<uint64_t>(4) << 7)));
-    assert(cpu.getState().GetPFS() == (6 | (static_cast<uint64_t>(4) << 7)));
+    assert(cpu.getState().GetPFS() == 0);
     assert(cpu.getState().GetCFM() == (10 | (static_cast<uint64_t>(5) << 7) | (static_cast<uint64_t>(2) << 14)));
 
     std::cout << "  ? alloc preserves ar.pfs and updates the current frame\n";
@@ -3349,12 +3349,12 @@ void testIA64PluginNullIndirectCallIgnoresDescriptorCandidate() {
     plugin.getCPUState().SetGR(8, 0x4008);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.getCPUState().GetIP() == 0);
     assert(plugin.getCPUState().GetBR(4) == 0x1010);
     assert(plugin.getCPUState().GetBR(0) == 0);
-    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(plugin.getCPUState().GetGR(8) == 0x4008);
 
-    std::cout << "  ? null indirect br.call stays null even when r8 points at a descriptor\n";
+    std::cout << "  ? null indirect br.call reaches zero without probing unrelated descriptor data\n";
 }
 
 void testIA64PluginGenericSuccessStubDoesNotProbeR8DescriptorCandidate() {
@@ -3765,8 +3765,8 @@ void testIA64PluginZeroFilledFirmwareCallReturnsSuccess() {
     std::cout << "  ? zero-filled high-memory br.call returns EFI_SUCCESS instead of exiting or walking NOPs\n";
 }
 
-void testIA64PluginNullFirmwareCallReturnsSuccess() {
-    std::cout << "Testing IA-64 plugin null firmware call handling...\n";
+void testIA64PluginNullFirmwareCallTransfersToZero() {
+    std::cout << "Testing IA-64 plugin null firmware call target...\n";
 
     Memory memory(512 * 1024);
     uint8_t bundleBytes[16] = {};
@@ -3776,14 +3776,14 @@ void testIA64PluginNullFirmwareCallReturnsSuccess() {
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x30e40);
     plugin.getCPUState().SetBR(6, 0);
-    plugin.getCPUState().SetGR(8, 0);
+    plugin.getCPUState().SetGR(8, 0x1122334455667788ULL);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetIP() == 0x30e50);
+    assert(plugin.getCPUState().GetIP() == 0);
     assert(plugin.getCPUState().GetBR(0) == 0x30e50);
-    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(plugin.getCPUState().GetGR(8) == 0x1122334455667788ULL);
 
-    std::cout << "  ? null indirect br.call returns EFI_SUCCESS instead of entering IP zero\n";
+    std::cout << "  ? null indirect br.call branches to zero without synthesizing EFI_SUCCESS\n";
 }
 
 void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
@@ -6071,7 +6071,7 @@ int main(int argc, char** argv) {
         testIA64PluginZeroFilledFirmwareCallReturnsSuccess();
         std::cout << "\n";
 
-        testIA64PluginNullFirmwareCallReturnsSuccess();
+        testIA64PluginNullFirmwareCallTransfersToZero();
         std::cout << "\n";
 
         testIA64PluginConsoleInputProtocolsAndPlabelDispatch();
