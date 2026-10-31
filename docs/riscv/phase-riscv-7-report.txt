@@ -1,0 +1,235 @@
+guideXOS Hypervisor — Phase RISCV-7 Report
+=========================================
+
+Outcome: A — RV64M and the selected standard RV64A word/doubleword profile
+execute through the production decoder and RV64CPU::step(). An independently
+assembled RV64IMA/Zicsr guest boots M-to-S, verifies arithmetic and atomics,
+uses Sv39 aliases and permissions, and commits a validated signature.
+
+Repository and preflight
+------------------------
+
+- Required branch: RISCV. Starting HEAD:
+  47beabb30c93a32b14d0f9e633e399f51eccaae9. Upstream divergence was 0 behind
+  and 1 ahead of origin/RISCV. The branch was not switched or rewritten.
+- The tracked worktree was clean at preflight. The five existing untracked
+  build directories build-riscv3/, build-riscv4/, build-riscv4-vs/,
+  build-riscv5-debug/, and build-riscv5-release/ were preserved.
+- .phase-riscv recorded RISCV-6 complete and RISCV-7 next. The shared .phase
+  marker was not modified.
+- All nine pre-existing RISC-V CTest suites passed before code changes in
+  Debug. The production decoder, CPU dispatch, bounded guest physical memory,
+  Sv39 walker, timer MMIO path, and RISCV-6 independently assembled guest
+  workflow were inspected.
+- The known unrelated IA-64 limitations from RISCV-6 remain documented:
+  test_io_devices expects a VirtualConsole side effect that the memory write
+  path does not dispatch, and test_elf_validation has legacy unresolved
+  IA-64 link symbols. No IA-64 source was changed.
+
+RV64M execution
+---------------
+
+RV64M is implemented in the existing production decoder/CPU pipeline:
+
+- Multiplication: MUL, MULH, MULHSU, MULHU, MULW.
+- Division/remainder: DIV, DIVU, REM, REMU, DIVW, DIVUW, REMW, REMUW.
+- MULH/MULHSU/MULHU use a portable 32-bit-limb unsigned 64x64 product and
+  two's-complement high-word corrections. No compiler-specific 128-bit type
+  is required, including for the supported MSVC build.
+- Signed division uses unsigned magnitudes and sign restoration, avoiding
+  host signed overflow for INT64_MIN / -1. Division by zero returns the
+  specified all-ones quotient and original dividend remainder. The signed
+  overflow quotient/remainder pair is handled explicitly.
+- W calculations use the low 32-bit operands/results and explicitly sign
+  extend to 64 bits. x0 suppression, register overlap, PC advancement, and
+  normal instruction retirement are retained.
+- The focused suite checks all 13 instructions, signed/unsigned boundaries,
+  upper products, division by zero and overflow, W sign extension, x0, and
+  source/destination overlap using fixed independent expected values.
+
+RV64A execution and instruction matrix
+---------------------------------------
+
+The production decoder's atomic instruction fields, including aq and rl, feed
+one synchronous atomic action inside a single CPU step. All supported forms
+are implemented:
+
+| Operation | Word | Doubleword |
+| --- | --- | --- |
+| Load-reserved / store-conditional | LR.W / SC.W | LR.D / SC.D |
+| Swap / add | AMOSWAP.W / AMOADD.W | AMOSWAP.D / AMOADD.D |
+| XOR / AND / OR | AMOXOR.W / AMOAND.W / AMOOR.W | AMOXOR.D / AMOAND.D / AMOOR.D |
+| Signed min / max | AMOMIN.W / AMOMAX.W | AMOMIN.D / AMOMAX.D |
+| Unsigned min / max | AMOMINU.W / AMOMAXU.W | AMOMINU.D / AMOMAXU.D |
+
+- AMOs return the original memory value in rd. Word results are sign-extended
+  to RV64; all word calculations wrap at 32 bits. Signed and unsigned min/max
+  use bitwise sign ordering or unsigned comparison without host signed-overflow
+  behavior. x0 remains hardwired while the memory operation still occurs.
+- Naturally misaligned LR reports load-address-misaligned (cause 4); SC and
+  AMOs report store/AMO-address-misaligned (cause 6), with the virtual address
+  in tval. Translation/page faults and physical access faults retain their
+  load/store-specific causes. Faulting atomics do not update rd or data RAM.
+- MMIO is not treated as reservable RAM. Atomic access to the supported timer
+  registers traps explicitly before any device read/write side effect.
+
+LR/SC reservation model
+----------------------
+
+- Reservation state belongs to each RV64CPU hart object. It stores validity,
+  the translated guest-physical LR address, access width, and the base of a
+  deterministic 16-byte reservation granule. It never stores host pointers or
+  guest virtual addresses.
+- A successful LR establishes/replaces the reservation after all alignment,
+  translation, physical-RAM and read checks pass. SC consumes the reservation
+  on every attempt. It succeeds only for a valid reservation at the same
+  physical address and width; success stores the operand and writes zero to
+  rd. Failure writes one and leaves guest data memory unchanged.
+- SC performs store translation, permission checks, and physical-range/MMIO
+  validation even without a reservation. This includes A/D-bit effects from a
+  successful store translation. A failed permission/access check traps before
+  changing rd or data RAM.
+- Writes through writePhysical/storeBytes, including guest stores and the
+  supported external physical-memory write path, invalidate a reservation
+  when they overlap its 16-byte granule. Writes wholly outside that granule
+  leave it valid. CPU reset, synchronous traps, interrupts, MRET, and SRET
+  deterministically clear reservation state; trap/xRET behavior is covered by
+  focused tests. The architecture permits a reservation to be lost at these
+  boundaries.
+- The model is single-hart and deterministic. A constrained LR/SC sequence
+  without conflicting writes makes progress. It does not provide cross-hart
+  invalidation, SMP atomicity, or cache coherence.
+
+Atomic ordering and Sv39 integration
+-------------------------------------
+
+- The decoder retains all four aq/rl combinations. The interpreter executes
+  instructions in program order, applies a release fence before an atomic
+  action when rl is set, and an acquire fence after it when aq is set. The
+  guest memory action itself has no visible intermediate state within the
+  supported single-hart step model.
+- This ordering describes the interpreter's single-hart program order. It is
+  not a claim of full multiprocessor RVWMO compliance; there is no multihart
+  scheduler, shared reservation state, or cache-coherence subsystem.
+- LR uses translated load access. SC uses translated store access even when
+  reservation state is invalid. AMOs validate both load and store access
+  before reading or writing data. Existing effective-privilege rules apply:
+  MPRV/MPP, S/U privilege, SUM, and MXR are consumed by the existing MMU path.
+- Atomic translations update accessed/dirty PTE bits through the existing
+  Sv39 walker. The reservation records the translated physical location, so an
+  LR through one VA and SC through a distinct alias of the same RAM can
+  succeed. Page faults, physical access faults, and misalignment remain
+  distinct; the faulting virtual address is propagated to tval.
+- Atomic RAM is accessed only after all required translation and physical
+  range checks. MMIO timer addresses are rejected before reading or writing
+  device state.
+
+ISA capability reporting
+------------------------
+
+- misa is fixed at 0x8000000000141101: MXL=RV64 and A, I, M, S, and U bits.
+  MISA writes remain read-only/WARL-ignored. S/U bits now match implemented
+  privilege transitions and enforcement.
+- C is not advertised: compressed instructions are decoded for diagnostics
+  but remain Unsupported except the existing C.EBREAK halt/trap convention.
+  F, D, and V are not advertised or executed. Zicsr and Zifencei are separate
+  extensions and do not have individual misa letter bits; the implemented
+  CSR subset executes, and FENCE.I remains a documented single-hart no-op.
+- Old tests that used MUL to assert Unsupported now probe a recognized C.NOP.
+  The compressed Unsupported regression remains explicit and active.
+
+Independent RV64IMA guest provenance and result
+-----------------------------------------------
+
+- Fixture: tests/fixtures/riscv_ima_guest. Source, linker script, PowerShell
+  build workflow, flat binary, LLVM ELF metadata, full disassembly, instruction
+  inventory, and binary manifest are checked in together.
+- Toolchain: Clang/LLVM integrated RISC-V assembler 22.1.8 and LLD 22.1.8;
+  llvm-objcopy/objdump/readobj are LLVM 22.1.8. Target riscv64-unknown-elf,
+  ISA rv64ima_zicsr, LP64 soft-float ABI. Build and link relaxation are
+  disabled, .option norvc is used, and F/D/V are not enabled.
+- The ELF is ELF64, little-endian ET_EXEC, EM_RISCV (243), entry 0x80000000.
+  The CTest harness accepts the checked-in raw binary only; image size is
+  32,864 bytes and SHA-256 is
+  31ede457263bccc771b8f37421c6978889b564cc9742cb7574d4229fc23741cf.
+- Program A enters at the M-mode contract, sets up Sv39 in guest instructions,
+  executes MRET into S-mode, checks genuine 64-bit MUL/DIV/REM and RV64W
+  operations, and records arithmetic result 42.
+- Program B initializes a RAM counter, runs AMOADD, checks the old and updated
+  values, performs a successful LR/SC increment, deliberately invalidates a
+  later reservation with an overlapping guest SD, verifies failed SC leaves
+  the counter at 6, then retries a constrained LR/SC increment.
+- Program C increments the same counter through VA 0x40009000 mapped to PA
+  0x80009000. It checks old value 7 and final physical value 8. A second SC
+  targets read-only VA 0x4000D000, reaches the M-mode trap handler with store
+  page fault cause 15, and leaves the mapped physical word at 55.
+- The guest writes a 96-byte version-2 signature at 0x80008000: magic, version,
+  status, arithmetic result, final counter, successful SC result, failed SC
+  result, Sv39 old/final values, fault cause/address, and completion marker.
+  Completion at offset 88 is written last. The host validates every field and
+  independently checks physical counter/data RAM; it never writes expected
+  results into the guest.
+- Successful run evidence: 7 RV64M instructions retired, 8 RV64A instructions
+  retired and 9 decoded (one expected faulting SC), two MRET handoffs, one
+  expected translated atomic page fault, 202 step calls, and 201 retired
+  instructions. The harness executes every guest instruction with
+  RV64CPU::step().
+
+Validation results
+------------------
+
+- Pre-edit baseline: 9/9 existing RISC-V CTest suites passed in Debug.
+- Final Debug: all 12 RISC-V CTest suites passed (9 existing + RV64M, RV64A,
+  and independent guest integration).
+- Focused Release: all 3 RISCV-7 CTest targets passed. Direct Debug and Release
+  runs each reported 131 RV64M checks, 550 RV64A checks, and 252 guest checks.
+- IA-64 regressions passed without IA-64 source edits: IA64SalTests and
+  EfiMemoryMapTests CTest (2/2), plus direct test_ia64_acpi,
+  test_ia64_interrupt_controller, and test_ia64_processor_interrupt_block.
+- Existing unrelated limitations were not retested in this RISC-V-focused
+  phase. The prior RISCV-6 report records the test_io_devices console-output
+  assertion and test_elf_validation's unresolved legacy IA-64 link symbols.
+- The shared .phase marker and IA-64 implementation sources remain untouched.
+  Existing build-riscv3/, build-riscv4/, build-riscv4-vs/, build-riscv5-debug/,
+  and build-riscv5-release/ directories were preserved.
+
+Current boot-readiness inventory
+--------------------------------
+
+- RV64I: complete integer/base execution in the tested profile.
+- RV64M: all standard RV64M arithmetic instructions listed above execute.
+- RV64A: standard word/doubleword LR/SC and AMO operations listed above
+  execute for the single-hart model.
+- Zicsr/SYSTEM: the documented CSR subset, M/S/U privilege paths, traps,
+  MRET/SRET, SBI Base/TIME boundary, and timer services execute. Zifencei is
+  represented by FENCE.I as a single-hart no-op.
+- RV64C: compressed decoding foundation only; execution remains a gap. F/D/V
+  floating-point and vector execution remain unavailable.
+- Sv39: uncached 3-level page walks, 4 KiB/2 MiB/1 GiB leaves, A/D updates,
+  MPRV, SUM/MXR and permission/fault paths are implemented and tested. Bare
+  mode is also supported.
+- ELF loader: the checked guest is a fixed-address flat image. Existing ELF
+  validation/loading paths are IA-64-specific and require EM_IA64; a RISC-V
+  ELF64 PT_LOAD loader is not available.
+- Device tree and handoff: no RISC-V FDT generation or external firmware
+  handoff contract exists. A real OpenSBI/Linux image needs the selected
+  platform's FDT, RAM/device map, reset/entry convention, hart arguments, and
+  firmware compatibility path.
+- UART/platform: no RISC-V UART is connected. The modeled timer is a narrow
+  single-hart mtime/mtimecmp device. There is no full CLINT/ACLINT, PLIC,
+  APLIC, IMSIC, virtio, or external-device interrupt path.
+- SBI: Base and TIME are available through the existing per-CPU provider.
+  IPI, RFENCE, HSM, SRST, PMU, and DBCN are not implemented. This is not Linux
+  or OpenSBI readiness; platform and firmware requirements remain.
+
+Recommended RISCV-8 scope
+------------------------
+
+Prioritize a bounded static RISC-V ELF64 ET_EXEC/PT_LOAD loader and execute a
+second independently linked RV64IMA/Zicsr guest from its validated ELF entry.
+Build that selected fixture without C so it fits the current execution profile.
+This is the smallest next external guest step because image loading is the
+current direct blocker after instruction execution. RV64C is also a major gap
+for ordinary firmware/Linux builds, while Linux/OpenSBI additionally require
+platform devices, device-tree handoff, firmware hooks, and broader SBI support.
+The ELF milestone should not imply that those later boot requirements are met.

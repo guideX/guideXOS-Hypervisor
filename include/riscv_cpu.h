@@ -516,10 +516,19 @@ public:
     void dump() const;
 
 private:
+    struct ReservationState {
+        bool valid = false;
+        uint64_t granuleBase = 0;
+        uint64_t address = 0;
+        size_t width = 0;
+    };
+
     bool fetchBytes(uint64_t addr, uint8_t* dst, size_t size);
     bool loadU64Internal(uint64_t addr, uint64_t& value) const;
     bool storeU64(uint64_t addr, uint64_t value);
     bool rangeInGuest(uint64_t addr, size_t size) const;
+    void clearReservation();
+    void invalidateReservation(uint64_t paddr, size_t size);
 
     // CSR helpers.
     bool csrSupported(uint32_t csr) const;
@@ -548,6 +557,7 @@ private:
     bool memLoaded_ = false;
     uint64_t stepsTaken_ = 0;
     uint64_t instructionsRetired_ = 0;
+    ReservationState reservation_{};
 
     PrivilegeMode priv_ = PrivilegeMode::Machine;
     bool breakpointHalt_ = true;

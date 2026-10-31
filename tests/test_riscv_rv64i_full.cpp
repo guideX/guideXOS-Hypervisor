@@ -511,23 +511,15 @@ void TestJumpMisalignedAndFence() {
         RunToHalt(cpu, 8, ok);
         ExpectEq("fence ok count", 2ULL, ok);
     }
-    // M/A remain Unsupported, never Ok.
+    // C execution remains explicitly unsupported after RV64M/A execution lands.
     {
-        std::vector<uint8_t> prog;
-        AppendWord(prog, EncodeR(0x33, 1, 0x0, 2, 3, 0x01));  // mul
-        RV64CPU cpu;
-        cpu.loadProgram(kBase, prog);
-        ExpectOutcome("mul unsupported", StepOutcome::Unsupported, cpu.step().outcome);
-    }
-    {
-        std::vector<uint8_t> prog;
-        AppendWord(prog, 0x1000202FU);  // lr.w (A): funct5=00010, funct3=010
+        const std::vector<uint8_t> prog{0x01U, 0x00U};  // c.nop
         RV64CPU cpu;
         cpu.loadProgram(kBase, prog);
         StepResult r = cpu.step();
-        Expect(r.outcome == StepOutcome::Unsupported || r.outcome == StepOutcome::Trap,
-               "lr.w not Ok");
-        Expect(r.outcome != StepOutcome::Ok, "lr.w never Ok");
+        ExpectOutcome("c.nop unsupported", StepOutcome::Unsupported, r.outcome);
+        Expect(r.insn.mnemonic == riscv::Mnemonic::C_NOP,
+               "unsupported probe is a recognized compressed instruction");
     }
     std::cout << "PASS jump-misaligned + fence + unsupported\n";
 }

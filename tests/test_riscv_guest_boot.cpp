@@ -401,7 +401,10 @@ void TestFixtureLoadAndMachineHandoff(const std::vector<uint8_t>& image,
     ExpectCsr(cpu, 0x142, 0, "initial scause");
     ExpectCsr(cpu, 0x143, 0, "initial stval");
     ExpectCsr(cpu, 0x106, 0, "initial scounteren");
-    ExpectCsr(cpu, kCsrMisa, (2ULL << 62) | (1ULL << 8), "initial misa RV64I");
+    ExpectCsr(cpu, kCsrMisa,
+              (2ULL << 62) | (1ULL << 0) | (1ULL << 8) | (1ULL << 12) |
+                  (1ULL << 18) | (1ULL << 20),
+              "initial misa RV64IMA with S/U");
     ExpectCsr(cpu, kCsrMhartid, 0, "initial hart ID");
     ExpectEq("initial virtual time", 0, cpu.mtime());
     ExpectEq("initial mtimecmp", UINT64_MAX, cpu.mtimecmp());
@@ -562,12 +565,12 @@ void TestFailureContainment(const std::vector<uint8_t>& image) {
     }
     {
         RV64CPU cpu;
-        const std::vector<uint8_t> mulInstruction{0x33, 0x00, 0x00, 0x02};
-        cpu.loadProgram(kRamBase, mulInstruction);
+        const std::vector<uint8_t> compressedInstruction{0x01, 0x00}; // c.nop
+        cpu.loadProgram(kRamBase, compressedInstruction);
         const StepResult step = cpu.step();
         Expect(step.outcome == StepOutcome::Unsupported,
-               "unsupported RV64M instruction stays explicit");
-        ReportExpectedFailure("unsupported instruction", "RV64M is outside the accepted ISA",
+               "unsupported compressed instruction stays explicit");
+        ReportExpectedFailure("unsupported instruction", "RV64C execution is outside the accepted ISA",
                               &cpu, &step);
     }
     {

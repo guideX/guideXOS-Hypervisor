@@ -788,6 +788,43 @@ endif()
 add_test(NAME RiscVGuestBootTests
          COMMAND test_riscv_guest_boot ${RISCV_GUEST_BINARY_COPY})
 
+# RISCV-7 RV64M arithmetic, RV64A atomics, and independent RV64IMA guest.
+add_executable(test_riscv_rv64m
+    tests/test_riscv_rv64m.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+add_executable(test_riscv_rv64a
+    tests/test_riscv_rv64a.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
+set(RISCV_IMA_GUEST_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_ima_guest)
+set(RISCV_IMA_GUEST_BINARY_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv_ima_guest.bin)
+configure_file(${RISCV_IMA_GUEST_FIXTURE_DIR}/guest.bin ${RISCV_IMA_GUEST_BINARY_COPY} COPYONLY)
+add_executable(test_riscv_rv64ima_guest
+    tests/test_riscv_ima_guest.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_rv64ima_guest PRIVATE bcrypt)
+add_test(NAME RiscVRv64mTests COMMAND test_riscv_rv64m)
+add_test(NAME RiscVRv64aTests COMMAND test_riscv_rv64a)
+add_test(NAME RiscVRv64imaGuestTests
+         COMMAND test_riscv_rv64ima_guest ${RISCV_IMA_GUEST_BINARY_COPY})
+
+foreach(riscv7_target IN ITEMS test_riscv_rv64m test_riscv_rv64a test_riscv_rv64ima_guest)
+    if(MSVC)
+        target_compile_options(${riscv7_target} PRIVATE /W4)
+    else()
+        target_compile_options(${riscv7_target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

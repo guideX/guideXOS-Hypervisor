@@ -125,7 +125,9 @@ void TestResetState() {
     Expect(cpu.readCsr(kSatp, v), "read satp");
     ExpectEq("satp reset Bare", 0ULL, v);
     Expect(cpu.readCsr(kMisa, v), "read misa");
-    ExpectEq("misa RV64I", (2ULL << 62) | (1ULL << 8), v);
+    ExpectEq("misa RV64IMA with S/U",
+             (2ULL << 62) | (1ULL << 0) | (1ULL << 8) | (1ULL << 12) |
+                 (1ULL << 18) | (1ULL << 20), v);
     Expect(cpu.readCsr(kMhartid, v), "read mhartid");
     ExpectEq("mhartid 0", 0ULL, v);
     std::cout << "PASS reset state\n";

@@ -2,6 +2,7 @@
 
 #include "riscv/riscv_mmu.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -35,7 +36,11 @@ constexpr uint32_t kCsrMhartid = 0xF14U;
 
 // mstatus fields and writable masks are declared in riscv_cpu.h.
 
-constexpr uint64_t kMisaValue = (2ULL << 62) | (1ULL << 8);  // MXL=RV64, extension I only.
+// MXL=RV64; A, I, M, S, and U are implemented. Zicsr and Zifencei do not
+// have individual misa letter bits. C is deliberately clear because C
+// instructions are decoded but not executed.
+constexpr uint64_t kMisaValue = (2ULL << 62) | (1ULL << 0) | (1ULL << 8) |
+    (1ULL << 12) | (1ULL << 18) | (1ULL << 20);
 constexpr uint64_t kMedelegWritableMask =
     0x3FFULL | (1ULL << 12) | (1ULL << 13) | (1ULL << 15);  // causes 0-9 plus page faults; bit 11 hardwired 0.
 constexpr uint64_t kMieWritableMask = kInterruptImplementedMask;
@@ -45,6 +50,72 @@ constexpr uint64_t kMipSoftwareWritableMask =
     kInterruptSupervisorTimerBit;
 
 uint64_t SignExtendTo64(int32_t value) { return static_cast<uint64_t>(static_cast<int64_t>(value)); }
+
+constexpr size_t kReservationGranuleSize = 16;
+
+uint64_t SignExtendWord(uint32_t value) {
+    return ((value & 0x80000000U) != 0U ? 0xFFFFFFFF00000000ULL : 0ULL) |
+           static_cast<uint64_t>(value);
+}
+
+uint64_t MultiplyHighUnsigned(uint64_t lhs, uint64_t rhs) {
+    const uint64_t lhsLow = static_cast<uint32_t>(lhs);
+    const uint64_t lhsHigh = lhs >> 32;
+    const uint64_t rhsLow = static_cast<uint32_t>(rhs);
+    const uint64_t rhsHigh = rhs >> 32;
+
+    const uint64_t lowProduct = lhsLow * rhsLow;
+    const uint64_t crossA = lhsLow * rhsHigh;
+    const uint64_t crossB = lhsHigh * rhsLow;
+    const uint64_t highProduct = lhsHigh * rhsHigh;
+    const uint64_t middle = (lowProduct >> 32) +
+        static_cast<uint32_t>(crossA) + static_cast<uint32_t>(crossB);
+    return highProduct + (crossA >> 32) + (crossB >> 32) + (middle >> 32);
+}
+
+bool SignedLess64(uint64_t lhs, uint64_t rhs) {
+    const bool lhsNegative = (lhs >> 63) != 0ULL;
+    const bool rhsNegative = (rhs >> 63) != 0ULL;
+    return lhsNegative != rhsNegative ? lhsNegative : lhs < rhs;
+}
+
+bool SignedLessWord(uint32_t lhs, uint32_t rhs) {
+    const bool lhsNegative = (lhs >> 31) != 0U;
+    const bool rhsNegative = (rhs >> 31) != 0U;
+    return lhsNegative != rhsNegative ? lhsNegative : lhs < rhs;
+}
+
+uint64_t SignedDivide64(uint64_t lhs, uint64_t rhs, bool remainder) {
+    if (rhs == 0ULL) return remainder ? lhs : UINT64_MAX;
+    const bool lhsNegative = (lhs >> 63) != 0ULL;
+    const bool rhsNegative = (rhs >> 63) != 0ULL;
+    const uint64_t lhsMagnitude = lhsNegative ? 0ULL - lhs : lhs;
+    const uint64_t rhsMagnitude = rhsNegative ? 0ULL - rhs : rhs;
+    const uint64_t minSigned = 0x8000000000000000ULL;
+    if (lhs == minSigned && rhs == UINT64_MAX) {
+        return remainder ? 0ULL : minSigned;
+    }
+    const uint64_t magnitude = remainder ? lhsMagnitude % rhsMagnitude
+                                         : lhsMagnitude / rhsMagnitude;
+    const bool negative = remainder ? lhsNegative : (lhsNegative != rhsNegative);
+    return negative ? 0ULL - magnitude : magnitude;
+}
+
+uint32_t SignedDivideWord(uint32_t lhs, uint32_t rhs, bool remainder) {
+    if (rhs == 0U) return remainder ? lhs : UINT32_MAX;
+    const bool lhsNegative = (lhs >> 31) != 0U;
+    const bool rhsNegative = (rhs >> 31) != 0U;
+    const uint32_t lhsMagnitude = lhsNegative ? 0U - lhs : lhs;
+    const uint32_t rhsMagnitude = rhsNegative ? 0U - rhs : rhs;
+    const uint32_t minSigned = 0x80000000U;
+    if (lhs == minSigned && rhs == UINT32_MAX) {
+        return remainder ? 0U : minSigned;
+    }
+    const uint32_t magnitude = remainder ? lhsMagnitude % rhsMagnitude
+                                         : lhsMagnitude / rhsMagnitude;
+    const bool negative = remainder ? lhsNegative : (lhsNegative != rhsNegative);
+    return negative ? 0U - magnitude : magnitude;
+}
 
 uint64_t LogicalShiftRight64(uint64_t value, unsigned shamt) {
     return (shamt >= 64U) ? 0ULL : (value >> shamt);
@@ -223,6 +294,7 @@ RV64CPU::RV64CPU() : state_(), decoder_(), mmu_(new Sv39Mmu(this)) {
 
 void RV64CPU::reset() {
     state_.Reset();
+    clearReservation();
     stepsTaken_ = 0;
     instructionsRetired_ = 0;
     priv_ = PrivilegeMode::Machine;
@@ -293,6 +365,26 @@ bool RV64CPU::rangeInGuest(uint64_t addr, size_t size) const {
     }
     const uint64_t remaining = static_cast<uint64_t>(mem_.size()) - offset;
     return static_cast<uint64_t>(size) <= remaining;
+}
+
+void RV64CPU::clearReservation() {
+    reservation_ = ReservationState{};
+}
+
+void RV64CPU::invalidateReservation(uint64_t paddr, size_t size) {
+    if (!reservation_.valid || size == 0) return;
+    const uint64_t writeSize = static_cast<uint64_t>(size);
+    if (writeSize > UINT64_MAX - paddr) {
+        clearReservation();
+        return;
+    }
+    const uint64_t writeEnd = paddr + writeSize;
+    const uint64_t granuleSize = static_cast<uint64_t>(kReservationGranuleSize);
+    const uint64_t reservationEnd = reservation_.granuleBase > UINT64_MAX - granuleSize
+        ? UINT64_MAX : reservation_.granuleBase + granuleSize;
+    if (paddr < reservationEnd && reservation_.granuleBase < writeEnd) {
+        clearReservation();
+    }
 }
 
 bool RV64CPU::timerMmioOverlaps(uint64_t paddr, size_t size) const {
@@ -439,6 +531,7 @@ bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
     }
     const uint64_t offset = paddr - memBase_;
     std::memcpy(mem_.data() + static_cast<size_t>(offset), src, size);
+    invalidateReservation(paddr, size);
     return true;
 }
 
@@ -668,7 +761,7 @@ bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
             return true;
         }
         case kCsrMisa:
-            // Advertises RV64I only; WARL read-only in this phase.
+            // Advertises the implemented base/standard extensions; read-only.
             return true;
         case kCsrMedeleg:
             medeleg_ = value & kMedelegWritableMask;
@@ -759,6 +852,9 @@ void RV64CPU::debugWriteCsr(uint32_t csr, uint64_t value) {
 }
 
 void RV64CPU::deliverTrap(TrapCause cause, uint64_t tval, uint64_t faultPc, StepResult& result) {
+    // A trap deterministically discards this hart's LR reservation. The
+    // architecture permits reservation loss across trap/context entry.
+    clearReservation();
     const uint64_t causeNum = static_cast<uint64_t>(cause);
     // Delegation: traps from M-mode always stay in M. Traps from S/U with the
     // medeleg bit set route to S-mode. M-mode ECALL (cause 11) is never
@@ -847,6 +943,7 @@ bool RV64CPU::selectInterrupt(uint64_t& cause) const {
 
 void RV64CPU::deliverInterrupt(uint64_t cause, uint64_t interruptedPc,
                                StepResult& result) {
+    clearReservation();
     const uint64_t bit = 1ULL << cause;
     const bool toS = (mideleg_ & bit) != 0ULL && priv_ != PrivilegeMode::Machine;
     const PrivilegeMode previous = priv_;
@@ -1170,6 +1267,257 @@ StepResult RV64CPU::step() {
         }
         case Mnemonic::AND: {
             state_.SetGR(insn.rd, state_.GetGR(insn.rs1) & state_.GetGR(insn.rs2));
+            state_.SetPC(pc + 4U);
+            break;
+        }
+        case Mnemonic::MUL:
+        case Mnemonic::MULH:
+        case Mnemonic::MULHSU:
+        case Mnemonic::MULHU:
+        case Mnemonic::DIV:
+        case Mnemonic::DIVU:
+        case Mnemonic::REM:
+        case Mnemonic::REMU:
+        case Mnemonic::MULW:
+        case Mnemonic::DIVW:
+        case Mnemonic::DIVUW:
+        case Mnemonic::REMW:
+        case Mnemonic::REMUW: {
+            const uint64_t lhs = state_.GetGR(insn.rs1);
+            const uint64_t rhs = state_.GetGR(insn.rs2);
+            uint64_t value = 0;
+            switch (insn.mnemonic) {
+                case Mnemonic::MUL:
+                    value = lhs * rhs;
+                    break;
+                case Mnemonic::MULH:
+                    value = MultiplyHighUnsigned(lhs, rhs) -
+                        (((lhs >> 63) != 0ULL) ? rhs : 0ULL) -
+                        (((rhs >> 63) != 0ULL) ? lhs : 0ULL);
+                    break;
+                case Mnemonic::MULHSU:
+                    value = MultiplyHighUnsigned(lhs, rhs) -
+                        (((lhs >> 63) != 0ULL) ? rhs : 0ULL);
+                    break;
+                case Mnemonic::MULHU:
+                    value = MultiplyHighUnsigned(lhs, rhs);
+                    break;
+                case Mnemonic::DIV:
+                    value = SignedDivide64(lhs, rhs, false);
+                    break;
+                case Mnemonic::DIVU:
+                    value = rhs == 0ULL ? UINT64_MAX : lhs / rhs;
+                    break;
+                case Mnemonic::REM:
+                    value = SignedDivide64(lhs, rhs, true);
+                    break;
+                case Mnemonic::REMU:
+                    value = rhs == 0ULL ? lhs : lhs % rhs;
+                    break;
+                case Mnemonic::MULW:
+                    value = SignExtendWord(static_cast<uint32_t>(lhs) *
+                                           static_cast<uint32_t>(rhs));
+                    break;
+                case Mnemonic::DIVW:
+                    value = SignExtendWord(SignedDivideWord(static_cast<uint32_t>(lhs),
+                                                            static_cast<uint32_t>(rhs), false));
+                    break;
+                case Mnemonic::DIVUW: {
+                    const uint32_t dividend = static_cast<uint32_t>(lhs);
+                    const uint32_t divisor = static_cast<uint32_t>(rhs);
+                    value = SignExtendWord(divisor == 0U ? UINT32_MAX : dividend / divisor);
+                    break;
+                }
+                case Mnemonic::REMW:
+                    value = SignExtendWord(SignedDivideWord(static_cast<uint32_t>(lhs),
+                                                            static_cast<uint32_t>(rhs), true));
+                    break;
+                case Mnemonic::REMUW: {
+                    const uint32_t dividend = static_cast<uint32_t>(lhs);
+                    const uint32_t divisor = static_cast<uint32_t>(rhs);
+                    value = SignExtendWord(divisor == 0U ? dividend : dividend % divisor);
+                    break;
+                }
+                default:
+                    break;
+            }
+            state_.SetGR(insn.rd, value);
+            state_.SetPC(pc + 4U);
+            break;
+        }
+        case Mnemonic::LR_W:
+        case Mnemonic::SC_W:
+        case Mnemonic::AMOSWAP_W:
+        case Mnemonic::AMOADD_W:
+        case Mnemonic::AMOXOR_W:
+        case Mnemonic::AMOAND_W:
+        case Mnemonic::AMOOR_W:
+        case Mnemonic::AMOMIN_W:
+        case Mnemonic::AMOMAX_W:
+        case Mnemonic::AMOMINU_W:
+        case Mnemonic::AMOMAXU_W:
+        case Mnemonic::LR_D:
+        case Mnemonic::SC_D:
+        case Mnemonic::AMOSWAP_D:
+        case Mnemonic::AMOADD_D:
+        case Mnemonic::AMOXOR_D:
+        case Mnemonic::AMOAND_D:
+        case Mnemonic::AMOOR_D:
+        case Mnemonic::AMOMIN_D:
+        case Mnemonic::AMOMAX_D:
+        case Mnemonic::AMOMINU_D:
+        case Mnemonic::AMOMAXU_D: {
+            const Mnemonic op = insn.mnemonic;
+            const bool isWord = op == Mnemonic::LR_W || op == Mnemonic::SC_W ||
+                op == Mnemonic::AMOSWAP_W || op == Mnemonic::AMOADD_W ||
+                op == Mnemonic::AMOXOR_W || op == Mnemonic::AMOAND_W ||
+                op == Mnemonic::AMOOR_W || op == Mnemonic::AMOMIN_W ||
+                op == Mnemonic::AMOMAX_W || op == Mnemonic::AMOMINU_W ||
+                op == Mnemonic::AMOMAXU_W;
+            const bool isLoadReserved = op == Mnemonic::LR_W || op == Mnemonic::LR_D;
+            const bool isStoreConditional = op == Mnemonic::SC_W || op == Mnemonic::SC_D;
+            const size_t width = isWord ? 4U : 8U;
+            const uint64_t address = state_.GetGR(insn.rs1);
+
+            if ((address & static_cast<uint64_t>(width - 1U)) != 0ULL) {
+                return isLoadReserved ? trapMisalignedLoad(address)
+                                      : trapMisalignedStore(address);
+            }
+
+            uint64_t loadPaddr = address;
+            uint64_t storePaddr = address;
+            const bool useTranslation = (priv_ != PrivilegeMode::Machine) ||
+                ((mstatus_ & kMstatusMprv) != 0ULL);
+            if (useTranslation && pagingEnabled()) {
+                if (!isStoreConditional) {
+                    const Sv39Translation loadXlt = translateLoad(address, width);
+                    if (!loadXlt.ok) {
+                        deliverTrap(loadXlt.cause, address, pc, result);
+                        return result;
+                    }
+                    loadPaddr = loadXlt.paddr;
+                }
+                if (!isLoadReserved) {
+                    const Sv39Translation storeXlt = translateStore(address, width);
+                    if (!storeXlt.ok) {
+                        deliverTrap(storeXlt.cause, address, pc, result);
+                        return result;
+                    }
+                    storePaddr = storeXlt.paddr;
+                }
+            }
+
+            // Atomic instructions are supported only for ordinary guest RAM.
+            // In particular, do not perform an MMIO read before discovering
+            // that the corresponding atomic write cannot be modeled.
+            if ((!isStoreConditional &&
+                 (timerMmioOverlaps(loadPaddr, width) || !rangeInGuest(loadPaddr, width))) ||
+                (!isLoadReserved &&
+                 (timerMmioOverlaps(storePaddr, width) || !rangeInGuest(storePaddr, width)))) {
+                deliverTrap((isLoadReserved) ? TrapCause::LoadAccessFault
+                                             : TrapCause::StoreAccessFault,
+                            address, pc, result);
+                return result;
+            }
+
+            // Keep a candidate reservation live through translation so an
+            // A/D-bit write through the normal physical write path can
+            // invalidate an overlapping reservation. Every nontrapping SC
+            // consumes it here; all fault exits clear it through deliverTrap.
+            const bool scMatches = isStoreConditional && reservation_.valid &&
+                reservation_.address == storePaddr && reservation_.width == width;
+            if (isStoreConditional) clearReservation();
+
+            if (insn.rl) std::atomic_thread_fence(std::memory_order_release);
+
+            if (isStoreConditional) {
+                if (!scMatches) {
+                    state_.SetGR(insn.rd, 1ULL);
+                } else {
+                    const uint64_t source = state_.GetGR(insn.rs2);
+                    uint8_t bytes[8] = {0};
+                    for (size_t i = 0; i < width; ++i) {
+                        bytes[i] = static_cast<uint8_t>((source >> (8U * i)) & 0xFFU);
+                    }
+                    if (!writePhysical(storePaddr, bytes, width)) {
+                        deliverTrap(TrapCause::StoreAccessFault, address, pc, result);
+                        return result;
+                    }
+                    state_.SetGR(insn.rd, 0ULL);
+                }
+            } else {
+                uint8_t bytes[8] = {0};
+                if (!readPhysical(loadPaddr, bytes, width)) {
+                    deliverTrap(TrapCause::LoadAccessFault, address, pc, result);
+                    return result;
+                }
+                uint64_t oldValue = 0;
+                for (size_t i = 0; i < width; ++i) {
+                    oldValue |= static_cast<uint64_t>(bytes[i]) << (8U * i);
+                }
+
+                if (isLoadReserved) {
+                    reservation_.valid = true;
+                    reservation_.address = loadPaddr;
+                    reservation_.width = width;
+                    reservation_.granuleBase = loadPaddr &
+                        ~static_cast<uint64_t>(kReservationGranuleSize - 1U);
+                    state_.SetGR(insn.rd, isWord ? SignExtendWord(static_cast<uint32_t>(oldValue))
+                                                 : oldValue);
+                } else {
+                    const uint64_t source = state_.GetGR(insn.rs2);
+                    uint64_t newValue = 0;
+                    if (isWord) {
+                        const uint32_t oldWord = static_cast<uint32_t>(oldValue);
+                        const uint32_t sourceWord = static_cast<uint32_t>(source);
+                        uint32_t resultWord = oldWord;
+                        switch (op) {
+                            case Mnemonic::AMOSWAP_W: resultWord = sourceWord; break;
+                            case Mnemonic::AMOADD_W: resultWord = oldWord + sourceWord; break;
+                            case Mnemonic::AMOXOR_W: resultWord = oldWord ^ sourceWord; break;
+                            case Mnemonic::AMOAND_W: resultWord = oldWord & sourceWord; break;
+                            case Mnemonic::AMOOR_W: resultWord = oldWord | sourceWord; break;
+                            case Mnemonic::AMOMIN_W:
+                                resultWord = SignedLessWord(oldWord, sourceWord) ? oldWord : sourceWord;
+                                break;
+                            case Mnemonic::AMOMAX_W:
+                                resultWord = SignedLessWord(oldWord, sourceWord) ? sourceWord : oldWord;
+                                break;
+                            case Mnemonic::AMOMINU_W: resultWord = oldWord < sourceWord ? oldWord : sourceWord; break;
+                            case Mnemonic::AMOMAXU_W: resultWord = oldWord > sourceWord ? oldWord : sourceWord; break;
+                            default: break;
+                        }
+                        newValue = resultWord;
+                        for (size_t i = 0; i < width; ++i) {
+                            bytes[i] = static_cast<uint8_t>((newValue >> (8U * i)) & 0xFFU);
+                        }
+                    } else {
+                        switch (op) {
+                            case Mnemonic::AMOSWAP_D: newValue = source; break;
+                            case Mnemonic::AMOADD_D: newValue = oldValue + source; break;
+                            case Mnemonic::AMOXOR_D: newValue = oldValue ^ source; break;
+                            case Mnemonic::AMOAND_D: newValue = oldValue & source; break;
+                            case Mnemonic::AMOOR_D: newValue = oldValue | source; break;
+                            case Mnemonic::AMOMIN_D: newValue = SignedLess64(oldValue, source) ? oldValue : source; break;
+                            case Mnemonic::AMOMAX_D: newValue = SignedLess64(oldValue, source) ? source : oldValue; break;
+                            case Mnemonic::AMOMINU_D: newValue = oldValue < source ? oldValue : source; break;
+                            case Mnemonic::AMOMAXU_D: newValue = oldValue > source ? oldValue : source; break;
+                            default: break;
+                        }
+                        for (size_t i = 0; i < width; ++i) {
+                            bytes[i] = static_cast<uint8_t>((newValue >> (8U * i)) & 0xFFU);
+                        }
+                    }
+                    if (!writePhysical(storePaddr, bytes, width)) {
+                        deliverTrap(TrapCause::StoreAccessFault, address, pc, result);
+                        return result;
+                    }
+                    state_.SetGR(insn.rd, isWord ? SignExtendWord(static_cast<uint32_t>(oldValue))
+                                                 : oldValue);
+                }
+            }
+
+            if (insn.aq) std::atomic_thread_fence(std::memory_order_acquire);
             state_.SetPC(pc + 4U);
             break;
         }
@@ -1616,6 +1964,7 @@ StepResult RV64CPU::step() {
             mstatus_ |= kMstatusMpie;
             mstatus_ &= ~kMstatusMppMask;  // MPP <- U (least privilege).
             if (next != PrivilegeMode::Machine) mstatus_ &= ~kMstatusMprv;
+            clearReservation();
             priv_ = next;
             state_.SetPC(mepc_);
             result.outcome = StepOutcome::Ok;
@@ -1636,6 +1985,7 @@ StepResult RV64CPU::step() {
             }
             // TSR is hardwired 0, so SRET is permitted in S and M modes.
             const bool spp = (mstatus_ & kMstatusSpp) != 0ULL;
+            clearReservation();
             priv_ = spp ? PrivilegeMode::Supervisor : PrivilegeMode::User;
             const bool spie = (mstatus_ & kMstatusSpie) != 0ULL;
             if (spie) {

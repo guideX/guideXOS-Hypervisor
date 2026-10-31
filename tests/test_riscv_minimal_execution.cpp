@@ -293,16 +293,16 @@ void TestProgramDFailureContainment() {
         ExpectEq("D1 mcause", 2ULL, mcause);
         ExpectEq("D1 PC at mtvec", 0ULL, cpu.getPC());
     }
-    // D2: recognized-but-unsupported (MUL decodes fine, no integer execution).
+    // D2: recognized-but-unsupported compressed execution remains deferred.
     {
-        std::vector<uint8_t> prog;
-        AppendWord(prog, EncodeR(0x33, 1, 0x0, 2, 3, 0x01));  // mul x1, x2, x3
+        std::vector<uint8_t> prog{0x01U, 0x00U};  // c.nop is decoded, not executed.
         RV64CPU cpu;
         cpu.loadProgram(kBase, prog);
         StepResult r = cpu.step();
         ExpectOutcome("D2 unsupported", StepOutcome::Unsupported, r.outcome);
         ExpectEq("D2 PC unchanged", kBase, cpu.getPC());
-        Expect(r.insn.recognized && !r.insn.illegal, "D2 decoder recognized MUL");
+        Expect(r.insn.recognized && !r.insn.illegal, "D2 decoder recognized C.NOP");
+        Expect(r.insn.mnemonic == riscv::Mnemonic::C_NOP, "D2 instruction remains C.NOP");
     }
     // D2b: compressed execution deferred (c.li decodes clean, never Ok).
     {

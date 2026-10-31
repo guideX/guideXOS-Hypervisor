@@ -1,0 +1,18 @@
+Assembler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1) (LLVM integrated RISC-V assembler)
+Linker: LLD 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1) (compatible with GNU linkers)
+Objcopy: llvm-objcopy (LLVM 22.1.8; GNU compatible)
+Objdump: llvm-objdump (LLVM 22.1.8)
+Readobj: llvm-readobj (LLVM 22.1.8)
+Target: riscv64-unknown-elf
+ISA: rv64ima_zicsr
+ABI: lp64 (soft-float; no floating-point ABI)
+Relaxation: disabled at compile and link time
+Compressed instructions: disabled with .option norvc
+F/D/V extensions: not enabled
+Load address: 0x80000000
+Entry point: _start at 0x80000000
+Binary size: 32864 bytes
+SHA-256: 31ede457263bccc771b8f37421c6978889b564cc9742cb7574d4229fc23741cf
+Build command: clang.exe --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mcmodel=medany -fno-pic -mno-relax -c guest.S -o .build/guest.o
+Link command: ld.lld.exe --no-relax --build-id=none -T guest.ld --Map=.build/guest.map -o .build/guest.elf .build/guest.o
+Binary command: llvm-objcopy.exe -O binary .build/guest.elf guest.bin

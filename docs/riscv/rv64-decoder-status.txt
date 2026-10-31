@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-6)
+RISC-V Decoder and Execution Status (updated Phase RISCV-7)
 
 Current decoded instruction families:
 - RV64I
@@ -85,15 +85,16 @@ RV64I vs independently defined extensions (explicit split):
 Tested CPU semantics:
 - test_riscv_minimal_execution (180 runtime checks, RISCV-1 programs A-D
   preserved; fault paths now expect architectural traps: illegal/access
-  faults -> Trap with mcause/mepc/tval checks; MUL replaces LW for the
-  Unsupported probe).
+  faults -> Trap with mcause/mepc/tval checks; C.NOP is the recognized
+  Unsupported probe now that RV64M executes).
 - test_riscv_rv64i_full (105 runtime checks): signed/unsigned compares,
   32-bit sign-extension incl. ADDW overflow (0x7FFFFFFF+1 -> 0xFFFFFFFF80000000),
   shift boundaries (63/32/0, register-shamt wraparound 64->0), SRA sign fill,
   byte/half/word/doubleword round-trips with LE verification, natural-
   alignment traps (cause 4/6) with rd/memory atomicity, JAL/JALR misalignment
   (cause 0, rd preserved), JALR low-bit clearing, FENCE/FENCE.I retirement,
-  M/A still never Ok.
+  The current C.NOP probe remains Unsupported; RV64M/A execution is covered
+  by the RISCV-7 focused suites below.
 - test_riscv_priv_sbi (266 runtime checks): reset state (M, CSRs zeroed,
   misa fixed, mhartid 0), CSR RW/suppression/sstatus-view, read-only
   (mhartid) and unknown-CSR traps with rd preservation, S/U privilege
@@ -115,7 +116,8 @@ Tested CPU semantics:
   violations. Checks are active runtime comparisons in Debug and Release.
 
 Explicitly unsupported operations (valid decode -> StepOutcome::Unsupported):
-- All RV64M, all RV64A, all compressed except C.EBREAK.
+- Compressed execution except C.EBREAK. RV64M and RV64A are implemented by
+  RISCV-7; F/D/V remain unsupported and are not advertised.
 
 Synchronous traps (StepOutcome::Trap, never silent):
 - Illegal instruction (cause 2, tval = faulting word), breakpoint (cause 3),
@@ -282,34 +284,71 @@ Audit notes:
 - Execution remains RV64I plus the implemented CSR/SYSTEM/interrupt/timer
   subset; RV64M/A/C execution remains deferred.
 
---- Current executable status after Phase RISCV-6 ---
+--- Current executable status after Phase RISCV-7 ---
 
-- The first independently assembled RV64 guest is checked in at
-  tests/fixtures/riscv_guest/guest.bin. It is linked at 0x80000000 for
-  rv64i_zicsr, LP64 soft-float, with relaxation and compressed instructions
-  disabled. The source, linker script, LLVM build script, SHA-256 manifest,
-  ELF metadata, instruction inventory, and disassembly are kept beside it.
-- test_riscv_guest_boot loads the flat binary into the bounded RV64CPU guest
-  RAM and executes it only through RV64CPU::step and the production decoder.
-  The guest initializes M-mode state, executes MRET into S-mode, queries SBI
-  Base through a real S-mode ECALL/M-mode trap, and writes a 72-byte signature
-  at guest address 0x80008000. The full signature is checked by the harness.
-- The fixture uses RV64I integer operations plus the implemented CSR/SYSTEM
-  instructions. It emits no M/A/F/D/V or compressed instructions. RV64M/A
-  remain Unsupported, RV64C execution remains deferred except C.EBREAK, and
-  F/D/V remain unsupported. This is a test boot contract, not a Linux boot ABI.
-- The flat image is sufficient because the linker fixes one load address and
-  entrypoint, and the CTest guest needs no segment relocation or dynamic
-  linking. Existing ELF loader/validator paths require EM_IA_64; RISC-V ELF64
-  loading remains deferred until an ELF guest is selected.
-- Nine RISC-V CTest suites pass in Debug. The focused guest-boot suite passes
-  in Debug and Release with 167 explicit runtime checks. The boot report records
-  the handoff, binary provenance, failure cases, IA-64 regressions, and the
-  remaining requirements for an external firmware or OS payload.
+- RV64M execution: MUL, MULH, MULHSU, MULHU, MULW, DIV, DIVU, REM, REMU,
+  DIVW, DIVUW, REMW, and REMUW execute through the production decoder and
+  RV64CPU::step(). Product high halves use a portable limb implementation;
+  signed divide overflow and divide-by-zero are explicit architectural cases.
+- RV64A execution: LR.W/LR.D, SC.W/SC.D, and all standard AMOSWAP, AMOADD,
+  AMOXOR, AMOAND, AMOOR, AMOMIN, AMOMAX, AMOMINU, and AMOMAXU word/doubleword
+  forms execute. AMO.W arithmetic uses 32-bit values and sign-extends the old
+  value to rd.
+- Reservation state is per CPU and based on translated guest-physical address,
+  width, and a deterministic 16-byte granule. RAM writes invalidate overlaps;
+  SC always consumes the reservation and validates its store translation even
+  on failure. Reset, trap/interrupt entry, MRET, and SRET clear it. The model
+  provides no SMP coherence claim.
+- aq/rl are interpreted as release/acquire ordering boundaries around the
+  atomic action in the sequential interpreter. This is the supported single-
+  hart order; full multiprocessor RVWMO is not implemented.
+- Atomic accesses use the existing Sv39 effective-privilege path, enforce load
+  and store permissions, support MPRV/SUM/MXR and A/D updates, honor physical
+  aliases, and preserve page/access-fault and misalignment distinctions.
+  Timer MMIO atomics fault before device side effects.
+- misa is 0x8000000000141101: RV64 with A/I/M/S/U. C remains unadvertised
+  because compressed execution is deferred. F/D/V remain unsupported. Zicsr
+  and Zifencei have no individual misa letter bits.
+- The RISCV-6 RV64I/Zicsr fixture remains unchanged. The independent RISCV-7
+  guest is tests/fixtures/riscv_ima_guest/guest.bin, linked at 0x80000000 for
+  rv64ima_zicsr, LP64 soft-float, with relaxation and compressed instructions
+  disabled. Its 32,864-byte flat image has SHA-256
+  31ede457263bccc771b8f37421c6978889b564cc9742cb7574d4229fc23741cf. Source,
+  linker script, build script, manifest, ELF metadata, inventory, and
+  disassembly are stored beside the binary.
+- The guest runs RV64M arithmetic, AMOADD, successful/failed/retried LR/SC,
+  an Sv39 alias counter increment, and a read-only SC permission fault. It
+  writes and validates a version-2 96-byte signature through guest execution.
+  The harness records 7 RV64M and 8 RV64A retirements, one expected atomic
+  page fault, two MRET transitions, 201 retired instructions, and 202 steps.
+- RISCV-7 adds test_riscv_rv64m, test_riscv_rv64a, and
+  test_riscv_rv64ima_guest. All 12 RISC-V CTest suites pass in Debug; the
+  three focused targets pass in Release. Direct tests report 131 RV64M,
+  550 RV64A, and 252 guest runtime checks in each configuration.
+- IA64SalTests, EfiMemoryMapTests, test_ia64_acpi,
+  test_ia64_interrupt_controller, and test_ia64_processor_interrupt_block
+  pass without IA-64 source changes. The pre-existing test_io_devices console
+  assertion and test_elf_validation unresolved IA-64 link symbols remain
+  documented separately in the RISCV-6 report.
 
-Recommended RISCV-7 target:
-- Add a bounded static RISC-V ELF64 PT_LOAD loader and malformed-image tests,
-  then boot a second independently linked RV64I/Zicsr guest from its validated
-  ELF entrypoint. Keep dynamic relocation, Linux/OpenSBI, SMP, and device
-  emulation outside that loader milestone unless the selected payload requires
-  them.
+Boot-readiness inventory:
+- RV64I is complete for the tested instruction profile. RV64M and the selected
+  standard RV64A word/doubleword profile are now executed and independently
+  tested. Zicsr/SYSTEM includes the existing privileged and SBI Base/TIME
+  subset. FENCE.I remains a single-hart no-op.
+- RV64C is still a major binary compatibility gap. F/D/V execution is absent.
+  Sv39 and M/S/U privilege paths are available, with single-hart timer support.
+- There is no RISC-V ELF64 loader. The guest boot fixtures use bounded raw
+  images at fixed addresses; existing ELF paths require EM_IA_64.
+- No FDT generation or OpenSBI/Linux handoff contract is available. No RISC-V
+  UART, full CLINT/ACLINT, PLIC/APLIC/IMSIC, virtio, or broad SBI IPI/RFENCE/
+  HSM/SRST/PMU/DBCN support exists. RV64IMA execution does not imply
+  Linux/OpenSBI readiness.
+
+Recommended RISCV-8 target:
+- Add a bounded static RISC-V ELF64 ET_EXEC/PT_LOAD loader and malformed-image
+  tests, then boot an independently linked RV64IMA/Zicsr S-mode ELF guest.
+  Build the selected fixture without C so it fits the current execution
+  profile. This makes image loading the next directly testable blocker; Linux,
+  OpenSBI, compressed execution, multicore, and platform devices remain separate
+  requirements.
