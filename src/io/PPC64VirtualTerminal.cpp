@@ -38,6 +38,7 @@ bool PPC64VirtualTerminal::reconfigure(uint32_t terminalId, bool enabled) {
         (terminalId != terminalId_ || enabled != enabled_)) return false;
     terminalId_ = terminalId;
     enabled_ = enabled;
+    attachments_.clear();
     return true;
 }
 
@@ -103,7 +104,8 @@ bool PPC64VirtualTerminal::injectInput(uint16_t lpid, const uint8_t* bytes,
 }
 
 PPC64TerminalResult PPC64VirtualTerminal::injectInputWithStatus(
-    uint16_t lpid, const uint8_t* bytes, size_t count) {
+    uint16_t lpid, const uint8_t* bytes, size_t count,
+    const std::function<bool()>& onEmptyToNonempty) {
     if (count != 0 && bytes == nullptr) return PPC64TerminalResult::PARAMETER;
     std::lock_guard<std::mutex> lock(mutex_);
     if (!enabled_) return PPC64TerminalResult::PARAMETER;
@@ -116,8 +118,88 @@ PPC64TerminalResult PPC64VirtualTerminal::injectInputWithStatus(
     if (channel == nullptr) return PPC64TerminalResult::RESOURCE;
     if (count > PPC64_TERMINAL_QUEUE_CAPACITY - channel->input.size())
         return PPC64TerminalResult::BUSY;
+    const bool wasEmpty = channel->input.empty();
     for (size_t i = 0; i < count; ++i) channel->input.push_back(bytes[i]);
+    if (wasEmpty && onEmptyToNonempty) {
+        bool notified = false;
+        try {
+            notified = onEmptyToNonempty();
+        } catch (...) {
+            notified = false;
+        }
+        if (!notified) {
+            for (size_t i = 0; i < count; ++i) channel->input.pop_back();
+            return PPC64TerminalResult::RESOURCE;
+        }
+    }
     return PPC64TerminalResult::SUCCESS;
+}
+
+bool PPC64VirtualTerminal::attachInterrupt(
+    const PPC64TerminalInterruptAttachmentSnapshot& attachment) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!enabled_ || !attachment.attached ||
+        attachment.terminalId != terminalId_ ||
+        !PPC64XICS::validSourceId(attachment.sourceId) ||
+        attachment.serverId != PPC64_XICS_SERVER_ID ||
+        attachment.sourceType != PPC64XICSSourceType::EDGE ||
+        attachment.priority == 0xffU ||
+        attachments_.find(attachment.ownerLPID) != attachments_.end()) {
+        return false;
+    }
+    for (const auto& [owner, existing] : attachments_) {
+        (void)owner;
+        if (existing.sourceId == attachment.sourceId) return false;
+    }
+    attachments_.emplace(attachment.ownerLPID, attachment);
+    return true;
+}
+
+bool PPC64VirtualTerminal::detachInterrupt(
+    uint16_t ownerLPID,
+    PPC64TerminalInterruptAttachmentSnapshot* removed) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = attachments_.find(ownerLPID);
+    if (found == attachments_.end()) return false;
+    if (removed != nullptr) *removed = found->second;
+    attachments_.erase(found);
+    return true;
+}
+
+bool PPC64VirtualTerminal::getInterruptAttachment(
+    uint16_t ownerLPID,
+    PPC64TerminalInterruptAttachmentSnapshot& attachment) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = attachments_.find(ownerLPID);
+    if (found == attachments_.end()) return false;
+    attachment = found->second;
+    return true;
+}
+
+std::vector<PPC64TerminalInterruptAttachmentSnapshot>
+PPC64VirtualTerminal::getInterruptAttachments() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<PPC64TerminalInterruptAttachmentSnapshot> result;
+    result.reserve(attachments_.size());
+    for (const auto& [owner, attachment] : attachments_) {
+        (void)owner;
+        result.push_back(attachment);
+    }
+    return result;
+}
+
+void PPC64VirtualTerminal::clearInterruptAttachmentsExcept(
+    uint16_t ownerLPID) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto current = attachments_.begin(); current != attachments_.end();) {
+        if (current->first != ownerLPID) current = attachments_.erase(current);
+        else ++current;
+    }
+}
+
+void PPC64VirtualTerminal::discardChannel(uint16_t lpid) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    channels_.erase(lpid);
 }
 
 std::vector<uint8_t> PPC64VirtualTerminal::readOutput(
@@ -179,15 +261,23 @@ PPC64VirtualTerminalSnapshot PPC64VirtualTerminal::createSnapshot() const {
         record.output.assign(channel.output.begin(), channel.output.end());
         snapshot.channels.push_back(std::move(record));
     }
+    snapshot.attachments.reserve(attachments_.size());
+    for (const auto& [lpid, attachment] : attachments_) {
+        (void)lpid;
+        snapshot.attachments.push_back(attachment);
+    }
     return snapshot;
 }
 
 bool PPC64VirtualTerminal::restoreSnapshot(
     const PPC64VirtualTerminalSnapshot& snapshot,
     const std::vector<uint16_t>& authorizedLPIDs) {
-    if (snapshot.version != PPC64_TERMINAL_STATE_VERSION ||
+    if ((snapshot.version != 1U &&
+         snapshot.version != PPC64_TERMINAL_STATE_VERSION) ||
         !validTerminalId(snapshot.terminalId) ||
-        snapshot.channels.size() > PPC64_TERMINAL_MAX_CHANNELS) return false;
+        snapshot.channels.size() > PPC64_TERMINAL_MAX_CHANNELS ||
+        snapshot.attachments.size() > PPC64_TERMINAL_MAX_CHANNELS ||
+        (snapshot.version == 1U && !snapshot.attachments.empty())) return false;
     std::set<uint16_t> allowed(authorizedLPIDs.begin(), authorizedLPIDs.end());
     allowed.insert(0);
     std::map<uint16_t, Channel> staged;
@@ -200,11 +290,28 @@ bool PPC64VirtualTerminal::restoreSnapshot(
         channel.output.assign(record.output.begin(), record.output.end());
         if (!staged.emplace(record.lpid, std::move(channel)).second) return false;
     }
+    std::map<uint16_t, PPC64TerminalInterruptAttachmentSnapshot> stagedAttachments;
+    std::set<uint32_t> attachedSources;
+    for (const auto& attachment : snapshot.attachments) {
+        if (!attachment.attached ||
+            (allowed.find(attachment.ownerLPID) == allowed.end() &&
+             attachment.ownerLPID != 0) ||
+            attachment.terminalId != snapshot.terminalId ||
+            !PPC64XICS::validSourceId(attachment.sourceId) ||
+            attachment.serverId != PPC64_XICS_SERVER_ID ||
+            attachment.sourceType != PPC64XICSSourceType::EDGE ||
+            attachment.priority == 0xffU ||
+            !attachedSources.insert(attachment.sourceId).second ||
+            !stagedAttachments.emplace(attachment.ownerLPID, attachment).second) {
+            return false;
+        }
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (snapshot.terminalId != terminalId_) return false;
     terminalId_ = snapshot.terminalId;
     enabled_ = snapshot.enabled;
     channels_.swap(staged);
+    attachments_.swap(stagedAttachments);
     return true;
 }
 

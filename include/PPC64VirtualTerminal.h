@@ -4,16 +4,29 @@
 #include <cstdint>
 #include <array>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <vector>
+#include "PPC64XICS.h"
 
 namespace ia64::ppc64 {
 
 inline constexpr uint32_t PPC64_DEFAULT_VIRTUAL_TERMINAL_ID = 0x30000000U;
 inline constexpr size_t PPC64_TERMINAL_QUEUE_CAPACITY = 4096U;
 inline constexpr size_t PPC64_TERMINAL_MAX_CHANNELS = 64U;
-inline constexpr uint32_t PPC64_TERMINAL_STATE_VERSION = 1U;
+inline constexpr uint32_t PPC64_TERMINAL_STATE_VERSION = 2U;
+inline constexpr uint8_t PPC64_TERMINAL_XICS_PRIORITY = 0x20U;
+
+struct PPC64TerminalInterruptAttachmentSnapshot {
+    bool attached = true;
+    uint16_t ownerLPID = 0;
+    uint32_t terminalId = PPC64_DEFAULT_VIRTUAL_TERMINAL_ID;
+    uint32_t sourceId = 0;
+    uint32_t serverId = PPC64_XICS_SERVER_ID;
+    PPC64XICSSourceType sourceType = PPC64XICSSourceType::EDGE;
+    uint8_t priority = PPC64_TERMINAL_XICS_PRIORITY;
+};
 
 struct PPC64VirtualTerminalChannelSnapshot {
     uint16_t lpid = 0;
@@ -26,6 +39,7 @@ struct PPC64VirtualTerminalSnapshot {
     uint32_t terminalId = PPC64_DEFAULT_VIRTUAL_TERMINAL_ID;
     bool enabled = true;
     std::vector<PPC64VirtualTerminalChannelSnapshot> channels;
+    std::vector<PPC64TerminalInterruptAttachmentSnapshot> attachments;
 };
 
 enum class PPC64TerminalResult : uint8_t {
@@ -61,7 +75,20 @@ public:
     bool injectInput(uint16_t lpid, const uint8_t* bytes, size_t count);
     PPC64TerminalResult injectInputWithStatus(uint16_t lpid,
                                               const uint8_t* bytes,
-                                              size_t count);
+                                              size_t count,
+                                              const std::function<bool()>&
+                                                  onEmptyToNonempty = {});
+    bool attachInterrupt(
+        const PPC64TerminalInterruptAttachmentSnapshot& attachment);
+    bool detachInterrupt(uint16_t ownerLPID,
+                         PPC64TerminalInterruptAttachmentSnapshot* removed = nullptr);
+    bool getInterruptAttachment(
+        uint16_t ownerLPID,
+        PPC64TerminalInterruptAttachmentSnapshot& attachment) const;
+    std::vector<PPC64TerminalInterruptAttachmentSnapshot>
+    getInterruptAttachments() const;
+    void clearInterruptAttachmentsExcept(uint16_t ownerLPID);
+    void discardChannel(uint16_t lpid);
     std::vector<uint8_t> readOutput(uint16_t lpid,
                                     size_t maximumCount = 0U) const;
     std::vector<uint8_t> drainOutput(uint16_t lpid,
@@ -87,6 +114,7 @@ private:
     uint32_t terminalId_;
     bool enabled_;
     std::map<uint16_t, Channel> channels_;
+    std::map<uint16_t, PPC64TerminalInterruptAttachmentSnapshot> attachments_;
 };
 
 } // namespace ia64::ppc64

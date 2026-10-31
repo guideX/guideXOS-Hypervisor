@@ -24,6 +24,7 @@
 #include <sstream>
 #include <algorithm>
 #include <limits>
+#include <set>
 
 namespace ia64 {
 
@@ -133,6 +134,14 @@ try {
     }
     if (isaName == "PPC64") {
         getPPC64ISAPlugin()->attachVirtualTerminal(ppc64VirtualTerminal_.get());
+        ppc64PartitionManager_->setPartitionDestroyedCallback(
+            [this](uint16_t lpid) {
+                std::string ignored;
+                detachPPC64TerminalInterrupt(lpid, &ignored);
+                if (ppc64VirtualTerminal_) {
+                    ppc64VirtualTerminal_->discardChannel(lpid);
+                }
+            });
     }
 
         interruptController_->RegisterDeliveryCallback([this](uint8_t vector) {
@@ -286,6 +295,24 @@ bool VirtualMachine::reset() {
             if (ppc64XICS_) ppc64XICS_->reset();
             if (ppc64PartitionManager_) {
                 ppc64PartitionManager_->destroyAllPartitions();
+            }
+            if (ppc64VirtualTerminal_) {
+                ppc64VirtualTerminal_->clearInterruptAttachmentsExcept(0);
+            }
+            if (ppc64XICS_ && ppc64VirtualTerminal_) {
+                for (const auto& attachment :
+                     ppc64VirtualTerminal_->getInterruptAttachments()) {
+                    std::string reason;
+                    if (attachment.ownerLPID != 0 ||
+                        !ppc64XICS_->configureSource(
+                            attachment.sourceId, attachment.sourceType,
+                            attachment.priority, attachment.serverId,
+                            attachment.ownerLPID, true, reason)) {
+                        throw std::runtime_error(reason.empty()
+                            ? "terminal interrupt attachment survived reset with an invalid owner"
+                            : reason);
+                    }
+                }
             }
             if (ppc64VirtualTimeBase_) {
                 ppc64VirtualTimeBase_->reset();
@@ -914,6 +941,7 @@ bool VirtualMachine::configurePPC64Platform(
             configuration, memory_->GetTotalSize(), reason)) {
         return reject(reason);
     }
+    ppc64::PPC64PlatformConfiguration configured = configuration;
     std::unique_ptr<ppc64::PPC64VirtualTimeBase> clock;
     try {
         clock = std::make_unique<ppc64::PPC64VirtualTimeBase>(configuration);
@@ -929,12 +957,45 @@ bool VirtualMachine::configurePPC64Platform(
     } catch (const std::exception& exception) {
         return reject(exception.what());
     }
+    configured.virtualTerminalInterruptSourceId = 0;
+    if (xics && configured.virtualTerminalEnabled) {
+        uint32_t selectedSource = 0;
+        for (uint32_t sourceId = ppc64::PPC64_XICS_FIRST_SOURCE;
+             sourceId <= ppc64::PPC64_XICS_LAST_SOURCE; ++sourceId) {
+            ppc64::PPC64XICSSourceSnapshot existing;
+            if (!xics->getSource(sourceId, existing)) {
+                selectedSource = sourceId;
+                break;
+            }
+        }
+        if (selectedSource == 0 ||
+            !xics->configureSource(
+                selectedSource, ppc64::PPC64XICSSourceType::EDGE,
+                ppc64::PPC64_TERMINAL_XICS_PRIORITY,
+                ppc64::PPC64_XICS_SERVER_ID, 0, true, reason)) {
+            return reject(reason.empty()
+                ? "no free XICS source is available for hvterm1" : reason);
+        }
+        configured.virtualTerminalInterruptSourceId = selectedSource;
+    }
     if (!ppc64VirtualTerminal_ ||
-        !ppc64VirtualTerminal_->reconfigure(configuration.virtualTerminalId,
-                                             configuration.virtualTerminalEnabled)) {
+        !ppc64VirtualTerminal_->reconfigure(configured.virtualTerminalId,
+                                             configured.virtualTerminalEnabled)) {
         return reject("virtual-terminal identity cannot change while channel state exists");
     }
-    ppc64PlatformConfiguration_ = configuration;
+    if (configured.virtualTerminalInterruptSourceId != 0) {
+        ppc64::PPC64TerminalInterruptAttachmentSnapshot attachment;
+        attachment.ownerLPID = 0;
+        attachment.terminalId = configured.virtualTerminalId;
+        attachment.sourceId = configured.virtualTerminalInterruptSourceId;
+        attachment.serverId = ppc64::PPC64_XICS_SERVER_ID;
+        attachment.sourceType = ppc64::PPC64XICSSourceType::EDGE;
+        attachment.priority = ppc64::PPC64_TERMINAL_XICS_PRIORITY;
+        if (!ppc64VirtualTerminal_->attachInterrupt(attachment)) {
+            return reject("failed to attach hvterm1 to its allocated XICS source");
+        }
+    }
+    ppc64PlatformConfiguration_ = configured;
     ppc64VirtualTimeBase_ = std::move(clock);
     ppc64XICS_ = std::move(xics);
     ppc64PlatformEnabled_ = true;
@@ -1171,6 +1232,105 @@ VirtualMachine::getPPC64TerminalSnapshot() const {
     return ppc64VirtualTerminal_->createSnapshot();
 }
 
+bool VirtualMachine::attachPPC64TerminalInterrupt(
+    uint16_t lpid, uint8_t priority, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64XICS_ || !ppc64VirtualTerminal_ ||
+        !ppc64VirtualTerminal_->isEnabled() || state_ == VMState::CREATED ||
+        state_ == VMState::TERMINATING || state_ == VMState::TERMINATED ||
+        state_ == VMState::ERROR || state_ == VMState::CRASHED) {
+        return reject("terminal interrupt attachment requires a live XICS-enabled VTY");
+    }
+    if (lpid != 0 && (!ppc64PartitionManager_ ||
+                      !ppc64PartitionManager_->findPartition(lpid))) {
+        return reject("terminal interrupt owner LPID is not live in this VM");
+    }
+    if (priority == 0xffU) {
+        return reject("terminal interrupt priority 0xff is reserved");
+    }
+    ppc64::PPC64TerminalInterruptAttachmentSnapshot existing;
+    if (ppc64VirtualTerminal_->getInterruptAttachment(lpid, existing)) {
+        return reject("terminal channel already has an XICS attachment");
+    }
+    if (lpid == 0 && ppc64PlatformPrepared_) {
+        return reject("root terminal interrupt is fixed by the prepared device tree");
+    }
+
+    uint32_t selectedSource = 0;
+    for (uint32_t sourceId = ppc64::PPC64_XICS_FIRST_SOURCE;
+         sourceId <= ppc64::PPC64_XICS_LAST_SOURCE; ++sourceId) {
+        ppc64::PPC64XICSSourceSnapshot source;
+        if (!ppc64XICS_->getSource(sourceId, source)) {
+            selectedSource = sourceId;
+            break;
+        }
+    }
+    if (selectedSource == 0) {
+        return reject("no free XICS source is available for the terminal channel");
+    }
+    std::string reason;
+    if (!ppc64XICS_->configureSource(
+            selectedSource, ppc64::PPC64XICSSourceType::EDGE, priority,
+            ppc64::PPC64_XICS_SERVER_ID, lpid, true, reason)) {
+        return reject(reason);
+    }
+    ppc64::PPC64TerminalInterruptAttachmentSnapshot attachment;
+    attachment.ownerLPID = lpid;
+    attachment.terminalId = ppc64VirtualTerminal_->terminalId();
+    attachment.sourceId = selectedSource;
+    attachment.serverId = ppc64::PPC64_XICS_SERVER_ID;
+    attachment.sourceType = ppc64::PPC64XICSSourceType::EDGE;
+    attachment.priority = priority;
+    if (!ppc64VirtualTerminal_->attachInterrupt(attachment)) {
+        ppc64XICS_->teardownSource(selectedSource, lpid, reason);
+        return reject("terminal backend rejected the XICS source attachment");
+    }
+    if (lpid == 0 && ppc64PlatformEnabled_) {
+        ppc64PlatformConfiguration_.virtualTerminalInterruptSourceId =
+            selectedSource;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::detachPPC64TerminalInterrupt(
+    uint16_t lpid, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_) {
+        return reject("PPC64 terminal backend is unavailable");
+    }
+    if (lpid == 0 && ppc64PlatformPrepared_) {
+        return reject("root terminal interrupt is fixed by the prepared device tree");
+    }
+    ppc64::PPC64TerminalInterruptAttachmentSnapshot attachment;
+    if (!ppc64VirtualTerminal_->getInterruptAttachment(lpid, attachment)) {
+        return reject("terminal channel has no XICS attachment");
+    }
+    if (ppc64XICS_ != nullptr) {
+        ppc64::PPC64XICSSourceSnapshot source;
+        if (ppc64XICS_->getSource(attachment.sourceId, source)) {
+            std::string reason;
+            if (!ppc64XICS_->teardownSource(attachment.sourceId, lpid, reason)) {
+                return reject(reason);
+            }
+        }
+    }
+    if (!ppc64VirtualTerminal_->detachInterrupt(lpid)) {
+        return reject("terminal attachment changed during teardown");
+    }
+    if (lpid == 0 && ppc64PlatformEnabled_) {
+        ppc64PlatformConfiguration_.virtualTerminalInterruptSourceId = 0;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool VirtualMachine::injectPPC64TerminalInput(
     const std::vector<uint8_t>& bytes, uint16_t lpid) {
     return injectPPC64TerminalInputWithStatus(bytes, lpid) ==
@@ -1185,8 +1345,31 @@ VirtualMachine::injectPPC64TerminalInputWithStatus(
                        !ppc64PartitionManager_->findPartition(lpid)))) {
         return ppc64::PPC64TerminalResult::PARAMETER;
     }
+    if (state_ == VMState::CREATED || state_ == VMState::TERMINATING ||
+        state_ == VMState::TERMINATED || state_ == VMState::ERROR ||
+        state_ == VMState::CRASHED || cpus_.empty() ||
+        !cpus_[0].enabled || cpus_[0].state == CPUExecutionState::HALTED ||
+        cpus_[0].state == CPUExecutionState::ERROR) {
+        return ppc64::PPC64TerminalResult::PARAMETER;
+    }
+    ppc64::PPC64TerminalInterruptAttachmentSnapshot attachment;
+    const bool hasAttachment = ppc64VirtualTerminal_->
+        getInterruptAttachment(lpid, attachment);
+    if (hasAttachment && ppc64XICS_ == nullptr) {
+        return ppc64::PPC64TerminalResult::RESOURCE;
+    }
     return ppc64VirtualTerminal_->injectInputWithStatus(
-        lpid, bytes.data(), bytes.size());
+        lpid, bytes.data(), bytes.size(), hasAttachment
+            ? std::function<bool()>([this, attachment, lpid] {
+                  std::string reason;
+                  if (!ppc64XICS_->assertSource(attachment.sourceId, lpid,
+                                               reason)) {
+                      return false;
+                  }
+                  return ppc64XICS_->deassertSource(attachment.sourceId, lpid,
+                                                    reason);
+              })
+            : std::function<bool()>{});
 }
 
 std::vector<uint8_t> VirtualMachine::readPPC64TerminalOutput(
@@ -1237,6 +1420,14 @@ size_t VirtualMachine::getPPC64TerminalQueueCapacity() const {
 void VirtualMachine::clearPPC64TerminalState() {
     if (isaName_ != "PPC64" || !ppc64VirtualTerminal_) {
         throw std::logic_error("PAPRvty is only available on PPC64 VMs");
+    }
+    for (const auto& attachment :
+         ppc64VirtualTerminal_->getInterruptAttachments()) {
+        if (ppc64XICS_ != nullptr) {
+            std::string ignored;
+            ppc64XICS_->resetSourceState(attachment.sourceId,
+                                         attachment.ownerLPID, ignored);
+        }
     }
     ppc64VirtualTerminal_->reset();
 }
@@ -1385,6 +1576,15 @@ bool VirtualMachine::assertPPC64InterruptSource(
         ppc64PartitionManager_->findPartition(ownerLPID) == nullptr) {
         return reject("XICS source owner LPID is not a live partition in this VM");
     }
+    if (ppc64VirtualTerminal_) {
+        for (const auto& attachment :
+             ppc64VirtualTerminal_->getInterruptAttachments()) {
+            if (attachment.sourceId == sourceId &&
+                attachment.ownerLPID == ownerLPID) {
+                return reject("terminal-owned XICS sources are signaled by accepted input only");
+            }
+        }
+    }
     std::string reason;
     if (!ppc64XICS_->assertSource(sourceId, ownerLPID, reason)) {
         return reject(reason);
@@ -1403,6 +1603,15 @@ bool VirtualMachine::deassertPPC64InterruptSource(
         (ownerLPID != 0 && ppc64PartitionManager_->findPartition(ownerLPID) == nullptr)) {
         return reject("XICS source owner is unavailable in this VM");
     }
+    if (ppc64VirtualTerminal_) {
+        for (const auto& attachment :
+             ppc64VirtualTerminal_->getInterruptAttachments()) {
+            if (attachment.sourceId == sourceId &&
+                attachment.ownerLPID == ownerLPID) {
+                return reject("terminal-owned XICS sources are pulsed by accepted input only");
+            }
+        }
+    }
     std::string reason;
     if (!ppc64XICS_->deassertSource(sourceId, ownerLPID, reason)) {
         return reject(reason);
@@ -1420,6 +1629,15 @@ bool VirtualMachine::removePPC64InterruptSource(
     if (isaName_ != "PPC64" || !ppc64XICS_ ||
         (ownerLPID != 0 && ppc64PartitionManager_->findPartition(ownerLPID) == nullptr)) {
         return reject("XICS source owner is unavailable in this VM");
+    }
+    if (ppc64VirtualTerminal_) {
+        for (const auto& attachment :
+             ppc64VirtualTerminal_->getInterruptAttachments()) {
+            if (attachment.sourceId == sourceId &&
+                attachment.ownerLPID == ownerLPID) {
+                return reject("detach the terminal before removing its XICS source");
+            }
+        }
     }
     std::string reason;
     if (!ppc64XICS_->removeSource(sourceId, ownerLPID, reason)) {
@@ -2566,12 +2784,85 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             snapshot.ppc64VirtualTerminal.enabled != expectedTerminalEnabled) {
             return reject("virtual-terminal identity or exposure disagrees with the destination FDT profile");
         }
+        if (snapshot.ppc64VirtualTerminal.version != 1U &&
+            snapshot.ppc64VirtualTerminal.version !=
+                ppc64::PPC64_TERMINAL_STATE_VERSION) {
+            return reject("virtual-terminal checkpoint version is unsupported");
+        }
+        if (snapshot.ppc64VirtualTerminal.version ==
+            ppc64::PPC64_TERMINAL_STATE_VERSION) {
+            const auto& platformConfig = snapshot.ppc64Platform.configuration;
+            std::set<uint16_t> authorizedLPIDs{0};
+            for (const auto& partitionSnapshot :
+                 snapshot.ppc64PartitionSnapshots) {
+                if (partitionSnapshot.size() < 10) {
+                    return reject("partition metadata is truncated");
+                }
+                authorizedLPIDs.insert(
+                    static_cast<uint16_t>(partitionSnapshot[8]) |
+                    (static_cast<uint16_t>(partitionSnapshot[9]) << 8));
+            }
+            std::set<uint16_t> attachmentOwners;
+            std::set<uint32_t> attachmentSources;
+            const ppc64::PPC64XICSSourceSnapshot* rootSource = nullptr;
+            for (const auto& attachment :
+                 snapshot.ppc64VirtualTerminal.attachments) {
+                if (!attachment.attached ||
+                    authorizedLPIDs.find(attachment.ownerLPID) ==
+                        authorizedLPIDs.end() ||
+                    attachment.terminalId !=
+                        snapshot.ppc64VirtualTerminal.terminalId ||
+                    attachment.serverId != ppc64::PPC64_XICS_SERVER_ID ||
+                    attachment.sourceType !=
+                        ppc64::PPC64XICSSourceType::EDGE ||
+                    attachment.priority == 0xffU ||
+                    !ppc64::PPC64XICS::validSourceId(attachment.sourceId) ||
+                    !attachmentOwners.insert(attachment.ownerLPID).second ||
+                    !attachmentSources.insert(attachment.sourceId).second) {
+                    return reject("virtual-terminal interrupt attachment metadata is invalid");
+                }
+                const auto found = std::find_if(
+                    snapshot.ppc64Xics.sources.begin(),
+                    snapshot.ppc64Xics.sources.end(),
+                    [&attachment](const auto& source) {
+                        return source.sourceId == attachment.sourceId;
+                    });
+                if (found == snapshot.ppc64Xics.sources.end() ||
+                    !found->allocated ||
+                    found->ownerLPID != attachment.ownerLPID ||
+                    found->serverId != attachment.serverId ||
+                    found->type != attachment.sourceType ||
+                    found->priority != attachment.priority || found->asserted) {
+                    return reject("terminal attachment does not match its allocated XICS source");
+                }
+                if (attachment.ownerLPID == 0) rootSource = &*found;
+            }
+            const uint32_t configuredSource =
+                platformConfig.virtualTerminalInterruptSourceId;
+            if ((configuredSource == 0 && rootSource != nullptr) ||
+                (configuredSource != 0 &&
+                 (rootSource == nullptr ||
+                  rootSource->sourceId != configuredSource)) ||
+                (!snapshot.ppc64VirtualTerminal.enabled &&
+                 !snapshot.ppc64VirtualTerminal.attachments.empty()) ||
+                (!snapshotXicsEnabled &&
+                 !snapshot.ppc64VirtualTerminal.attachments.empty())) {
+                return reject("terminal attachment and platform source configuration disagree");
+            }
+        }
         std::vector<uint8_t> canonicalDTB;
         if (snapshot.ppc64Platform.enabled) {
             const auto& platform = snapshot.ppc64Platform;
             std::string platformReason;
+            auto checkpointConfig = platform.configuration;
+            auto destinationConfig = ppc64PlatformConfiguration_;
+            // A source number is allocated by the checkpointed VM and can
+            // differ from the destination VM's initial free slot. Its value
+            // is validated against both attachment metadata and XICS below.
+            checkpointConfig.virtualTerminalInterruptSourceId = 0;
+            destinationConfig.virtualTerminalInterruptSourceId = 0;
             if (!ppc64::samePPC64PlatformConfiguration(
-                    platform.configuration, ppc64PlatformConfiguration_) ||
+                    checkpointConfig, destinationConfig) ||
                 !ppc64::validatePPC64PlatformConfiguration(
                     platform.configuration, snapshot.memoryState.data.size(),
                     platformReason)) {
@@ -2884,6 +3175,14 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
 
         memory_ = std::move(stagedMemory);
         ppc64PartitionManager_ = std::move(stagedManager);
+        ppc64PartitionManager_->setPartitionDestroyedCallback(
+            [this](uint16_t lpid) {
+                std::string ignored;
+                detachPPC64TerminalInterrupt(lpid, &ignored);
+                if (ppc64VirtualTerminal_) {
+                    ppc64VirtualTerminal_->discardChannel(lpid);
+                }
+            });
         ppc64VirtualTerminal_ = std::move(stagedTerminal);
         ppc64VirtualTimeBase_ = std::move(stagedTimeBase);
         ppc64XICS_ = std::move(stagedXICS);

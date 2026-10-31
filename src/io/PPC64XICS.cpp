@@ -195,6 +195,56 @@ bool PPC64XICS::removeSource(uint32_t sourceId, uint16_t ownerLPID,
     return true;
 }
 
+bool PPC64XICS::resetSourceState(uint32_t sourceId, uint16_t ownerLPID,
+                                std::string& reason) {
+    if (!validSourceId(sourceId)) {
+        setFailure(reason, "invalid XICS source ID");
+        return false;
+    }
+    Source& source = sources_[sourceIndex(sourceId)];
+    if (!source.state.allocated || source.state.ownerLPID != ownerLPID) {
+        setFailure(reason, "XICS source is not owned by the requested LPID");
+        return false;
+    }
+    auto found = presentations_.find(ownerLPID);
+    if (found != presentations_.end()) {
+        Presentation& state = found->second;
+        if (state.presentedSourceId == sourceId) {
+            state.presentedSourceId = 0;
+            state.pendingPriority = 0xff;
+        }
+        for (auto current = state.outstanding.begin();
+             current != state.outstanding.end();) {
+            if (current->sourceId == sourceId) {
+                if (current + 1 == state.outstanding.end()) {
+                    state.cppr = static_cast<uint8_t>(
+                        (current->xirr & PPC64_XICS_XIRR_CPPR_MASK) >> 24);
+                }
+                current = state.outstanding.erase(current);
+            } else {
+                ++current;
+            }
+        }
+    }
+    source.state.asserted = false;
+    source.state.pending = false;
+    source.state.presented = false;
+    source.state.acknowledged = false;
+    reevaluate(ownerLPID);
+    reason.clear();
+    return true;
+}
+
+bool PPC64XICS::teardownSource(uint32_t sourceId, uint16_t ownerLPID,
+                              std::string& reason) {
+    if (!resetSourceState(sourceId, ownerLPID, reason)) return false;
+    sources_[sourceIndex(sourceId)].state = PPC64XICSSourceSnapshot{};
+    sources_[sourceIndex(sourceId)].state.sourceId = sourceId;
+    reevaluate(ownerLPID);
+    reason.clear();
+    return true;
+}
+
 bool PPC64XICS::getSource(uint32_t sourceId,
                           PPC64XICSSourceSnapshot& result) const {
     if (!validSourceId(sourceId)) return false;

@@ -40,6 +40,9 @@ struct PPC64PlatformConfiguration {
     // Expose the VM-owned PAPR hvterm1 through the guest FDT when requested.
     bool virtualTerminalEnabled = false;
     uint32_t virtualTerminalId = PPC64_DEFAULT_VIRTUAL_TERMINAL_ID;
+    // Set by VirtualMachine when it binds hvterm1 to an allocated XICS edge
+    // source. Zero denotes polling-only terminal operation.
+    uint32_t virtualTerminalInterruptSourceId = 0;
     std::string bootArguments;
     // Host-supplied reservations for page tables and other guest RAM objects
     // whose ownership is not inferable from the PPC64 MMU configuration.

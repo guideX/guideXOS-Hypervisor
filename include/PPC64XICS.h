@@ -88,6 +88,13 @@ public:
                         std::string& reason);
     bool removeSource(uint32_t sourceId, uint16_t ownerLPID,
                       std::string& reason);
+    // Device lifecycle operations clear only the selected source's event
+    // state. Teardown also releases the allocation if an event is pending or
+    // acknowledged, while invalidating that source's outstanding XIRR record.
+    bool resetSourceState(uint32_t sourceId, uint16_t ownerLPID,
+                          std::string& reason);
+    bool teardownSource(uint32_t sourceId, uint16_t ownerLPID,
+                        std::string& reason);
     bool getSource(uint32_t sourceId, PPC64XICSSourceSnapshot& result) const;
 
     bool setCPPR(uint8_t cppr, uint16_t callerLPID, std::string& reason);

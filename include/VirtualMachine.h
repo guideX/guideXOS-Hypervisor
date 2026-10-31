@@ -707,6 +707,12 @@ public:
     std::vector<uint8_t> getPPC64FDT() const { return ppc64PlatformDTB_; }
     uint32_t getPPC64VirtualTerminalId() const;
     ppc64::PPC64VirtualTerminalSnapshot getPPC64TerminalSnapshot() const;
+    bool attachPPC64TerminalInterrupt(
+        uint16_t lpid = 0,
+        uint8_t priority = ppc64::PPC64_TERMINAL_XICS_PRIORITY,
+        std::string* error = nullptr);
+    bool detachPPC64TerminalInterrupt(uint16_t lpid = 0,
+                                      std::string* error = nullptr);
     bool injectPPC64TerminalInput(const std::vector<uint8_t>& bytes,
                                   uint16_t lpid = 0);
     ppc64::PPC64TerminalResult injectPPC64TerminalInputWithStatus(

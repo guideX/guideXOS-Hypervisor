@@ -1054,7 +1054,7 @@ std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::findPartition(
 }
 
 bool PPC64PartitionManager::destroyPartition(uint16_t lpid) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     const auto found = partitions_.find(lpid);
     if (found == partitions_.end()) {
         return false;
@@ -1077,7 +1077,16 @@ bool PPC64PartitionManager::destroyPartition(uint16_t lpid) {
     }
     found->second->active_ = false;
     partitions_.erase(found);
+    const auto callback = partitionDestroyedCallback_;
+    lock.unlock();
+    if (callback) callback(lpid);
     return true;
+}
+
+void PPC64PartitionManager::setPartitionDestroyedCallback(
+    std::function<void(uint16_t)> callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    partitionDestroyedCallback_ = std::move(callback);
 }
 
 std::shared_ptr<PPC64PartitionContext> PPC64PartitionManager::restorePartition(

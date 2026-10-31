@@ -3,6 +3,7 @@
 #include "PPC64RadixMMU.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -138,6 +139,7 @@ public:
                                                            std::string& reason);
     std::shared_ptr<PPC64PartitionContext> findPartition(uint16_t lpid) const;
     bool destroyPartition(uint16_t lpid);
+    void setPartitionDestroyedCallback(std::function<void(uint16_t)> callback);
     std::shared_ptr<PPC64PartitionContext> restorePartition(
         IMemory& memory, const std::vector<uint8_t>& snapshot,
         std::string& reason);
@@ -160,6 +162,7 @@ private:
     uint8_t partitionTableSizeExponent_ = 0;
     bool configured_ = false;
     std::unordered_map<uint16_t, std::shared_ptr<PPC64PartitionContext>> partitions_;
+    std::function<void(uint16_t)> partitionDestroyedCallback_;
     std::shared_ptr<PPC64PartitionBackingPolicy> backingPolicy_ =
         std::make_shared<PPC64PartitionBackingPolicy>();
 };

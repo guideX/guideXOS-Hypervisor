@@ -302,6 +302,13 @@ bool buildStructure(const PPC64PlatformConfiguration& configuration,
             setReason(reason, "failed to encode the PAPR hvterm1 node");
             return false;
         }
+        if (configuration.virtualTerminalInterruptSourceId != 0 &&
+            (!property("interrupt-parent", 1) ||
+             !builder.cells("interrupts", {
+                 configuration.virtualTerminalInterruptSourceId, 0U}))) {
+            setReason(reason, "failed to encode the hvterm1 XICS interrupt relationship");
+            return false;
+        }
         builder.endNode();
         builder.endNode();
     }
@@ -390,6 +397,14 @@ bool validatePPC64PlatformConfiguration(
         setReason(reason, "virtual-terminal ID is outside the pSeries VIO vty range");
         return false;
     }
+    if (configuration.virtualTerminalInterruptSourceId != 0 &&
+        (configuration.interruptMode != PPC64InterruptMode::XICS_COMPAT ||
+         !configuration.virtualTerminalEnabled ||
+         !PPC64XICS::validSourceId(
+             configuration.virtualTerminalInterruptSourceId))) {
+        setReason(reason, "terminal XICS source requires an enabled VTY and XICS mode");
+        return false;
+    }
     for (size_t i = 0; i < configuration.reservedRanges.size(); ++i) {
         const PPC64MemoryRange& range = configuration.reservedRanges[i];
         uint64_t end = 0;
@@ -427,6 +442,8 @@ bool samePPC64PlatformConfiguration(
         left.maximumFdtSize != right.maximumFdtSize ||
         left.virtualTerminalEnabled != right.virtualTerminalEnabled ||
         left.virtualTerminalId != right.virtualTerminalId ||
+        left.virtualTerminalInterruptSourceId !=
+            right.virtualTerminalInterruptSourceId ||
         left.bootArguments != right.bootArguments ||
         left.reservedRanges.size() != right.reservedRanges.size()) {
         return false;

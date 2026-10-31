@@ -708,6 +708,7 @@ add_test(NAME PPC64Phase10Tests COMMAND test_ppc64_phase10)
 add_test(NAME PPC64Phase11Tests COMMAND test_ppc64_phase11)
 add_test(NAME PPC64Phase12Tests COMMAND test_ppc64_phase12)
 add_test(NAME PPC64Phase13Tests COMMAND test_ppc64_phase13)
+add_test(NAME PPC64Phase14Tests COMMAND test_ppc64_phase14)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -929,6 +930,23 @@ if(MSVC)
     target_compile_options(test_ppc64_phase13 PRIVATE /W4)
 else()
     target_compile_options(test_ppc64_phase13 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# PPC64 Phase 14 production hvterm1-to-XICS interrupt integration tests.
+add_executable(test_ppc64_phase14
+    tests/test_ppc64_phase14.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase14 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase14 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase14 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
