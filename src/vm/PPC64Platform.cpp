@@ -123,6 +123,16 @@ struct StructureBuilder {
         return property(name, bytes);
     }
 
+    bool cells(const std::string& name, const std::vector<uint32_t>& values) {
+        if (values.empty() || values.size() >
+            std::numeric_limits<size_t>::max() / 4U) return false;
+        std::vector<uint8_t> bytes(values.size() * 4U);
+        for (size_t i = 0; i < values.size(); ++i) {
+            putBe32(bytes.data() + i * 4U, values[i]);
+        }
+        return property(name, bytes);
+    }
+
     bool cells64(const std::string& name, uint64_t first, uint64_t second) {
         std::vector<uint8_t> bytes(16);
         putBe64(bytes.data(), first);
@@ -229,6 +239,21 @@ bool buildStructure(const PPC64PlatformConfiguration& configuration,
     }
     builder.endNode();
     builder.endNode();
+
+    if (configuration.interruptMode == PPC64InterruptMode::XICS_COMPAT) {
+        if (!builder.node("interrupt-controller") ||
+            !builder.string("device_type",
+                            "PowerPC-External-Interrupt-Presentation") ||
+            !builder.string("compatible", "IBM,ppc-xicp") ||
+            !builder.empty("interrupt-controller") ||
+            !property("#interrupt-cells", 2) ||
+            !builder.cells("ibm,interrupt-server-ranges", {0, 1}) ||
+            !property("phandle", 1) || !property("linux,phandle", 1)) {
+            setReason(reason, "failed to encode the pSeries XICS presentation node");
+            return false;
+        }
+        builder.endNode();
+    }
 
     const std::vector<PPC64MemoryRange> defaultMemory{{layout.ramBase,
         layout.ramSize, "guest RAM", true}};
@@ -339,6 +364,11 @@ bool validatePPC64PlatformConfiguration(
         setReason(reason, "POWER9 foundation profile supports exactly one vCPU");
         return false;
     }
+    if (configuration.interruptMode != PPC64InterruptMode::LEGACY_EXTERNAL &&
+        configuration.interruptMode != PPC64InterruptMode::XICS_COMPAT) {
+        setReason(reason, "unsupported PPC64 interrupt mode");
+        return false;
+    }
     if (configuration.timebaseFrequency == 0 ||
         configuration.timebaseFrequency > std::numeric_limits<uint32_t>::max() ||
         configuration.ticksPerInstruction == 0) {
@@ -389,6 +419,7 @@ bool samePPC64PlatformConfiguration(
     const PPC64PlatformConfiguration& right) {
     if (left.profile != right.profile || left.entryMode != right.entryMode ||
         left.cpuCount != right.cpuCount ||
+        left.interruptMode != right.interruptMode ||
         left.timebaseFrequency != right.timebaseFrequency ||
         left.ticksPerInstruction != right.ticksPerInstruction ||
         left.initialTimebase != right.initialTimebase ||

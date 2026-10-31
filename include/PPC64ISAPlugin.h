@@ -697,6 +697,7 @@ public:
     void attachVirtualTerminal(PPC64VirtualTerminal* terminal) {
         virtualTerminal_ = terminal;
     }
+    void attachXICS(PPC64XICS* xics) { xics_ = xics; }
     void setSRR0(uint64_t v) { state_.srr0 = v; }
     void setSRR1(uint64_t v) { state_.srr1 = v; }
     void setDAR(uint64_t v) { state_.dar = v; }
@@ -956,6 +957,7 @@ private:
     std::shared_ptr<PPC64PartitionContext> partitionContext_;
     PPC64VirtualTimeBase* virtualTimeBase_ = nullptr; // owned by the containing VM
     PPC64VirtualTerminal* virtualTerminal_ = nullptr; // owned by the containing VM
+    PPC64XICS* xics_ = nullptr; // owned by the containing VM
     PPC64VirtualInterruptSnapshot interruptState_;
 };
 

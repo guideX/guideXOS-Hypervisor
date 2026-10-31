@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "PPC64XICS.h"
 #include "PPC64VirtualTerminal.h"
 
 namespace ia64::ppc64 {
@@ -30,6 +31,7 @@ struct PPC64PlatformConfiguration {
         PPC64PlatformProfile::POWER9_PSERIES_FOUNDATION;
     PPC64GuestEntryMode entryMode = PPC64GuestEntryMode::DIRECT_FDT;
     uint32_t cpuCount = 1;
+    PPC64InterruptMode interruptMode = PPC64InterruptMode::LEGACY_EXTERNAL;
     uint64_t timebaseFrequency = 512'000'000ULL;
     uint64_t ticksPerInstruction = 1;
     uint64_t initialTimebase = 0;

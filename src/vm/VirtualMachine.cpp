@@ -283,6 +283,7 @@ bool VirtualMachine::reset() {
         if (isaName_ == "PPC64") {
             auto* plugin = getPPC64ISAPlugin();
             plugin->deactivatePartitionContext();
+            if (ppc64XICS_) ppc64XICS_->reset();
             if (ppc64PartitionManager_) {
                 ppc64PartitionManager_->destroyAllPartitions();
             }
@@ -920,6 +921,14 @@ bool VirtualMachine::configurePPC64Platform(
         return reject(exception.what());
     }
     auto* plugin = getPPC64ISAPlugin();
+    std::unique_ptr<ppc64::PPC64XICS> xics;
+    try {
+        if (configuration.interruptMode == ppc64::PPC64InterruptMode::XICS_COMPAT) {
+            xics = std::make_unique<ppc64::PPC64XICS>(plugin->getActiveLPID());
+        }
+    } catch (const std::exception& exception) {
+        return reject(exception.what());
+    }
     if (!ppc64VirtualTerminal_ ||
         !ppc64VirtualTerminal_->reconfigure(configuration.virtualTerminalId,
                                              configuration.virtualTerminalEnabled)) {
@@ -927,8 +936,10 @@ bool VirtualMachine::configurePPC64Platform(
     }
     ppc64PlatformConfiguration_ = configuration;
     ppc64VirtualTimeBase_ = std::move(clock);
+    ppc64XICS_ = std::move(xics);
     ppc64PlatformEnabled_ = true;
     plugin->attachVirtualTimeBase(ppc64VirtualTimeBase_.get());
+    plugin->attachXICS(ppc64XICS_.get());
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1233,6 +1244,7 @@ void VirtualMachine::clearPPC64TerminalState() {
 ppc64::PPC64PlatformCapabilities VirtualMachine::getPPC64PlatformCapabilities() const {
     if (!ppc64PlatformEnabled_) return {};
     auto capabilities = ppc64::getPPC64FoundationCapabilities();
+    capabilities.interruptController = ppc64XICS_ != nullptr;
     capabilities.virtualTerminal =
         ppc64PlatformConfiguration_.virtualTerminalEnabled;
     return capabilities;
@@ -1263,6 +1275,9 @@ bool VirtualMachine::assertPPC64ExternalInterrupt(uint16_t lpid,
     if (plugin == nullptr) {
         return reject("external interrupt target has no PPC64 vCPU");
     }
+    if (ppc64XICS_) {
+        return reject("legacy external injection is disabled in XICS mode; assert a configured XICS source");
+    }
     std::string reason;
     if (!plugin->requestExternalInterrupt(lpid, reason)) {
         return reject(reason);
@@ -1287,6 +1302,9 @@ bool VirtualMachine::deassertPPC64ExternalInterrupt(uint16_t lpid,
     if (plugin == nullptr) {
         return reject("external interrupt target has no PPC64 vCPU");
     }
+    if (ppc64XICS_) {
+        return reject("legacy external injection is disabled in XICS mode; deassert a configured XICS source");
+    }
     std::string reason;
     if (!plugin->deassertExternalInterrupt(lpid, reason)) {
         return reject(reason);
@@ -1302,6 +1320,125 @@ VirtualMachine::getPPC64InterruptSnapshot() const {
         throw std::logic_error("PPC64 interrupt state is unavailable");
     }
     return plugin->getInterruptSnapshot();
+}
+
+bool VirtualMachine::configurePPC64InterruptSource(
+    uint32_t sourceId, ppc64::PPC64XICSSourceType type,
+    uint8_t priority, uint32_t serverId, uint16_t ownerLPID,
+    bool enabled, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64XICS_ || !ppc64PartitionManager_ ||
+        state_ == VMState::CREATED || state_ == VMState::TERMINATING ||
+        state_ == VMState::TERMINATED || state_ == VMState::ERROR ||
+        state_ == VMState::CRASHED) {
+        return reject("XICS source configuration requires a live XICS-enabled PPC64 VM");
+    }
+    if (ownerLPID != 0 &&
+        ppc64PartitionManager_->findPartition(ownerLPID) == nullptr) {
+        return reject("XICS source owner LPID is not a live partition in this VM");
+    }
+    std::string reason;
+    if (!ppc64XICS_->configureSource(sourceId, type, priority, serverId,
+                                     ownerLPID, enabled, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::setPPC64InterruptSourceEnabled(
+    uint32_t sourceId, uint16_t ownerLPID, bool enabled, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64XICS_ ||
+        (ownerLPID != 0 && ppc64PartitionManager_->findPartition(ownerLPID) == nullptr)) {
+        return reject("XICS source owner is unavailable in this VM");
+    }
+    std::string reason;
+    if (!ppc64XICS_->setSourceEnabled(sourceId, ownerLPID, enabled, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::assertPPC64InterruptSource(
+    uint32_t sourceId, uint16_t ownerLPID, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64XICS_ || cpus_.size() != 1 ||
+        !cpus_[0].isaPlugin || state_ == VMState::CREATED ||
+        state_ == VMState::TERMINATING || state_ == VMState::TERMINATED ||
+        state_ == VMState::ERROR || state_ == VMState::CRASHED ||
+        !cpus_[0].enabled || cpus_[0].state == CPUExecutionState::HALTED ||
+        cpus_[0].state == CPUExecutionState::ERROR) {
+        return reject("XICS source assertion requires a live XICS-enabled PPC64 VM");
+    }
+    if (ownerLPID != 0 &&
+        ppc64PartitionManager_->findPartition(ownerLPID) == nullptr) {
+        return reject("XICS source owner LPID is not a live partition in this VM");
+    }
+    std::string reason;
+    if (!ppc64XICS_->assertSource(sourceId, ownerLPID, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::deassertPPC64InterruptSource(
+    uint32_t sourceId, uint16_t ownerLPID, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64XICS_ ||
+        (ownerLPID != 0 && ppc64PartitionManager_->findPartition(ownerLPID) == nullptr)) {
+        return reject("XICS source owner is unavailable in this VM");
+    }
+    std::string reason;
+    if (!ppc64XICS_->deassertSource(sourceId, ownerLPID, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::removePPC64InterruptSource(
+    uint32_t sourceId, uint16_t ownerLPID, std::string* error) {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64XICS_ ||
+        (ownerLPID != 0 && ppc64PartitionManager_->findPartition(ownerLPID) == nullptr)) {
+        return reject("XICS source owner is unavailable in this VM");
+    }
+    std::string reason;
+    if (!ppc64XICS_->removeSource(sourceId, ownerLPID, reason)) {
+        return reject(reason);
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool VirtualMachine::getPPC64InterruptSource(
+    uint32_t sourceId, ppc64::PPC64XICSSourceSnapshot& source) const {
+    return ppc64XICS_ != nullptr && ppc64XICS_->getSource(sourceId, source);
+}
+
+ppc64::PPC64XICSSnapshot VirtualMachine::getPPC64XICSSnapshot() const {
+    if (!ppc64XICS_) {
+        throw std::logic_error("XICS is not configured for this PPC64 VM");
+    }
+    return ppc64XICS_->createSnapshot();
 }
 
 std::string VirtualMachine::getLastExecutionDiagnostic() const {
@@ -2330,6 +2467,7 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
                 ppc64VirtualTerminal_->createSnapshot();
         }
         snapshot.ppc64Interrupts = plugin->getInterruptSnapshot();
+        if (ppc64XICS_) snapshot.ppc64Xics = ppc64XICS_->createSnapshot();
     }
     
     return snapshot;
@@ -2407,6 +2545,13 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
 
         if (snapshot.ppc64Platform.enabled != ppc64PlatformEnabled_) {
             return reject("PPC64 platform profile does not match the destination VM");
+        }
+        const bool snapshotXicsEnabled = snapshot.ppc64Platform.enabled &&
+            snapshot.ppc64Platform.configuration.interruptMode ==
+                ppc64::PPC64InterruptMode::XICS_COMPAT;
+        if (snapshotXicsEnabled != (ppc64XICS_ != nullptr) ||
+            snapshot.ppc64Xics.enabled != snapshotXicsEnabled) {
+            return reject("XICS platform mode or controller snapshot is incompatible");
         }
         if (!ppc64VirtualTerminal_) {
             return reject("PPC64 VM has no virtual-terminal backend");
@@ -2540,6 +2685,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         std::unique_ptr<VirtualTimer> stagedTimer;
         std::unique_ptr<BasicInterruptController> stagedInterruptController;
         std::unique_ptr<ppc64::PPC64VirtualTimeBase> stagedTimeBase;
+        std::unique_ptr<ppc64::PPC64XICS> stagedXICS;
         auto stagedTerminal = std::make_unique<ppc64::PPC64VirtualTerminal>(
             expectedTerminalId, expectedTerminalEnabled);
         std::vector<uint8_t> stagedDTB = std::move(canonicalDTB);
@@ -2551,6 +2697,10 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                 if (!stagedTimeBase->restore(
                         snapshot.ppc64Platform.currentTimebase)) {
                     return reject("platform time-base restore failed");
+                }
+                if (snapshotXicsEnabled) {
+                    stagedXICS = std::make_unique<ppc64::PPC64XICS>(
+                        snapshot.ppc64HasActiveLPID ? snapshot.ppc64ActiveLPID : 0);
                 }
             }
             stagedManager = std::make_unique<ppc64::PPC64PartitionManager>();
@@ -2618,6 +2768,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             }
             stagedPlugin->attachVirtualTimeBase(stagedTimeBase.get());
             stagedPlugin->attachVirtualTerminal(stagedTerminal.get());
+            stagedPlugin->attachXICS(stagedXICS.get());
             stagedCPU = std::make_unique<CPU>(*stagedMemory, *stagedPlugin);
 
             std::string reason;
@@ -2661,6 +2812,34 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                 }
             } else if (snapshot.ppc64ActiveLPID != 0) {
                 return reject("snapshot active LPID relationship is invalid");
+            }
+
+            if (snapshotXicsEnabled) {
+                std::vector<uint16_t> allowedXicsLPIDs;
+                allowedXicsLPIDs.reserve(snapshot.ppc64PartitionSnapshots.size());
+                for (const auto& partitionSnapshot :
+                     snapshot.ppc64PartitionSnapshots) {
+                    if (partitionSnapshot.size() < 10) {
+                        return reject("partition metadata is truncated");
+                    }
+                    const uint16_t lpid =
+                        static_cast<uint16_t>(partitionSnapshot[8]) |
+                        (static_cast<uint16_t>(partitionSnapshot[9]) << 8);
+                    allowedXicsLPIDs.push_back(lpid);
+                }
+                const uint16_t expectedXicsLPID = snapshot.ppc64HasActiveLPID
+                    ? snapshot.ppc64ActiveLPID : 0;
+                if (!stagedXICS->restoreSnapshot(snapshot.ppc64Xics,
+                                                  allowedXicsLPIDs,
+                                                  expectedXicsLPID, reason)) {
+                    return reject("XICS checkpoint state is invalid: " + reason);
+                }
+            } else if (!snapshot.ppc64Xics.sources.empty() ||
+                       !snapshot.ppc64Xics.presentations.empty() ||
+                       snapshot.ppc64Xics.activeLPID != 0 ||
+                       snapshot.ppc64Xics.version !=
+                           ppc64::PPC64_XICS_SNAPSHOT_VERSION) {
+                return reject("legacy interrupt mode contains stale XICS state");
             }
 
             if (authorizeHypervisorState) {
@@ -2707,6 +2886,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         ppc64PartitionManager_ = std::move(stagedManager);
         ppc64VirtualTerminal_ = std::move(stagedTerminal);
         ppc64VirtualTimeBase_ = std::move(stagedTimeBase);
+        ppc64XICS_ = std::move(stagedXICS);
         ppc64PlatformEnabled_ = snapshot.ppc64Platform.enabled;
         ppc64PlatformPrepared_ = snapshot.ppc64Platform.enabled &&
             snapshot.ppc64Platform.prepared;

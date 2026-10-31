@@ -687,6 +687,23 @@ public:
     bool deassertPPC64ExternalInterrupt(uint16_t lpid = 0,
                                        std::string* error = nullptr);
     ppc64::PPC64VirtualInterruptSnapshot getPPC64InterruptSnapshot() const;
+    bool configurePPC64InterruptSource(
+        uint32_t sourceId, ppc64::PPC64XICSSourceType type,
+        uint8_t priority, uint32_t serverId = ppc64::PPC64_XICS_SERVER_ID,
+        uint16_t ownerLPID = 0, bool enabled = true,
+        std::string* error = nullptr);
+    bool setPPC64InterruptSourceEnabled(uint32_t sourceId, uint16_t ownerLPID,
+                                       bool enabled,
+                                       std::string* error = nullptr);
+    bool assertPPC64InterruptSource(uint32_t sourceId, uint16_t ownerLPID = 0,
+                                   std::string* error = nullptr);
+    bool deassertPPC64InterruptSource(uint32_t sourceId, uint16_t ownerLPID = 0,
+                                      std::string* error = nullptr);
+    bool removePPC64InterruptSource(uint32_t sourceId, uint16_t ownerLPID = 0,
+                                    std::string* error = nullptr);
+    bool getPPC64InterruptSource(
+        uint32_t sourceId, ppc64::PPC64XICSSourceSnapshot& source) const;
+    ppc64::PPC64XICSSnapshot getPPC64XICSSnapshot() const;
     std::vector<uint8_t> getPPC64FDT() const { return ppc64PlatformDTB_; }
     uint32_t getPPC64VirtualTerminalId() const;
     ppc64::PPC64VirtualTerminalSnapshot getPPC64TerminalSnapshot() const;
@@ -729,6 +746,7 @@ private:
     std::unique_ptr<Memory> memory_;                // Memory system (shared)
     std::unique_ptr<ppc64::PPC64PartitionManager> ppc64PartitionManager_;
     std::unique_ptr<ppc64::PPC64VirtualTerminal> ppc64VirtualTerminal_;
+    std::unique_ptr<ppc64::PPC64XICS> ppc64XICS_;
     ppc64::PPC64PlatformConfiguration ppc64PlatformConfiguration_;
     std::unique_ptr<ppc64::PPC64VirtualTimeBase> ppc64VirtualTimeBase_;
     ppc64::PPC64GuestMemoryLayout ppc64GuestMemoryLayout_;

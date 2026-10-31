@@ -236,6 +236,7 @@ struct VMStateSnapshot {
     ppc64::PPC64PlatformSnapshot ppc64Platform;
     ppc64::PPC64VirtualTerminalSnapshot ppc64VirtualTerminal;
     ppc64::PPC64VirtualInterruptSnapshot ppc64Interrupts;
+    ppc64::PPC64XICSSnapshot ppc64Xics;
     
     VMStateSnapshot()
         : metadata()
@@ -263,7 +264,8 @@ struct VMStateSnapshot {
         , ppc64RadixConfiguration()
         , ppc64Platform()
         , ppc64VirtualTerminal()
-        , ppc64Interrupts() {}
+        , ppc64Interrupts()
+        , ppc64Xics() {}
 };
 
 /**

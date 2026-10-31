@@ -559,6 +559,10 @@ void PPC64ISAPlugin::advanceDecrementer(uint64_t ticks) {
 
 bool PPC64ISAPlugin::requestExternalInterrupt(uint16_t lpid,
                                               std::string& reason) {
+    if (xics_ != nullptr) {
+        reason = "legacy external injection is disabled while XICS owns the CPU interrupt input";
+        return false;
+    }
     if ((state_.msr & MSR_HV) != 0) {
         reason = "guest external injection is unsupported while MSR[HV] is set";
         return false;
@@ -583,6 +587,10 @@ bool PPC64ISAPlugin::requestExternalInterrupt(uint16_t lpid,
 
 bool PPC64ISAPlugin::deassertExternalInterrupt(uint16_t lpid,
                                                std::string& reason) {
+    if (xics_ != nullptr) {
+        reason = "legacy external injection is disabled while XICS owns the CPU interrupt input";
+        return false;
+    }
     if (interruptState_.externalAsserted &&
         interruptState_.externalLPID != lpid) {
         reason = "external deassertion LPID does not own the asserted source";
@@ -602,8 +610,9 @@ bool PPC64ISAPlugin::deassertExternalInterrupt(uint16_t lpid,
 PPC64ISAPlugin::InterruptBoundaryResult
 PPC64ISAPlugin::deliverPendingInterrupt(IMemory& memory, std::string& reason) {
     reason.clear();
-    const bool external = interruptState_.externalPending &&
-                          interruptState_.externalAsserted;
+    const bool external = xics_ != nullptr
+        ? xics_->externalOutputAsserted()
+        : interruptState_.externalPending && interruptState_.externalAsserted;
     const bool decrementer = interruptState_.decrementerPending;
     if ((!external && !decrementer) || (state_.msr & MSR_EE) == 0) {
         return InterruptBoundaryResult::NONE;
@@ -616,8 +625,9 @@ PPC64ISAPlugin::deliverPendingInterrupt(IMemory& memory, std::string& reason) {
     const uint8_t source = external ? PPC64_INTERRUPT_SOURCE_EXTERNAL
                                     : PPC64_INTERRUPT_SOURCE_DECREMENTER;
     const uint64_t vector = external ? 0x500ULL : 0x900ULL;
-    const uint16_t targetLPID = external ? interruptState_.externalLPID
-                                         : getActiveLPID();
+    const uint16_t targetLPID = external
+        ? (xics_ != nullptr ? xics_->activeLPID() : interruptState_.externalLPID)
+        : getActiveLPID();
     if (targetLPID != getActiveLPID()) {
         // Keep a partition-bound source pending until its authorized context
         // is active on this vCPU again.
@@ -3611,6 +3621,70 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                     clearReservation();
                     hasCachedInstruction_ = false;
                 }
+            } else if (xics_ != nullptr && state_.gpr[3] == PPC64_H_EOI) {
+                if (state_.gpr[4] > std::numeric_limits<uint32_t>::max()) {
+                    status = PPC64_H_PARAMETER;
+                } else {
+                    std::string reason;
+                    if (xics_->endOfInterrupt(static_cast<uint32_t>(state_.gpr[4]),
+                                              getActiveLPID(), reason)) {
+                        status = PPC64_H_SUCCESS;
+                        clearReservation();
+                        hasCachedInstruction_ = false;
+                    } else {
+                        status = PPC64_H_PARAMETER;
+                    }
+                }
+            } else if (xics_ != nullptr && state_.gpr[3] == PPC64_H_CPPR) {
+                if (state_.gpr[4] > 0xffU) {
+                    status = PPC64_H_PARAMETER;
+                } else {
+                    std::string reason;
+                    if (xics_->setCPPR(static_cast<uint8_t>(state_.gpr[4]),
+                                       getActiveLPID(), reason)) {
+                        status = PPC64_H_SUCCESS;
+                        clearReservation();
+                        hasCachedInstruction_ = false;
+                    } else {
+                        status = PPC64_H_PARAMETER;
+                    }
+                }
+            } else if (xics_ != nullptr && state_.gpr[3] == PPC64_H_IPOLL) {
+                uint32_t xirr = 0;
+                uint32_t mfrr = 0;
+                std::string reason;
+                if (state_.gpr[4] > std::numeric_limits<uint32_t>::max() ||
+                    !xics_->poll(static_cast<uint32_t>(state_.gpr[4]),
+                                 getActiveLPID(), xirr, mfrr, reason)) {
+                    status = PPC64_H_PARAMETER;
+                } else {
+                    state_.gpr[4] = xirr;
+                    state_.gpr[5] = mfrr;
+                    status = PPC64_H_SUCCESS;
+                }
+            } else if (xics_ != nullptr &&
+                       (state_.gpr[3] == PPC64_H_XIRR ||
+                        state_.gpr[3] == PPC64_H_XIRR_X)) {
+                uint32_t xirr = 0;
+                std::string reason;
+                if (state_.gpr[3] == PPC64_H_XIRR_X &&
+                    virtualTimeBase_ == nullptr) {
+                    status = PPC64_H_FUNCTION;
+                } else if (!xics_->acknowledge(getActiveLPID(), xirr, reason)) {
+                    status = PPC64_H_PARAMETER;
+                } else {
+                    state_.gpr[4] = xirr;
+                    if (state_.gpr[3] == PPC64_H_XIRR_X) {
+                        state_.gpr[5] = virtualTimeBase_->read();
+                    }
+                    status = PPC64_H_SUCCESS;
+                    clearReservation();
+                    hasCachedInstruction_ = false;
+                }
+            } else if (xics_ != nullptr && state_.gpr[3] == PPC64_H_IPI) {
+                status = state_.gpr[4] == PPC64_XICS_SERVER_ID &&
+                         state_.gpr[5] <= 0xffU
+                    ? PPC64_H_FUNCTION : PPC64_H_PARAMETER;
             } else if (virtualTerminal_ != nullptr &&
                        state_.gpr[3] == PPC64_H_PUT_TERM_CHAR) {
                 if (state_.gpr[4] > std::numeric_limits<uint32_t>::max() ||
@@ -3947,6 +4021,9 @@ bool PPC64ISAPlugin::activatePartitionContext(
         reason = "cannot activate a missing or destroyed partition context";
         return false;
     }
+    if (xics_ != nullptr && !xics_->bindActiveLPID(context->lpid(), reason)) {
+        return false;
+    }
     partitionContext_ = context;
     clearReservation();
     hasCachedInstruction_ = false;
@@ -3955,6 +4032,10 @@ bool PPC64ISAPlugin::activatePartitionContext(
 }
 
 void PPC64ISAPlugin::deactivatePartitionContext() {
+    if (xics_ != nullptr) {
+        std::string ignored;
+        (void)xics_->bindActiveLPID(0, ignored);
+    }
     partitionContext_.reset();
     clearReservation();
     hasCachedInstruction_ = false;

@@ -83,6 +83,7 @@ set(IO_SOURCES
     src/io/Console.cpp
     src/io/ConsoleOutputBuffer.cpp
     src/io/PPC64VirtualTerminal.cpp
+    src/io/PPC64XICS.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
     src/io/FramebufferDevice.cpp
@@ -706,6 +707,7 @@ add_test(NAME PPC64Phase9Tests COMMAND test_ppc64_phase9)
 add_test(NAME PPC64Phase10Tests COMMAND test_ppc64_phase10)
 add_test(NAME PPC64Phase11Tests COMMAND test_ppc64_phase11)
 add_test(NAME PPC64Phase12Tests COMMAND test_ppc64_phase12)
+add_test(NAME PPC64Phase13Tests COMMAND test_ppc64_phase13)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -910,6 +912,23 @@ add_executable(test_ppc64_phase12
 
 if(WIN32)
     target_link_libraries(test_ppc64_phase12 PRIVATE ws2_32)
+endif()
+
+# PPC64 Phase 13 bounded pSeries XICS compatibility acceptance tests.
+add_executable(test_ppc64_phase13
+    tests/test_ppc64_phase13.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase13 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase13 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase13 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
