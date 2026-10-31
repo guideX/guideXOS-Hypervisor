@@ -209,6 +209,10 @@ public:
     bool isUsingISAPlugin() const { return isaPlugin_ != nullptr; }
     IISA* getISAPlugin() const { return isaPlugin_; }
     bool isHalted() const { return halted_; }
+    // True only when the most recent successful step retired an instruction.
+    // Interrupt delivery and synchronous guest exception entry consume a VM
+    // cycle but do not retire the interrupted/faulting instruction.
+    bool didLastStepRetireInstruction() const { return lastStepRetired_; }
 
     void queueInterrupt(uint8_t vector);
     bool hasPendingInterrupt() const;
@@ -230,6 +234,7 @@ SyscallDispatcher* syscallDispatcher_; // Optional syscall dispatcher
 Profiler* profiler_;                // Optional profiler for performance analysis
 IISA* isaPlugin_;                   // Optional ISA plugin (new architecture)
 bool halted_;
+bool lastStepRetired_;
     
 // Current bundle tracking (for multi-instruction execution)
 Bundle currentBundle_;

@@ -166,6 +166,14 @@ struct KernelPanic {
     
     // Additional diagnostics
     std::string additionalInfo;
+
+    // ISA identity (MIPS64-4R1). IA-64 panics keep the defaults. When
+    // ia64StateValid is false the register dump, bundle and stack fields do
+    // not describe the failing machine; isaStateDump carries the ISA's own
+    // diagnostic text instead.
+    bool ia64StateValid;
+    std::string isaName;
+    std::string isaStateDump;
     
     KernelPanic()
         : reason(KernelPanicReason::UNKNOWN)
@@ -184,7 +192,10 @@ struct KernelPanic {
         , faultingAddress(0)
         , mmuEnabled(false)
         , recentEvents()
-        , additionalInfo() {}
+        , additionalInfo()
+        , ia64StateValid(true)
+        , isaName("IA-64")
+        , isaStateDump() {}
 };
 
 /**
@@ -249,6 +260,15 @@ public:
     KernelPanic captureExceptionPanic(const std::string& exceptionMessage, const CPUState& cpuState,
                                      const Bundle& lastBundle, size_t lastSlot,
                                      uint64_t timestamp, uint64_t cycles);
+
+    /**
+     * Capture a panic for a CPU whose architectural state is not the IA-64
+     * register model. No IA-64 register dump, bundle or stack is produced
+     * (ia64StateValid == false); the ISA's own state text is recorded.
+     */
+    KernelPanic captureIsaPanic(KernelPanicReason reason, const std::string& description,
+                                const std::string& isaName, const std::string& isaStateDump,
+                                uint64_t timestamp, uint64_t cycles);
     
     /**
      * Generate register dump from CPU state

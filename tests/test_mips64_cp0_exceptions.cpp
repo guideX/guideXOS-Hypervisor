@@ -154,13 +154,17 @@ static void testCp0WritableFields() {
     CHECK(!cpu.statusBev() && !cpu.statusExl() && !cpu.statusErl());
     CHECK(cpu.exceptionVector() == kBev0Vector);  // BEV cleared -> EBase vector
 
-    // Cause: only SW interrupt bits IP[1:0] are software-writable.
+    // Cause (MIPS64r2): software-writable bits are IP[1:0] (9:8), IV (23) and
+    // DC (27). TI (30), IP7 (15), BD and ExcCode are core-managed. (MIPS64-3
+    // expected only IP1:0; IV/DC became writable in MIPS64-4 and the
+    // corrected positions are asserted here.)
     cpu.writeGpr(8, 0xFFFFFFFFFFFFFFFFULL);
     storeWord(mem, 8, encodeCp0(4, 8, 13, 0), true);  // mtc0 $8, $13, 0
     cpu.setPc(8);
     CHECK(stepOk(cpu, mem));
-    CHECK((cpu.cp0Cause() & 0xFFFFFFFFFFFFFC00ULL) == 0);  // only IP1:0/BD/ExcCode readable
-    CHECK((cpu.cp0Cause() & 0x300ULL) == 0x300ULL);  // IP1:0 set
+    CHECK(cpu.cp0Cause() == (0x300ULL | (1ULL << 23) | (1ULL << 27)));
+    CHECK((cpu.cp0Cause() & (1ULL << 30)) == 0);  // TI not software-writable
+    CHECK((cpu.cp0Cause() & (1ULL << 15)) == 0);  // IP7 not software-writable
     // Clearing them again keeps ExcCode/BD management intact.
     cpu.writeGpr(8, 0);
     cpu.setPc(8);
@@ -1082,7 +1086,7 @@ static void testSerializationV2() {
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob.size() == 957);
     CHECK(blob[0] == 'M' && blob[1] == 'P' && blob[2] == '6' && blob[3] == '2');
-    CHECK(blob[4] == 3);  // MIPS64-3 format (TLB state appended)
+    CHECK(blob[4] == 4);  // v4 format (MIPS64-4R1: corrected Cause layout; TLB state appended)
 
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));

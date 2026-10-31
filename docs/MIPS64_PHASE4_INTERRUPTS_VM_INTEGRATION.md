@@ -1,6 +1,10 @@
 # MIPS64 Phase 4 — Interrupts and VM Integration
 
-Status: Outcome A (core interrupt model and production linkage implemented).
+Status: Historical MIPS64-4 implementation report; it did not prove complete
+MIPS64-4 acceptance. The seven suites cited below covered the CPU/plugin core,
+but omitted the required production `VirtualMachine` execution and guest timer
+handler evidence. MIPS64-4R1 closes those gaps; see
+`MIPS64_PHASE4R1_ACCEPTANCE_CLOSURE.md` for the final acceptance record.
 
 ## Interrupt model
 - Count increments per Mips64Cpu::step unless Cause.DC set.

@@ -47,6 +47,19 @@ void finishCpuCountedLoopTraceIfActive() {
     g_cpuCountedLoopTrace = CountedLoopTraceState();
 }
 
+// True when the CPU's architectural state is the IA-64 register model (legacy
+// CPU, or an IA-64 plugin). Any other ISA plugin owns its own state, and the
+// wrapper must not expose its IA-64 shadow state as if it were that ISA's.
+bool usesIA64RegisterModel(const IISA* plugin) {
+    return plugin == nullptr || dynamic_cast<const IA64ISAPlugin*>(plugin) != nullptr;
+}
+
+[[noreturn]] void throwNoIA64State(const IISA* plugin, const char* operation) {
+    throw std::runtime_error(std::string(operation) +
+                             " requires IA-64 architectural state; ISA '" +
+                             plugin->getName() + "' does not provide it");
+}
+
 } // namespace
 
 // ============================================================================
@@ -121,6 +134,7 @@ CPU::CPU(IMemory& memory, IDecoder& decoder)
       profiler_(nullptr),
       isaPlugin_(nullptr),
       halted_(false),
+      lastStepRetired_(false),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -136,6 +150,7 @@ CPU::CPU(IMemory& memory, IDecoder& decoder, SyscallDispatcher* syscallDispatche
       profiler_(nullptr),
       isaPlugin_(nullptr),
       halted_(false),
+      lastStepRetired_(false),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -151,6 +166,7 @@ CPU::CPU(IMemory& memory, IISA& isaPlugin)
       profiler_(nullptr),
       isaPlugin_(&isaPlugin),
       halted_(false),
+      lastStepRetired_(false),
       currentSlot_(0),
       bundleValid_(false),
       pendingInterrupts_(),
@@ -164,6 +180,7 @@ CPU::~CPU() {
 
 void CPU::reset() {
 halted_ = false;
+lastStepRetired_ = false;
 // If using ISA plugin, delegate reset to it
 if (isaPlugin_) {
     isaPlugin_->reset();
@@ -202,25 +219,31 @@ state_.Reset();
 }
 
 bool CPU::step() {
+    lastStepRetired_ = false;
     // If using ISA plugin, delegate execution to it
     if (isaPlugin_) {
         if (halted_) {
             return false;
         }
-        servicePendingInterrupt();
+        // The wrapper's pending-interrupt queue and PSR shadow are IA-64
+        // constructs; they never apply to another ISA's CPU.
+        if (usesIA64RegisterModel(isaPlugin_)) {
+            servicePendingInterrupt();
+        }
         
         ISAExecutionResult result = isaPlugin_->step(memory_);
 
         const auto advanceITC = [this]() {
+            // ITC is an IA-64 register. Plugins without an IA-64 register
+            // model have no ITC to advance (and must not get a shadow one).
             if (auto* ia64 = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
                 ia64->advanceITC();
-            } else {
-                getState().AdvanceITC();
             }
         };
         
         switch (result) {
         case ISAExecutionResult::CONTINUE:
+            lastStepRetired_ = true;
             advanceITC();
             return true;
         case ISAExecutionResult::HALT:
@@ -229,12 +252,17 @@ bool CPU::step() {
         case ISAExecutionResult::EXCEPTION:
             std::cerr << "Exception during execution\n";
             return false;
+        case ISAExecutionResult::EXCEPTION_ENTERED:
+            // Architectural exception delivered to the guest handler.
+            advanceITC();
+            return true;
         case ISAExecutionResult::INTERRUPT:
             // Interrupt was handled, continue
             advanceITC();
             return true;
         case ISAExecutionResult::SYSCALL:
             // Syscall was handled, continue
+            lastStepRetired_ = true;
             advanceITC();
             return true;
         case ISAExecutionResult::BREAKPOINT:
@@ -278,6 +306,7 @@ bool CPU::step() {
             bundleValid_ = false;
             currentSlot_ = 0;
         }
+        lastStepRetired_ = true;
         return true;
     }
     
@@ -308,6 +337,7 @@ bool CPU::step() {
     
     // Execute the instruction
     executeInstruction(instr);
+    lastStepRetired_ = true;
 
     state_.AdvanceITC();
 
@@ -341,6 +371,9 @@ bool CPU::step() {
 }
 
 void CPU::executeInstruction(const InstructionEx& instr) {
+    if (isaPlugin_ && !usesIA64RegisterModel(isaPlugin_)) {
+        throwNoIA64State(isaPlugin_, "IA-64 decoded-instruction execution");
+    }
     // Safe execution with error handling
     try {
         // Check if this is a syscall (break 0x100000)
@@ -668,6 +701,9 @@ void CPU::queueInterrupt(uint8_t vector) {
             ia64->queueInterrupt(vector);
             return;
         }
+        // Platform (IA-64 external) vectors have no delivery path into another
+        // ISA's CPU; refuse rather than park them in the IA-64 shadow queue.
+        throwNoIA64State(isaPlugin_, "external interrupt delivery");
     }
     pendingInterrupts_.push_back(vector);
 }
@@ -687,6 +723,7 @@ void CPU::setInterruptsEnabled(bool enabled) {
             ia64->setInterruptsEnabled(enabled);
             return;
         }
+        throwNoIA64State(isaPlugin_, "PSR interrupt enable");
     }
     const uint64_t psr = state_.GetPSR();
     state_.SetPSR(enabled ? (psr | 0x1ULL) : (psr & ~0x1ULL));
@@ -697,6 +734,7 @@ bool CPU::areInterruptsEnabled() const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->areInterruptsEnabled();
         }
+        throwNoIA64State(isaPlugin_, "PSR interrupt enable");
     }
     return (state_.GetPSR() & 0x1ULL) != 0;
 }
@@ -707,6 +745,7 @@ void CPU::setInterruptVectorBase(uint64_t baseAddress) {
             ia64->setInterruptVectorBase(baseAddress);
             return;
         }
+        throwNoIA64State(isaPlugin_, "IA-64 interrupt vector base");
     }
     interruptVectorBase_ = baseAddress;
 }
@@ -716,6 +755,7 @@ uint64_t CPU::getInterruptVectorBase() const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->getInterruptVectorBase();
         }
+        throwNoIA64State(isaPlugin_, "IA-64 interrupt vector base");
     }
     return interruptVectorBase_;
 }
@@ -730,6 +770,11 @@ size_t CPU::getCurrentSlot() const {
 
 CPURuntimeStateSnapshot CPU::createSnapshot() const {
     CPURuntimeStateSnapshot snapshot;
+    // This runtime snapshot schema contains IA-64 state only. Non-IA-64
+    // architectural state must be captured through the ISA plugin instead.
+    if (!usesIA64RegisterModel(isaPlugin_)) {
+        throwNoIA64State(isaPlugin_, "CPU runtime snapshot creation");
+    }
     snapshot.architecturalState = getState();
     snapshot.currentBundle = currentBundle_;
     snapshot.currentSlot = currentSlot_;
@@ -744,6 +789,10 @@ CPURuntimeStateSnapshot CPU::createSnapshot() const {
 void CPU::restoreSnapshot(const CPURuntimeStateSnapshot& snapshot) {
     if (isaPlugin_ == nullptr) {
         state_ = snapshot.architecturalState;
+    } else if (!usesIA64RegisterModel(isaPlugin_)) {
+        // Refuse before any mutation: restoring a snapshot that carries no
+        // state for this ISA would silently resume from the wrong machine.
+        throwNoIA64State(isaPlugin_, "CPU runtime snapshot restore");
     } else if (auto* ia64Plugin = dynamic_cast<IA64ISAPlugin*>(isaPlugin_)) {
         // The plugin owns the architectural register file for the modern
         // execution path.  Restoring only CPU's legacy shadow state silently
@@ -783,6 +832,7 @@ uint64_t CPU::readGR(size_t index) const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->readGR(index);
         }
+        throwNoIA64State(isaPlugin_, "general register read (IA-64 GR file)");
     }
 
     // Profile register read
@@ -799,6 +849,7 @@ void CPU::writeGR(size_t index, uint64_t value) {
             ia64->writeGR(index, value);
             return;
         }
+        throwNoIA64State(isaPlugin_, "general register write (IA-64 GR file)");
     }
 
     // Profile register write
@@ -814,6 +865,7 @@ bool CPU::readPR(size_t index) const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->readPR(index);
         }
+        throwNoIA64State(isaPlugin_, "predicate register read");
     }
 
     // Profile register read
@@ -830,6 +882,7 @@ void CPU::writePR(size_t index, bool value) {
             ia64->writePR(index, value);
             return;
         }
+        throwNoIA64State(isaPlugin_, "predicate register write");
     }
 
     // Profile register write
@@ -845,6 +898,7 @@ uint64_t CPU::readBR(size_t index) const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->readBR(index);
         }
+        throwNoIA64State(isaPlugin_, "branch register read");
     }
 
     // Branch registers are never rotated
@@ -863,6 +917,7 @@ void CPU::writeBR(size_t index, uint64_t value) {
             ia64->writeBR(index, value);
             return;
         }
+        throwNoIA64State(isaPlugin_, "branch register write");
     }
 
     // Profile register write
@@ -897,6 +952,7 @@ uint64_t CPU::getCFM() const {
         if (const auto* ia64 = dynamic_cast<const IA64ISAPlugin*>(isaPlugin_)) {
             return ia64->getCFM();
         }
+        throwNoIA64State(isaPlugin_, "current frame marker (CFM)");
     }
 
     return state_.GetCFM();
@@ -908,6 +964,7 @@ void CPU::setCFM(uint64_t value) {
             ia64->setCFM(value);
             return;
         }
+        throwNoIA64State(isaPlugin_, "current frame marker (CFM)");
     }
 
     state_.SetCFM(value);
@@ -918,6 +975,9 @@ const CPUState& CPU::getState() const {
         if (const auto* ia64State = dynamic_cast<const IA64ISAState*>(&isaPlugin_->getState())) {
             return ia64State->getCPUState();
         }
+        // A non-IA-64 plugin owns its state; never hand out the wrapper's
+        // IA-64 shadow CPUState for it (MIPS64-4R1 containment).
+        throwNoIA64State(isaPlugin_, "CPUState access");
     }
     return state_;
 }
@@ -927,6 +987,7 @@ CPUState& CPU::getState() {
         if (auto* ia64State = dynamic_cast<IA64ISAState*>(&isaPlugin_->getState())) {
             return ia64State->getCPUState();
         }
+        throwNoIA64State(isaPlugin_, "CPUState access");
     }
     return state_;
 }
@@ -940,21 +1001,35 @@ CPUState& CPU::getState() {
 // Bits 32-37: RRB.pr - predicate register rotation base
 
 uint8_t CPU::getGRRotationBase() const {
+    if (isaPlugin_ && !usesIA64RegisterModel(isaPlugin_)) {
+        throwNoIA64State(isaPlugin_, "general-register rotation base");
+    }
     uint64_t cfm = state_.GetCFM();
     return (cfm >> 18) & 0x7F;  // Bits 18-24 (7 bits)
 }
 
 uint8_t CPU::getFRRotationBase() const {
+    if (isaPlugin_ && !usesIA64RegisterModel(isaPlugin_)) {
+        throwNoIA64State(isaPlugin_, "floating-register rotation base");
+    }
     uint64_t cfm = state_.GetCFM();
     return (cfm >> 25) & 0x7F;  // Bits 25-31 (7 bits)
 }
 
 uint8_t CPU::getPRRotationBase() const {
+    if (isaPlugin_ && !usesIA64RegisterModel(isaPlugin_)) {
+        throwNoIA64State(isaPlugin_, "predicate-register rotation base");
+    }
     uint64_t cfm = state_.GetCFM();
     return (cfm >> 32) & 0x3F;  // Bits 32-37 (6 bits)
 }
 
 void CPU::dump() const {
+    if (isaPlugin_ && !usesIA64RegisterModel(isaPlugin_)) {
+        // Non-IA-64 ISA: print the plugin's own state, not the IA-64 shadow.
+        std::cout << isaPlugin_->dumpState();
+        return;
+    }
     state_.Dump();
     
     // Additional CPU-specific state

@@ -76,10 +76,14 @@ protected:
 enum class ISAExecutionResult {
     CONTINUE,       // Continue normal execution
     HALT,           // Halt execution (HLT instruction or similar)
-    EXCEPTION,      // Exception occurred (trap, fault, etc.)
+    EXCEPTION,      // Execution failure: the ISA could not retire or deliver the instruction
     INTERRUPT,      // Interrupt occurred
     SYSCALL,        // System call instruction
-    BREAKPOINT      // Debug breakpoint hit
+    BREAKPOINT,     // Debug breakpoint hit
+    // An architectural synchronous exception was taken: the ISA has entered
+    // its exception handler (architectural state updated, PC redirected) and
+    // execution continues. Not a host or VM error. Added in MIPS64-4R1.
+    EXCEPTION_ENTERED
 };
 
 /**

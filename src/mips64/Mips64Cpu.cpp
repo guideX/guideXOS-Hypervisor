@@ -431,6 +431,44 @@ Mips64Decoded decodeInstruction(uint32_t word) {
 
 Mips64Cpu::Mips64Cpu(Mips64Endianness endianness) : endianness_(endianness) { reset(); }
 
+bool Mips64Cpu::faultEntersException(Mips64Fault fault) {
+    switch (fault) {
+        // Synchronous exceptions taken through enterException(): the guest
+        // continues at the architectural vector.
+        case Mips64Fault::MisalignedFetch:
+        case Mips64Fault::MemoryFaultFetch:
+        case Mips64Fault::ReservedInstruction:
+        case Mips64Fault::MisalignedLoad:
+        case Mips64Fault::MisalignedStore:
+        case Mips64Fault::MemoryFaultLoad:
+        case Mips64Fault::MemoryFaultStore:
+        case Mips64Fault::SyscallTrap:
+        case Mips64Fault::BreakTrap:
+        case Mips64Fault::OverflowTrap:
+        case Mips64Fault::PrivilegeViolation:
+        case Mips64Fault::AddressErrorFetch:
+        case Mips64Fault::AddressErrorLoad:
+        case Mips64Fault::AddressErrorStore:
+        case Mips64Fault::TlbRefillFetch:
+        case Mips64Fault::TlbRefillLoad:
+        case Mips64Fault::TlbRefillStore:
+        case Mips64Fault::TlbInvalidFetch:
+        case Mips64Fault::TlbInvalidLoad:
+        case Mips64Fault::TlbInvalidStore:
+        case Mips64Fault::TlbModified:
+            return true;
+        // Unsupported or invalid-for-this-core conditions fail without any
+        // exception entry and must be treated as emulator errors.
+        case Mips64Fault::None:
+        case Mips64Fault::UnsupportedInstruction:
+        case Mips64Fault::BranchInDelaySlot:
+        case Mips64Fault::MisalignedBranchTarget:
+        case Mips64Fault::Cp0Violation:
+        default:
+            return false;
+    }
+}
+
 void Mips64Cpu::reset() {
     gpr_.fill(0);
     pc_ = kResetPc;
@@ -657,8 +695,7 @@ bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
         return true;
     }
     if (rd == kCp0RegCause && sel == kCp0SelCause) {
-        out = cause_ & (kCauseBitBd | kCauseExcCodeMask | kCauseIpSwMask |
-                        kCauseBitDc | kCauseBitIv | kCauseBitTi | kCauseIp7Bit);
+        out = cause_ & kCauseImplementedMask;
         return true;
     }
     if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
@@ -744,8 +781,10 @@ bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
         return true;
     }
     if (rd == kCp0RegCause && sel == kCp0SelCause) {
-        cause_ = (cause_ & ~(kCauseIpSwMask | kCauseBitDc | kCauseBitIv)) |
-                 (value & (kCauseIpSwMask | kCauseBitDc | kCauseBitIv));
+        // Only IP[1:0], DC and IV are software-writable; TI, IP7, BD and
+        // ExcCode remain under core control and are preserved here.
+        cause_ = (cause_ & ~kCauseSoftwareWritableMask) |
+                 (value & kCauseSoftwareWritableMask);
         return true;
     }
     if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
@@ -1797,20 +1836,17 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
 
 Mips64StepResult Mips64Cpu::step(ia64::IMemory& memory) {
     // Deterministic virtual-cycle clock: one Count increment per step call,
-    // unless Cause.DC disables counting. Count wraps at 32 bits.
+    // unless Cause.DC disables counting. Count is a 32-bit register and wraps.
+    //
+    // Count/Compare is an edge event: the timer request latches (TI and IP7)
+    // only on the increment that makes Count equal Compare. It is not
+    // re-latched on later steps, so a Compare write that acknowledges the
+    // request stays acknowledged until Count next reaches Compare.
     if ((cause_ & kCauseBitDc) == 0) {
-        const uint32_t prev = static_cast<uint32_t>(count_ & 0xFFFFFFFFULL);
         count_ = (count_ + 1) & 0xFFFFFFFFULL;
-        if (static_cast<uint32_t>(count_ & 0xFFFFFFFFULL) == static_cast<uint32_t>(compare_ & 0xFFFFFFFFULL) &&
-            prev != static_cast<uint32_t>(compare_ & 0xFFFFFFFFULL)) {
-            // Count/Compare match latches the timer interrupt request.
+        if (static_cast<uint32_t>(count_) == static_cast<uint32_t>(compare_)) {
             cause_ |= (kCauseBitTi | kCauseIp7Bit);
         }
-    }
-    // Also latch if already equal on a fresh match? Ensure equality sets pending.
-    if ((cause_ & kCauseBitDc) == 0 &&
-        static_cast<uint32_t>(count_ & 0xFFFFFFFFULL) == static_cast<uint32_t>(compare_ & 0xFFFFFFFFULL)) {
-        cause_ |= (kCauseBitTi | kCauseIp7Bit);
     }
     clearFault();
     // Asynchronous interrupt delivery at instruction boundary.
@@ -2016,7 +2052,7 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     blob[1] = 'P';
     blob[2] = '6';
     blob[3] = '2';
-    blob[4] = 3;  // format version (MIPS64-3: TLB state appended)
+    blob[4] = kSerializationVersion;  // v4: corrected Cause DC/IV layout (MIPS64-4R1)
     blob[5] = static_cast<uint8_t>(endianness_);
     // bytes 6..7 reserved (zero)
 
@@ -2100,8 +2136,15 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if (data[0] != 'M' || data[1] != 'P' || data[2] != '6' || data[3] != '2') {
         return false;
     }
-    if (data[4] != 3) {  // v1 ('MP61') and v2 blobs are rejected by size+version
+    // v1 ('MP61') and v2 blobs are rejected by size and version. v3 (MIPS64-3
+    // and MIPS64-4 builds) shares the v4 layout but used a wrong Cause
+    // assignment; see the version history in Mips64Cpu.h.
+    const uint8_t version = data[4];
+    if (version != kSerializationVersion && version != kSerializationVersionV3) {
         return false;
+    }
+    if (data[6] != 0 || data[7] != 0) {
+        return false;  // reserved header bytes must remain zero
     }
     if (data[5] != static_cast<uint8_t>(Mips64Endianness::Little) &&
         data[5] != static_cast<uint8_t>(Mips64Endianness::Big)) {
@@ -2159,6 +2202,27 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     const uint64_t wired = load64(tlbOffset + 48);
     const uint64_t context = load64(tlbOffset + 56);
     const uint64_t xcontext = load64(tlbOffset + 64);
+    // Interrupt state (MIPS64-4 / 4R1). Cause bits must lie in the implemented
+    // set. A v3 blob that sets IV (bit 23) or DC (bit 27) was written with the
+    // MIPS64-4 bit assignment and cannot be interpreted unambiguously.
+    if ((cause & ~kCauseImplementedMask) != 0) {
+        return false;
+    }
+    if (version == kSerializationVersionV3 && (cause & (kCauseBitIv | kCauseBitDc)) != 0) {
+        return false;
+    }
+    if ((status & ~kStatusWritableMask) != 0) {
+        return false;
+    }
+    if ((ebase & ~kEBaseWritableMask) != 0) {
+        return false;
+    }
+    if ((count >> 32) != 0 || (compare >> 32) != 0) {
+        return false;  // Count/Compare are 32-bit registers
+    }
+    if (!delayArmed && (delayTarget != 0 || delayBranch != 0)) {
+        return false;  // delay fields are only meaningful while armed
+    }
     if ((index & ~kIndexWritableMask) != 0) {
         return false;
     }

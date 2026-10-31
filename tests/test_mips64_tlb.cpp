@@ -613,7 +613,7 @@ static void testSerializationRoundTrip() {
     const std::vector<uint8_t> blob = cpu.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob.size() == 957);
-    CHECK(blob[4] == 3);
+    CHECK(blob[4] == 4);  // v4 (MIPS64-4R1)
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));
     CHECK(restored.cp0EntryHi() == cpu.cp0EntryHi());

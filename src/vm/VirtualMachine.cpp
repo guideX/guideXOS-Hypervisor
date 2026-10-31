@@ -22,9 +22,53 @@
 
 namespace ia64 {
 
+namespace {
+
+// A CPU context whose architectural state is the IA-64 register model: the
+// legacy IA-64 CPU, or a CPU driven by the IA-64 plugin. Any other ISA owns
+// its state; the VM must not read or present IA-64 state for it (MIPS64-4R1).
+bool isIA64Context(const CPUContext& ctx) {
+    return !ctx.isaPlugin || dynamic_cast<const IA64ISAPlugin*>(ctx.isaPlugin.get()) != nullptr;
+}
+
+bool isIA64Cpu(const CPU& cpu) {
+    return !cpu.isUsingISAPlugin() ||
+           dynamic_cast<const IA64ISAPlugin*>(cpu.getISAPlugin()) != nullptr;
+}
+
+bool allContextsIA64(const std::vector<CPUContext>& contexts) {
+    for (const CPUContext& ctx : contexts) {
+        if (!isIA64Context(ctx)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Builds the panic record for a failed CPU step. IA-64 CPUs keep the IA-64
+// register and bundle capture; other ISAs record their own state text and no
+// IA-64 bundle or register dump.
+KernelPanic captureCpuFailure(KernelPanicDetector& detector, const CPU& cpu,
+                              const std::string& message, uint64_t cycles) {
+    if (isIA64Cpu(cpu)) {
+        return detector.captureExceptionPanic(message, cpu.getState(), Bundle(), 0, cycles, cycles);
+    }
+    const IISA* isa = cpu.getISAPlugin();
+    const std::string isaName = isa != nullptr ? isa->getName() : std::string("unknown");
+    const std::string isaDump = isa != nullptr ? isa->dumpState() : std::string();
+    return detector.captureIsaPanic(KernelPanicReason::UNHANDLED_EXCEPTION,
+                                    "Unhandled exception: " + message, isaName, isaDump,
+                                    cycles, cycles);
+}
+
+}  // namespace
+
 // ============================================================================
 // Constructor / Destructor
 // ============================================================================
+
+VirtualMachine::VirtualMachine(size_t memorySize, const std::string& isaName)
+    : VirtualMachine(memorySize, 1, isaName) {}
 
 VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::string& isaName)
 : memory_(nullptr),
@@ -108,6 +152,12 @@ try {
     memory_->RegisterDevice(framebufferDevice_.get());
     memory_->RegisterDevice(processorInterruptBlock_.get());
         
+    // An unregistered ISA is refused. It must never silently become an IA-64
+    // CPU; "IA-64" keeps its legacy construction when no plugin is registered.
+    if (isaName != "IA-64" && !ISAPluginRegistry::instance().isRegistered(isaName)) {
+        throw std::invalid_argument("VirtualMachine: ISA '" + isaName + "' is not registered");
+    }
+
     // Create CPU contexts with specified ISA
     if (!createCPUs(numCPUs, isaName)) {
         throw std::runtime_error("Failed to create CPU contexts with ISA: " + isaName);
@@ -115,7 +165,10 @@ try {
 
         interruptController_->RegisterDeliveryCallback([this](uint8_t vector) {
             const int targetCPU = activeCPUIndex_ >= 0 ? activeCPUIndex_ : 0;
-            if (isValidCPUIndex(targetCPU) && cpus_[targetCPU].cpu) {
+            // External (IA-64 interrupt-controller) vectors are delivered to
+            // IA-64 CPUs only. Other ISAs have no delivery path for them yet.
+            if (isValidCPUIndex(targetCPU) && cpus_[targetCPU].cpu &&
+                isIA64Context(cpus_[targetCPU])) {
                 cpus_[targetCPU].cpu->queueInterrupt(vector);
                 if (cpus_[targetCPU].state == CPUExecutionState::WAITING) {
                     cpus_[targetCPU].state = CPUExecutionState::RUNNING;
@@ -490,6 +543,10 @@ const CPUState& VirtualMachine::getCPUState() const {
     // Return state of active CPU
     if (activeCPUIndex_ >= 0 && activeCPUIndex_ < static_cast<int>(cpus_.size())) {
         if (cpus_[activeCPUIndex_].cpu) {
+            if (!isIA64Cpu(*cpus_[activeCPUIndex_].cpu)) {
+                throw std::runtime_error("CPUState access is not supported for ISA '" +
+                                         cpus_[activeCPUIndex_].isaPlugin->getName() + "'");
+            }
             return cpus_[activeCPUIndex_].cpu->getState();
         }
     }
@@ -619,6 +676,10 @@ const CPUState& VirtualMachine::getCPUState(int cpuIndex) const {
     }
     if (!cpus_[cpuIndex].cpu) {
         throw std::runtime_error("CPU not initialized");
+    }
+    if (!isIA64Cpu(*cpus_[cpuIndex].cpu)) {
+        throw std::runtime_error("CPUState access is not supported for ISA '" +
+                                 cpus_[cpuIndex].isaPlugin->getName() + "'");
     }
     return cpus_[cpuIndex].cpu->getState();
 }
@@ -1023,6 +1084,12 @@ bool VirtualMachine::restoreSnapshot(const DebuggerSnapshot& snapshot) {
     if (snapshot.cpus.size() != cpus_.size()) {
         return false;
     }
+    // Refuse before mutating anything: a debugger snapshot carries IA-64 CPU
+    // state only.
+    if (!allContextsIA64(cpus_)) {
+        LOG_ERROR("Debugger snapshot restore is not supported for this ISA");
+        return false;
+    }
 
     memory_->RestoreSnapshot(snapshot.memory);
     for (size_t i = 0; i < cpus_.size(); ++i) {
@@ -1064,6 +1131,15 @@ bool VirtualMachine::checkBreakpoint(uint64_t address) const {
 }
 
 bool VirtualMachine::evaluateCondition(const DebugCondition& condition, const CPU& cpu) const {
+    if (condition.target == DebugConditionTarget::NONE || condition.op == DebugConditionOperator::ANY) {
+        return true;
+    }
+    if (!isIA64Cpu(cpu)) {
+        // IA-64 register/IP conditions cannot be evaluated against another
+        // ISA's state. The condition is reported and treated as not matched.
+        LOG_WARN("Breakpoint condition not evaluated: CPU has no IA-64 register state");
+        return false;
+    }
     return evaluateCondition(condition, cpu.getState());
 }
 
@@ -1116,7 +1192,7 @@ size_t VirtualMachine::registerMemoryBreakpointHook(const MemoryBreakpoint& brea
     Watchpoint watchpoint(breakpoint.addressStart, breakpoint.addressEnd, breakpoint.type,
         [this, breakpoint](WatchpointContext& context) {
             const CPU* cpu = getCPUForIndex(activeCPUIndex_);
-            if (cpu == nullptr || !evaluateCondition(breakpoint.condition, cpu->getState())) {
+            if (cpu == nullptr || !evaluateCondition(breakpoint.condition, *cpu)) {
                 return;
             }
 
@@ -1136,6 +1212,11 @@ void VirtualMachine::captureSnapshotIfBoundary(int cpuIndex) {
 
     CPU* cpu = getCPUForIndex(cpuIndex);
     if (cpu == nullptr) {
+        return;
+    }
+    // Debugger rewind history is only captured for IA-64 CPUs; other ISAs have
+    // no runtime snapshot path yet, so no history is kept for them.
+    if (!isIA64Cpu(*cpu)) {
         return;
     }
 
@@ -1207,9 +1288,13 @@ bool VirtualMachine::createCPUs(size_t numCPUs, const std::string& isaName) {
             CPUContext ctx(static_cast<uint32_t>(i));
             
             if (usePlugin) {
-                // Create ISA plugin instance
+                // Create ISA plugin instance. Only the IA-64 factory consumes
+                // IA64FactoryData; every other factory receives null (its own
+                // defaults) instead of a reinterpreted IA-64 structure.
                 IA64FactoryData factoryData(decoder_.get());
-                auto isaPlugin = ISAPluginRegistry::instance().createISA(isaName, &factoryData);
+                void* factoryPointer = (isaName == "IA-64") ? static_cast<void*>(&factoryData)
+                                                            : nullptr;
+                auto isaPlugin = ISAPluginRegistry::instance().createISA(isaName, factoryPointer);
                 
                 if (!isaPlugin) {
                     LOG_ERROR("Failed to create ISA plugin: " + isaName);
@@ -1283,7 +1368,7 @@ if (!isValidCPUIndex(cpuIndex)) {
         }
 
         activeCPUIndex_ = cpuIndex;
-        memory_->GetMMU().SetCPUStateReference(&cpu->getState());
+        memory_->GetMMU().SetCPUStateReference(isIA64Cpu(*cpu) ? &cpu->getState() : nullptr);
 
         captureSnapshotIfBoundary(cpuIndex);
 
@@ -1314,26 +1399,28 @@ if (!isValidCPUIndex(cpuIndex)) {
                 return false;
             }
 
-            // CPU step failed - this could be a kernel panic condition
-            // Capture panic state
-            KernelPanic panic = panicDetector_.captureExceptionPanic(
-                "CPU execution failed", cpu->getState(), Bundle(), 0,
-                cyclesExecuted_, cyclesExecuted_
-            );
+            // CPU step failed without delivering an architectural exception:
+            // an execution failure (unsupported operation or host fault). Guest
+            // exceptions are never reported here. Capture panic state.
+            KernelPanic panic = captureCpuFailure(panicDetector_, *cpu,
+                                                  "CPU execution failed", cyclesExecuted_);
             lastPanic_ = std::make_unique<KernelPanic>(panic);
-            
+            ctx.state = CPUExecutionState::ERROR;
             state_ = VMState::ERROR;
             bootStateMachine_.transition(VMBootState::KERNEL_PANIC, "CPU execution failed");
             return false;
         }
 
         ctx.cyclesExecuted++;
-        ctx.instructionsExecuted++;
+        if (cpu->didLastStepRetireInstruction()) {
+            ctx.instructionsExecuted++;
+        }
         cyclesExecuted_++;
         scheduler_->onCPUExecuted(cpuIndex, 1);
         
         // Record instruction milestone every 10000 instructions
-        if (bootTraceSystem_.isEnabled() && ctx.instructionsExecuted % 10000 == 0) {
+        if (bootTraceSystem_.isEnabled() && cpu->didLastStepRetireInstruction() &&
+            ctx.instructionsExecuted % 10000 == 0) {
             bootTraceSystem_.recordInstructionMilestone(ctx.instructionsExecuted, cyclesExecuted_, currentIP);
         }
 
@@ -1354,11 +1441,11 @@ if (!isValidCPUIndex(cpuIndex)) {
         // Capture exception as kernel panic
         CPU* cpu = getCPUForIndex(cpuIndex);
         if (cpu) {
-            KernelPanic panic = panicDetector_.captureExceptionPanic(
-                e.what(), cpu->getState(), Bundle(), 0,
-                cyclesExecuted_, cyclesExecuted_
-            );
+            KernelPanic panic = captureCpuFailure(panicDetector_, *cpu, e.what(), cyclesExecuted_);
             lastPanic_ = std::make_unique<KernelPanic>(panic);
+        }
+        if (isValidCPUIndex(cpuIndex)) {
+            cpus_[cpuIndex].state = CPUExecutionState::ERROR;
         }
         
         state_ = VMState::ERROR;
@@ -1486,6 +1573,12 @@ std::string VirtualMachine::createFullSnapshot(const std::string& name, const st
         LOG_ERROR("Snapshot manager not initialized");
         return "";
     }
+    // Full-VM snapshots are IA-64 only. A snapshot of a non-IA-64 CPU would
+    // omit its architectural state, so it is refused rather than recorded.
+    if (!allContextsIA64(cpus_)) {
+        LOG_ERROR("Full VM snapshots are not supported for this ISA (CPU state is not captured)");
+        return "";
+    }
     
     std::string snapshotId = snapshotManager_->createFullSnapshot(*this, name, description);
     
@@ -1503,6 +1596,10 @@ std::string VirtualMachine::createDeltaSnapshot(const std::string& parentSnapsho
                                                  const std::string& description) {
     if (!snapshotManager_) {
         LOG_ERROR("Snapshot manager not initialized");
+        return "";
+    }
+    if (!allContextsIA64(cpus_)) {
+        LOG_ERROR("Delta VM snapshots are not supported for this ISA (CPU state is not captured)");
         return "";
     }
     
@@ -1566,7 +1663,10 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
         
         const CPUContext& ctx = cpus_[i];
         if (ctx.cpu) {
-            cpuRecord.architecturalState = ctx.cpu->getState();
+            // Non-IA-64 CPUs have no CPUState to record (see createFullSnapshot).
+            if (isIA64Context(ctx)) {
+                cpuRecord.architecturalState = ctx.cpu->getState();
+            }
             cpuRecord.executionState = ctx.state;
             cpuRecord.cyclesExecuted = ctx.cyclesExecuted;
             cpuRecord.instructionsExecuted = ctx.instructionsExecuted;
@@ -1619,6 +1719,11 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot) {
     // Validate snapshot
     if (snapshot.cpus.size() != cpus_.size()) {
         LOG_ERROR("Snapshot CPU count mismatch");
+        return false;
+    }
+    // Refuse before mutating memory or CPU state (no partial restore).
+    if (!allContextsIA64(cpus_)) {
+        LOG_ERROR("VM snapshot restore is not supported for this ISA");
         return false;
     }
     
@@ -1720,6 +1825,20 @@ KernelPanic VirtualMachine::triggerKernelPanic(KernelPanicReason reason, const s
         return panic;
     }
     
+    // A non-IA-64 CPU has no IA-64 bundle or register dump to capture. Its
+    // panic records the ISA's own state text instead (no IA-64 decode).
+    if (!isIA64Cpu(*cpu)) {
+        const IISA* isa = cpu->getISAPlugin();
+        const std::string isaName = isa != nullptr ? isa->getName() : std::string("unknown");
+        const std::string isaDump = isa != nullptr ? isa->dumpState() : std::string();
+        KernelPanic panic = panicDetector_.captureIsaPanic(reason, description, isaName, isaDump,
+                                                           cyclesExecuted_, cyclesExecuted_);
+        lastPanic_ = std::make_unique<KernelPanic>(panic);
+        state_ = VMState::ERROR;
+        bootStateMachine_.transition(VMBootState::KERNEL_PANIC, description);
+        return panic;
+    }
+
     // Capture last executed bundle (if available)
     Bundle lastBundle;
     size_t lastSlot = 0;

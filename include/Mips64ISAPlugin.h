@@ -50,7 +50,7 @@ public:
 
     // -- identity -------------------------------------------------------------
     std::string getName() const override { return "MIPS64"; }
-    std::string getVersion() const override { return "MIPS64r2 MIPS64-3"; }
+    std::string getVersion() const override { return "MIPS64r2 MIPS64-4R1"; }
 
     void reset() override;
 

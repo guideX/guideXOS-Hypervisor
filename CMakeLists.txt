@@ -862,3 +862,49 @@ endif()
 
 target_include_directories(test_mips64_privilege PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
 add_test(NAME Mips64PrivilegeTests COMMAND test_mips64_privilege)
+
+# MIPS64-4R1 interrupt qualification uses genuine encoded guest instructions
+# and the production Mips64Cpu step/decode/execute implementation.
+add_executable(test_mips64_interrupts
+    tests/test_mips64_interrupts.cpp
+    ${MIPS64_CORE_SOURCES}
+)
+target_include_directories(test_mips64_interrupts PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(MSVC)
+    target_compile_options(test_mips64_interrupts PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_interrupts PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64InterruptTests COMMAND test_mips64_interrupts)
+
+# Snapshot format/version qualification for interrupt, timer, exception and
+# in-flight delay-slot state.
+add_executable(test_mips64_serialization
+    tests/test_mips64_serialization.cpp
+    ${MIPS64_CORE_SOURCES}
+)
+target_include_directories(test_mips64_serialization PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(MSVC)
+    target_compile_options(test_mips64_serialization PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_serialization PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64SerializationTests COMMAND test_mips64_serialization)
+
+# Link a real MIPS64 VM test to the same production implementation units as
+# ia64emu. This verifies registry auto-registration in the production-linked
+# path, scheduler stepping, panic handling and guest timer-handler execution.
+add_executable(test_mips64_vm_integration
+    tests/test_mips64_vm_integration.cpp
+    ${ALL_SOURCES}
+)
+target_include_directories(test_mips64_vm_integration PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(WIN32)
+    target_link_libraries(test_mips64_vm_integration PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_vm_integration PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_vm_integration PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64VmIntegrationTests COMMAND test_mips64_vm_integration)

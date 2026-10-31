@@ -212,6 +212,13 @@ public:
                           const std::string& isaName = "IA-64");
 
     /**
+     * Constructor - single-CPU VM for a registered ISA
+     * (e.g. VirtualMachine vm(16 * 1024 * 1024, "MIPS64")).
+     * Throws std::invalid_argument when isaName is not registered.
+     */
+    VirtualMachine(size_t memorySize, const std::string& isaName);
+
+    /**
      * Destructor - cleans up all subsystems
      */
     ~VirtualMachine() override;

@@ -118,7 +118,9 @@ enum class Mips64Fault : uint32_t {
 // Step outcome. Returning Fault always coincides with fault() !=
 // Mips64Fault::None and lastError() set. Faults that raise synchronous
 // MIPS exceptions additionally perform full exception entry (CP0 update +
-// PC redirected to the selected exception vector).
+// PC redirected to the selected exception vector); use
+// Mips64Cpu::faultEntersException() to tell those apart from unsupported
+// or host-level failures that did not enter an exception.
 enum class Mips64StepResult : uint8_t {
     Continue = 0,  // instruction retired; PC advanced per delay-slot rules
     Fault = 1,     // instruction did not retire; see fault()/lastError()
@@ -200,16 +202,26 @@ constexpr uint64_t kStatusBitBev = 1ULL << 22;
 constexpr uint64_t kStatusWritableMask = 0x0040FFFFULL;
 constexpr uint64_t kStatusReset = kStatusBitBev | kStatusBitErl;  // 0x00400004
 
-// Cause bit positions. Only the SW interrupt bits IP[1:0] (bits 9:8) are
-// software-writable; ExcCode/BD/TI/CE/IP[7:2] are managed by the core.
+// Cause bit positions (MIPS64r2 PRA; cross-checked against the Linux MIPS
+// CAUSEB_* definitions). Software-writable through MTC0/DMTC0: IP[1:0]
+// (bits 9:8), DC (bit 27) and IV (bit 23). Read-only to software: BD, TI,
+// CE, IP[7:2] (IP7 carries the timer request) and ExcCode.
+// MIPS64-4 used DC=bit 23 and IV=bit 24; those positions were wrong and are
+// corrected in MIPS64-4R1 (bit 24 is not a Cause bit).
 constexpr uint64_t kCauseBitBd = 1ULL << 31;
+constexpr uint64_t kCauseBitTi = 1ULL << 30;  // Timer Interrupt pending (read-only)
+constexpr uint64_t kCauseBitDc = 1ULL << 27;  // Disable Count (software-writable)
+constexpr uint64_t kCauseBitIv = 1ULL << 23;  // Interrupt Vector select (software-writable)
+constexpr uint64_t kCauseIp7Bit = 1ULL << 15; // IP7 hardware-pending (timer routing)
 constexpr uint64_t kCauseIpSwMask = 0x00000300ULL;  // IP[1:0], bits 9:8
-constexpr uint64_t kCauseBitDc = 1ULL << 23;  // Disable Count (Release 2)
-constexpr uint64_t kCauseBitIv = 1ULL << 24;  // Interrupt Vector select
-constexpr uint64_t kCauseBitTi = 1ULL << 30;  // Timer Interrupt pending
-constexpr uint64_t kCauseIp7Bit = 1ULL << 15; // IP7 hardware-pending (timer)
 constexpr unsigned kCauseExcCodeShift = 2;
 constexpr uint64_t kCauseExcCodeMask = 0x7CULL;  // bits 6:2
+// Every Cause bit this core implements (reads outside this mask are zero).
+constexpr uint64_t kCauseImplementedMask = kCauseBitBd | kCauseBitTi | kCauseBitDc |
+                                           kCauseBitIv | kCauseIp7Bit | kCauseIpSwMask |
+                                           kCauseExcCodeMask;
+// Cause bits software may change through MTC0/DMTC0.
+constexpr uint64_t kCauseSoftwareWritableMask = kCauseIpSwMask | kCauseBitDc | kCauseBitIv;
 
 // EBase: exception-base bits 31:12 writable, low 12 bits (incl. CPUNum)
 // read-only zero; upper 32 bits read zero in this phase.
@@ -529,8 +541,19 @@ public:
                                     uint64_t address);
 
     // Combined fetch + decode + execute at the current PC. Ticks Count by
-    // one per call (documented simple tick; Compare delivers no interrupt).
+    // one per call unless Cause.DC is set (virtual-cycle clock). When
+    // Count/Compare matches, Cause.TI and Cause.IP7 latch; an enabled
+    // interrupt is then taken at this instruction boundary and reported as
+    // Mips64StepResult::Interrupt (the interrupted instruction is not
+    // executed; EPC/BD name the restart point).
     Mips64StepResult step(ia64::IMemory& memory);
+
+    // True when a Fault result from step()/executeDecoded() is an
+    // architectural synchronous exception that was already entered (CP0
+    // updated, PC redirected to a handler, guest may continue). False for
+    // unsupported encodings, delay-slot violations, unsupported CP0 accesses
+    // and misaligned register-jump targets, which fail without entry.
+    static bool faultEntersException(Mips64Fault fault);
 
     // Disassembly of a decoded instruction (no memory access).
     std::string disassemble(const Mips64Decoded& decoded) const;
@@ -539,7 +562,7 @@ public:
     // Serialization blob layout (blob itself is always little-endian and
     // versioned; the configured CPU endianness is stored and restored):
     //   offset 0:  magic 'M','P','6','2' (4 bytes)
-    //   offset 4:  format version u8 (=3), endianness u8, reserved u16
+    //   offset 4:  format version u8 (=4), endianness u8, reserved u16
     //   offset 8:  GPR[32] x u64 LE (256 bytes)
     //   offset 264: PC u64, HI u64, LO u64 (24 bytes)
     //   offset 288: delayArmed u8, delayTarget u64 LE, delayBranch u64 LE
@@ -552,10 +575,25 @@ public:
     //               (vpn2 u64, pfn0 u32, pfn1 u32, mask u16, asid u8,
     //                c0 u8, c1 u8, flags u8 [v0,d0,v1,d1,g,badMask],
     //                reserved 10 bytes zero)
-    // Total: 957 bytes. Format v1 (magic 'MP61', 301 bytes) and v2 (version
-    // 2, 373 bytes) are rejected; truncation, bad magic/version, null data
-    // and out-of-range field values fail safely with live state untouched.
+    // Total: 957 bytes.
+    //
+    // Version history (see docs/MIPS64_PHASE4R1_ACCEPTANCE_CLOSURE.md):
+    //   v1 'MP61' (301 bytes), v2 (373 bytes): rejected.
+    //   v3 (MIPS64-3/-4): same layout. Cause bits 23/24/27 were not
+    //      meaningful in v3 (MIPS64-4 stored DC at bit 23 and IV at bit
+    //      24), so v3 blobs carrying any of them are rejected as ambiguous.
+    //      Other v3 blobs are migrated: restored with v4 semantics and
+    //      re-serialized as v4.
+    //   v4 (MIPS64-4R1): same layout with the corrected Cause assignments
+    //      (IV=bit 23, DC=bit 27). Cause bits outside kCauseImplementedMask,
+    //      Status/EBase bits outside their writable masks, Count/Compare
+    //      above 32 bits and non-zero delay fields with delayArmed=0 are
+    //      rejected.
+    // Truncation, bad magic/version, null data and out-of-range fields fail
+    // safely with live state untouched.
     static constexpr std::size_t kSerializedSize = 957;
+    static constexpr uint8_t kSerializationVersion = 4;
+    static constexpr uint8_t kSerializationVersionV3 = 3;
     std::vector<uint8_t> serialize() const;
     bool deserialize(const uint8_t* data, std::size_t size);
 

@@ -11,9 +11,16 @@
 namespace mips64 {
 namespace {
 
-ia64::ISAExecutionResult mapStepResult(Mips64StepResult result) {
+// Maps a core step outcome to the ISA-neutral result. A Fault that entered an
+// architectural exception is EXCEPTION_ENTERED (the guest continues at its
+// handler); any other Fault is an execution failure (EXCEPTION) that the VM
+// must treat as an error rather than a guest exception.
+ia64::ISAExecutionResult mapStepResult(const Mips64Cpu& cpu, Mips64StepResult result) {
     if (result == Mips64StepResult::Continue) return ia64::ISAExecutionResult::CONTINUE;
     if (result == Mips64StepResult::Interrupt) return ia64::ISAExecutionResult::INTERRUPT;
+    if (Mips64Cpu::faultEntersException(cpu.fault())) {
+        return ia64::ISAExecutionResult::EXCEPTION_ENTERED;
+    }
     return ia64::ISAExecutionResult::EXCEPTION;
 }
 
@@ -117,7 +124,7 @@ ia64::ISAExecutionResult Mips64ISAPlugin::execute(
     const Mips64StepResult outcome =
         state_.cpu().executeDecoded(memory, cachedInstruction_, cachedAddress_);
     hasCachedInstruction_ = false;
-    return mapStepResult(outcome);
+    return mapStepResult(state_.cpu(), outcome);
 }
 
 ia64::ISAExecutionResult Mips64ISAPlugin::step(ia64::IMemory& memory) {
@@ -125,7 +132,8 @@ ia64::ISAExecutionResult Mips64ISAPlugin::step(ia64::IMemory& memory) {
     // exception entry (CP0 update + vector redirect) behaves identically
     // to direct Mips64Cpu stepping. Any cached decode is invalidated.
     hasCachedInstruction_ = false;
-    return mapStepResult(state_.cpu().step(memory));
+    const Mips64StepResult outcome = state_.cpu().step(memory);
+    return mapStepResult(state_.cpu(), outcome);
 }
 
 void Mips64ISAPlugin::setState(const ia64::ISAState& state) {

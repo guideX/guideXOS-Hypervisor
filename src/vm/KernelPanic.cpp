@@ -88,6 +88,30 @@ KernelPanic KernelPanicDetector::captureExceptionPanic(const std::string& except
                      cpuState, lastBundle, lastSlot, timestamp, cycles);
 }
 
+KernelPanic KernelPanicDetector::captureIsaPanic(KernelPanicReason reason,
+                                                 const std::string& description,
+                                                 const std::string& isaName,
+                                                 const std::string& isaStateDump,
+                                                 uint64_t timestamp, uint64_t cycles) {
+    KernelPanic panic;
+    panic.reason = reason;
+    panic.description = description;
+    panic.timestamp = timestamp;
+    panic.cyclesExecuted = cycles;
+    panic.ia64StateValid = false;
+    panic.isaName = isaName;
+    panic.isaStateDump = isaStateDump;
+    panic.bundleValid = false;
+    panic.stackBase = stackBase_;
+    panic.stackLimit = stackLimit_;
+
+    if (bootTrace_) {
+        panic.recentEvents = bootTrace_->getLastEvents(recentEventsCount_);
+        bootTrace_->recordKernelPanic(description, timestamp, 0);
+    }
+    return panic;
+}
+
 RegisterDump KernelPanicDetector::captureRegisterDump(const CPUState& cpuState) const {
     RegisterDump dump;
     
@@ -206,21 +230,30 @@ std::string KernelPanicDetector::generatePanicReport(const KernelPanic& panic) c
     }
     
     report << "\n";
-    report << "--- CPU STATE AT PANIC ---\n";
-    report << generateRegisterDump(panic.registers);
-    
-    report << "\n";
-    report << "--- LAST EXECUTED BUNDLE ---\n";
-    if (panic.bundleValid) {
-        report << generateBundleDisassembly(panic.lastBundle, panic.lastBundleAddress);
-        report << "Last Slot: " << panic.lastSlot << "\n";
+    if (panic.ia64StateValid) {
+        report << "--- CPU STATE AT PANIC ---\n";
+        report << generateRegisterDump(panic.registers);
+
+        report << "\n";
+        report << "--- LAST EXECUTED BUNDLE ---\n";
+        if (panic.bundleValid) {
+            report << generateBundleDisassembly(panic.lastBundle, panic.lastBundleAddress);
+            report << "Last Slot: " << panic.lastSlot << "\n";
+        } else {
+            report << "No valid bundle information available\n";
+        }
+
+        report << "\n";
+        report << "--- STACK TRACE ---\n";
+        report << generateStackTrace(panic.stackTrace);
     } else {
-        report << "No valid bundle information available\n";
+        report << "--- ISA STATE AT PANIC (" << panic.isaName << ") ---\n";
+        report << panic.isaStateDump;
+        if (panic.isaStateDump.empty() || panic.isaStateDump.back() != '\n') {
+            report << "\n";
+        }
+        report << "IA-64 register dump, bundle and stack trace do not apply to this ISA.\n";
     }
-    
-    report << "\n";
-    report << "--- STACK TRACE ---\n";
-    report << generateStackTrace(panic.stackTrace);
     
     report << "\n";
     report << "--- RECENT BOOT EVENTS (Last " << panic.recentEvents.size() << " events) ---\n";
