@@ -1,0 +1,27 @@
+Emitted guest instruction inventory
+===================================
+
+Source of truth: guest.disassembly.txt, generated from guest.elf by LLVM
+22.1.8 llvm-objdump. The disassembler uses common aliases (li, mv, j, bnez,
+ret, csrr, csrw); those aliases expand to the base RV64I or Zicsr encodings
+described below. The 84 decoded instruction instances in executable sections
+use only these mnemonics and aliases:
+
+  add: 1                 addi: 15              auipc: 6
+  bne: 3                 bnez: 2               csrr: 2
+  csrrw: 2               csrw: 5               ecall: 1
+  j: 5                   jal: 1                lbu: 1
+  ld: 4                  li: 8                 lui: 3
+  mret: 2                mv: 1                 ret: 1
+  sb: 1                  sd: 18                slli: 1
+  wfi: 2
+
+Architectural instruction families after alias expansion:
+
+  RV64I: ADD, ADDI, AUIPC, BNE, JAL, JALR, LBU, LD, LUI, SB, SD, SLLI.
+  Zicsr/SYSTEM: CSRRS, CSRRW, ECALL, MRET, WFI.
+
+No M/A/F/D/V or compressed instructions were emitted. The two WFI
+instructions are failure/trap containment paths; successful completion remains
+in S-mode and uses a self-loop after the guest writes its completion flag.
+The raw binary is linked with relaxation disabled and .option norvc enabled.

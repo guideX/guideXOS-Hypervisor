@@ -769,6 +769,25 @@ add_executable(test_riscv_sbi_time
     src/decoder/riscv_decoder.cpp
 )
 
+# RISCV-6 independent, checked-in flat guest binary boot proof.
+set(RISCV_GUEST_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_guest)
+set(RISCV_GUEST_BINARY_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv_guest.bin)
+configure_file(${RISCV_GUEST_FIXTURE_DIR}/guest.bin ${RISCV_GUEST_BINARY_COPY} COPYONLY)
+add_executable(test_riscv_guest_boot
+    tests/test_riscv_guest_boot.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_guest_boot PRIVATE bcrypt)
+if(MSVC)
+    target_compile_options(test_riscv_guest_boot PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_guest_boot PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME RiscVGuestBootTests
+         COMMAND test_riscv_guest_boot ${RISCV_GUEST_BINARY_COPY})
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

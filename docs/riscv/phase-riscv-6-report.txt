@@ -1,0 +1,234 @@
+guideXOS Hypervisor — Phase RISCV-6 Report
+=========================================
+
+Outcome: A — independently assembled guest binary loaded and executed through
+the production RV64CPU pipeline, with architectural MRET handoff, S-mode work,
+and a complete guest-written memory signature.
+
+Repository and preflight
+------------------------
+
+- Required branch: RISCV. Starting HEAD: e4e3bb64bcdee689d8056af2884c843effc65aff.
+- At preflight the checkout was exactly the required starting HEAD, with no
+  tracked modifications. Local branch was four commits ahead of origin/RISCV
+  (upstream divergence 0 behind / 4 ahead).
+- .phase-riscv showed RISCV-5 complete and RISCV-6 next. The shared IA-64
+  .phase file was not changed.
+- The existing untracked build-riscv3/, build-riscv4/, build-riscv4-vs/,
+  build-riscv5-debug/, and build-riscv5-release/ directories were preserved.
+- The existing eight RISC-V CTest suites passed before edits.
+- The existing generic/IA-64 ELF infrastructure was inspected. Its ELF
+  validation and loading paths require EM_IA_64 (50); no RISC-V guest loading
+  path is present. The phase therefore uses a linker-fixed flat binary.
+
+Guest binary provenance
+-----------------------
+
+- Assembler: Clang 22.1.8 LLVM integrated RISC-V assembler.
+- Linker: LLD 22.1.8. LLVM objcopy, objdump, and readobj 22.1.8 are used for
+  binary emission and inspection.
+- Target: riscv64-unknown-elf, rv64i_zicsr, LP64 soft-float ABI. No standard
+  library or runtime. Relaxation is disabled; .option norvc is enabled.
+- Assembly command:
+    clang.exe --target=riscv64-unknown-elf -march=rv64i_zicsr -mabi=lp64
+      -mcmodel=medany -fno-pic -mno-relax -c guest.S -o .build/guest.o
+- Link command:
+    ld.lld.exe --no-relax --build-id=none -T guest.ld
+      --Map=.build/guest.map -o .build/guest.elf .build/guest.o
+- Binary command:
+    llvm-objcopy.exe -O binary .build/guest.elf guest.bin
+- The inspected intermediate ELF is ELF64, little-endian, ET_EXEC, EM_RISCV
+  (243), entry 0x80000000, with the rv64i2p1_zicsr2p0 architecture attribute.
+  The test loads guest.bin, a raw flat binary, unchanged.
+- Binary size: 4,123 bytes. Load address: 0x80000000. Entry symbol: _start at
+  0x80000000. Accepted SHA-256:
+  446ba95d998db2c1aa7114461a8b0001614433af25c845ce12bdb30fe25bd04b
+- The checked-in instruction inventory and full LLVM disassembly are beside
+  guest.S. The emitted code uses RV64I and Zicsr/SYSTEM instructions only; no
+  M/A/F/D/V or compressed instructions were found. The build script regenerates
+  the binary and manifest without a network dependency.
+- Fixture sources and instructions: tests/fixtures/riscv_guest/README.txt.
+
+Machine-entry contract
+----------------------
+
+This is a guideXOS test guest contract, not a Linux boot protocol.
+
+  Hart count / hart ID       one hart / 0
+  Initial PC and privilege   0x80000000 / M-mode
+  RAM                        [0x80000000, 0x80010000), 64 KiB, zero-filled
+  Paging                     Bare; satp=0
+  Initial GPR/CSR state      GPRs zero; mstatus, mtvec, mepc, mscratch,
+                             medeleg, mie, mip, stvec, satp zero; mhartid=0
+  Guest image                [0x80000000, 0x8000101b), entry _start
+  M-mode stack               [0x8000d000, 0x8000e000), initial top 0x8000e000
+  S-mode stack               [0x8000b000, 0x8000c000), initial top 0x8000c000
+  Machine trap vector        guest-owned at 0x80000080
+  Supervisor entry           0x80000100
+  SBI provider               existing host SbiFirmwareProvider; Base and TIME
+  Completion region          [0x80008000, 0x80008048), bounded 72-byte record
+  Execution bound            2,000 steps in the successful harness run
+
+The boot fixture only loads bytes, zero-fills the documented RAM region,
+attaches the existing provider, and sets the reset PC through loadProgram().
+It does not set privilege or run guest setup instructions. No FDT pointer is
+manufactured; this test has no hardware-discovery handoff.
+
+M-mode initialization and supervisor execution
+-----------------------------------------------
+
+- The guest's first 13 retired instructions initialize the M-mode stack,
+  mscratch, mtvec, mepc, and mstatus.MPP=S. Before the handoff the test checks
+  sp=mscratch=0x8000e000, mtvec=0x80000080, mepc=0x80000100, satp=0, and MPP=1.
+- The production RV64CPU::step() executes the instruction at 0x80000040
+  (MRET). The resulting privilege is S and PC is 0x80000100. The guest's next
+  two instructions set the S-mode stack top to 0x8000c000; the application
+  then allocates a stack frame and saves/restores registers through guest
+  stores and loads.
+- S-mode arithmetic adds 20 and 22 in a called function and returns with
+  JALR. The application uses stack reads/writes and copies the NUL-terminated
+  ASCII string "Hello from guideXOS RISC-V" with executed LBU/SB instructions.
+- The S-mode SBI Base query uses EID 0x10, FID 0. RV64CPU first delivers the
+  architectural cause-9 trap to M-mode and the guest mtvec handler advances
+  mepc, preserves its temporary registers on the M stack, and executes MRET.
+  The existing host provider returns a0=0 and a1=0x02000000 (SBI 2.0). The
+  guest verifies both registers before proceeding. Exactly one such ECALL is
+  observed. The test checks mscratch is restored and the saved t0/t1 values
+  remain in the guest M-mode stack area after the trap return.
+- After all checks succeed, the guest writes a signature at 0x80008000:
+    offset 0   magic 0x47584f53
+    offset 8   format version 1
+    offset 16  result code 0
+    offset 24  arithmetic result 42
+    offset 32  32-byte message field, including NUL and zero padding
+    offset 64  completion flag 0x434f4d50, written last
+- The harness verifies every field, all message bytes and padding, and the
+  completion flag. The successful execution retires 208 instructions in 209
+  step calls; the single ECALL trap is the non-retiring step. The guest remains
+  in S-mode after completion.
+
+Loading and negative tests
+--------------------------
+
+- The test copies the independently built 4,123-byte file into a zero-filled
+  64 KiB guest RAM vector at its linked address and checks the loaded bytes
+  against the file. Entry, range, 4-byte alignment, RAM size, expected binary
+  size, and SHA-256 are checked before execution.
+- Flat loading is sufficient for this fixed-address, statically linked test:
+  all code/data addresses are resolved by LLD, no runtime relocation or
+  dynamic linking is needed, and the binary has one contiguous load address.
+  No general ELF loader was added. RISC-V ELF64 support is deferred.
+- The guest-boot test uses explicit runtime checks rather than C assert(). It
+  passes 167 checks and exercises 11 deterministic failure scenarios:
+  truncated image, out-of-image entry, misaligned entry, image outside RAM,
+  insufficient RAM, unsupported MUL, instruction access fault, stack store
+  access fault, execution step-limit exhaustion, missing completion marker,
+  and incorrect completion signature.
+- Failed instruction execution reports PC, privilege, instruction word,
+  decoded disassembly when available, step outcome, trap cause/vector,
+  mtval/stval fault address, retired instruction count, and total step count.
+  Successful execution is quiet apart from a bounded summary.
+
+Regression results
+------------------
+
+- Pre-edit baseline: all 8 existing RISC-V CTest suites passed in Debug.
+- Post-edit Debug: all 9 RISC-V CTest suites passed (9/9), including the new
+  RiscVGuestBootTests target.
+- Focused guest boot in Release: passed (1/1 CTest); direct invocation reported
+  167 explicit checks, 208 retired instructions, and 209 steps.
+- IA-64 regressions passed without IA-64 source changes:
+    IA64SalTests CTest (1/1), test_ia64_acpi, test_ia64_interrupt_controller,
+    test_ia64_processor_interrupt_block, and test_efi_memory_map.
+- The existing test_io_devices failure remains separate and unchanged:
+  tests/test_io_devices.cpp:27 expects VirtualConsole output after
+  Memory::write<uint8_t>, while that write path updates backing memory without
+  dispatching the console device. The test still fails at that assertion.
+- The existing test_elf_validation target could not be linked in this build:
+  MSVC reported 27 unresolved legacy IA-64 symbols. Its sources and target
+  predate this phase and were not modified. The focused IA-64 tests above ran
+  and passed independently.
+- git diff --check passes. No IA-64 implementation files or shared .phase
+  were modified. All pre-existing untracked build directories were preserved.
+
+Boot-readiness assessment
+-------------------------
+
+The selected RISCV-6 guest itself needs only RV64I, Zicsr/SYSTEM, one hart,
+Bare paging, the existing SBI Base response, and private guest RAM. It does not
+need RV64M/A/C, ELF loading, a device tree, UART, external interrupts, or PMP.
+Those are not implied by this test's success.
+
+For a chosen external firmware or minimal OS payload:
+
+- ELF64: there is no EM_RISCV loader path. Existing ELF loader/validator code
+  is IA-64-specific. An ELF target needs a bounded RISC-V ELF64 loader that
+  checks machine/class/endian/type/ABI flags, PT_LOAD bounds and overlap,
+  p_filesz<=p_memsz, zero fill, executable entry, and unsupported relocations.
+  A static ET_EXEC image can avoid dynamic relocation for an initial target.
+- RV64M/A/C: all remain unsupported by the execution pipeline (M/A decode
+  only; C execution deferred). A payload built with any of these extensions
+  will fail when it reaches an unsupported instruction. Inspect ELF attributes
+  and disassembly for each selected firmware/kernel build; add only the
+  extensions that image actually needs.
+- Firmware and handoff: the current M-mode startup and SBI trap handler are
+  test assembly, not OpenSBI. OpenSBI has platform-specific hooks and expects
+  previous-stage boot information in a0/a1 (hart ID and FDT address) for its
+  firmware interfaces. A real firmware target needs a chosen platform, reset
+  map, stack/trap setup, arguments, payload-loading policy, and the firmware's
+  required device/interrupt hooks.
+- RAM and kernel placement: the test has one fixed 64 KiB RAM area. Linux's
+  documented entry contract requires a0=hart ID, a1=DTB address, satp=0, and
+  an RV64 kernel placed at a 2 MiB boundary, plus correct reserved-memory
+  description. There is no Linux loader, relocation, argument setup, or
+  reserved-memory/FDT implementation here.
+- SBI: the host provider supports Base and TIME only. HSM, IPI, RFENCE, PMU,
+  SRST, and DBCN are not implemented. The RISC-V Boot and Runtime Services
+  specification requires SBI v2.0+ and HSM for its BRS-compatible baseline;
+  additional extensions are conditional on the selected platform. The
+  current provider is enough for this one-hart test, not a general OS contract.
+- Device tree: no FDT is generated or passed to the guest. A real OS needs a
+  valid DTB or another supported hardware description of CPUs, memory, timer,
+  interrupt controller, serial device, and reserved regions. No fake pointer
+  is provided.
+- UART/serial: no RISC-V UART is modeled or wired. The memory signature is
+  test-only completion; boot logs and console input require a real device and
+  interrupt/clock description where applicable.
+- Timer/interrupts: the CPU has a narrow single-hart mtime/mtimecmp model and
+  deterministic retired-instruction time, with SBI TIME forwarding. It is
+  not a full CLINT/ACLINT. No PLIC/APLIC/IMSIC or external interrupt platform
+  is integrated. A chosen firmware must match the modeled timer and interrupt
+  topology or require new implementations.
+- PMP: no PMP CSR or region checks exist. Bounded guest RAM is not PMP
+  isolation: S-mode can access any address within the loaded RAM image. Without
+  PMP, M-mode firmware/resident memory cannot be protected from lower modes;
+  an OS memory map must not expose reserved firmware regions as ordinary RAM.
+- Kernel image and handoff: no kernel image loader, multi-segment placement,
+  FDT/ACPI/UEFI handoff, Linux register contract, SBI domain setup, or
+  secondary-hart startup exists. This test does not establish Linux or
+  OpenSBI boot readiness.
+
+Recommended RISCV-7 milestone
+----------------------------
+
+Implement a bounded RISC-V ELF64 static ET_EXEC loader for EM_RISCV PT_LOAD
+segments, with strict file/header/range/overlap/entry validation and malformed
+ELF tests. Load and execute a second independently linked RV64I/Zicsr guest
+from its ELF entrypoint. Preserve the flat-binary fixture as a regression.
+Select the ELF guest to determine whether M/A/C or additional SBI services are
+actually required; keep Linux/OpenSBI, SMP, UART, FDT, and external interrupt
+support as separate milestones.
+
+Readiness references checked
+----------------------------
+
+- Linux RISC-V kernel entry and platform handoff:
+  https://docs.kernel.org/arch/riscv/boot.html
+- OpenSBI firmware inputs and platform-specific firmware types:
+  https://github.com/riscv-software-src/opensbi/blob/master/docs/firmware/fw.md
+- OpenSBI platform support hooks:
+  https://github.com/riscv-software-src/opensbi/blob/master/docs/platform_guide.md
+- RISC-V Boot and Runtime Services SBI requirements:
+  https://docs.riscv.org/reference/brs/sbi.html
+- RISC-V PMP privilege/access behavior:
+  https://docs.riscv.org/reference/isa/priv/machine.html

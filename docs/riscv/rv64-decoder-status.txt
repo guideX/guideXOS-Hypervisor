@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-5)
+RISC-V Decoder and Execution Status (updated Phase RISCV-6)
 
 Current decoded instruction families:
 - RV64I
@@ -281,3 +281,35 @@ Audit notes:
 - Existing build-riscv3/, build-riscv4/, and build-riscv4-vs/ preserved.
 - Execution remains RV64I plus the implemented CSR/SYSTEM/interrupt/timer
   subset; RV64M/A/C execution remains deferred.
+
+--- Current executable status after Phase RISCV-6 ---
+
+- The first independently assembled RV64 guest is checked in at
+  tests/fixtures/riscv_guest/guest.bin. It is linked at 0x80000000 for
+  rv64i_zicsr, LP64 soft-float, with relaxation and compressed instructions
+  disabled. The source, linker script, LLVM build script, SHA-256 manifest,
+  ELF metadata, instruction inventory, and disassembly are kept beside it.
+- test_riscv_guest_boot loads the flat binary into the bounded RV64CPU guest
+  RAM and executes it only through RV64CPU::step and the production decoder.
+  The guest initializes M-mode state, executes MRET into S-mode, queries SBI
+  Base through a real S-mode ECALL/M-mode trap, and writes a 72-byte signature
+  at guest address 0x80008000. The full signature is checked by the harness.
+- The fixture uses RV64I integer operations plus the implemented CSR/SYSTEM
+  instructions. It emits no M/A/F/D/V or compressed instructions. RV64M/A
+  remain Unsupported, RV64C execution remains deferred except C.EBREAK, and
+  F/D/V remain unsupported. This is a test boot contract, not a Linux boot ABI.
+- The flat image is sufficient because the linker fixes one load address and
+  entrypoint, and the CTest guest needs no segment relocation or dynamic
+  linking. Existing ELF loader/validator paths require EM_IA_64; RISC-V ELF64
+  loading remains deferred until an ELF guest is selected.
+- Nine RISC-V CTest suites pass in Debug. The focused guest-boot suite passes
+  in Debug and Release with 167 explicit runtime checks. The boot report records
+  the handoff, binary provenance, failure cases, IA-64 regressions, and the
+  remaining requirements for an external firmware or OS payload.
+
+Recommended RISCV-7 target:
+- Add a bounded static RISC-V ELF64 PT_LOAD loader and malformed-image tests,
+  then boot a second independently linked RV64I/Zicsr guest from its validated
+  ELF entrypoint. Keep dynamic relocation, Linux/OpenSBI, SMP, and device
+  emulation outside that loader milestone unless the selected payload requires
+  them.

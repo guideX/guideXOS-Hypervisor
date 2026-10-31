@@ -1,0 +1,4 @@
+.build/
+guest.o
+guest.elf
+guest.map

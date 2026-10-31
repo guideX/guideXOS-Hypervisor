@@ -1,0 +1,121 @@
+
+D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_guest\.build\guest.elf:	file format elf64-littleriscv
+
+Disassembly of section .text.boot:
+
+0000000080000000 <_start>:
+80000000: 0000e117     	auipc	sp, 0xe
+80000004: 00010113     	mv	sp, sp
+80000008: 34011073     	csrw	mscratch, sp
+
+000000008000000c <.Lpcrel_hi1>:
+8000000c: 00000297     	auipc	t0, 0x0
+80000010: 07428293     	addi	t0, t0, 0x74
+80000014: 30529073     	csrw	mtvec, t0
+
+0000000080000018 <.Lpcrel_hi2>:
+80000018: 00000297     	auipc	t0, 0x0
+8000001c: 0e828293     	addi	t0, t0, 0xe8
+80000020: 34129073     	csrw	mepc, t0
+80000024: 00100293     	li	t0, 0x1
+80000028: 00b29293     	slli	t0, t0, 0xb
+8000002c: 30029073     	csrw	mstatus, t0
+80000030: 0100006f     	j	0x80000040 <machine_mret>
+
+Disassembly of section .text.handoff:
+
+0000000080000040 <machine_mret>:
+80000040: 30200073     	mret
+
+Disassembly of section .text.trap:
+
+0000000080000080 <machine_trap_vector>:
+80000080: 34011173     	csrrw	sp, mscratch, sp
+80000084: ff010113     	addi	sp, sp, -0x10
+80000088: 00513023     	sd	t0, 0x0(sp)
+8000008c: 00613423     	sd	t1, 0x8(sp)
+80000090: 342022f3     	csrr	t0, mcause
+80000094: 00900313     	li	t1, 0x9
+80000098: 02629263     	bne	t0, t1, 0x800000bc <machine_unexpected_trap>
+8000009c: 341022f3     	csrr	t0, mepc
+800000a0: 00428293     	addi	t0, t0, 0x4
+800000a4: 34129073     	csrw	mepc, t0
+800000a8: 00013283     	ld	t0, 0x0(sp)
+800000ac: 00813303     	ld	t1, 0x8(sp)
+800000b0: 01010113     	addi	sp, sp, 0x10
+800000b4: 34011173     	csrrw	sp, mscratch, sp
+800000b8: 30200073     	mret
+
+00000000800000bc <machine_unexpected_trap>:
+800000bc: 10500073     	wfi
+800000c0: ffdff06f     	j	0x800000bc <machine_unexpected_trap>
+
+Disassembly of section .text.supervisor:
+
+0000000080000100 <supervisor_entry>:
+80000100: 0000c117     	auipc	sp, 0xc
+80000104: f0010113     	addi	sp, sp, -0x100
+80000108: ff010113     	addi	sp, sp, -0x10
+8000010c: 00113423     	sd	ra, 0x8(sp)
+80000110: 01400513     	li	a0, 0x14
+80000114: 01600593     	li	a1, 0x16
+80000118: 0b8000ef     	jal	0x800001d0 <compute_result>
+8000011c: 00a13023     	sd	a0, 0x0(sp)
+80000120: 00013283     	ld	t0, 0x0(sp)
+80000124: 02a00313     	li	t1, 0x2a
+80000128: 08629e63     	bne	t0, t1, 0x800001c4 <supervisor_failure>
+8000012c: 00000813     	li	a6, 0x0
+80000130: 01000893     	li	a7, 0x10
+80000134: 00000073     	ecall
+80000138: 08051663     	bnez	a0, 0x800001c4 <supervisor_failure>
+8000013c: 020003b7     	lui	t2, 0x2000
+80000140: 08759263     	bne	a1, t2, 0x800001c4 <supervisor_failure>
+
+0000000080000144 <.Lpcrel_hi4>:
+80000144: 00008397     	auipc	t2, 0x8
+80000148: ebc38393     	addi	t2, t2, -0x144
+8000014c: 0003b023     	sd	zero, 0x0(t2)
+80000150: 0003b423     	sd	zero, 0x8(t2)
+80000154: 0003b823     	sd	zero, 0x10(t2)
+80000158: 0003bc23     	sd	zero, 0x18(t2)
+8000015c: 0203b023     	sd	zero, 0x20(t2)
+80000160: 0203b423     	sd	zero, 0x28(t2)
+80000164: 0203b823     	sd	zero, 0x30(t2)
+80000168: 0203bc23     	sd	zero, 0x38(t2)
+8000016c: 0403b023     	sd	zero, 0x40(t2)
+80000170: 47585e37     	lui	t3, 0x47585
+80000174: f53e0e13     	addi	t3, t3, -0xad
+80000178: 01c3b023     	sd	t3, 0x0(t2)
+8000017c: 00100e13     	li	t3, 0x1
+80000180: 01c3b423     	sd	t3, 0x8(t2)
+80000184: 0003b823     	sd	zero, 0x10(t2)
+80000188: 0053bc23     	sd	t0, 0x18(t2)
+
+000000008000018c <.Lpcrel_hi5>:
+8000018c: 00001e17     	auipc	t3, 0x1
+80000190: e74e0e13     	addi	t3, t3, -0x18c
+80000194: 02038e93     	addi	t4, t2, 0x20
+
+0000000080000198 <supervisor_copy_message>:
+80000198: 000e4f03     	lbu	t5, 0x0(t3)
+8000019c: 01ee8023     	sb	t5, 0x0(t4)
+800001a0: 001e0e13     	addi	t3, t3, 0x1
+800001a4: 001e8e93     	addi	t4, t4, 0x1
+800001a8: fe0f18e3     	bnez	t5, 0x80000198 <supervisor_copy_message>
+800001ac: 00813083     	ld	ra, 0x8(sp)
+800001b0: 01010113     	addi	sp, sp, 0x10
+800001b4: 434f5fb7     	lui	t6, 0x434f5
+800001b8: d50f8f93     	addi	t6, t6, -0x2b0
+800001bc: 05f3b023     	sd	t6, 0x40(t2)
+800001c0: 00c0006f     	j	0x800001cc <supervisor_done>
+
+00000000800001c4 <supervisor_failure>:
+800001c4: 10500073     	wfi
+800001c8: ffdff06f     	j	0x800001c4 <supervisor_failure>
+
+00000000800001cc <supervisor_done>:
+800001cc: 0000006f     	j	0x800001cc <supervisor_done>
+
+00000000800001d0 <compute_result>:
+800001d0: 00b50533     	add	a0, a0, a1
+800001d4: 00008067     	ret
