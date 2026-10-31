@@ -674,7 +674,8 @@ DecodedInstruction Decoder::Decode(uint32_t rawWord) const {
 				insn.mnemonic = Mnemonic::WFI;
 				markSystemExtension();
 				markLegal();
-			} else if (((rawWord >> 25) & 0x7FU) == 0x08U) {
+			} else if (((rawWord >> 25) & 0x7FU) == 0x09U &&
+			           ((rawWord >> 7) & 0x1FU) == 0U) {
 				insn.mnemonic = Mnemonic::SFENCE_VMA;
 				markSystemExtension();
 				markLegal();

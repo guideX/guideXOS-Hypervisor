@@ -55,15 +55,23 @@ bool Sv39Mmu::validatePte(uint64_t pte, bool atFinalLevel, TrapCause& cause) con
         cause = TrapCause::InstructionPageFault;
         return false;
     }
-    // Reserved bits 54:58 must be zero.
+    // Bits 63:54 include unsupported Svnapot/Svpbmt and reserved fields.
     if ((pte & kPteReservedMask) != 0ULL) {
         cause = TrapCause::InstructionPageFault;
         return false;
     }
-    // At the final level, a valid PTE with R=0 and W=0 is not a valid leaf.
-    if (atFinalLevel && ((pte & kPteR) == 0ULL) && ((pte & kPteW) == 0ULL)) {
-        cause = TrapCause::InstructionPageFault;
-        return false;
+    if (atFinalLevel) {
+        // A leaf has at least one of R/W/X set. W without R is reserved.
+        if ((pte & (kPteR | kPteW | kPteX)) == 0ULL) {
+            cause = TrapCause::InstructionPageFault;
+            return false;
+        }
+    } else {
+        // U, A, and D are reserved in non-leaf PTEs; G and RSW are allowed.
+        if ((pte & (kPteU | kPteA | kPteD)) != 0ULL) {
+            cause = TrapCause::InstructionPageFault;
+            return false;
+        }
     }
     cause = TrapCause::IllegalInstruction; // sentinel: ok
     return true;
@@ -86,8 +94,8 @@ bool Sv39Mmu::checkPermissions(uint64_t pte, AccessType type, PrivilegeMode priv
         return false;
     }
 
-    // S-mode accessing a U page requires SUM=1.
-    if (userPage && !isUser && !sum) {
+    // S-mode may load/store a U page when SUM=1, but may never fetch from it.
+    if (userPage && !isUser && (type == AccessType::Fetch || !sum)) {
         cause = TrapCause::InstructionPageFault;
         return false;
     }
@@ -96,11 +104,8 @@ bool Sv39Mmu::checkPermissions(uint64_t pte, AccessType type, PrivilegeMode priv
     const bool pteW = (pte & kPteW) != 0ULL;
     const bool pteX = (pte & kPteX) != 0ULL;
 
-    // Effective read: R set, or (MXR and X set) for S-mode loads.
-    bool canRead = pteR;
-    if (!canRead && mxr && pteX && priv == PrivilegeMode::Supervisor) {
-        canRead = true;
-    }
+    // MXR permits loads from execute-only pages at either S or U privilege.
+    const bool canRead = pteR || (mxr && pteX);
     const bool canWrite = pteW;
     const bool canExecute = pteX;
 
@@ -169,9 +174,30 @@ void Sv39Mmu::sfenceVma(uint64_t /*rs1*/, uint64_t /*rs2*/) const {
 Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType type,
                                    PrivilegeMode priv, bool mprv) const {
     Sv39Translation result;
+    // The CPU's physical read/write boundary checks the complete access size
+    // after translation and reports an access fault for an inaccessible PA.
+    (void)accessSize;
+    const auto faultCause = [type](bool accessFault) {
+        if (type == AccessType::Fetch) {
+            return accessFault ? TrapCause::InstructionAccessFault
+                               : TrapCause::InstructionPageFault;
+        }
+        if (type == AccessType::Store) {
+            return accessFault ? TrapCause::StoreAccessFault
+                               : TrapCause::StorePageFault;
+        }
+        return accessFault ? TrapCause::LoadAccessFault : TrapCause::LoadPageFault;
+    };
 
-    // Bare mode: identity mapping.
-    if (!pagingEnabled()) {
+    uint64_t mstatus = 0;
+    cpu_->readCsr(0x300U, mstatus);
+    const bool mxr = (mstatus & kMstatusMxr) != 0ULL;
+    const bool sum = (mstatus & kMstatusSum) != 0ULL;
+    const PrivilegeMode effPriv = effectivePriv(priv, mstatus, mprv);
+
+    // Bare mode and effective M-mode accesses bypass S-stage translation.
+    // In particular, MPRV=1 with MPP=M is still a physical M-mode access.
+    if (!pagingEnabled() || effPriv == PrivilegeMode::Machine) {
         result.ok = true;
         result.paddr = vaddr;
         result.pageSize = kPageSize4K;
@@ -188,31 +214,13 @@ Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType
         return result;
     }
 
-    // Read CSRs for permission checks.
-    uint64_t mstatus = 0;
-    cpu_->readCsr(0x300U, mstatus);
-    const bool mxr = (mstatus & kMstatusMxr) != 0ULL;
-    const bool sum = (mstatus & kMstatusSum) != 0ULL;
-    const PrivilegeMode effPriv = effectivePriv(priv, mstatus, mprv);
-
     // Walk the page table.
     uint64_t pte = 0;
     uint64_t pteAddr = 0;
     uint64_t pageSize = 0;
-    if (!walk(vaddr, pte, pteAddr, pageSize)) {
-        result.cause = (type == AccessType::Fetch) ? TrapCause::InstructionPageFault :
-                         (type == AccessType::Store) ? TrapCause::StorePageFault :
-                                                       TrapCause::LoadPageFault;
-        return result;
-    }
-
-    // Validate PTE encoding.
-    TrapCause validateCause = TrapCause::InstructionPageFault;
-    const bool atFinalLevel = (pageSize > 0); // walk sets pageSize only on leaf
-    if (!validatePte(pte, atFinalLevel, validateCause)) {
-        result.cause = (type == AccessType::Fetch) ? TrapCause::InstructionPageFault :
-                         (type == AccessType::Store) ? TrapCause::StorePageFault :
-                                                       TrapCause::LoadPageFault;
+    const WalkResult walkResult = walk(vaddr, pte, pteAddr, pageSize);
+    if (walkResult != WalkResult::Success) {
+        result.cause = faultCause(walkResult == WalkResult::AccessFault);
         return result;
     }
 
@@ -232,19 +240,12 @@ Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType
     result.paddr = (ppn << 12ULL) | offset;
     result.pageSize = pageSize;
 
-    // Check physical bounds: the full access must fit in guest memory.
-    if (!cpu_->rangeInGuest(result.paddr, accessSize)) {
-        result.cause = (type == AccessType::Fetch) ? TrapCause::InstructionPageFault :
-                         (type == AccessType::Store) ? TrapCause::StorePageFault :
-                                                       TrapCause::LoadPageFault;
-        return result;
-    }
-
     // Update A/D bits: A on any qualifying access, D on qualifying store.
     bool setA = true;
     bool setD = (type == AccessType::Store);
-    if (setA || setD) {
-        updateADBits(pteAddr, pte, setA, setD);
+    if ((setA || setD) && !updateADBits(pteAddr, pte, setA, setD)) {
+        result.cause = faultCause(true);
+        return result;
     }
 
     result.ok = true;
@@ -252,17 +253,18 @@ Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType
     return result;
 }
 
-bool Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte, uint64_t& pteAddr, uint64_t& pageSize) const {
+Sv39Mmu::WalkResult Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte,
+                                  uint64_t& pteAddr, uint64_t& pageSize) const {
     pageSize = 0;
 
     // Read satp to get root PPN and mode.
     uint64_t satp = 0;
     if (!cpu_->readCsr(0x180U, satp)) {
-        return false;
+        return WalkResult::PageFault;
     }
     const uint64_t mode = (satp >> kSatpModeShift) & 0xFULL;
     if (mode != kSatpModeSv39) {
-        return false;
+        return WalkResult::PageFault;
     }
     const uint64_t rootPPN = satp & kSatpPpnMask;
 
@@ -273,47 +275,46 @@ bool Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte, uint64_t& pteAddr, uint64_t& p
 
         // Overflow guard: ppn << 12 must not exceed 64 bits.
         if (ppn > (0xFFFFFFFFFFFFFFFFULL >> 12)) {
-            return false;
+            return WalkResult::AccessFault;
         }
         const uint64_t pteAddrCandidate = (ppn << 12ULL) | (vpnBits << kPteShift);
 
         // PTE address must be within guest memory for 8 bytes.
         if (!cpu_->rangeInGuest(pteAddrCandidate, kPteSize)) {
-            return false;
+            return WalkResult::AccessFault;
         }
 
         if (!readPte(pteAddrCandidate, pte)) {
-            return false;
+            return WalkResult::AccessFault;
         }
         pteAddr = pteAddrCandidate;
 
-        // V=0: invalid.
-        if ((pte & kPteV) == 0ULL) {
-            return false;
+        // A leaf has any of R/W/X set. Validate every PTE, including non-leaves.
+        const bool isLeaf = (pte & (kPteR | kPteW | kPteX)) != 0ULL;
+        TrapCause validationCause = TrapCause::InstructionPageFault;
+        if (!validatePte(pte, isLeaf, validationCause)) {
+            return WalkResult::PageFault;
         }
-
-        // Leaf if R or W set.
-        const bool isLeaf = ((pte & kPteR) != 0ULL) || ((pte & kPteW) != 0ULL);
 
         if (isLeaf) {
             // Superpage alignment checks.
             const uint64_t ppnVal = (pte & kPtePPNMask) >> 10;
             if (level == 2) {
-                // 1 GiB page: PPN[1:0] must be 0.
-                if ((ppnVal & 0x3ULL) != 0ULL) {
-                    return false; // misaligned superpage
+                // 1 GiB page: PPN[1:0] comprises the low 18 PPN bits.
+                if ((ppnVal & 0x3FFFFULL) != 0ULL) {
+                    return WalkResult::PageFault;
                 }
                 pageSize = kPageSize1G;
             } else if (level == 1) {
-                // 2 MiB page: PPN[0] must be 0.
-                if ((ppnVal & 0x1ULL) != 0ULL) {
-                    return false; // misaligned superpage
+                // 2 MiB page: all nine PPN[0] bits must be 0.
+                if ((ppnVal & 0x1FFULL) != 0ULL) {
+                    return WalkResult::PageFault;
                 }
                 pageSize = kPageSize2M;
             } else {
                 pageSize = kPageSize4K;
             }
-            return true;
+            return WalkResult::Success;
         }
 
         // Non-leaf: V=1, R=0, W=0. Extract PPN for next-level table base.
@@ -321,11 +322,11 @@ bool Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte, uint64_t& pteAddr, uint64_t& p
 
         // At level 0, a non-leaf valid PTE has no next level: invalid.
         if (level == 0) {
-            return false;
+            return WalkResult::PageFault;
         }
     }
 
-    return false;
+    return WalkResult::PageFault;
 }
 
 } // namespace riscv

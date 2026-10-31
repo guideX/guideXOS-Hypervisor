@@ -25,13 +25,16 @@ public:
     void sfenceVma(uint64_t rs1, uint64_t rs2) const;
 
 private:
+    enum class WalkResult : uint8_t { Success, PageFault, AccessFault };
+
     RV64CPU* cpu_;
 
     static uint64_t vpn(uint64_t vaddr, unsigned level);
     bool readPte(uint64_t paddr, uint64_t& pte) const;
     bool writePte(uint64_t paddr, uint64_t pte) const;
 
-    bool walk(uint64_t vaddr, uint64_t& pte, uint64_t& pteAddr, uint64_t& pageSize) const;
+    WalkResult walk(uint64_t vaddr, uint64_t& pte, uint64_t& pteAddr,
+                    uint64_t& pageSize) const;
 
     bool validatePte(uint64_t pte, bool atFinalLevel, TrapCause& cause) const;
 

@@ -101,7 +101,8 @@ constexpr uint64_t kMstatusTvm = 1ULL << 20;
 constexpr uint64_t kMstatusWritableMask =
     kMstatusSie | kMstatusMie | kMstatusSpie | kMstatusMpie | kMstatusSpp |
     kMstatusMppMask | kMstatusMprv | kMstatusSum | kMstatusMxr;
-constexpr uint64_t kSstatusMask = kMstatusSie | kMstatusSpie | kMstatusSpp;
+constexpr uint64_t kSstatusMask =
+    kMstatusSie | kMstatusSpie | kMstatusSpp | kMstatusSum | kMstatusMxr;
 
 // ---------------------------------------------------------------------------
 // Sv39 virtual-memory constants (RISCV-3).
@@ -128,16 +129,16 @@ constexpr uint64_t kPteU   = 1ULL << 4;
 constexpr uint64_t kPteG   = 1ULL << 5;
 constexpr uint64_t kPteA   = 1ULL << 6;
 constexpr uint64_t kPteD   = 1ULL << 7;
-constexpr uint64_t kPtePPNMask = 0xFFFFFFFFFFFFULL << 10;
-constexpr uint64_t kPteReservedMask = 0x1FULL << 54;
+constexpr uint64_t kPtePPNMask = 0xFFFFFFFFFFFULL << 10; // PPN[43:0], bits 53:10.
+constexpr uint64_t kPteReservedMask = 0x3FFULL << 54; // Unsupported extension/reserved bits 63:54.
 
 constexpr uint64_t kSatpModeShift = 60;
 constexpr uint64_t kSatpModeMask = 0xFULL << kSatpModeShift;
 constexpr uint64_t kSatpModeBare = 0ULL;
 constexpr uint64_t kSatpModeSv39 = 8ULL;
-constexpr uint64_t kSatpPpnMask = 0xFFFFFFFFFFFFULL;
+constexpr uint64_t kSatpPpnMask = 0xFFFFFFFFFFFULL; // Sv39 PPN[43:0].
 
-constexpr uint32_t kSfenceVmaOpcode = 0x00200073U;
+constexpr uint32_t kSfenceVmaOpcode = 0x12000073U; // sfence.vma x0,x0.
 
 enum class AccessType : uint8_t { Fetch, Load, Store };
 
@@ -332,10 +333,12 @@ public:
  *   GPRs zero, CSRs to their reset values (mtvec/stvec 0 Direct, mstatus 0,
  *   medeleg/mideleg 0, mie/mip/sie/sip 0, mepc/sepc/mcause/scause/mtval/stval/
  *   mscratch/sscratch 0, misa fixed, mhartid 0, satp Bare 0).
- * - Tests enter lower privilege architecturally (mstatus.MPP + mepc + MRET,
- *   or SPP + sepc + SRET); there is no test backdoor privilege setter.
- * - satp supports Bare (MODE 0) only; other MODE writes are ignored (WARL).
- *   Bare mode is a direct byte-region mapping, not paging or PMP isolation.
+ * - Guest proof programs enter lower privilege architecturally (mstatus.MPP
+ *   + mepc + MRET, or SPP + sepc + SRET); the production API exposes no
+ *   privilege setter. Focused unit tests may use the friend-only test helper.
+ * - satp supports Bare (MODE 0) and Sv39 (MODE 8), with ASIDLEN=0; other
+ *   MODE writes are WARL-ignored. Bare mode is a direct byte-region mapping,
+ *   not paging or PMP isolation.
  */
 class RV64CPU {
     friend class Sv39Mmu;
@@ -379,7 +382,8 @@ public:
 
     // Sv39 translation (RISCV-3). Translate a virtual address to a guest
     // physical address; Bare mode is identity. Returns ok=false with a page
-    // fault cause on failure.
+    // or access-fault cause on translation failure. Explicit physical-memory
+    // bounds are checked by the CPU access after translation.
     Sv39Translation translateFetch(uint64_t vaddr, size_t size) const;
     Sv39Translation translateLoad(uint64_t vaddr, size_t size) const;
     Sv39Translation translateStore(uint64_t vaddr, size_t size) const;
@@ -389,8 +393,8 @@ public:
     bool readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const;
     bool writePhysical(uint64_t paddr, const uint8_t* src, size_t size);
 
-    // Transitional alias for tests (RISCV-3): storeBytes is now translated.
-    // Exposed as a public alias for backward compat.
+    // Direct guest-physical write helper retained for test compatibility.
+    // It bypasses translation; guest stores use RV64CPU::step().
     bool storeBytes(uint64_t addr, const uint8_t* src, size_t size) {
         return writePhysical(addr, src, size);
     }

@@ -59,15 +59,17 @@ RV64I vs independently defined extensions (explicit split):
 - Zicsr (executed subset): the six CSR instructions with the CSR matrix in
   include/riscv_cpu.h (mstatus/misa/medeleg/mideleg/mie/mip/mtvec/mscratch/
   mepc/mcause/mtval/mhartid, sstatus/sie/sip/stvec/sscratch/sepc/scause/
-  stval/satp). satp accepts Bare (0) and Sv39 (8); ASIDLEN=0 (hardwired);
-  other MODE values are WARL-ignored. mstatus SUM/MXR/MPRV are writable;
-  medeleg extends to bits 12/13/15. Unknown/unavailable CSRs trap illegal,
-  never silently succeed.
+  stval/satp). satp accepts Bare (0) and Sv39 (8); ASIDLEN=0, so nonzero
+  ASID writes are WARL-rejected and other MODE values leave satp unchanged.
+  mstatus SUM/MXR/MPRV are writable; sstatus exposes SUM and MXR; TVM is
+  hardwired zero. medeleg extends to bits 12/13/15. Unknown/unavailable
+  CSRs trap illegal, never silently succeed.
 - SYSTEM privileged (executed): ECALL/MRET/SRET with full trap semantics;
   WFI reports Unsupported (no wake sources modeled); SFENCE.VMA is now
-  decoded legal and executed as a TLB-sync no-op (the Sv39 walker is
-  uncached, so no cached translations exist to flush); U-mode SFENCE.VMA
-  traps illegal.
+  decoded with funct7=0001001, funct3=000, rd=0 and executed as an
+  uncached-walker synchronization point. Each subsequent translation reads
+  guest-physical PTEs again; U-mode SFENCE.VMA traps illegal. TVM is
+  hardwired zero, so S-mode is allowed to execute it.
 - RV64M (decode only, still Unsupported): MUL/MULH/MULHSU/MULHU/DIV/DIVU/
   REM/REMU/MULW/DIVW/DIVUW/REMW/REMUW.
 - RV64A (decode only, still Unsupported): LR.W/SC.W/AMO* and LR.D/SC.D/AMO*.
@@ -95,13 +97,16 @@ Tested CPU semantics:
   breakpoint Halt vs trap modes, SBI Base FIDs 0-6 + probe/unsupported
   behavior with and without a provider, full S-mode hello-world (see
   phase-riscv-2-report.txt), deterministic step bounds.
-- test_riscv_sv39 (164 runtime checks, RISCV-3): Bare identity
-  translation, canonical-address fault (cause 13), satp WARL (Sv39
-  accepted, ASIDLEN=0), guest hello-world through translated stores
-  with paging on, automatic A/D-bit updates on leaf PTEs, SFENCE.VMA
-  retirement, permission faults (U/SUM/MXR/store-to-read-only with
-  faulting VA in tval), and store-page-fault recovery (delegated to
-  S-mode handler that repairs the PTE, SFENCE.VMA, SRET, store retry).
+- test_riscv_sv39 (850 runtime checks, RISCV-3): Bare identity; canonical
+  upper-half and noncanonical addresses; Sv39 4 KiB/2 MiB/1 GiB walks and
+  superpage alignment; invalid/reserved PTE and unsupported-extension-bit
+  rejection; U/S, SUM, MXR, MPRV/MPP, sstatus, and A/D rules; satp WARL;
+  actual M-mode guest page-table construction; nonidentity S-mode hello
+  with translated stores and loadback; all page-fault causes and delegated
+  S-mode store-fault repair/SFENCE.VMA/SRET retry; MPRV M-origin trap
+  routing; physical access-fault distinction; failed load/store precision;
+  uncached translation after PTE modification; and SFENCE/CSR privilege
+  violations. Checks are active runtime comparisons in Debug and Release.
 
 Explicitly unsupported operations (valid decode -> StepOutcome::Unsupported):
 - All RV64M, all RV64A, WFI, all compressed except C.EBREAK.
@@ -112,8 +117,9 @@ Synchronous traps (StepOutcome::Trap, never silent):
   (cause 1), load/store address misaligned (causes 4/6), load/store access
   fault (causes 5/7), ECALL from U/S/M (causes 8/9/11), instruction/load/
   store page fault (causes 12/13/15, tval = faulting virtual address).
-  Translation failures raise page faults; physical-range failures after
-  translation (or in M-mode/Bare) raise access faults. Legacy Illegal/
+  Invalid PTE/permission failures raise page faults; page-table physical
+  read/write failures and explicit physical-range failures after translation
+  (or in M-mode/Bare) raise access faults. Legacy Illegal/
   FetchFault/MemoryFault outcomes are retained in the enum for source
   compatibility and are returned only when no guest image is loaded;
   architectural execution delivers traps.
@@ -138,7 +144,7 @@ Latest test result:
 - PASS: RISC-V minimal execution test passed (180 checks)
 - PASS: RV64I full execution test passed (105 checks)
 - PASS: Privilege/CSR/trap/SBI tests passed (266 checks)
-- PASS: Sv39 MMU/translation/page-fault tests passed (164 checks)
+- PASS: Sv39 MMU/translation/page-fault tests passed (850 checks)
 - PASS: IA-64 spot regressions (implementation untouched): test_efi_memory_map,
   test_ia64_sal, test_new_instructions
 
