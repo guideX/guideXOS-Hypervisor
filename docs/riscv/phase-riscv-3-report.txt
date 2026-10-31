@@ -158,4 +158,5 @@ Remaining gaps and RISCV-4 recommendation
   add timer/interrupt delivery and the required platform/SBI groundwork before
   attempting firmware or operating-system boot.
 
-Local commit: recorded after the follow-up commit; no push performed.
+Audit implementation commit: c6255812fd162261528acf13512e1b1c219230a6
+(local only; no push performed).
