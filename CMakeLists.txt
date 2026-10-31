@@ -178,6 +178,7 @@ set(HEADERS
     include/ExampleISAPlugin.h
     include/riscv_decoder.h
     include/riscv_cpu.h
+    include/riscv/riscv_elf64_loader.h
     include/SyscallDispatcher.h
     include/CPUContext.h
     include/IVirtualMachine.h
@@ -817,6 +818,22 @@ add_test(NAME RiscVRv64aTests COMMAND test_riscv_rv64a)
 add_test(NAME RiscVRv64imaGuestTests
          COMMAND test_riscv_rv64ima_guest ${RISCV_IMA_GUEST_BINARY_COPY})
 
+# RISC-V static ELF64/PT_LOAD load-and-execute integration milestone.
+set(RISCV_ELF64_GUEST_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_elf64_guest)
+set(RISCV_ELF64_GUEST_FILE ${RISCV_ELF64_GUEST_FIXTURE_DIR}/guest.elf)
+set(RISCV_ELF64_GUEST_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv_elf64_guest.elf)
+configure_file(${RISCV_ELF64_GUEST_FILE} ${RISCV_ELF64_GUEST_COPY} COPYONLY)
+
+add_executable(test_riscv_elf64_boot
+    tests/test_riscv_elf64_boot.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+add_test(NAME RiscVRiscvElf64BootTests
+         COMMAND test_riscv_elf64_boot ${RISCV_ELF64_GUEST_COPY})
+
 foreach(riscv7_target IN ITEMS test_riscv_rv64m test_riscv_rv64a test_riscv_rv64ima_guest)
     if(MSVC)
         target_compile_options(${riscv7_target} PRIVATE /W4)
@@ -824,6 +841,12 @@ foreach(riscv7_target IN ITEMS test_riscv_rv64m test_riscv_rv64a test_riscv_rv64
         target_compile_options(${riscv7_target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endforeach()
+
+if(MSVC)
+    target_compile_options(test_riscv_elf64_boot PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_elf64_boot PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)

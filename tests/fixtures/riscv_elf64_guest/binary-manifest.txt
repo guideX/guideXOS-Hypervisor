@@ -1,0 +1,16 @@
+Clang: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1) (LLVM integrated assembler)
+Linker: LLD 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1) (compatible with GNU linkers)
+Objcopy: llvm-objcopy, compatible with GNU objcopy
+Target: riscv64-unknown-elf
+ISA: rv64ima_zicsr (RV64IMA plus Zicsr)
+ABI: lp64 soft-float
+ELF: ELF64 little-endian EM_RISCV ET_EXEC, statically linked
+Compressed instructions: disabled by .option norvc
+Linker relaxation: disabled
+Dynamic linking: disabled; no PT_INTERP or PT_DYNAMIC
+Compile: clang --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mcmodel=medany -fno-pic -mno-relax -c guest.S
+Link: ld.lld --no-relax --build-id=none -T guest.ld guest.o
+Entry: _start at 0x80200000
+PT_LOAD layout: RX 0x80200000, R 0x80400000, RW 0x80600000
+ELF size: 13936 bytes
+SHA-256: 1fbc7e2cd48fdf413c29740a60f7e0e8441725f2fdab1d739ac122366c048afb

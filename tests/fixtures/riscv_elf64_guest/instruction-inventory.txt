@@ -1,0 +1,27 @@
+Guest instruction inventory
+===========================
+
+Source: guest.S
+Disassembly: guest.disassembly.txt
+Architecture selected by Clang: rv64ima_zicsr
+
+Privilege and CSR:
+  CSRW MTVEC, CSRW MEPC, CSRW MSTATUS, CSRR MCause, CSRR MEPC, CSRW MEPC
+  MRET (initial M-to-S handoff and S-mode SBI return)
+  ECALL (one S-mode SBI Base call)
+  EBREAK (unexpected-trap sentinel only; not reached on success)
+
+RV64I:
+  ADDI, AUIPC, BNE, BNEZ, JAL, JALR, LD, LBU, LI expansions,
+  LUI, MV expansion, SB, SD, SLLI, FENCE
+
+RV64M:
+  MUL
+
+RV64A:
+  AMOADD.D with aqrl ordering bits
+
+Compressed instructions: none; .option norvc and the disassembly uses
+four-byte instruction addresses throughout.
+Floating-point and vector instructions: none.
+Linker relaxation: disabled for compilation and linking.

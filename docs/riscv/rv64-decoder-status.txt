@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-7)
+RISC-V Decoder and Execution Status (updated Phase RISCV-8)
 
 Current decoded instruction families:
 - RV64I
@@ -331,7 +331,7 @@ Audit notes:
   assertion and test_elf_validation unresolved IA-64 link symbols remain
   documented separately in the RISCV-6 report.
 
-Boot-readiness inventory:
+Boot-readiness inventory (snapshot at the end of RISCV-7; superseded below):
 - RV64I is complete for the tested instruction profile. RV64M and the selected
   standard RV64A word/doubleword profile are now executed and independently
   tested. Zicsr/SYSTEM includes the existing privileged and SBI Base/TIME
@@ -345,10 +345,137 @@ Boot-readiness inventory:
   HSM/SRST/PMU/DBCN support exists. RV64IMA execution does not imply
   Linux/OpenSBI readiness.
 
-Recommended RISCV-8 target:
+Recommended RISCV-8 target (completed):
 - Add a bounded static RISC-V ELF64 ET_EXEC/PT_LOAD loader and malformed-image
   tests, then boot an independently linked RV64IMA/Zicsr S-mode ELF guest.
   Build the selected fixture without C so it fits the current execution
   profile. This makes image loading the next directly testable blocker; Linux,
   OpenSBI, compressed execution, multicore, and platform devices remain separate
   requirements.
+
+--- Phase RISCV-8: static RISC-V ELF64 loading and execution ---
+
+RISC-V ELF64 profile:
+- A separate bounded loader lives in include/riscv/riscv_elf64_loader.h and
+  src/riscv/riscv_elf64_loader.cpp. The IA-64 loader is not changed.
+- Accepts ELF64, little-endian, current ELF version, System V/GNU OS ABI,
+  EM_RISCV, ET_EXEC, a zero e_flags RV64IMA soft-float profile, and nonempty
+  PT_LOAD segments. Section headers are optional and never determine placement.
+- Requires a 64-byte ELF header, 56-byte program-header records, an in-file
+  program-header table, and ordinary bounded program-header numbering.
+  PN_XNUM, zero headers, and more than 64 headers are rejected.
+- Limits input files to 16 MiB, load segments to 16, and total loaded memory to
+  8 MiB. Rejects RVC, floating-point ABI, RVE, TSO, unknown ELF flags, ELF32,
+  non-little-endian files, ET_REL, ET_DYN, PT_INTERP, PT_DYNAMIC, PT_TLS,
+  PT_SHLIB, executable stacks, unknown program-header types, and runtime
+  relocation/dependency requirements.
+- For each PT_LOAD, bounds checks file and guest-RAM ranges, checks
+  p_filesz <= p_memsz, power-of-two and offset/address-congruent alignment,
+  requires p_paddr == p_vaddr, rejects overlaps and reserved-region collisions,
+  copies p_filesz bytes, and zeroes the BSS tail. Entry must be four-byte
+  aligned and contained in file-backed bytes of an executable PT_LOAD.
+- The address policy is fixed-address identity placement: p_vaddr is the
+  execution address, and p_paddr must equal it. No relocation or virtual-to-
+  physical translation is performed by the loader.
+- The complete plan, staged segment bytes, and rollback copies are prepared
+  before the first write. A failed write attempts to restore all affected
+  segment ranges. The CPU is reset and its PC set from e_entry only after all
+  segment writes succeed. Timer MMIO overlap is rejected.
+
+ELF guest fixture:
+- tests/fixtures/riscv_elf64_guest/guest.elf is an independently linked static
+  ELF64 ET_EXEC produced by Clang/LLVM integrated assembler and LLD 22.1.8.
+  Source, linker script, build.ps1, README, manifest, readobj inventory,
+  instruction inventory, and disassembly are checked in beside it.
+- Toolchain flags select rv64ima_zicsr and LP64 soft-float; .option norvc,
+  -mno-relax, and --no-relax disable compressed output and relaxation. No C
+  runtime, libc, dynamic dependency, or run-time relocation is used.
+- The program headers contain three distinct PT_LOAD ranges: RX at 0x80200000
+  (520 file/memory bytes), R at 0x80400000 (24/24 bytes), and RW at 0x80600000
+  (8 file bytes and 24 memory bytes). The last 16 bytes prove BSS zeroing.
+  p_align is 4096, p_paddr equals p_vaddr, and entry is 0x80200000.
+- Fixture size is 13,936 bytes. SHA-256:
+  1fbc7e2cd48fdf413c29740a60f7e0e8441725f2fdab1d739ac122366c048afb.
+  Rebuilding with the recorded LLVM 22.1.8 installation reproduced the same
+  digest. CTest consumes the checked-in ELF and requires no toolchain/network.
+
+Guest execution contract and evidence:
+- RAM is [0x80000000, 0x81000000) (16 MiB). CPU reset starts M-mode, hart ID
+  zero, PC is the ELF e_entry, satp is Bare, and reset CSR state is retained.
+  The loader does not perform privilege transitions.
+- Guest assembly initializes its stack at 0x80FFFFF0 in the reserved page
+  [0x80FFF000, 0x81000000), installs its M-mode trap handler, sets MPP=S and
+  mepc, then executes MRET. The test observes the first handoff before S-mode
+  work. SBI Base uses the existing host firmware boundary; the guest M trap
+  handler advances mepc and executes a second MRET to return to S-mode.
+- Output/message reservation is 0x80010000..0x80010FFF; the guest trap record
+  reservation is 0x80011000..0x80011FFF. Neither collides with PT_LOAD.
+  Message bytes begin at output base; the 128-byte signature begins at
+  0x80010100 and its completion word is at offset 112. The guest writes the
+  completion word last. The CPU step budget is 2,000.
+- The guest executes RV64M MUL, RV64A AMOADD.D, initialized-data and zeroed-BSS
+  checks, stack load/store, function call/return, SBI Base get_spec_version,
+  exact "Hello from RISC-V ELF64" output, and a version-1 signature.
+- The integrated test verifies ELF-derived PC rather than the historical
+  0x80000000 raw-binary entry, three noncontiguous PT_LOAD placements, copied
+  file bytes, BSS zeros, preserved inter-segment gaps, reserved regions,
+  rejected-load RAM/CPU-state preservation, isolated CPU instances, M-mode
+  entry, architectural MRET to S-mode, RV64M/A retirement, SBI completion,
+  output, every signature field, and completion within budget.
+- Successful run: 236 step calls, 235 retired instructions, two MRET
+  executions (startup and SBI return), one RV64M MUL, one RV64A AMOADD.D,
+  one SBI Base call, and completion in S-mode. Both Debug and Release direct
+  runs report 405 explicit runtime checks.
+- Malformed checks cover header magic/size/version/class/endian/machine/type,
+  header and program-table bounds/counts/entry sizes, sectionless loading,
+  segment file/memory ranges, alignment and congruence, overlap, RAM and
+  reservation collisions, virtual/file/table overflow, resource caps,
+  physical/virtual mismatch, entrypoint alignment/permissions, RVC/F ABI/RVE/
+  TSO/unknown flags, interpreter/dynamic dependency/relocation requirements,
+  and missing loadable segments.
+
+Validation and next target:
+- Pre-edit baseline: 12/12 RISC-V CTest suites passed in Debug.
+- Final Debug: 13/13 RISC-V CTest suites passed, including
+  RiscVRiscvElf64BootTests. New target Release: 1/1 CTest passed; direct Debug
+  and Release executions each report 405 checks.
+- IA-64 regression: EfiMemoryMapTests and IA64SalTests passed (2/2 CTest);
+  test_ia64_acpi, test_ia64_interrupt_controller, and
+  test_ia64_processor_interrupt_block passed as direct executables. No IA-64
+  source or shared .phase change was made.
+- Existing unrelated issues remain: test_io_devices has a console-dispatch
+  assertion and legacy test_elf_validation has unresolved IA-64 link symbols.
+  Neither was changed in this phase.
+- Recommended RISCV-9 target: boot a genuine single-hart OpenSBI generic
+  FW_JUMP image on a QEMU virt-compatible platform and transfer to a
+  freestanding S-mode payload. OpenSBI's base platform profile requires
+  RV64IMA_Zicsr, S-mode, and direct mtvec, which match this CPU's selected
+  execution profile; firmware still requires authentic M-mode setup and
+  platform services. Begin with an explicit FDT and the serial/timer devices
+  needed by the selected OpenSBI build. Keep Linux and SMP outside that phase.
+- For a later Linux target, standard inputs differ: Linux boot documentation
+  specifies a0=hartid, a1=FDT address, satp=0, and 2 MiB RV64 placement
+  alignment. The documented QEMU virt/OpenSBI path consumes the flattened
+  arch/riscv/boot/Image, not vmlinux ELF, so it needs a distinct Image loader.
+  A 16 MiB RAM profile is not a Linux platform contract. FDT-described RAM,
+  firmware reservations, kernel, optional initramfs, and devices must agree.
+- Remaining items by target: compressed execution is not in OpenSBI's base
+  ISA minimum, but any selected firmware/Linux build must be inspected or
+  compiled to the emulator's advertised ISA; RV64C is absent today. Linux SMP
+  uses SBI TIME/IPI/RFENCE interfaces, with HSM preferred for ordered hart
+  startup and CPU hotplug; SRST and DBCN serve reboot and console use cases.
+  The current SBI boundary is not an executing OpenSBI firmware. A real
+  QEMU-virt-style machine also needs FDT handoff, NS16550 UART output, external
+  interrupt-controller/MMIO support for device interrupts, and a larger
+  declared RAM map. OpenSBI can operate without PMP, but then cannot isolate
+  M-mode firmware and protected memory. For Linux, resident firmware and
+  protected ranges must be excluded from RAM mappings through FDT/UEFI
+  reservations; Linux also needs its documented entry registers and paging
+  state.
+- Primary references consulted 2026-10-31:
+  https://docs.kernel.org/arch/riscv/boot.html
+  https://www.qemu.org/docs/master/system/riscv/virt.html
+  https://github.com/riscv-software-src/opensbi/blob/master/docs/platform_requirements.md
+  https://github.com/riscv-software-src/opensbi/blob/master/docs/firmware/fw.md
+  https://github.com/riscv-software-src/opensbi/blob/master/docs/platform/qemu_virt.md
+  https://github.com/torvalds/linux/blob/master/arch/riscv/kernel/sbi.c

@@ -1,0 +1,156 @@
+
+D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_elf64_guest\guest.elf:	file format elf64-littleriscv
+
+Disassembly of section .text:
+
+0000000080200000 <_start>:
+80200000:      	li	sp, 0x81
+80200004:      	slli	sp, sp, 0x18
+80200008:      	addi	sp, sp, -0x10
+8020000c:      	auipc	t0, 0x0
+80200010:      	addi	t0, t0, 0x28
+80200014:      	csrw	mtvec, t0
+80200018:      	auipc	t0, 0x0
+8020001c:      	addi	t0, t0, 0x54
+80200020:      	csrw	mepc, t0
+80200024:      	li	t0, 0x1
+80200028:      	slli	t0, t0, 0xb
+8020002c:      	csrw	mstatus, t0
+80200030:      	mret
+
+0000000080200034 <machine_trap>:
+80200034:      	csrr	t0, mcause
+80200038:      	li	t1, 0x9
+8020003c:      	bne	t0, t1, 0x80200050 <unexpected_trap>
+80200040:      	csrr	t0, mepc
+80200044:      	addi	t0, t0, 0x4
+80200048:      	csrw	mepc, t0
+8020004c:      	mret
+
+0000000080200050 <unexpected_trap>:
+80200050:      	lui	t1, 0x80
+80200054:      	addi	t1, t1, 0x11
+80200058:      	slli	t1, t1, 0xc
+8020005c:      	sd	t0, 0x0(t1)
+80200060:      	csrr	t0, mtval
+80200064:      	sd	t0, 0x8(t1)
+80200068:      	ebreak
+
+000000008020006c <supervisor_entry>:
+8020006c:      	li	s0, 0x0
+
+0000000080200070 <.Lpcrel_hi2>:
+80200070:      	auipc	t0, 0x400
+80200074:      	addi	t0, t0, -0x70
+80200078:      	ld	s1, 0x0(t0)
+8020007c:      	lui	t1, 0x449
+80200080:      	addi	t1, t1, -0x733
+80200084:      	slli	t1, t1, 0xe
+80200088:      	addi	t1, t1, 0x455
+8020008c:      	slli	t1, t1, 0xc
+80200090:      	addi	t1, t1, 0x667
+80200094:      	slli	t1, t1, 0xc
+80200098:      	addi	t1, t1, 0x788
+8020009c:      	bne	s1, t1, 0x8020016c <guest_failure>
+
+00000000802000a0 <.Lpcrel_hi3>:
+802000a0:      	auipc	t0, 0x400
+802000a4:      	addi	t0, t0, -0x98
+802000a8:      	ld	s2, 0x0(t0)
+802000ac:      	bnez	s2, 0x8020016c <guest_failure>
+802000b0:      	li	s10, 0x1
+802000b4:      	li	t0, 0x6
+802000b8:      	li	t1, 0x7
+802000bc:      	mul	s5, t0, t1
+802000c0:      	li	t1, 0x2a
+802000c4:      	bne	s5, t1, 0x8020016c <guest_failure>
+
+00000000802000c8 <.Lpcrel_hi4>:
+802000c8:      	auipc	t0, 0x400
+802000cc:      	addi	t0, t0, -0xb8
+802000d0:      	li	t1, 0x1
+802000d4:      	amoadd.d.aqrl	s3, t1, (t0)
+802000d8:      	ld	s4, 0x0(t0)
+802000dc:      	bnez	s3, 0x8020016c <guest_failure>
+802000e0:      	li	t1, 0x1
+802000e4:      	bne	s4, t1, 0x8020016c <guest_failure>
+802000e8:      	addi	sp, sp, -0x10
+802000ec:      	lui	t0, 0x12345
+802000f0:      	addi	t0, t0, 0x678
+802000f4:      	sd	t0, 0x0(sp)
+802000f8:      	ld	s7, 0x0(sp)
+802000fc:      	addi	sp, sp, 0x10
+80200100:      	lui	t1, 0x12345
+80200104:      	addi	t1, t1, 0x678
+80200108:      	bne	s7, t1, 0x8020016c <guest_failure>
+8020010c:      	li	a0, 0x29
+80200110:      	auipc	ra, 0x0
+80200114:      	jalr	0xf0(ra) <add_one>
+80200118:      	mv	s6, a0
+8020011c:      	li	t1, 0x2a
+80200120:      	bne	s6, t1, 0x8020016c <guest_failure>
+80200124:      	li	a7, 0x10
+80200128:      	li	a6, 0x0
+8020012c:      	ecall
+80200130:      	mv	s8, a0
+80200134:      	mv	s9, a1
+80200138:      	bnez	s8, 0x8020016c <guest_failure>
+8020013c:      	lui	t1, 0x2000
+80200140:      	bne	s9, t1, 0x8020016c <guest_failure>
+
+0000000080200144 <.Lpcrel_hi5>:
+80200144:      	auipc	t0, 0x200
+80200148:      	addi	t0, t0, -0x144
+8020014c:      	lui	t1, 0x8001
+80200150:      	slli	t1, t1, 0x4
+80200154:      	lbu	t2, 0x0(t0)
+80200158:      	sb	t2, 0x0(t1)
+8020015c:      	addi	t0, t0, 0x1
+80200160:      	addi	t1, t1, 0x1
+80200164:      	bnez	t2, 0x80200154 <.Lpcrel_hi5+0x10>
+80200168:      	j	0x80200170 <write_signature>
+
+000000008020016c <guest_failure>:
+8020016c:      	li	s0, 0x1
+
+0000000080200170 <write_signature>:
+80200170:      	lui	t0, 0x8001
+80200174:      	slli	t0, t0, 0x4
+80200178:      	addi	t0, t0, 0x100
+8020017c:      	lui	t1, 0x8eb09
+80200180:      	addi	t1, t1, -0x567
+80200184:      	slli	t1, t1, 0xc
+80200188:      	addi	t1, t1, -0x739
+8020018c:      	slli	t1, t1, 0x14
+80200190:      	addi	t1, t1, 0x3
+80200194:      	srli	t1, t1, 0x1
+80200198:      	sd	t1, 0x0(t0)
+8020019c:      	li	t1, 0x1
+802001a0:      	sd	t1, 0x8(t0)
+802001a4:      	sd	s0, 0x10(t0)
+802001a8:      	sd	s5, 0x18(t0)
+802001ac:      	sd	s3, 0x20(t0)
+802001b0:      	sd	s4, 0x28(t0)
+802001b4:      	sd	s1, 0x30(t0)
+802001b8:      	sd	s10, 0x38(t0)
+802001bc:      	sd	s7, 0x40(t0)
+802001c0:      	sd	s6, 0x48(t0)
+802001c4:      	sd	s8, 0x50(t0)
+802001c8:      	sd	s9, 0x58(t0)
+802001cc:      	li	t1, 0x17
+802001d0:      	sd	t1, 0x60(t0)
+802001d4:      	fence	rw, w
+802001d8:      	lui	t1, 0x10d4
+802001dc:      	addi	t1, t1, -0x2cb
+802001e0:      	slli	t1, t1, 0xc
+802001e4:      	addi	t1, t1, 0x413
+802001e8:      	slli	t1, t1, 0xe
+802001ec:      	addi	t1, t1, 0x455
+802001f0:      	slli	t1, t1, 0xc
+802001f4:      	addi	t1, t1, 0x445
+802001f8:      	sd	t1, 0x70(t0)
+802001fc:      	j	0x802001fc <write_signature+0x8c>
+
+0000000080200200 <add_one>:
+80200200:      	addi	a0, a0, 0x1
+80200204:      	ret
