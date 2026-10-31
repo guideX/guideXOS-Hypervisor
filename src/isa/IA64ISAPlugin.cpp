@@ -270,6 +270,19 @@ struct EfiSlotName {
 };
 
 std::string cpuSummary(const CPUState& cpu) {
+    const RSEState& rse = cpu.GetRSEState();
+    size_t invalidPartitions = 0;
+    size_t cleanPartitions = 0;
+    size_t dirtyPartitions = 0;
+    size_t currentPartitions = 0;
+    for (RSERegisterPartition partition : rse.physicalPartition) {
+        switch (partition) {
+            case RSERegisterPartition::INVALID: ++invalidPartitions; break;
+            case RSERegisterPartition::CLEAN: ++cleanPartitions; break;
+            case RSERegisterPartition::DIRTY: ++dirtyPartitions; break;
+            case RSERegisterPartition::CURRENT: ++currentPartitions; break;
+        }
+    }
     std::ostringstream oss;
     oss << "ip=" << BootStageTrace::Hex(cpu.GetIP())
         << " r1_gp=" << BootStageTrace::Hex(cpu.GetGR(1))
@@ -280,7 +293,23 @@ std::string cpuSummary(const CPUState& cpu) {
         << " br0=" << BootStageTrace::Hex(cpu.GetBR(0))
         << " br6=" << BootStageTrace::Hex(cpu.GetBR(6))
         << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
-        << " psr=" << BootStageTrace::Hex(cpu.GetPSR());
+        << " psr=" << BootStageTrace::Hex(cpu.GetPSR())
+        << " rsc=" << BootStageTrace::Hex(rse.rsc)
+        << " bsp=" << BootStageTrace::Hex(rse.bsp)
+        << " bspstore=" << BootStageTrace::Hex(rse.bspstore)
+        << " rnat=" << BootStageTrace::Hex(rse.rnat)
+        << " pfs=" << BootStageTrace::Hex(rse.pfs)
+        << " bspLoad=" << BootStageTrace::Hex(rse.bspLoad)
+        << " rseRing={bof:" << static_cast<unsigned>(rse.bof)
+        << ",store:" << static_cast<unsigned>(rse.storeReg)
+        << ",load:" << static_cast<unsigned>(rse.loadReg)
+        << ",sof:" << static_cast<unsigned>(rse.sof)
+        << ",sol:" << static_cast<unsigned>(rse.sol)
+        << ",sor:" << static_cast<unsigned>(rse.sor) << '}'
+        << " rsePartitions={invalid:" << invalidPartitions
+        << ",clean:" << cleanPartitions
+        << ",dirty:" << dirtyPartitions
+        << ",current:" << currentPartitions << '}';
     return oss.str();
 }
 
@@ -3652,6 +3681,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             } else {
                                 std::cout << "unknown";
                             }
+                            std::cout << ' ' << cpuSummary(state_.getCPUState());
                             std::cout << std::dec << std::endl;
                         }
                     }
@@ -4582,13 +4612,6 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                           descriptorCandidate, originalBranchTarget,
                                           EFI_STATUS_SUCCESS);
                         }
-                    } else if (!cachedInstruction_.HasBranchTarget() && branchTarget == 0) {
-                        handledFirmwareCallStub = true;
-                        branchTarget = currentIP + 16;
-                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
-                        std::cout << "[EFI-STUB] indirect br.call target is null; returning EFI_SUCCESS"
-                                  << std::endl;
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         isZeroFilledEfiHandoffBundle(memory, branchTarget)) {
                         handledFirmwareCallStub = true;

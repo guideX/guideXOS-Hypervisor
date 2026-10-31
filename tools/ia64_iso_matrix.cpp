@@ -1349,6 +1349,47 @@ int main(int argc, char** argv) {
                   << (vm == nullptr ? std::string("unknown") : ia64::vmStateToString(vm->getState()))
                   << " error=\"" << metadata.lastError << "\""
                   << std::endl;
+        if (vm != nullptr) {
+            const ia64::CPUState& cpu = vm->getCPUState(0);
+            const ia64::RSEState& rse = cpu.GetRSEState();
+            size_t invalidPartitions = 0;
+            size_t cleanPartitions = 0;
+            size_t dirtyPartitions = 0;
+            size_t currentPartitions = 0;
+            for (ia64::RSERegisterPartition partition : rse.physicalPartition) {
+                switch (partition) {
+                    case ia64::RSERegisterPartition::INVALID: ++invalidPartitions; break;
+                    case ia64::RSERegisterPartition::CLEAN: ++cleanPartitions; break;
+                    case ia64::RSERegisterPartition::DIRTY: ++dirtyPartitions; break;
+                    case ia64::RSERegisterPartition::CURRENT: ++currentPartitions; break;
+                }
+            }
+            std::cerr << "[IA64-MATRIX] cpu-final"
+                      << " ip=0x" << std::hex << cpu.GetIP()
+                      << " slot=" << std::dec << (plugin == nullptr ? 0 : plugin->getCurrentSlot())
+                      << " psr=0x" << std::hex << cpu.GetPSR()
+                      << " cfm=0x" << cpu.GetCFM()
+                      << " pfs=0x" << rse.pfs
+                      << " rsc=0x" << rse.rsc
+                      << " bsp=0x" << rse.bsp
+                      << " bspstore=0x" << rse.bspstore
+                      << " rnat=0x" << rse.rnat
+                      << " bspLoad=0x" << rse.bspLoad
+                      << " r1=0x" << cpu.GetGR(1)
+                      << " br0=0x" << cpu.GetBR(0)
+                      << " br6=0x" << cpu.GetBR(6)
+                      << " rseRing={bof:" << std::dec << static_cast<unsigned>(rse.bof)
+                      << ",store:" << static_cast<unsigned>(rse.storeReg)
+                      << ",load:" << static_cast<unsigned>(rse.loadReg)
+                      << ",sof:" << static_cast<unsigned>(rse.sof)
+                      << ",sol:" << static_cast<unsigned>(rse.sol)
+                      << ",sor:" << static_cast<unsigned>(rse.sor) << '}'
+                      << " rsePartitions={invalid:" << invalidPartitions
+                      << ",clean:" << cleanPartitions
+                      << ",dirty:" << dirtyPartitions
+                      << ",current:" << currentPartitions << '}'
+                      << std::endl;
+        }
         if (ia64::VirtualMachine* dumpVm = manager.getVMDirect(vmId)) {
             dumpGuestRam(*dumpVm, options.dumpRamPath);
         }
