@@ -1,0 +1,140 @@
+guideXOS Hypervisor — Phase RISCV-5 Closeout
+Outcome: A
+
+Repository and phase
+--------------------
+- Required branch: RISCV. Starting HEAD: dea9d5811aa45189c9474d438565cb2f2651a95b.
+- At preflight, RISCV was 3 commits ahead of origin/RISCV and 0 behind.
+- The starting .phase-riscv marker correctly named RISCV-4 complete and
+  RISCV-5 next. It now records RISCV-5 complete and RISCV-6 next.
+- The pre-existing untracked build-riscv3/, build-riscv4/, and
+  build-riscv4-vs/ directories were preserved. New Debug and Release outputs
+  use build-riscv5-debug/ and build-riscv5-release/. No shared .phase file or
+  IA-64 implementation file was modified.
+
+SBI TIME and firmware boundary
+------------------------------
+- SBI Base behavior and its existing version/implementation IDs are retained.
+  SbiFirmwareProvider implements TIME EID 0x54494D45, FID 0 only, using the
+  modern calling convention: a7=EID, a6=FID, a0=absolute uint64 deadline;
+  return a0=error and a1=0. Supported calls return SBI_SUCCESS. Unsupported
+  TIME FIDs and EIDs return SBI_ERR_NOT_SUPPORTED (-2). No legacy timer EID,
+  IPI, RFENCE, HSM, SRST, PMU, or DBCN extension is implemented.
+- Base ProbeExtension advertises TIME only when SbiFirmwareProvider is
+  connected to the same CPU that owns the timer. The Base-only provider still
+  advertises Base and returns TIME unsupported. Timer and provider state are
+  per CPU; two CPU instances have separate mtime, mtimecmp, deadline, and
+  pending state.
+- S-mode ECALL first takes the existing architectural trap into M-mode. The
+  provider dispatches after M trap state is established and writes only the
+  SBI result registers a0/a1. Guest M-mode instructions at mtvec then execute;
+  the guest handler advances mepc for ECALL and returns with MRET. No duplicate
+  MRET or suppressed trap path is used. With no provider, the original ECALL
+  trap and unmodified guest registers are preserved.
+- The provider's M-timer callback runs after architectural machine interrupt
+  entry. It is a host-side firmware service, not guest firmware instruction
+  execution. The guest M-mode vector still runs its instructions and MRETs.
+
+Timer routing and semantics
+---------------------------
+- The SBI request is an absolute deadline in the existing deterministic
+  mtime clock. Scheduling sets this CPU's mtimecmp to that deadline and clears
+  STIP. A due event first raises hardware-owned MTIP (cause 7). On M-mode timer
+  entry, the provider moves mtimecmp to UINT64_MAX, clearing the level-sensitive
+  MTIP, then asserts distinct supervisor STIP (cause 5). MTIP is not delegated.
+- A new SBI TIME request from the S-mode handler clears the old STIP, stores
+  the new absolute deadline, and rearms mtimecmp. A past or equal deadline is
+  immediately due at the next enabled machine-timer service. UINT64_MAX
+  disables practical future delivery; as with the modeled unsigned comparator,
+  that deadline could assert only if mtime itself reaches UINT64_MAX.
+- Timer pending and local/global interrupt enables remain independent. The
+  existing one-tick-per-retired-instruction policy is unchanged. The WFI test
+  harness advances explicit virtual ticks while the guest waits; the CPU does
+  not consume host wall time while asleep.
+- S-mode reads the architectural time CSR (0xC01), backed by mtime. Reads below
+  M require mcounteren.TM; U-mode also requires scounteren.TM. No Sstc or
+  stimecmp facility and no S-mode timer MMIO access are exposed.
+
+Executable guest proofs
+-----------------------
+- Program A runs in S-mode, queries SBI Base and TIME, reads time, records a
+  future absolute deadline, and calls sbi_set_timer. It checks the TIME probe,
+  SBI result values, unsupported FID/EID results, unrelated register
+  preservation, and provider/mtimecmp deadline state.
+- Program B takes a machine timer event, observes guest MRET, receives the
+  delegated supervisor timer interrupt, runs a real S-mode handler, rearms via
+  SBI TIME, and resumes through SRET.
+- Program C executes WFI and services three separately scheduled supervisor
+  timer events. The guest handler performs every counter update and timer
+  rearm; the host test only advances virtual time while waiting.
+- Program D repeats the three-event WFI proof with Sv39. S-mode code,
+  stvec, and data use non-identity mappings; translated handler fetch, guest
+  memory writes, virtual interrupted EPC, SBI ABI results, and SRET return are
+  checked.
+- Program E and focused cases cover unsupported IDs, unavailable and absent
+  providers, MTIE/MIE/STIE/SIE masking, pending-but-masked STIP, past/equal and
+  reprogrammed deadlines, clearing STIP, UINT64_MAX, repeated ECALL/MRET/SRET,
+  WFI wakeup, counter permission, bounded stepping, and timer/CSR isolation
+  across two CPU instances.
+
+Verification and regressions
+----------------------------
+- Before code changes, the seven RISCV-4 CTest suites passed (7/7).
+- After changes, all seven existing RISC-V suites plus test_riscv_sbi_time pass
+  in Debug (8/8 CTest suites). The focused SBI TIME executable reports 158
+  explicit runtime checks in Debug and 158 in Release; Release CTest passes
+  (1/1 focused suite). Checks remain active in Release.
+- IA-64 regression executables test_ia64_sal, test_ia64_acpi,
+  test_ia64_interrupt_controller, and test_ia64_processor_interrupt_block all
+  pass. No IA-64 implementation files changed.
+- test_io_devices fails both before and after the RISC-V changes with:
+  `Assertion failed: output.str() == "Hi\n", file ...\tests\test_io_devices.cpp,
+  line 27`. The failing condition follows three calls to
+  Memory::write<uint8_t> at the console data address. That typed helper writes
+  directly to Memory's backing vector and bypasses registered device
+  dispatch, so VirtualConsole receives no characters and the output stream is
+  empty. This reproduces on the unmodified RISCV-4 baseline and is unrelated
+  to the RISC-V changes; the IA-64/device implementation was left unchanged.
+- git diff --check passes.
+
+Boot-readiness inventory and next phase
+---------------------------------------
+- RV64M is decoded but not executed. It is required for code built with M or
+  runtimes that emit multiply/divide; it is optional for a deliberately RV64I
+  single-hart payload. RV64A is decoded but not executed; atomics are needed
+  for SMP and guests/runtimes that use them, but not for the current proof.
+  RV64C has decode foundation only, with C.EBREAK as the only executed
+  compressed instruction; C is required when images contain compressed
+  instructions and optional for a no-C build.
+- The ELF loader and ELF validation suite are IA-64-specific; there is no
+  EM_RISCV load-to-RV64CPU path. ELF loading and entry setup are mandatory for
+  an ELF guest, while a raw-image test target can defer them.
+- loadProgram uses a caller-provided PC/base. Real firmware needs a documented
+  reset vector, ROM/RAM map, boot arguments, and image-loading contract.
+  Device-tree generation/consumption is absent and is required to describe a
+  Linux/OpenSBI platform, but can be deferred by a private fixed-map test.
+- No RISC-V UART is connected. Serial diagnostics need it; a memory-signature
+  guest can run without it. Base and TIME are available; IPI/RFENCE/HSM/SRST/
+  PMU/DBCN remain unsupported. SMP and Linux/OpenSBI targets need additional
+  services according to their selected platform/configuration.
+- The timer is single-hart mtime/mtimecmp with deterministic retired-
+  instruction time and host-side MTIP-to-STIP forwarding. Full CLINT/ACLINT,
+  PLIC/APLIC/IMSIC, external-device interrupts, and platform clock-frequency
+  compatibility remain open for Linux/hardware targets.
+- Recommended RISCV-6 target: a small single-hart RV64I S-mode guest with a
+  documented M-mode entry contract and memory-signature completion. Add a
+  RISC-V ELF loader only if ELF is part of that selected target. Keep Linux,
+  OpenSBI, SMP, and external-device emulation out of the immediate milestone.
+
+Changed files
+-------------
+- CMakeLists.txt
+- include/riscv_cpu.h
+- src/riscv/riscv_cpu.cpp
+- tests/test_riscv_sbi_time.cpp
+- docs/riscv/rv64-decoder-status.txt
+- docs/riscv/phase-riscv-5-report.txt
+- .phase-riscv
+
+The local closeout commit SHA is reported in the task response. No push was
+performed.

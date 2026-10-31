@@ -301,6 +301,15 @@ constexpr uint64_t kSbiErrInvalidParam = static_cast<uint64_t>(-3LL);
 
 // SBI Base extension ID.
 constexpr uint64_t kSbiBaseEid = 0x10ULL;
+// SBI TIME extension (modern SBI calling convention, FID 0 = set_timer).
+constexpr uint64_t kSbiTimeEid = 0x54494D45ULL;
+constexpr uint64_t kSbiTimeSetTimerFid = 0ULL;
+
+// Narrow architectural counter CSRs implemented for the SBI TIME workload.
+constexpr uint32_t kCsrScounteren = 0x106U;
+constexpr uint32_t kCsrMcounteren = 0x306U;
+constexpr uint32_t kCsrTime = 0xC01U;
+constexpr uint64_t kCounterenTime = 1ULL << 1;
 
 // Documented SBI version surface (SBI v2.0: major 2, minor 0).
 constexpr uint64_t kSbiSpecVersion = (2ULL << 24) | 0ULL;  // 0x2000000
@@ -311,6 +320,8 @@ struct SbiReturn {
     uint64_t error = kSbiErrNotSupported;
     uint64_t value = 0ULL;
 };
+
+class RV64CPU;
 
 /**
  * ISbiProvider - firmware interception boundary for S-mode ECALLs.
@@ -327,8 +338,21 @@ public:
     virtual ~ISbiProvider() = default;
     // Handle an S-mode ECALL trapped to M-mode. args holds guest a0-a5.
     virtual SbiReturn handle(uint64_t eid, uint64_t fid, const uint64_t args[6]) = 0;
+    // Context-aware dispatch lets a provider keep timer state per CPU/VM.
+    virtual SbiReturn handle(uint64_t eid, uint64_t fid, const uint64_t args[6],
+                             RV64CPU& cpu) {
+        (void)cpu;
+        return handle(eid, fid, args);
+    }
     // True when eid is advertised by this provider.
     virtual bool supports(uint64_t eid) const = 0;
+    virtual bool supports(uint64_t eid, const RV64CPU& cpu) const {
+        (void)cpu;
+        return supports(eid);
+    }
+    // Called after architectural M-mode entry for a machine timer interrupt.
+    // Implementations may perform bounded host-side firmware services here.
+    virtual void serviceMachineTimer(RV64CPU& cpu) { (void)cpu; }
 };
 
 /**
@@ -406,6 +430,14 @@ public:
     uint64_t mtimecmp() const { return mtimecmp_; }
     const MachineTimerMapping& machineTimerMapping() const { return timerMapping_; }
     bool configureMachineTimer(const MachineTimerMapping& mapping);
+
+    // SBI TIME state is per hart. Firmware schedules an absolute deadline on
+    // the machine comparator; servicing a due MTIP clears the comparator and
+    // presents STIP as a separate supervisor pending source.
+    void scheduleSupervisorTimer(uint64_t absoluteDeadline);
+    bool serviceSupervisorTimer();
+    uint64_t supervisorTimerDeadline() const { return supervisorTimerDeadline_; }
+    bool supervisorTimerArmed() const { return supervisorTimerArmed_; }
 
     // Bounded source injection for test/platform wiring. MTIP is timer-owned
     // and cannot be injected; supported software, STIP, and external sources
@@ -533,19 +565,49 @@ private:
     uint64_t mepc_ = 0;
     uint64_t mcause_ = 0;
     uint64_t mtval_ = 0;
+    uint64_t mcounteren_ = 0;
     // Supervisor state (sie/sip are views of mie/mip, sstatus of mstatus).
     uint64_t stvec_ = 0;
     uint64_t sscratch_ = 0;
     uint64_t sepc_ = 0;
     uint64_t scause_ = 0;
     uint64_t stval_ = 0;
+    uint64_t scounteren_ = 0;
     uint64_t satp_ = 0;
 
     // Interrupt source and deterministic MTIMER state.
     MachineTimerMapping timerMapping_{};
     uint64_t mtime_ = 0;
     uint64_t mtimecmp_ = UINT64_MAX;
+    uint64_t supervisorTimerDeadline_ = UINT64_MAX;
+    bool supervisorTimerArmed_ = false;
     bool wfiWaiting_ = false;
+};
+
+/**
+ * SbiFirmwareProvider - per-CPU host-side machine-firmware service for SBI
+ * Base and TIME. ECALL dispatch and MTIP service occur only after the CPU has
+ * performed the architectural M-mode trap entry. Guest M-mode trap code still
+ * executes normally to return with MRET.
+ */
+class SbiFirmwareProvider final : public ISbiProvider {
+public:
+    explicit SbiFirmwareProvider(RV64CPU& cpu);
+
+    SbiReturn handle(uint64_t eid, uint64_t fid, const uint64_t args[6]) override;
+    SbiReturn handle(uint64_t eid, uint64_t fid, const uint64_t args[6],
+                     RV64CPU& cpu) override;
+    bool supports(uint64_t eid) const override;
+    bool supports(uint64_t eid, const RV64CPU& cpu) const override;
+    void serviceMachineTimer(RV64CPU& cpu) override;
+
+    uint64_t scheduledDeadline() const;
+
+private:
+    SbiReturn handleForCpu(uint64_t eid, uint64_t fid, const uint64_t args[6],
+                           RV64CPU* dispatchCpu);
+    RV64CPU* cpu_;
+    SbiBaseProvider base_;
 };
 
 }  // namespace riscv

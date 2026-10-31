@@ -114,6 +114,66 @@ SbiReturn SbiBaseProvider::handle(uint64_t eid, uint64_t fid, const uint64_t arg
 
 bool SbiBaseProvider::supports(uint64_t eid) const { return eid == kSbiBaseEid; }
 
+SbiFirmwareProvider::SbiFirmwareProvider(RV64CPU& cpu) : cpu_(&cpu) {}
+
+SbiReturn SbiFirmwareProvider::handle(uint64_t eid, uint64_t fid,
+                                      const uint64_t args[6]) {
+    return handleForCpu(eid, fid, args, nullptr);
+}
+
+SbiReturn SbiFirmwareProvider::handle(uint64_t eid, uint64_t fid,
+                                      const uint64_t args[6], RV64CPU& cpu) {
+    return handleForCpu(eid, fid, args, &cpu);
+}
+
+SbiReturn SbiFirmwareProvider::handleForCpu(uint64_t eid, uint64_t fid,
+                                            const uint64_t args[6],
+                                            RV64CPU* dispatchCpu) {
+    if (eid == kSbiBaseEid) {
+        if (fid != 3ULL) return base_.handle(eid, fid, args);
+        SbiReturn out;
+        out.error = kSbiSuccess;
+        const uint64_t probed = (args != nullptr) ? args[0] : 0ULL;
+        const bool supported = dispatchCpu != nullptr
+            ? supports(probed, *dispatchCpu)
+            : supports(probed);
+        out.value = supported ? 1ULL : 0ULL;
+        return out;
+    }
+    if (eid != kSbiTimeEid || cpu_ == nullptr || cpu_->sbiProvider() != this ||
+        (dispatchCpu != nullptr && dispatchCpu != cpu_)) {
+        return {kSbiErrNotSupported, 0ULL};
+    }
+    if (fid != kSbiTimeSetTimerFid) {
+        return {kSbiErrNotSupported, 0ULL};
+    }
+    if (args == nullptr) {
+        return {kSbiErrInvalidParam, 0ULL};
+    }
+
+    cpu_->scheduleSupervisorTimer(args[0]);
+    return {kSbiSuccess, 0ULL};
+}
+
+bool SbiFirmwareProvider::supports(uint64_t eid) const {
+    return eid == kSbiBaseEid ||
+           (eid == kSbiTimeEid && cpu_ != nullptr && cpu_->sbiProvider() == this);
+}
+
+bool SbiFirmwareProvider::supports(uint64_t eid, const RV64CPU& cpu) const {
+    if (eid == kSbiBaseEid) return true;
+    return eid == kSbiTimeEid && cpu_ != nullptr && cpu_ == &cpu &&
+           cpu.sbiProvider() == this;
+}
+
+void SbiFirmwareProvider::serviceMachineTimer(RV64CPU& cpu) {
+    if (cpu_ == &cpu) (void)cpu.serviceSupervisorTimer();
+}
+
+uint64_t SbiFirmwareProvider::scheduledDeadline() const {
+    return cpu_ != nullptr ? cpu_->supervisorTimerDeadline() : UINT64_MAX;
+}
+
 RV64CPUState::RV64CPUState() : pc_(0) {
     Reset();
 }
@@ -176,14 +236,18 @@ void RV64CPU::reset() {
     mepc_ = 0;
     mcause_ = 0;
     mtval_ = 0;
+    mcounteren_ = 0;
     stvec_ = 0;
     sscratch_ = 0;
     sepc_ = 0;
     scause_ = 0;
     stval_ = 0;
+    scounteren_ = 0;
     satp_ = 0;
     mtime_ = 0;
     mtimecmp_ = UINT64_MAX;
+    supervisorTimerDeadline_ = UINT64_MAX;
+    supervisorTimerArmed_ = false;
     wfiWaiting_ = false;
     updateTimerPending();
     // Guest memory image is preserved across reset; PC restarts at its base.
@@ -409,6 +473,29 @@ void RV64CPU::advanceVirtualTime(uint64_t ticks) {
     updateTimerPending();
 }
 
+void RV64CPU::scheduleSupervisorTimer(uint64_t absoluteDeadline) {
+    supervisorTimerDeadline_ = absoluteDeadline;
+    supervisorTimerArmed_ = absoluteDeadline != UINT64_MAX;
+    // SBI TIME schedules an absolute deadline through the machine timer.
+    // STIP is a distinct software-presented supervisor source and is cleared
+    // on every reprogram, including immediate and disabled deadlines.
+    mip_ &= ~kInterruptSupervisorTimerBit;
+    mtimecmp_ = absoluteDeadline;
+    updateTimerPending();
+}
+
+bool RV64CPU::serviceSupervisorTimer() {
+    if (!supervisorTimerArmed_ || mtime_ < supervisorTimerDeadline_) return false;
+    // MTIP is level-sensitive and remains asserted until mtimecmp is moved
+    // beyond mtime. Disarm it before presenting STIP so MRET cannot loop on
+    // the same machine timer event.
+    supervisorTimerArmed_ = false;
+    mtimecmp_ = UINT64_MAX;
+    updateTimerPending();
+    mip_ |= kInterruptSupervisorTimerBit;
+    return true;
+}
+
 void RV64CPU::retireInstruction() {
     ++instructionsRetired_;
     advanceVirtualTime(1);
@@ -512,12 +599,14 @@ bool RV64CPU::csrSupported(uint32_t csr) const {
         case kCsrScause:
         case kCsrStval:
         case kCsrSip:
+        case kCsrScounteren:
         case kCsrSatp:
         case kCsrMstatus:
         case kCsrMisa:
         case kCsrMedeleg:
         case kCsrMideleg:
         case kCsrMie:
+        case kCsrMcounteren:
         case kCsrMtvec:
         case kCsrMscratch:
         case kCsrMepc:
@@ -525,6 +614,7 @@ bool RV64CPU::csrSupported(uint32_t csr) const {
         case kCsrMtval:
         case kCsrMip:
         case kCsrMhartid:
+        case kCsrTime:
             return true;
         default:
             return false;
@@ -553,6 +643,9 @@ bool RV64CPU::csrRead(uint32_t csr, uint64_t& value) const {
         case kCsrMtval: value = mtval_; return true;
         case kCsrStval: value = stval_; return true;
         case kCsrMhartid: value = 0ULL; return true;
+        case kCsrScounteren: value = scounteren_; return true;
+        case kCsrMcounteren: value = mcounteren_; return true;
+        case kCsrTime: value = mtime_; return true;
         case kCsrSatp: value = satp_; return true;
         default: return false;
     }
@@ -588,6 +681,9 @@ bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
         case kCsrMie:
             mie_ = value & kMieWritableMask;
             return true;
+        case kCsrMcounteren:
+            mcounteren_ = value & 0xFFFFFFFFULL;
+            return true;
         case kCsrMip:
             // With no stimecmp extension, M-mode software may present STIP.
             // MSIP and SSIP are also software writable; MTIP and external
@@ -601,6 +697,9 @@ bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
             mie_ = (mie_ & ~writable) | (value & writable);
             return true;
         }
+        case kCsrScounteren:
+            scounteren_ = value & 0xFFFFFFFFULL;
+            return true;
         case kCsrSip: {
             const uint64_t writable = mideleg_ & kInterruptSupervisorSoftwareBit;
             mip_ = (mip_ & ~writable) | (value & writable);
@@ -823,6 +922,13 @@ StepResult RV64CPU::step() {
     uint64_t interruptCause = 0;
     if (selectInterrupt(interruptCause)) {
         deliverInterrupt(interruptCause, pc, result);
+        if (interruptCause == kInterruptMachineTimer &&
+            result.trapTarget == PrivilegeMode::Machine && sbi_ != nullptr) {
+            // The provider is a host-side firmware service boundary. Trap
+            // state and the M-mode vector are established first; guest M-mode
+            // instructions still execute from mtvec and return with MRET.
+            sbi_->serviceMachineTimer(*this);
+        }
         return result;
     }
 
@@ -1391,6 +1497,14 @@ StepResult RV64CPU::step() {
                             pc, result);
                 return result;
             }
+            if (csr == kCsrTime && priv_ != PrivilegeMode::Machine &&
+                ((mcounteren_ & kCounterenTime) == 0ULL ||
+                 (priv_ == PrivilegeMode::User &&
+                  (scounteren_ & kCounterenTime) == 0ULL))) {
+                deliverTrap(TrapCause::IllegalInstruction, static_cast<uint64_t>(raw),
+                            pc, result);
+                return result;
+            }
             uint64_t oldValue = 0;
             if (!csrRead(csr, oldValue)) {
                 deliverTrap(TrapCause::IllegalInstruction, static_cast<uint64_t>(raw),
@@ -1452,7 +1566,7 @@ StepResult RV64CPU::step() {
                 uint64_t args[6] = {state_.GetGR(10), state_.GetGR(11),
                                     state_.GetGR(12), state_.GetGR(13),
                                     state_.GetGR(14), state_.GetGR(15)};
-                const SbiReturn r = sbi_->handle(eid, fid, args);
+                const SbiReturn r = sbi_->handle(eid, fid, args, *this);
                 state_.SetGR(10, r.error);
                 state_.SetGR(11, r.value);
                 result.sbiHandled = true;

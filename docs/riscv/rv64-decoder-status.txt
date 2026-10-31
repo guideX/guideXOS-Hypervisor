@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-4)
+RISC-V Decoder and Execution Status (updated Phase RISCV-5)
 
 Current decoded instruction families:
 - RV64I
@@ -59,7 +59,7 @@ RV64I vs independently defined extensions (explicit split):
 - Zicsr (executed subset): the six CSR instructions with the CSR matrix in
   include/riscv_cpu.h (mstatus/misa/medeleg/mideleg/mie/mip/mtvec/mscratch/
   mepc/mcause/mtval/mhartid, sstatus/sie/sip/stvec/sscratch/sepc/scause/
-  stval/satp). satp accepts Bare (0) and Sv39 (8); ASIDLEN=0, so nonzero
+  stval/satp/mcounteren/scounteren/time). satp accepts Bare (0) and Sv39 (8); ASIDLEN=0, so nonzero
   ASID writes are WARL-rejected and other MODE values leave satp unchanged.
   mstatus SUM/MXR/MPRV are writable; sstatus exposes SUM and MXR; TVM is
   hardwired zero. medeleg extends to bits 12/13/15. RISCV-4 implements the
@@ -184,43 +184,100 @@ Guest execution evidence and RISCV-4 regression:
 - Seven RISC-V CTest suites pass: decoder, fetch/decode, minimal execution,
   RV64I, privilege/SBI, Sv39, and interrupt/timer.
 
-Remaining architectural requirements for Linux boot (NOT in RISCV-4):
-- Sv48 mode; TLB caching with real SFENCE.VMA invalidation (walker is
-  uncached; SFENCE.VMA is a sync no-op)
-- SBI TIME/IPI/fence/HSM/debug-console/reset extensions + real firmware;
-  SBI TIME remains unadvertised and sbi_set_timer is not connected
-- PLIC/APLIC/IMSIC, UART/virtio devices, and full CLINT/ACLINT behavior
-- RV64M/A/F/D/V execution, full C extension
-- ELF loader integration and boot Hart state machine
+--- Phase RISCV-5: SBI TIME and supervisor timer service ---
 
-Test command used:
-- cmake -S . -B build-riscv3 -G "Visual Studio 18 2026" -A x64
-- cmake --build build-riscv3 --config Debug --target test_riscv_decoder --target test_riscv_fetch_decode --target test_riscv_minimal_execution --target test_riscv_rv64i_full --target test_riscv_priv_sbi --target test_riscv_sv39 -- /m:1
-- ctest --test-dir build-riscv3 -C Debug -R "RiscV" --output-on-failure
+SBI services and timer ownership:
+- SBI Base behavior and version values are unchanged. SbiFirmwareProvider
+  implements EID 0x10 and SBI TIME EID 0x54494D45, FID 0 only. The modern
+  call receives an absolute RV64 deadline in a0, returns the signed SBI error
+  in a0, and returns zero in a1. Unsupported EIDs/FIDs return
+  SBI_ERR_NOT_SUPPORTED (-2). The legacy timer extension is not implemented.
+- TIME is advertised by Base ProbeExtension only when a per-CPU
+  SbiFirmwareProvider is attached to that same CPU. The Base-only provider
+  continues to advertise Base but reports TIME unavailable.
+- The CPU owns mtime, mtimecmp, the SBI-requested deadline, and its armed
+  state. set_timer writes that CPU's mtimecmp and clears pending STIP. When a
+  due machine timer interrupt enters M-mode, the provider disarms mtimecmp to
+  UINT64_MAX before setting STIP. MTIP remains cause 7 and STIP cause 5; MTIP
+  is not delegated. Rearming from an S-mode handler updates mtimecmp and
+  clears the old STIP. UINT64_MAX disables practical future delivery.
+- The provider executes as a host-side firmware service after architectural
+  M-mode trap entry. Guest M-mode instructions at mtvec still execute and use
+  MRET; S-mode SBI calls advance mepc in the guest M handler. The provider
+  does not claim to execute firmware instructions on the guest's behalf.
+- Virtual time policy remains one tick per retired guest instruction, with
+  explicit harness ticks while WFI waits. S-mode reads CSR time only when
+  mcounteren.TM is set; U-mode also requires scounteren.TM. No timer MMIO is
+  exposed through this counter read, and Sstc/stimecmp are not advertised.
 
-Latest test result:
-- PASS: RISC-V RV64I/RV64M/Zicsr/RV64A/RV64C decoder smoke tests passed
-- PASS: RISC-V guest-memory fetch/decode smoke harness passed
-- PASS: RISC-V minimal execution test passed (180 checks)
-- PASS: RV64I full execution test passed (105 checks)
-- PASS: Privilege/CSR/trap/SBI tests passed (266 checks)
-- PASS: Sv39 MMU/translation/page-fault tests passed (850 checks)
-- PASS: IA-64 spot regressions (implementation untouched): test_efi_memory_map,
-  test_ia64_sal, test_new_instructions
+RISCV-5 executable guest evidence:
+- test_riscv_sbi_time builds RV64I guest instruction streams and executes
+  them through RV64CPU::step. Program A queries Base/TIME, reads time, calls
+  sbi_set_timer, checks error/value results and preserves unrelated registers.
+- Program B executes an S-mode timer handler and SRET after the M-mode MTIP
+  service presents delegated STIP. Program C executes WFI and receives three
+  distinct timer events; each handler uses SBI TIME to rearm, and the final
+  UINT64_MAX call clears/disables the timer. The test harness explicitly
+  advances deterministic virtual time while WFI is waiting.
+- Program D repeats the three-event WFI workload with Sv39 enabled and
+  non-identity S-mode instruction, handler, and data pages. It verifies
+  translated vector fetch, guest-memory updates, virtual sepc, and return.
+- Negative coverage includes unsupported EID/FID, Base-only/no provider,
+  absolute/past/equal/future deadlines, STIP clearing and reprogramming,
+  UINT64_MAX, MTIE/MIE/STIE/SIE gating, time CSR permission, two-CPU timer
+  isolation, and bounded progress. Debug and Release each pass 158 runtime
+  assertions in the focused suite.
+- Seven pre-existing RISC-V CTest suites and the new SBI TIME suite pass in
+  Debug. The seven-suite RISCV-4 baseline passed before edits. The focused SBI
+  TIME suite also passes in Release.
 
-Next milestone runway:
-- RISCV-5: connect SBI TIME/sbi_set_timer to the deterministic MTIMER and
-  supervisor timer presentation path; preserve SBI Base behavior, advertise
-  TIME only after its firmware contract is complete. Then define the minimal
-  platform firmware/device-tree services required by the intended boot flow.
-  No Linux/OpenSBI boot is claimed.
+Boot readiness inventory:
+- RV64M: decoded but not executed. Required for targets compiled with M and
+  for toolchains/runtimes that emit multiply/divide; optional for a deliberately
+  RV64I-only smoke payload.
+- RV64A: decoded but not executed. Required for SMP and guests/runtimes that
+  use atomics; optional for the current single-hart, no-atomic guest proof.
+- RV64C: decode foundation only; all compressed instructions except C.EBREAK
+  remain Unsupported. Required if firmware or kernel binaries contain C
+  instructions; optional when the target is built without C.
+- ELF: the existing loader and validation tests are IA-64-specific; they do
+  not load an EM_RISCV image into RV64CPU. ELF loading and RISC-V entry setup
+  are mandatory for an ELF target, but a bounded raw-image proof can defer it.
+- Firmware entry/layout: loadProgram starts at a caller-supplied base and the
+  tests assemble their own M-mode boot instructions. A real firmware guest
+  needs a documented reset PC, RAM/ROM map, entry arguments, and image loader.
+- Device tree: no FDT generation or RISC-V FDT handoff/consumer exists. It is
+  mandatory to describe devices to Linux/OpenSBI; a private fixed-map test
+  image can defer it.
+- UART/console: no RISC-V UART device is connected. It is needed for serial
+  boot logs and interactive firmware, but not for a guest that reports through
+  a bounded memory signature.
+- SBI: Base and TIME are now available through the host-side per-CPU provider.
+  IPI, RFENCE, HSM, SRST, PMU, and DBCN are unsupported. SMP needs the relevant
+  IPI/HSM services; Linux and OpenSBI targets may require additional services
+  according to their platform and configuration.
+- Timer/platform: only single-hart mtime/mtimecmp using the deterministic
+  retired-instruction clock is modeled. The M-provider translates due MTIP to
+  STIP. There is no full CLINT/ACLINT, PLIC/APLIC/IMSIC, or external-device
+  interrupt path. Linux hardware compatibility requires those platform
+  contracts and the expected clock frequency/interrupt routing.
 
-Execution semantics: full RV64I + Zicsr/SYSTEM privilege subset (see above)
-Runtime/plugin registration: deferred
+Recommended RISCV-6 target:
+- Select a small, single-hart RV64I S-mode guest image with a documented M-mode
+  entry contract and a memory-signature completion path. Add an RISC-V ELF
+  loader only if ELF is part of that selected target; keep Linux/OpenSBI,
+  multicore, external interrupts, and device emulation as later milestones.
+
+Test command used for RISCV-5:
+- cmake -S . -B build-riscv5-debug -G "Visual Studio 18 2026"
+- cmake --build build-riscv5-debug --config Debug --target test_riscv_sbi_time
+- ctest --test-dir build-riscv5-debug -C Debug -R "RiscV" --output-on-failure
+- cmake --build build-riscv5-release --config Release --target test_riscv_sbi_time
+- build-riscv5-release/bin/Release/test_riscv_sbi_time.exe
 
 Audit notes:
-- IA-64 / Itanium modified: no
-- Windows-specific dependencies added to C++ core: no
-- Execution semantics: RV64I plus the RISCV-4 interrupt/timer/WFI subset;
-  M/A/F/D/V and compressed execution deferred
-- Runtime/plugin registration: deferred
+- IA-64 implementation source modified: no.
+- Shared .phase file modified: no.
+- Existing build-riscv3/, build-riscv4/, and build-riscv4-vs/ preserved.
+- Execution remains RV64I plus the implemented CSR/SYSTEM/interrupt/timer
+  subset; RV64M/A/C execution remains deferred.

@@ -689,6 +689,7 @@ add_test(NAME RiscVRv64iFullTests COMMAND test_riscv_rv64i_full)
 add_test(NAME RiscVPrivSbiTests COMMAND test_riscv_priv_sbi)
 add_test(NAME RiscVSv39Tests COMMAND test_riscv_sv39)
 add_test(NAME RiscVInterruptTimerTests COMMAND test_riscv_interrupt_timer)
+add_test(NAME RiscVSbiTimeTests COMMAND test_riscv_sbi_time)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -760,6 +761,14 @@ add_executable(test_riscv_interrupt_timer
     src/decoder/riscv_decoder.cpp
 )
 
+# RISCV-5 SBI TIME firmware service, recurring S-mode timer, WFI, and Sv39.
+add_executable(test_riscv_sbi_time
+    tests/test_riscv_sbi_time.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()
@@ -770,4 +779,10 @@ if(MSVC)
     target_compile_options(test_riscv_interrupt_timer PRIVATE /W4)
 else()
     target_compile_options(test_riscv_interrupt_timer PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(MSVC)
+    target_compile_options(test_riscv_sbi_time PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_sbi_time PRIVATE -Wall -Wextra -Wpedantic)
 endif()
