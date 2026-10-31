@@ -1,0 +1,107 @@
+guideXOS Hypervisor — Phase RISCV-4 Closeout
+Outcome: A
+
+Repository and phase
+--------------------
+- Required branch: RISCV.
+- Starting HEAD: d39020d1987fe542c76eaeca968f4beb64ea0766.
+- At preflight, RISCV was 2 commits ahead of origin/RISCV and 0 behind.
+- The starting .phase-riscv marker correctly named RISCV-3 complete and
+  RISCV-4 next. It now records RISCV-4 complete and RISCV-5 next.
+- The pre-existing untracked build-riscv3/ directory was preserved. No IA-64
+  implementation source or shared .phase file was changed.
+
+Interrupt architecture
+----------------------
+- Implemented SSIP=1, MSIP=3, STIP=5, MTIP=7, SEIP=9, and MEIP=11.
+- MIE is the local enable state; MIP is pending state. The implemented MIE and
+  MIP views expose only these identities. MIDELEG permits only SSIP, STIP,
+  and SEIP. SIE and SIP are masked views of delegated supervisor interrupts.
+- M-mode software may set MSIP, SSIP, and STIP through MIP. SIP can clear
+  delegated SSIP; SIP.STIP is read-only in this implementation. MTIP is owned
+  by the timer comparison, and external pending state uses the bounded
+  setInterruptPending interface. No external interrupt controller is claimed.
+- Selection priority is MEI, MSI, MTI, SEI, SSI, STI. Delegated interrupts do
+  not preempt M-mode. Machine-targeted interrupts preempt S/U regardless of
+  MIE; same-privilege delivery observes the matching global enable.
+- Interrupt entry sets mcause/scause bit 63 and the cause, preserves the
+  interrupted PC, writes zero to the trap value CSR, updates the privilege and
+  interrupt-enable stack, and does not retire the interrupted instruction.
+  Pending sources are sampled at instruction boundaries and after xRET.
+
+Timer, vectors, and WFI
+----------------------
+- Implemented a deterministic single-hart 64-bit mtime/mtimecmp device. The
+  configurable default guest-physical map is mtimecmp=0x02004000 and
+  mtime=0x0200BFF8 (QEMU virt CLINT register locations); this is only the two
+  registers, not full CLINT/ACLINT support.
+- Aligned 32-bit low/high and 64-bit register accesses are supported. Other
+  widths, boundary overlaps, and unmapped addresses fault. The device is not
+  ordinary RAM or executable memory; Sv39 and MPRV accesses translate before
+  physical MMIO decoding, and the timer cannot be used as a page table.
+- Virtual time advances one tick for each retired guest instruction. It does
+  not use host wall time. The harness can add explicit ticks while WFI waits.
+  mtime wraps modulo 2^64; MTIP is asserted exactly while unsigned
+  mtime >= mtimecmp.
+- mtvec/stvec implement Direct and Vectored. Exceptions always use BASE;
+  vectored interrupts use BASE + 4*cause. Unsupported modes are WARL-ignored.
+- WFI is a real retired instruction with observable waiting. No guest fetch or
+  retirement occurs while waiting. A locally enabled pending interrupt wakes
+  the hart even when global enable prevents trap delivery, keeping wake
+  eligibility separate from actual interrupt entry. U-mode WFI and S-mode WFI
+  with mstatus.TW set trap as illegal instructions.
+
+Guest execution evidence
+------------------------
+- M-mode timer guest configures mtvec/mtimecmp and MTIE/MIE, receives MTIP,
+  records mcause and the interrupted PC, reprograms the compare register,
+  returns with MRET, and completes its resumed instruction sequence.
+- S-mode guest configures delegation, takes and clears SSIP in its handler,
+  returns with SRET, and verifies the resumed workload and CSR state.
+- A separate guest distinguishes hardware MTIP (cause 7) from software
+  presentation of STIP (cause 5): M-mode handles MTIP, sets MIP.STIP, S-mode
+  handles delegated STIP, and an S-mode ECALL asks M firmware to clear it
+  through SIP before SRET resumes the workload.
+- WFI guest advances explicit virtual time while waiting, handles the timer
+  event, resumes, and completes under a bounded scheduler loop.
+- Sv39 guest executes translated S-mode code, fetches its translated interrupt
+  vector, accesses translated data and mtimecmp MMIO, takes a delegated
+  interrupt, returns with SRET, and resumes without an unintended page fault.
+
+Verification
+------------
+- Seven RISC-V CTest suites pass in Debug: decoder, fetch/decode, minimal
+  execution, RV64I, privilege/SBI, Sv39, and interrupt/timer.
+- The focused interrupt/timer suite passes in Debug and Release with 596
+  explicit runtime checks in each configuration.
+- IA-64 interrupt-controller and processor-interrupt-block focused test
+  executables pass. An additional test_io_devices executable fails at the
+  console assertion in tests/test_io_devices.cpp:27 before reaching its
+  timer/controller checks; no IA-64 source was changed.
+- git diff --check passes.
+
+Changed files
+-------------
+- CMakeLists.txt
+- include/riscv_cpu.h
+- src/riscv/riscv_cpu.cpp
+- src/riscv/riscv_mmu.cpp
+- tests/test_riscv_interrupt_timer.cpp
+- docs/riscv/rv64-decoder-status.txt
+- docs/riscv/phase-riscv-4-report.txt
+- .phase-riscv
+
+Limits and recommended RISCV-5 scope
+------------------------------------
+- SBI Base remains intact. SBI TIME is not advertised and sbi_set_timer is
+  not connected to this MTIMER. RISCV-5 should first implement and test SBI
+  TIME set_timer against mtimecmp and the supervisor timer pending model, and
+  advertise TIME only when that contract is complete.
+- Add only the platform firmware services needed by the next boot target
+  (for example console, reset, and applicable IPI/fence services), with a
+  documented boot/device-tree contract. Keep PLIC/APLIC/IMSIC, virtio,
+  multicore execution, and Linux/OpenSBI claims out of scope until separately
+  implemented and tested.
+
+The exact local closeout commit and ending HEAD are recorded in the task's
+final response. No push was performed.

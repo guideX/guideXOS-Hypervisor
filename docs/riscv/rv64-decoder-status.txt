@@ -1,4 +1,4 @@
-RISC-V Decoder Status (updated Phase RISCV-3)
+RISC-V Decoder and Execution Status (updated Phase RISCV-4)
 
 Current decoded instruction families:
 - RV64I
@@ -62,14 +62,20 @@ RV64I vs independently defined extensions (explicit split):
   stval/satp). satp accepts Bare (0) and Sv39 (8); ASIDLEN=0, so nonzero
   ASID writes are WARL-rejected and other MODE values leave satp unchanged.
   mstatus SUM/MXR/MPRV are writable; sstatus exposes SUM and MXR; TVM is
-  hardwired zero. medeleg extends to bits 12/13/15. Unknown/unavailable
-  CSRs trap illegal, never silently succeed.
+  hardwired zero. medeleg extends to bits 12/13/15. RISCV-4 implements the
+  standard MSIP/MTIP/SSIP/STIP/MEIP/SEIP pending and enable identities,
+  supported MIDELEG bits, and architectural MIP/SIP and MIE/SIE views.
+  STIP is software writable in MIP because Sstc/stimecmp is not implemented;
+  SIP.STIP is read-only. Unknown/unavailable CSRs trap illegal, never silently
+  succeed.
 - SYSTEM privileged (executed): ECALL/MRET/SRET with full trap semantics;
-  WFI reports Unsupported (no wake sources modeled); SFENCE.VMA is now
-  decoded with funct7=0001001, funct3=000, rd=0 and executed as an
-  uncached-walker synchronization point. Each subsequent translation reads
-  guest-physical PTEs again; U-mode SFENCE.VMA traps illegal. TVM is
-  hardwired zero, so S-mode is allowed to execute it.
+  WFI retires into an observable bounded waiting state and resumes for a
+  locally enabled pending interrupt, including wake without a trap when the
+  global enable masks delivery. U-mode WFI traps; S-mode WFI traps when
+  mstatus.TW=1. SFENCE.VMA is decoded with funct7=0001001, funct3=000, rd=0
+  and executed as an uncached-walker synchronization point. Each subsequent
+  translation reads guest-physical PTEs again; U-mode SFENCE.VMA traps
+  illegal. TVM is hardwired zero, so S-mode is allowed to execute it.
 - RV64M (decode only, still Unsupported): MUL/MULH/MULHSU/MULHU/DIV/DIVU/
   REM/REMU/MULW/DIVW/DIVUW/REMW/REMUW.
 - RV64A (decode only, still Unsupported): LR.W/SC.W/AMO* and LR.D/SC.D/AMO*.
@@ -109,7 +115,7 @@ Tested CPU semantics:
   violations. Checks are active runtime comparisons in Debug and Release.
 
 Explicitly unsupported operations (valid decode -> StepOutcome::Unsupported):
-- All RV64M, all RV64A, WFI, all compressed except C.EBREAK.
+- All RV64M, all RV64A, all compressed except C.EBREAK.
 
 Synchronous traps (StepOutcome::Trap, never silent):
 - Illegal instruction (cause 2, tval = faulting word), breakpoint (cause 3),
@@ -124,12 +130,66 @@ Synchronous traps (StepOutcome::Trap, never silent):
   compatibility and are returned only when no guest image is loaded;
   architectural execution delivers traps.
 
-Remaining architectural requirements for Linux boot (NOT in RISCV-3):
+--- Phase RISCV-4: asynchronous interrupt delivery and deterministic MTIMER ---
+
+Interrupt identities and CSR state:
+- Implemented causes: SSIP=1, MSIP=3, STIP=5, MTIP=7, SEIP=9, MEIP=11.
+- mip exposes only those pending bits; mie independently controls their local
+  enables. MIP software writes control MSIP, SSIP, and STIP. MTIP is timer
+  owned. MEIP/SEIP are bounded source-injection inputs. SIE/SIP expose only
+  delegated supervisor identities; MIDELEG accepts only SSIP/STIP/SEIP.
+- Priority is MEI, MSI, MTI, SEI, SSI, STI. Delegated interrupts never
+  preempt M-mode; machine-target interrupts preempt S/U independent of MIE;
+  same-privilege delivery requires the matching global enable.
+- Interrupt trap causes set RV64 mcause/scause[63], save the interrupted PC,
+  clear the target global enable, and update MPP/MPIE or SPP/SPIE. Pending
+  sources are rechecked at every instruction boundary and after xRET. Handler
+  entry does not retire or alter the interrupted instruction state.
+
+Machine timer and waiting model:
+- The narrow single-hart MTIMER has 64-bit mtime and mtimecmp registers. Its
+  default guest-physical map is mtimecmp=0x02004000 and mtime=0x0200BFF8, the
+  corresponding QEMU virt CLINT register locations. The configurable mapping
+  implements only these registers, not full CLINT/ACLINT.
+- Naturally aligned 32-bit low/high accesses and 64-bit accesses are supported;
+  other widths, partial boundary overlaps, and unmapped addresses fault. Device
+  accesses take precedence over backing image bytes and are not executable or
+  eligible as Sv39 page tables. S/U and MPRV accesses are translated before the
+  physical MMIO decode.
+- Virtual time advances one tick per retired instruction. It never uses host
+  wall time. The harness may advance an explicit number of ticks while WFI is
+  waiting. mtime wraps modulo 2^64 and MTIP follows unsigned mtime>=mtimecmp.
+- mtvec/stvec accept Direct (MODE=0) and Vectored (MODE=1); unsupported modes
+  are WARL-ignored. Exceptions always use BASE; vectored interrupts use
+  BASE+4*cause. S-mode vector fetches continue through the Sv39 instruction
+  path.
+
+Guest execution evidence and RISCV-4 regression:
+- The production CPU test executes a guest M-mode timer setup, MTIP handler,
+  compare reprogramming, MRET, and resumed workload (24 increments plus a
+  completion marker).
+- A guest configures and services delegated SSIP through S-mode and clears it
+  using SIP. A second guest demonstrates hardware MTIP handled in M, M-mode
+  software presenting STIP through writable MIP, delegated S-mode service,
+  and an S-mode ECALL to M firmware to clear read-only SIP.STIP.
+- A WFI guest is advanced through explicit virtual ticks, services MTIP, and
+  resumes within a bounded scheduler loop. Another real S-mode guest uses
+  Sv39-translated code, vector, data, and mtimecmp MMIO accesses across an
+  interrupt and SRET.
+- test_riscv_interrupt_timer: 596 explicit runtime checks in Debug and Release.
+  Covers CSR pending/enable/delegation masks and routing, priority, status/EPC/
+  cause stacks, vector modes, MRET/SRET, timer compare/reprogram/rollover,
+  MMIO widths/bounds/faults, WFI wait/wake, sync-trap preservation, SBI Base,
+  and the integrated guests.
+- Seven RISC-V CTest suites pass: decoder, fetch/decode, minimal execution,
+  RV64I, privilege/SBI, Sv39, and interrupt/timer.
+
+Remaining architectural requirements for Linux boot (NOT in RISCV-4):
 - Sv48 mode; TLB caching with real SFENCE.VMA invalidation (walker is
   uncached; SFENCE.VMA is a sync no-op)
-- SBI timer/IPI/fence/HSM/debug-console/reset extensions + real firmware
-- PLIC/CLINT, UART/virtio device emulation, timer/interrupt delivery
-  (mie/mip/sie/sip hardwired 0; vectored mtvec/stvec not implemented)
+- SBI TIME/IPI/fence/HSM/debug-console/reset extensions + real firmware;
+  SBI TIME remains unadvertised and sbi_set_timer is not connected
+- PLIC/APLIC/IMSIC, UART/virtio devices, and full CLINT/ACLINT behavior
 - RV64M/A/F/D/V execution, full C extension
 - ELF loader integration and boot Hart state machine
 
@@ -149,10 +209,11 @@ Latest test result:
   test_ia64_sal, test_new_instructions
 
 Next milestone runway:
-- RISCV-4 (proposed, not implemented): timer/interrupt delivery
-  (CLINT/PLIC stubs, mie/mip/sie/sip, vectored vectors), expanded SBI
-  (timer/IPI/fence/HSM), device tree + UART/virtio platform devices,
-  ELF boot path. No Linux/OpenSBI boot yet.
+- RISCV-5: connect SBI TIME/sbi_set_timer to the deterministic MTIMER and
+  supervisor timer presentation path; preserve SBI Base behavior, advertise
+  TIME only after its firmware contract is complete. Then define the minimal
+  platform firmware/device-tree services required by the intended boot flow.
+  No Linux/OpenSBI boot is claimed.
 
 Execution semantics: full RV64I + Zicsr/SYSTEM privilege subset (see above)
 Runtime/plugin registration: deferred
@@ -160,5 +221,6 @@ Runtime/plugin registration: deferred
 Audit notes:
 - IA-64 / Itanium modified: no
 - Windows-specific dependencies added to C++ core: no
-- Execution semantics: RV64I complete; M/A/F/D/V and C execution deferred
+- Execution semantics: RV64I plus the RISCV-4 interrupt/timer/WFI subset;
+  M/A/F/D/V and compressed execution deferred
 - Runtime/plugin registration: deferred

@@ -283,6 +283,11 @@ Sv39Mmu::WalkResult Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte,
         if (!cpu_->rangeInGuest(pteAddrCandidate, kPteSize)) {
             return WalkResult::AccessFault;
         }
+        // The narrow MTIMER device is not ordinary RAM and cannot serve as a
+        // page table, even if an image's byte range overlaps its MMIO map.
+        if (cpu_->timerMmioOverlaps(pteAddrCandidate, kPteSize)) {
+            return WalkResult::AccessFault;
+        }
 
         if (!readPte(pteAddrCandidate, pte)) {
             return WalkResult::AccessFault;

@@ -98,11 +98,30 @@ constexpr uint64_t kMstatusMprv = 1ULL << 17;
 constexpr uint64_t kMstatusSum = 1ULL << 18;
 constexpr uint64_t kMstatusMxr = 1ULL << 19;
 constexpr uint64_t kMstatusTvm = 1ULL << 20;
+constexpr uint64_t kMstatusTw = 1ULL << 21;
 constexpr uint64_t kMstatusWritableMask =
     kMstatusSie | kMstatusMie | kMstatusSpie | kMstatusMpie | kMstatusSpp |
-    kMstatusMppMask | kMstatusMprv | kMstatusSum | kMstatusMxr;
+    kMstatusMppMask | kMstatusMprv | kMstatusSum | kMstatusMxr | kMstatusTw;
 constexpr uint64_t kSstatusMask =
     kMstatusSie | kMstatusSpie | kMstatusSpp | kMstatusSum | kMstatusMxr;
+
+// Standard interrupt identities implemented by RISCV-4.
+constexpr uint64_t kInterruptSupervisorSoftware = 1ULL;
+constexpr uint64_t kInterruptMachineSoftware = 3ULL;
+constexpr uint64_t kInterruptSupervisorTimer = 5ULL;
+constexpr uint64_t kInterruptMachineTimer = 7ULL;
+constexpr uint64_t kInterruptSupervisorExternal = 9ULL;
+constexpr uint64_t kInterruptMachineExternal = 11ULL;
+constexpr uint64_t kInterruptSupervisorSoftwareBit = 1ULL << kInterruptSupervisorSoftware;
+constexpr uint64_t kInterruptMachineSoftwareBit = 1ULL << kInterruptMachineSoftware;
+constexpr uint64_t kInterruptSupervisorTimerBit = 1ULL << kInterruptSupervisorTimer;
+constexpr uint64_t kInterruptMachineTimerBit = 1ULL << kInterruptMachineTimer;
+constexpr uint64_t kInterruptSupervisorExternalBit = 1ULL << kInterruptSupervisorExternal;
+constexpr uint64_t kInterruptMachineExternalBit = 1ULL << kInterruptMachineExternal;
+constexpr uint64_t kInterruptSupervisorMask = kInterruptSupervisorSoftwareBit |
+    kInterruptSupervisorTimerBit | kInterruptSupervisorExternalBit;
+constexpr uint64_t kInterruptImplementedMask = kInterruptSupervisorMask |
+    kInterruptMachineSoftwareBit | kInterruptMachineTimerBit | kInterruptMachineExternalBit;
 
 // ---------------------------------------------------------------------------
 // Sv39 virtual-memory constants (RISCV-3).
@@ -196,22 +215,22 @@ private:
  *   RISCV-1 deterministic tests). PC points at the breakpoint instruction
  *   (not advanced).
  * - Unsupported: valid decoded instruction with no execution support in this
- *   phase (includes all compressed instructions except C.EBREAK, plus M/A/F/D/V
- *   and unimplemented privileged ops such as WFI). PC points at the
- *   unexecuted instruction (not advanced).
+ *   phase (includes all compressed instructions except C.EBREAK, plus M/A/F/D/V).
+ *   PC points at the unexecuted instruction (not advanced).
+ * - WFI is implemented as an architectural wait state. Its instruction
+ *   retires, advances PC, and sets StepResult::wfiExecuted; subsequent idle
+ *   calls return Waiting until a locally enabled pending interrupt wakes it.
  * - Illegal / FetchFault / MemoryFault: retained for source compatibility.
  *   In architectural RISCV-2 execution these conditions are delivered as
  *   synchronous traps (outcome Trap, see below) whenever a guest image is
  *   loaded. The legacy outcomes are returned only when no trap can be
  *   delivered (e.g. step with no guest image loaded) or for the truncated
  *   corner reported before CSR state exists. New tests must expect Trap.
- * - Trap (new in RISCV-2): a synchronous exception was delivered
- *   architecturally. CSRs (xEPC/xCAUSE/xTVAL, status stack) are updated,
- *   privilege is updated, and PC points at the handler (mtvec/stvec BASE).
- *   result.trapTaken is true and trapCause/trapTarget describe delivery.
- *   This covers illegal instructions, breakpoints (when halt interception is
- *   off), misaligned addresses, access faults, and ECALLs (including the
- *   SBI interception path, which still performs full M-mode trap entry).
+ * - Trap: a synchronous exception or asynchronous interrupt was delivered
+ *   architecturally. CSRs, status stack, privilege, and trap PC are updated.
+ *   result.trapTaken is true; interruptTaken distinguishes asynchronous entry
+ *   and interruptCause carries its cause. Synchronous exceptions retain their
+ *   original behavior, including the SBI M-mode interception path.
  */
 enum class StepOutcome {
     Ok,
@@ -221,6 +240,8 @@ enum class StepOutcome {
     FetchFault,
     MemoryFault,
     Trap,
+    // The hart is in WFI and no locally enabled interrupt is pending.
+    Waiting,
 };
 
 inline const char* StepOutcomeToString(StepOutcome outcome) {
@@ -232,6 +253,7 @@ inline const char* StepOutcomeToString(StepOutcome outcome) {
         case StepOutcome::FetchFault: return "fetch_fault";
         case StepOutcome::MemoryFault: return "memory_fault";
         case StepOutcome::Trap: return "trap";
+        case StepOutcome::Waiting: return "waiting";
     }
     return "unknown";
 }
@@ -254,6 +276,21 @@ struct StepResult {
     PrivilegeMode trapTarget = PrivilegeMode::Machine;
     uint64_t trapVector = 0;
     bool sbiHandled = false;
+    bool interruptTaken = false;
+    uint64_t interruptCause = 0;
+    bool wfiExecuted = false;
+    bool wokeFromWfi = false;
+    bool waiting = false;
+};
+
+/**
+ * Narrow machine-timer platform mapping. Defaults match the mtimecmp and
+ * mtime register locations commonly used by QEMU virt's CLINT address map;
+ * this CPU models only those two registers, not a complete CLINT/ACLINT.
+ */
+struct MachineTimerMapping {
+    uint64_t mtimecmpAddress = 0x02004000ULL;
+    uint64_t mtimeAddress = 0x0200BFF8ULL;
 };
 
 // SBI error codes (SBI Base, returned in a0 as signed 64-bit values).
@@ -311,7 +348,7 @@ public:
 };
 
 /**
- * RV64CPU - standalone RISC-V RV64 CPU core (Phase RISCV-2).
+ * RV64CPU - standalone RISC-V RV64 CPU core (Phase RISCV-4).
  *
  * Compatibility decision (deliberate, documented):
  * - RV64CPU is standalone and does NOT inherit ia64::ICPU. The IA-64
@@ -325,8 +362,9 @@ public:
  *   no caches: FENCE/FENCE.I are documented no-ops that retire normally.
  * - Each step() fetches at the guest PC, determines length from the low two
  *   bits, decodes with the production riscv::Decoder, and executes the full
- *   RV64I integer set plus Zicsr CSR access and SYSTEM privileged
- *   instructions with trap delivery. M/A/F/D/V and compressed execution stay
+ *   RV64I integer set, Zicsr, SYSTEM trap returns, interrupt delivery, and WFI.
+ *   The single-hart MTIMER uses a deterministic retired-instruction clock and
+ *   configurable guest-physical MMIO mapping. M/A/F/D/V and compressed execution stay
  *   Unsupported (never Ok), except C.EBREAK which is Halt (halt interception
  *   on) or a breakpoint trap (halt interception off).
  * - Reset state: privilege Machine, PC = guest base (or 0 with no image),
@@ -343,6 +381,7 @@ public:
 class RV64CPU {
     friend class Sv39Mmu;
     friend class Sv39TestHelper;
+    friend class RiscvInterruptTestHelper;
 public:
     RV64CPU();
     ~RV64CPU();
@@ -359,6 +398,20 @@ public:
 
     // Execute exactly one instruction at the current PC.
     StepResult step();
+
+    // Single-hart deterministic clock. One tick elapses per retired guest
+    // instruction; callers may also advance ticks explicitly while WFI waits.
+    void advanceVirtualTime(uint64_t ticks = 1);
+    uint64_t mtime() const { return mtime_; }
+    uint64_t mtimecmp() const { return mtimecmp_; }
+    const MachineTimerMapping& machineTimerMapping() const { return timerMapping_; }
+    bool configureMachineTimer(const MachineTimerMapping& mapping);
+
+    // Bounded source injection for test/platform wiring. MTIP is timer-owned
+    // and cannot be injected; supported software, STIP, and external sources
+    // can be asserted or cleared here.
+    bool setInterruptPending(uint64_t cause, bool pending);
+    bool waitingForInterrupt() const;
 
     // Register access (x0 hardwired to zero; out-of-range reads 0, writes ignored)
     uint64_t readGR(size_t index) const;
@@ -388,7 +441,8 @@ public:
     Sv39Translation translateLoad(uint64_t vaddr, size_t size) const;
     Sv39Translation translateStore(uint64_t vaddr, size_t size) const;
 
-    // Direct guest-physical read/write (bypasses translation). Used by the
+    // Direct guest-physical read/write (bypasses translation). MTIMER MMIO is
+    // decoded here; ordinary addresses use the bounded image. Used by the
     // page-table walker and by M-mode accesses when paging is bypassed.
     bool readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const;
     bool writePhysical(uint64_t paddr, const uint8_t* src, size_t size);
@@ -446,6 +500,14 @@ private:
     // Deliver a synchronous trap: updates xEPC/xCAUSE/xTVAL, status stack,
     // privilege and PC. Fills result trap fields with outcome Trap.
     void deliverTrap(TrapCause cause, uint64_t tval, uint64_t faultPc, StepResult& result);
+    void deliverInterrupt(uint64_t cause, uint64_t interruptedPc, StepResult& result);
+    bool selectInterrupt(uint64_t& cause) const;
+    bool wfiWakeEligible() const;
+    void updateTimerPending();
+    void retireInstruction();
+    bool timerMmioOverlaps(uint64_t paddr, size_t size) const;
+    bool readTimerMmio(uint64_t paddr, uint8_t* dst, size_t size, bool& handled) const;
+    bool writeTimerMmio(uint64_t paddr, const uint8_t* src, size_t size, bool& handled);
 
     RV64CPUState state_;
     Decoder decoder_;
@@ -478,6 +540,12 @@ private:
     uint64_t scause_ = 0;
     uint64_t stval_ = 0;
     uint64_t satp_ = 0;
+
+    // Interrupt source and deterministic MTIMER state.
+    MachineTimerMapping timerMapping_{};
+    uint64_t mtime_ = 0;
+    uint64_t mtimecmp_ = UINT64_MAX;
+    bool wfiWaiting_ = false;
 };
 
 }  // namespace riscv

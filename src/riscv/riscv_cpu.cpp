@@ -38,6 +38,11 @@ constexpr uint32_t kCsrMhartid = 0xF14U;
 constexpr uint64_t kMisaValue = (2ULL << 62) | (1ULL << 8);  // MXL=RV64, extension I only.
 constexpr uint64_t kMedelegWritableMask =
     0x3FFULL | (1ULL << 12) | (1ULL << 13) | (1ULL << 15);  // causes 0-9 plus page faults; bit 11 hardwired 0.
+constexpr uint64_t kMieWritableMask = kInterruptImplementedMask;
+constexpr uint64_t kMidelegWritableMask = kInterruptSupervisorMask;
+constexpr uint64_t kMipSoftwareWritableMask =
+    kInterruptMachineSoftwareBit | kInterruptSupervisorSoftwareBit |
+    kInterruptSupervisorTimerBit;
 
 uint64_t SignExtendTo64(int32_t value) { return static_cast<uint64_t>(static_cast<int64_t>(value)); }
 
@@ -177,6 +182,10 @@ void RV64CPU::reset() {
     scause_ = 0;
     stval_ = 0;
     satp_ = 0;
+    mtime_ = 0;
+    mtimecmp_ = UINT64_MAX;
+    wfiWaiting_ = false;
+    updateTimerPending();
     // Guest memory image is preserved across reset; PC restarts at its base.
     if (memLoaded_) {
         state_.SetPC(memBase_);
@@ -222,12 +231,96 @@ bool RV64CPU::rangeInGuest(uint64_t addr, size_t size) const {
     return static_cast<uint64_t>(size) <= remaining;
 }
 
+bool RV64CPU::timerMmioOverlaps(uint64_t paddr, size_t size) const {
+    if (size == 0 || static_cast<uint64_t>(size) > UINT64_MAX - paddr) {
+        return false;
+    }
+    const uint64_t accessEnd = paddr + static_cast<uint64_t>(size);
+    const auto overlaps = [paddr, accessEnd](uint64_t reg) {
+        const uint64_t regEnd = reg + 8ULL;
+        return paddr < regEnd && reg < accessEnd;
+    };
+    return overlaps(timerMapping_.mtimecmpAddress) || overlaps(timerMapping_.mtimeAddress);
+}
+
+bool RV64CPU::readTimerMmio(uint64_t paddr, uint8_t* dst, size_t size,
+                            bool& handled) const {
+    handled = timerMmioOverlaps(paddr, size);
+    if (!handled) return true;
+    if (dst == nullptr) return false;
+
+    uint64_t base = 0;
+    uint64_t value = 0;
+    if (paddr < timerMapping_.mtimecmpAddress + 8ULL &&
+        paddr + static_cast<uint64_t>(size) > timerMapping_.mtimecmpAddress) {
+        base = timerMapping_.mtimecmpAddress;
+        value = mtimecmp_;
+    } else {
+        base = timerMapping_.mtimeAddress;
+        value = mtime_;
+    }
+    const uint64_t offset = paddr - base;
+    if (!((size == 8 && offset == 0) ||
+          (size == 4 && (offset == 0 || offset == 4)))) {
+        return false;
+    }
+    for (size_t i = 0; i < size; ++i) {
+        dst[i] = static_cast<uint8_t>((value >> (8U * (static_cast<unsigned>(offset) +
+                                                       static_cast<unsigned>(i)))) & 0xFFU);
+    }
+    return true;
+}
+
+bool RV64CPU::writeTimerMmio(uint64_t paddr, const uint8_t* src, size_t size,
+                             bool& handled) {
+    handled = timerMmioOverlaps(paddr, size);
+    if (!handled) return true;
+    if (src == nullptr) return false;
+
+    uint64_t base = 0;
+    uint64_t* target = nullptr;
+    if (paddr < timerMapping_.mtimecmpAddress + 8ULL &&
+        paddr + static_cast<uint64_t>(size) > timerMapping_.mtimecmpAddress) {
+        base = timerMapping_.mtimecmpAddress;
+        target = &mtimecmp_;
+    } else {
+        base = timerMapping_.mtimeAddress;
+        target = &mtime_;
+    }
+    const uint64_t offset = paddr - base;
+    if (!((size == 8 && offset == 0) ||
+          (size == 4 && (offset == 0 || offset == 4)))) {
+        return false;
+    }
+    uint64_t part = 0;
+    for (size_t i = 0; i < size; ++i) {
+        part |= static_cast<uint64_t>(src[i]) << (8U * static_cast<unsigned>(i));
+    }
+    if (size == 8) {
+        *target = part;
+    } else if (offset == 0) {
+        *target = (*target & 0xFFFFFFFF00000000ULL) | part;
+    } else {
+        *target = (*target & 0x00000000FFFFFFFFULL) | (part << 32);
+    }
+    updateTimerPending();
+    return true;
+}
+
 bool RV64CPU::readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const {
-    if (!memLoaded_ || dst == nullptr) {
+    if (dst == nullptr) {
         return false;
     }
     if (size == 0) {
-        return true;
+        return memLoaded_;
+    }
+    bool handled = false;
+    const bool timerRead = readTimerMmio(paddr, dst, size, handled);
+    if (handled) {
+        return timerRead;
+    }
+    if (!memLoaded_) {
+        return false;
     }
     if (!rangeInGuest(paddr, size)) {
         return false;
@@ -263,11 +356,19 @@ bool RV64CPU::readU64(uint64_t addr, uint64_t& value) const {
 }
 
 bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
-    if (!memLoaded_ || src == nullptr) {
+    if (src == nullptr) {
         return false;
     }
     if (size == 0) {
-        return true;
+        return memLoaded_;
+    }
+    bool handled = false;
+    const bool timerWrite = writeTimerMmio(paddr, src, size, handled);
+    if (handled) {
+        return timerWrite;
+    }
+    if (!memLoaded_) {
+        return false;
     }
     if (!rangeInGuest(paddr, size)) {
         return false;
@@ -275,6 +376,65 @@ bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
     const uint64_t offset = paddr - memBase_;
     std::memcpy(mem_.data() + static_cast<size_t>(offset), src, size);
     return true;
+}
+
+bool RV64CPU::configureMachineTimer(const MachineTimerMapping& mapping) {
+    const auto validRegister = [](uint64_t address) {
+        return (address & 7ULL) == 0 && address <= UINT64_MAX - 8ULL;
+    };
+    if (!validRegister(mapping.mtimecmpAddress) || !validRegister(mapping.mtimeAddress)) {
+        return false;
+    }
+    const uint64_t distance = mapping.mtimecmpAddress > mapping.mtimeAddress
+                                  ? mapping.mtimecmpAddress - mapping.mtimeAddress
+                                  : mapping.mtimeAddress - mapping.mtimecmpAddress;
+    if (distance < 8ULL) {
+        return false;
+    }
+    timerMapping_ = mapping;
+    updateTimerPending();
+    return true;
+}
+
+void RV64CPU::updateTimerPending() {
+    if (mtime_ >= mtimecmp_) {
+        mip_ |= kInterruptMachineTimerBit;
+    } else {
+        mip_ &= ~kInterruptMachineTimerBit;
+    }
+}
+
+void RV64CPU::advanceVirtualTime(uint64_t ticks) {
+    mtime_ += ticks;  // RV64 wraparound is the architectural modulo-2^64 timer.
+    updateTimerPending();
+}
+
+void RV64CPU::retireInstruction() {
+    ++instructionsRetired_;
+    advanceVirtualTime(1);
+}
+
+bool RV64CPU::setInterruptPending(uint64_t cause, bool pending) {
+    uint64_t bit = 0;
+    switch (cause) {
+        case kInterruptSupervisorSoftware: bit = kInterruptSupervisorSoftwareBit; break;
+        case kInterruptMachineSoftware: bit = kInterruptMachineSoftwareBit; break;
+        case kInterruptSupervisorTimer: bit = kInterruptSupervisorTimerBit; break;
+        case kInterruptSupervisorExternal: bit = kInterruptSupervisorExternalBit; break;
+        case kInterruptMachineExternal: bit = kInterruptMachineExternalBit; break;
+        default: return false;  // MTIP is owned by mtime/mtimecmp.
+    }
+    if (pending) mip_ |= bit;
+    else mip_ &= ~bit;
+    return true;
+}
+
+bool RV64CPU::wfiWakeEligible() const {
+    return (mip_ & mie_ & kInterruptImplementedMask) != 0ULL;
+}
+
+bool RV64CPU::waitingForInterrupt() const {
+    return wfiWaiting_ && !wfiWakeEligible();
 }
 
 // Sv39-translated fetch. M-mode instruction fetch bypasses translation.
@@ -295,6 +455,7 @@ bool RV64CPU::fetchBytes(uint64_t vaddr, uint8_t* dst, size_t size) {
         }
         paddr = xlt.paddr;
     }
+    if (timerMmioOverlaps(paddr, size)) return false;
     return readPhysical(paddr, dst, size);
 }
 
@@ -377,10 +538,10 @@ bool RV64CPU::csrRead(uint32_t csr, uint64_t& value) const {
         case kCsrMisa: value = kMisaValue; return true;
         case kCsrMedeleg: value = medeleg_; return true;
         case kCsrMideleg: value = mideleg_; return true;
-        case kCsrMie: value = mie_; return true;
-        case kCsrSie: value = mie_ & 0ULL; return true;  // No interrupt bits implemented.
-        case kCsrMip: value = mip_; return true;
-        case kCsrSip: value = mip_ & 0ULL; return true;
+        case kCsrMie: value = mie_ & kMieWritableMask; return true;
+        case kCsrSie: value = mie_ & mideleg_ & kInterruptSupervisorMask; return true;
+        case kCsrMip: value = mip_ & kInterruptImplementedMask; return true;
+        case kCsrSip: value = mip_ & mideleg_ & kInterruptSupervisorMask; return true;
         case kCsrMtvec: value = mtvec_; return true;
         case kCsrStvec: value = stvec_; return true;
         case kCsrMscratch: value = mscratch_; return true;
@@ -420,33 +581,39 @@ bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
             medeleg_ = value & kMedelegWritableMask;
             return true;
         case kCsrMideleg:
-            // No interrupt delegation implemented; WARL zero.
-            mideleg_ = 0;
+            // Machine interrupt identities remain nondelegable; implement the
+            // three standard supervisor interrupt delegation bits.
+            mideleg_ = value & kMidelegWritableMask;
             return true;
         case kCsrMie:
+            mie_ = value & kMieWritableMask;
+            return true;
         case kCsrMip:
-            // No interrupt sources implemented; WARL zero.
-            mie_ = 0;
-            mip_ = 0;
+            // With no stimecmp extension, M-mode software may present STIP.
+            // MSIP and SSIP are also software writable; MTIP and external
+            // pending bits remain owned by their device/source interfaces.
+            mip_ = (mip_ & ~kMipSoftwareWritableMask) |
+                   (value & kMipSoftwareWritableMask);
+            updateTimerPending();
             return true;
-        case kCsrSie:
-        case kCsrSip:
-            // Views of mie/mip; no bits implemented.
-            mie_ = 0;
-            mip_ = 0;
+        case kCsrSie: {
+            const uint64_t writable = mideleg_ & kInterruptSupervisorMask;
+            mie_ = (mie_ & ~writable) | (value & writable);
             return true;
+        }
+        case kCsrSip: {
+            const uint64_t writable = mideleg_ & kInterruptSupervisorSoftwareBit;
+            mip_ = (mip_ & ~writable) | (value & writable);
+            updateTimerPending();
+            return true;
+        }
         case kCsrMtvec:
-            // Direct mode only (low two bits WARL zero).
-            if ((value & 0x3ULL) != 0ULL) {
-                return true;
-            }
-            mtvec_ = value;
+            // BASE is 4-byte aligned. MODE 0 (Direct) and 1 (Vectored) exist;
+            // unsupported modes are WARL-ignored as a whole.
+            if ((value & 0x3ULL) <= 1ULL) mtvec_ = value;
             return true;
         case kCsrStvec:
-            if ((value & 0x3ULL) != 0ULL) {
-                return true;
-            }
-            stvec_ = value;
+            if ((value & 0x3ULL) <= 1ULL) stvec_ = value;
             return true;
         case kCsrMscratch: mscratch_ = value; return true;
         case kCsrSscratch: sscratch_ = value; return true;
@@ -524,9 +691,9 @@ void RV64CPU::deliverTrap(TrapCause cause, uint64_t tval, uint64_t faultPc, Step
             mstatus_ &= ~kMstatusSpp;
         }
         priv_ = PrivilegeMode::Supervisor;
-        state_.SetPC(stvec_);
+        state_.SetPC(stvec_ & ~3ULL);  // Exceptions always use BASE, also in vectored mode.
         result.trapTarget = PrivilegeMode::Supervisor;
-        result.trapVector = stvec_;
+        result.trapVector = stvec_ & ~3ULL;
     } else {
         mepc_ = faultPc & ~3ULL;
         mcause_ = causeNum;
@@ -541,14 +708,87 @@ void RV64CPU::deliverTrap(TrapCause cause, uint64_t tval, uint64_t faultPc, Step
         mstatus_ &= ~kMstatusMie;
         mstatus_ = (mstatus_ & ~kMstatusMppMask) | ((prevNum & 0x3ULL) << 11);
         priv_ = PrivilegeMode::Machine;
-        state_.SetPC(mtvec_);
+        state_.SetPC(mtvec_ & ~3ULL);
         result.trapTarget = PrivilegeMode::Machine;
-        result.trapVector = mtvec_;
+        result.trapVector = mtvec_ & ~3ULL;
     }
     result.outcome = StepOutcome::Trap;
     result.trapTaken = true;
     result.trapCause = cause;
     result.nextPc = state_.GetPC();
+}
+
+bool RV64CPU::selectInterrupt(uint64_t& cause) const {
+    // Privileged architecture priority: MEI, MSI, MTI, SEI, SSI, STI.
+    static constexpr uint64_t priority[] = {
+        kInterruptMachineExternal, kInterruptMachineSoftware,
+        kInterruptMachineTimer, kInterruptSupervisorExternal,
+        kInterruptSupervisorSoftware, kInterruptSupervisorTimer,
+    };
+    for (const uint64_t candidate : priority) {
+        const uint64_t bit = 1ULL << candidate;
+        if ((mip_ & mie_ & bit) == 0ULL) continue;
+        const bool delegated = (mideleg_ & bit) != 0ULL;
+        if (delegated) {
+            // A delegated interrupt targets S-mode and never interrupts M-mode.
+            if (priv_ == PrivilegeMode::Machine) continue;
+            if (priv_ == PrivilegeMode::Supervisor &&
+                (mstatus_ & kMstatusSie) == 0ULL) continue;
+            // U-mode is below S-mode, so SIE does not gate delivery there.
+        } else {
+            // A machine-targeted interrupt preempts S/U regardless of MIE.
+            if (priv_ == PrivilegeMode::Machine &&
+                (mstatus_ & kMstatusMie) == 0ULL) continue;
+        }
+        cause = candidate;
+        return true;
+    }
+    return false;
+}
+
+void RV64CPU::deliverInterrupt(uint64_t cause, uint64_t interruptedPc,
+                               StepResult& result) {
+    const uint64_t bit = 1ULL << cause;
+    const bool toS = (mideleg_ & bit) != 0ULL && priv_ != PrivilegeMode::Machine;
+    const PrivilegeMode previous = priv_;
+    const uint64_t previousNumber = previous == PrivilegeMode::Machine ? 3ULL
+                                      : previous == PrivilegeMode::Supervisor ? 1ULL : 0ULL;
+    const uint64_t causeValue = (1ULL << 63) | cause;
+    uint64_t vector = 0;
+    if (toS) {
+        sepc_ = interruptedPc & ~3ULL;
+        scause_ = causeValue;
+        stval_ = 0;
+        if ((mstatus_ & kMstatusSie) != 0ULL) mstatus_ |= kMstatusSpie;
+        else mstatus_ &= ~kMstatusSpie;
+        mstatus_ &= ~kMstatusSie;
+        if (previous == PrivilegeMode::Supervisor) mstatus_ |= kMstatusSpp;
+        else mstatus_ &= ~kMstatusSpp;
+        priv_ = PrivilegeMode::Supervisor;
+        const uint64_t base = stvec_ & ~3ULL;
+        vector = ((stvec_ & 3ULL) == 1ULL) ? base + 4ULL * cause : base;
+        result.trapTarget = PrivilegeMode::Supervisor;
+    } else {
+        mepc_ = interruptedPc & ~3ULL;
+        mcause_ = causeValue;
+        mtval_ = 0;
+        if ((mstatus_ & kMstatusMie) != 0ULL) mstatus_ |= kMstatusMpie;
+        else mstatus_ &= ~kMstatusMpie;
+        mstatus_ &= ~kMstatusMie;
+        mstatus_ = (mstatus_ & ~kMstatusMppMask) | (previousNumber << 11);
+        priv_ = PrivilegeMode::Machine;
+        const uint64_t base = mtvec_ & ~3ULL;
+        vector = ((mtvec_ & 3ULL) == 1ULL) ? base + 4ULL * cause : base;
+        result.trapTarget = PrivilegeMode::Machine;
+    }
+    state_.SetPC(vector);
+    result.outcome = StepOutcome::Trap;
+    result.trapTaken = true;
+    result.interruptTaken = true;
+    result.interruptCause = cause;
+    result.trapCause = static_cast<TrapCause>(cause);
+    result.trapVector = vector;
+    result.nextPc = vector;
 }
 
 StepResult RV64CPU::step() {
@@ -562,6 +802,27 @@ StepResult RV64CPU::step() {
     if (!memLoaded_) {
         result.outcome = StepOutcome::FetchFault;
         result.insn = DecodedInstruction();
+        return result;
+    }
+
+    // WFI leaves the PC at the following instruction. While asleep, step()
+    // performs no fetch or retirement until a locally enabled source wakes it.
+    if (wfiWaiting_) {
+        if (!wfiWakeEligible()) {
+            result.outcome = StepOutcome::Waiting;
+            result.waiting = true;
+            return result;
+        }
+        wfiWaiting_ = false;
+        result.wokeFromWfi = true;
+    }
+
+    // Interrupts are sampled at instruction boundaries. Entry happens before
+    // fetching the next instruction, so the interrupted PC is preserved and
+    // the interrupted instruction does not retire.
+    uint64_t interruptCause = 0;
+    if (selectInterrupt(interruptCause)) {
+        deliverInterrupt(interruptCause, pc, result);
         return result;
     }
 
@@ -591,7 +852,8 @@ StepResult RV64CPU::step() {
         }
         fetchPaddr = xlt.paddr;
     }
-    if (!readPhysical(fetchPaddr, half, sizeof(half))) {
+    if (timerMmioOverlaps(fetchPaddr, sizeof(half)) ||
+        !readPhysical(fetchPaddr, half, sizeof(half))) {
         result.insn = DecodedInstruction();
         deliverTrap(TrapCause::InstructionAccessFault, pc, pc, result);
         return result;
@@ -644,7 +906,8 @@ StepResult RV64CPU::step() {
         }
         wordPaddr = xlt.paddr;
     }
-    if (!readPhysical(wordPaddr, word, sizeof(word))) {
+    if (timerMmioOverlaps(wordPaddr, sizeof(word)) ||
+        !readPhysical(wordPaddr, word, sizeof(word))) {
         result.insn = DecodedInstruction();
         deliverTrap(TrapCause::InstructionAccessFault, pc, pc, result);
         return result;
@@ -1238,11 +1501,12 @@ StepResult RV64CPU::step() {
             }
             mstatus_ |= kMstatusMpie;
             mstatus_ &= ~kMstatusMppMask;  // MPP <- U (least privilege).
+            if (next != PrivilegeMode::Machine) mstatus_ &= ~kMstatusMprv;
             priv_ = next;
             state_.SetPC(mepc_);
             result.outcome = StepOutcome::Ok;
             result.nextPc = state_.GetPC();
-            ++instructionsRetired_;
+            retireInstruction();
             return result;
         }
         case Mnemonic::SRET: {
@@ -1270,7 +1534,7 @@ StepResult RV64CPU::step() {
             state_.SetPC(sepc_);
             result.outcome = StepOutcome::Ok;
             result.nextPc = state_.GetPC();
-            ++instructionsRetired_;
+            retireInstruction();
             return result;
         }
         case Mnemonic::SFENCE_VMA: {
@@ -1288,20 +1552,28 @@ StepResult RV64CPU::step() {
             state_.SetPC(pc + 4U);
             result.outcome = StepOutcome::Ok;
             result.nextPc = state_.GetPC();
-            ++instructionsRetired_;
+            retireInstruction();
             return result;
         }
         case Mnemonic::WFI: {
-            // No interrupt/wake sources are modeled in RISCV-2. Executing WFI
-            // as a no-op would misrepresent wake semantics, so report
-            // Unsupported (never Ok). Privilege is still enforced.
-            if (priv_ == PrivilegeMode::User) {
+            // WFI is legal in M/S in this implementation. U-mode traps, and
+            // mstatus.TW makes S-mode WFI trap, as specified for TW=1.
+            if (priv_ == PrivilegeMode::User ||
+                (priv_ == PrivilegeMode::Supervisor && (mstatus_ & kMstatusTw) != 0ULL)) {
                 deliverTrap(TrapCause::IllegalInstruction, static_cast<uint64_t>(raw),
                             pc, result);
                 return result;
             }
-            result.outcome = StepOutcome::Unsupported;
-            result.nextPc = pc;
+            state_.SetPC(pc + 4U);
+            result.wfiExecuted = true;
+            retireInstruction();
+            // Wake may be caused by pending+locally-enabled state even when
+            // global enable masks trap delivery. In that case WFI retires and
+            // execution continues without an interrupt trap.
+            wfiWaiting_ = !wfiWakeEligible();
+            result.waiting = wfiWaiting_;
+            result.outcome = StepOutcome::Ok;
+            result.nextPc = state_.GetPC();
             return result;
         }
         default: {
@@ -1315,7 +1587,7 @@ StepResult RV64CPU::step() {
 
     result.outcome = StepOutcome::Ok;
     result.nextPc = state_.GetPC();
-    ++instructionsRetired_;
+    retireInstruction();
     return result;
 }
 
