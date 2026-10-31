@@ -20,7 +20,7 @@ bool ISAPluginRegistry::registerISA(const std::string& name, ISAFactoryFunc fact
     }
     
     registry_[name] = factory;
-    std::cout << "Registered ISA plugin: " << name << "\n";
+    std::cerr << "Registered ISA plugin: " << name << "\n";
     return true;
 }
 

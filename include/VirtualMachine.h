@@ -33,6 +33,7 @@ namespace ia64 {
 namespace ppc64 {
 class PPC64ISAPlugin;
 class PPC64PartitionManager;
+class PPC64ConsoleBridge;
 }
 
 // Forward declarations
@@ -725,6 +726,9 @@ public:
     size_t getPPC64TerminalPendingOutputBytes(uint16_t lpid = 0) const;
     size_t getPPC64TerminalQueueCapacity() const;
     void clearPPC64TerminalState();
+    std::weak_ptr<const uint8_t> getPPC64ConsoleLifetimeToken() const {
+        return ppc64ConsoleLifetimeToken_;
+    }
     std::string getLastExecutionDiagnostic() const;
     std::string getArchitectureName() const { return isaName_; }
 
@@ -745,6 +749,7 @@ public:
 
 private:
     friend class VMCheckpointCodec;
+    friend class ppc64::PPC64ConsoleBridge;
     // ========================================================================
     // Subsystems (owned by VM)
     // ========================================================================
@@ -753,6 +758,16 @@ private:
     std::unique_ptr<ppc64::PPC64PartitionManager> ppc64PartitionManager_;
     std::unique_ptr<ppc64::PPC64VirtualTerminal> ppc64VirtualTerminal_;
     std::unique_ptr<ppc64::PPC64XICS> ppc64XICS_;
+    std::shared_ptr<const uint8_t> ppc64ConsoleLifetimeToken_ =
+        std::make_shared<const uint8_t>(0);
+    std::map<uint16_t, std::pair<uint64_t, bool>> ppc64ConsoleOutputLeases_;
+    struct PPC64ConsoleStagingState {
+        std::deque<uint8_t> bytes;
+        size_t capacity = 0;
+    };
+    std::map<uint16_t, PPC64ConsoleStagingState> ppc64ConsoleStagedInput_;
+    uint64_t ppc64ConsoleNextLease_ = 1;
+    uint64_t ppc64ConsoleGeneration_ = 0;
     ppc64::PPC64PlatformConfiguration ppc64PlatformConfiguration_;
     std::unique_ptr<ppc64::PPC64VirtualTimeBase> ppc64VirtualTimeBase_;
     ppc64::PPC64GuestMemoryLayout ppc64GuestMemoryLayout_;
@@ -805,6 +820,26 @@ private:
      * @return true if breakpoint hit
      */
     bool checkBreakpoint(uint64_t address) const;
+    uint64_t claimPPC64ConsoleOutput(uint16_t lpid, size_t inputCapacity);
+    void releasePPC64ConsoleOutput(uint16_t lpid, uint64_t lease) noexcept;
+    void setPPC64ConsoleCheckpointReady(uint16_t lpid, uint64_t lease,
+                                       bool ready) noexcept;
+    std::vector<uint8_t> readPPC64ConsoleOutput(
+        uint16_t lpid, uint64_t lease, size_t maximumCount) const;
+    std::vector<uint8_t> drainPPC64ConsoleOutput(
+        uint16_t lpid, uint64_t lease, size_t maximumCount);
+    size_t stagePPC64ConsoleInput(uint16_t lpid, uint64_t lease,
+                                  const uint8_t* bytes, size_t count);
+    std::vector<uint8_t> peekPPC64ConsoleInput(uint16_t lpid, uint64_t lease,
+                                               size_t maximumCount) const;
+    bool consumePPC64ConsoleInput(uint16_t lpid, uint64_t lease,
+                                  size_t count);
+    void discardPPC64ConsoleInput(uint16_t lpid, uint64_t lease) noexcept;
+    size_t getPPC64ConsoleInputCount(uint16_t lpid,
+                                    uint64_t lease) const noexcept;
+    uint64_t getPPC64ConsoleGeneration() const noexcept {
+        return ppc64ConsoleGeneration_;
+    }
     bool evaluateCondition(const DebugCondition& condition, const CPU& cpu) const;
     bool evaluateCondition(const DebugCondition& condition, const CPUState& cpuState) const;
     size_t registerMemoryBreakpointHook(const MemoryBreakpoint& breakpoint);

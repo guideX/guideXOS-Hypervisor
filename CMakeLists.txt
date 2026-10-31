@@ -83,6 +83,7 @@ set(IO_SOURCES
     src/io/Console.cpp
     src/io/ConsoleOutputBuffer.cpp
     src/io/PPC64VirtualTerminal.cpp
+    src/io/PPC64HostConsole.cpp
     src/io/PPC64XICS.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
@@ -709,6 +710,7 @@ add_test(NAME PPC64Phase11Tests COMMAND test_ppc64_phase11)
 add_test(NAME PPC64Phase12Tests COMMAND test_ppc64_phase12)
 add_test(NAME PPC64Phase13Tests COMMAND test_ppc64_phase13)
 add_test(NAME PPC64Phase14Tests COMMAND test_ppc64_phase14)
+add_test(NAME PPC64Phase15Tests COMMAND test_ppc64_phase15)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
 # Installation rules (optional)
@@ -942,6 +944,41 @@ add_executable(test_ppc64_phase14
 if(WIN32)
     target_link_libraries(test_ppc64_phase14 PRIVATE ws2_32)
 endif()
+
+# PPC64 Phase 15 host-console transport, backpressure, and lifecycle tests.
+add_executable(test_ppc64_phase15
+    tests/test_ppc64_phase15.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase15 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase15 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase15 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Hosted PPC64 console demonstration; consumes real stdio through the bridge.
+add_executable(ppc64_console_demo
+    tools/ppc64_console_demo.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(ppc64_console_demo PRIVATE ws2_32)
+endif()
+
+add_test(NAME PPC64ConsoleRedirectedStdioSmoke
+    COMMAND ${CMAKE_COMMAND}
+        -DDEMO=$<TARGET_FILE:ppc64_console_demo>
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/ppc64_console_stdio_smoke.cmake
+)
 
 if(MSVC)
     target_compile_options(test_ppc64_phase14 PRIVATE /W4)

@@ -16,6 +16,7 @@
 #include "PPC64PartitionMMU.h"
 #include "PPC64RadixMMU.h"
 #include "PPC64VirtualTerminal.h"
+#include "PPC64HostConsole.h"
 #include "VMSnapshot.h"
 #include "VMSnapshotManager.h"
 #include "VMCheckpoint.h"
@@ -176,6 +177,8 @@ VirtualMachine::VirtualMachine(
 }
 
 VirtualMachine::~VirtualMachine() {
+    // Expire weak console bindings before tearing down any PPC64 device state.
+    ppc64ConsoleLifetimeToken_.reset();
     // Halt execution if running
     if (state_ == VMState::RUNNING) {
         halt();
@@ -276,6 +279,17 @@ if (!bootStateMachine_.powerOn()) {
 
 bool VirtualMachine::reset() {
     LOG_INFO("Resetting VirtualMachine...");
+    if (isaName_ == "PPC64") {
+        ++ppc64ConsoleGeneration_;
+        for (auto& [lpid, staging] : ppc64ConsoleStagedInput_) {
+            (void)lpid;
+            staging.bytes.clear();
+        }
+        for (auto& [lpid, lease] : ppc64ConsoleOutputLeases_) {
+            (void)lpid;
+            lease.second = true;
+        }
+    }
     
     try {
         // Reset all CPU states
@@ -1384,6 +1398,8 @@ std::vector<uint8_t> VirtualMachine::readPPC64TerminalOutput(
 
 std::vector<uint8_t> VirtualMachine::drainPPC64TerminalOutput(
     uint16_t lpid, size_t maximumCount) {
+    if (ppc64ConsoleOutputLeases_.find(lpid) !=
+        ppc64ConsoleOutputLeases_.end()) return {};
     if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
         (lpid != 0 && (!ppc64PartitionManager_ ||
                        !ppc64PartitionManager_->findPartition(lpid)))) {
@@ -1415,6 +1431,123 @@ size_t VirtualMachine::getPPC64TerminalQueueCapacity() const {
         throw std::logic_error("PAPRvty is only available on PPC64 VMs");
     }
     return ppc64::PPC64_TERMINAL_QUEUE_CAPACITY;
+}
+
+uint64_t VirtualMachine::claimPPC64ConsoleOutput(uint16_t lpid,
+                                                  size_t inputCapacity) {
+    if (isaName_ != "PPC64" || !ppc64VirtualTerminal_ ||
+        inputCapacity == 0 || inputCapacity > 1024U * 1024U ||
+        injectPPC64TerminalInputWithStatus({}, lpid) !=
+            ppc64::PPC64TerminalResult::SUCCESS ||
+        ppc64ConsoleOutputLeases_.find(lpid) !=
+            ppc64ConsoleOutputLeases_.end()) return 0;
+    uint64_t lease = ppc64ConsoleNextLease_++;
+    if (lease == 0) lease = ppc64ConsoleNextLease_++;
+    ppc64ConsoleOutputLeases_.emplace(lpid, std::make_pair(lease, true));
+    auto& staging = ppc64ConsoleStagedInput_[lpid];
+    if (staging.bytes.size() > inputCapacity) {
+        ppc64ConsoleOutputLeases_.erase(lpid);
+        return 0;
+    }
+    staging.capacity = inputCapacity;
+    return lease;
+}
+
+void VirtualMachine::releasePPC64ConsoleOutput(uint16_t lpid,
+                                                uint64_t lease) noexcept {
+    const auto found = ppc64ConsoleOutputLeases_.find(lpid);
+    if (found != ppc64ConsoleOutputLeases_.end() &&
+        found->second.first == lease) ppc64ConsoleOutputLeases_.erase(found);
+}
+
+void VirtualMachine::setPPC64ConsoleCheckpointReady(uint16_t lpid,
+                                                     uint64_t lease,
+                                                     bool ready) noexcept {
+    const auto found = ppc64ConsoleOutputLeases_.find(lpid);
+    if (found != ppc64ConsoleOutputLeases_.end() &&
+        found->second.first == lease) found->second.second = ready;
+}
+
+std::vector<uint8_t> VirtualMachine::readPPC64ConsoleOutput(
+    uint16_t lpid, uint64_t lease, size_t maximumCount) const {
+    const auto found = ppc64ConsoleOutputLeases_.find(lpid);
+    if (found == ppc64ConsoleOutputLeases_.end() ||
+        found->second.first != lease || !ppc64VirtualTerminal_) return {};
+    return ppc64VirtualTerminal_->readOutput(lpid, maximumCount);
+}
+
+std::vector<uint8_t> VirtualMachine::drainPPC64ConsoleOutput(
+    uint16_t lpid, uint64_t lease, size_t maximumCount) {
+    const auto found = ppc64ConsoleOutputLeases_.find(lpid);
+    if (found == ppc64ConsoleOutputLeases_.end() ||
+        found->second.first != lease || !ppc64VirtualTerminal_) return {};
+    return ppc64VirtualTerminal_->drainOutput(lpid, maximumCount);
+}
+
+size_t VirtualMachine::stagePPC64ConsoleInput(uint16_t lpid, uint64_t lease,
+                                              const uint8_t* bytes,
+                                              size_t count) {
+    const auto owner = ppc64ConsoleOutputLeases_.find(lpid);
+    auto staging = ppc64ConsoleStagedInput_.find(lpid);
+    if (owner == ppc64ConsoleOutputLeases_.end() ||
+        owner->second.first != lease || staging == ppc64ConsoleStagedInput_.end() ||
+        (count != 0 && bytes == nullptr)) return 0;
+    auto& queue = staging->second.bytes;
+    const size_t accepted = std::min(count,
+        staging->second.capacity - std::min(staging->second.capacity, queue.size()));
+    for (size_t i = 0; i < accepted; ++i) queue.push_back(bytes[i]);
+    owner->second.second = queue.empty();
+    return accepted;
+}
+
+std::vector<uint8_t> VirtualMachine::peekPPC64ConsoleInput(
+    uint16_t lpid, uint64_t lease, size_t maximumCount) const {
+    const auto owner = ppc64ConsoleOutputLeases_.find(lpid);
+    const auto staging = ppc64ConsoleStagedInput_.find(lpid);
+    if (owner == ppc64ConsoleOutputLeases_.end() ||
+        owner->second.first != lease || staging == ppc64ConsoleStagedInput_.end())
+        return {};
+    const auto& queue = staging->second.bytes;
+    const size_t count = maximumCount == 0
+        ? queue.size() : std::min(maximumCount, queue.size());
+    std::vector<uint8_t> result;
+    result.reserve(count);
+    auto current = queue.begin();
+    for (size_t i = 0; i < count; ++i, ++current) result.push_back(*current);
+    return result;
+}
+
+bool VirtualMachine::consumePPC64ConsoleInput(uint16_t lpid, uint64_t lease,
+                                               size_t count) {
+    const auto owner = ppc64ConsoleOutputLeases_.find(lpid);
+    auto staging = ppc64ConsoleStagedInput_.find(lpid);
+    if (owner == ppc64ConsoleOutputLeases_.end() ||
+        owner->second.first != lease || staging == ppc64ConsoleStagedInput_.end() ||
+        count > staging->second.bytes.size()) return false;
+    for (size_t i = 0; i < count; ++i) staging->second.bytes.pop_front();
+    owner->second.second = staging->second.bytes.empty();
+    return true;
+}
+
+void VirtualMachine::discardPPC64ConsoleInput(uint16_t lpid,
+                                               uint64_t lease) noexcept {
+    const auto owner = ppc64ConsoleOutputLeases_.find(lpid);
+    const auto staging = ppc64ConsoleStagedInput_.find(lpid);
+    if (owner != ppc64ConsoleOutputLeases_.end() &&
+        owner->second.first == lease && staging != ppc64ConsoleStagedInput_.end()) {
+        staging->second.bytes.clear();
+        owner->second.second = true;
+    }
+}
+
+size_t VirtualMachine::getPPC64ConsoleInputCount(uint16_t lpid,
+                                                 uint64_t lease) const noexcept {
+    const auto owner = ppc64ConsoleOutputLeases_.find(lpid);
+    const auto staging = ppc64ConsoleStagedInput_.find(lpid);
+    if (owner == ppc64ConsoleOutputLeases_.end() ||
+        owner->second.first != lease || staging == ppc64ConsoleStagedInput_.end())
+        return 0;
+    return staging->second.bytes.size();
 }
 
 void VirtualMachine::clearPPC64TerminalState() {
@@ -2594,6 +2727,15 @@ VMStateSnapshot snapshot = snapshotManager_->resolveSnapshot(snapshotId);
 }
 
 VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
+    if (isaName_ == "PPC64") {
+        for (const auto& [lpid, staging] : ppc64ConsoleStagedInput_) {
+            (void)lpid;
+            if (!staging.bytes.empty()) {
+                throw std::logic_error(
+                    "cannot capture PPC64 VM snapshot while host-console input is staged outside guest state");
+            }
+        }
+    }
     VMStateSnapshot snapshot;
     snapshot.architecture = isaName_;
     
@@ -2702,6 +2844,12 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             LOG_ERROR("Rejected PPC64 VM snapshot: " + reason);
             return false;
         };
+        for (const auto& [lpid, staging] : ppc64ConsoleStagedInput_) {
+            (void)lpid;
+            if (!staging.bytes.empty()) {
+                return reject("host-console input must be quiesced before snapshot restore");
+            }
+        }
         if (snapshot.architecture != "PPC64") {
             return reject("architecture identity mismatch");
         }
@@ -3230,6 +3378,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         if (scheduler_) {
             scheduler_->setQuantumSize(snapshot.quantumSize);
         }
+        ++ppc64ConsoleGeneration_;
         return true;
     }
 
@@ -3306,6 +3455,24 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
 bool VirtualMachine::writeDiagnosticCheckpoint(const std::string& path,
                                                const std::string& guestIdentity,
                                                std::string* error) const {
+    for (const auto& [lpid, lease] : ppc64ConsoleOutputLeases_) {
+        (void)lpid;
+        if (!lease.second) {
+            if (error != nullptr) {
+                *error = "PPC64 console has accepted input staged outside the VM; pump or detach before checkpoint";
+            }
+            return false;
+        }
+    }
+    for (const auto& [lpid, staging] : ppc64ConsoleStagedInput_) {
+        (void)lpid;
+        if (!staging.bytes.empty()) {
+            if (error != nullptr) {
+                *error = "PPC64 console has accepted input staged outside the VM; pump or explicitly discard before checkpoint";
+            }
+            return false;
+        }
+    }
     return VMCheckpointCodec::write(*this, path, guestIdentity, error);
 }
 
@@ -3313,6 +3480,24 @@ bool VirtualMachine::readDiagnosticCheckpoint(const std::string& path,
                                               const std::string& expectedGuestIdentity,
                                                std::string* error,
                                                bool authorizeHypervisorState) {
+    for (const auto& [lpid, lease] : ppc64ConsoleOutputLeases_) {
+        (void)lpid;
+        if (!lease.second) {
+            if (error != nullptr) {
+                *error = "PPC64 console has accepted input staged outside the VM; pump or detach before restore";
+            }
+            return false;
+        }
+    }
+    for (const auto& [lpid, staging] : ppc64ConsoleStagedInput_) {
+        (void)lpid;
+        if (!staging.bytes.empty()) {
+            if (error != nullptr) {
+                *error = "PPC64 console has accepted input staged outside the VM; pump or explicitly discard before restore";
+            }
+            return false;
+        }
+    }
     return VMCheckpointCodec::read(*this, path, expectedGuestIdentity, error,
                                    authorizeHypervisorState);
 }
