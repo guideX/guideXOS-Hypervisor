@@ -208,6 +208,54 @@ std::vector<uint8_t> makeFatImageWithBootLoader() {
     return image;
 }
 
+std::vector<uint8_t> makeFatImageWithPayload(const std::vector<uint8_t>& payload) {
+    constexpr size_t bytesPerSector = 512;
+    constexpr size_t totalSectors = 4160;
+    constexpr size_t firstFileCluster = 2;
+    const size_t clusterCount = (payload.size() + bytesPerSector - 1) / bytesPerSector;
+    assert(clusterCount > 0 && firstFileCluster + clusterCount < 128);
+
+    std::vector<uint8_t> image(totalSectors * bytesPerSector, 0);
+    writeLe16(image, 11, static_cast<uint16_t>(bytesPerSector));
+    image[13] = 1; // One sector per cluster: each FAT cluster is 512 bytes.
+    writeLe16(image, 14, 1);
+    image[16] = 2;
+    writeLe16(image, 17, 16);
+    writeLe16(image, 19, static_cast<uint16_t>(totalSectors));
+    image[21] = 0xF8;
+    writeLe16(image, 22, 17);
+    image[38] = 0x29;
+    std::memcpy(image.data() + 54, "FAT16   ", 8);
+    image[510] = 0x55;
+    image[511] = 0xAA;
+
+    const size_t fatOffset = bytesPerSector;
+    const size_t secondFatOffset = 18 * bytesPerSector;
+    writeLe16(image, fatOffset, 0xFFF8);
+    writeLe16(image, fatOffset + 2, 0xFFFF);
+    writeLe16(image, secondFatOffset, 0xFFF8);
+    writeLe16(image, secondFatOffset + 2, 0xFFFF);
+    for (size_t index = 0; index < clusterCount; ++index) {
+        const uint16_t cluster = static_cast<uint16_t>(firstFileCluster + index);
+        const uint16_t next = index + 1 == clusterCount
+            ? 0xFFFF
+            : static_cast<uint16_t>(cluster + 1);
+        writeLe16(image, fatOffset + static_cast<size_t>(cluster) * 2, next);
+        writeLe16(image, secondFatOffset + static_cast<size_t>(cluster) * 2, next);
+    }
+
+    const size_t rootOffset = 35 * bytesPerSector;
+    std::memcpy(image.data() + rootOffset, "PAYLOAD ", 8);
+    std::memcpy(image.data() + rootOffset + 8, "BIN", 3);
+    image[rootOffset + 11] = guideXOS::ATTR_ARCHIVE;
+    writeLe16(image, rootOffset + 26, static_cast<uint16_t>(firstFileCluster));
+    writeLe32(image, rootOffset + 28, static_cast<uint32_t>(payload.size()));
+
+    const size_t dataOffset = 36 * bytesPerSector;
+    std::memcpy(image.data() + dataOffset, payload.data(), payload.size());
+    return image;
+}
+
 std::vector<uint8_t> makeSyntheticIa64EfiLoadImage() {
     std::vector<uint8_t> image(0xA00, 0);
 
@@ -4551,6 +4599,269 @@ void testIA64PluginFileProtocolOpenNoMediaIsSafe() {
     std::cout << "  ? FileProtocol.Open reports EFI_NO_MEDIA without destabilizing the boot stub path\n";
 }
 
+void testIA64PluginFileProtocolReadStreaming() {
+    std::cout << "Testing IA-64 EFI_FILE_PROTOCOL.Read streaming and cursor semantics...\n";
+
+    constexpr uint64_t EFI_SUCCESS = 0;
+    constexpr uint64_t EFI_INVALID_PARAMETER = 0x8000000000000002ULL;
+    constexpr uint64_t EFI_BUFFER_TOO_SMALL = 0x8000000000000005ULL;
+    constexpr uint64_t guestMemorySize = 0x20000000ULL;
+    constexpr uint64_t callIP = 0x30e40ULL;
+    EfiHandoffLayout layout{};
+    assert(tryComputeEfiHandoffLayout(guestMemorySize, layout));
+    const uint64_t fileReadCode = layout.fileReadStubCodeAddr;
+    const uint64_t fileOpenCode = layout.fileOpenStubCodeAddr;
+    const uint64_t fileCloseCode = layout.fileCloseStubCodeAddr;
+    const uint64_t fileGetInfoCode = layout.fileGetInfoStubCodeAddr;
+    const uint64_t getPositionCode = layout.fileGetPositionStubCodeAddr;
+    const uint64_t setPositionCode = layout.fileSetPositionStubCodeAddr;
+    const uint64_t openVolumeCode = layout.openVolumeStubCodeAddr;
+
+    std::vector<uint8_t> payload(1700);
+    for (size_t index = 0; index < payload.size(); ++index) {
+        payload[index] = static_cast<uint8_t>((index * 37U + 13U) & 0xffU);
+    }
+
+    SizedSparseMemory memory(guestMemorySize);
+    const uint8_t emptyBundle[16] = {};
+    memory.Write(callIP, emptyBundle, sizeof(emptyBundle));
+    const uint16_t filePath[] = { 'P','A','Y','L','O','A','D','.','B','I','N',0 };
+    memory.Write(0x6000, reinterpret_cast<const uint8_t*>(filePath), sizeof(filePath));
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    plugin.setBootImageBackingStore(makeFatImageWithPayload(payload));
+
+    const auto invoke = [&](uint64_t code,
+                            size_t argumentCount,
+                            const std::array<uint64_t, 6>& args) {
+        plugin.getCPUState().SetIP(callIP);
+        plugin.getCPUState().SetCFM(static_cast<uint64_t>(argumentCount));
+        plugin.getCPUState().SetBR(6, code);
+        for (size_t index = 0; index < args.size(); ++index) {
+            plugin.getCPUState().SetGR(32 + index, args[index]);
+        }
+        plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
+        const ISAExecutionResult result = plugin.step(memory);
+        assert(result == ISAExecutionResult::CONTINUE);
+        assert(plugin.getCPUState().GetIP() == callIP + 16);
+        return plugin.getCPUState().GetGR(8);
+    };
+
+    uint64_t rootHandle = 0;
+    memory.Write(0x5000, reinterpret_cast<const uint8_t*>(&rootHandle), sizeof(rootHandle));
+    assert(invoke(openVolumeCode, 2, {layout.simpleFileSystemProtocolAddr, 0x5000, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5000, reinterpret_cast<uint8_t*>(&rootHandle), sizeof(rootHandle));
+    assert(rootHandle == layout.rootFileProtocolAddr);
+
+    // A short directory buffer must report the required EFI_FILE_INFO size
+    // without consuming the entry. The retry then returns PAYLOAD.BIN.
+    uint64_t directorySize = 1;
+    memory.Write(0x5400, reinterpret_cast<const uint8_t*>(&directorySize), sizeof(directorySize));
+    assert(invoke(fileReadCode, 3, {rootHandle, 0x5400, 0xA000, 0, 0, 0}) == EFI_BUFFER_TOO_SMALL);
+    memory.Read(0x5400, reinterpret_cast<uint8_t*>(&directorySize), sizeof(directorySize));
+    assert(directorySize > 80);
+    const uint64_t directorySizeRequired = directorySize;
+    memory.Write(0x5400, reinterpret_cast<const uint8_t*>(&directorySize), sizeof(directorySize));
+    assert(invoke(fileReadCode, 3, {rootHandle, 0x5400, 0xA000, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5400, reinterpret_cast<uint8_t*>(&directorySize), sizeof(directorySize));
+    std::vector<uint8_t> directoryRecord(static_cast<size_t>(directorySizeRequired));
+    memory.Read(0xA000, directoryRecord.data(), directoryRecord.size());
+    constexpr char directoryName[] = "PAYLOAD.BIN";
+    assert(directorySize == directorySizeRequired && directoryRecord[80] == 'P');
+    for (size_t index = 0; index < sizeof(directoryName) - 1; ++index) {
+        assert(directoryRecord[80 + index * 2] == static_cast<uint8_t>(directoryName[index]));
+        assert(directoryRecord[81 + index * 2] == 0);
+    }
+
+    uint64_t fileHandle = 0;
+    memory.Write(0x5100, reinterpret_cast<const uint8_t*>(&fileHandle), sizeof(fileHandle));
+    assert(invoke(fileOpenCode, 5,
+                  {rootHandle, 0x5100, 0x6000, 1, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5100, reinterpret_cast<uint8_t*>(&fileHandle), sizeof(fileHandle));
+    assert(fileHandle != 0);
+
+    // File.GetInfo must validate EFI_FILE_INFO, return the exact required
+    // size on a short-buffer probe, and serialize the metadata before retry.
+    const std::array<uint8_t, 16> fileInfoGuid = {
+        0x92, 0x6e, 0x57, 0x09, 0x3f, 0x6d, 0xd2, 0x11,
+        0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b};
+    memory.Write(0x6200, fileInfoGuid.data(), fileInfoGuid.size());
+    std::array<uint8_t, 32> infoBufferCanary{};
+    infoBufferCanary.fill(0xA5);
+    memory.Write(0xA400, infoBufferCanary.data(), infoBufferCanary.size());
+    uint64_t infoBufferSize = infoBufferCanary.size();
+    memory.Write(0x5500, reinterpret_cast<const uint8_t*>(&infoBufferSize), sizeof(infoBufferSize));
+    assert(invoke(fileGetInfoCode, 4,
+                  {fileHandle, 0x6200, 0x5500, 0xA400, 0, 0}) == EFI_BUFFER_TOO_SMALL);
+    memory.Read(0x5500, reinterpret_cast<uint8_t*>(&infoBufferSize), sizeof(infoBufferSize));
+    assert(infoBufferSize == 80 + (std::strlen("PAYLOAD.BIN") + 1) * sizeof(uint16_t));
+    std::array<uint8_t, 32> infoBufferAfterProbe{};
+    memory.Read(0xA400, infoBufferAfterProbe.data(), infoBufferAfterProbe.size());
+    assert(infoBufferAfterProbe == infoBufferCanary);
+    std::vector<uint8_t> infoBuffer(static_cast<size_t>(infoBufferSize));
+    memory.Write(0xA400, infoBuffer.data(), infoBuffer.size());
+    memory.Write(0x5500, reinterpret_cast<const uint8_t*>(&infoBufferSize), sizeof(infoBufferSize));
+    assert(invoke(fileGetInfoCode, 4,
+                  {fileHandle, 0x6200, 0x5500, 0xA400, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0xA400, infoBuffer.data(), infoBuffer.size());
+    uint64_t infoTotalSize = 0;
+    uint64_t infoFileSize = 0;
+    uint64_t infoPhysicalSize = 0;
+    uint64_t infoAttributes = 0;
+    std::memcpy(&infoTotalSize, infoBuffer.data(), sizeof(infoTotalSize));
+    std::memcpy(&infoFileSize, infoBuffer.data() + 8, sizeof(infoFileSize));
+    std::memcpy(&infoPhysicalSize, infoBuffer.data() + 16, sizeof(infoPhysicalSize));
+    std::memcpy(&infoAttributes, infoBuffer.data() + 72, sizeof(infoAttributes));
+    assert(infoTotalSize == infoBuffer.size());
+    assert(infoFileSize == payload.size() && infoPhysicalSize == payload.size());
+    assert(infoAttributes == 1);
+    constexpr char fileName[] = "PAYLOAD.BIN";
+    for (size_t index = 0; index < sizeof(fileName) - 1; ++index) {
+        assert(infoBuffer[80 + index * 2] == static_cast<uint8_t>(fileName[index]));
+        assert(infoBuffer[81 + index * 2] == 0);
+    }
+    assert(infoBuffer[80 + (sizeof(fileName) - 1) * 2] == 0);
+    assert(infoBuffer[81 + (sizeof(fileName) - 1) * 2] == 0);
+
+    const auto readFile = [&](uint64_t requested,
+                              uint64_t buffer,
+                              uint64_t& actual) {
+        memory.Write(0x5200, reinterpret_cast<const uint8_t*>(&requested), sizeof(requested));
+        const uint64_t status = invoke(fileReadCode, 3,
+                                       {fileHandle, 0x5200, buffer, 0, 0, 0});
+        memory.Read(0x5200, reinterpret_cast<uint8_t*>(&actual), sizeof(actual));
+        return status;
+    };
+
+    uint64_t actual = 0;
+    // R12's old implementation reported bytes as transferred for a NULL
+    // destination without writing data or advancing the file position.
+    assert(readFile(16, 0, actual) == EFI_INVALID_PARAMETER);
+    assert(actual == 16);
+
+    uint64_t position = 0;
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == 0);
+
+    // An invalid guest destination is rejected before it can wrap past RAM.
+    std::array<uint8_t, 8> upperBoundaryCanary = {0x19, 0x27, 0x35, 0x43,
+                                                  0x51, 0x6F, 0x7D, 0x8B};
+    memory.Write(guestMemorySize - upperBoundaryCanary.size(),
+                 upperBoundaryCanary.data(), upperBoundaryCanary.size());
+    assert(readFile(16, guestMemorySize - 8, actual) == EFI_INVALID_PARAMETER);
+    assert(actual == 16);
+    std::array<uint8_t, 8> upperBoundaryAfter{};
+    memory.Read(guestMemorySize - upperBoundaryAfter.size(),
+                upperBoundaryAfter.data(), upperBoundaryAfter.size());
+    assert(upperBoundaryAfter == upperBoundaryCanary);
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == 0);
+
+    // 13 bytes is below a cluster. The following 700-byte read crosses two
+    // 512-byte FAT cluster boundaries and leaves the cursor at byte 713.
+    const uint8_t canary = 0xA7;
+    memory.Write(0x6FFF, &canary, 1);
+    memory.Write(0x700D, &canary, 1);
+    assert(readFile(13, 0x7000, actual) == EFI_SUCCESS && actual == 13);
+    std::array<uint8_t, 13> firstRead{};
+    memory.Read(0x7000, firstRead.data(), firstRead.size());
+    assert(std::equal(firstRead.begin(), firstRead.end(), payload.begin()));
+    uint8_t canaryAfter = 0;
+    memory.Read(0x6FFF, &canaryAfter, 1);
+    assert(canaryAfter == canary);
+    memory.Read(0x700D, &canaryAfter, 1);
+    assert(canaryAfter == canary);
+
+    assert(readFile(700, 0x8000, actual) == EFI_SUCCESS && actual == 700);
+    std::array<uint8_t, 700> crossingRead{};
+    memory.Read(0x8000, crossingRead.data(), crossingRead.size());
+    assert(std::equal(crossingRead.begin(), crossingRead.end(), payload.begin() + 13));
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == 713);
+
+    assert(invoke(setPositionCode, 2, {fileHandle, 500, 0, 0, 0, 0}) == EFI_SUCCESS);
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == 500);
+    assert(readFile(32, 0x9000, actual) == EFI_SUCCESS && actual == 32);
+    std::array<uint8_t, 32> soughtRead{};
+    memory.Read(0x9000, soughtRead.data(), soughtRead.size());
+    assert(std::equal(soughtRead.begin(), soughtRead.end(), payload.begin() + 500));
+
+    // UEFI permits a zero-length read with a NULL Buffer; it must leave the
+    // cursor unchanged and return a zero BufferSize.
+    assert(readFile(0, 0, actual) == EFI_SUCCESS && actual == 0);
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == 532);
+
+    assert(invoke(setPositionCode, 2, {fileHandle, 713, 0, 0, 0, 0}) == EFI_SUCCESS);
+    assert(readFile(1200, 0xA200, actual) == EFI_SUCCESS && actual == 987);
+    std::array<uint8_t, 987> finalShortRead{};
+    memory.Read(0xA200, finalShortRead.data(), finalShortRead.size());
+    assert(std::equal(finalShortRead.begin(), finalShortRead.end(), payload.begin() + 713));
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == payload.size());
+
+    assert(readFile(100, 0xB000, actual) == EFI_SUCCESS && actual == 0);
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == payload.size());
+
+    // Invalid BufferSize pointers fail without changing the cursor or reading
+    // from or writing to the inaccessible pointer.
+    const uint64_t boundarySize = 8;
+    memory.Write(0x5200, reinterpret_cast<const uint8_t*>(&boundarySize), sizeof(boundarySize));
+    assert(invoke(fileReadCode, 3,
+                  {fileHandle, guestMemorySize - 4, 0xC000, 0, 0, 0}) == EFI_INVALID_PARAMETER);
+    assert(invoke(fileReadCode, 3,
+                  {fileHandle, 0, 0xC000, 0, 0, 0}) == EFI_INVALID_PARAMETER);
+    assert(invoke(getPositionCode, 2, {fileHandle, 0x5300, 0, 0, 0, 0}) == EFI_SUCCESS);
+    memory.Read(0x5300, reinterpret_cast<uint8_t*>(&position), sizeof(position));
+    assert(position == payload.size());
+
+    assert(invoke(fileCloseCode, 1, {fileHandle, 0, 0, 0, 0, 0}) == EFI_SUCCESS);
+    assert(readFile(1, 0xC000, actual) == EFI_INVALID_PARAMETER);
+
+    const auto& readTrace = plugin.getEfiFileReadTrace();
+    assert(readTrace.size() == 13);
+    assert(readTrace[0].isDirectory && readTrace[0].status == EFI_BUFFER_TOO_SMALL);
+    assert(readTrace[0].filePositionBefore == 0 && readTrace[0].filePositionAfter == 0);
+    assert(readTrace[1].isDirectory && readTrace[1].status == EFI_SUCCESS);
+    assert(readTrace[2].status == EFI_INVALID_PARAMETER && readTrace[2].actualBytes == 0);
+    assert(readTrace[3].status == EFI_INVALID_PARAMETER && readTrace[3].actualBytes == 0);
+    assert(readTrace[4].filePositionBefore == 0 && readTrace[4].filePositionAfter == 13);
+    assert(readTrace[5].filePositionBefore == 13 && readTrace[5].filePositionAfter == 713);
+    assert(readTrace[6].filePositionBefore == 500 && readTrace[6].filePositionAfter == 532);
+    assert(readTrace[7].requestedBytes == 0 && readTrace[7].actualBytes == 0);
+    assert(readTrace[7].filePositionBefore == 532 && readTrace[7].filePositionAfter == 532);
+    assert(readTrace[8].filePositionBefore == 713 && readTrace[8].filePositionAfter == payload.size());
+    assert(readTrace[9].actualBytes == 0 && readTrace[9].filePositionAfter == payload.size());
+    assert(readTrace[10].status == EFI_INVALID_PARAMETER && readTrace[10].actualBytes == 0);
+    assert(readTrace[11].status == EFI_INVALID_PARAMETER && readTrace[11].actualBytes == 0);
+    assert(readTrace[10].filePositionBefore == payload.size() &&
+           readTrace[10].filePositionAfter == payload.size());
+    assert(readTrace[11].filePositionBefore == payload.size() &&
+           readTrace[11].filePositionAfter == payload.size());
+    assert(readTrace[12].status == EFI_INVALID_PARAMETER && readTrace[12].path.empty());
+    for (size_t index = 4; index <= 8; ++index) {
+        assert(readTrace[index].guestBufferVerified);
+        assert(readTrace[index].guestBytes.size() == readTrace[index].actualBytes);
+    }
+    assert(std::equal(readTrace[4].guestBytes.begin(), readTrace[4].guestBytes.end(), payload.begin()));
+    assert(std::equal(readTrace[5].guestBytes.begin(), readTrace[5].guestBytes.end(), payload.begin() + 13));
+    assert(std::equal(readTrace[6].guestBytes.begin(), readTrace[6].guestBytes.end(), payload.begin() + 500));
+    assert(std::equal(readTrace[8].guestBytes.begin(), readTrace[8].guestBytes.end(), payload.begin() + 713));
+
+    std::cout << "  ? Read validates Buffer/BufferSize, crosses FAT clusters, truncates at EOF, "
+                 "preserves position on errors, supports seek/zero-length reads, and records guest readback\n";
+}
+
 void testIA64PluginTextOutputStringReturnsSuccess() {
     std::cout << "Testing IA-64 plugin SimpleTextOut OutputString stub...\n";
 
@@ -6025,6 +6336,10 @@ int main(int argc, char** argv) {
         }
         if (argc > 1 && std::string(argv[1]) == "consoleinput") {
             testIA64PluginConsoleInputProtocolsAndPlabelDispatch();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "fileprotocol") {
+            testIA64PluginFileProtocolReadStreaming();
             return 0;
         }
 

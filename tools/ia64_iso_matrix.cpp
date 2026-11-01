@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -40,6 +41,10 @@ struct Options {
         "artifact-c:size=13035024;sha256=81B843ACDD1F69456D5D1BF2C6FE7059ECB8730BAAD1405BFFA109872EF23B45;iso-size=4695296000;gzip-sha256=4C62D04431645C8F5F4CC30861DE30A153C47D5B487549B5CFCCF2DE03B8B94";
     std::string equivalenceLogPath;
     std::string dumpRamPath;
+    uint64_t dumpMemoryRangeAddress = 0;
+    uint64_t dumpMemoryRangeSize = 0;
+    std::string dumpMemoryRangePath;
+    std::string efiFileReadCapturePath;
     std::string hotIpsPath;
     std::string lockTracePath;
     std::vector<uint64_t> probeIps;
@@ -159,6 +164,14 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.equivalenceLogPath = argv[++i];
         } else if (argument == "--dump-ram" && i + 1 < argc) {
             options.dumpRamPath = argv[++i];
+        } else if (argument == "--dump-memory-range" && i + 3 < argc) {
+            if (!parseUnsigned(argv[++i], options.dumpMemoryRangeAddress) ||
+                !parseUnsigned(argv[++i], options.dumpMemoryRangeSize)) {
+                return false;
+            }
+            options.dumpMemoryRangePath = argv[++i];
+        } else if (argument == "--capture-efi-file-reads" && i + 1 < argc) {
+            options.efiFileReadCapturePath = argv[++i];
         } else if (argument == "--hot-ips" && i + 1 < argc) {
             options.hotIpsPath = argv[++i];
         } else if (argument == "--lock-trace" && i + 1 < argc) {
@@ -175,6 +188,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
     }
     return !options.isoPath.empty() && options.cycles > 0 && options.memoryMiB >= 1 &&
            options.handoffCycles > 0 && options.postCheckpointCycles > 0 &&
+           (options.dumpMemoryRangePath.empty() == (options.dumpMemoryRangeSize == 0)) &&
            !(options.checkpointWritePath.empty() && !options.checkpointReadPath.empty() && !options.keys.empty()) &&
            !(options.checkpointWritePath.empty() == false && !options.checkpointReadPath.empty());
 }
@@ -186,7 +200,8 @@ void printUsage() {
                  "[--checkpoint-write PATH | --checkpoint-read PATH] "
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
-                 "[--hot-ips PATH] [--lock-trace PATH]\n"
+                 "[--dump-memory-range BASE SIZE PATH] [--hot-ips PATH] [--lock-trace PATH] "
+                 "[--capture-efi-file-reads BASE]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
                  "--key-after-cycles 300000 --handoff-cycles 1200000000 "
                  "--post-checkpoint-cycles 2000000\n"
@@ -906,6 +921,115 @@ void dumpGuestRam(ia64::VirtualMachine& vm, const std::string& path) {
               << " ip=0x" << std::hex << vm.getIP(0) << std::dec << "\n";
 }
 
+bool dumpGuestMemoryRange(ia64::VirtualMachine& vm,
+                          uint64_t address,
+                          uint64_t size,
+                          const std::string& path) {
+    if (path.empty()) return true;
+    const uint64_t totalSize = static_cast<uint64_t>(vm.getMemory().GetTotalSize());
+    if (address > totalSize || size > totalSize - address ||
+        size > static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max())) {
+        std::cerr << "[IA64-MATRIX] dump-memory-range rejected out-of-RAM range base=0x"
+                  << std::hex << address << " size=0x" << size
+                  << " memorySize=0x" << totalSize << std::dec << "\n";
+        return false;
+    }
+    std::error_code error;
+    if (std::filesystem::exists(path, error) || error) {
+        std::cerr << "[IA64-MATRIX] dump-memory-range path already exists or cannot be checked: \""
+                  << path << "\"\n";
+        return false;
+    }
+    const uint8_t* raw = vm.getMemory().GetRawData();
+    if (raw == nullptr) {
+        std::cerr << "[IA64-MATRIX] dump-memory-range raw guest memory unavailable\n";
+        return false;
+    }
+    std::ofstream output(path, std::ios::binary);
+    if (!output) {
+        std::cerr << "[IA64-MATRIX] dump-memory-range open failed path=\""
+                  << path << "\"\n";
+        return false;
+    }
+    output.write(reinterpret_cast<const char*>(raw + address),
+                 static_cast<std::streamsize>(size));
+    output.flush();
+    if (!output) {
+        std::cerr << "[IA64-MATRIX] dump-memory-range write failed path=\""
+                  << path << "\"\n";
+        return false;
+    }
+    std::cerr << "[IA64-MATRIX] dump-memory-range path=\"" << path
+              << "\" base=0x" << std::hex << address << " size=0x" << size
+              << std::dec << " cycles=" << vm.getCyclesExecuted()
+              << " ip=0x" << std::hex << vm.getIP(0) << std::dec << "\n";
+    return true;
+}
+
+bool writeEfiFileReadCapture(
+    const ia64::IA64ISAPlugin& plugin,
+    const std::string& basePath) {
+    if (basePath.empty()) return true;
+    const std::filesystem::path metadataPath = basePath + ".tsv";
+    const std::filesystem::path bytesPath = basePath + ".bin";
+    std::error_code error;
+    if (std::filesystem::exists(metadataPath, error) || error ||
+        std::filesystem::exists(bytesPath, error) || error) {
+        std::cerr << "[IA64-MATRIX] EFI file-read capture path already exists or cannot be checked: \""
+                  << basePath << "\"\n";
+        return false;
+    }
+
+    std::ofstream metadata(metadataPath, std::ios::out | std::ios::binary);
+    std::ofstream bytes(bytesPath, std::ios::out | std::ios::binary);
+    if (!metadata || !bytes) {
+        std::cerr << "[IA64-MATRIX] EFI file-read capture open failed base=\""
+                  << basePath << "\"\n";
+        return false;
+    }
+    metadata << "index\tcycle\tcaller_ip\thandle\tpath\tbuffer\trequested\tactual"
+                "\tposition_before\tposition_after\tstatus\tdirectory"
+                "\tguest_buffer_verified\tpayload_offset\tpayload_size\n";
+    uint64_t payloadOffset = 0;
+    const auto& records = plugin.getEfiFileReadTrace();
+    for (size_t index = 0; index < records.size(); ++index) {
+        const auto& record = records[index];
+        const bool hasPayload = record.status == 0 && record.actualBytes != 0 &&
+            record.guestBufferVerified && record.guestBytes.size() == record.actualBytes;
+        const uint64_t payloadSize = hasPayload
+            ? static_cast<uint64_t>(record.guestBytes.size()) : 0;
+        metadata << index << '\t' << std::hex << record.cycle << '\t'
+                 << record.callerIP << '\t' << record.handle << '\t'
+                 << std::quoted(record.path) << '\t' << record.bufferAddress << '\t'
+                 << record.requestedBytes << '\t' << record.actualBytes << '\t'
+                 << record.filePositionBefore << '\t' << record.filePositionAfter << '\t'
+                 << record.status << '\t' << (record.isDirectory ? 1 : 0) << '\t'
+                 << (record.guestBufferVerified ? 1 : 0) << '\t' << payloadOffset << '\t'
+                 << payloadSize << std::dec << '\n';
+        if (hasPayload) {
+            bytes.write(reinterpret_cast<const char*>(record.guestBytes.data()),
+                        static_cast<std::streamsize>(record.guestBytes.size()));
+            if (!bytes) {
+                std::cerr << "[IA64-MATRIX] EFI file-read payload write failed base=\""
+                          << basePath << "\"\n";
+                return false;
+            }
+            payloadOffset += payloadSize;
+        }
+    }
+    metadata.flush();
+    bytes.flush();
+    if (!metadata || !bytes) {
+        std::cerr << "[IA64-MATRIX] EFI file-read metadata write failed base=\""
+                  << basePath << "\"\n";
+        return false;
+    }
+    std::cerr << "[IA64-MATRIX] EFI file-read capture metadata=\"" << metadataPath.string()
+              << "\" payload=\"" << bytesPath.string() << "\" records=" << records.size()
+              << " payloadBytes=" << payloadOffset << "\n";
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1319,6 +1443,12 @@ int main(int argc, char** argv) {
                       << " File.Close=" << summary.fileCloseCalls
                       << " File.GetPosition=" << summary.fileGetPositionCalls
                       << " File.SetPosition=" << summary.fileSetPositionCalls
+                      << " GetMemoryMap=" << summary.getMemoryMapCalls
+                      << " AllocatePool=" << summary.allocatePoolCalls
+                      << " FreePool=" << summary.freePoolCalls
+                      << " AllocatePages=" << summary.allocatePagesCalls
+                      << " FreePages=" << summary.freePagesCalls
+                      << " memoryMapKey=" << summary.memoryMapKey
                       << " LoadImage=" << summary.loadImageCalls
                       << " StartImage=" << summary.startImageCalls
                       << " ExitBootServices=" << summary.exitBootServicesCalls
@@ -1335,6 +1465,9 @@ int main(int argc, char** argv) {
                 std::cerr << "[IA64-MATRIX] open-file path=\"" << summary.openFilePaths[i]
                           << "\" position=0x" << std::hex << summary.openFilePositions[i]
                           << " size=0x" << summary.openFileSizes[i] << std::dec << std::endl;
+            }
+            if (!writeEfiFileReadCapture(*plugin, options.efiFileReadCapturePath)) {
+                return 1;
             }
             if (!options.oraclePath.empty() && vm != nullptr) {
                 verifyPlacementOracle(*vm, summary, options.oraclePath);
@@ -1398,6 +1531,12 @@ int main(int argc, char** argv) {
         }
         if (ia64::VirtualMachine* dumpVm = manager.getVMDirect(vmId)) {
             dumpGuestRam(*dumpVm, options.dumpRamPath);
+            if (!dumpGuestMemoryRange(*dumpVm,
+                                      options.dumpMemoryRangeAddress,
+                                      options.dumpMemoryRangeSize,
+                                      options.dumpMemoryRangePath)) {
+                return 1;
+            }
         }
         return 0;
     } catch (const std::exception& exception) {

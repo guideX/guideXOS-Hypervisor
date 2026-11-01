@@ -345,6 +345,11 @@ public:
         size_t fileCloseCalls = 0;
         size_t fileGetPositionCalls = 0;
         size_t fileSetPositionCalls = 0;
+        size_t getMemoryMapCalls = 0;
+        size_t allocatePoolCalls = 0;
+        size_t freePoolCalls = 0;
+        size_t allocatePagesCalls = 0;
+        size_t freePagesCalls = 0;
         size_t loadImageCalls = 0;
         size_t startImageCalls = 0;
         size_t exitBootServicesCalls = 0;
@@ -354,6 +359,7 @@ public:
         size_t waitForEventCalls = 0;
         size_t checkEventCalls = 0;
         uint64_t totalFileBytesRead = 0;
+        uint64_t memoryMapKey = 0;
         std::vector<std::string> openFilePaths;
         std::vector<uint64_t> openFilePositions;
         std::vector<uint64_t> openFileSizes;
@@ -361,6 +367,30 @@ public:
     };
 
     EfiTraceSummary getEfiTraceSummary() const;
+
+    // Readback evidence captured by EFI_FILE_PROTOCOL.Read.  guestBytes are
+    // copied from guest memory after a successful firmware write, so the
+    // matrix harness can verify the bytes that were actually visible to the
+    // guest rather than trusting only the FAT source buffer.
+    struct EfiFileReadTraceRecord {
+        uint64_t cycle = 0;
+        uint64_t callerIP = 0;
+        uint64_t handle = 0;
+        std::string path;
+        uint64_t bufferAddress = 0;
+        uint64_t requestedBytes = 0;
+        uint64_t actualBytes = 0;
+        uint64_t filePositionBefore = 0;
+        uint64_t filePositionAfter = 0;
+        uint64_t status = 0;
+        bool isDirectory = false;
+        bool guestBufferVerified = false;
+        std::vector<uint8_t> guestBytes;
+    };
+
+    const std::vector<EfiFileReadTraceRecord>& getEfiFileReadTrace() const {
+        return efiFileReadTrace_;
+    }
 
     struct EfiHandoffCheckpointBoundary {
         bool valid = false;
@@ -597,6 +627,7 @@ private:
         uint64_t position = 0;
     };
     std::map<uint64_t, EfiFileHandle> efiFileHandles_;
+    std::vector<EfiFileReadTraceRecord> efiFileReadTrace_;
 
     struct EfiInputKey {
         uint16_t scanCode = 0;

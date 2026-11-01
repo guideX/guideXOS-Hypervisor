@@ -64,6 +64,41 @@ bool environmentFlagEnabled(const char* name) {
            value != "no";
 }
 
+uint64_t configuredBranchTraceTarget() {
+    static const uint64_t target = []() {
+        const char* raw = nullptr;
+#ifdef _MSC_VER
+        char* rawBuffer = nullptr;
+        size_t rawLength = 0;
+        if (_dupenv_s(&rawBuffer, &rawLength, "GUIDEXOS_IA64_TRACE_BRANCH_TARGET") != 0) {
+            return uint64_t{0};
+        }
+        raw = rawBuffer;
+#else
+        raw = std::getenv("GUIDEXOS_IA64_TRACE_BRANCH_TARGET");
+#endif
+        if (!raw || *raw == '\0') {
+#ifdef _MSC_VER
+            std::free(const_cast<char*>(raw));
+#endif
+            return uint64_t{0};
+        }
+        char* end = nullptr;
+        const unsigned long long parsed = std::strtoull(raw, &end, 0);
+        const bool valid = end != raw && *end == '\0';
+#ifdef _MSC_VER
+        std::free(const_cast<char*>(raw));
+#endif
+        return valid ? static_cast<uint64_t>(parsed) : uint64_t{0};
+    }();
+    return target;
+}
+
+bool shouldSuppressVerboseTrace() {
+    static const bool enabled = environmentFlagEnabled("GUIDEXOS_SUPPRESS_VERBOSE_TRACE");
+    return enabled;
+}
+
 bool shouldEmitInstructionTrace() {
     static const bool enabled = environmentFlagEnabled("GUIDEXOS_IA64_INSTRUCTION_TRACE");
     return enabled;
@@ -135,6 +170,7 @@ constexpr uint64_t EFI_STATUS_SUCCESS = 0ULL;
 constexpr uint64_t EFI_STATUS_INVALID_PARAMETER = 0x8000000000000002ULL;
 constexpr uint64_t EFI_STATUS_UNSUPPORTED = 0x8000000000000003ULL;
 constexpr uint64_t EFI_STATUS_BUFFER_TOO_SMALL = 0x8000000000000005ULL;
+constexpr uint64_t EFI_STATUS_DEVICE_ERROR = 0x8000000000000007ULL;
 constexpr uint64_t EFI_STATUS_WRITE_PROTECTED = 0x8000000000000008ULL;
 constexpr uint64_t EFI_STATUS_OUT_OF_RESOURCES = 0x8000000000000009ULL;
 constexpr uint64_t EFI_STATUS_NOT_FOUND = 0x800000000000000EULL;
@@ -2731,6 +2767,11 @@ IA64ISAPlugin::EfiTraceSummary IA64ISAPlugin::getEfiTraceSummary() const {
     summary.fileCloseCalls = efiFileCloseCalls_;
     summary.fileGetPositionCalls = efiFileGetPositionCalls_;
     summary.fileSetPositionCalls = efiFileSetPositionCalls_;
+    summary.getMemoryMapCalls = efiGetMemoryMapCalls_;
+    summary.allocatePoolCalls = efiAllocatePoolCalls_;
+    summary.freePoolCalls = efiFreePoolCalls_;
+    summary.allocatePagesCalls = efiAllocatePagesCalls_;
+    summary.freePagesCalls = efiFreePagesCalls_;
     summary.loadImageCalls = efiLoadImageCalls_;
     summary.startImageCalls = efiStartImageCalls_;
     summary.exitBootServicesCalls = efiExitBootServicesCalls_;
@@ -2740,6 +2781,7 @@ IA64ISAPlugin::EfiTraceSummary IA64ISAPlugin::getEfiTraceSummary() const {
     summary.waitForEventCalls = efiWaitForEventCalls_;
     summary.checkEventCalls = efiCheckEventCalls_;
     summary.totalFileBytesRead = efiTotalFileBytesRead_;
+    summary.memoryMapKey = efiMemoryMapKey_;
     for (const auto& [handleAddress, handle] : efiFileHandles_) {
         (void)handleAddress;
         if (!handle.isDirectory) {
@@ -2889,6 +2931,7 @@ void IA64ISAPlugin::reset() {
     lastBranchTargets_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
+    efiFileReadTrace_.clear();
     efiInputQueue_.clear();
     efiMemoryMap_.clear();
     efiMemoryReservations_.clear();
@@ -5099,6 +5142,8 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 branchEntryIP < memory.GetTotalSize() &&
                 (branchEntryIP < EFI_HANDOFF_REGION_BASE || branchEntryIP >= EFI_HANDOFF_REGION_END) &&
                 branchEntryIP >= 0x100000ULL) {
+                const bool traceEntry = configuredBranchTraceTarget() != 0 &&
+                                        branchEntryIP == configuredBranchTraceTarget();
                 {
                     std::ostringstream ctx;
                     ctx << "callerIP=" << BootStageTrace::Hex(currentIP)
@@ -5108,9 +5153,36 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         << cpuSummary(state_.getCPUState());
                     BootStageTrace::Stage(180, "Kernel handoff attempted", ctx.str());
                 }
-                std::cout << "[EFI-MILESTONE] branch/call to non-firmware kernel entry candidate ip=0x"
-                          << std::hex << currentIP << " target=0x" << branchEntryIP
-                          << " lastEfiCall=" << lastEfiCallName_ << std::dec << std::endl;
+                if (!shouldSuppressVerboseTrace() || traceEntry) {
+                    std::cout << "[EFI-MILESTONE] branch/call to non-firmware kernel entry candidate ip=0x"
+                              << std::hex << currentIP << " target=0x" << branchEntryIP
+                              << " lastEfiCall=" << lastEfiCallName_ << std::dec << std::endl;
+                }
+                if (traceEntry) {
+                    const CPUState& entryCPU = state_.getCPUState();
+                    const RSEState& entryRse = entryCPU.GetRSEState();
+                    std::ostringstream handoff;
+                    handoff << "callerIP=" << BootStageTrace::Hex(currentIP)
+                            << " target=" << BootStageTrace::Hex(branchEntryIP)
+                            << " rawTarget=" << BootStageTrace::Hex(branchTarget)
+                            << " kind=" << (cachedInstruction_.GetType() == InstructionType::BR_CALL
+                                                 ? "br.call"
+                                                 : (cachedInstruction_.GetType() == InstructionType::BR_RET
+                                                        ? "br.ret"
+                                                        : "branch"))
+                            << " " << cpuSummary(entryCPU)
+                            << " gr=[";
+                    for (size_t reg = 0; reg < 128; ++reg) {
+                        if (reg != 0) handoff << ',';
+                        handoff << "r" << reg << '=' << BootStageTrace::Hex(entryCPU.GetGR(reg));
+                    }
+                    handoff << "] pfs=" << BootStageTrace::Hex(entryRse.pfs)
+                            << " bsp=" << BootStageTrace::Hex(entryRse.bsp)
+                            << " bspstore=" << BootStageTrace::Hex(entryRse.bspstore)
+                            << " rsc=" << BootStageTrace::Hex(entryRse.rsc)
+                            << " rnat=" << BootStageTrace::Hex(entryRse.rnat);
+                    std::cout << "[IA64-HANDOFF] " << handoff.str() << std::endl;
+                }
                 if (!efiHandoffBoundaryPending_) {
                     efiHandoffBoundaryPending_ = true;
                     efiHandoffBoundary_.valid = true;
@@ -5383,6 +5455,7 @@ void IA64ISAPlugin::setState(const ISAState& state) {
     lastBranchTargets_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
     efiFileHandles_.clear();
+    efiFileReadTrace_.clear();
     efiInputQueue_.clear();
     efiMemoryMap_.clear();
     efiPageAllocations_.clear();
@@ -6202,6 +6275,7 @@ bool IA64ISAPlugin::deserializeCheckpointState(const std::vector<uint8_t>& data)
         intervalTimerConfigured_ = restoredIntervalTimerConfigured ||
                                    restoredCPU.GetCR(IA64_CR_ITM) != 0;
         interruptTelemetry_ = IA64InterruptTelemetry();
+        efiFileReadTrace_.clear();
         return true;
     } catch (...) {
         return false;
@@ -6223,6 +6297,7 @@ bool IA64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
         
         state_.deserialize(data.data());
         hasCachedInstruction_ = false;
+        efiFileReadTrace_.clear();
         return true;
     } catch (...) {
         return false;
@@ -7291,6 +7366,7 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
     if (!quietConsoleInputCall) {
         std::ostringstream ctx;
         ctx << "service=\"" << lastEfiCallName_ << "\""
+            << " cycle=" << BootStageTrace::Hex(cpu.GetAR(44))
             << " callerIP=" << BootStageTrace::Hex(callerIP)
             << " descriptor=" << BootStageTrace::Hex(descriptorAddress)
             << " code=" << BootStageTrace::Hex(codePointer)
@@ -7318,6 +7394,7 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
         return;
     }
     std::cout << "[EFI-CALL] service=" << lastEfiCallName_
+              << " cycle=0x" << std::hex << cpu.GetAR(44)
               << " callerIP=0x" << std::hex << callerIP
               << " descriptor=0x" << descriptorAddress
               << " code=0x" << codePointer
@@ -7565,68 +7642,179 @@ uint64_t IA64ISAPlugin::handleEfiFileRead(IMemory& memory) {
     const uint64_t thisProtocol = readCallerOutputRegister(state_.getCPUState(), 0);
     const uint64_t bufferSizeAddress = readCallerOutputRegister(state_.getCPUState(), 1);
     const uint64_t bufferAddress = readCallerOutputRegister(state_.getCPUState(), 2);
-    if (bufferSizeAddress == 0) {
-        return EFI_STATUS_INVALID_PARAMETER;
+    EfiFileReadTraceRecord record;
+    record.cycle = state_.getCPUState().GetAR(44);
+    record.callerIP = state_.getCPUState().GetIP();
+    record.handle = thisProtocol;
+    record.bufferAddress = bufferAddress;
+    auto handleIt = efiFileHandles_.find(thisProtocol);
+    EfiFileHandle* handle = handleIt == efiFileHandles_.end() ? nullptr : &handleIt->second;
+
+    const auto guestRangeValid = [&memory](uint64_t address, uint64_t size) {
+        if (address > std::numeric_limits<uint64_t>::max() - size) {
+            return false;
+        }
+        const uint64_t guestSize = static_cast<uint64_t>(memory.GetTotalSize());
+        return guestSize == 0 || (address <= guestSize && size <= guestSize - address);
+    };
+    const auto finish = [this, &record, handle](uint64_t status) {
+        record.filePositionAfter = handle == nullptr
+            ? record.filePositionBefore
+            : (handle->isDirectory
+                   ? static_cast<uint64_t>(handle->directoryIndex)
+                   : handle->position);
+        record.status = status;
+        if (record.actualBytes == 0 && status == EFI_STATUS_SUCCESS) {
+            record.guestBufferVerified = true;
+        }
+        std::cout << "[EFI-FILE] Read cycle=0x" << std::hex << record.cycle
+                  << " callerIP=0x" << record.callerIP
+                  << " handle=0x" << record.handle
+                  << " path=\"" << record.path << "\""
+                  << " sourceOffset=0x" << record.filePositionBefore
+                  << " requested=0x" << record.requestedBytes
+                  << " buffer=0x" << record.bufferAddress
+                  << " actual=0x" << record.actualBytes
+                  << " positionAfter=0x" << record.filePositionAfter
+                  << std::dec << " status=0x" << std::hex << status
+                  << " (" << efiStatusName(status) << ")"
+                  << " guestBufferVerified=" << std::boolalpha << record.guestBufferVerified
+                  << std::noboolalpha << std::endl;
+        efiFileReadTrace_.push_back(std::move(record));
+        return status;
+    };
+
+    if (handle == nullptr) {
+        return finish(EFI_STATUS_INVALID_PARAMETER);
     }
+    if (handle->isDirectory) {
+        record.isDirectory = true;
+        record.path = handle->path;
+        record.filePositionBefore = static_cast<uint64_t>(handle->directoryIndex);
+    } else {
+        record.path = handle->path;
+        record.filePositionBefore = handle->position;
+    }
+    if (bufferSizeAddress == 0 ||
+        !guestRangeValid(bufferSizeAddress, sizeof(uint64_t))) {
+        return finish(EFI_STATUS_INVALID_PARAMETER);
+    }
+
     uint64_t requested = 0;
-    memory.Read(bufferSizeAddress, reinterpret_cast<uint8_t*>(&requested), sizeof(requested));
-    auto it = efiFileHandles_.find(thisProtocol);
-    if (it == efiFileHandles_.end()) {
-        return EFI_STATUS_INVALID_PARAMETER;
+    try {
+        memory.Read(bufferSizeAddress, reinterpret_cast<uint8_t*>(&requested), sizeof(requested));
+    } catch (const std::exception&) {
+        return finish(EFI_STATUS_INVALID_PARAMETER);
     }
-    EfiFileHandle& handle = it->second;
+    record.requestedBytes = requested;
 
-    if (handle.isDirectory) {
-        if (handle.directoryIndex >= handle.directoryEntries.size()) {
-            const uint64_t zero = 0;
-            memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&zero), sizeof(zero));
-            return EFI_STATUS_SUCCESS;
+    const auto writeBufferSize = [&](uint64_t value) {
+        try {
+            memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+            return true;
+        } catch (const std::exception&) {
+            return false;
         }
-        const auto& entry = handle.directoryEntries[handle.directoryIndex];
-        std::vector<uint8_t> info = makeEfiFileInfoBuffer(entry.name, entry.size, entry.isDirectory);
-        if (requested < info.size() || bufferAddress == 0) {
-            const uint64_t required = static_cast<uint64_t>(info.size());
-            memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&required), sizeof(required));
-            return EFI_STATUS_BUFFER_TOO_SMALL;
+    };
+
+    if (handle->isDirectory) {
+        if (handle->directoryIndex >= handle->directoryEntries.size()) {
+            return finish(writeBufferSize(0)
+                              ? EFI_STATUS_SUCCESS
+                              : EFI_STATUS_INVALID_PARAMETER);
         }
-        memory.Write(bufferAddress, info.data(), info.size());
-        const uint64_t actual = static_cast<uint64_t>(info.size());
-        memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&actual), sizeof(actual));
-        ++handle.directoryIndex;
-        return EFI_STATUS_SUCCESS;
+        const auto& entry = handle->directoryEntries[handle->directoryIndex];
+        const std::vector<uint8_t> info =
+            makeEfiFileInfoBuffer(entry.name, entry.size, entry.isDirectory);
+        const uint64_t required = static_cast<uint64_t>(info.size());
+        if (requested < required) {
+            return finish(writeBufferSize(required)
+                              ? EFI_STATUS_BUFFER_TOO_SMALL
+                              : EFI_STATUS_INVALID_PARAMETER);
+        }
+        if (bufferAddress == 0) {
+            return finish(EFI_STATUS_INVALID_PARAMETER);
+        }
+        if (!guestRangeValid(bufferAddress, required)) {
+            return finish(EFI_STATUS_INVALID_PARAMETER);
+        }
+        try {
+            memory.Write(bufferAddress, info.data(), info.size());
+            record.guestBytes.resize(info.size());
+            memory.Read(bufferAddress, record.guestBytes.data(), record.guestBytes.size());
+        } catch (const std::exception&) {
+            record.guestBytes.clear();
+            return finish(EFI_STATUS_DEVICE_ERROR);
+        }
+        if (record.guestBytes != info) {
+            return finish(EFI_STATUS_DEVICE_ERROR);
+        }
+        if (!writeBufferSize(required)) {
+            return finish(EFI_STATUS_INVALID_PARAMETER);
+        }
+        record.actualBytes = required;
+        record.guestBufferVerified = true;
+        ++handle->directoryIndex;
+        return finish(EFI_STATUS_SUCCESS);
     }
 
-    const uint64_t remaining = handle.position < handle.data.size()
-        ? static_cast<uint64_t>(handle.data.size()) - handle.position
-        : 0;
+    if (requested != 0 && bufferAddress == 0) {
+        return finish(EFI_STATUS_INVALID_PARAMETER);
+    }
+    if (handle->position > handle->data.size()) {
+        return finish(EFI_STATUS_DEVICE_ERROR);
+    }
+
+    const uint64_t remaining = static_cast<uint64_t>(handle->data.size()) - handle->position;
     const uint64_t actual = std::min(requested, remaining);
-    if (actual > 0 && bufferAddress != 0) {
-        memory.Write(bufferAddress, handle.data.data() + static_cast<size_t>(handle.position), static_cast<size_t>(actual));
-        handle.position += actual;
-        efiTotalFileBytesRead_ += actual;
-        std::cout << "[EFI-MILESTONE] first Read over 0 bytes path=\"" << handle.path
+    if (actual > 0) {
+        if (!guestRangeValid(bufferAddress, actual)) {
+            return finish(EFI_STATUS_INVALID_PARAMETER);
+        }
+        try {
+            memory.Write(bufferAddress,
+                         handle->data.data() + static_cast<size_t>(handle->position),
+                         static_cast<size_t>(actual));
+            record.guestBytes.resize(static_cast<size_t>(actual));
+            memory.Read(bufferAddress, record.guestBytes.data(), record.guestBytes.size());
+        } catch (const std::exception&) {
+            record.guestBytes.clear();
+            return finish(EFI_STATUS_DEVICE_ERROR);
+        }
+        const auto* expected = handle->data.data() + static_cast<size_t>(handle->position);
+        record.guestBufferVerified =
+            std::equal(record.guestBytes.begin(), record.guestBytes.end(), expected);
+        if (!record.guestBufferVerified) {
+            return finish(EFI_STATUS_DEVICE_ERROR);
+        }
+    }
+    if (!writeBufferSize(actual)) {
+        return finish(EFI_STATUS_INVALID_PARAMETER);
+    }
+
+    record.actualBytes = actual;
+    handle->position += actual;
+    efiTotalFileBytesRead_ += actual;
+    if (actual > 0) {
+        std::cout << "[EFI-MILESTONE] first Read over 0 bytes path=\"" << handle->path
                   << "\" bytes=0x" << std::hex << actual
                   << " totalFileBytes=0x" << efiTotalFileBytesRead_ << std::dec << std::endl;
-        {
-            std::ostringstream ctx;
-            ctx << "service=FileProtocol.Read"
-                << " handle=" << BootStageTrace::Hex(thisProtocol)
-                << " path=\"" << handle.path << "\""
-                << " buffer=" << BootStageTrace::Hex(bufferAddress)
-                << " requested=" << BootStageTrace::Hex(requested)
-                << " actual=" << BootStageTrace::Hex(actual)
-                << " newPosition=" << BootStageTrace::Hex(handle.position)
-                << " totalFileBytes=" << BootStageTrace::Hex(efiTotalFileBytesRead_);
-            BootStageTrace::Stage(150, "First disk read after EFI entry observed", ctx.str());
-            BootStageTrace::Event("EFI_FILE_READ", ctx.str());
-        }
+        std::ostringstream ctx;
+        ctx << "service=FileProtocol.Read"
+            << " cycle=" << BootStageTrace::Hex(record.cycle)
+            << " callerIP=" << BootStageTrace::Hex(record.callerIP)
+            << " handle=" << BootStageTrace::Hex(thisProtocol)
+            << " path=\"" << handle->path << "\""
+            << " buffer=" << BootStageTrace::Hex(bufferAddress)
+            << " requested=" << BootStageTrace::Hex(requested)
+            << " actual=" << BootStageTrace::Hex(actual)
+            << " filePositionBefore=" << BootStageTrace::Hex(record.filePositionBefore)
+            << " filePositionAfter=" << BootStageTrace::Hex(handle->position)
+            << " totalFileBytes=" << BootStageTrace::Hex(efiTotalFileBytesRead_);
+        BootStageTrace::Stage(150, "First disk read after EFI entry observed", ctx.str());
+        BootStageTrace::Event("EFI_FILE_READ", ctx.str());
     }
-    memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&actual), sizeof(actual));
-    std::cout << "[EFI-FILE] Read handle=0x" << std::hex << thisProtocol
-              << " path=\"" << handle.path << "\" requested=0x" << requested
-              << " actual=0x" << actual << " position=0x" << handle.position
-              << std::dec << " -> EFI_SUCCESS" << std::endl;
-    return EFI_STATUS_SUCCESS;
+    return finish(EFI_STATUS_SUCCESS);
 }
 
 uint64_t IA64ISAPlugin::handleEfiFileGetInfo(IMemory& memory) {
@@ -7658,10 +7846,24 @@ uint64_t IA64ISAPlugin::handleEfiFileGetInfo(IMemory& memory) {
     memory.Read(bufferSizeAddress, reinterpret_cast<uint8_t*>(&provided), sizeof(provided));
     const uint64_t required = static_cast<uint64_t>(info.size());
     memory.Write(bufferSizeAddress, reinterpret_cast<const uint8_t*>(&required), sizeof(required));
+    const auto traceGetInfo = [&](uint64_t status) {
+        std::ostringstream trace;
+        trace << "path=\"" << handle.path << "\" guid=";
+        for (uint8_t byte : guid) {
+            trace << std::hex << std::setw(2) << std::setfill('0')
+                  << static_cast<unsigned>(byte);
+        }
+        trace << " requested=0x" << std::hex << provided
+              << " required=0x" << required
+              << " status=0x" << status << " (" << efiStatusName(status) << ')';
+        std::cout << "[EFI-GETINFO] " << trace.str() << std::endl;
+    };
     if (bufferAddress == 0 || provided < required) {
+        traceGetInfo(EFI_STATUS_BUFFER_TOO_SMALL);
         return EFI_STATUS_BUFFER_TOO_SMALL;
     }
     memory.Write(bufferAddress, info.data(), info.size());
+    traceGetInfo(EFI_STATUS_SUCCESS);
     return EFI_STATUS_SUCCESS;
 }
 
@@ -8232,6 +8434,8 @@ bool IA64ISAPlugin::replaceEfiMemoryMapRange(uint64_t physicalStart,
 
 uint64_t IA64ISAPlugin::handleEfiAllocatePages(IMemory& memory) {
     ++efiAllocatePagesCalls_;
+    const CPUState& cpu = state_.getCPUState();
+    const RSEState& rse = cpu.GetRSEState();
 
     const uint32_t allocationType = static_cast<uint32_t>(
         readCallerOutputRegister(state_.getCPUState(), 0));
@@ -8250,7 +8454,13 @@ uint64_t IA64ISAPlugin::handleEfiAllocatePages(IMemory& memory) {
     const bool inputWritable = memoryAddress != 0 &&
         guestRangeHasPermission(memory, memoryAddress, sizeof(uint64_t),
                                 MemoryAccessType::WRITE, writeKnown);
-    std::cout << "[EFI-ALLOCATEPAGES] type=" << allocationType
+    std::cout << "[EFI-ALLOCATEPAGES] cycle=0x" << std::hex << cpu.GetAR(44)
+              << " callerIP=0x" << cpu.GetIP()
+              << " stack=0x" << cpu.GetGR(12)
+              << " bsp=0x" << rse.bsp
+              << " bspstore=0x" << rse.bspstore
+              << " rnat=0x" << rse.rnat
+              << std::dec << " type=" << allocationType
               << " memoryType=" << memoryType
               << " pages=" << numberOfPages
               << " Memory=0x" << std::hex << memoryAddress
