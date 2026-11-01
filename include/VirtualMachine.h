@@ -729,6 +729,9 @@ public:
     std::weak_ptr<const uint8_t> getPPC64ConsoleLifetimeToken() const {
         return ppc64ConsoleLifetimeToken_;
     }
+    uint64_t getPPC64ConsoleVMIdentity() const noexcept {
+        return ppc64ConsoleVMIdentity_;
+    }
     std::string getLastExecutionDiagnostic() const;
     std::string getArchitectureName() const { return isaName_; }
 
@@ -767,6 +770,7 @@ private:
     };
     std::map<uint16_t, PPC64ConsoleStagingState> ppc64ConsoleStagedInput_;
     uint64_t ppc64ConsoleNextLease_ = 1;
+    uint64_t ppc64ConsoleVMIdentity_ = 0;
     uint64_t ppc64ConsoleGeneration_ = 0;
     ppc64::PPC64PlatformConfiguration ppc64PlatformConfiguration_;
     std::unique_ptr<ppc64::PPC64VirtualTimeBase> ppc64VirtualTimeBase_;

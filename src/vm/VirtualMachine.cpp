@@ -24,10 +24,15 @@
 #include <stdexcept>
 #include <sstream>
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <set>
 
 namespace ia64 {
+
+namespace {
+std::atomic<uint64_t> gNextPPC64ConsoleVMIdentity{1};
+}
 
 // ============================================================================
 // Constructor / Destructor
@@ -54,6 +59,12 @@ VirtualMachine::VirtualMachine(size_t memorySize, size_t numCPUs, const std::str
   cyclesExecuted_(0),
   isaName_(isaName),
   snapshotManager_(std::make_unique<VMSnapshotManager>()) {
+    ppc64ConsoleVMIdentity_ =
+        gNextPPC64ConsoleVMIdentity.fetch_add(1, std::memory_order_relaxed);
+    if (ppc64ConsoleVMIdentity_ == 0) {
+        ppc64ConsoleVMIdentity_ =
+            gNextPPC64ConsoleVMIdentity.fetch_add(1, std::memory_order_relaxed);
+    }
     
 if (numCPUs == 0) {
     throw std::invalid_argument("VM must have at least 1 CPU");

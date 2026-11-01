@@ -28,6 +28,93 @@ namespace {
 std::mutex gPipeSinkOwnersMutex;
 std::vector<void*> gPipeSinkOwners;
 
+struct WorkerResourceManager {
+    std::mutex mutex;
+    size_t activeWorkers = 0;
+    size_t quarantinedWorkers = 0;
+    size_t unresolvedIO = 0;
+    size_t quarantinedBufferCapacityBytes = 0;
+    size_t reservedQuarantineSlots = 0;
+    size_t reservedBufferCapacityBytes = 0;
+    uint64_t reclaimedWorkers = 0;
+    size_t maximumActiveWorkers = 16;
+    size_t maximumQuarantinedWorkers = 4;
+    size_t maximumQuarantinedBufferCapacityBytes = 4U * 1024U * 1024U;
+
+    bool reserve(size_t capacity) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (activeWorkers >= maximumActiveWorkers ||
+            reservedQuarantineSlots >= maximumQuarantinedWorkers ||
+            capacity > maximumQuarantinedBufferCapacityBytes -
+                std::min(reservedBufferCapacityBytes,
+                         maximumQuarantinedBufferCapacityBytes)) return false;
+        ++activeWorkers;
+        ++reservedQuarantineSlots;
+        reservedBufferCapacityBytes += capacity;
+        return true;
+    }
+
+    bool configure(size_t maximumActive, size_t maximumQuarantined,
+                   size_t maximumCapacity) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (activeWorkers != 0 || quarantinedWorkers != 0 ||
+            maximumActive == 0 || maximumQuarantined == 0 ||
+            maximumQuarantined > 16 || maximumCapacity == 0) return false;
+        maximumActiveWorkers = maximumActive;
+        maximumQuarantinedWorkers = maximumQuarantined;
+        maximumQuarantinedBufferCapacityBytes = maximumCapacity;
+        return true;
+    }
+
+    void quarantine(size_t capacity, bool unresolved) noexcept {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++quarantinedWorkers;
+        quarantinedBufferCapacityBytes += capacity;
+        if (unresolved) ++unresolvedIO;
+    }
+
+    void reaped(size_t capacity, bool unresolved) noexcept {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (quarantinedWorkers != 0) --quarantinedWorkers;
+        quarantinedBufferCapacityBytes -=
+            std::min(quarantinedBufferCapacityBytes, capacity);
+        if (unresolved && unresolvedIO != 0) --unresolvedIO;
+        if (reclaimedWorkers != std::numeric_limits<uint64_t>::max())
+            ++reclaimedWorkers;
+    }
+
+    void release(size_t capacity) noexcept {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (activeWorkers != 0) --activeWorkers;
+        if (reservedQuarantineSlots != 0) --reservedQuarantineSlots;
+        reservedBufferCapacityBytes -=
+            std::min(reservedBufferCapacityBytes, capacity);
+    }
+
+    StdioHostConsoleTransport::WorkerResourceSnapshot snapshot() noexcept {
+        std::lock_guard<std::mutex> lock(mutex);
+        return {activeWorkers, quarantinedWorkers, unresolvedIO,
+                quarantinedBufferCapacityBytes, reclaimedWorkers,
+                maximumActiveWorkers, maximumQuarantinedWorkers,
+                maximumQuarantinedBufferCapacityBytes};
+    }
+};
+
+WorkerResourceManager& workerResources() {
+    static WorkerResourceManager resources;
+    return resources;
+}
+
+uint64_t incrementSaturated(uint64_t value, uint64_t amount) noexcept {
+    return amount > std::numeric_limits<uint64_t>::max() - value
+        ? std::numeric_limits<uint64_t>::max() : value + amount;
+}
+
+size_t addSizeSaturated(size_t value, size_t amount) noexcept {
+    return amount > std::numeric_limits<size_t>::max() - value
+        ? std::numeric_limits<size_t>::max() : value + amount;
+}
+
 bool reservePipeSink(void* handle) {
     std::lock_guard<std::mutex> lock(gPipeSinkOwnersMutex);
     HMODULE module = GetModuleHandleW(L"kernelbase.dll");
@@ -72,7 +159,88 @@ HostConsoleIOStatus classifyPipeWriteError(DWORD error) {
     return HostConsoleIOStatus::UNRECOVERABLE_ERROR;
 }
 #endif
+
+HostConsoleFailureClass classifyOutputFailure(HostConsoleIOStatus status,
+                                              int systemError) noexcept {
+    if (status == HostConsoleIOStatus::WOULD_BLOCK)
+        return HostConsoleFailureClass::TEMPORARY_BACKPRESSURE;
+    if (status == HostConsoleIOStatus::DISCONNECTED)
+        return HostConsoleFailureClass::BROKEN_PIPE;
+    if (status == HostConsoleIOStatus::SHUTDOWN) {
+        return systemError == 0 || systemError == 995
+            ? HostConsoleFailureClass::CANCELLATION_COMPLETED
+            : HostConsoleFailureClass::WORKER_TERMINATION;
+    }
+    if (systemError == 6)
+        return HostConsoleFailureClass::INVALID_HANDLE;
+    if (status == HostConsoleIOStatus::UNRECOVERABLE_ERROR ||
+        status == HostConsoleIOStatus::INVALID_CONFIGURATION)
+        return HostConsoleFailureClass::PERMANENT_SINK_IO;
+    return HostConsoleFailureClass::NONE;
+}
 } // namespace
+
+bool PPC64OutputSessionStateMachine::isAllowed(
+    PPC64OutputSessionState from, PPC64OutputSessionState to) noexcept {
+    if (from == to) return true;
+    using S = PPC64OutputSessionState;
+    switch (from) {
+    case S::DETACHED:
+        return to == S::CONNECTED || to == S::CLEANLY_STOPPED;
+    case S::CONNECTED:
+        return to == S::OUTPUT_QUEUED || to == S::WRITE_IN_PROGRESS ||
+               to == S::BACKPRESSURED || to == S::PERMANENT_FAILURE ||
+               to == S::CANCELLATION_REQUESTED || to == S::CLEANLY_STOPPED;
+    case S::OUTPUT_QUEUED:
+        return to == S::WRITE_IN_PROGRESS || to == S::BACKPRESSURED ||
+               to == S::CONNECTED || to == S::PERMANENT_FAILURE ||
+               to == S::CANCELLATION_REQUESTED;
+    case S::WRITE_IN_PROGRESS:
+        return to == S::CONNECTED || to == S::OUTPUT_QUEUED ||
+               to == S::BACKPRESSURED || to == S::PERMANENT_FAILURE ||
+               to == S::CANCELLATION_REQUESTED ||
+               to == S::DELIVERY_UNCERTAIN || to == S::QUARANTINED;
+    case S::BACKPRESSURED:
+        return to == S::OUTPUT_QUEUED || to == S::WRITE_IN_PROGRESS ||
+               to == S::CONNECTED || to == S::PERMANENT_FAILURE ||
+               to == S::CANCELLATION_REQUESTED || to == S::CLEANLY_STOPPED;
+    case S::PERMANENT_FAILURE:
+        return to == S::DELIVERY_UNCERTAIN ||
+               to == S::RECONNECT_ELIGIBLE ||
+               to == S::CANCELLATION_REQUESTED ||
+               to == S::CANCELLATION_PENDING || to == S::QUARANTINED ||
+               to == S::CLEANLY_STOPPED;
+    case S::CANCELLATION_REQUESTED:
+        return to == S::CANCELLATION_PENDING || to == S::CLEANLY_STOPPED ||
+               to == S::PERMANENT_FAILURE ||
+               to == S::DELIVERY_UNCERTAIN || to == S::QUARANTINED;
+    case S::CANCELLATION_PENDING:
+        return to == S::CLEANLY_STOPPED || to == S::PERMANENT_FAILURE ||
+               to == S::DELIVERY_UNCERTAIN || to == S::QUARANTINED;
+    case S::DELIVERY_UNCERTAIN:
+        return to == S::RECONNECT_ELIGIBLE ||
+               to == S::CANCELLATION_REQUESTED || to == S::QUARANTINED ||
+               to == S::CLEANLY_STOPPED;
+    case S::RECONNECT_ELIGIBLE:
+        return to == S::RECONNECTING || to == S::PERMANENT_FAILURE ||
+               to == S::CLEANLY_STOPPED;
+    case S::RECONNECTING:
+        return to == S::CONNECTED || to == S::PERMANENT_FAILURE ||
+               to == S::CLEANLY_STOPPED;
+    case S::QUARANTINED:
+        return to == S::CLEANLY_STOPPED;
+    case S::CLEANLY_STOPPED:
+        return to == S::CONNECTED || to == S::CLEANLY_STOPPED;
+    }
+    return false;
+}
+
+bool PPC64OutputSessionStateMachine::transition(
+    PPC64OutputSessionState next) noexcept {
+    if (!isAllowed(state_, next)) return false;
+    state_ = next;
+    return true;
+}
 
 struct StdioHostConsoleTransport::OutputWorker final
     : std::enable_shared_from_this<OutputWorker> {
@@ -80,7 +248,8 @@ struct StdioHostConsoleTransport::OutputWorker final
     OutputWorker(HANDLE sinkHandle, void* sinkKey, size_t queueCapacity)
         : sink(sinkHandle), key(sinkKey), capacity(queueCapacity),
           buffer(queueCapacity) {
-        event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        admitted = workerResources().reserve(queueCapacity);
+        if (admitted) event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
 
     ~OutputWorker() {
@@ -88,9 +257,11 @@ struct StdioHostConsoleTransport::OutputWorker final
         if (ownsSinkKey) releasePipeSink(key);
         if (event != nullptr) CloseHandle(event);
         if (sink != nullptr && sink != INVALID_HANDLE_VALUE) CloseHandle(sink);
+        if (admitted) workerResources().release(capacity);
     }
 
-    bool valid() const noexcept { return event != nullptr; }
+    bool valid() const noexcept { return admitted && event != nullptr; }
+    bool admittedCapacity() const noexcept { return admitted; }
 
     void start() {
         const std::shared_ptr<OutputWorker> self = shared_from_this();
@@ -111,6 +282,7 @@ struct StdioHostConsoleTransport::OutputWorker final
         std::copy_n(source, count, buffer.data());
         requested = count;
         confirmed = 0;
+        partialWrite = false;
         hasSubmission = true;
         state = HostConsoleOutputWorkerState::QUEUED;
         cv.notify_all();
@@ -211,38 +383,48 @@ struct StdioHostConsoleTransport::OutputWorker final
     }
 
     void preserveForReaping() {
+        bool unresolved = false;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (reaperOwnsState) return;
             reaperOwnsState = true;
+            unresolved = ioInProgress;
+            quarantinedUnresolved = unresolved;
         }
+        workerResources().quarantine(capacity, unresolved);
         struct Reaper {
             Reaper() : thread([this] { run(); }) {}
 
-            void keep(const std::shared_ptr<OutputWorker>& worker) {
+            bool keep(const std::shared_ptr<OutputWorker>& worker) {
                 std::lock_guard<std::mutex> lock(mutex);
-                workers.push_back(worker);
-                cv.notify_all();
+                for (auto& slot : workers) {
+                    if (!slot) {
+                        slot = worker;
+                        cv.notify_all();
+                        return true;
+                    }
+                }
+                return false;
             }
 
             void run() {
                 for (;;) {
-                    std::vector<std::shared_ptr<OutputWorker>> ready;
+                    std::array<std::shared_ptr<OutputWorker>, 16> ready{};
+                    size_t readyCount = 0;
                     {
                         std::unique_lock<std::mutex> lock(mutex);
                         cv.wait_for(lock, std::chrono::milliseconds(25));
-                        auto current = workers.begin();
-                        while (current != workers.end()) {
-                            if ((*current)->isDone()) {
-                                ready.push_back(std::move(*current));
-                                current = workers.erase(current);
-                            } else {
-                                ++current;
+                        for (auto& slot : workers) {
+                            if (slot && slot->isDone()) {
+                                ready[readyCount++] = std::move(slot);
+                                slot.reset();
                             }
                         }
                     }
-                    for (const auto& worker : ready) {
+                    for (size_t i = 0; i < readyCount; ++i) {
+                        const auto& worker = ready[i];
                         if (worker->thread.joinable()) worker->thread.join();
+                        worker->markReaped();
                         worker->releaseSinkLease();
                     }
                 }
@@ -250,14 +432,30 @@ struct StdioHostConsoleTransport::OutputWorker final
 
             std::mutex mutex;
             std::condition_variable cv;
-            std::vector<std::shared_ptr<OutputWorker>> workers;
+            std::array<std::shared_ptr<OutputWorker>, 16> workers{};
             std::thread thread;
         };
         // A timed-out synchronous pipe write must outlive its transport. The
         // process-lifetime reaper keeps the joinable worker, its OVERLAPPED
         // storage, buffer, and duplicated handle until I/O really completes.
         static Reaper* const reaper = new Reaper();
-        reaper->keep(shared_from_this());
+        if (!reaper->keep(shared_from_this())) {
+            // The admission manager reserves a fixed reaper slot before each
+            // worker starts, so this indicates an internal accounting fault.
+            std::terminate();
+        }
+    }
+
+    void markReaped() noexcept {
+        bool unresolved = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!reaperOwnsState) return;
+            reaperOwnsState = false;
+            unresolved = quarantinedUnresolved;
+            quarantinedUnresolved = false;
+        }
+        workerResources().reaped(capacity, unresolved);
     }
 
 private:
@@ -266,6 +464,7 @@ private:
                   size_t notAttemptedBytes) {
         std::lock_guard<std::mutex> lock(mutex);
         completion.ready = true;
+        completion.partialWrite = partialWrite;
         completion.confirmedBytes = confirmedBytes;
         completion.uncertainBytes = uncertainBytes;
         completion.notAttemptedBytes = notAttemptedBytes;
@@ -376,6 +575,7 @@ private:
                     {
                         std::lock_guard<std::mutex> lock(mutex);
                         confirmed = offset;
+                        if (transferred < callBytes) partialWrite = true;
                     }
                     continue;
                 }
@@ -436,6 +636,9 @@ private:
     bool ioInProgress = false;
     bool ownsSinkKey = true;
     bool reaperOwnsState = false;
+    bool quarantinedUnresolved = false;
+    bool admitted = false;
+    bool partialWrite = false;
 #endif
 };
 
@@ -580,9 +783,21 @@ StdioHostConsoleTransport::~StdioHostConsoleTransport() { shutdown(); }
 
 bool StdioHostConsoleTransport::attach(std::string& error) {
 #ifdef _WIN32
+    return attachToHandles(GetStdHandle(STD_INPUT_HANDLE),
+                           GetStdHandle(STD_OUTPUT_HANDLE), error);
+#else
+    error = "stdio transport is implemented for the Windows host environment";
+    return false;
+#endif
+}
+
+bool StdioHostConsoleTransport::attachToHandles(void* inputHandle,
+                                                void* outputHandle,
+                                                std::string& error) {
+#ifdef _WIN32
     if (attached_) { error.clear(); return true; }
-    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
-    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE input = static_cast<HANDLE>(inputHandle);
+    HANDLE output = static_cast<HANDLE>(outputHandle);
     if (input == nullptr || input == INVALID_HANDLE_VALUE ||
         output == nullptr || output == INVALID_HANDLE_VALUE) {
         error = "standard input or output handle is unavailable";
@@ -653,9 +868,12 @@ bool StdioHostConsoleTransport::attach(std::string& error) {
         }
         if (!pipeWorker->valid()) {
             const DWORD eventError = GetLastError();
+            const bool admitted = pipeWorker->admittedCapacity();
             pipeWorker.reset(); // also releases the exclusive sink lease
-            error = "could not create redirected stdout worker event: " +
-                    std::to_string(eventError);
+            error = admitted
+                ? "could not create redirected stdout worker event: " +
+                      std::to_string(eventError)
+                : "redirected stdout worker admission rejected by finite active or quarantine limits";
             return false;
         }
         try {
@@ -690,9 +908,37 @@ bool StdioHostConsoleTransport::attach(std::string& error) {
     error.clear();
     return true;
 #else
+    (void)inputHandle;
+    (void)outputHandle;
     error = "stdio transport is implemented for the Windows host environment";
     return false;
 #endif
+}
+
+HostConsoleSinkType StdioHostConsoleTransport::sinkType() const noexcept {
+    if (!attached_) return HostConsoleSinkType::UNKNOWN;
+    if (outputIsPipe_) return HostConsoleSinkType::WINDOWS_PIPE;
+    if (outputIsConsole_) return HostConsoleSinkType::WINDOWS_CONSOLE;
+    if (outputHandle_ == nullptr) return HostConsoleSinkType::UNKNOWN;
+#ifdef _WIN32
+    const DWORD type = GetFileType(static_cast<HANDLE>(outputHandle_));
+    if (type == FILE_TYPE_DISK) return HostConsoleSinkType::REDIRECTED_FILE;
+    if (type == FILE_TYPE_CHAR) return HostConsoleSinkType::CHARACTER_DEVICE;
+#endif
+    return HostConsoleSinkType::UNKNOWN;
+}
+
+bool StdioHostConsoleTransport::configureWorkerLimits(
+    size_t maximumActiveWorkers, size_t maximumQuarantinedWorkers,
+    size_t maximumQuarantinedBufferCapacityBytes) {
+    return workerResources().configure(maximumActiveWorkers,
+                                       maximumQuarantinedWorkers,
+                                       maximumQuarantinedBufferCapacityBytes);
+}
+
+StdioHostConsoleTransport::WorkerResourceSnapshot
+StdioHostConsoleTransport::workerResourceSnapshot() noexcept {
+    return workerResources().snapshot();
 }
 
 void StdioHostConsoleTransport::detach() noexcept {
@@ -971,6 +1217,7 @@ PPC64ConsoleBridge::PPC64ConsoleBridge(
       inputCapacity_(inputCapacity), transferChunk_(transferChunk) {
     status_.lpid = lpid;
     status_.inputCapacity = inputCapacity;
+    status_.vmIdentity = vm.getPPC64ConsoleVMIdentity();
 }
 
 PPC64ConsoleBridge::~PPC64ConsoleBridge() { shutdown(); }
@@ -982,7 +1229,55 @@ bool PPC64ConsoleBridge::vmAlive(ia64::VirtualMachine*& vm) const noexcept {
     return true;
 }
 
+void PPC64ConsoleBridge::recordEvent(PPC64ConsoleEventType type,
+                                     size_t byteCount,
+                                     HostConsoleFailureClass failure,
+                                     int systemError) {
+    if (nextEventSequence_ == 0) return;
+    const size_t index = (eventRingStart_ + eventRingCount_) % eventRing_.size();
+    PPC64ConsoleDiagnosticEvent event;
+    event.sequence = nextEventSequence_;
+    event.sessionGeneration = sessionGeneration_;
+    event.type = type;
+    event.state = outputStateMachine_.state();
+    event.failure = failure;
+    event.byteCount = byteCount;
+    event.systemError = systemError;
+    event.uncertainSegmentId = status_.uncertainSegmentId;
+    if (eventRingCount_ < eventRing_.size()) {
+        eventRing_[index] = event;
+        ++eventRingCount_;
+    } else {
+        eventRing_[eventRingStart_] = event;
+        eventRingStart_ = (eventRingStart_ + 1) % eventRing_.size();
+    }
+    if (nextEventSequence_ == std::numeric_limits<uint64_t>::max())
+        nextEventSequence_ = 0;
+    else
+        ++nextEventSequence_;
+}
+
+bool PPC64ConsoleBridge::transitionOutput(
+    PPC64OutputSessionState state, PPC64ConsoleEventType event,
+    size_t byteCount, HostConsoleFailureClass failure, int systemError) {
+    if (!outputStateMachine_.transition(state)) {
+        status_.lastFailure = HostConsoleFailureClass::INVALID_SESSION_GENERATION;
+        return false;
+    }
+    status_.outputState = state;
+    recordEvent(event, byteCount, failure, systemError);
+    return true;
+}
+
+bool PPC64ConsoleBridge::ownsOutputLease(
+    const ia64::VirtualMachine& vm) const noexcept {
+    const auto found = vm.ppc64ConsoleOutputLeases_.find(lpid_);
+    return outputLease_ != 0 && found != vm.ppc64ConsoleOutputLeases_.end() &&
+           found->second.first == outputLease_;
+}
+
 bool PPC64ConsoleBridge::attach(std::string& error) {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     ia64::VirtualMachine* vm = nullptr;
     if (!vmAlive(vm)) { error = "PPC64 VM has been destroyed"; return false; }
     if (attached_) { error.clear(); return true; }
@@ -1005,27 +1300,232 @@ bool PPC64ConsoleBridge::attach(std::string& error) {
     if (outputLease_ == 0) {
         status_.state = PPC64ConsoleSessionState::INVALID_BINDING;
         status_.diagnostic = "another host consumer owns this terminal output channel";
+        status_.lastFailure = HostConsoleFailureClass::OUTPUT_LEASE_CONFLICT;
         error = status_.diagnostic;
         return false;
     }
+    status_.outputLeaseHeld = true;
     if (!transport_->attach(error)) {
         vm->releasePPC64ConsoleOutput(lpid_, outputLease_);
         outputLease_ = 0;
+        status_.outputLeaseHeld = false;
         status_.state = PPC64ConsoleSessionState::FAILED;
         status_.diagnostic = error;
+        status_.lastFailure = HostConsoleFailureClass::PERMANENT_SINK_IO;
+        return false;
+    }
+    if (sessionGeneration_ != std::numeric_limits<uint64_t>::max())
+        ++sessionGeneration_;
+    else {
+        transport_->detach();
+        vm->releasePPC64ConsoleOutput(lpid_, outputLease_);
+        outputLease_ = 0;
+        status_.outputLeaseHeld = false;
+        error = "console session generation exhausted";
+        status_.lastFailure = HostConsoleFailureClass::INVALID_SESSION_GENERATION;
         return false;
     }
     observedGeneration_ = vm->getPPC64ConsoleGeneration();
     attached_ = true;
     status_.state = PPC64ConsoleSessionState::ACTIVE;
     status_.terminalId = terminalId_;
+    status_.sessionGeneration = sessionGeneration_;
+    status_.vmResetGeneration = observedGeneration_;
+    status_.sinkType = transport_->sinkType();
     status_.diagnostic.clear();
+    status_.lastFailure = HostConsoleFailureClass::NONE;
+    if (!transitionOutput(PPC64OutputSessionState::CONNECTED)) {
+        transport_->detach();
+        vm->releasePPC64ConsoleOutput(lpid_, outputLease_);
+        outputLease_ = 0;
+        status_.outputLeaseHeld = false;
+        attached_ = false;
+        error = "invalid output-session transition during attachment";
+        return false;
+    }
+    recordEvent(PPC64ConsoleEventType::SESSION_ATTACHED);
+    if (status_.sinkType == HostConsoleSinkType::WINDOWS_PIPE)
+        recordEvent(PPC64ConsoleEventType::WORKER_STARTED);
     updateCheckpointReady(*vm);
     error.clear();
     return true;
 }
 
+bool PPC64ConsoleBridge::reconnect(
+    std::shared_ptr<IHostConsoleTransport> replacement, std::string& error) {
+    std::lock_guard<std::mutex> guard(statusMutex_);
+    recordEvent(PPC64ConsoleEventType::RECONNECT_REQUESTED);
+    auto reject = [&](const std::string& reason,
+                      HostConsoleFailureClass failure) {
+        status_.lastFailure = failure;
+        status_.diagnostic = reason;
+        recordEvent(PPC64ConsoleEventType::RECONNECT_REJECTED, 0, failure,
+                    status_.lastSystemError);
+        error = reason;
+        return false;
+    };
+
+    ia64::VirtualMachine* vm = nullptr;
+    if (!vmAlive(vm))
+        return reject("reconnect rejected: owning PPC64 VM was destroyed",
+                      HostConsoleFailureClass::INVALID_VM_LPID_OWNERSHIP);
+    if (!attached_ || !replacement || replacement.get() == transport_.get() ||
+        (outputStateMachine_.state() !=
+             PPC64OutputSessionState::RECONNECT_ELIGIBLE &&
+         outputStateMachine_.state() !=
+             PPC64OutputSessionState::PERMANENT_FAILURE &&
+         outputStateMachine_.state() !=
+             PPC64OutputSessionState::DELIVERY_UNCERTAIN))
+        return reject("reconnect rejected: output session is not eligible for replacement",
+                      HostConsoleFailureClass::RECONNECT_INELIGIBLE);
+    if (outputSubmissionBytes_ != 0 && !reconcileAsyncOutput(*vm))
+        return reject("reconnect rejected: prior worker completion is unresolved",
+                      HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED);
+    if (outputSubmissionBytes_ != 0 || status_.unresolvedUncertainBytes != 0)
+        return reject("reconnect rejected: output boundary still contains unresolved or in-flight bytes",
+                      status_.unresolvedUncertainBytes != 0
+                          ? HostConsoleFailureClass::UNCERTAIN_DELIVERY
+                          : HostConsoleFailureClass::RECONNECT_INELIGIBLE);
+    if (!ownsOutputLease(*vm) ||
+        vm->injectPPC64TerminalInputWithStatus({}, lpid_) !=
+            PPC64TerminalResult::SUCCESS ||
+        vm->getPPC64VirtualTerminalId() != terminalId_) {
+        return reject("reconnect rejected: VM, LPID, terminal, or output lease ownership changed",
+                      HostConsoleFailureClass::INVALID_VM_LPID_OWNERSHIP);
+    }
+    if (vm->cpus_.empty() ||
+        vm->cpus_[0].state == ia64::CPUExecutionState::HALTED ||
+        vm->cpus_[0].state == ia64::CPUExecutionState::ERROR) {
+        return reject("reconnect rejected: VM lifecycle state is not recoverable",
+                      HostConsoleFailureClass::RECONNECT_INELIGIBLE);
+    }
+    if (sessionGeneration_ == std::numeric_limits<uint64_t>::max())
+        return reject("reconnect rejected: session generation exhausted",
+                      HostConsoleFailureClass::INVALID_SESSION_GENERATION);
+
+    if (outputStateMachine_.state() ==
+        PPC64OutputSessionState::PERMANENT_FAILURE &&
+        !transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE))
+        return reject("reconnect rejected: failed output boundary is invalid",
+                      HostConsoleFailureClass::RECONNECT_INELIGIBLE);
+
+    if (auto* oldAsync = dynamic_cast<IAsyncHostConsoleOutput*>(transport_.get());
+        oldAsync != nullptr && oldAsync->usesAsyncOutput()) {
+        const auto stopped = oldAsync->stopOutput(
+            false, std::chrono::milliseconds(500));
+        if (!stopped.completed)
+            return reject("reconnect rejected: old worker can still access its output buffer",
+                          HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED);
+        status_.outputWorkerState = HostConsoleOutputWorkerState::STOPPED;
+        recordEvent(PPC64ConsoleEventType::WORKER_STOPPED);
+    }
+
+    if (!transitionOutput(PPC64OutputSessionState::RECONNECTING))
+        return reject("reconnect rejected: invalid output-session state transition",
+                      HostConsoleFailureClass::INVALID_SESSION_GENERATION);
+
+    std::string attachError;
+    if (!replacement->attach(attachError)) {
+        (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                               PPC64ConsoleEventType::RECONNECT_REJECTED,
+                               0, HostConsoleFailureClass::PERMANENT_SINK_IO);
+        status_.lastFailure = HostConsoleFailureClass::PERMANENT_SINK_IO;
+        return reject("replacement sink could not be attached: " + attachError,
+                      HostConsoleFailureClass::PERMANENT_SINK_IO);
+    }
+
+    if (transport_) transport_->detach();
+    transport_ = std::move(replacement);
+    ++sessionGeneration_;
+    outputSubmissionSessionGeneration_ = 0;
+    observedGeneration_ = vm->getPPC64ConsoleGeneration();
+    status_.sessionGeneration = sessionGeneration_;
+    status_.vmResetGeneration = observedGeneration_;
+    status_.sinkType = transport_->sinkType();
+    status_.outputLeaseHeld = ownsOutputLease(*vm);
+    status_.lastFailure = HostConsoleFailureClass::NONE;
+    status_.lastOutputStatus = HostConsoleIOStatus::WOULD_BLOCK;
+    status_.lastSystemError = 0;
+    status_.state = PPC64ConsoleSessionState::ACTIVE;
+    status_.diagnostic = "reconnected at a reconciled output boundary; queued never-attempted bytes remain in FIFO order";
+    outputStopRequested_ = false;
+    outputRetryAfter_ = {};
+    if (!transitionOutput(PPC64OutputSessionState::CONNECTED,
+                          PPC64ConsoleEventType::RECONNECT_COMPLETED)) {
+        transport_->detach();
+        status_.state = PPC64ConsoleSessionState::FAILED;
+        return reject("replacement attached but output-session transition failed",
+                      HostConsoleFailureClass::INVALID_SESSION_GENERATION);
+    }
+    if (status_.sinkType == HostConsoleSinkType::WINDOWS_PIPE)
+        recordEvent(PPC64ConsoleEventType::WORKER_STARTED);
+    updateCheckpointReady(*vm);
+    error.clear();
+    return true;
+}
+
+bool PPC64ConsoleBridge::resolveOutputUncertainty(
+    PPC64OutputUncertaintyResolution resolution, uint64_t uncertainSegmentId,
+    std::string& error) {
+    std::lock_guard<std::mutex> guard(statusMutex_);
+    if (resolution == PPC64OutputUncertaintyResolution::KEEP_UNRESOLVED) {
+        status_.diagnostic = "delivery uncertainty was explicitly kept unresolved; later output remains blocked";
+        recordEvent(PPC64ConsoleEventType::UNCERTAINTY_KEPT_UNRESOLVED,
+                    status_.unresolvedUncertainBytes,
+                    HostConsoleFailureClass::UNCERTAIN_DELIVERY);
+        error.clear();
+        return true;
+    }
+    if (status_.unresolvedUncertainBytes == 0 ||
+        outputSubmissionBytes_ != 0) {
+        error = "there is no settled uncertain output segment to resolve";
+        status_.lastFailure = HostConsoleFailureClass::RECONNECT_INELIGIBLE;
+        return false;
+    }
+    const bool abandon = resolution ==
+        PPC64OutputUncertaintyResolution::ABANDON_FAILED_SESSION;
+    if (!abandon && uncertainSegmentId != status_.uncertainSegmentId) {
+        error = "uncertainty resolution rejected: segment identifier does not match the pending segment";
+        status_.lastFailure = HostConsoleFailureClass::UNCERTAIN_DELIVERY;
+        return false;
+    }
+    if (abandon && outputStateMachine_.state() !=
+                       PPC64OutputSessionState::DELIVERY_UNCERTAIN &&
+                   outputStateMachine_.state() !=
+                       PPC64OutputSessionState::PERMANENT_FAILURE) {
+        error = "session abandonment rejected: no failed output session is pending";
+        status_.lastFailure = HostConsoleFailureClass::RECONNECT_INELIGIBLE;
+        return false;
+    }
+    const size_t resolvedBytes = status_.unresolvedUncertainBytes;
+    status_.unresolvedUncertainBytes = 0;
+    uncertainSegmentBytes_ = 0;
+    const char* action = abandon
+        ? "failed output session abandoned with an explicit output discontinuity"
+        : "identified uncertain output segment explicitly discarded; recovery is not lossless";
+    status_.diagnostic = action;
+    const PPC64ConsoleEventType resolutionEvent = abandon
+        ? PPC64ConsoleEventType::FAILED_SESSION_ABANDONED
+        : PPC64ConsoleEventType::UNCERTAINTY_SEGMENT_DISCARDED;
+    if (outputStateMachine_.state() ==
+        PPC64OutputSessionState::DELIVERY_UNCERTAIN) {
+        (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE,
+                               resolutionEvent,
+                               resolvedBytes,
+                               HostConsoleFailureClass::UNCERTAIN_DELIVERY);
+    } else if (outputStateMachine_.state() ==
+               PPC64OutputSessionState::PERMANENT_FAILURE) {
+        (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE,
+                               resolutionEvent,
+                               resolvedBytes,
+                               HostConsoleFailureClass::UNCERTAIN_DELIVERY);
+    }
+    error.clear();
+    return true;
+}
+
 bool PPC64ConsoleBridge::detach(bool discardStagedInput, std::string* error) {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     ia64::VirtualMachine* vm = nullptr;
     if (!vmAlive(vm)) {
         if (transport_) transport_->shutdown();
@@ -1046,13 +1546,20 @@ bool PPC64ConsoleBridge::detach(bool discardStagedInput, std::string* error) {
     if (transport_) transport_->detach();
     if (outputLease_ != 0) vm->releasePPC64ConsoleOutput(lpid_, outputLease_);
     outputLease_ = 0;
+    status_.outputLeaseHeld = false;
     attached_ = false;
     status_.state = PPC64ConsoleSessionState::DETACHED;
+    status_.outputWorkerState = HostConsoleOutputWorkerState::STOPPED;
+    if (outputStateMachine_.state() != PPC64OutputSessionState::CLEANLY_STOPPED)
+        (void)transitionOutput(PPC64OutputSessionState::CLEANLY_STOPPED,
+                               PPC64ConsoleEventType::WORKER_STOPPED);
+    recordEvent(PPC64ConsoleEventType::SESSION_DETACHED);
     if (error) error->clear();
     return true;
 }
 
 void PPC64ConsoleBridge::shutdown() noexcept {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     ia64::VirtualMachine* vm = nullptr;
     bool safeToReleaseLease = true;
     if (vmAlive(vm)) {
@@ -1073,9 +1580,21 @@ void PPC64ConsoleBridge::shutdown() noexcept {
     attached_ = false;
     if (transport_) transport_->shutdown();
     if (safeToReleaseLease) {
+        status_.outputLeaseHeld = false;
+        if (outputStateMachine_.state() !=
+            PPC64OutputSessionState::CLEANLY_STOPPED)
+            (void)transitionOutput(PPC64OutputSessionState::CLEANLY_STOPPED,
+                                   PPC64ConsoleEventType::WORKER_STOPPED);
         status_.state = vmAlive(vm)
             ? PPC64ConsoleSessionState::SHUTDOWN
             : PPC64ConsoleSessionState::VM_DESTROYED;
+    } else {
+        (void)transitionOutput(PPC64OutputSessionState::QUARANTINED,
+                               PPC64ConsoleEventType::WORKER_QUARANTINED,
+                               status_.outputHandoffBytesPending,
+                               HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED,
+                               status_.lastSystemError);
+        status_.workerQuarantined = true;
     }
 }
 
@@ -1089,6 +1608,7 @@ void PPC64ConsoleBridge::noticeGenerationChange(ia64::VirtualMachine& vm) {
     const uint64_t current = vm.getPPC64ConsoleGeneration();
     if (current == observedGeneration_) return;
     observedGeneration_ = current;
+    status_.vmResetGeneration = current;
     transport_->resetInput();
     inputEOF_ = false;
     status_.diagnostic = "staged and unread host input cleared at VM reset or restore boundary";
@@ -1101,8 +1621,13 @@ void PPC64ConsoleBridge::updateCheckpointReady(ia64::VirtualMachine& vm) {
     status_.terminalOutputBytesPending = terminalBytesNotHandedToWorker(
         vm, lpid_, outputSubmissionBytes_,
         outputSubmissionGeneration_ == vm.getPPC64ConsoleGeneration());
+    status_.guestOutputBytesPending =
+        vm.getPPC64TerminalPendingOutputBytes(lpid_);
+    status_.knownNotAttemptedBytes = status_.terminalOutputBytesPending;
     vm.setPPC64ConsoleCheckpointReady(lpid_, outputLease_,
-                                      staged == 0 && outputSubmissionBytes_ == 0);
+        staged == 0 && outputSubmissionBytes_ == 0 &&
+        status_.unresolvedUncertainBytes == 0 &&
+        outputStateMachine_.state() != PPC64OutputSessionState::QUARANTINED);
 }
 
 void PPC64ConsoleBridge::transferInput(ia64::VirtualMachine& vm) {
@@ -1122,7 +1647,8 @@ void PPC64ConsoleBridge::transferInput(ia64::VirtualMachine& vm) {
                  "VM staged-input ownership changed during transfer");
             return;
         }
-        status_.guestInputBytesAccepted += count;
+        status_.guestInputBytesAccepted = incrementSaturated(
+            status_.guestInputBytesAccepted, count);
     } else if (result == PPC64TerminalResult::PARAMETER ||
                result == PPC64TerminalResult::RESOURCE) {
         fail(PPC64ConsoleSessionState::INVALID_BINDING,
@@ -1139,6 +1665,11 @@ void PPC64ConsoleBridge::transferOutput(ia64::VirtualMachine& vm,
     if (auto* async = dynamic_cast<IAsyncHostConsoleOutput*>(transport_.get());
         async != nullptr && async->usesAsyncOutput()) {
         if (!reconcileAsyncOutput(vm)) return;
+        const auto currentWorker = async->outputWorkerSnapshot();
+        if (currentWorker.state == HostConsoleOutputWorkerState::WRITING &&
+            outputSubmissionBytes_ != 0 &&
+            outputStateMachine_.state() == PPC64OutputSessionState::OUTPUT_QUEUED)
+            (void)transitionOutput(PPC64OutputSessionState::WRITE_IN_PROGRESS);
         if (outputSubmissionBytes_ != 0 || outputStopRequested_) {
             updateCheckpointReady(vm);
             return;
@@ -1156,7 +1687,8 @@ void PPC64ConsoleBridge::transferOutput(ia64::VirtualMachine& vm,
         const HostConsoleOutputSubmission submitted =
             async->submitOutput(peeked.data(), peeked.size());
         status_.lastOutputStatus = submitted.status;
-        status_.lastSystemError = submitted.systemError;
+        if (submitted.systemError != 0)
+            status_.lastSystemError = submitted.systemError;
         if (submitted.queuedBytes > peeked.size()) {
             fail(PPC64ConsoleSessionState::FAILED,
                  "host worker accepted more output than was offered");
@@ -1170,26 +1702,55 @@ void PPC64ConsoleBridge::transferOutput(ia64::VirtualMachine& vm,
             }
             outputSubmissionBytes_ = submitted.queuedBytes;
             outputSubmissionGeneration_ = vm.getPPC64ConsoleGeneration();
-            status_.outputBytesHandedToWorker += submitted.queuedBytes;
+            outputSubmissionSessionGeneration_ = sessionGeneration_;
+            status_.outputBytesHandedToWorker = incrementSaturated(
+                status_.outputBytesHandedToWorker, submitted.queuedBytes);
+            status_.writeAttempts = incrementSaturated(status_.writeAttempts, 1);
+            status_.lastFailure = HostConsoleFailureClass::NONE;
+            (void)transitionOutput(PPC64OutputSessionState::OUTPUT_QUEUED,
+                                   PPC64ConsoleEventType::WRITE_SUBMITTED,
+                                   submitted.queuedBytes);
             outputRetryAfter_ = {};
             updateCheckpointReady(vm);
             const auto worker = async->outputWorkerSnapshot();
             status_.outputHandoffCapacity = worker.capacity;
             status_.outputHandoffBytesPending = worker.bufferedBytes;
+            status_.workerBytesPending = worker.bufferedBytes;
             status_.outputWorkerState = worker.state;
             return;
         }
         if (submitted.status == HostConsoleIOStatus::DISCONNECTED) {
             fail(PPC64ConsoleSessionState::OUTPUT_DISCONNECTED,
                  "redirected stdout pipe disconnected before accepting output");
+            status_.lastFailure = HostConsoleFailureClass::BROKEN_PIPE;
+            (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                                   PPC64ConsoleEventType::BROKEN_PIPE,
+                                   0, HostConsoleFailureClass::BROKEN_PIPE,
+                                   submitted.systemError);
+            (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE);
         } else if (submitted.status == HostConsoleIOStatus::UNRECOVERABLE_ERROR ||
                    submitted.status == HostConsoleIOStatus::INVALID_CONFIGURATION) {
             fail(PPC64ConsoleSessionState::FAILED,
                  "redirected stdout worker rejected output permanently");
+            status_.lastFailure = classifyOutputFailure(submitted.status,
+                                                        submitted.systemError);
+            (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                                   PPC64ConsoleEventType::STATE_TRANSITION,
+                                   0, status_.lastFailure,
+                                   submitted.systemError);
+            (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE);
+        } else if (submitted.status == HostConsoleIOStatus::WOULD_BLOCK) {
+            status_.backpressureEvents = incrementSaturated(
+                status_.backpressureEvents, 1);
+            status_.lastFailure = HostConsoleFailureClass::TEMPORARY_BACKPRESSURE;
+            (void)transitionOutput(PPC64OutputSessionState::BACKPRESSURED,
+                                   PPC64ConsoleEventType::BACKPRESSURE_ENTERED,
+                                   0, HostConsoleFailureClass::TEMPORARY_BACKPRESSURE);
         }
         const auto worker = async->outputWorkerSnapshot();
         status_.outputHandoffCapacity = worker.capacity;
         status_.outputHandoffBytesPending = worker.bufferedBytes;
+        status_.workerBytesPending = worker.bufferedBytes;
         status_.outputWorkerState = worker.state;
         updateCheckpointReady(vm);
         return;
@@ -1198,10 +1759,16 @@ void PPC64ConsoleBridge::transferOutput(ia64::VirtualMachine& vm,
     const auto peeked = vm.readPPC64ConsoleOutput(lpid_, outputLease_,
                                                   maximumBytes);
     if (peeked.empty()) return;
+    (void)transitionOutput(PPC64OutputSessionState::WRITE_IN_PROGRESS);
+    status_.writeAttempts = incrementSaturated(status_.writeAttempts, 1);
     const HostConsoleIOResult result =
         transport_->writeOutput(peeked.data(), peeked.size());
+    status_.writeCompletions = incrementSaturated(status_.writeCompletions, 1);
+    recordEvent(PPC64ConsoleEventType::WRITE_COMPLETED, result.bytes,
+                classifyOutputFailure(result.status, result.systemError),
+                result.systemError);
     status_.lastOutputStatus = result.status;
-    status_.lastSystemError = result.systemError;
+    if (result.systemError != 0) status_.lastSystemError = result.systemError;
     if (result.bytes > peeked.size()) {
         fail(PPC64ConsoleSessionState::FAILED,
              "host transport reported an output count larger than requested");
@@ -1215,15 +1782,47 @@ void PPC64ConsoleBridge::transferOutput(ia64::VirtualMachine& vm,
                  "terminal output changed while its host lease was active");
             return;
         }
-        status_.guestOutputBytesAcceptedByHost += result.bytes;
+        status_.guestOutputBytesAcceptedByHost = incrementSaturated(
+            status_.guestOutputBytesAcceptedByHost, result.bytes);
     }
     if (result.status == HostConsoleIOStatus::DISCONNECTED) {
         fail(PPC64ConsoleSessionState::OUTPUT_DISCONNECTED,
              "host output sink disconnected; undelivered guest bytes remain queued");
+        status_.lastFailure = HostConsoleFailureClass::BROKEN_PIPE;
+        (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                               PPC64ConsoleEventType::BROKEN_PIPE,
+                               result.bytes, HostConsoleFailureClass::BROKEN_PIPE,
+                               result.systemError);
+        (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE);
     } else if (result.status == HostConsoleIOStatus::UNRECOVERABLE_ERROR ||
                result.status == HostConsoleIOStatus::INVALID_CONFIGURATION) {
         fail(PPC64ConsoleSessionState::FAILED,
              "host output failed; undelivered guest bytes remain queued");
+        status_.lastFailure = classifyOutputFailure(result.status,
+                                                    result.systemError);
+        (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                               PPC64ConsoleEventType::STATE_TRANSITION,
+                               result.bytes, status_.lastFailure,
+                               result.systemError);
+        (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE);
+    } else if (result.status == HostConsoleIOStatus::WOULD_BLOCK) {
+        status_.backpressureEvents = incrementSaturated(status_.backpressureEvents, 1);
+        status_.lastFailure = HostConsoleFailureClass::TEMPORARY_BACKPRESSURE;
+        (void)transitionOutput(PPC64OutputSessionState::BACKPRESSURED,
+                               PPC64ConsoleEventType::BACKPRESSURE_ENTERED,
+                               peeked.size() - result.bytes,
+                               HostConsoleFailureClass::TEMPORARY_BACKPRESSURE);
+    } else {
+        if (result.bytes != 0 && result.bytes < peeked.size()) {
+            status_.partialWrites = incrementSaturated(status_.partialWrites, 1);
+            recordEvent(PPC64ConsoleEventType::PARTIAL_WRITE, result.bytes);
+        }
+        status_.lastFailure = HostConsoleFailureClass::NONE;
+        (void)transitionOutput(PPC64OutputSessionState::CONNECTED,
+                               result.bytes != 0 && result.bytes < peeked.size()
+                                   ? PPC64ConsoleEventType::PARTIAL_WRITE
+                                   : PPC64ConsoleEventType::STATE_TRANSITION,
+                               result.bytes);
     }
 }
 
@@ -1233,19 +1832,51 @@ bool PPC64ConsoleBridge::reconcileAsyncOutput(ia64::VirtualMachine& vm) {
     const HostConsoleOutputCompletion completion =
         async->pollOutputCompletion();
     if (completion.ready) {
-        const size_t settled = completion.confirmedBytes +
-                               completion.uncertainBytes +
-                               completion.notAttemptedBytes;
-        if (outputSubmissionBytes_ == 0 || settled != outputSubmissionBytes_) {
+        const bool countsFit = completion.confirmedBytes <= outputSubmissionBytes_ &&
+            completion.uncertainBytes <= outputSubmissionBytes_ -
+                std::min(outputSubmissionBytes_, completion.confirmedBytes) &&
+            completion.notAttemptedBytes <= outputSubmissionBytes_ -
+                std::min(outputSubmissionBytes_, completion.confirmedBytes) -
+                std::min(outputSubmissionBytes_ -
+                             std::min(outputSubmissionBytes_, completion.confirmedBytes),
+                         completion.uncertainBytes);
+        const size_t settled = countsFit
+            ? completion.confirmedBytes + completion.uncertainBytes +
+                  completion.notAttemptedBytes
+            : 0;
+        if (outputSubmissionBytes_ == 0 || !countsFit ||
+            settled != outputSubmissionBytes_) {
             fail(PPC64ConsoleSessionState::FAILED,
                  "stdout worker completion did not reconcile with its submitted prefix");
+            status_.lastFailure = HostConsoleFailureClass::WORKER_TERMINATION;
+            (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                                   PPC64ConsoleEventType::STATE_TRANSITION,
+                                   0, status_.lastFailure,
+                                   completion.systemError);
             return false;
         }
-        status_.guestOutputBytesAcceptedByHost += completion.confirmedBytes;
-        status_.outputBytesWithUncertainDelivery += completion.uncertainBytes;
-        status_.outputBytesReportedNotAttempted +=
-            completion.notAttemptedBytes;
-        if (outputSubmissionGeneration_ == vm.getPPC64ConsoleGeneration()) {
+        status_.writeCompletions = incrementSaturated(status_.writeCompletions, 1);
+        status_.guestOutputBytesAcceptedByHost = incrementSaturated(
+            status_.guestOutputBytesAcceptedByHost, completion.confirmedBytes);
+        status_.outputBytesWithUncertainDelivery = incrementSaturated(
+            status_.outputBytesWithUncertainDelivery, completion.uncertainBytes);
+        status_.outputBytesReportedNotAttempted = incrementSaturated(
+            status_.outputBytesReportedNotAttempted,
+            completion.notAttemptedBytes);
+        recordEvent(PPC64ConsoleEventType::WRITE_COMPLETED,
+                    completion.confirmedBytes,
+                    classifyOutputFailure(completion.status,
+                                          completion.systemError),
+                    completion.systemError);
+        if (completion.partialWrite) {
+            status_.partialWrites = incrementSaturated(status_.partialWrites, 1);
+            recordEvent(PPC64ConsoleEventType::PARTIAL_WRITE,
+                        completion.confirmedBytes);
+        }
+        const bool currentSession =
+            outputSubmissionSessionGeneration_ == sessionGeneration_;
+        if (outputSubmissionGeneration_ == vm.getPPC64ConsoleGeneration() &&
+            currentSession) {
             const size_t committed = completion.confirmedBytes +
                                      completion.uncertainBytes;
             if (committed != 0) {
@@ -1258,28 +1889,104 @@ bool PPC64ConsoleBridge::reconcileAsyncOutput(ia64::VirtualMachine& vm) {
                 }
             }
         } else {
-            ++status_.staleGenerationOutputCompletions;
+            status_.staleGenerationOutputCompletions = incrementSaturated(
+                status_.staleGenerationOutputCompletions, 1);
+            status_.lastFailure = HostConsoleFailureClass::INVALID_SESSION_GENERATION;
+        }
+        if (completion.uncertainBytes != 0) {
+            uncertainSegmentBytes_ = completion.uncertainBytes;
+            status_.unresolvedUncertainBytes = addSizeSaturated(
+                status_.unresolvedUncertainBytes, completion.uncertainBytes);
+            status_.uncertainSegmentId = nextUncertainSegmentId_;
+            nextUncertainSegmentId_ = incrementSaturated(
+                nextUncertainSegmentId_, 1);
+            status_.lastFailure = HostConsoleFailureClass::UNCERTAIN_DELIVERY;
         }
         outputSubmissionBytes_ = 0;
         outputSubmissionGeneration_ = 0;
+        outputSubmissionSessionGeneration_ = 0;
         status_.lastOutputStatus = completion.status;
-        status_.lastSystemError = completion.systemError;
+        if (completion.systemError != 0)
+            status_.lastSystemError = completion.systemError;
         if (completion.status == HostConsoleIOStatus::DISCONNECTED) {
             fail(PPC64ConsoleSessionState::OUTPUT_DISCONNECTED,
                  "stdout pipe disconnected; confirmed and uncertain prefixes were reconciled; never-attempted guest bytes remain queued");
+            status_.lastFailure = completion.uncertainBytes != 0
+                ? HostConsoleFailureClass::UNCERTAIN_DELIVERY
+                : HostConsoleFailureClass::BROKEN_PIPE;
+            (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                                   PPC64ConsoleEventType::BROKEN_PIPE,
+                                   completion.uncertainBytes,
+                                   HostConsoleFailureClass::BROKEN_PIPE,
+                                   completion.systemError);
+            if (completion.uncertainBytes != 0) {
+                (void)transitionOutput(PPC64OutputSessionState::DELIVERY_UNCERTAIN,
+                                       PPC64ConsoleEventType::STATE_TRANSITION,
+                                       completion.uncertainBytes,
+                                       HostConsoleFailureClass::UNCERTAIN_DELIVERY);
+            } else {
+                (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE);
+            }
         } else if (completion.status == HostConsoleIOStatus::UNRECOVERABLE_ERROR ||
                    completion.status == HostConsoleIOStatus::INVALID_CONFIGURATION) {
             fail(PPC64ConsoleSessionState::FAILED,
                  "stdout worker failed permanently; never-attempted guest bytes remain queued");
+            status_.lastFailure = completion.uncertainBytes != 0
+                ? HostConsoleFailureClass::UNCERTAIN_DELIVERY
+                : classifyOutputFailure(completion.status,
+                                        completion.systemError);
+            (void)transitionOutput(PPC64OutputSessionState::PERMANENT_FAILURE,
+                                   PPC64ConsoleEventType::STATE_TRANSITION,
+                                   completion.uncertainBytes,
+                                   classifyOutputFailure(completion.status,
+                                                         completion.systemError),
+                                   completion.systemError);
+            if (completion.uncertainBytes != 0) {
+                (void)transitionOutput(PPC64OutputSessionState::DELIVERY_UNCERTAIN,
+                                       PPC64ConsoleEventType::STATE_TRANSITION,
+                                       completion.uncertainBytes,
+                                       HostConsoleFailureClass::UNCERTAIN_DELIVERY);
+            } else {
+                (void)transitionOutput(PPC64OutputSessionState::RECONNECT_ELIGIBLE);
+            }
+        } else if (completion.status == HostConsoleIOStatus::UNRECOVERABLE_ERROR ||
+                   completion.status == HostConsoleIOStatus::INVALID_CONFIGURATION) {
+            // Kept for clarity if additional permanent statuses are added.
         } else if (completion.status == HostConsoleIOStatus::WOULD_BLOCK) {
             outputRetryAfter_ = std::chrono::steady_clock::now() +
                                 std::chrono::milliseconds(10);
+            status_.backpressureEvents = incrementSaturated(
+                status_.backpressureEvents, 1);
+            status_.lastFailure = HostConsoleFailureClass::TEMPORARY_BACKPRESSURE;
+            (void)transitionOutput(PPC64OutputSessionState::BACKPRESSURED,
+                                   PPC64ConsoleEventType::BACKPRESSURE_ENTERED,
+                                   completion.notAttemptedBytes,
+                                   HostConsoleFailureClass::TEMPORARY_BACKPRESSURE);
+        } else if (completion.status == HostConsoleIOStatus::SHUTDOWN) {
+            status_.lastFailure = HostConsoleFailureClass::CANCELLATION_COMPLETED;
+        } else {
+            if (outputStateMachine_.state() ==
+                PPC64OutputSessionState::BACKPRESSURED)
+                recordEvent(PPC64ConsoleEventType::BACKPRESSURE_CLEARED);
+            status_.lastFailure = HostConsoleFailureClass::NONE;
+            (void)transitionOutput(PPC64OutputSessionState::CONNECTED);
         }
     }
     const auto worker = async->outputWorkerSnapshot();
     status_.outputHandoffCapacity = worker.capacity;
     status_.outputHandoffBytesPending = worker.bufferedBytes;
+    status_.workerBytesPending = worker.bufferedBytes;
     status_.outputWorkerState = worker.state;
+    status_.inFlightBytes = worker.state == HostConsoleOutputWorkerState::WRITING
+        ? worker.bufferedBytes : 0;
+    status_.workerRunning = worker.state == HostConsoleOutputWorkerState::QUEUED ||
+        worker.state == HostConsoleOutputWorkerState::WRITING ||
+        worker.state == HostConsoleOutputWorkerState::STOPPING;
+    status_.workerStopped = worker.state == HostConsoleOutputWorkerState::STOPPED;
+    if (worker.state == HostConsoleOutputWorkerState::WRITING &&
+        outputSubmissionBytes_ != 0 &&
+        outputStateMachine_.state() == PPC64OutputSessionState::OUTPUT_QUEUED)
+        (void)transitionOutput(PPC64OutputSessionState::WRITE_IN_PROGRESS);
     updateCheckpointReady(vm);
     return status_.state != PPC64ConsoleSessionState::FAILED &&
            status_.state != PPC64ConsoleSessionState::OUTPUT_DISCONNECTED;
@@ -1289,6 +1996,7 @@ bool PPC64ConsoleBridge::stopAsyncOutput(ia64::VirtualMachine& vm,
                                          std::string* error) {
     auto* async = dynamic_cast<IAsyncHostConsoleOutput*>(transport_.get());
     if (async == nullptr || !async->usesAsyncOutput()) return true;
+    const bool alreadyStopping = outputStopRequested_;
     outputStopRequested_ = true;
 
     // Allow one bounded normal drain attempt, then request cancellation against
@@ -1296,6 +2004,15 @@ bool PPC64ConsoleBridge::stopAsyncOutput(ia64::VirtualMachine& vm,
     HostConsoleOutputStopResult stopped =
         async->stopOutput(false, std::chrono::milliseconds(50));
     if (!stopped.completed) {
+        if (!alreadyStopping) {
+            status_.cancellationRequests = incrementSaturated(
+                status_.cancellationRequests, 1);
+            status_.lastFailure = HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED;
+            (void)transitionOutput(PPC64OutputSessionState::CANCELLATION_REQUESTED,
+                                   PPC64ConsoleEventType::CANCELLATION_REQUESTED,
+                                   outputSubmissionBytes_,
+                                   HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED);
+        }
         const auto canceled =
             async->stopOutput(true, std::chrono::milliseconds(150));
         if (canceled.cancellationError != 0)
@@ -1304,8 +2021,14 @@ bool PPC64ConsoleBridge::stopAsyncOutput(ia64::VirtualMachine& vm,
     }
     if (!stopped.completed) {
         status_.state = PPC64ConsoleSessionState::OUTPUT_STOP_PENDING;
+        status_.lastFailure = HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED;
         status_.diagnostic =
             "stdout worker completion is still pending after a bounded cancellation request; output lease and VM buffers remain owned";
+        (void)transitionOutput(PPC64OutputSessionState::CANCELLATION_PENDING,
+                               PPC64ConsoleEventType::CANCELLATION_OBSERVED,
+                               outputSubmissionBytes_,
+                               HostConsoleFailureClass::CANCELLATION_REQUESTED_UNRESOLVED,
+                               stopped.cancellationError);
         vm.setPPC64ConsoleCheckpointReady(lpid_, outputLease_, false);
         if (error) *error = status_.diagnostic;
         const auto worker = async->outputWorkerSnapshot();
@@ -1314,9 +2037,16 @@ bool PPC64ConsoleBridge::stopAsyncOutput(ia64::VirtualMachine& vm,
         status_.outputWorkerState = worker.state;
         return false;
     }
+    if (stopped.cancellationRequested) {
+        status_.cancellationCompletions = incrementSaturated(
+            status_.cancellationCompletions, 1);
+        recordEvent(PPC64ConsoleEventType::CANCELLATION_OBSERVED, 0,
+                    HostConsoleFailureClass::CANCELLATION_COMPLETED);
+    }
     const bool outputStateHealthy = reconcileAsyncOutput(vm);
     if (outputSubmissionBytes_ != 0) {
         status_.state = PPC64ConsoleSessionState::OUTPUT_STOP_PENDING;
+        status_.lastFailure = HostConsoleFailureClass::WORKER_TERMINATION;
         status_.diagnostic =
             "stdout worker stopped without a completion record; output lease remains held";
         vm.setPPC64ConsoleCheckpointReady(lpid_, outputLease_, false);
@@ -1330,6 +2060,7 @@ bool PPC64ConsoleBridge::stopAsyncOutput(ia64::VirtualMachine& vm,
 
 void PPC64ConsoleBridge::poll(size_t maximumInputRead,
                               size_t maximumOutputWrite) {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     ia64::VirtualMachine* vm = nullptr;
     if (!attached_) return;
     if (!vmAlive(vm)) {
@@ -1374,14 +2105,15 @@ void PPC64ConsoleBridge::poll(size_t maximumInputRead,
         const HostConsoleIOResult result =
             transport_->readInput(buffer.data(), request);
         status_.lastInputStatus = result.status;
-        status_.lastSystemError = result.systemError;
+        if (result.systemError != 0) status_.lastSystemError = result.systemError;
         if (result.bytes > request) {
             fail(PPC64ConsoleSessionState::FAILED,
                  "host transport reported an input count larger than requested");
         } else if (result.bytes != 0) {
             const size_t stagedBytes = vm->stagePPC64ConsoleInput(
                 lpid_, outputLease_, buffer.data(), result.bytes);
-            status_.hostInputBytesRead += result.bytes;
+            status_.hostInputBytesRead = incrementSaturated(
+                status_.hostInputBytesRead, result.bytes);
             if (stagedBytes != result.bytes) {
                 fail(PPC64ConsoleSessionState::FAILED,
                      "VM bridge staging queue could not retain all host-read bytes");
@@ -1409,6 +2141,7 @@ void PPC64ConsoleBridge::poll(size_t maximumInputRead,
 bool PPC64ConsoleBridge::writeCheckpoint(const std::string& path,
                                         const std::string& guestIdentity,
                                         std::string* error) {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     ia64::VirtualMachine* vm = nullptr;
     if (!attached_ || !vmAlive(vm)) {
         if (error) *error = "console bridge is not attached to a live VM";
@@ -1418,6 +2151,12 @@ bool PPC64ConsoleBridge::writeCheckpoint(const std::string& path,
     if (outputSubmissionBytes_ != 0) {
         if (error) {
             *error = "checkpoint rejected: redirected stdout has a queued or in-flight write whose external completion is unresolved";
+        }
+        return false;
+    }
+    if (status_.unresolvedUncertainBytes != 0) {
+        if (error) {
+            *error = "checkpoint rejected: output delivery uncertainty must be explicitly resolved";
         }
         return false;
     }
@@ -1441,7 +2180,8 @@ bool PPC64ConsoleBridge::writeCheckpoint(const std::string& path,
             if (error) *error = "staged input could not be quiesced into the guest terminal";
             return false;
         }
-        status_.guestInputBytesAccepted += bytes.size();
+        status_.guestInputBytesAccepted = incrementSaturated(
+            status_.guestInputBytesAccepted, bytes.size());
         if (!vm->consumePPC64ConsoleInput(lpid_, outputLease_, staged)) {
             if (error) *error = "could not consume quiesced bridge input";
             return false;
@@ -1452,6 +2192,7 @@ bool PPC64ConsoleBridge::writeCheckpoint(const std::string& path,
 }
 
 PPC64ConsoleBridgeStatus PPC64ConsoleBridge::status() const {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     PPC64ConsoleBridgeStatus result = status_;
     if (const auto* async = dynamic_cast<const IAsyncHostConsoleOutput*>(
             transport_.get()); async != nullptr && async->usesAsyncOutput()) {
@@ -1459,6 +2200,11 @@ PPC64ConsoleBridgeStatus PPC64ConsoleBridge::status() const {
         result.outputWorkerState = worker.state;
         result.outputHandoffCapacity = worker.capacity;
         result.outputHandoffBytesPending = worker.bufferedBytes;
+        result.inFlightBytes = worker.state == HostConsoleOutputWorkerState::WRITING
+            ? worker.bufferedBytes : 0;
+        result.workerRunning = worker.state == HostConsoleOutputWorkerState::QUEUED ||
+            worker.state == HostConsoleOutputWorkerState::WRITING ||
+            worker.state == HostConsoleOutputWorkerState::STOPPING;
     }
     if (attached_) {
         ia64::VirtualMachine* vm = nullptr;
@@ -1469,12 +2215,30 @@ PPC64ConsoleBridgeStatus PPC64ConsoleBridge::status() const {
             result.terminalOutputBytesPending = terminalBytesNotHandedToWorker(
                 *vm, lpid_, outputSubmissionBytes_,
                 outputSubmissionGeneration_ == vm->getPPC64ConsoleGeneration());
+            result.knownNotAttemptedBytes = result.terminalOutputBytesPending;
+            result.outputLeaseHeld = ownsOutputLease(*vm);
+            result.vmIdentity = vm->getPPC64ConsoleVMIdentity();
+            result.sessionGeneration = sessionGeneration_;
+            result.vmResetGeneration = vm->getPPC64ConsoleGeneration();
+            result.sinkType = transport_ ? transport_->sinkType()
+                                         : HostConsoleSinkType::UNKNOWN;
         }
     }
     return result;
 }
 
+std::vector<PPC64ConsoleDiagnosticEvent>
+PPC64ConsoleBridge::diagnosticEvents() const {
+    std::lock_guard<std::mutex> guard(statusMutex_);
+    std::vector<PPC64ConsoleDiagnosticEvent> result;
+    result.reserve(eventRingCount_);
+    for (size_t i = 0; i < eventRingCount_; ++i)
+        result.push_back(eventRing_[(eventRingStart_ + i) % eventRing_.size()]);
+    return result;
+}
+
 size_t PPC64ConsoleBridge::stagedInputBytes() const noexcept {
+    std::lock_guard<std::mutex> guard(statusMutex_);
     ia64::VirtualMachine* vm = nullptr;
     return vmAlive(vm)
         ? vm->getPPC64ConsoleInputCount(lpid_, outputLease_)

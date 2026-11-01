@@ -9,13 +9,26 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <string>
+#include <atomic>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#ifdef ERROR
+#undef ERROR
+#endif
+#endif
 
 using namespace ia64;
 using namespace ia64::ppc64;
@@ -45,6 +58,11 @@ uint32_t mfmsr(uint8_t rt) {
 }
 uint32_t mtmsr(uint8_t rs) {
     return (31U << 26) | (static_cast<uint32_t>(rs) << 21) | (146U << 1);
+}
+uint32_t ld(uint8_t rt, uint8_t ra, int16_t displacement) {
+    return (58U << 26) | (static_cast<uint32_t>(rt) << 21) |
+           (static_cast<uint32_t>(ra) << 16) |
+           (static_cast<uint16_t>(displacement) & 0xfffcU);
 }
 
 std::vector<uint8_t> encode(const std::vector<uint32_t>& words) {
@@ -101,22 +119,221 @@ bool writeWords(IMemory& memory, uint64_t address,
     return true;
 }
 
-bool parseLimit(int argc, char** argv, uint64_t& limit) {
+std::vector<uint32_t> guestPipeRecoveryProgram() {
+    std::vector<uint32_t> words;
+    auto append = [&](int16_t address, size_t count) {
+        words.insert(words.end(), {
+            addis(4, 0, 0x3000), addi(5, 0, static_cast<int16_t>(count)),
+            addi(8, 0, address), ld(6, 8, 0), ld(7, 8, 8),
+            addi(3, 0, PPC64_H_PUT_TERM_CHAR), kSc1,
+        });
+    };
+    append(0x4000, 8);
+    append(0x4010, 8);
+    return words;
+}
+
+bool parseOptions(int argc, char** argv, uint64_t& limit,
+                  bool& recoveryDemo) {
     limit = 2'000'000;
-    if (argc == 1) return true;
-    if (argc != 3 || std::string(argv[1]) != "--max-steps") return false;
-    char* end = nullptr;
-    const unsigned long long value = std::strtoull(argv[2], &end, 10);
-    if (end == argv[2] || *end != '\0' || value == 0) return false;
-    limit = static_cast<uint64_t>(value);
+    recoveryDemo = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--recover-pipe") {
+            recoveryDemo = true;
+            continue;
+        }
+        if (std::string(argv[i]) != "--max-steps" || i + 1 >= argc)
+            return false;
+        char* end = nullptr;
+        const unsigned long long value = std::strtoull(argv[++i], &end, 10);
+        if (end == argv[i] || *end != '\0' || value == 0) return false;
+        limit = static_cast<uint64_t>(value);
+    }
     return true;
+}
+
+bool writeRecoveryPayload(IMemory& memory, uint64_t address,
+                          const char (&text)[9]) {
+    memory.Write(address, reinterpret_cast<const uint8_t*>(text), 8);
+    return true;
+}
+
+int runPipeRecoveryDemo(VirtualMachine& vm) {
+#ifdef _WIN32
+    HANDLE input = CreateFileW(L"NUL", GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE oldReader = INVALID_HANDLE_VALUE;
+    HANDLE oldWriter = INVALID_HANDLE_VALUE;
+    if (input == INVALID_HANDLE_VALUE ||
+        !CreatePipe(&oldReader, &oldWriter, nullptr, 4096)) {
+        std::cerr << "could not create the initial demonstration pipe\n";
+        if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
+        return 1;
+    }
+
+    auto failedTransport = std::make_shared<StdioHostConsoleTransport>(4096);
+    std::string error;
+    if (!failedTransport->attachToHandles(input, oldWriter, error)) {
+        std::cerr << "could not attach the initial pipe: " << error << '\n';
+        CloseHandle(oldReader);
+        CloseHandle(oldWriter);
+        CloseHandle(input);
+        return 1;
+    }
+    CloseHandle(oldReader); // Force the guest output operation to see a broken pipe.
+    oldReader = INVALID_HANDLE_VALUE;
+    CloseHandle(oldWriter);
+    oldWriter = INVALID_HANDLE_VALUE;
+
+    PPC64ConsoleBridge bridge(vm, failedTransport);
+    if (!bridge.attach(error)) {
+        std::cerr << "could not attach the initial console bridge: " << error << '\n';
+        CloseHandle(input);
+        return 1;
+    }
+    for (size_t i = 0; i < 7; ++i) {
+        if (!vm.step()) {
+            std::cerr << "guest stopped before its first hvterm1 write\n";
+            (void)bridge.detach(false, &error);
+            CloseHandle(input);
+            return 1;
+        }
+        bridge.poll(0, 4096);
+    }
+
+    const auto failureDeadline = std::chrono::steady_clock::now() +
+                                 std::chrono::seconds(3);
+    PPC64ConsoleBridgeStatus failedStatus;
+    while (std::chrono::steady_clock::now() < failureDeadline) {
+        bridge.poll(0, 4096);
+        failedStatus = bridge.status();
+        if (failedStatus.outputState ==
+            PPC64OutputSessionState::DELIVERY_UNCERTAIN) break;
+        std::this_thread::yield();
+    }
+    if (failedStatus.outputState != PPC64OutputSessionState::DELIVERY_UNCERTAIN) {
+        std::cerr << "initial pipe did not reach an observable uncertain failure; state="
+                  << static_cast<unsigned>(failedStatus.outputState)
+                  << " error=" << failedStatus.lastSystemError << '\n';
+        (void)bridge.detach(false, &error);
+        CloseHandle(input);
+        return 1;
+    }
+    std::cerr << "initial Windows pipe failed: state=delivery-uncertain, bytes="
+              << failedStatus.unresolvedUncertainBytes << ", error="
+              << failedStatus.lastSystemError << "; automatic reconnect refused\n";
+
+    for (size_t i = 0; i < 7; ++i) {
+        if (!vm.step()) {
+            std::cerr << "guest stopped before its later hvterm1 write\n";
+            (void)bridge.detach(false, &error);
+            CloseHandle(input);
+            return 1;
+        }
+        bridge.poll(0, 4096);
+    }
+    if (vm.getPPC64TerminalPendingOutputBytes() != 8) {
+        std::cerr << "later guest output did not remain queued at the failed boundary\n";
+        (void)bridge.detach(false, &error);
+        CloseHandle(input);
+        return 1;
+    }
+    if (!bridge.resolveOutputUncertainty(
+            PPC64OutputUncertaintyResolution::DISCARD_UNCERTAIN_SEGMENT,
+            failedStatus.uncertainSegmentId, error)) {
+        std::cerr << "could not explicitly resolve uncertain segment: " << error << '\n';
+        (void)bridge.detach(false, &error);
+        CloseHandle(input);
+        return 1;
+    }
+
+    HANDLE newReader = INVALID_HANDLE_VALUE;
+    HANDLE newWriter = INVALID_HANDLE_VALUE;
+    if (!CreatePipe(&newReader, &newWriter, nullptr, 4096)) {
+        std::cerr << "could not create a genuinely new replacement pipe\n";
+        (void)bridge.detach(false, &error);
+        CloseHandle(input);
+        return 1;
+    }
+    std::array<uint8_t, 8> received{};
+    size_t receivedBytes = 0;
+    std::mutex captureMutex;
+    std::condition_variable captureCV;
+    bool captureFinished = false;
+    std::thread reader([&] {
+        while (receivedBytes < received.size()) {
+            DWORD count = 0;
+            if (!ReadFile(newReader, received.data() + receivedBytes,
+                          static_cast<DWORD>(received.size() - receivedBytes),
+                          &count, nullptr) || count == 0) break;
+            receivedBytes += count;
+        }
+        {
+            std::lock_guard<std::mutex> lock(captureMutex);
+            captureFinished = true;
+        }
+        captureCV.notify_all();
+    });
+
+    auto replacement = std::make_shared<StdioHostConsoleTransport>(4096);
+    if (!replacement->attachToHandles(input, newWriter, error) ||
+        !bridge.reconnect(replacement, error)) {
+        std::cerr << "replacement attach/reconnect failed: " << error << '\n';
+        CloseHandle(newWriter);
+        CloseHandle(newReader);
+        reader.join();
+        (void)bridge.detach(false, &error);
+        CloseHandle(input);
+        return 1;
+    }
+    CloseHandle(newWriter);
+
+    const auto outputDeadline = std::chrono::steady_clock::now() +
+                                std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < outputDeadline) {
+        bridge.poll(0, 4096);
+        if (bridge.status().guestOutputBytesAcceptedByHost >= 8) break;
+        std::this_thread::yield();
+    }
+    {
+        std::unique_lock<std::mutex> lock(captureMutex);
+        (void)captureCV.wait_until(lock, outputDeadline,
+                                  [&] { return captureFinished; });
+    }
+    reader.join();
+    CloseHandle(newReader);
+    const std::string captured(received.begin(), received.end());
+    if (receivedBytes != received.size() || captured != "IJKLMNOP" ||
+        vm.getPPC64TerminalPendingOutputBytes() != 0) {
+        std::cerr << "replacement pipe output did not match the later guest bytes; captured="
+                  << captured << " count=" << receivedBytes << '\n';
+        (void)bridge.detach(false, &error);
+        CloseHandle(input);
+        return 1;
+    }
+    std::cerr << "replacement Windows pipe received exact later guest bytes: "
+              << captured << "; first uncertain segment was not replayed\n";
+    if (!bridge.detach(false, &error)) {
+        std::cerr << "console bridge shutdown remains pending: " << error << '\n';
+        CloseHandle(input);
+        return 1;
+    }
+    CloseHandle(input);
+    return 0;
+#else
+    (void)vm;
+    std::cerr << "--recover-pipe requires Windows anonymous pipes\n";
+    return 2;
+#endif
 }
 } // namespace
 
 int main(int argc, char** argv) {
     uint64_t maxSteps = 0;
-    if (!parseLimit(argc, argv, maxSteps)) {
-        std::cerr << "usage: ppc64_console_demo [--max-steps N]\n";
+    bool recoveryDemo = false;
+    if (!parseOptions(argc, argv, maxSteps, recoveryDemo)) {
+        std::cerr << "usage: ppc64_console_demo [--max-steps N] [--recover-pipe]\n";
         return 2;
     }
     Logger::getInstance().setLogLevel(LogLevel::ERROR);
@@ -133,12 +350,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::vector<uint32_t> mainCode{
-        addi(4, 0, 0xff), addi(3, 0, PPC64_H_CPPR), kSc1,
-        mfmsr(6), ori(6, 6, static_cast<uint16_t>(MSR_EE)), mtmsr(6),
-    };
-    for (size_t i = 0; i < 64; ++i) mainCode.push_back(addi(10, 10, 1));
-    mainCode.push_back(0x4bfffffcU); // bounded host loop; poll remains outside the guest
+    std::vector<uint32_t> mainCode;
+    if (recoveryDemo) {
+        mainCode = guestPipeRecoveryProgram();
+    } else {
+        mainCode = {
+            addi(4, 0, 0xff), addi(3, 0, PPC64_H_CPPR), kSc1,
+            mfmsr(6), ori(6, 6, static_cast<uint16_t>(MSR_EE)), mtmsr(6),
+        };
+        for (size_t i = 0; i < 64; ++i) mainCode.push_back(addi(10, 10, 1));
+        mainCode.push_back(0x4bfffffcU); // bounded host loop; poll remains outside the guest
+    }
     const auto program = encode(mainCode);
     std::string error;
     if (!vm.preparePPC64Platform(program, kEntry, kEntry, &error)) {
@@ -149,6 +371,12 @@ int main(int argc, char** argv) {
     if (!writeWords(vm.getMemory(), 0x500, handler)) {
         std::cerr << "could not install the encoded guest interrupt handler\n";
         return 1;
+    }
+
+    if (recoveryDemo) {
+        writeRecoveryPayload(vm.getMemory(), 0x4000, "ABCDEFGH");
+        writeRecoveryPayload(vm.getMemory(), 0x4010, "IJKLMNOP");
+        return runPipeRecoveryDemo(vm);
     }
 
     auto transport = std::make_shared<StdioHostConsoleTransport>();

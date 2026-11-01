@@ -972,6 +972,27 @@ add_test(NAME PPC64Phase16Tests
 )
 set_tests_properties(PPC64Phase16Tests PROPERTIES TIMEOUT 90)
 
+# PPC64 Phase 17 structured diagnostics, safe reconnect, and failure recovery.
+add_executable(test_ppc64_phase17
+    tests/test_ppc64_phase17.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase17 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase17 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase17 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_custom_target(test_ppc64_phase17_target DEPENDS test_ppc64_phase17)
+add_test(NAME PPC64Phase17Tests COMMAND test_ppc64_phase17)
+set_tests_properties(PPC64Phase17Tests PROPERTIES TIMEOUT 60)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp
@@ -991,6 +1012,14 @@ add_test(NAME PPC64ConsoleRedirectedStdioSmoke
         -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/ppc64_console_stdio_smoke.cmake
 )
+
+if(WIN32)
+    # Child-process demonstration uses two distinct real anonymous pipes and
+    # authentic guest hvterm1 output across a broken-sink recovery boundary.
+    add_test(NAME PPC64ConsoleRecoveryDemo
+        COMMAND $<TARGET_FILE:ppc64_console_demo> --recover-pipe)
+    set_tests_properties(PPC64ConsoleRecoveryDemo PROPERTIES TIMEOUT 20)
+endif()
 
 if(MSVC)
     target_compile_options(test_ppc64_phase14 PRIVATE /W4)
