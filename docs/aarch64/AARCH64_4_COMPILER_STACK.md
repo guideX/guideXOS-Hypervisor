@@ -195,7 +195,7 @@ with identical outputs.
 
 ## 7. Integrated Program C — memory addressing matrix
 
-The bounded eight-instruction program independently checks each effective
+The bounded ten-instruction program independently checks each effective
 address and writeback point:
 
 | Step | Instruction | Transfer address | Base after success |
@@ -208,11 +208,14 @@ address and writeback point:
 | 6 | `LDP X6,X7,[X1,#-16]` | `0x3FF3` | `0x4003` |
 | 7 | `STP X4,X5,[X1,#16]!` | `0x4013` | `0x4013` |
 | 8 | `LDP X6,X7,[X1],#-16` | `0x4013` | `0x4003` |
+| 9 | `STP X4,X5,[X8],#16`, X8=`0x5000` | `0x5000` | `0x5010` |
+| 10 | `LDP X6,X7,[X8,#-16]!` | `0x5000` | `0x5000` |
 
-The final PC is `0x20`; X2/X3 equal `0x0102030405060708`, X6 is
-`0x1111222233334444`, and X7 is `0xAAAABBBBCCCCDDDD`. Protected accesses at
-and beyond the memory limit fault without register/PC/writeback changes.
-Canaries around the transfer regions and in untouched gaps remain unchanged.
+The final PC is `0x28`; X2/X3 equal `0x0102030405060708`, X6 is
+`0x1111222233334444`, X7 is `0xAAAABBBBCCCCDDDD`, and X8 is `0x5000`.
+Protected accesses at and beyond the memory limit fault without
+register/PC/writeback changes. Canaries around the transfer regions and in
+untouched gaps remain unchanged.
 
 ## 8. Plugin, state format, and validation results
 
@@ -234,7 +237,7 @@ git diff --check
 ```
 
 Results from the test executables: Foundation 221 checks / 0 failures;
-MemoryBranch 1,304 / 0; PcStack 940 / 0; CompilerStack 5,221 / 0. CTest
+MemoryBranch 1,304 / 0; PcStack 940 / 0; CompilerStack 5,725 / 0. CTest
 passed 7/7 suites. EfiMemoryMapTests, IA64SalTests, and RiscVDecoderSmokeTest
 passed. `git diff --check` passed. The IA-64 `test_isa_plugin` failure
 documented at `tests/test_isa_plugin.cpp:1551` is outside these gates and was

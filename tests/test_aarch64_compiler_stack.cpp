@@ -668,12 +668,14 @@ void testUnscaledAndIndexedMemory() {
     {
         FlatMemory memory(0x8000);
         std::fill(memory.mutableData() + 0x3F00, memory.mutableData() + 0x4100, 0xCC);
+        std::fill(memory.mutableData() + 0x4F00, memory.mutableData() + 0x5100, 0xCC);
         Cpu cpu(0);
         cpu.writeX(0, 0x0102030405060708ull);
         cpu.writeX(1, 0x4000);
         cpu.writeX(4, 0x1111222233334444ull);
         cpu.writeX(5, 0xAAAABBBBCCCCDDDDull);
-        const std::array<uint32_t, 8> program = {
+        cpu.writeX(8, 0x5000);
+        const std::array<uint32_t, 10> program = {
             encodeUnscaled(true, false, -3, 0, 1),             // STUR X0,[X1,#-3]
             encodeUnscaled(true, true, -3, 2, 1),              // LDUR X2,[X1,#-3]
             encodeIndexed(true, false, true, 5, 0, 1),         // STR X0,[X1,#5]!
@@ -682,6 +684,8 @@ void testUnscaledAndIndexedMemory() {
             encodePair(true, true, 0, -16, 6, 7, 1),           // LDP offset
             encodePair(true, false, 1, 16, 4, 5, 1),           // STP pre-index
             encodePair(true, true, 2, -16, 6, 7, 1),           // LDP post-index
+            encodePair(true, false, 2, 16, 4, 5, 8),           // STP post-index
+            encodePair(true, true, 1, -16, 6, 7, 8),           // LDP pre-index
         };
         putWords(memory, 0, std::vector<uint32_t>(program.begin(), program.end()));
         for (size_t i = 0; i < program.size(); ++i) {
@@ -710,10 +714,18 @@ void testUnscaledAndIndexedMemory() {
                 CHECK_EQ(0x4013, cpu.readX(1));
                 CHECK_EQ(0x1111222233334444ull, readLE(memory, 0x4013, 8));
                 CHECK_EQ(0xAAAABBBBCCCCDDDDull, readLE(memory, 0x401B, 8));
-            } else {
+            } else if (i == 7) {
                 CHECK_EQ(0x1111222233334444ull, cpu.readX(6));
                 CHECK_EQ(0xAAAABBBBCCCCDDDDull, cpu.readX(7));
                 CHECK_EQ(0x4003, cpu.readX(1));
+            } else if (i == 8) {
+                CHECK_EQ(0x5010, cpu.readX(8));
+                CHECK_EQ(0x1111222233334444ull, readLE(memory, 0x5000, 8));
+                CHECK_EQ(0xAAAABBBBCCCCDDDDull, readLE(memory, 0x5008, 8));
+            } else {
+                CHECK_EQ(0x1111222233334444ull, cpu.readX(6));
+                CHECK_EQ(0xAAAABBBBCCCCDDDDull, cpu.readX(7));
+                CHECK_EQ(0x5000, cpu.readX(8));
             }
         }
         CHECK_EQ(program.size() * 4, cpu.pc());
@@ -726,10 +738,17 @@ void testUnscaledAndIndexedMemory() {
         for (uint64_t address = 0x400D; address < 0x4013; ++address) {
             CHECK_EQ(0xCC, memory.GetRawData()[address]);
         }
+        for (uint64_t address = 0x4F00; address < 0x5000; ++address) {
+            CHECK_EQ(0xCC, memory.GetRawData()[address]);
+        }
+        for (uint64_t address = 0x5010; address < 0x5100; ++address) {
+            CHECK_EQ(0xCC, memory.GetRawData()[address]);
+        }
         std::cout << "Program C: steps=" << program.size() << " final_pc=0x" << std::hex
                   << cpu.pc() << " X1=0x" << cpu.readX(1) << " X2=0x" << cpu.readX(2)
                   << " X3=0x" << cpu.readX(3) << " X6=0x" << cpu.readX(6)
-                  << " X7=0x" << cpu.readX(7) << std::dec << '\n';
+                  << " X7=0x" << cpu.readX(7) << " X8=0x" << cpu.readX(8)
+                  << std::dec << '\n';
     }
 }
 
