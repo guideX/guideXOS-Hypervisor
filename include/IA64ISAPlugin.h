@@ -606,13 +606,19 @@ private:
     struct RecentRegisterWriteTrace {
         size_t reg = 0;
         uint64_t value = 0;
+        bool nat = false;
         uint64_t ip = 0;
         size_t slot = 0;
         std::string disasm;
     };
     std::deque<RecentInstructionTrace> recentInstructions_;
     std::deque<RecentRegisterWriteTrace> recentTrackedRegisterWrites_;
+    std::map<size_t, RecentRegisterWriteTrace> lastTrackedRegisterWrites_;
     size_t recentInstructionSequenceRepeatCount_;
+    uint64_t pluginStepOrdinal_ = 0;
+    uint64_t handoffInstructionTraceTarget_ = 0;
+    size_t handoffInstructionTraceRemaining_ = 0;
+    bool handoffInstructionTraceActive_ = false;
     uint64_t placementStepCount_ = 0;
     uint64_t placementFileBackedBytes_ = 0;
     std::vector<EfiTraceSummary::PlacementEvent> placementEvents_;

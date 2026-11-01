@@ -1,5 +1,6 @@
 #include "IA64ISAPlugin.h"
 #include "IA64AddressTranslation.h"
+#include "IA64EfiBootLifecycle.h"
 #include "IA64EfiHandoffLayout.h"
 #include "IA64SalFirmware.h"
 #include "SyscallDispatcher.h"
@@ -20,6 +21,8 @@
 #include <cstdlib>
 #include <new>
 #include <limits>
+#include <fstream>
+#include <filesystem>
 
 namespace ia64 {
 
@@ -92,6 +95,52 @@ uint64_t configuredBranchTraceTarget() {
         return valid ? static_cast<uint64_t>(parsed) : uint64_t{0};
     }();
     return target;
+}
+
+size_t configuredBranchTraceInstructionCount() {
+    static const size_t count = []() {
+        const char* raw = nullptr;
+#ifdef _MSC_VER
+        char* rawBuffer = nullptr;
+        size_t rawLength = 0;
+        if (_dupenv_s(&rawBuffer, &rawLength,
+                      "GUIDEXOS_IA64_TRACE_BRANCH_INSTRUCTIONS") != 0) {
+            return size_t{1000};
+        }
+        raw = rawBuffer;
+#else
+        raw = std::getenv("GUIDEXOS_IA64_TRACE_BRANCH_INSTRUCTIONS");
+#endif
+        if (!raw || *raw == '\0') {
+#ifdef _MSC_VER
+            std::free(const_cast<char*>(raw));
+#endif
+            return size_t{1000};
+        }
+        char* end = nullptr;
+        const unsigned long long parsed = std::strtoull(raw, &end, 0);
+        const bool valid = end != raw && *end == '\0';
+#ifdef _MSC_VER
+        std::free(const_cast<char*>(raw));
+#endif
+        if (!valid || parsed == 0) return size_t{0};
+        return static_cast<size_t>(std::min<unsigned long long>(parsed, 1000ULL));
+    }();
+    return count;
+}
+
+std::string environmentValue(const char* name) {
+#ifdef _MSC_VER
+    char* raw = nullptr;
+    size_t length = 0;
+    if (_dupenv_s(&raw, &length, name) != 0 || !raw) return {};
+    std::string value(raw);
+    std::free(raw);
+    return value;
+#else
+    const char* raw = std::getenv(name);
+    return raw ? std::string(raw) : std::string();
+#endif
 }
 
 bool shouldSuppressVerboseTrace() {
@@ -653,6 +702,34 @@ bool isEfiBootServicesFieldAddress(uint64_t address) {
            ((address - EFI_BOOT_SERVICES_ADDR) & 7ULL) == 0;
 }
 
+bool isBootServiceOrBootProtocolStubCode(uint64_t address) {
+    return address == EFI_ALLOCATE_POOL_STUB_CODE_ADDR ||
+           address == EFI_HANDLE_PROTOCOL_STUB_CODE_ADDR ||
+           address == EFI_OPEN_VOLUME_STUB_CODE_ADDR ||
+           address == EFI_FILE_OPEN_STUB_CODE_ADDR ||
+           address == EFI_FILE_CLOSE_STUB_CODE_ADDR ||
+           address == EFI_FILE_READ_STUB_CODE_ADDR ||
+           address == EFI_FILE_GET_POSITION_STUB_CODE_ADDR ||
+           address == EFI_FILE_SET_POSITION_STUB_CODE_ADDR ||
+           address == EFI_FILE_GET_INFO_STUB_CODE_ADDR ||
+           address == EFI_LOCATE_HANDLE_STUB_CODE_ADDR ||
+           address == EFI_LOCATE_PROTOCOL_STUB_CODE_ADDR ||
+           address == EFI_GET_MEMORY_MAP_STUB_CODE_ADDR ||
+           address == EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR ||
+           address == EFI_LOAD_IMAGE_STUB_CODE_ADDR ||
+           address == EFI_START_IMAGE_STUB_CODE_ADDR ||
+           address == EFI_SET_MEM_STUB_CODE_ADDR ||
+           address == EFI_INPUT_RESET_STUB_CODE_ADDR ||
+           address == EFI_INPUT_READ_KEY_STROKE_STUB_CODE_ADDR ||
+           address == EFI_INPUT_READ_KEY_STROKE_EX_STUB_CODE_ADDR ||
+           address == EFI_INPUT_REGISTER_KEY_NOTIFY_STUB_CODE_ADDR ||
+           address == EFI_INPUT_UNREGISTER_KEY_NOTIFY_STUB_CODE_ADDR ||
+           address == EFI_WAIT_FOR_EVENT_STUB_CODE_ADDR ||
+           address == EFI_CHECK_EVENT_STUB_CODE_ADDR ||
+           address == EFI_TEXT_OUTPUT_STRING_STUB_CODE_ADDR ||
+           address == EFI_TEXT_OUTPUT_QUERY_MODE_STUB_CODE_ADDR;
+}
+
 EfiBootServiceKind efiBootServiceKindForField(uint64_t address) {
     if (!isEfiBootServicesFieldAddress(address)) {
         return EfiBootServiceKind::Unknown;
@@ -875,6 +952,7 @@ const char* efiStatusName(uint64_t status) {
         case EFI_STATUS_SUCCESS: return "EFI_SUCCESS";
         case EFI_STATUS_INVALID_PARAMETER: return "EFI_INVALID_PARAMETER";
         case EFI_STATUS_UNSUPPORTED: return "EFI_UNSUPPORTED";
+        case EFI_STATUS_DEVICE_ERROR: return "EFI_DEVICE_ERROR";
         case EFI_STATUS_BUFFER_TOO_SMALL: return "EFI_BUFFER_TOO_SMALL";
         case EFI_STATUS_WRITE_PROTECTED: return "EFI_WRITE_PROTECTED";
         case EFI_STATUS_NO_MEDIA: return "EFI_NO_MEDIA";
@@ -1208,7 +1286,7 @@ void logEfiHandoffAccess(const char* phase,
                          uint64_t registerNumber,
                          uint64_t registerValue,
                          IMemory& memory) {
-    if (size == 0) {
+    if (size == 0 || shouldSuppressVerboseTrace()) {
         return;
     }
 
@@ -1328,6 +1406,36 @@ bool writeGuestU64(IMemory& memory, uint64_t address, uint64_t value) {
     } catch (const std::exception&) {
         return false;
     }
+}
+
+bool transitionEfiSystemTableForExit(IMemory& memory, uint32_t& resultingCrc32) {
+    resultingCrc32 = 0;
+    const uint64_t totalSize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (EFI_HANDOFF_REGION_BASE > totalSize ||
+        ia64::kEfiSystemTableMinimumSize > totalSize - EFI_HANDOFF_REGION_BASE) {
+        return false;
+    }
+
+    std::array<uint8_t, ia64::kEfiSystemTableMinimumSize> bytes{};
+    try {
+        memory.Read(EFI_HANDOFF_REGION_BASE, bytes.data(), bytes.size());
+    } catch (const std::exception&) {
+        return false;
+    }
+    std::span<uint8_t> systemTable(bytes);
+    if (!ia64::prepareEfiSystemTableForExit(systemTable)) {
+        return false;
+    }
+    resultingCrc32 = ia64::readEfiLe32(
+        std::span<const uint8_t>(systemTable.data(), systemTable.size()),
+        ia64::kEfiSystemTableCrc32Offset);
+    try {
+        memory.Write(EFI_HANDOFF_REGION_BASE, bytes.data(), bytes.size());
+    } catch (const std::exception&) {
+        resultingCrc32 = 0;
+        return false;
+    }
+    return true;
 }
 
 bool guestRangeWithinReportedMemory(const IMemory& memory,
@@ -1482,6 +1590,393 @@ std::string readHexBytesPreview(IMemory& memory, uint64_t address, size_t count)
         oss << value;
     }
     return oss.str();
+}
+
+bool readLittleEndian(IMemory& memory, uint64_t address, size_t width,
+                      uint64_t& value) {
+    if (width == 0 || width > sizeof(value)) return false;
+    uint8_t bytes[sizeof(value)] = {};
+    try {
+        memory.Read(address, bytes, width);
+    } catch (const std::exception&) {
+        return false;
+    }
+    value = 0;
+    for (size_t i = 0; i < width; ++i) {
+        value |= static_cast<uint64_t>(bytes[i]) << (i * 8U);
+    }
+    return true;
+}
+
+std::string readGuestCString(IMemory& memory, uint64_t address, size_t limit,
+                            bool& terminated) {
+    std::ostringstream text;
+    terminated = false;
+    if (address == 0) return "<null>";
+    for (size_t i = 0; i < limit; ++i) {
+        uint64_t byte = 0;
+        if (!readLittleEndian(memory, address + i, 1, byte)) return "<unreadable>";
+        if (byte == 0) {
+            terminated = true;
+            return text.str();
+        }
+        const unsigned char value = static_cast<unsigned char>(byte);
+        if (value >= 0x20 && value <= 0x7e && value != '\\' && value != '"') {
+            text << static_cast<char>(value);
+        } else {
+            text << "\\x" << std::hex << std::setw(2) << std::setfill('0')
+                 << static_cast<unsigned>(value) << std::dec;
+        }
+    }
+    return text.str();
+}
+
+void appendFullHandoffCpuSnapshot(std::ostream& out, const CPUState& cpu) {
+    const RSEState& rse = cpu.GetRSEState();
+    out << " psr=" << BootStageTrace::Hex(cpu.GetPSR())
+        << " cpl=" << ((cpu.GetPSR() >> 32U) & 0x3ULL)
+        << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+        << " pfs=" << BootStageTrace::Hex(cpu.GetPFS())
+        << " rsc=" << BootStageTrace::Hex(cpu.GetRSC())
+        << " bsp=" << BootStageTrace::Hex(cpu.GetBSP())
+        << " bspstore=" << BootStageTrace::Hex(cpu.GetBSPSTORE())
+        << " rnat=" << BootStageTrace::Hex(cpu.GetRNAT())
+        << " bspLoad=" << BootStageTrace::Hex(cpu.GetRSELoadPointer())
+        << " rseRing={bof:" << static_cast<unsigned>(rse.bof)
+        << ",store:" << static_cast<unsigned>(rse.storeReg)
+        << ",load:" << static_cast<unsigned>(rse.loadReg)
+        << ",sof:" << static_cast<unsigned>(rse.sof)
+        << ",sol:" << static_cast<unsigned>(rse.sol)
+        << ",sor:" << static_cast<unsigned>(rse.sor) << "}"
+        << " ip=" << BootStageTrace::Hex(cpu.GetIP())
+        << " r12=" << BootStageTrace::Hex(cpu.GetGR(12))
+        << " gr=[";
+    for (size_t reg = 0; reg < NUM_GENERAL_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << 'r' << reg << '=' << BootStageTrace::Hex(cpu.GetGR(reg));
+    }
+    out << "] physicalGR=[";
+    for (size_t reg = 0; reg < NUM_PHYSICAL_GENERAL_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << 'r' << reg << '=' << BootStageTrace::Hex(cpu.GetGRPhysical(reg));
+    }
+    out << "] nat=[";
+    for (size_t reg = 0; reg < NUM_PHYSICAL_GENERAL_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << (cpu.GetGRNaTPhysical(reg) ? '1' : '0');
+    }
+    out << "] pr=[";
+    for (size_t reg = 0; reg < NUM_PREDICATE_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << (cpu.GetPR(reg) ? '1' : '0');
+    }
+    out << "] br=[";
+    for (size_t reg = 0; reg < NUM_BRANCH_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << 'b' << reg << '=' << BootStageTrace::Hex(cpu.GetBR(reg));
+    }
+    out << "] rr=[";
+    for (size_t reg = 0; reg < NUM_REGION_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << 'r' << reg << '=' << BootStageTrace::Hex(cpu.GetRR(reg));
+    }
+    out << "] cr=[";
+    for (size_t reg = 0; reg < NUM_CONTROL_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << 'c' << reg << '=' << BootStageTrace::Hex(cpu.GetCR(reg));
+    }
+    out << "] ar=[";
+    for (size_t reg = 0; reg < NUM_APPLICATION_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << 'a' << reg << '=' << BootStageTrace::Hex(cpu.GetAR(reg));
+    }
+    out << "] rsePartitions=[";
+    for (size_t reg = 0; reg < NUM_STACKED_GENERAL_REGISTERS; ++reg) {
+        if (reg != 0) out << ',';
+        out << static_cast<unsigned>(rse.physicalPartition[reg]);
+    }
+    out << "] itr=[";
+    bool first = true;
+    for (size_t reg = 0; reg < NUM_TRANSLATION_REGISTERS; ++reg) {
+        const TranslationRegisterState& entry = cpu.GetITR(reg);
+        if (!entry.valid) continue;
+        if (!first) out << ',';
+        first = false;
+        out << reg << ':' << BootStageTrace::Hex(entry.physicalAddress) << '/'
+            << BootStageTrace::Hex(entry.virtualAddress) << '/'
+            << BootStageTrace::Hex(entry.itir) << '/'
+            << BootStageTrace::Hex(entry.regionValue);
+    }
+    out << "] dtr=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_TRANSLATION_REGISTERS; ++reg) {
+        const TranslationRegisterState& entry = cpu.GetDTR(reg);
+        if (!entry.valid) continue;
+        if (!first) out << ',';
+        first = false;
+        out << reg << ':' << BootStageTrace::Hex(entry.physicalAddress) << '/'
+            << BootStageTrace::Hex(entry.virtualAddress) << '/'
+            << BootStageTrace::Hex(entry.itir) << '/'
+            << BootStageTrace::Hex(entry.regionValue);
+    }
+    out << "] itlb=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_INSTRUCTION_TLB_ENTRIES; ++reg) {
+        const TranslationRegisterState& entry = cpu.GetITLB(reg);
+        if (!entry.valid) continue;
+        if (!first) out << ',';
+        first = false;
+        out << reg << ':' << BootStageTrace::Hex(entry.physicalAddress) << '/'
+            << BootStageTrace::Hex(entry.virtualAddress) << '/'
+            << BootStageTrace::Hex(entry.itir) << '/'
+            << BootStageTrace::Hex(entry.regionValue);
+    }
+    out << "] dtlb=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_DATA_TLB_ENTRIES; ++reg) {
+        const TranslationRegisterState& entry = cpu.GetDTLB(reg);
+        if (!entry.valid) continue;
+        if (!first) out << ',';
+        first = false;
+        out << reg << ':' << BootStageTrace::Hex(entry.physicalAddress) << '/'
+            << BootStageTrace::Hex(entry.virtualAddress) << '/'
+            << BootStageTrace::Hex(entry.itir) << '/'
+            << BootStageTrace::Hex(entry.regionValue);
+    }
+    out << ']';
+}
+
+void appendCpuRegisterDeltas(std::ostream& out, const CPUState& before,
+                             const CPUState& after) {
+    out << " grDelta=[";
+    bool first = true;
+    for (size_t reg = 0; reg < NUM_GENERAL_REGISTERS; ++reg) {
+        const uint64_t oldValue = before.GetGR(reg);
+        const uint64_t newValue = after.GetGR(reg);
+        const bool oldNaT = before.GetGRNaT(reg);
+        const bool newNaT = after.GetGRNaT(reg);
+        if (oldValue == newValue && oldNaT == newNaT) continue;
+        if (!first) out << ',';
+        first = false;
+        out << 'r' << reg << ':' << BootStageTrace::Hex(oldValue) << "->"
+            << BootStageTrace::Hex(newValue) << ":nat=" << (oldNaT ? 1 : 0)
+            << "->" << (newNaT ? 1 : 0);
+    }
+    out << "] brDelta=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_BRANCH_REGISTERS; ++reg) {
+        const uint64_t oldValue = before.GetBR(reg);
+        const uint64_t newValue = after.GetBR(reg);
+        if (oldValue == newValue) continue;
+        if (!first) out << ',';
+        first = false;
+        out << 'b' << reg << ':' << BootStageTrace::Hex(oldValue) << "->"
+            << BootStageTrace::Hex(newValue);
+    }
+    out << "] prDelta=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_PREDICATE_REGISTERS; ++reg) {
+        const bool oldValue = before.GetPR(reg);
+        const bool newValue = after.GetPR(reg);
+        if (oldValue == newValue) continue;
+        if (!first) out << ',';
+        first = false;
+        out << 'p' << reg << ':' << (oldValue ? 1 : 0) << "->" << (newValue ? 1 : 0);
+    }
+    out << "] rrDelta=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_REGION_REGISTERS; ++reg) {
+        const uint64_t oldValue = before.GetRR(reg);
+        const uint64_t newValue = after.GetRR(reg);
+        if (oldValue == newValue) continue;
+        if (!first) out << ',';
+        first = false;
+        out << 'r' << reg << ':' << BootStageTrace::Hex(oldValue) << "->"
+            << BootStageTrace::Hex(newValue);
+    }
+    out << "] crDelta=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_CONTROL_REGISTERS; ++reg) {
+        const uint64_t oldValue = before.GetCR(reg);
+        const uint64_t newValue = after.GetCR(reg);
+        if (oldValue == newValue) continue;
+        if (!first) out << ',';
+        first = false;
+        out << 'c' << reg << ':' << BootStageTrace::Hex(oldValue) << "->"
+            << BootStageTrace::Hex(newValue);
+    }
+    out << "] arDelta=[";
+    first = true;
+    for (size_t reg = 0; reg < NUM_APPLICATION_REGISTERS; ++reg) {
+        const uint64_t oldValue = before.GetAR(reg);
+        const uint64_t newValue = after.GetAR(reg);
+        if (oldValue == newValue) continue;
+        if (!first) out << ',';
+        first = false;
+        out << 'a' << reg << ':' << BootStageTrace::Hex(oldValue) << "->"
+            << BootStageTrace::Hex(newValue);
+    }
+    out << "] rseDelta={cfm:" << BootStageTrace::Hex(before.GetCFM()) << "->"
+        << BootStageTrace::Hex(after.GetCFM())
+        << ",pfs:" << BootStageTrace::Hex(before.GetPFS()) << "->"
+        << BootStageTrace::Hex(after.GetPFS())
+        << ",rsc:" << BootStageTrace::Hex(before.GetRSC()) << "->"
+        << BootStageTrace::Hex(after.GetRSC())
+        << ",bsp:" << BootStageTrace::Hex(before.GetBSP()) << "->"
+        << BootStageTrace::Hex(after.GetBSP())
+        << ",bspstore:" << BootStageTrace::Hex(before.GetBSPSTORE()) << "->"
+        << BootStageTrace::Hex(after.GetBSPSTORE())
+        << ",rnat:" << BootStageTrace::Hex(before.GetRNAT()) << "->"
+        << BootStageTrace::Hex(after.GetRNAT())
+        << ",bspLoad:" << BootStageTrace::Hex(before.GetRSELoadPointer()) << "->"
+        << BootStageTrace::Hex(after.GetRSELoadPointer()) << '}';
+}
+
+void appendLinuxBootParamSnapshot(std::ostream& out, IMemory& memory,
+                                 const CPUState& cpu) {
+    constexpr uint64_t bootParamSize = 80;
+    constexpr uint64_t efiSystemTableSize = 120;
+    const uint64_t totalSize = static_cast<uint64_t>(memory.GetTotalSize());
+    const uint64_t address = cpu.GetGR(28);
+    out << " r28=" << BootStageTrace::Hex(address)
+        << " r28PhysicalRange=";
+    if (address == 0 || address > totalSize || bootParamSize > totalSize - address) {
+        out << "outside-guest-memory";
+        return;
+    }
+
+    uint64_t commandLine = 0, systemTable = 0, memoryMap = 0, memoryMapSize = 0;
+    uint64_t descriptorSize = 0, descriptorVersion = 0, fpswa = 0;
+    uint64_t initrdStart = 0, initrdSize = 0;
+    uint64_t consoleColumns = 0, consoleRows = 0, consoleX = 0, consoleY = 0;
+    const bool decoded =
+        readLittleEndian(memory, address + 0, 8, commandLine) &&
+        readLittleEndian(memory, address + 8, 8, systemTable) &&
+        readLittleEndian(memory, address + 16, 8, memoryMap) &&
+        readLittleEndian(memory, address + 24, 8, memoryMapSize) &&
+        readLittleEndian(memory, address + 32, 8, descriptorSize) &&
+        readLittleEndian(memory, address + 40, 4, descriptorVersion) &&
+        readLittleEndian(memory, address + 44, 2, consoleColumns) &&
+        readLittleEndian(memory, address + 46, 2, consoleRows) &&
+        readLittleEndian(memory, address + 48, 2, consoleX) &&
+        readLittleEndian(memory, address + 50, 2, consoleY) &&
+        readLittleEndian(memory, address + 56, 8, fpswa) &&
+        readLittleEndian(memory, address + 64, 8, initrdStart) &&
+        readLittleEndian(memory, address + 72, 8, initrdSize);
+    if (!decoded) {
+        out << "unreadable";
+        return;
+    }
+
+    bool commandLineTerminated = false;
+    const std::string commandLineText = readGuestCString(
+        memory, commandLine, 2048, commandLineTerminated);
+    out << "physical bytes=" << readHexBytesPreview(memory, address, bootParamSize)
+        << " command_line=" << BootStageTrace::Hex(commandLine)
+        << " command_line_nul=" << (commandLineTerminated ? "yes" : "no")
+        << " command_line_text=\"" << commandLineText << '"'
+        << " efi_systab=" << BootStageTrace::Hex(systemTable)
+        << " efi_memmap=" << BootStageTrace::Hex(memoryMap)
+        << " efi_memmap_size=" << BootStageTrace::Hex(memoryMapSize)
+        << " efi_memdesc_size=" << BootStageTrace::Hex(descriptorSize)
+        << " efi_memdesc_version=" << descriptorVersion
+        << " console_info={cols:" << consoleColumns << ",rows:" << consoleRows
+        << ",x:" << consoleX << ",y:" << consoleY << '}'
+        << " fpswa=" << BootStageTrace::Hex(fpswa)
+        << " fpswa_bytes=" << readHexBytesPreview(memory, fpswa, fpswa == 0 ? 0 : 16)
+        << " initrd_start=" << BootStageTrace::Hex(initrdStart)
+        << " initrd_size=" << BootStageTrace::Hex(initrdSize);
+
+    if (systemTable != 0 && systemTable <= totalSize &&
+        efiSystemTableSize <= totalSize - systemTable) {
+        uint64_t revision = 0, headerSize = 0, crc = 0;
+        readLittleEndian(memory, systemTable + 8, 4, revision);
+        readLittleEndian(memory, systemTable + 12, 4, headerSize);
+        readLittleEndian(memory, systemTable + 16, 4, crc);
+        uint64_t consoleOut = 0, runtimeServices = 0, bootServices = 0;
+        readLittleEndian(memory, systemTable + 64, 8, consoleOut);
+        readLittleEndian(memory, systemTable + 88, 8, runtimeServices);
+        readLittleEndian(memory, systemTable + 96, 8, bootServices);
+        out << " system_table_header={signature:" << readHexBytesPreview(memory, systemTable, 8)
+            << ",revision:" << BootStageTrace::Hex(revision)
+            << ",header_size:" << BootStageTrace::Hex(headerSize)
+            << ",crc32:" << BootStageTrace::Hex(crc)
+            << "} system_table_console_out=" << BootStageTrace::Hex(consoleOut)
+            << " runtime_services=" << BootStageTrace::Hex(runtimeServices)
+            << " boot_services=" << BootStageTrace::Hex(bootServices)
+            << " system_table_bytes=" << readHexBytesPreview(memory, systemTable, efiSystemTableSize);
+    } else {
+        out << " system_table_range=outside-guest-memory";
+    }
+
+    if (memoryMapSize != 0 && descriptorSize >= 40 &&
+        memoryMapSize % descriptorSize == 0 &&
+        memoryMapSize <= 1024 * 1024 && memoryMap <= totalSize &&
+        memoryMapSize <= totalSize - memoryMap) {
+        const uint64_t descriptorCount = memoryMapSize / descriptorSize;
+        out << " memory_map_descriptors=[";
+        for (uint64_t index = 0; index < descriptorCount; ++index) {
+            const uint64_t descriptor = memoryMap + index * descriptorSize;
+            uint64_t type = 0, physicalStart = 0, virtualStart = 0;
+            uint64_t pages = 0, attributes = 0;
+            if (!readLittleEndian(memory, descriptor, 4, type) ||
+                !readLittleEndian(memory, descriptor + 8, 8, physicalStart) ||
+                !readLittleEndian(memory, descriptor + 16, 8, virtualStart) ||
+                !readLittleEndian(memory, descriptor + 24, 8, pages) ||
+                !readLittleEndian(memory, descriptor + 32, 8, attributes)) {
+                out << "unreadable";
+                break;
+            }
+            if (index != 0) out << ';';
+            out << "{type:" << type << ",physical:" << BootStageTrace::Hex(physicalStart)
+                << ",virtual:" << BootStageTrace::Hex(virtualStart)
+                << ",pages:" << BootStageTrace::Hex(pages)
+                << ",attributes:" << BootStageTrace::Hex(attributes) << '}';
+        }
+        out << ']';
+    } else {
+        out << " memory_map_range=invalid-or-unreadable";
+    }
+}
+
+void writeHandoffKernelAllocation(IMemory& memory) {
+    const std::string path = environmentValue("GUIDEXOS_IA64_HANDOFF_KERNEL_DUMP_PATH");
+    if (path.empty()) return;
+    constexpr uint64_t base = 0x04000000ULL;
+    constexpr uint64_t size = 0x00D76000ULL;
+    const uint64_t totalSize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (base > totalSize || size > totalSize - base) {
+        std::cerr << "[IA64-HANDOFF] kernel-allocation dump rejected: range outside guest RAM\n";
+        return;
+    }
+    std::error_code error;
+    if (std::filesystem::exists(path, error) || error) {
+        std::cerr << "[IA64-HANDOFF] kernel-allocation dump refused existing or inaccessible path=\""
+                  << path << "\"\n";
+        return;
+    }
+    const uint8_t* raw = memory.GetRawData();
+    if (!raw) {
+        std::cerr << "[IA64-HANDOFF] kernel-allocation dump unavailable: raw guest RAM is absent\n";
+        return;
+    }
+    std::ofstream output(path, std::ios::binary);
+    if (!output) {
+        std::cerr << "[IA64-HANDOFF] kernel-allocation dump open failed path=\""
+                  << path << "\"\n";
+        return;
+    }
+    output.write(reinterpret_cast<const char*>(raw + base),
+                 static_cast<std::streamsize>(size));
+    output.flush();
+    if (!output) {
+        std::cerr << "[IA64-HANDOFF] kernel-allocation dump write failed path=\""
+                  << path << "\"\n";
+        return;
+    }
+    std::cout << "[IA64-HANDOFF] kernel-allocation-snapshot path=\"" << path
+              << "\" base=" << BootStageTrace::Hex(base)
+              << " size=" << BootStageTrace::Hex(size) << std::endl;
 }
 
 std::string readHexBytesPreviewRaw(const IMemory& memory, uint64_t address, size_t count) {
@@ -2056,6 +2551,12 @@ void IA64ISAState::serialize(uint8_t* buffer) const {
         std::memcpy(buffer + offset, &val, sizeof(uint64_t));
         offset += sizeof(uint64_t);
     }
+
+    // NaT is independent architectural state; SetGRPhysical on restore
+    // clears it, so preserve one explicit byte for every physical GR.
+    for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
+        buffer[offset++] = cpuState_.GetGRNaTPhysical(i) ? 1 : 0;
+    }
     
     // Predicate registers (64 * 1 byte, padded)
     for (size_t i = 0; i < NUM_PREDICATE_REGISTERS; ++i) {
@@ -2139,6 +2640,10 @@ void IA64ISAState::deserialize(const uint8_t* buffer) {
         std::memcpy(&val, buffer + offset, sizeof(uint64_t));
         cpuState_.SetGRPhysical(i, val);
         offset += sizeof(uint64_t);
+    }
+
+    for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
+        cpuState_.SetGRNaTPhysical(i, buffer[offset++] != 0);
     }
     
     // Predicate registers
@@ -2231,6 +2736,7 @@ size_t IA64ISAState::getStateSize() const {
     
     // CPUState
     size += NUM_PHYSICAL_GENERAL_REGISTERS * sizeof(uint64_t);  // Physical GRs
+    size += NUM_PHYSICAL_GENERAL_REGISTERS;          // Physical GR NaT bits
     size += NUM_PREDICATE_REGISTERS;                   // PRs (padded to bytes)
     size += NUM_BRANCH_REGISTERS * sizeof(uint64_t);   // BRs
     size += NUM_APPLICATION_REGISTERS * sizeof(uint64_t); // ARs
@@ -2870,7 +3376,12 @@ void IA64ISAPlugin::reset() {
     hasCachedInstruction_ = false;
     recentInstructions_.clear();
     recentTrackedRegisterWrites_.clear();
+    lastTrackedRegisterWrites_.clear();
     recentInstructionSequenceRepeatCount_ = 0;
+    pluginStepOrdinal_ = 0;
+    handoffInstructionTraceTarget_ = 0;
+    handoffInstructionTraceRemaining_ = 0;
+    handoffInstructionTraceActive_ = false;
     placementStepCount_ = 0;
     placementFileBackedBytes_ = 0;
     placementEvents_.clear();
@@ -3402,8 +3913,26 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         ModuloLoopResult moduloLoopResult{};
         uint64_t branchTarget = 0;
         const uint64_t gpBeforeBranch = state_.getCPUState().GetGR(1);
+        const bool gpNatBeforeBranch = state_.getCPUState().GetGRNaT(1);
         const uint64_t r8BeforeBranch = state_.getCPUState().GetGR(8);
         const uint64_t r38BeforeBranch = state_.getCPUState().GetGR(38);
+        const bool traceHandoffBranchRegisters =
+            configuredBranchTraceTarget() != 0 &&
+            (cachedInstruction_.GetType() == InstructionType::BR_CALL ||
+             cachedInstruction_.GetType() == InstructionType::BR_RET);
+        constexpr std::array<uint8_t, 6> branchHandoffRegisters = {
+            12, 13, 28, 29, 30, 31
+        };
+        std::array<uint64_t, branchHandoffRegisters.size()> branchHandoffValuesBefore{};
+        std::array<bool, branchHandoffRegisters.size()> branchHandoffNatBefore{};
+        if (traceHandoffBranchRegisters) {
+            for (size_t i = 0; i < branchHandoffRegisters.size(); ++i) {
+                branchHandoffValuesBefore[i] =
+                    state_.getCPUState().GetGR(branchHandoffRegisters[i]);
+                branchHandoffNatBefore[i] =
+                    state_.getCPUState().GetGRNaT(branchHandoffRegisters[i]);
+            }
+        }
         std::array<uint64_t, 8> branchRegistersBefore{};
         for (size_t i = 0; i < branchRegistersBefore.size(); ++i) {
             branchRegistersBefore[i] = state_.getCPUState().GetBR(i);
@@ -3411,6 +3940,12 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
         std::array<uint64_t, 8> callArgumentRegistersBefore{};
         for (size_t i = 0; i < callArgumentRegistersBefore.size(); ++i) {
             callArgumentRegistersBefore[i] = state_.getCPUState().GetGR(32 + i);
+        }
+        std::array<bool, 8> callArgumentNatBefore{};
+        if (traceHandoffBranchRegisters) {
+            for (size_t i = 0; i < callArgumentNatBefore.size(); ++i) {
+                callArgumentNatBefore[i] = state_.getCPUState().GetGRNaT(32 + i);
+            }
         }
         const uint8_t predicate = cachedInstruction_.GetPredicate();
         const bool snapshotPredicateTrue = (predicate == 0) || state_.predicateGroupSnapshot_[predicate];
@@ -3695,7 +4230,7 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             descriptorCallCount_ <= 24 ||
                             !descriptorReadable ||
                             (descriptorCallCount_ % 128 == 0);
-                        if (verboseIndirectCall) {
+                        if (verboseIndirectCall && !shouldSuppressVerboseTrace()) {
                             std::cout << "[IA64-DESC] indirect br.call callerIP=0x" << std::hex << currentIP
                                       << " srcBR=b" << std::dec << static_cast<int>(cachedInstruction_.GetSrc1())
                                       << " srcValue=0x" << std::hex << branchRegisterValue
@@ -3786,6 +4321,15 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                              << cpuSummary(state_.getCPUState());
                         BootStageTrace::Event("IA64_EA00_CALL", ea00.str());
                     }
+                    const bool genericBootServiceStub =
+                        (branchTarget == EFI_SUCCESS_STUB_CODE_ADDR ||
+                         branchTarget == EFI_UNSUPPORTED_STUB_CODE_ADDR ||
+                         isZeroFilledEfiHandoffBundle(memory, branchTarget)) &&
+                        isEfiBootServicesFieldAddress(lastEfiDescriptorFieldAddress_);
+                    const bool rejectedPostExitBootServiceCall =
+                        !areEfiBootServicesAvailable(efiExitBootServicesCalls_ != 0) &&
+                        (isBootServiceOrBootProtocolStubCode(branchTarget) ||
+                         genericBootServiceStub);
                     if (!cachedInstruction_.HasBranchTarget() &&
                         normalizeBranchEntryIP(branchTarget) == EFI_SAL_PROCEDURE_CODE_ADDR) {
                         handledFirmwareCallStub = true;
@@ -3827,8 +4371,25 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                                  << " v1=" << BootStageTrace::Hex(v1)
                                  << " v2=" << BootStageTrace::Hex(v2);
                         BootStageTrace::Event("IA64_SAL_CALL", salTrace.str());
+                    } else if (rejectedPostExitBootServiceCall) {
+                        handledFirmwareCallStub = true;
+                        const uint64_t descriptor = lastDescriptorAddress_ != 0
+                            ? lastDescriptorAddress_
+                            : efiDescriptorForCodePointer(branchTarget);
+                        branchTarget = currentIP + 16;
+                        state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
+                        state_.getCPUState().SetGR(8, EFI_STATUS_UNSUPPORTED);
+                        std::cout << "[EFI-LIFECYCLE] rejected Boot Service after successful ExitBootServices"
+                                  << " ip=" << BootStageTrace::Hex(currentIP)
+                                  << " code=" << BootStageTrace::Hex(originalBranchTarget)
+                                  << " descriptor=" << BootStageTrace::Hex(descriptor)
+                                  << " lastField=" << BootStageTrace::Hex(lastEfiDescriptorFieldAddress_)
+                                  << " status=EFI_UNSUPPORTED" << std::endl;
+                        logEfiServiceCall(memory, "EFI.PostExitBootServices", currentIP,
+                                          descriptor, originalBranchTarget,
+                                          EFI_STATUS_UNSUPPORTED);
                     } else if (!cachedInstruction_.HasBranchTarget() &&
-                               branchTarget == EFI_INPUT_RESET_STUB_CODE_ADDR) {
+                                   branchTarget == EFI_INPUT_RESET_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         resetEfiConsoleInput();
                         branchTarget = currentIP + 16;
@@ -4441,17 +5002,47 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         branchTarget == EFI_EXIT_BOOT_SERVICES_STUB_CODE_ADDR) {
                         handledFirmwareCallStub = true;
-                        ++efiExitBootServicesCalls_;
+                        const uint64_t imageHandle =
+                            readCallerOutputRegister(state_.getCPUState(), 0);
+                        const uint64_t suppliedMapKey =
+                            readCallerOutputRegister(state_.getCPUState(), 1);
+                        const bool memoryMapAvailable =
+                            efiMemoryMapInitialized_ && !efiMemoryMap_.empty() &&
+                            efiGetMemoryMapCalls_ != 0;
+                        const bool requestAccepted =
+                            isEfiExitBootServicesRequestValid(
+                                imageHandle, EFI_IMAGE_HANDLE, suppliedMapKey,
+                                efiMemoryMapKey_, memoryMapAvailable,
+                                efiExitBootServicesCalls_ != 0);
+                        uint32_t systemTableCrc32 = 0;
+                        const bool systemTableTransitioned = requestAccepted &&
+                            transitionEfiSystemTableForExit(memory, systemTableCrc32);
+                        const bool accepted = requestAccepted && systemTableTransitioned;
+                        const uint64_t status = accepted
+                            ? EFI_STATUS_SUCCESS
+                            : requestAccepted
+                                ? EFI_STATUS_DEVICE_ERROR
+                                : EFI_STATUS_INVALID_PARAMETER;
+                        if (accepted) {
+                            ++efiExitBootServicesCalls_;
+                        }
                         branchTarget = currentIP + 16;
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
-                        state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
-                        std::cout << "[EFI-MILESTONE] ExitBootServices called image=0x"
-                                  << std::hex << readCallerOutputRegister(state_.getCPUState(), 0)
-                                  << " key=0x" << readCallerOutputRegister(state_.getCPUState(), 1)
-                                  << std::dec << std::endl;
+                        state_.getCPUState().SetGR(8, status);
+                        std::cout << "[EFI-MILESTONE] ExitBootServices image=0x"
+                                  << std::hex << imageHandle
+                                  << " suppliedKey=0x" << suppliedMapKey
+                                  << " currentKey=0x" << efiMemoryMapKey_
+                                  << " mapAvailable=" << std::boolalpha << memoryMapAvailable
+                                  << " requestValid=" << requestAccepted
+                                  << " systemTableTransitioned=" << systemTableTransitioned
+                                  << " systemTableCrc32=0x" << systemTableCrc32
+                                  << " accepted=" << accepted
+                                  << " status=" << efiStatusName(status)
+                                  << std::dec << std::noboolalpha << std::endl;
                         logEfiServiceCall(memory, "BootServices.ExitBootServices", currentIP,
                                           EFI_EXIT_BOOT_SERVICES_STUB_DESC_ADDR, originalBranchTarget,
-                                          EFI_STATUS_SUCCESS);
+                                          status);
                     } else if (!cachedInstruction_.HasBranchTarget() &&
                         (branchTarget == EFI_LOAD_IMAGE_STUB_CODE_ADDR ||
                          branchTarget == EFI_START_IMAGE_STUB_CODE_ADDR)) {
@@ -4480,27 +5071,37 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         state_.getCPUState().SetBR(cachedInstruction_.GetDst(), branchTarget);
                         state_.getCPUState().SetGR(8, EFI_STATUS_SUCCESS);
                         ++efiTextOutputCalls_;
-                        std::cout << "[EFI-STUB] SimpleTextOut.OutputString this=0x"
-                                  << std::hex << thisProtocol
-                                  << " string=0x" << stringAddress;
+                        const bool emitVerboseTextOutputTrace =
+                            !shouldSuppressVerboseTrace();
+                        if (emitVerboseTextOutputTrace) {
+                            std::cout << "[EFI-STUB] SimpleTextOut.OutputString this=0x"
+                                      << std::hex << thisProtocol
+                                      << " string=0x" << stringAddress;
+                        }
                         const std::string preview = readUtf16Preview(memory, stringAddress);
-                        if (!preview.empty()) {
+                        if (emitVerboseTextOutputTrace && !preview.empty()) {
                             std::cout << " \"" << preview << "\"";
                         }
-                        std::cout << " utf16="
-                                  << readUtf16CodeUnitPreview(memory, stringAddress, 16);
+                        if (emitVerboseTextOutputTrace) {
+                            std::cout << " utf16="
+                                      << readUtf16CodeUnitPreview(memory, stringAddress, 16);
+                        }
                         uint64_t consoleAddress = 0;
                         if (mirrorTextToVmConsole(memory, preview, consoleAddress)) {
                             ++efiTextOutputMirrored_;
-                            std::cout << " mirroredToConsole=0x" << consoleAddress;
-                        } else {
+                            if (emitVerboseTextOutputTrace) {
+                                std::cout << " mirroredToConsole=0x" << consoleAddress;
+                            }
+                        } else if (emitVerboseTextOutputTrace) {
                             std::cout << " consoleMirror=unavailable";
                         }
                         uint64_t framebufferAddress = 0;
                         if (mirrorTextToFramebuffer(memory, preview, efiTextOutputCalls_, framebufferAddress)) {
                             ++efiTextOutputFramebuffer_;
-                            std::cout << " mirroredToFramebuffer=0x" << framebufferAddress;
-                        } else {
+                            if (emitVerboseTextOutputTrace) {
+                                std::cout << " mirroredToFramebuffer=0x" << framebufferAddress;
+                            }
+                        } else if (emitVerboseTextOutputTrace) {
                             std::cout << " framebufferMirror=unavailable";
                         }
                         {
@@ -4515,7 +5116,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                             BootStageTrace::Stage(140, "First console/GOP/serial output observed", ctx.str());
                             BootStageTrace::Event("VISIBLE_OUTPUT", ctx.str());
                         }
-                        std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
+                        if (emitVerboseTextOutputTrace) {
+                            std::cout << " -> EFI_SUCCESS" << std::dec << std::endl;
+                        }
                         logEfiServiceCall(memory, "SimpleTextOut.OutputString", currentIP,
                                           EFI_TEXT_OUTPUT_STRING_STUB_DESC_ADDR, originalBranchTarget,
                                           EFI_STATUS_SUCCESS);
@@ -5116,6 +5719,29 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 hasCachedInstruction_ = false;
                 return ISAExecutionResult::HALT;
             }
+            if (traceHandoffBranchRegisters) {
+                const auto recordBranchChange = [&](size_t reg,
+                                                    uint64_t valueBefore,
+                                                    bool natBefore) {
+                    const uint64_t valueAfter = state_.getCPUState().GetGR(reg);
+                    const bool natAfter = state_.getCPUState().GetGRNaT(reg);
+                    if (valueAfter != valueBefore || natAfter != natBefore) {
+                        recordTrackedRegisterWrite(reg, valueAfter, currentIP,
+                                                   state_.currentSlot_,
+                                                   cachedInstruction_.GetDisassembly());
+                    }
+                };
+                recordBranchChange(1, gpBeforeBranch, gpNatBeforeBranch);
+                for (size_t i = 0; i < callArgumentRegistersBefore.size(); ++i) {
+                    recordBranchChange(32 + i, callArgumentRegistersBefore[i],
+                                       callArgumentNatBefore[i]);
+                }
+                for (size_t i = 0; i < branchHandoffRegisters.size(); ++i) {
+                    recordBranchChange(branchHandoffRegisters[i],
+                                       branchHandoffValuesBefore[i],
+                                       branchHandoffNatBefore[i]);
+                }
+            }
             const uint64_t branchEntryIP = normalizeBranchEntryIP(branchTarget);
             if (branchEntryIP == 0x10) {
                 emitPalTrace("target-0x10", branchTarget, branchEntryIP);
@@ -5138,12 +5764,16 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 std::cout << "[IA64-A5D] branch " << trace.str() << std::endl;
                 BootStageTrace::Event("IA64_A5D_BRANCH", trace.str());
             }
+            bool traceKernelHandoff = false;
+            size_t traceKernelHandoffSourceSlot = 0;
             if (efiExitBootServicesCalls_ > 0 &&
                 branchEntryIP < memory.GetTotalSize() &&
                 (branchEntryIP < EFI_HANDOFF_REGION_BASE || branchEntryIP >= EFI_HANDOFF_REGION_END) &&
                 branchEntryIP >= 0x100000ULL) {
                 const bool traceEntry = configuredBranchTraceTarget() != 0 &&
                                         branchEntryIP == configuredBranchTraceTarget();
+                traceKernelHandoff = traceEntry;
+                traceKernelHandoffSourceSlot = state_.currentSlot_;
                 {
                     std::ostringstream ctx;
                     ctx << "callerIP=" << BootStageTrace::Hex(currentIP)
@@ -5160,28 +5790,63 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                 }
                 if (traceEntry) {
                     const CPUState& entryCPU = state_.getCPUState();
-                    const RSEState& entryRse = entryCPU.GetRSEState();
                     std::ostringstream handoff;
-                    handoff << "callerIP=" << BootStageTrace::Hex(currentIP)
+                    handoff << "phase=pre-branch"
+                            << " guestAR_ITC=" << BootStageTrace::Hex(entryCPU.GetAR(44))
+                            << " replayRelativePluginStep=" << pluginStepOrdinal_
+                            << " callerIP=" << BootStageTrace::Hex(currentIP)
+                            << " callerSlot=" << state_.currentSlot_
                             << " target=" << BootStageTrace::Hex(branchEntryIP)
                             << " rawTarget=" << BootStageTrace::Hex(branchTarget)
+                            << " branchRegister=b"
+                            << static_cast<unsigned>(cachedInstruction_.GetSrc1())
+                            << " branchRegisterValue=" << BootStageTrace::Hex(branchRegisterValue)
+                            << " raw41=" << BootStageTrace::Hex(cachedInstruction_.GetRawBits())
+                            << " bundleTemplate="
+                            << static_cast<unsigned>(static_cast<uint8_t>(state_.currentBundle_.templateType))
+                            << " bundleBytes=" << readHexBytesPreview(memory, currentIP, 16)
+                            << " disasm=\"" << cachedInstruction_.GetDisassembly() << '"'
+                            << " predicate=p" << static_cast<unsigned>(predicate)
+                            << " predicateTrue=" << (livePredicateTrue ? "yes" : "no")
                             << " kind=" << (cachedInstruction_.GetType() == InstructionType::BR_CALL
                                                  ? "br.call"
                                                  : (cachedInstruction_.GetType() == InstructionType::BR_RET
                                                         ? "br.ret"
                                                         : "branch"))
-                            << " " << cpuSummary(entryCPU)
-                            << " gr=[";
-                    for (size_t reg = 0; reg < 128; ++reg) {
-                        if (reg != 0) handoff << ',';
-                        handoff << "r" << reg << '=' << BootStageTrace::Hex(entryCPU.GetGR(reg));
-                    }
-                    handoff << "] pfs=" << BootStageTrace::Hex(entryRse.pfs)
-                            << " bsp=" << BootStageTrace::Hex(entryRse.bsp)
-                            << " bspstore=" << BootStageTrace::Hex(entryRse.bspstore)
-                            << " rsc=" << BootStageTrace::Hex(entryRse.rsc)
-                            << " rnat=" << BootStageTrace::Hex(entryRse.rnat);
+                            << " pendingInterrupt=" << (hasPendingInterrupt() ? "yes" : "no")
+                            << " inServiceInterrupt=" << (hasInServiceInterrupt() ? "yes" : "no")
+                            << " inServiceVector=0x"
+                            << std::hex << static_cast<unsigned>(getInServiceVector()) << std::dec;
+                    appendFullHandoffCpuSnapshot(handoff, entryCPU);
                     std::cout << "[IA64-HANDOFF] " << handoff.str() << std::endl;
+                    std::cout << "[IA64-HANDOFF-MEM] ";
+                    appendLinuxBootParamSnapshot(std::cout, memory, entryCPU);
+                    std::cout << std::endl;
+                    std::cout << "[IA64-HANDOFF] recentELILORegisterWrites=[";
+                    for (size_t index = 0; index < recentTrackedRegisterWrites_.size(); ++index) {
+                        const RecentRegisterWriteTrace& write = recentTrackedRegisterWrites_[index];
+                        if (index != 0) std::cout << ';';
+                        std::cout << "r" << write.reg << '=' << BootStageTrace::Hex(write.value)
+                                  << ":nat=" << (write.nat ? 1 : 0)
+                                  << "@" << BootStageTrace::Hex(write.ip)
+                                  << ':' << write.slot << "(\"" << write.disasm << "\")";
+                    }
+                    std::cout << "]" << std::endl;
+                    std::cout << "[IA64-HANDOFF] lastELILORegisterChanges={";
+                    bool firstWriter = true;
+                    for (const auto& [reg, write] : lastTrackedRegisterWrites_) {
+                        if (!firstWriter) std::cout << ';';
+                        firstWriter = false;
+                        std::cout << "r" << reg << '=' << BootStageTrace::Hex(write.value)
+                                  << ":nat=" << (write.nat ? 1 : 0)
+                                  << "@" << BootStageTrace::Hex(write.ip)
+                                  << ':' << write.slot << "(\"" << write.disasm << "\")";
+                    }
+                    std::cout << "}" << std::endl;
+                    handoffInstructionTraceTarget_ = branchEntryIP;
+                    handoffInstructionTraceRemaining_ = configuredBranchTraceInstructionCount();
+                    handoffInstructionTraceActive_ = handoffInstructionTraceRemaining_ != 0;
+                    writeHandoffKernelAllocation(memory);
                 }
                 if (!efiHandoffBoundaryPending_) {
                     efiHandoffBoundaryPending_ = true;
@@ -5252,6 +5917,21 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             state_.bundleValid_ = false;
             state_.currentSlot_ = 0;
             capturePredicateGroupSnapshot();
+            if (traceKernelHandoff) {
+                std::ostringstream committed;
+                committed << "phase=post-branch-commit"
+                          << " guestAR_ITC=" << BootStageTrace::Hex(state_.getCPUState().GetAR(44))
+                          << " replayRelativePluginStep=" << pluginStepOrdinal_
+                          << " sourceIP=" << BootStageTrace::Hex(currentIP)
+                          << " sourceSlot=" << traceKernelHandoffSourceSlot
+                          << " targetIP=" << BootStageTrace::Hex(state_.getCPUState().GetIP())
+                          << " targetSlot=" << state_.currentSlot_
+                          << " bundleValid=" << (state_.bundleValid_ ? "yes" : "no")
+                          << " pendingInterrupt=" << (hasPendingInterrupt() ? "yes" : "no")
+                          << " inServiceInterrupt=" << (hasInServiceInterrupt() ? "yes" : "no");
+                appendFullHandoffCpuSnapshot(committed, state_.getCPUState());
+                std::cout << "[IA64-HANDOFF] " << committed.str() << std::endl;
+            }
             hasCachedInstruction_ = false;
             return ISAExecutionResult::CONTINUE;
         }
@@ -5293,6 +5973,7 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
         hasCachedInstruction_ = false;
         return ISAExecutionResult::HALT;
     }
+    ++pluginStepOrdinal_;
 
     // Service interrupts first. An external interrupt may itself defer an
     // incomplete return fill until the handler returns through rfi.
@@ -5308,6 +5989,15 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
             enterTranslationFault(fault, true, true, targetIP, targetPsr);
             return ISAExecutionResult::CONTINUE;
         }
+    }
+
+    const bool traceKernelInstruction = handoffInstructionTraceActive_;
+    std::unique_ptr<CPUState> handoffInstructionBefore;
+    const uint64_t handoffInstructionStep = traceKernelInstruction
+        ? (configuredBranchTraceInstructionCount() - handoffInstructionTraceRemaining_ + 1ULL)
+        : 0ULL;
+    if (traceKernelInstruction) {
+        handoffInstructionBefore = std::make_unique<CPUState>(cpu);
     }
     
     // Decode and execute
@@ -5341,6 +6031,16 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
         }
     }
     if (!decodeResult.valid) {
+        if (traceKernelInstruction && handoffInstructionBefore) {
+            std::cout << "[IA64-LINUX-INSTRUCTION] ordinal=" << handoffInstructionStep
+                      << " retired=no decode=invalid result=EXCEPTION"
+                      << " replayRelativePluginStep=" << pluginStepOrdinal_
+                      << " guestAR_ITC=" << BootStageTrace::Hex(cpu.GetAR(44))
+                      << " ip=" << BootStageTrace::Hex(cpu.GetIP())
+                      << " slot=" << slotBeforeDecode
+                      << " reason=decode-failed" << std::endl;
+            handoffInstructionTraceActive_ = false;
+        }
         return ISAExecutionResult::EXCEPTION;
     }
     
@@ -5354,8 +6054,74 @@ ISAExecutionResult IA64ISAPlugin::step(IMemory& memory) {
         isBranchRegisterTargetInstruction(typeBeforeExecute)
             ? state_.getCPUState().GetBR(cachedInstruction_.GetSrc1())
             : 0;
+    const uint64_t handoffCycleBefore = traceKernelInstruction
+        ? state_.getCPUState().GetAR(44)
+        : 0ULL;
+    const uint8_t handoffPredicate = traceKernelInstruction
+        ? cachedInstruction_.GetPredicate()
+        : 0;
+    const std::string handoffBundleBytes = traceKernelInstruction
+        ? readHexBytesPreview(memory, ipAfterDecode, 16)
+        : std::string();
+    const unsigned handoffBundleTemplate = traceKernelInstruction
+        ? static_cast<unsigned>(static_cast<uint8_t>(state_.currentBundle_.templateType))
+        : 0U;
+    const uint64_t handoffRseWindowAddress = traceKernelInstruction &&
+        handoffInstructionBefore->GetBSPSTORE() >= 64
+            ? handoffInstructionBefore->GetBSPSTORE() - 64
+            : (traceKernelInstruction ? handoffInstructionBefore->GetBSPSTORE() : 0ULL);
+    const bool handoffRseWindowReadable = traceKernelInstruction &&
+        handoffRseWindowAddress <= memory.GetTotalSize() &&
+        128 <= memory.GetTotalSize() - handoffRseWindowAddress;
+    const std::string handoffRseWindowBefore = handoffRseWindowReadable
+        ? readHexBytesPreview(memory, handoffRseWindowAddress, 128)
+        : std::string("<outside-guest-memory>");
     const ISAExecutionResult result = execute(memory, decodeResult);
     const uint64_t ipAfterExecute = state_.getCPUState().GetIP();
+    if (traceKernelInstruction && handoffInstructionBefore) {
+        const bool retired = decodeResult.valid && result == ISAExecutionResult::CONTINUE;
+        std::ostringstream trace;
+        trace << "ordinal=" << handoffInstructionStep
+              << " handoffTargetIP=" << BootStageTrace::Hex(handoffInstructionTraceTarget_)
+              << " retired=" << (retired ? "yes" : "no")
+              << " result=" << static_cast<int>(result)
+              << " replayRelativePluginStep=" << pluginStepOrdinal_
+              << " guestAR_ITC_before=" << BootStageTrace::Hex(handoffCycleBefore)
+              << " guestAR_ITC_after=" << BootStageTrace::Hex(state_.getCPUState().GetAR(44))
+              << " ip=" << BootStageTrace::Hex(ipAfterDecode)
+              << " slot=" << slotBeforeExecute
+              << " ip_after=" << BootStageTrace::Hex(ipAfterExecute)
+              << " slot_after=" << state_.currentSlot_
+              << " bundleTemplate=" << handoffBundleTemplate
+              << " bundleBytes=" << handoffBundleBytes
+              << " raw41=" << BootStageTrace::Hex(rawBeforeExecute)
+              << " predicate=p" << static_cast<unsigned>(handoffPredicate)
+              << " predicateValue=" << (handoffInstructionBefore->GetPR(handoffPredicate) ? 1 : 0)
+              << " disasm=\"" << decodeResult.disassembly << '"'
+              << " psr_before=" << BootStageTrace::Hex(handoffInstructionBefore->GetPSR())
+              << " psr_after=" << BootStageTrace::Hex(state_.getCPUState().GetPSR())
+              << " cfm_before=" << BootStageTrace::Hex(handoffInstructionBefore->GetCFM())
+              << " cfm_after=" << BootStageTrace::Hex(state_.getCPUState().GetCFM())
+              << " r1_before=" << BootStageTrace::Hex(handoffInstructionBefore->GetGR(1))
+              << " r12_before=" << BootStageTrace::Hex(handoffInstructionBefore->GetGR(12))
+              << " r28_before=" << BootStageTrace::Hex(handoffInstructionBefore->GetGR(28));
+        appendCpuRegisterDeltas(trace, *handoffInstructionBefore, state_.getCPUState());
+        if (handoffRseWindowReadable) {
+            trace << " rseWindow={address:" << BootStageTrace::Hex(handoffRseWindowAddress)
+                  << ",before:" << handoffRseWindowBefore
+                  << ",after:" << readHexBytesPreview(memory, handoffRseWindowAddress, 128)
+                  << '}';
+        } else {
+            trace << " rseWindow=" << handoffRseWindowBefore;
+        }
+        std::cout << "[IA64-LINUX-INSTRUCTION] " << trace.str() << std::endl;
+        if (retired && handoffInstructionTraceRemaining_ > 0) {
+            --handoffInstructionTraceRemaining_;
+        }
+        if (!retired || handoffInstructionTraceRemaining_ == 0) {
+            handoffInstructionTraceActive_ = false;
+        }
+    }
     static uint64_t executeTraceGeneration = 0;
     static uint64_t executeTraceCount = 0;
     if (executeTraceGeneration != gPalDispatchCount) {
@@ -6794,13 +7560,20 @@ void IA64ISAPlugin::recordRecentInstruction(uint64_t ip, size_t slot, const std:
 }
 
 void IA64ISAPlugin::recordTrackedRegisterWrite(size_t reg, uint64_t value, uint64_t ip, size_t slot, const std::string& disasm) {
-    if (reg != 16 && reg != 17 && reg != 18 && reg != 19 &&
-        reg != 21 && reg != 22) {
+    if (reg != 1 && reg != 12 && reg != 13 && reg != 16 && reg != 17 && reg != 18 &&
+        reg != 19 && reg != 21 && reg != 22 && reg != 28 &&
+        reg != 29 && reg != 30 && reg != 31 && reg != 32 && reg != 33 &&
+        reg != 34 && reg != 35 && reg != 36 && reg != 37 && reg != 38 &&
+        reg != 39) {
         return;
     }
 
-    recentTrackedRegisterWrites_.push_back(RecentRegisterWriteTrace{reg, value, ip, slot, disasm});
-    if (recentTrackedRegisterWrites_.size() > 16) {
+    const bool nat = reg < NUM_GENERAL_REGISTERS &&
+                     state_.getCPUState().GetGRNaT(reg);
+    const RecentRegisterWriteTrace write{reg, value, nat, ip, slot, disasm};
+    recentTrackedRegisterWrites_.push_back(write);
+    lastTrackedRegisterWrites_[reg] = write;
+    if (recentTrackedRegisterWrites_.size() > 64) {
         recentTrackedRegisterWrites_.pop_front();
     }
 }
@@ -7390,7 +8163,7 @@ void IA64ISAPlugin::logEfiServiceCall(IMemory& memory,
             BootStageTrace::Stage(170, "ExitBootServices attempted", ctx.str());
         }
     }
-    if (quietConsoleInputCall) {
+    if (quietConsoleInputCall || shouldSuppressVerboseTrace()) {
         return;
     }
     std::cout << "[EFI-CALL] service=" << lastEfiCallName_
@@ -7427,6 +8200,9 @@ void IA64ISAPlugin::logEfiVoidServiceCall(IMemory& memory,
     std::string descriptor = describeEfiDescriptor(descriptorAddress);
     if (descriptor.empty()) {
         descriptor = describeEfiTableSlot(descriptorAddress);
+    }
+    if (shouldSuppressVerboseTrace()) {
+        return;
     }
     std::cout << "[EFI-CALL] service=" << lastEfiCallName_
               << " callerIP=0x" << std::hex << callerIP
@@ -8769,6 +9545,37 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         const uint64_t currentIP = cpu.GetIP();
         const bool instructionTrace = shouldEmitInstructionTrace();
         const bool bootPathTrace = shouldEmitBootPathTrace();
+        const bool handoffTraceTargetConfigured = configuredBranchTraceTarget() != 0;
+        constexpr std::array<uint8_t, 15> handoffRegisters = {
+            1, 12, 13, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39
+        };
+        const uint8_t destinationRegister = instr.GetDst();
+        const bool isHandoffRegister =
+            destinationRegister == 1 || destinationRegister == 12 ||
+            destinationRegister == 13 ||
+            (destinationRegister >= 28 && destinationRegister <= 39);
+        const uint64_t destinationValueBefore = isHandoffRegister
+            ? cpu.GetGR(destinationRegister) : 0;
+        const bool destinationNatBefore = isHandoffRegister
+            ? cpu.GetGRNaT(destinationRegister) : false;
+        const bool traceRegisterWindowChange = handoffTraceTargetConfigured &&
+            (instr.GetType() == InstructionType::ALLOC ||
+             instr.GetType() == InstructionType::COVER ||
+             instr.GetType() == InstructionType::FLUSHRS ||
+             instr.GetType() == InstructionType::LOADRS);
+        const bool traceRegisterBankChange = handoffTraceTargetConfigured &&
+            (instr.GetType() == InstructionType::RSM ||
+             instr.GetType() == InstructionType::SSM ||
+             instr.GetType() == InstructionType::MOV_TO_PSR ||
+             instr.GetType() == InstructionType::RFI);
+        std::array<uint64_t, handoffRegisters.size()> handoffValuesBefore{};
+        std::array<bool, handoffRegisters.size()> handoffNatBefore{};
+        if (traceRegisterWindowChange || traceRegisterBankChange) {
+            for (size_t index = 0; index < handoffRegisters.size(); ++index) {
+                handoffValuesBefore[index] = cpu.GetGR(handoffRegisters[index]);
+                handoffNatBefore[index] = cpu.GetGRNaT(handoffRegisters[index]);
+            }
+        }
         const uint64_t tpaInput = instr.GetType() == InstructionType::TPA
             ? cpu.GetGR(instr.GetSrc1()) : 0;
         const bool traceScanLoop =
@@ -8922,14 +9729,15 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
               loadAddress < EFI_BOOT_SERVICES_ADDR + 0x180ULL))) {
             lastEfiDescriptorFieldAddress_ = loadAddress;
         }
+        const bool emitLegacyEfiAccessTrace = !shouldSuppressVerboseTrace();
         const bool traceBootLocalLoad =
-            loadSize != 0 &&
+            emitLegacyEfiAccessTrace && loadSize != 0 &&
             rangesOverlap(loadAddress, loadSize, 0x5E000ULL, 0x80ULL);
         const bool traceBootLocalStore =
-            storeSize != 0 &&
+            emitLegacyEfiAccessTrace && storeSize != 0 &&
             rangesOverlap(storeAddress, storeSize, 0x5E000ULL, 0x80ULL);
         const bool traceEfiHandoffLoad =
-            loadSize != 0 &&
+            emitLegacyEfiAccessTrace && loadSize != 0 &&
             (rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
@@ -8941,7 +9749,7 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
              rangesOverlap(loadAddress, loadSize, EFI_RSDT_ADDR, 40ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_MADT_ADDR, 60ULL));
         const bool traceEfiHandoffStore =
-            storeSize != 0 &&
+            emitLegacyEfiAccessTrace && storeSize != 0 &&
             (rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_FILE_PATH_ADDR, 0x40ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_ADDR, 0x10ULL) ||
@@ -8997,9 +9805,10 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
             storeSize != 0 &&
             rangesOverlap(storeAddress, storeSize, 0x1FDB0CC0ULL, 0x10ULL);
         const bool traceDiagAnyAccess =
-            traceDiagOutRead || traceDiagSimpleFsRead || traceDiagSimpleFsOpenVolumeRead ||
-            traceDiagOpenVolumeTargetRead || traceDiagOutStore || traceDiagSimpleFsStore ||
-            traceDiagSimpleFsOpenVolumeStore || traceDiagOpenVolumeTargetStore;
+            emitLegacyEfiAccessTrace &&
+            (traceDiagOutRead || traceDiagSimpleFsRead || traceDiagSimpleFsOpenVolumeRead ||
+             traceDiagOpenVolumeTargetRead || traceDiagOutStore || traceDiagSimpleFsStore ||
+             traceDiagSimpleFsOpenVolumeStore || traceDiagOpenVolumeTargetStore);
         if (traceDiagAnyAccess) {
             std::cout << "[EFI-BOOT-WATCH] phase=pre"
                       << " ip=0x" << std::hex << cpu.GetIP()
@@ -9255,14 +10064,40 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
         } else if (traceScanLoop) {
             ++scanLoopTraceCount;
         }
-        const uint8_t destinationRegister = instr.GetDst();
+        if (handoffTraceTargetConfigured) {
+            if (traceRegisterWindowChange || traceRegisterBankChange) {
+                for (size_t index = 0; index < handoffRegisters.size(); ++index) {
+                    const size_t reg = handoffRegisters[index];
+                    const uint64_t valueAfter = cpu.GetGR(reg);
+                    const bool natAfter = cpu.GetGRNaT(reg);
+                    if (valueAfter != handoffValuesBefore[index] ||
+                        natAfter != handoffNatBefore[index]) {
+                        recordTrackedRegisterWrite(reg, valueAfter, currentIP,
+                                                   state_.currentSlot_,
+                                                   instr.GetDisassembly());
+                    }
+                }
+            } else if (isHandoffRegister) {
+                const uint64_t destinationValueAfter = cpu.GetGR(destinationRegister);
+                const bool destinationNatAfter = cpu.GetGRNaT(destinationRegister);
+                if (destinationValueAfter != destinationValueBefore ||
+                    destinationNatAfter != destinationNatBefore) {
+                    recordTrackedRegisterWrite(destinationRegister,
+                                               destinationValueAfter, currentIP,
+                                               state_.currentSlot_,
+                                               instr.GetDisassembly());
+                }
+            }
+        }
         const bool isTranslationWalkRegister =
             destinationRegister == 16 || destinationRegister == 17 ||
             destinationRegister == 18 || destinationRegister == 19 ||
             destinationRegister == 21 || destinationRegister == 22;
         if ((instructionTrace || bootPathTrace) && isTranslationWalkRegister) {
-            recordTrackedRegisterWrite(instr.GetDst(), state_.getCPUState().GetGR(instr.GetDst()),
-                                       cpu.GetIP(), state_.currentSlot_, instr.GetDisassembly());
+            recordTrackedRegisterWrite(destinationRegister,
+                                       state_.getCPUState().GetGR(destinationRegister),
+                                       currentIP, state_.currentSlot_,
+                                       instr.GetDisassembly());
         }
         if (watchPostSimpleFsOutStore) {
             std::cout << "[EFI-OUT-WATCH] post store ip=0x" << std::hex << cpu.GetIP()

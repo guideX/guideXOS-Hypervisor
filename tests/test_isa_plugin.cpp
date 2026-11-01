@@ -1589,6 +1589,7 @@ void testISAStateSerialization() {
     state1.getCPUState().SetGRPhysical(16, 0x1616ULL);
     state1.getCPUState().SetGRPhysical(NUM_GENERAL_REGISTERS, 0xB016ULL);
     state1.getCPUState().SetGRNaTPhysical(NUM_GENERAL_REGISTERS, true);
+    state1.getCPUState().SetGRNaTPhysical(NUM_PHYSICAL_GENERAL_REGISTERS - 1, true);
     state1.getCPUState().SetPSR(IA64_PSR_BN_MASK);
     state1.getCPUState().SetIP(0x1000);
     state1.getCPUState().SetCFM(0x42);
@@ -1605,7 +1606,9 @@ void testISAStateSerialization() {
     assert(state2.getCPUState().GetGR(1) == 0x1234567890ABCDEF);
     assert(state2.getCPUState().GetGRPhysical(16) == 0x1616ULL);
     assert(state2.getCPUState().GetGRPhysical(NUM_GENERAL_REGISTERS) == 0xB016ULL);
+    assert(!state2.getCPUState().GetGRNaTPhysical(16));
     assert(state2.getCPUState().GetGRNaTPhysical(NUM_GENERAL_REGISTERS));
+    assert(state2.getCPUState().GetGRNaTPhysical(NUM_PHYSICAL_GENERAL_REGISTERS - 1));
     assert(state2.getCPUState().GetGR(16) == 0xB016ULL);
     assert(state2.getCPUState().GetIP() == 0x1000);
     assert(state2.getCPUState().GetCFM() == 0x42);

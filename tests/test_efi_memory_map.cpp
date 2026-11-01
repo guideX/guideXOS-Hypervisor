@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "IA64EfiHandoffLayout.h"
+#include "IA64EfiBootLifecycle.h"
 
 namespace {
 
@@ -88,6 +89,14 @@ void putLe(uint8_t* bytes, size_t offset, uint64_t value, size_t width) {
     for (size_t i = 0; i < width; ++i) {
         bytes[offset + i] = static_cast<uint8_t>(value >> (i * 8));
     }
+}
+
+uint64_t getLe(const uint8_t* bytes, size_t offset, size_t width) {
+    uint64_t value = 0;
+    for (size_t index = 0; index < width; ++index) {
+        value |= static_cast<uint64_t>(bytes[offset + index]) << (index * 8);
+    }
+    return value;
 }
 
 void require(bool condition, const char* message) {
@@ -193,6 +202,86 @@ void testTextOutputQueryModeLayout() {
             "QueryMode stub must remain inside the EFI handoff region");
 }
 
+void testExitBootServicesLifecycleValidation() {
+    constexpr uint64_t imageHandle = 1;
+    constexpr uint64_t liveMapKey = 0x80CF;
+    require(ia64::isEfiExitBootServicesRequestValid(
+                imageHandle, imageHandle, liveMapKey, liveMapKey, true, false),
+            "ExitBootServices must accept the current image handle and map key");
+    require(!ia64::isEfiExitBootServicesRequestValid(
+                imageHandle + 1, imageHandle, liveMapKey, liveMapKey, true, false),
+            "ExitBootServices must reject a different image handle");
+    require(!ia64::isEfiExitBootServicesRequestValid(
+                imageHandle, imageHandle, liveMapKey - 1, liveMapKey, true, false),
+            "ExitBootServices must reject a stale map key");
+    require(!ia64::isEfiExitBootServicesRequestValid(
+                imageHandle, imageHandle, liveMapKey, liveMapKey, false, false),
+            "ExitBootServices must reject a request before a memory map exists");
+    require(!ia64::isEfiExitBootServicesRequestValid(
+                imageHandle, imageHandle, liveMapKey, liveMapKey, true, true),
+            "ExitBootServices must reject a second request after success");
+    require(ia64::areEfiBootServicesAvailable(false),
+            "Boot Services must be available before successful exit");
+    require(!ia64::areEfiBootServicesAvailable(true),
+            "Boot Services must be unavailable after successful exit");
+}
+
+void testSystemTableExitTransitionAndCrc() {
+    constexpr std::array<uint8_t, 9> crcVector = {
+        '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    require(ia64::calculateEfiCrc32(std::span<const uint8_t>(crcVector)) ==
+                0xCBF43926U,
+            "EFI CRC32 must match the standard IEEE CRC-32 test vector");
+
+    std::array<uint8_t, ia64::kEfiSystemTableMinimumSize> systemTable{};
+    putLe(systemTable.data(), 0, 0x5453595320494249ULL, 8);
+    putLe(systemTable.data(), 8, 0x00010010, 4);
+    putLe(systemTable.data(), ia64::kEfiSystemTableHeaderSizeOffset,
+          systemTable.size(), 4);
+    putLe(systemTable.data(), 40, 0x41, 8); // ConsoleInHandle
+    putLe(systemTable.data(), 48, 0x1FDB1A80, 8); // ConIn
+    putLe(systemTable.data(), 56, 0x1, 8); // ConsoleOutHandle
+    putLe(systemTable.data(), 64, 0x1FDB1200, 8); // ConOut
+    putLe(systemTable.data(), 72, 0x1, 8); // StandardErrorHandle
+    putLe(systemTable.data(), 80, 0x1FDB1200, 8); // StdErr
+    putLe(systemTable.data(), 88, 0x1FDB0400, 8); // RuntimeServices
+    putLe(systemTable.data(), 96, 0x1FDB0800, 8); // BootServicesTable
+    putLe(systemTable.data(), 104, 2, 8);
+    putLe(systemTable.data(), 112, 0x1FDB2000, 8); // ConfigurationTable
+    require(ia64::updateEfiSystemTableCrc(std::span<uint8_t>(systemTable)),
+            "initial EFI system-table CRC must be computable");
+
+    auto invalidShortTable = systemTable;
+    require(!ia64::prepareEfiSystemTableForExit(
+                std::span<uint8_t>(invalidShortTable.data(), 119)),
+            "ExitBootServices must reject a truncated EFI system table");
+    auto invalidHeaderTable = systemTable;
+    putLe(invalidHeaderTable.data(), ia64::kEfiSystemTableHeaderSizeOffset,
+          119, 4);
+    require(!ia64::prepareEfiSystemTableForExit(
+                std::span<uint8_t>(invalidHeaderTable)),
+            "ExitBootServices must reject an incomplete system-table header");
+
+    require(ia64::prepareEfiSystemTableForExit(std::span<uint8_t>(systemTable)),
+            "successful ExitBootServices must prepare the system table");
+    for (size_t offset : {size_t{40}, size_t{48}, size_t{56}, size_t{64},
+                          size_t{72}, size_t{80}, size_t{96}}) {
+        require(getLe(systemTable.data(), offset, 8) == 0,
+                "console handles and BootServicesTable must be NULL after exit");
+    }
+    require(getLe(systemTable.data(), 88, 8) == 0x1FDB0400,
+            "RuntimeServices must remain available after exit");
+    require(getLe(systemTable.data(), 112, 8) == 0x1FDB2000,
+            "the configuration-table pointer must be preserved after exit");
+
+    const uint32_t expectedCrc = static_cast<uint32_t>(
+        getLe(systemTable.data(), ia64::kEfiSystemTableCrc32Offset, 4));
+    auto checksumInput = systemTable;
+    putLe(checksumInput.data(), ia64::kEfiSystemTableCrc32Offset, 0, 4);
+    require(ia64::calculateEfiCrc32(checksumInput) == expectedCrc,
+            "post-exit system-table CRC must cover the updated table bytes");
+}
+
 } // namespace
 
 int main() {
@@ -200,6 +289,8 @@ int main() {
         testHistoricalDescriptorAbiAndStride();
         testGenericEliloSearchAndMapInvariants();
         testTextOutputQueryModeLayout();
+        testExitBootServicesLifecycleValidation();
+        testSystemTableExitTransitionAndCrc();
         std::cout << "EFI memory-map tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

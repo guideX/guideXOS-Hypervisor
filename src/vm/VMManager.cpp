@@ -6,6 +6,7 @@
 #include "PEParser.h"
 #include "TestKernelHandler.h"
 #include "IA64EfiHandoffLayout.h"
+#include "IA64EfiBootLifecycle.h"
 #include "IA64SalFirmware.h"
 #include "IA64AcpiFirmware.h"
 #include "memory.h"
@@ -2284,6 +2285,16 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     write64(EFI_STUB_ADDR + 0x60, EFI_BOOT_SERVICES_ADDR);
             write64(EFI_STUB_ADDR + 0x68, 2ULL); // NumberOfTableEntries
             write64(EFI_STUB_ADDR + 0x70, layout.configurationTableAddr);
+
+            std::array<uint8_t, ia64::kEfiSystemTableMinimumSize> systemTableBytes{};
+            instance->vm->getMemory().Read(
+                EFI_STUB_ADDR, systemTableBytes.data(), systemTableBytes.size());
+            if (ia64::updateEfiSystemTableCrc(std::span<uint8_t>(systemTableBytes))) {
+                instance->vm->getMemory().Write(
+                    EFI_STUB_ADDR, systemTableBytes.data(), systemTableBytes.size());
+            } else {
+                LOG_ERROR("Unable to compute EFI system-table CRC32");
+            }
 
             WriteIa64SalFirmware(instance->vm->getMemory(), layout);
 
