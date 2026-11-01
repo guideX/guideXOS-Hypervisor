@@ -89,7 +89,7 @@ The test verifies the `GXPPC64V` v6 header and restores the fixture through the 
 
 The QEMU references resolved at the pinned commit `af1179b40643a61ac8016caaba0fb26d40124fd8`: [`entry.S`, forwarding instructions](https://github.com/qemu/qemu/blob/af1179b40643a61ac8016caaba0fb26d40124fd8/pc-bios/vof/entry.S#L333-L346) and [`spapr_hcall.c`, `h_rtas` dispatch](https://github.com/qemu/qemu/blob/af1179b40643a61ac8016caaba0fb26d40124fd8/hw/ppc/spapr_hcall.c#L3209). The Linux reference at pinned commit `cbbddb6b08cc9900a87cccaa9a22bbe06aa4f50a` returned HTTP 404 for the requested `arch/powerpc/kernel/rtas_entry.S` path, so no substitute Linux revision is claimed. No PPC cross-assembler was available. No QEMU guest run was performed: the authorized QAC lane was not established for this task, and no guest was launched. Status: **`REFERENCE_GUEST_PENDING`**. This documentation does not claim QEMU runtime equivalence.
 
-## 10. Acceptance programs A–N
+## 10. Acceptance programs A–N (R1 baseline)
 
 | Program | Result | Evidence or open item |
 | --- | --- | --- |
@@ -112,7 +112,7 @@ Because D, G, H, I, and J remain partial, the complete A–N gate is not satisfi
 
 ## 11. Tests and regressions
 
-The `PPC64Phase19Tests` executable is registered with CTest and uses production `VirtualMachine::step()` for guest instruction execution. Phase 19R1 adds guest write-denial, fault-register, atomicity, typed/raw access, fetch/read, direct-H_RTAS compatibility, and v9 checkpoint-protection checks. Final PPC64/CTest/IA-64 results are recorded in the R1 closeout section below.
+The `PPC64Phase19Tests` executable is registered with CTest and uses production `VirtualMachine::step()` for guest instruction execution. Phase 19R1 added guest write-denial, fault-register, atomicity, typed/raw access, fetch/read, direct-H_RTAS compatibility, and v9 checkpoint-protection checks. Phase 19R2 adds the level-XICS and non-root-LPID guest cases recorded in the closeout below.
 
 All PPC64 phase suites 1–18 pass in the current run. Their observed counts are: phases 1–14, 6,238; phase 15, 241; phase 16, 1,522; phase 17, 335; phase 18, 310; total **8,646**. The request's historical table says phase 15 has 238 and the total is 8,643; this checkout's Phase 15 executable reports 241, a three-check discrepancy. No assertions were removed to force the older total. The original pre-R1 Phase 19 baseline had 175 passing assertions; the R1-expanded count is in the closeout below.
 
@@ -122,7 +122,7 @@ Known historical issue categories remain separately accounted: IA-64 NaT seriali
 
 This work provides guest-side forwarding and a discoverable hosted entry with a VM-local protected backing page, plus a real historical checkpoint fixture. It does not provide a full Linux RTAS save/restore wrapper, SLOF/Open Firmware client services, firmware boot, Linux boot, a general RTAS service catalog, SMP, or QEMU runtime qualification. In particular, a valid `linux,rtas-entry` property alone is not proof of Linux boot readiness.
 
-Recommended **PPC64-19R2**: complete the remaining A–N malformed-pointer, privilege, execution-mode, LPID, level-triggered XICS, direct-`H_RTAS`, and checkpoint-boundary matrix through genuine guest execution; then request an authorized QAC slot for a bounded QEMU reference payload. Only after these gates pass should the phase marker advance.
+Recommended **PPC64-19R3**: close the specific execution-mode and architectural fault matrix, and add exactly-once checkpoint continuation at the pre-entry, in-trampoline, post-hypercall, pending-XICS, and non-root-LPID boundaries. Only after those gates pass should the phase marker advance.
 
 ## 13. PPC64-19R1 closeout — Outcome B
 
@@ -163,3 +163,114 @@ Recommended **PPC64-19R2**: complete the remaining A–N malformed-pointer, priv
 - Ending implementation HEAD: `8cadef501fa7cf622a1c019df0649b9033d27e7a` (`PPC64-19R1 protect RTAS trampoline`), containing the validated source, tests, and closeout report. This SHA is recorded by a documentation-only follow-up commit; the task's final HEAD is reported in the task response. No push was performed.
 
 Recommended **PPC64-19R2** scope: complete level-triggered XICS through the trampoline, non-root LPID ownership, the requested execution-mode and malformed-parameter matrix, and safe checkpoints before entry, within the trampoline, and after dispatch; then request an authorized bounded QEMU reference run.
+
+## 14. PPC64-19R2 closeout — Outcome B
+
+### Repository state and changes
+
+- Starting HEAD was `d0f354547fb553002d2e697ee62d6dfcff3116c8` on branch `PPC64`. Preflight found the local branch ahead 2 and behind 0 of `origin/PPC64`, with only the pre-existing untracked `build/` directory. No tracked changes existed before this task.
+- R2 changes are limited to `tests/test_ppc64_phase19.cpp` and this closeout document. Production RTAS, XICS, memory-protection, partition, FDT, and checkpoint code was not changed.
+- The test harness creates aligned identity-mapped partition contexts for LPIDs 7 and 8 and adds dedicated level-XICS and non-root-LPID ownership scenarios. All guest service calls under test execute through production `VirtualMachine::step()` and the installed trampoline.
+- The existing 20-byte trampoline and 4 KiB protected page passed the unchanged R1 protection, fetch, DSI, atomic-store, reset, FDT, and restore checks. R2 did not weaken the protection path.
+
+### Level-sensitive XICS
+
+- A configured LEVEL source was set and read through guest `ibm,set-xive` and `ibm,get-xive`; the guest disabled it with `ibm,int-off`, asserted it while masked, and confirmed the pending level remained latched without presentation.
+- After `ibm,int-on`, CPPR 0x20 masked priority 0x30; raising CPPR to 0x40 made it eligible. Enabling EE caused production exception delivery to vector 0x500, with SRR0 holding the actual guest continuation.
+- The guest handler acknowledged with `H_XIRR` and observed the encoded priority/source. `H_EOI` while the device level remained asserted caused a second presentation. After deassertion, the guest acknowledged/EOIed and returned through `rfid`; the following instruction executed and no spurious vector followed.
+- Additional guest cases covered repeated disable/enable, saved priority restoration, a level removed before re-enable, priority changes while pending under two CPPR thresholds, and invalid source/server RTAS errors with unchanged source state. This qualifies the requested hosted LEVEL-source behavior and continuation path.
+
+### LPID ownership and isolation matrix
+
+| Case | Result | Observed boundary |
+| --- | --- | --- |
+| Existing root partition | Pass | Existing root-profile guest trampoline/service path remains covered. |
+| Same VM, LPID A = 7 | Pass | A configures its owned LEVEL source through the trampoline; its pending state and saved priority remain present when B becomes active. |
+| Same VM, LPID B = 8 | Pass for allowed call | B configures its own source through the trampoline. |
+| Cross-owner source | Rejected safely | B's attempt to reconfigure A's source returns outer `H_SUCCESS` and inner `RTAS_OUT_PARAM_ERROR`; A's configuration and pending assertion remain unchanged. |
+| A-private parameter page used by B | Rejected safely | B receives `H_PARAMETER`; the response sentinel and A's source state are unchanged. |
+| A → B → A activation | Pass for current CPU model | NIP, MSR, LR, GPR14, CR, and XER persist across partition-context activation; source ownership/configuration remains LPID-specific and A's pending source is not presented to B. |
+| Two separate VMs | Pass, existing regression | Identical guest-visible source/address use retains independent RAM, XICS, and trampoline protection state. |
+
+The ownership matrix is: one VM identity; active CPU partition A→B→A on one CPU; identity radix mappings in both contexts; guest-real address 0x100000 registered as A-private backing; one VM-installed protected trampoline page used by calls from both active contexts; ordinary parameter blocks accepted, with B's use of A's private pointer rejected; XICS source A owned by LPID 7 and source B by LPID 8; and A's pending source not presented while B is active. Translated RTAS entry, the wider per-LPID memory-access matrix, per-LPID trampoline remapping, checkpoint restoration, and pending-interrupt delivery after restoring A remain open. The partition manager switches the active partition binding and LPID on a single CPU; it does not implement a bank of GPR/MSR/exception state per LPID, so the test verifies preservation of the one current CPU architectural state, not independent vCPU register banks.
+
+### Execution-mode matrix
+
+| Profile | R2 classification | Evidence or limit |
+| --- | --- | --- |
+| SF=0, IR=0, DR=0, EE=0, PR=0, HV=0, ME=1, RI=1, big-endian | Supported and qualified | Existing genuine guest RTAS calls through the trampoline. |
+| EE=1 after RTAS configuration | Supported for interrupt delivery | LEVEL-source guest enters vector 0x500, acknowledges, EOI/reasserts, and resumes through `rfid`. EE=1 at RTAS entry itself was not qualified. |
+| IR/DR enabled without an installed translation profile | Architectural fault observed | Existing relocation-enabled fetch test faults instead of succeeding; this is not translated RTAS-entry support. |
+| SF=1, PR=1, HV transition, ME/RI variants, and combined profiles | Not qualified | No broad mode matrix or privilege-escalation test was added. Guest access to HV state is not asserted to be supported. |
+
+Linux comparison used the verified source revision [`6628e7d4c6b25c8d18f1345e3a20d21829aae7e4`](https://github.com/torvalds/linux/blob/6628e7d4c6b25c8d18f1345e3a20d21829aae7e4/arch/powerpc/kernel/rtas_entry.S). Its wrapper documents a broader real-mode transition and caller-state handling than this hosted stub. QEMU source comparison remains pinned to `af1179b40643a61ac8016caaba0fb26d40124fd8`; neither source comparison is runtime compatibility evidence.
+
+### Architectural fault matrix
+
+| Case | Current result |
+| --- | --- |
+| Misaligned trampoline PC; unmapped instruction fetch; invalid LR return; relocation-enabled fetch without translation | Existing guest execution tests observe the corresponding bounded fetch/return fault behavior. |
+| Guest stores to the protected page, including cross-page and reservation forms | Existing DSI checks verify `DAR`/store-protection `DSISR`, unchanged protected bytes, cross-boundary atomicity, and valid `rfid` recovery. |
+| Invalid XICS source/server via RTAS | Guest sees service-level `RTAS_OUT_PARAM_ERROR` in the block while the recognized hypercall returns `H_SUCCESS`; checked owner, priority, and pending fields remain unchanged. |
+| Cross-LPID source access | Guest sees service-level `RTAS_OUT_PARAM_ERROR`; checked owner, priority, pending, and asserted fields remain unchanged. |
+| Cross-LPID parameter-page access | Guest sees outer `H_PARAMETER`; the response sentinel and protected source state remain unchanged. |
+
+The full required fault record for every malformed input (initial MSR/NIP, exact vector/registers, memory/XICS deltas, and recoverability) is still incomplete. Invalid or unaligned RTAS blocks, cross-page blocks and length overflow, invalid `nargs`/`nret`, MMIO response space, unsupported instruction encoding, protected handler overlap, PR/HV escalation, and bounded repeated-fault handling were not all qualified through authentic guest execution. Do not infer a safe architectural rejection for those untested cases.
+
+### Checkpoint boundary matrix
+
+| Boundary | R2 status |
+| --- | --- |
+| Before trampoline entry; after `mr r4,r3`; immediately before `sc 1`; after hypercall/before `blr`; after return | Only the existing after-return round trip is qualified. Intermediate boundaries and exactly-once side-effect behavior remain open. |
+| Recoverable protected-page DSI state | Protected bytes and fault recovery are tested; saving/restoring a checkpoint captured at the DSI boundary is not. |
+| Masked pending XICS source | No checkpoint/restore continuation test. |
+| Non-root LPID state | No checkpoint/restore ownership or mapping test. |
+| Atomic restore and protection | Existing v9 validation rejects corrupt protection metadata/page bytes and restores the protected page before publishing staged memory. |
+| Historical v6 | Authentic fixture restoration and continuation pass; this is reader compatibility, not an intermediate RTAS-boundary checkpoint. |
+
+The checkpoint writer remains **v9**, introduced by R1 because the protected-page base and size must be serialized. Readers v1–v8 remain available; an older enabled-trampoline image without protection metadata is rejected rather than restored writable. The pasted R2 request described the current writer as v8, but the checked-out implementation and regression suite establish v9. R2 preserves that format and its safety checks; it does not downgrade the writer or readers.
+
+### Fixture, FDT, direct H_RTAS, and Programs A–N
+
+- `tests/artifacts/ppc64-phase17-v6.gxcp` was verified before use: 2,109,857 bytes, SHA-256 `86EB3B924DCBA3F5DA48562387BAD026EDFCD0A8CF7D34B2205A3F2241832196`. The existing authentic historical reader test passes.
+- The independent FDT parser continues to match the advertised RTAS entry/base/size and service registry to the installed protected page; disabled mode omits entry advertisement. The direct-`H_RTAS` R1 regression still passes in the declared root profile and shares the same service registry and checked response-memory path.
+
+| Program | R2 result |
+| --- | --- |
+| A — Installed, protected trampoline | Pass; R1 protection regression preserved. |
+| B — Genuine caller/trampoline/return | Pass; guest executes the production forwarding path and continuation. |
+| C — Hypercall versus RTAS result | Pass; outer and service-level statuses remain distinct. |
+| D — Four XICS services including LEVEL | Pass for tested hosted source/CPPR cases, including guest vector, `H_XIRR`, `H_EOI`, reassertion, and deasserted continuation. |
+| E — Pending interrupt and handler continuation | Pass for the tested LEVEL path and existing terminal path. |
+| F — Terminal event integration | Pass; existing guest terminal interrupt demonstration remains green. |
+| G — Execution modes | Partial; declared real-address mode plus post-configuration interrupt delivery pass; other requested profiles are open. |
+| H — Fault and privilege matrix | Partial; protected DSI, fetch/return failures, invalid XICS service arguments, and the two LPID rejection cases pass; broad fault/privilege coverage is open. |
+| I — LPID and two-VM isolation | Partial; LPID A/B service, ownership, parameter denial, switching, and existing two-VM isolation pass; per-LPID architectural banking and checkpoint matrix are not implemented/qualified. |
+| J — Checkpoint boundaries | Partial; v9 after-return/protection/corruption checks pass; intermediate, pending-XICS, DSI-boundary, and LPID checkpoints remain open. |
+| K — Authentic v6 fixture | Pass; fixture size/hash verified and historical restore/continuation passes. |
+| L — Direct `H_RTAS` | Partial; existing root-profile registry/equivalence and safety cases pass, while complete malformed-input and LPID parity remains open. |
+| M — FDT/protection consistency | Pass; independent parser and protected reservation checks remain green. |
+| N — Integrated RTAS/XICS/terminal flow | Pass for the hosted profile. |
+
+Because G, H, I, and J remain partial, Programs A–N are not accepted as a complete phase gate.
+
+### Regressions and counts
+
+- Phase 19 now reports **412 checks, 0 failures**: 267 existing R1 checks plus **145 new R2 checks**.
+- PPC64 Phases 1–18 remain at **8,646 checks**. The observed PPC64 total is **9,058 checks** across Phases 1–19.
+- Full configured CTest: **27 passed, 0 executed failures, 6 Not Run** out of 33. The missing executables are `SyscallTests`, `DebuggerTests`, `ProfilerTests`, `FuzzerTests`, `VMIsolationTests`, and `ELFValidationTests`. All registered PPC64 phase tests 1–19 passed.
+- VM checkpoint and IA-64 SAL CTest entries passed. Direct IA-64 ACPI, interrupt-controller, and Processor Interrupt Block executables passed. These results show no new regression in the selected shared suites. The unrelated NaT serialization, MMU Hook-based Monitoring, typed-memory/MMIO diagnostic, and MinGW WinSock link issues were not requalified here.
+- The v6 fixture and relocated `E:\CodexArtifacts\guideXOS_Hypervisor` artifacts were preserved. The pre-existing untracked `build/` remains untracked; no generated artifact was staged.
+
+### QEMU status, remaining limits, and next direction
+
+- QEMU runtime status is **`REFERENCE_GUEST_PENDING`**. No QAC authorization was available and no QEMU guest was launched. The pinned QEMU source comparison is unchanged; the Linux source pin above was verified for source review only.
+- This remains hosted VM evidence. It does not establish SLOF/Open Firmware services, Linux kernel RTAS wrapper compatibility, firmware boot, Linux boot, SMP behavior, or general 64-bit/translated RTAS ABI support.
+- Outcome is **B — partial**. `.phase-ppc64` remains `last_completed=PPC64-18`, `next_expected=PPC64-19`; the shared IA-64 `.phase` was not modified.
+- Recommended **PPC64-19R3** blockers: (1) finish the declared execution-mode and privilege/fault matrix with actual guest vectors/registers and bounded recovery; (2) exercise malformed RTAS pointer/length/argument cases without memory or XICS side effects; (3) qualify checkpoint boundaries before entry, between trampoline instructions, after H_RTAS, with pending LEVEL interrupt, and under non-root LPID ownership, proving exactly-once externally visible service effects.
+- Recommended **PPC64-20** direction: begin only after PPC64-19 acceptance. Treat the next milestone as a separately scoped firmware/client integration decision with an explicit end-to-end guest boot target and supported ABI; do not infer Linux or Open Firmware readiness from this hosted RTAS entry alone.
+
+### Commit
+
+- Implementation and documentation are committed locally on `PPC64`; no push was performed. After both R2 commits the local branch is expected to be ahead 4 and behind 0 of `origin/PPC64`.
+- Ending implementation HEAD: `ae22f5782b80403b9f1a1c5bba8fbbc83b5e470c` (`test: qualify PPC64 RTAS level XICS and LPID ownership`). This contains the new guest test coverage. The closeout is the documentation-only follow-up; final repository HEAD is reported in the task response.
