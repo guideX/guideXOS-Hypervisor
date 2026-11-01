@@ -712,6 +712,7 @@ add_test(NAME PPC64Phase11Tests COMMAND test_ppc64_phase11)
 add_test(NAME PPC64Phase12Tests COMMAND test_ppc64_phase12)
 add_test(NAME PPC64Phase13Tests COMMAND test_ppc64_phase13)
 add_test(NAME PPC64Phase14Tests COMMAND test_ppc64_phase14)
+set_tests_properties(PPC64Phase14Tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 add_test(NAME PPC64Phase15Tests COMMAND test_ppc64_phase15)
 add_test(NAME ELFValidationTests COMMAND test_elf_validation)
 
@@ -1014,6 +1015,29 @@ endif()
 
 add_test(NAME PPC64Phase18Tests COMMAND test_ppc64_phase18)
 set_tests_properties(PPC64Phase18Tests PROPERTIES TIMEOUT 90)
+
+# PPC64 Phase 19 guest RTAS forwarding trampoline and FDT entry qualification.
+add_executable(test_ppc64_phase19
+    tests/test_ppc64_phase19.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+target_compile_definitions(test_ppc64_phase19 PRIVATE
+    PPC64_PHASE19_V6_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/artifacts/ppc64-phase17-v6.gxcp"
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase19 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase19 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase19 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME PPC64Phase19Tests COMMAND test_ppc64_phase19)
+set_tests_properties(PPC64Phase19Tests PROPERTIES TIMEOUT 120)
 
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo

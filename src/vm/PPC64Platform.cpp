@@ -1,4 +1,5 @@
 #include "PPC64Platform.h"
+#include "PPC64RTAS.h"
 
 #include <algorithm>
 #include <cstring>
@@ -267,6 +268,16 @@ bool buildStructure(const PPC64PlatformConfiguration& configuration,
             setReason(reason, "failed to encode the bounded RTAS service discovery node");
             return false;
         }
+        if (configuration.rtasTrampolineEnabled &&
+            (layout.rtasBase > std::numeric_limits<uint32_t>::max() ||
+             layout.rtasEntry > std::numeric_limits<uint32_t>::max() ||
+             layout.rtasSize > std::numeric_limits<uint32_t>::max() ||
+             !property("linux,rtas-base", static_cast<uint32_t>(layout.rtasBase)) ||
+             !property("linux,rtas-entry", static_cast<uint32_t>(layout.rtasEntry)) ||
+             !property("rtas-size", static_cast<uint32_t>(layout.rtasSize)))) {
+            setReason(reason, "failed to encode the installed RTAS entry properties");
+            return false;
+        }
         builder.endNode();
     }
 
@@ -396,6 +407,10 @@ bool validatePPC64PlatformConfiguration(
         setReason(reason, "the bounded RTAS service profile requires XICS compatibility mode");
         return false;
     }
+    if (configuration.rtasTrampolineEnabled && !configuration.rtasEnabled) {
+        setReason(reason, "an RTAS trampoline requires the RTAS service profile");
+        return false;
+    }
     if (configuration.timebaseFrequency == 0 ||
         configuration.timebaseFrequency > std::numeric_limits<uint32_t>::max() ||
         configuration.ticksPerInstruction == 0) {
@@ -462,6 +477,7 @@ bool samePPC64PlatformConfiguration(
         left.maximumFdtSize != right.maximumFdtSize ||
         left.virtualTerminalEnabled != right.virtualTerminalEnabled ||
         left.rtasEnabled != right.rtasEnabled ||
+        left.rtasTrampolineEnabled != right.rtasTrampolineEnabled ||
         left.virtualTerminalId != right.virtualTerminalId ||
         left.virtualTerminalInterruptSourceId !=
             right.virtualTerminalInterruptSourceId ||
@@ -493,6 +509,40 @@ bool validatePPC64GuestMemoryLayout(const PPC64GuestMemoryLayout& layout,
         layout.entryAddress < layout.imageBase || layout.entryAddress >= imageEnd ||
         overlaps(layout.imageBase, layout.imageSize, layout.fdtBase, layout.fdtSize)) {
         setReason(reason, "guest RAM, image, FDT, or entry geometry is invalid or overlapping");
+        return false;
+    }
+    const bool hasRTASMetadata = layout.rtasBase != 0 ||
+        layout.rtasEntry != 0 || layout.rtasSize != 0;
+    if (hasRTASMetadata) {
+        uint64_t rtasEnd = 0;
+        const bool reserved = std::any_of(
+            layout.reservations.begin(), layout.reservations.end(),
+            [&layout](const PPC64MemoryRange& range) {
+                return range.base == layout.rtasBase &&
+                       range.size == layout.rtasSize &&
+                       range.guestAccessible &&
+                       range.purpose == "RTAS forwarding trampoline";
+            });
+        if (layout.rtasBase != layout.rtasEntry ||
+            layout.rtasSize != PPC64_RTAS_FORWARDING_CODE_SIZE ||
+            (layout.rtasBase & 3ULL) != 0 ||
+            !rangeEnd(layout.rtasBase, layout.rtasSize, rtasEnd) ||
+            layout.rtasBase < layout.ramBase || rtasEnd > ramEnd ||
+            rtasEnd > (static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1U) ||
+            overlaps(layout.rtasBase, layout.rtasSize,
+                     layout.imageBase, layout.imageSize) ||
+            overlaps(layout.rtasBase, layout.rtasSize,
+                     layout.fdtBase, layout.fdtSize) ||
+            (layout.initrdSize != 0 &&
+             overlaps(layout.rtasBase, layout.rtasSize,
+                      layout.initrdBase, layout.initrdSize)) ||
+            !reserved) {
+            setReason(reason, "RTAS forwarding entry geometry or reservation is inconsistent");
+            return false;
+        }
+    } else if (layout.rtasBase != 0 || layout.rtasEntry != 0 ||
+               layout.rtasSize != 0) {
+        setReason(reason, "partial RTAS forwarding entry metadata is invalid");
         return false;
     }
     if ((layout.initrdSize == 0) != (layout.initrdBase == 0)) {
@@ -570,6 +620,10 @@ bool PPC64FDTBuilder::build(const PPC64PlatformConfiguration& configuration,
         layout.ramSize == 0 || layout.fdtSize == 0 ||
         !validatePPC64GuestMemoryLayout(layout, reason)) {
         if (reason.empty()) setReason(reason, "invalid FDT profile or layout input");
+        return false;
+    }
+    if (configuration.rtasTrampolineEnabled != (layout.rtasSize != 0)) {
+        setReason(reason, "RTAS trampoline profile and memory-layout metadata disagree");
         return false;
     }
     StructureBuilder structure;

@@ -682,6 +682,9 @@ public:
     bool isPPC64PlatformPrepared() const { return ppc64PlatformPrepared_; }
     ppc64::PPC64PlatformConfiguration getPPC64PlatformConfiguration() const;
     ppc64::PPC64PlatformSnapshot getPPC64PlatformSnapshot() const;
+    // Checks the prepared RTAS stub's guest-memory backing against the
+    // built-in instruction bytes. Guest RAM itself is writable by the guest.
+    bool validatePPC64RTASTrampoline(std::string* error = nullptr) const;
     ppc64::PPC64PlatformCapabilities getPPC64PlatformCapabilities() const;
     ppc64::PPC64RTASServiceRegistry* getPPC64RTASServiceRegistry();
     const ppc64::PPC64RTASServiceRegistry* getPPC64RTASServiceRegistry() const;

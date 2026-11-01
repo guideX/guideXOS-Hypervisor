@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PPC64XICS.h"
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -16,6 +17,24 @@ inline constexpr uint32_t PPC64_RTAS_TOKEN_IBM_GET_XIVE = 0x200BU;
 inline constexpr uint32_t PPC64_RTAS_TOKEN_IBM_INT_OFF = 0x200CU;
 inline constexpr uint32_t PPC64_RTAS_TOKEN_IBM_INT_ON = 0x200DU;
 inline constexpr uint32_t PPC64_RTAS_MAX_CELLS = 16U;
+inline constexpr uint32_t PPC64_RTAS_SERVICE_REGISTRY_VERSION = 1U;
+inline constexpr uint32_t PPC64_RTAS_FORWARDING_CODE_SIZE = 20U;
+// QEMU pc-bios/vof/entry.S: hv_rtas, assembled as big-endian PPC64 words.
+inline constexpr std::array<uint32_t, 5> PPC64_RTAS_FORWARDING_WORDS{{
+    0x7C641B78U, // mr r4,r3
+    0x3C600000U, // lis r3,0
+    0x6063F000U, // ori r3,r3,0xf000
+    0x44000022U, // sc 1
+    0x4E800020U, // blr
+}};
+inline constexpr std::array<uint8_t, PPC64_RTAS_FORWARDING_CODE_SIZE>
+    PPC64_RTAS_FORWARDING_BYTES{{
+        0x7c, 0x64, 0x1b, 0x78,
+        0x3c, 0x60, 0x00, 0x00,
+        0x60, 0x63, 0xf0, 0x00,
+        0x44, 0x00, 0x00, 0x22,
+        0x4e, 0x80, 0x00, 0x20,
+    }};
 inline constexpr int32_t PPC64_RTAS_OUT_SUCCESS = 0;
 inline constexpr int32_t PPC64_RTAS_OUT_PARAM_ERROR = -3;
 

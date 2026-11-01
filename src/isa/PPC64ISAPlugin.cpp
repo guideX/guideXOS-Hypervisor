@@ -1676,8 +1676,8 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (instr.rc) {
                 out << ".";
             }
-            out << " r" << static_cast<int>(instr.rt)
-                << ",r" << static_cast<int>(instr.ra)
+            out << " r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.rb);
             break;
         case DecodedKind::OR:
@@ -1685,8 +1685,8 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (instr.rc) {
                 out << ".";
             }
-            out << " r" << static_cast<int>(instr.rt)
-                << ",r" << static_cast<int>(instr.ra)
+            out << " r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.rb);
             break;
         case DecodedKind::XOR:
@@ -1694,8 +1694,8 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (instr.rc) {
                 out << ".";
             }
-            out << " r" << static_cast<int>(instr.rt)
-                << ",r" << static_cast<int>(instr.ra)
+            out << " r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.rb);
             break;
         case DecodedKind::ANDI_DOT:
@@ -3167,7 +3167,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
         case DecodedKind::AND:
         case DecodedKind::OR:
         case DecodedKind::XOR: {
-            const uint64_t s = state_.gpr[instr.ra];
+            // Logical X-form instructions use RS in the RT bit position,
+            // RA as the destination, and RB as the second source. This is
+            // different from arithmetic X-form instructions, whose RT is
+            // the destination.
+            const uint64_t s = state_.gpr[instr.rt];
             const uint64_t t = state_.gpr[instr.rb];
             uint64_t result = 0;
             if (instr.kind == DecodedKind::AND) {
@@ -3177,8 +3181,7 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             } else {
                 result = s ^ t;
             }
-            // X-form logicals: dest is the RT field, sources are RA/RB.
-            state_.gpr[instr.rt] = result;
+            state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);
             }

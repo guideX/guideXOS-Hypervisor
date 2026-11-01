@@ -39,9 +39,13 @@ struct PPC64PlatformConfiguration {
     uint64_t maximumFdtSize = 64 * 1024;
     // Expose the VM-owned PAPR hvterm1 through the guest FDT when requested.
     bool virtualTerminalEnabled = false;
-    // Expose the bounded direct-H_RTAS foundation only when XICS is enabled.
-    // This advertises service tokens, never a firmware entry address.
+    // Expose the bounded RTAS service profile only when XICS is enabled.
+    // The legacy profile advertises tokens; the optional trampoline profile
+    // also publishes the installed guest entry address.
     bool rtasEnabled = false;
+    // Install the QEMU-compatible guest forwarding stub and advertise its
+    // address. The legacy direct-H_RTAS profile remains available by default.
+    bool rtasTrampolineEnabled = false;
     uint32_t virtualTerminalId = PPC64_DEFAULT_VIRTUAL_TERMINAL_ID;
     // Set by VirtualMachine when it binds hvterm1 to an allocated XICS edge
     // source. Zero denotes polling-only terminal operation.
@@ -62,6 +66,9 @@ struct PPC64GuestMemoryLayout {
     uint64_t entryAddress = 0;
     uint64_t initrdBase = 0;
     uint64_t initrdSize = 0;
+    uint64_t rtasBase = 0;
+    uint64_t rtasEntry = 0;
+    uint64_t rtasSize = 0;
     std::vector<PPC64MemoryRange> reservations;
     std::vector<PPC64MemoryRange> guestMemoryRanges;
 };
@@ -72,6 +79,7 @@ struct PPC64PlatformSnapshot {
     bool prepared = false;
     PPC64GuestMemoryLayout memoryLayout;
     uint64_t currentTimebase = 0;
+    uint32_t rtasServiceRegistryVersion = 0;
 };
 
 // Host-owned state for the deliberately small PPC64 interrupt input profile.

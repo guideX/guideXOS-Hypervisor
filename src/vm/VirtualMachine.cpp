@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <limits>
 #include <set>
@@ -346,10 +347,20 @@ bool VirtualMachine::reset() {
                 ppc64VirtualTerminal_->reset();
             }
             if (ppc64PlatformPrepared_) {
+                std::vector<GuestRealWriteSegment> writes;
+                if (ppc64PlatformConfiguration_.rtasTrampolineEnabled) {
+                    GuestRealWriteSegment trampoline;
+                    trampoline.address = ppc64GuestMemoryLayout_.rtasBase;
+                    trampoline.bytes.assign(
+                        ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
+                        ppc64::PPC64_RTAS_FORWARDING_BYTES.end());
+                    writes.push_back(std::move(trampoline));
+                }
                 GuestRealWriteSegment dtb;
                 dtb.address = ppc64GuestMemoryLayout_.fdtBase;
                 dtb.bytes = ppc64PlatformDTB_;
-                memory_->WriteGuestRealTransaction({dtb});
+                writes.push_back(std::move(dtb));
+                memory_->WriteGuestRealTransaction(writes);
                 plugin->writeGPR(3, ppc64GuestMemoryLayout_.fdtBase);
                 plugin->writeGPR(4, ppc64GuestMemoryLayout_.imageBase);
                 plugin->writeGPR(5, 0);
@@ -1091,6 +1102,15 @@ bool VirtualMachine::preparePPC64Platform(
         return reject("FDT placement is outside configured guest RAM");
     }
     layout.reservations = ppc64PlatformConfiguration_.reservedRanges;
+    if (ppc64PlatformConfiguration_.rtasTrampolineEnabled) {
+        if (layout.fdtBase < ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE) {
+            return reject("RTAS trampoline placement would underflow guest RAM");
+        }
+        layout.rtasBase = (layout.fdtBase -
+            ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE) & ~3ULL;
+        layout.rtasEntry = layout.rtasBase;
+        layout.rtasSize = ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE;
+    }
 
     const auto appendReservation = [&](uint64_t base, uint64_t size,
                                        const std::string& purpose,
@@ -1133,6 +1153,11 @@ bool VirtualMachine::preparePPC64Platform(
                            plugin->getHypervisorMemorySize(),
                            "protected hypervisor handler backing", false)) {
         return reject("protected hypervisor handler conflicts with another platform range");
+    }
+    if (layout.rtasSize != 0 &&
+        !appendReservation(layout.rtasBase, layout.rtasSize,
+                           "RTAS forwarding trampoline", true)) {
+        return reject("RTAS trampoline conflicts with a reserved or protected range");
     }
     for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
         if (imageAddress < reservation.base + reservation.size &&
@@ -1208,11 +1233,23 @@ bool VirtualMachine::preparePPC64Platform(
         }
     }
 
-    std::vector<GuestRealWriteSegment> writes(2);
-    writes[0].address = imageAddress;
-    writes[0].bytes = image;
-    writes[1].address = layout.fdtBase;
-    writes[1].bytes = dtb;
+    std::vector<GuestRealWriteSegment> writes;
+    writes.reserve(layout.rtasSize == 0 ? 2U : 3U);
+    GuestRealWriteSegment imageWrite;
+    imageWrite.address = imageAddress;
+    imageWrite.bytes = image;
+    writes.push_back(std::move(imageWrite));
+    if (layout.rtasSize != 0) {
+        GuestRealWriteSegment trampoline;
+        trampoline.address = layout.rtasBase;
+        trampoline.bytes.assign(ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
+                                ppc64::PPC64_RTAS_FORWARDING_BYTES.end());
+        writes.push_back(std::move(trampoline));
+    }
+    GuestRealWriteSegment fdtWrite;
+    fdtWrite.address = layout.fdtBase;
+    fdtWrite.bytes = dtb;
+    writes.push_back(std::move(fdtWrite));
     try {
         memory_->WriteGuestRealTransaction(writes);
     } catch (const std::exception& exception) {
@@ -1248,10 +1285,53 @@ ppc64::PPC64PlatformSnapshot VirtualMachine::getPPC64PlatformSnapshot() const {
     snapshot.enabled = ppc64PlatformEnabled_;
     if (!snapshot.enabled) return snapshot;
     snapshot.configuration = ppc64PlatformConfiguration_;
+    if (ppc64PlatformConfiguration_.rtasEnabled) {
+        snapshot.rtasServiceRegistryVersion =
+            ppc64::PPC64_RTAS_SERVICE_REGISTRY_VERSION;
+    }
     snapshot.prepared = ppc64PlatformPrepared_;
     snapshot.memoryLayout = ppc64GuestMemoryLayout_;
     snapshot.currentTimebase = ppc64VirtualTimeBase_->read();
     return snapshot;
+}
+
+bool VirtualMachine::validatePPC64RTASTrampoline(std::string* error) const {
+    const auto reject = [error](const std::string& reason) {
+        if (error != nullptr) *error = reason;
+        return false;
+    };
+    if (isaName_ != "PPC64" || !ppc64PlatformEnabled_ ||
+        !ppc64PlatformPrepared_ ||
+        !ppc64PlatformConfiguration_.rtasTrampolineEnabled) {
+        return reject("an installed PPC64 RTAS trampoline is not configured");
+    }
+    const auto& layout = ppc64GuestMemoryLayout_;
+    if (layout.rtasBase != layout.rtasEntry ||
+        layout.rtasSize != ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE ||
+        (layout.rtasEntry & 3ULL) != 0) {
+        return reject("RTAS trampoline metadata is malformed");
+    }
+    std::string rangeReason;
+    if (!memory_->ValidateGuestRealRange(
+            layout.rtasBase,
+            static_cast<size_t>(ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE),
+            false, rangeReason)) {
+        return reject(std::string("RTAS trampoline backing is inaccessible: ") +
+                      rangeReason);
+    }
+    std::array<uint8_t, ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE> bytes{};
+    try {
+        memory_->ReadGuestReal(layout.rtasBase, bytes.data(), bytes.size());
+    } catch (const std::exception& exception) {
+        return reject(std::string("RTAS trampoline backing read failed: ") +
+                      exception.what());
+    }
+    if (!std::equal(bytes.begin(), bytes.end(),
+                    ppc64::PPC64_RTAS_FORWARDING_BYTES.begin())) {
+        return reject("RTAS trampoline bytes do not match the installed reference sequence");
+    }
+    if (error != nullptr) error->clear();
+    return true;
 }
 
 uint32_t VirtualMachine::getPPC64VirtualTerminalId() const {
@@ -3057,6 +3137,11 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             destinationConfig.virtualTerminalInterruptSourceId = 0;
             if (!ppc64::samePPC64PlatformConfiguration(
                     checkpointConfig, destinationConfig) ||
+                (platform.configuration.rtasEnabled &&
+                 platform.rtasServiceRegistryVersion !=
+                    ppc64::PPC64_RTAS_SERVICE_REGISTRY_VERSION) ||
+                (!platform.configuration.rtasEnabled &&
+                 platform.rtasServiceRegistryVersion != 0) ||
                 !ppc64::validatePPC64PlatformConfiguration(
                     platform.configuration, snapshot.memoryState.data.size(),
                     platformReason)) {
@@ -3087,6 +3172,10 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                     !hasRange(layout.fdtBase, layout.fdtSize, true)) {
                     return reject("platform checkpoint omits its image or FDT reservation");
                 }
+                if (platform.configuration.rtasTrampolineEnabled &&
+                    !hasRange(layout.rtasBase, layout.rtasSize, true)) {
+                    return reject("platform checkpoint omits its RTAS trampoline reservation");
+                }
                 for (const auto& configured : platform.configuration.reservedRanges) {
                     if (!hasRange(configured.base, configured.size,
                                   configured.guestAccessible)) {
@@ -3116,6 +3205,18 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                         static_cast<unsigned>(snapshot.ppc64PartitionTableSizeExponent) + 12U);
                     if (!hasRange(snapshot.ppc64PartitionTableBase, tableSize, true)) {
                         return reject("platform checkpoint partition-table reservation is inconsistent");
+                    }
+                }
+                if (platform.configuration.rtasTrampolineEnabled) {
+                    const auto begin = snapshot.memoryState.data.begin() +
+                        static_cast<std::ptrdiff_t>(layout.rtasBase);
+                    if (layout.rtasEntry != layout.rtasBase ||
+                        layout.rtasSize !=
+                            ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE ||
+                        !std::equal(ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
+                                    ppc64::PPC64_RTAS_FORWARDING_BYTES.end(),
+                                    begin)) {
+                        return reject("checkpoint RTAS metadata does not match its installed instruction bytes");
                     }
                 }
                 if (!ppc64::PPC64FDTBuilder::validate(

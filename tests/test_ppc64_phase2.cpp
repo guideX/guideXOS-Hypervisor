@@ -361,20 +361,20 @@ static void testLogical() {
     ppc64::PPC64ISAPlugin cpu;
     Memory mem(4096);
 
-    // and / and. (X-form dest=RT field).
+    // Logical X-forms use RT as the first source and RA as the destination.
     setState(cpu);
     cpu.writeGPR(4, 0xFF00FF00FF00FF00ULL);
     cpu.writeGPR(5, 0x0F0F0F0F0F0F0F0FULL);
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 28, false)) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 28, false)) == ISAExecutionResult::CONTINUE);
     CHECK(cpu.readGPR(3) == 0x0F000F000F000F00ULL);
     CHECK(cpu.getCR() == 0);  // Rc=0: CR untouched
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 28, true), 0) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 28, true), 0) == ISAExecutionResult::CONTINUE);
     CHECK(crField(cpu.getCR(), 0) == 0x4);  // positive -> GT
 
     // and. zero result -> EQ.
     cpu.writeGPR(4, 0xF0ULL);
     cpu.writeGPR(5, 0x0FULL);
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 28, true), 0) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 28, true), 0) == ISAExecutionResult::CONTINUE);
     CHECK(cpu.readGPR(3) == 0);
     CHECK(crField(cpu.getCR(), 0) == 0x2);
 
@@ -382,19 +382,19 @@ static void testLogical() {
     setState(cpu);
     cpu.writeGPR(4, 0xF0F0ULL);
     cpu.writeGPR(5, 0x0F0FULL);
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 444, false)) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 444, false)) == ISAExecutionResult::CONTINUE);
     CHECK(cpu.readGPR(3) == 0xFFFFULL);
     CHECK(cpu.getCR() == 0);
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 316, false), 0) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 316, false), 0) == ISAExecutionResult::CONTINUE);
     CHECK(cpu.readGPR(3) == 0xFFFFULL);
     CHECK(cpu.getCR() == 0);
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 316, true), 0) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 316, true), 0) == ISAExecutionResult::CONTINUE);
     CHECK(crField(cpu.getCR(), 0) == 0x4);
 
     // or. with high bit set -> LT.
     cpu.writeGPR(4, 0x8000000000000000ULL);
     cpu.writeGPR(5, 0);
-    CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 444, true), 0) == ISAExecutionResult::CONTINUE);
+    CHECK(runOne(cpu, mem, encodeXO(4, 3, 5, false, 444, true), 0) == ISAExecutionResult::CONTINUE);
     CHECK(crField(cpu.getCR(), 0) == 0x8);
 
     // andi. / andis. always record; xori / xoris never record.
