@@ -320,9 +320,10 @@ public:
                                uint64_t size,
                                uint32_t memoryType);
 
-    // Queue a host-independent EFI key for focused firmware/input tests.
-    // Production starts with an empty queue until a host input source is wired.
-    void enqueueEfiInputKey(uint16_t scanCode, uint16_t unicodeChar,
+    // Host input is delivered through the same bounded queue consumed by the
+    // guest's EFI Simple Text Input protocol.
+    static constexpr size_t kEfiInputQueueCapacity = 64;
+    bool enqueueEfiInputKey(uint16_t scanCode, uint16_t unicodeChar,
                             uint32_t shiftState = 0, uint8_t toggleState = 0);
 
     struct EfiTraceSummary {

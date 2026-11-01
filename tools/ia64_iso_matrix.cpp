@@ -1137,7 +1137,10 @@ int main(int argc, char** argv) {
                 return 1;
             }
             for (const auto& key : options.keys) {
-                plugin->enqueueEfiInputKey(key.scanCode, key.unicodeChar);
+                if (!plugin->enqueueEfiInputKey(key.scanCode, key.unicodeChar)) {
+                    std::cerr << "[IA64-CHECKPOINT] EFI input queue is full\n";
+                    return 2;
+                }
                 std::cout << "[IA64-MATRIX] queued key=" << key.name
                           << " scan=0x" << std::hex << key.scanCode
                           << " unicode=0x" << key.unicodeChar << std::dec << "\n";
@@ -1285,7 +1288,10 @@ int main(int argc, char** argv) {
                 return 1;
             }
             for (const auto& key : options.keys) {
-                plugin->enqueueEfiInputKey(key.scanCode, key.unicodeChar);
+                if (!plugin->enqueueEfiInputKey(key.scanCode, key.unicodeChar)) {
+                    std::cerr << "[IA64-MATRIX] EFI input queue is full" << std::endl;
+                    return 2;
+                }
                 std::cout << "[IA64-MATRIX] queued key=" << key.name
                           << " scan=0x" << std::hex << key.scanCode
                           << " unicode=0x" << key.unicodeChar << std::dec << std::endl;

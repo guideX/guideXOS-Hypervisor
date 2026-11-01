@@ -95,6 +95,15 @@ private:
     std::map<uint64_t, uint8_t> bytes_;
 };
 
+class BoundedSparseMemory : public SizedSparseMemory {
+public:
+    using SizedSparseMemory::SizedSparseMemory;
+
+    // Keep the fixed handoff addresses used by focused EFI service tests while
+    // retaining SizedSparseMemory's real read/write bounds checks.
+    size_t GetTotalSize() const override { return 0; }
+};
+
 class GuardedSparseMemory : public IMemory {
 public:
     explicit GuardedSparseMemory(uint64_t forbiddenReadAddress)
@@ -3800,6 +3809,11 @@ void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
     constexpr uint64_t readCode = handoffBase + kEfiInputReadKeyStrokeStubCodeOffset;
     constexpr uint64_t readExDescriptor = handoffBase + kEfiInputReadKeyStrokeExStubDescOffset;
     constexpr uint64_t readExCode = handoffBase + kEfiInputReadKeyStrokeExStubCodeOffset;
+    constexpr uint64_t inputEvent = handoffBase + kEfiConsoleInputEventOffset;
+    constexpr uint64_t waitDescriptor = handoffBase + kEfiWaitForEventStubDescOffset;
+    constexpr uint64_t waitCode = handoffBase + kEfiWaitForEventStubCodeOffset;
+    constexpr uint64_t checkDescriptor = handoffBase + kEfiCheckEventStubDescOffset;
+    constexpr uint64_t checkCode = handoffBase + kEfiCheckEventStubCodeOffset;
     constexpr uint64_t handleProtocolCode = handoffBase + kEfiHandleProtocolStubCodeOffset;
     constexpr uint64_t gp = handoffBase;
 
@@ -3825,6 +3839,8 @@ void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
     writeDescriptor(memory, resetDescriptor, resetCode);
     writeDescriptor(memory, readDescriptor, readCode);
     writeDescriptor(memory, readExDescriptor, readExCode);
+    writeDescriptor(memory, waitDescriptor, waitCode);
+    writeDescriptor(memory, checkDescriptor, checkCode);
 
     const uint64_t consoleInHandle = [&]() {
         uint64_t value = 0;
@@ -3912,11 +3928,120 @@ void testIA64PluginConsoleInputProtocolsAndPlabelDispatch() {
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(8) == 0x8000000000000006ULL);
 
+    // The synthetic ConsoleIn event is signaled while a key is queued, and
+    // becomes unsignaled when ReadKeyStroke consumes that key.
+    constexpr uint64_t eventArray = 0x6200;
+    constexpr uint64_t eventIndexOut = 0x6210;
+    write64(memory, eventArray, inputEvent);
+    plugin.enqueueEfiInputKey(0x0002, 0); // EFI scan code for Down.
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, waitDescriptor);
+    plugin.getCPUState().SetGR(35, 1);
+    plugin.getCPUState().SetGR(36, eventArray);
+    plugin.getCPUState().SetGR(37, eventIndexOut);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    uint64_t eventIndex = UINT64_MAX;
+    memory.Read(eventIndexOut, reinterpret_cast<uint8_t*>(&eventIndex), sizeof(eventIndex));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(eventIndex == 0);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, checkDescriptor);
+    plugin.getCPUState().SetGR(35, inputEvent);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, readKeyDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    memory.Read(0x6000, reinterpret_cast<uint8_t*>(&scanCode), sizeof(scanCode));
+    memory.Read(0x6002, reinterpret_cast<uint8_t*>(&unicodeChar), sizeof(unicodeChar));
+    assert(plugin.getCPUState().GetGR(8) == 0);
+    assert(scanCode == 0x0002);
+    assert(unicodeChar == 0);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, checkDescriptor);
+    plugin.getCPUState().SetGR(35, inputEvent);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0x8000000000000006ULL);
+
     plugin.getCPUState().SetIP(0x30e40);
     plugin.getCPUState().SetBR(0, resetDescriptor);
     plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.enqueueEfiInputKey(0, static_cast<uint16_t>('r'));
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(8) == 0);
+    plugin.getCPUState().SetIP(0x30e40);
+    plugin.getCPUState().SetBR(0, readKeyDescriptor);
+    plugin.getCPUState().SetGR(35, inputProtocol);
+    plugin.getCPUState().SetGR(36, 0x6000);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetGR(8) == 0x8000000000000006ULL);
+
+    // A key must remain queued when the guest supplies a buffer that only
+    // holds half of EFI_INPUT_KEY.  The old implementation popped the key and
+    // wrote ScanCode before the UnicodeChar write faulted.
+    constexpr uint64_t smallGuestSize = 0x20000000ULL;
+    constexpr uint64_t invalidKeyBuffer = smallGuestSize - sizeof(uint16_t);
+    BoundedSparseMemory boundedMemory(smallGuestSize);
+    boundedMemory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
+    writeDescriptor(boundedMemory, readDescriptor, readCode);
+    FakeIndirectSelfCallDecoder boundedDecoder;
+    IA64ISAPlugin boundedPlugin(boundedDecoder);
+    boundedPlugin.reset();
+    boundedPlugin.enqueueEfiInputKey(0x1234, static_cast<uint16_t>('Z'));
+    boundedPlugin.getCPUState().SetIP(0x30e40);
+    boundedPlugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
+    boundedPlugin.getCPUState().SetBR(0, readDescriptor);
+    boundedPlugin.getCPUState().SetGR(35, inputProtocol);
+    boundedPlugin.getCPUState().SetGR(36, 0);
+    assert(boundedPlugin.step(boundedMemory) == ISAExecutionResult::CONTINUE);
+    assert(boundedPlugin.getCPUState().GetGR(8) == 0x8000000000000002ULL);
+    boundedPlugin.getCPUState().SetIP(0x30e40);
+    boundedPlugin.getCPUState().SetBR(0, readDescriptor);
+    boundedPlugin.getCPUState().SetGR(35, inputProtocol);
+    boundedPlugin.getCPUState().SetGR(36, invalidKeyBuffer);
+    const uint16_t invalidBufferCanary = 0xA55A;
+    boundedMemory.Write(invalidKeyBuffer,
+                        reinterpret_cast<const uint8_t*>(&invalidBufferCanary),
+                        sizeof(invalidBufferCanary));
+    assert(boundedPlugin.step(boundedMemory) == ISAExecutionResult::CONTINUE);
+    uint16_t invalidBufferAfter = 0;
+    boundedMemory.Read(invalidKeyBuffer,
+                       reinterpret_cast<uint8_t*>(&invalidBufferAfter),
+                       sizeof(invalidBufferAfter));
+    assert(boundedPlugin.getCPUState().GetGR(8) == 0x8000000000000002ULL);
+    assert(invalidBufferAfter == invalidBufferCanary);
+    boundedPlugin.getCPUState().SetIP(0x30e40);
+    boundedPlugin.getCPUState().SetBR(0, readDescriptor);
+    boundedPlugin.getCPUState().SetGR(35, inputProtocol);
+    boundedPlugin.getCPUState().SetGR(36, 0x6000);
+    assert(boundedPlugin.step(boundedMemory) == ISAExecutionResult::CONTINUE);
+    boundedMemory.Read(0x6000, reinterpret_cast<uint8_t*>(&scanCode), sizeof(scanCode));
+    boundedMemory.Read(0x6002, reinterpret_cast<uint8_t*>(&unicodeChar), sizeof(unicodeChar));
+    assert(boundedPlugin.getCPUState().GetGR(8) == 0);
+    assert(scanCode == 0x1234);
+    assert(unicodeChar == static_cast<uint16_t>('Z'));
+
+    // The host side rejects an over-capacity burst instead of growing memory
+    // without bound or silently discarding an earlier key.
+    for (size_t index = 0; index < IA64ISAPlugin::kEfiInputQueueCapacity; ++index) {
+        assert(boundedPlugin.enqueueEfiInputKey(static_cast<uint16_t>(index),
+                                                static_cast<uint16_t>('A' + (index % 26))));
+    }
+    assert(!boundedPlugin.enqueueEfiInputKey(0xFFFF, 0xFFFF));
+    for (size_t index = 0; index < IA64ISAPlugin::kEfiInputQueueCapacity; ++index) {
+        boundedPlugin.getCPUState().SetIP(0x30e40);
+        boundedPlugin.getCPUState().SetBR(0, readDescriptor);
+        boundedPlugin.getCPUState().SetGR(35, inputProtocol);
+        boundedPlugin.getCPUState().SetGR(36, 0x6000);
+        assert(boundedPlugin.step(boundedMemory) == ISAExecutionResult::CONTINUE);
+        boundedMemory.Read(0x6000, reinterpret_cast<uint8_t*>(&scanCode), sizeof(scanCode));
+        boundedMemory.Read(0x6002, reinterpret_cast<uint8_t*>(&unicodeChar), sizeof(unicodeChar));
+        assert(boundedPlugin.getCPUState().GetGR(8) == 0);
+        assert(scanCode == static_cast<uint16_t>(index));
+        assert(unicodeChar == static_cast<uint16_t>('A' + (index % 26)));
+    }
 
     const uint8_t simpleInputGuid[16] = {
         0xC1, 0x77, 0x74, 0x38, 0xC7, 0x69, 0xD2, 0x11,
@@ -5896,6 +6021,10 @@ int main(int argc, char** argv) {
         }
         if (argc > 1 && std::string(argv[1]) == "relocation") {
             testIA64PeRelocationOwnership();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "consoleinput") {
+            testIA64PluginConsoleInputProtocolsAndPlabelDispatch();
             return 0;
         }
 

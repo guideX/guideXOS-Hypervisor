@@ -2663,11 +2663,15 @@ bool IA64ISAPlugin::reserveEfiMemoryRange(uint64_t physicalStart,
     return true;
 }
 
-void IA64ISAPlugin::enqueueEfiInputKey(uint16_t scanCode,
-                                       uint16_t unicodeChar,
-                                       uint32_t shiftState,
-                                       uint8_t toggleState) {
+bool IA64ISAPlugin::enqueueEfiInputKey(uint16_t scanCode,
+                                      uint16_t unicodeChar,
+                                      uint32_t shiftState,
+                                      uint8_t toggleState) {
+    if (efiInputQueue_.size() >= kEfiInputQueueCapacity) {
+        return false;
+    }
     efiInputQueue_.push_back({scanCode, unicodeChar, shiftState, toggleState});
+    return true;
 }
 
 void IA64ISAPlugin::recordPlacementTelemetry(const CPUState& cpu) {
@@ -7725,24 +7729,37 @@ uint64_t IA64ISAPlugin::handleEfiReadKeyStroke(IMemory& memory, bool extended) {
     }
 
     const EfiInputKey key = efiInputQueue_.front();
-    efiInputQueue_.pop_front();
+    std::array<uint8_t, 12> keyData{};
+    const auto put16 = [&keyData](size_t offset, uint16_t value) {
+        keyData[offset] = static_cast<uint8_t>(value & 0xffU);
+        keyData[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xffU);
+    };
+    put16(0, key.scanCode);
+    put16(2, key.unicodeChar);
+    const uint32_t shiftState = key.shiftState;
+    for (size_t byte = 0; byte < sizeof(shiftState); ++byte) {
+        keyData[4 + byte] = static_cast<uint8_t>((shiftState >> (byte * 8)) & 0xffU);
+    }
+    keyData[8] = key.toggleState;
+    const size_t writeSize = extended ? keyData.size() : 4;
+    if (keyDataOut > std::numeric_limits<uint64_t>::max() - writeSize) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
+    const uint64_t guestMemorySize = static_cast<uint64_t>(memory.GetTotalSize());
+    if (guestMemorySize != 0 &&
+        (keyDataOut > guestMemorySize || writeSize > guestMemorySize - keyDataOut)) {
+        return EFI_STATUS_INVALID_PARAMETER;
+    }
     try {
-        memory.Write(keyDataOut + 0,
-                     reinterpret_cast<const uint8_t*>(&key.scanCode), sizeof(key.scanCode));
-        memory.Write(keyDataOut + 2,
-                     reinterpret_cast<const uint8_t*>(&key.unicodeChar), sizeof(key.unicodeChar));
-        if (extended) {
-            memory.Write(keyDataOut + 4,
-                         reinterpret_cast<const uint8_t*>(&key.shiftState), sizeof(key.shiftState));
-            memory.Write(keyDataOut + 8, &key.toggleState, sizeof(key.toggleState));
-            const uint8_t padding[3] = {0, 0, 0};
-            memory.Write(keyDataOut + 9, padding, sizeof(padding));
-            ++efiReadKeyStrokeExSuccessCalls_;
-        } else {
-            ++efiReadKeyStrokeSuccessCalls_;
-        }
+        memory.Write(keyDataOut, keyData.data(), writeSize);
     } catch (const std::exception&) {
         return EFI_STATUS_INVALID_PARAMETER;
+    }
+    efiInputQueue_.pop_front();
+    if (extended) {
+        ++efiReadKeyStrokeExSuccessCalls_;
+    } else {
+        ++efiReadKeyStrokeSuccessCalls_;
     }
     std::cerr << "[EFI-INPUT] ReadKeyStroke delivered scan=0x" << std::hex
               << key.scanCode << " unicode=0x" << key.unicodeChar
@@ -7759,7 +7776,18 @@ uint64_t IA64ISAPlugin::handleEfiWaitForEvent(IMemory& memory, bool checkOnly) {
         ++efiWaitForEventCalls_;
     }
 
-    const uint64_t numberOfEvents = readCallerOutputRegister(state_.getCPUState(), 0);
+    const uint64_t firstArgument = readCallerOutputRegister(state_.getCPUState(), 0);
+    if (checkOnly) {
+        if (firstArgument == 0) {
+            return EFI_STATUS_INVALID_PARAMETER;
+        }
+        if (firstArgument != EFI_CONSOLE_INPUT_EVENT_ADDR) {
+            return EFI_STATUS_UNSUPPORTED;
+        }
+        return efiInputQueue_.empty() ? EFI_STATUS_NOT_READY : EFI_STATUS_SUCCESS;
+    }
+
+    const uint64_t numberOfEvents = firstArgument;
     const uint64_t events = readCallerOutputRegister(state_.getCPUState(), 1);
     const uint64_t indexOut = readCallerOutputRegister(state_.getCPUState(), 2);
     if (numberOfEvents == 0 || events == 0 || indexOut == 0 || numberOfEvents > 64) {
