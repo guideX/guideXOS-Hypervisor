@@ -293,6 +293,13 @@ struct MachineTimerMapping {
     uint64_t mtimeAddress = 0x0200BFF8ULL;
 };
 
+// Narrow NS16550-compatible console mapping used by firmware profiles which
+// expose an 8-bit register interface. This is not a complete UART model.
+struct MachineUartMapping {
+    uint64_t baseAddress = 0x10000000ULL;
+    bool enabled = false;
+};
+
 // SBI error codes (SBI Base, returned in a0 as signed 64-bit values).
 constexpr uint64_t kSbiSuccess = 0ULL;
 constexpr uint64_t kSbiErrFailed = static_cast<uint64_t>(-1LL);
@@ -430,6 +437,11 @@ public:
     uint64_t mtimecmp() const { return mtimecmp_; }
     const MachineTimerMapping& machineTimerMapping() const { return timerMapping_; }
     bool configureMachineTimer(const MachineTimerMapping& mapping);
+    const MachineUartMapping& machineUartMapping() const { return uartMapping_; }
+    bool configureMachineUart(const MachineUartMapping& mapping);
+    const std::string& machineUartOutput() const { return uartOutput_; }
+    uint64_t mmioReadCount() const { return mmioReadCount_; }
+    uint64_t mmioWriteCount() const { return mmioWriteCount_; }
 
     // SBI TIME state is per hart. Firmware schedules an absolute deadline on
     // the machine comparator; servicing a due MTIP clears the comparator and
@@ -549,6 +561,9 @@ private:
     bool timerMmioOverlaps(uint64_t paddr, size_t size) const;
     bool readTimerMmio(uint64_t paddr, uint8_t* dst, size_t size, bool& handled) const;
     bool writeTimerMmio(uint64_t paddr, const uint8_t* src, size_t size, bool& handled);
+    bool uartMmioOverlaps(uint64_t paddr, size_t size) const;
+    bool readUartMmio(uint64_t paddr, uint8_t* dst, size_t size, bool& handled) const;
+    bool writeUartMmio(uint64_t paddr, const uint8_t* src, size_t size, bool& handled);
 
     RV64CPUState state_;
     Decoder decoder_;
@@ -587,6 +602,16 @@ private:
 
     // Interrupt source and deterministic MTIMER state.
     MachineTimerMapping timerMapping_{};
+    MachineUartMapping uartMapping_{};
+    uint8_t uartInterruptEnable_ = 0;
+    uint8_t uartLineControl_ = 0;
+    uint8_t uartModemControl_ = 0;
+    uint8_t uartScratch_ = 0;
+    uint8_t uartDivisorLow_ = 0;
+    uint8_t uartDivisorHigh_ = 0;
+    std::string uartOutput_;
+    mutable uint64_t mmioReadCount_ = 0;
+    uint64_t mmioWriteCount_ = 0;
     uint64_t mtime_ = 0;
     uint64_t mtimecmp_ = UINT64_MAX;
     uint64_t supervisorTimerDeadline_ = UINT64_MAX;

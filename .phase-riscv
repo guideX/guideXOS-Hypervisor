@@ -1,4 +1,4 @@
 project=guideXOS_Hypervisor
 arch=riscv
-last_completed=RISCV-8
-next_expected=RISCV-9
+last_completed=RISCV-9
+next_expected=RISCV-10

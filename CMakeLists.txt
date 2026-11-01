@@ -848,6 +848,36 @@ else()
     target_compile_options(test_riscv_elf64_boot PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-9 authentic OpenSBI generic FW_JUMP execution and S-mode handoff.
+set(RISCV_OPENSBI_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_fw_jump)
+set(RISCV_OPENSBI_FW_BIN_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv9_fw_jump.bin)
+set(RISCV_OPENSBI_FW_ELF_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv9_fw_jump.elf)
+set(RISCV_OPENSBI_SUPERVISOR_ELF_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv9_supervisor.elf)
+set(RISCV_OPENSBI_DTB_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv9_platform.dtb)
+configure_file(${RISCV_OPENSBI_FIXTURE_DIR}/fw_jump.bin ${RISCV_OPENSBI_FW_BIN_COPY} COPYONLY)
+configure_file(${RISCV_OPENSBI_FIXTURE_DIR}/fw_jump.elf ${RISCV_OPENSBI_FW_ELF_COPY} COPYONLY)
+configure_file(${RISCV_OPENSBI_FIXTURE_DIR}/supervisor.elf ${RISCV_OPENSBI_SUPERVISOR_ELF_COPY} COPYONLY)
+configure_file(${RISCV_OPENSBI_FIXTURE_DIR}/platform.dtb ${RISCV_OPENSBI_DTB_COPY} COPYONLY)
+add_executable(test_riscv_opensbi_fw_jump
+    tests/test_riscv_opensbi_fw_jump.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_opensbi_fw_jump PRIVATE bcrypt)
+add_test(NAME RiscVOpenSbiFwJumpTests
+         COMMAND test_riscv_opensbi_fw_jump
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_OPENSBI_SUPERVISOR_ELF_COPY}
+                 ${RISCV_OPENSBI_DTB_COPY})
+if(MSVC)
+    target_compile_options(test_riscv_opensbi_fw_jump PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_opensbi_fw_jump PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

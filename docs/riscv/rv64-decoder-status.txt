@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-8)
+RISC-V Decoder and Execution Status (updated Phase RISCV-9)
 
 Current decoded instruction families:
 - RV64I
@@ -446,13 +446,11 @@ Validation and next target:
 - Existing unrelated issues remain: test_io_devices has a console-dispatch
   assertion and legacy test_elf_validation has unresolved IA-64 link symbols.
   Neither was changed in this phase.
-- Recommended RISCV-9 target: boot a genuine single-hart OpenSBI generic
-  FW_JUMP image on a QEMU virt-compatible platform and transfer to a
-  freestanding S-mode payload. OpenSBI's base platform profile requires
-  RV64IMA_Zicsr, S-mode, and direct mtvec, which match this CPU's selected
-  execution profile; firmware still requires authentic M-mode setup and
-  platform services. Begin with an explicit FDT and the serial/timer devices
-  needed by the selected OpenSBI build. Keep Linux and SMP outside that phase.
+- RISCV-9 completed the authentic single-hart OpenSBI v1.8.1 generic FW_JUMP
+  boot and independent S-mode payload handoff. The new bounded UART subset,
+  FDT, guest SBI Base ECALL, trace, reproducible artifacts, and limitations
+  are recorded in phase-riscv-9-report.txt. This profile is minimal and is not
+  claimed to be QEMU virt compatible.
 - For a later Linux target, standard inputs differ: Linux boot documentation
   specifies a0=hartid, a1=FDT address, satp=0, and 2 MiB RV64 placement
   alignment. The documented QEMU virt/OpenSBI path consumes the flattened
@@ -464,11 +462,12 @@ Validation and next target:
   compiled to the emulator's advertised ISA; RV64C is absent today. Linux SMP
   uses SBI TIME/IPI/RFENCE interfaces, with HSM preferred for ordered hart
   startup and CPU hotplug; SRST and DBCN serve reboot and console use cases.
-  The current SBI boundary is not an executing OpenSBI firmware. A real
-  QEMU-virt-style machine also needs FDT handoff, NS16550 UART output, external
-  interrupt-controller/MMIO support for device interrupts, and a larger
-  declared RAM map. OpenSBI can operate without PMP, but then cannot isolate
-  M-mode firmware and protected memory. For Linux, resident firmware and
+  Earlier host SBI provider tests remain supported; RISCV-9 additionally
+  proves the guest-executed OpenSBI SBI Base path. A real QEMU-virt-style
+  machine also needs a device timer, external interrupt-controller/MMIO
+  support for device interrupts, and a larger declared RAM map. OpenSBI can
+  operate without PMP, but then cannot isolate M-mode firmware and protected
+  memory. For Linux, resident firmware and
   protected ranges must be excluded from RAM mappings through FDT/UEFI
   reservations; Linux also needs its documented entry registers and paging
   state.
@@ -479,3 +478,40 @@ Validation and next target:
   https://github.com/riscv-software-src/opensbi/blob/master/docs/firmware/fw.md
   https://github.com/riscv-software-src/opensbi/blob/master/docs/platform/qemu_virt.md
   https://github.com/torvalds/linux/blob/master/arch/riscv/kernel/sbi.c
+
+--- Current executable status after Phase RISCV-9 ---
+
+- In addition to the preceding RV64I/M/A, privilege, Sv39, timer, SBI, and
+  ELF64 work, production RV64CPU::step() now executes genuine OpenSBI v1.8.1
+  generic FW_JUMP machine code, then its MRET-controlled S-mode handoff.
+- The pinned image is built for RV64IMA_Zicsr. Its ET_DYN ELF is retained and
+  inspected; the paired configured raw fw_jump.bin is loaded in the bounded
+  2 MiB firmware slot. The existing static ET_EXEC RISC-V ELF loader is not
+  weakened. A separate ET_EXEC supervisor ELF is loaded at 0x80200000.
+- An FDT at 0x82200000 describes 64 MiB RAM, one RV64IMA_Zicsr/Sv39 hart,
+  CPU interrupt controller, 10 MHz timebase, and only the supported 8-bit
+  transmit UART interface. No timer or external interrupt controller is
+  advertised. The profile is single-hart, with deterministic CPU virtual time.
+- New M-mode mvendorid/marchid/mimpid CSR reads return zero and writes remain
+  illegal, matching the unassigned-ID profile. Unknown CSRs remain traps.
+  The opt-in UART covers eight byte-wide registers; wider or out-of-range
+  accesses fault. It is not a complete NS16550 or QEMU virt model.
+- The independent supervisor guest verifies S-mode, hart/FDT arguments,
+  initialized data, BSS, RV64M arithmetic, memory, and SBI Base version 3.0.
+  Its S-mode ECALL enters guest OpenSBI M-mode code and returns success/version
+  through architectural trap handling. It then writes the message and
+  versioned completion record into guest RAM. No host SBI provider is attached
+  during this proof.
+- The Release execution trace records 3,446,455 steps, 3,446,114 M-mode and
+  302 S-mode retirements, 39 recovered traps, 400 CSR operations, one SBI
+  ECALL/return, 2,473 MMIO reads, 2,480 MMIO writes, one firmware handoff, and
+  guest completion. The test imposes instruction and repeated-PC bounds.
+- Validation: 14/14 RISC-V CTest suites pass in Debug; the focused new suite
+  passes in Release. EfiMemoryMapTests and IA64SalTests pass in Debug and
+  Release (2/2 each). The unrelated pre-existing test_io_devices assertion
+  and test_elf_validation IA-64 link failures remain outside this phase.
+- Next target recommendation: select either a deterministic timer plus
+  OpenSBI SBI TIME proof, or a staged QEMU-virt compatibility milestone with
+  the required timer and external interrupt path. Linux, SMP, and unrelated
+  devices remain later targets. Inspect firmware ISA and advertised services
+  before implementing additional CPU or platform support.

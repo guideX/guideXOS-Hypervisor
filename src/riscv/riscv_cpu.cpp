@@ -32,6 +32,9 @@ constexpr uint32_t kCsrMepc = 0x341U;
 constexpr uint32_t kCsrMcause = 0x342U;
 constexpr uint32_t kCsrMtval = 0x343U;
 constexpr uint32_t kCsrMip = 0x344U;
+constexpr uint32_t kCsrMvendorid = 0xF11U;
+constexpr uint32_t kCsrMarchid = 0xF12U;
+constexpr uint32_t kCsrMimpid = 0xF13U;
 constexpr uint32_t kCsrMhartid = 0xF14U;
 
 // mstatus fields and writable masks are declared in riscv_cpu.h.
@@ -321,6 +324,15 @@ void RV64CPU::reset() {
     supervisorTimerDeadline_ = UINT64_MAX;
     supervisorTimerArmed_ = false;
     wfiWaiting_ = false;
+    uartInterruptEnable_ = 0;
+    uartLineControl_ = 0;
+    uartModemControl_ = 0;
+    uartScratch_ = 0;
+    uartDivisorLow_ = 0;
+    uartDivisorHigh_ = 0;
+    uartOutput_.clear();
+    mmioReadCount_ = 0;
+    mmioWriteCount_ = 0;
     updateTimerPending();
     // Guest memory image is preserved across reset; PC restarts at its base.
     if (memLoaded_) {
@@ -399,6 +411,84 @@ bool RV64CPU::timerMmioOverlaps(uint64_t paddr, size_t size) const {
     return overlaps(timerMapping_.mtimecmpAddress) || overlaps(timerMapping_.mtimeAddress);
 }
 
+bool RV64CPU::uartMmioOverlaps(uint64_t paddr, size_t size) const {
+    if (!uartMapping_.enabled || size == 0 ||
+        static_cast<uint64_t>(size) > UINT64_MAX - paddr ||
+        uartMapping_.baseAddress > UINT64_MAX - 8ULL) {
+        return false;
+    }
+    const uint64_t accessEnd = paddr + static_cast<uint64_t>(size);
+    const uint64_t uartEnd = uartMapping_.baseAddress + 8ULL;
+    return paddr < uartEnd && uartMapping_.baseAddress < accessEnd;
+}
+
+bool RV64CPU::readUartMmio(uint64_t paddr, uint8_t* dst, size_t size,
+                           bool& handled) const {
+    handled = uartMmioOverlaps(paddr, size);
+    if (!handled) return true;
+    if (dst == nullptr || size != 1 || paddr < uartMapping_.baseAddress ||
+        paddr - uartMapping_.baseAddress >= 8ULL) {
+        return false;
+    }
+
+    const uint8_t offset = static_cast<uint8_t>(paddr - uartMapping_.baseAddress);
+    uint8_t value = 0;
+    switch (offset) {
+        case 0:
+            value = (uartLineControl_ & 0x80U) != 0U ? uartDivisorLow_ : 0U;
+            break;
+        case 1:
+            value = (uartLineControl_ & 0x80U) != 0U ? uartDivisorHigh_
+                                                     : uartInterruptEnable_;
+            break;
+        case 2: value = 0x01U; break;  // No interrupt pending.
+        case 3: value = uartLineControl_; break;
+        case 4: value = uartModemControl_; break;
+        case 5: value = 0x60U; break;  // THR and transmitter are empty.
+        case 6: value = 0; break;      // No modem inputs are connected.
+        case 7: value = uartScratch_; break;
+        default: return false;
+    }
+    dst[0] = value;
+    return true;
+}
+
+bool RV64CPU::writeUartMmio(uint64_t paddr, const uint8_t* src, size_t size,
+                            bool& handled) {
+    handled = uartMmioOverlaps(paddr, size);
+    if (!handled) return true;
+    if (src == nullptr || size != 1 || paddr < uartMapping_.baseAddress ||
+        paddr - uartMapping_.baseAddress >= 8ULL) {
+        return false;
+    }
+
+    const uint8_t offset = static_cast<uint8_t>(paddr - uartMapping_.baseAddress);
+    const uint8_t value = src[0];
+    switch (offset) {
+        case 0:
+            if ((uartLineControl_ & 0x80U) != 0U) {
+                uartDivisorLow_ = value;
+            } else {
+                uartOutput_.push_back(static_cast<char>(value));
+            }
+            break;
+        case 1:
+            if ((uartLineControl_ & 0x80U) != 0U) uartDivisorHigh_ = value;
+            else uartInterruptEnable_ = value & 0x0FU;
+            break;
+        case 2:  // FCR: transmit-only fixture has no FIFO state to clear.
+            break;
+        case 3: uartLineControl_ = value; break;
+        case 4: uartModemControl_ = value & 0x1FU; break;
+        case 5:  // LSR is read-only.
+        case 6:  // MSR is read-only.
+            break;
+        case 7: uartScratch_ = value; break;
+        default: return false;
+    }
+    return true;
+}
+
 bool RV64CPU::readTimerMmio(uint64_t paddr, uint8_t* dst, size_t size,
                             bool& handled) const {
     handled = timerMmioOverlaps(paddr, size);
@@ -471,8 +561,14 @@ bool RV64CPU::readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const {
         return memLoaded_;
     }
     bool handled = false;
+    const bool uartRead = readUartMmio(paddr, dst, size, handled);
+    if (handled) {
+        if (uartRead) ++mmioReadCount_;
+        return uartRead;
+    }
     const bool timerRead = readTimerMmio(paddr, dst, size, handled);
     if (handled) {
+        if (timerRead) ++mmioReadCount_;
         return timerRead;
     }
     if (!memLoaded_) {
@@ -519,8 +615,14 @@ bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
         return memLoaded_;
     }
     bool handled = false;
+    const bool uartWrite = writeUartMmio(paddr, src, size, handled);
+    if (handled) {
+        if (uartWrite) ++mmioWriteCount_;
+        return uartWrite;
+    }
     const bool timerWrite = writeTimerMmio(paddr, src, size, handled);
     if (handled) {
+        if (timerWrite) ++mmioWriteCount_;
         return timerWrite;
     }
     if (!memLoaded_) {
@@ -548,8 +650,49 @@ bool RV64CPU::configureMachineTimer(const MachineTimerMapping& mapping) {
     if (distance < 8ULL) {
         return false;
     }
+    if (uartMapping_.enabled) {
+        const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
+                                 uint64_t rhs, uint64_t rhsSize) {
+            return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
+        };
+        if (overlaps(mapping.mtimecmpAddress, 8, uartMapping_.baseAddress, 8) ||
+            overlaps(mapping.mtimeAddress, 8, uartMapping_.baseAddress, 8)) {
+            return false;
+        }
+    }
     timerMapping_ = mapping;
     updateTimerPending();
+    return true;
+}
+
+bool RV64CPU::configureMachineUart(const MachineUartMapping& mapping) {
+    if (!mapping.enabled) {
+        uartMapping_ = mapping;
+        uartOutput_.clear();
+        return true;
+    }
+    if ((mapping.baseAddress & 7ULL) != 0ULL ||
+        mapping.baseAddress > UINT64_MAX - 8ULL ||
+        (memLoaded_ && rangeInGuest(mapping.baseAddress, 8))) {
+        return false;
+    }
+    const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
+                             uint64_t rhs, uint64_t rhsSize) {
+        if (lhs > UINT64_MAX - lhsSize || rhs > UINT64_MAX - rhsSize) return true;
+        return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
+    };
+    if (overlaps(mapping.baseAddress, 8, timerMapping_.mtimeAddress, 8) ||
+        overlaps(mapping.baseAddress, 8, timerMapping_.mtimecmpAddress, 8)) {
+        return false;
+    }
+    uartMapping_ = mapping;
+    uartInterruptEnable_ = 0;
+    uartLineControl_ = 0;
+    uartModemControl_ = 0;
+    uartScratch_ = 0;
+    uartDivisorLow_ = 0;
+    uartDivisorHigh_ = 0;
+    uartOutput_.clear();
     return true;
 }
 
@@ -706,6 +849,9 @@ bool RV64CPU::csrSupported(uint32_t csr) const {
         case kCsrMcause:
         case kCsrMtval:
         case kCsrMip:
+        case kCsrMvendorid:
+        case kCsrMarchid:
+        case kCsrMimpid:
         case kCsrMhartid:
         case kCsrTime:
             return true;
@@ -735,6 +881,12 @@ bool RV64CPU::csrRead(uint32_t csr, uint64_t& value) const {
         case kCsrScause: value = scause_; return true;
         case kCsrMtval: value = mtval_; return true;
         case kCsrStval: value = stval_; return true;
+        // No JEDEC vendor, standardized architecture ID, or stable processor
+        // revision has been assigned to this virtual hart. The privileged ISA
+        // permits zero for each unimplemented machine identification field.
+        case kCsrMvendorid: value = 0ULL; return true;
+        case kCsrMarchid: value = 0ULL; return true;
+        case kCsrMimpid: value = 0ULL; return true;
         case kCsrMhartid: value = 0ULL; return true;
         case kCsrScounteren: value = scounteren_; return true;
         case kCsrMcounteren: value = mcounteren_; return true;
@@ -817,6 +969,11 @@ bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
         case kCsrStval: stval_ = value; return true;
         case kCsrMhartid:
             // Read-only.
+            return true;
+        case kCsrMvendorid:
+        case kCsrMarchid:
+        case kCsrMimpid:
+            // Read-only; zero denotes an unassigned/unimplemented ID.
             return true;
         case kCsrSatp: {
             // RISCV-3: Bare (MODE 0) and Sv39 (MODE 8). ASIDLEN=0: ASID field

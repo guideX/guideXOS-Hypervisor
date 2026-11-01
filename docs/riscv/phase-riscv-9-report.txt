@@ -1,0 +1,189 @@
+guideXOS Hypervisor — Phase RISCV-9 report
+Authentic OpenSBI Generic FW_JUMP and S-mode payload
+
+Outcome: A — completed
+
+Repository and phase state
+--------------------------
+Starting branch: RISCV
+Starting HEAD: 009e65ee563e5d0511e260a56cce79be632f2d6f
+Upstream divergence at preflight: 0 ahead / 0 behind
+Preflight tracked worktree: clean
+Preflight phase marker: RISCV-8 completed; RISCV-9 next
+The original untracked build and guest-fixture directories were preserved.
+The only new build output is build-riscv9-debug/; it is local and untracked.
+No IA-64 implementation, .phase file, other architecture marker, branch, or
+pre-existing relocated artifact was changed. No push was performed.
+
+Firmware provenance and reproducible build
+-------------------------------------------
+Upstream: https://github.com/riscv-software-src/opensbi
+Release tag: v1.8.1
+Immutable source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+The source tree was not patched. Fixture rebuild instructions and the
+PowerShell build script are tests/fixtures/riscv_opensbi_fw_jump/README.md and
+rebuild.ps1. The script verifies the commit before building. The upstream
+BSD-2-Clause COPYING.BSD license accompanies the redistributed firmware.
+
+Build configuration:
+  PLATFORM=generic
+  FW_JUMP=y FW_DYNAMIC=n FW_PAYLOAD=n
+  FW_TEXT_START=0x80000000
+  FW_JUMP_ADDR=0x80200000
+  FW_JUMP_FDT_OFFSET=0x2200000
+  PLATFORM_RISCV_XLEN=64 PLATFORM_RISCV_ABI=lp64
+  PLATFORM_RISCV_ISA=rv64ima_zicsr
+  LLVM=1 REPRODUCIBLE=1
+
+Host tools used: LLVM/Clang/LLD 22.1.8, GNU Make 4.4.1, DTC 1.7.2,
+MSYS2 Bash, and Python 3. The independent payload uses Clang/LLD with
+--target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax
+-ffreestanding -fno-stack-protector -nostdlib. Its assembly selects norvc and
+norelax. It has no C runtime, libc, floating-point, compressed, or vector
+instructions. The FDT was compiled from platform.dts with DTC 1.7.2.
+Firmware ELF Tag_RISCV_arch: rv64i2p1_m2p0_a2p1_zicsr2p0_zmmul1p0_zaamo1p0_zalrsc1p0.
+This is RV64I, M, A, and Zicsr/Zmmul/Zaamo/Zalrsc only; there is no C, F, D,
+or V requirement. OpenSBI's own boot-hart report identifies rv64ima and no
+additional ISA extensions.
+
+Checked-in generated artifact inventory (SHA-256, byte size):
+  fw_jump.bin       CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3  537872
+  fw_jump.elf       255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0  1533544
+  supervisor.bin    2C8D29F2624F151E939E9688B8A9D6645C2FE8164127FD2C055A633956F1EC93  65552
+  supervisor.elf    53326D1234E061E6398AD122CBAEA52F4DA189168FF150ECF44B1D76B13C26D8  9744
+  platform.dtb      B2CBFE6E2A6C4D21616BEC6EEF216A9A42F7068B9853505C700751FA7C92E093  1516
+
+Firmware format and load policy
+-------------------------------
+The upstream fw_jump.elf is ELF64 little-endian ET_DYN and contains PT_LOAD
+segments plus OpenSBI's dynamic relocation data. The existing RISC-V ELF64
+loader correctly rejects ET_DYN because it accepts bounded static ET_EXEC
+images only. No loader rule was relaxed. The authentic paired fw_jump.bin is
+loaded at its configured FW_TEXT_START through a bounded raw-image path; the
+test verifies its size, digest, entry contract, configured slot, and the
+associated ELF program-header extents.
+
+ELF PT_LOAD extents (physical and virtual addresses are identical):
+  RX  0x80000000  file/memory 224312/224312  end 0x80036c38
+  R   0x80037000  file/memory 52485/52485    end 0x80043d05
+  RW  0x80043d08  file/memory 224/224        end 0x80043de8
+  RW  0x80080000  file/memory 13584/20048    end 0x80084e50
+All firmware load and zero-fill extents are inside its reserved 2 MiB slot.
+The raw image is 537872 bytes; OpenSBI owns its runtime initialization and
+relocation. The CPU/loader does not emulate relocation or skip firmware code.
+
+Guest machine and memory map
+----------------------------
+Single hart, hart ID 0; RV64IMA_Zicsr; M-mode firmware; S-mode next stage;
+Sv39 implemented, initial satp Bare; deterministic virtual time. Initial
+firmware state is PC=0x80000000, a0=0, a1=0x82200000, M privilege. The CPU
+loader sets those entry inputs and does not perform initialization or MRET.
+
+Guest RAM: [0x80000000, 0x84000000) (64 MiB)
+  OpenSBI reserved slot:    [0x80000000, 0x80200000)
+  Supervisor ELF reservation:[0x80200000, 0x80220000)
+    RX: 0x80200000, 544 bytes; R: 0x80200220, 31 bytes
+    RW: 0x80210000, 16 file bytes plus 8 BSS bytes
+  FDT reserved placement:   [0x82200000, 0x82202000)
+    Actual FDT size 1516 bytes; pointer is 8-byte aligned.
+  Guest message/signature:  [0x83e00000, 0x83e01000)
+    Message at base; 128-byte signature at base+0x100; completion at +112.
+  Guest stack reservation:  [0x83ff0000, 0x84000000)
+    Payload sets SP=0x83fffff0.
+The FDT describes RAM, one RV64IMA_Zicsr/Sv39 hart and CPU interrupt
+controller, a 10 MHz timebase, and one NS16550-compatible serial node. It
+does not advertise timer, PLIC/APLIC/IMSIC, virtio, or storage/network devices.
+The DTS also reserves firmware, payload, FDT, result, and stack ranges.
+
+Implemented hardware boundary
+-----------------------------
+The only new MMIO model is an opt-in, 8-register, 8-bit UART transmit subset
+at 0x10000000. It provides divisor-latch selection, transmit output capture,
+empty transmitter status, no pending UART interrupt, and bounded register
+state. Non-byte widths and invalid accesses fault deterministically. It is not
+a full NS16550 model. Existing deterministic timer and SBI-provider features
+remain available to their existing tests; the authentic OpenSBI test attaches
+no host ISbiProvider. OpenSBI reports zero PMP entries and proceeds using its
+supported fallback. Unassigned/unimplemented mvendorid, marchid, and mimpid
+CSRs read as architectural zero and remain read-only; unsupported CSRs still
+trap.
+
+Execution proof
+---------------
+The integrated test runs production RV64CPU::step() over guest-loaded bytes.
+It allows the architectural semihosting breakpoint probe to trap and continue,
+keeps a bounded trace, imposes a 10,000,000-step maximum and repeated-PC bound,
+and stops only when the S-mode payload has written its last completion word.
+No alternate interpreter, host jump, OpenSBI patch, or host SBI provider is
+used for the success path.
+
+Direct Release trace:
+  steps=3446455
+  M-mode retired=3446114; S-mode retired=302
+  traps=39; CSR operations=400
+  SBI ECALLs=1; MMIO reads=2473; MMIO writes=2480
+  OpenSBI handoff=1; guest SBI return=1; complete=1
+The first M-mode PC is 0x80000000. UART capture contains the genuine OpenSBI
+v1.8 banner, platform and domain report, and console output. OpenSBI reports
+one hart, boot hart 0, RV64IMA, no PMP, and next address 0x80200000 with next
+mode S-mode. It consumes the DTB at 0x82200000 and enters the independent
+payload through its machine-to-supervisor transition.
+
+The payload verifies S-mode, hart ID 0, incoming FDT pointer, initialized
+data, zeroed BSS, MUL result 42, and a guest memory round trip. It makes SBI
+Base EID 0x10 / FID 0 through S-mode ECALL. The trap is delivered to OpenSBI's
+M-mode trap code, which returns success in a0 and SBI version 0x03000000 in
+a1; the payload resumes in S-mode. It writes the exact NUL-terminated message
+"Hello from OpenSBI on guideXOS" into guest RAM, populates the version-1
+signature and writes the completion word last. At completion PC=0x80200184,
+privilege=S, a0=0, a1=0x03000000, s0=hart 0, s1=0x82200000, s4=s5=42, and
+s6=0x1122334455667788. The test verifies message, every signature field,
+M-to-S handoff, guest SBI trap/return, and that host SBI interception is null.
+
+The 39 handled traps comprise the EBREAK used by OpenSBI's architectural
+semihosting probe, optional unsupported PMP/performance-counter CSR probes,
+and the payload's expected S-mode ECALL. They are architecturally delivered
+and recovered by guest OpenSBI; none is converted to success by the host.
+
+Validation
+----------
+Preflight: all 13 existing RISC-V CTest suites passed in Debug before edits.
+Final Debug: all 14 RISC-V CTest suites passed (13 existing + the new
+RiscVOpenSbiFwJumpTests); the OpenSBI case completed in 261.94 seconds.
+Focused Release: RiscVOpenSbiFwJumpTests passed, 1/1, in 15.68 seconds.
+The new executable uses 63 explicit runtime checks, active in Release.
+
+IA-64 regressions, with no IA-64 implementation changes:
+  Debug EfiMemoryMapTests and IA64SalTests: 2/2 passed.
+  Release EfiMemoryMapTests and IA64SalTests: 2/2 passed.
+The pre-existing unrelated test_io_devices console assertion and legacy
+test_elf_validation unresolved IA-64 link symbols remain unchanged and outside
+this phase. The established direct IA-64 ACPI, interrupt-controller, and
+processor-interrupt-block executables also passed. git diff --check passed.
+
+Remaining limits and RISCV-10 recommendation
+--------------------------------------------
+This is a minimal OpenSBI-compatible single-hart profile, not QEMU virt
+compatibility. It lacks a real timer device node, external interrupt
+controller, UART interrupts, full UART semantics, PMP isolation, SMP, and
+virtio. OpenSBI's report shows its timer device unavailable at 0 Hz; the
+successful guest SBI Base request does not prove SBI TIME functionality.
+Compressed execution remains unsupported, and the firmware/payload are built
+for the advertised RV64IMA_Zicsr subset. Linux is out of scope: it needs its
+own Image loading and entry contract, broader FDT-described platform support,
+and validation of the exact kernel's ISA requirements.
+
+Recommended RISCV-10: deepen the platform contract using an explicitly chosen
+next target. First add the missing deterministic timer device/OpenSBI timer
+binding and prove SBI TIME end-to-end with guest OpenSBI, or choose a staged
+QEMU-virt compatibility milestone and implement only its required timer and
+external interrupt path. Keep Linux, SMP, and unrelated devices out until
+those interfaces are validated. Recheck the selected firmware's advertised
+extensions and ISA before expanding the CPU profile.
+
+Primary references
+------------------
+OpenSBI v1.8.1 source: https://github.com/riscv-software-src/opensbi/tree/v1.8.1
+FW_JUMP configuration: https://github.com/riscv-software-src/opensbi/blob/v1.8.1/docs/firmware/fw_jump.md
+OpenSBI platform requirements: https://github.com/riscv-software-src/opensbi/blob/v1.8.1/docs/platform_requirements.md
+Machine identification CSR rules: https://docs.riscv.org/reference/isa/priv/machine.html
