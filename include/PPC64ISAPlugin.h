@@ -17,6 +17,7 @@ namespace ppc64 {
 
 class PPC64VirtualTimeBase;
 class PPC64VirtualTerminal;
+class PPC64RTASServiceRegistry;
 
 // ============================================================================
 // PPC64 Phase 1 + Phase 2 constants
@@ -698,6 +699,7 @@ public:
         virtualTerminal_ = terminal;
     }
     void attachXICS(PPC64XICS* xics) { xics_ = xics; }
+    void attachRTAS(PPC64RTASServiceRegistry* rtas) { rtas_ = rtas; }
     void setSRR0(uint64_t v) { state_.srr0 = v; }
     void setSRR1(uint64_t v) { state_.srr1 = v; }
     void setDAR(uint64_t v) { state_.dar = v; }
@@ -915,6 +917,12 @@ private:
                                       uint32_t width, uint64_t value,
                                       PPC64TranslationResult& failure,
                                       std::string& reason) const;
+    uint64_t executeRTAS(IMemory& memory, uint64_t guestPhysicalAddress);
+    bool validateRTASGuestRealRange(
+        IMemory& memory, uint64_t guestRealAddress, size_t size,
+        PPC64TranslationAccess access,
+        std::vector<TranslatedMemorySegment>& segments,
+        std::string& reason) const;
     // Central guest-delivery dispatcher. Assumes the host fault was already
     // recorded via recordFault (for getLastFault diagnostics). When guest
     // delivery is disabled or the fault is terminal (unsupported-state,
@@ -958,6 +966,7 @@ private:
     PPC64VirtualTimeBase* virtualTimeBase_ = nullptr; // owned by the containing VM
     PPC64VirtualTerminal* virtualTerminal_ = nullptr; // owned by the containing VM
     PPC64XICS* xics_ = nullptr; // owned by the containing VM
+    PPC64RTASServiceRegistry* rtas_ = nullptr; // owned by the containing VM
     PPC64VirtualInterruptSnapshot interruptState_;
 };
 

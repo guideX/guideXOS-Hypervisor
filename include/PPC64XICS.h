@@ -8,7 +8,8 @@
 
 namespace ia64::ppc64 {
 
-inline constexpr uint32_t PPC64_XICS_SNAPSHOT_VERSION = 1;
+inline constexpr uint32_t PPC64_XICS_SNAPSHOT_VERSION = 2;
+inline constexpr uint32_t PPC64_XICS_LEGACY_SNAPSHOT_VERSION = 1;
 inline constexpr uint32_t PPC64_XICS_FIRST_SOURCE = 0x1100;
 inline constexpr uint32_t PPC64_XICS_LAST_SOURCE = 0x113f;
 inline constexpr size_t PPC64_XICS_SOURCE_COUNT = 64;
@@ -34,6 +35,8 @@ struct PPC64XICSSourceSnapshot {
     bool enabled = false;
     uint32_t serverId = PPC64_XICS_SERVER_ID;
     uint8_t priority = 0xff;
+    uint8_t savedPriority = 0xff;
+    bool savedEnabled = false;
     bool asserted = false;
     bool pending = false;
     bool presented = false;
@@ -82,6 +85,13 @@ public:
                          std::string& reason);
     bool setSourceEnabled(uint32_t sourceId, uint16_t ownerLPID,
                           bool enabled, std::string& reason);
+    bool setSourceXive(uint32_t sourceId, uint16_t ownerLPID,
+                       uint32_t serverId, uint8_t priority,
+                       std::string& reason);
+    bool rtasInterruptOff(uint32_t sourceId, uint16_t ownerLPID,
+                          std::string& reason);
+    bool rtasInterruptOn(uint32_t sourceId, uint16_t ownerLPID,
+                         std::string& reason);
     bool assertSource(uint32_t sourceId, uint16_t ownerLPID,
                       std::string& reason);
     bool deassertSource(uint32_t sourceId, uint16_t ownerLPID,

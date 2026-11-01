@@ -1,6 +1,7 @@
 #include "PPC64ISAPlugin.h"
 #include "PPC64VirtualTerminal.h"
 #include "PPC64Platform.h"
+#include "PPC64RTAS.h"
 #include "ISAPluginRegistry.h"
 #include "memory.h"
 #include "mmu.h"
@@ -3612,6 +3613,14 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             uint64_t status = PPC64_H_FUNCTION;
             if (inProblemState()) {
                 status = PPC64_H_PRIVILEGE;
+            } else if (state_.gpr[3] == PPC64_H_RTAS) {
+                if (rtas_ == nullptr || xics_ == nullptr) {
+                    status = PPC64_H_FUNCTION;
+                } else if (inHypervisorState()) {
+                    status = PPC64_H_PRIVILEGE;
+                } else {
+                    status = executeRTAS(memory, state_.gpr[4]);
+                }
             } else if (partitionContext_ != nullptr &&
                        state_.gpr[3] == PPC64_H_REGISTER_PROC_TBL) {
                 status = PPC64PartitionMMU::registerProcessTable(
@@ -4745,6 +4754,258 @@ void PPC64ISAPlugin::writeGPR(size_t index, uint64_t value) {
         throw std::out_of_range("PPC64 writeGPR: register index out of range");
     }
     state_.gpr[index] = value;
+}
+
+bool PPC64ISAPlugin::validateRTASGuestRealRange(
+    IMemory& memory, uint64_t guestRealAddress, size_t size,
+    PPC64TranslationAccess access,
+    std::vector<TranslatedMemorySegment>& segments,
+    std::string& reason) const {
+    segments.clear();
+    if (size == 0) {
+        reason.clear();
+        return true;
+    }
+    if (size > std::numeric_limits<uint64_t>::max() - guestRealAddress) {
+        reason = "RTAS guest-real range overflows the address space";
+        return false;
+    }
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    if (ram == nullptr) {
+        reason = "RTAS requires the supported host-backed guest RAM backend";
+        return false;
+    }
+
+    size_t done = 0;
+    while (done < size) {
+        const uint64_t current = guestRealAddress + static_cast<uint64_t>(done);
+        uint64_t hostBackingAddress = current;
+        size_t chunk = size - done;
+
+        if (partitionContext_ != nullptr) {
+            if (!partitionContext_->isActive()) {
+                reason = "RTAS caller partition is no longer active";
+                return false;
+            }
+            const PPC64PartitionTranslationResult translated =
+                PPC64PartitionMMU::translateGuestReal(
+                    memory, *partitionContext_, current, access, false);
+            if (!translated.success || translated.pageSize == 0) {
+                reason = "RTAS guest-real partition translation failed: " +
+                         translated.reason;
+                return false;
+            }
+            const uint64_t pageOffset = current % translated.pageSize;
+            const uint64_t bytesInPage = translated.pageSize - pageOffset;
+            chunk = static_cast<size_t>(std::min<uint64_t>(
+                static_cast<uint64_t>(chunk), bytesInPage));
+            hostBackingAddress = translated.hostBackingAddress;
+            if (!partitionContext_->allowsGuestBackingRange(
+                    hostBackingAddress, chunk)) {
+                reason = "RTAS guest-real range crosses backing memory private to another LPID";
+                return false;
+            }
+        } else if (radixConfigured_) {
+            if (!PPC64RadixMMU::resolveGuestReal(
+                    radixConfiguration_, current, chunk, hostBackingAddress,
+                    reason)) {
+                reason = "RTAS flat guest-real translation failed: " + reason;
+                return false;
+            }
+        }
+
+        if (chunk == 0 ||
+            static_cast<uint64_t>(chunk) >
+                std::numeric_limits<uint64_t>::max() - hostBackingAddress ||
+            !ram->ValidateGuestRealRange(
+                hostBackingAddress, chunk,
+                access == PPC64TranslationAccess::WRITE, reason)) {
+            if (reason.empty()) {
+                reason = "RTAS request touches unavailable, unbacked, or MMIO memory";
+            }
+            return false;
+        }
+        if (guestBackingRangeProtected(hostBackingAddress, chunk)) {
+            reason = "RTAS guest memory aliases protected hypervisor backing";
+            return false;
+        }
+        segments.push_back({current, current, hostBackingAddress,
+                            static_cast<uint32_t>(chunk)});
+        done += chunk;
+    }
+    reason.clear();
+    return true;
+}
+
+uint64_t PPC64ISAPlugin::executeRTAS(
+    IMemory& memory, uint64_t guestPhysicalAddress) {
+    if (rtas_ == nullptr || xics_ == nullptr || inProblemState() ||
+        inHypervisorState() || xics_->activeLPID() != getActiveLPID() ||
+        (guestPhysicalAddress & 3ULL) != 0) {
+        return PPC64_H_PARAMETER;
+    }
+    auto* ram = dynamic_cast<Memory*>(&memory);
+    if (ram == nullptr) return PPC64_H_PARAMETER;
+
+    const auto readBE32 = [](const uint8_t* bytes) {
+        return (static_cast<uint32_t>(bytes[0]) << 24) |
+               (static_cast<uint32_t>(bytes[1]) << 16) |
+               (static_cast<uint32_t>(bytes[2]) << 8) |
+               static_cast<uint32_t>(bytes[3]);
+    };
+    const auto readSegments = [](Memory& guestRAM,
+                                 const std::vector<TranslatedMemorySegment>& segments,
+                                 std::vector<uint8_t>& output,
+                                 size_t outputOffset) {
+        size_t copied = 0;
+        for (const auto& segment : segments) {
+            guestRAM.ReadGuestReal(segment.hostBackingAddress,
+                output.data() + outputOffset + copied, segment.size);
+            copied += segment.size;
+        }
+    };
+
+    std::string reason;
+    std::vector<TranslatedMemorySegment> headerSegments;
+    if (!validateRTASGuestRealRange(memory, guestPhysicalAddress, 12,
+            PPC64TranslationAccess::READ, headerSegments, reason)) {
+        return PPC64_H_PARAMETER;
+    }
+    std::array<uint8_t, 12> header{};
+    try {
+        size_t copied = 0;
+        for (const auto& segment : headerSegments) {
+            ram->ReadGuestReal(segment.hostBackingAddress,
+                header.data() + copied, segment.size);
+            copied += segment.size;
+        }
+    } catch (const std::exception&) {
+        return PPC64_H_PARAMETER;
+    }
+
+    const uint32_t token = readBE32(header.data());
+    const uint32_t nargs = readBE32(header.data() + 4);
+    const uint32_t nret = readBE32(header.data() + 8);
+    if (nargs > PPC64_RTAS_MAX_CELLS ||
+        nret > PPC64_RTAS_MAX_CELLS ||
+        nargs > PPC64_RTAS_MAX_CELLS - nret || nret == 0) {
+        return PPC64_H_PARAMETER;
+    }
+
+    constexpr size_t headerSize = 12;
+    const size_t requestLength = headerSize + static_cast<size_t>(nargs) * 4U;
+    const size_t responseLength = static_cast<size_t>(nret) * 4U;
+    const size_t totalLength = requestLength + responseLength;
+    if (requestLength < headerSize || totalLength < requestLength ||
+        totalLength > headerSize + PPC64_RTAS_MAX_CELLS * 4U) {
+        return PPC64_H_PARAMETER;
+    }
+    const uint64_t responseAddress =
+        guestPhysicalAddress + static_cast<uint64_t>(requestLength);
+    if (responseAddress < guestPhysicalAddress) return PPC64_H_PARAMETER;
+
+    std::vector<TranslatedMemorySegment> requestSegments;
+    std::vector<TranslatedMemorySegment> responseSegments;
+    if (!validateRTASGuestRealRange(memory, guestPhysicalAddress,
+            requestLength, PPC64TranslationAccess::READ,
+            requestSegments, reason) ||
+        !validateRTASGuestRealRange(memory, responseAddress,
+            responseLength, PPC64TranslationAccess::WRITE,
+            responseSegments, reason)) {
+        return PPC64_H_PARAMETER;
+    }
+
+    // Dispatch only from a complete staged request. Linux's host-side rets
+    // pointer is deliberately not read or written as guest wire data.
+    std::vector<uint8_t> stagedRequest(requestLength);
+    try {
+        readSegments(*ram, requestSegments, stagedRequest, 0);
+    } catch (const std::exception&) {
+        return PPC64_H_PARAMETER;
+    }
+    if (readBE32(stagedRequest.data()) != token ||
+        readBE32(stagedRequest.data() + 4) != nargs ||
+        readBE32(stagedRequest.data() + 8) != nret) {
+        return PPC64_H_PARAMETER;
+    }
+
+    std::vector<uint32_t> arguments;
+    arguments.reserve(nargs);
+    for (uint32_t index = 0; index < nargs; ++index) {
+        arguments.push_back(readBE32(stagedRequest.data() + headerSize +
+                                     static_cast<size_t>(index) * 4U));
+    }
+    const PPC64XICSSnapshot xicsBefore = xics_->createSnapshot();
+    const auto rollbackXics = [&]() {
+        std::vector<uint16_t> allowedLPIDs{0};
+        for (const auto& presentation : xicsBefore.presentations) {
+            if (std::find(allowedLPIDs.begin(), allowedLPIDs.end(),
+                          presentation.ownerLPID) == allowedLPIDs.end()) {
+                allowedLPIDs.push_back(presentation.ownerLPID);
+            }
+        }
+        for (const auto& source : xicsBefore.sources) {
+            if (std::find(allowedLPIDs.begin(), allowedLPIDs.end(),
+                          source.ownerLPID) == allowedLPIDs.end()) {
+                allowedLPIDs.push_back(source.ownerLPID);
+            }
+        }
+        std::string ignored;
+        (void)xics_->restoreSnapshot(xicsBefore, allowedLPIDs,
+                                     xicsBefore.activeLPID, ignored);
+    };
+    const PPC64RTASInvocationResult invocation = rtas_->invoke(
+        token, nargs, nret, arguments, PPC64_RTAS_CAP_XICS,
+        *xics_, getActiveLPID());
+
+    std::vector<GuestRealWriteSegment> writes;
+    for (const PPC64RTASReturnCell& cell : invocation.returnCells) {
+        if (cell.index >= nret) continue;
+        const uint64_t cellAddress = responseAddress +
+                                     static_cast<uint64_t>(cell.index) * 4U;
+        const uint64_t cellEnd = cellAddress + 4U;
+        const std::array<uint8_t, 4> encoded{
+            static_cast<uint8_t>(cell.value >> 24),
+            static_cast<uint8_t>(cell.value >> 16),
+            static_cast<uint8_t>(cell.value >> 8),
+            static_cast<uint8_t>(cell.value)};
+        uint64_t copied = cellAddress;
+        for (const auto& segment : responseSegments) {
+            const uint64_t segmentEnd = segment.effectiveAddress + segment.size;
+            const uint64_t partBegin = std::max(copied, segment.effectiveAddress);
+            const uint64_t partEnd = std::min(cellEnd, segmentEnd);
+            if (partBegin >= partEnd) continue;
+            GuestRealWriteSegment write;
+            write.address = segment.hostBackingAddress +
+                            (partBegin - segment.effectiveAddress);
+            const size_t sourceOffset = static_cast<size_t>(partBegin - cellAddress);
+            const size_t partSize = static_cast<size_t>(partEnd - partBegin);
+            write.bytes.assign(encoded.begin() + sourceOffset,
+                               encoded.begin() + sourceOffset + partSize);
+            writes.push_back(std::move(write));
+            copied = partEnd;
+            if (copied == cellEnd) break;
+        }
+        if (copied != cellEnd) {
+            rollbackXics();
+            return PPC64_H_PARAMETER;
+        }
+    }
+
+    try {
+        // The complete response mapping was validated before dispatch; this
+        // RAM transaction validates every segment before committing any cell.
+        ram->WriteGuestRealTransaction(writes);
+    } catch (const std::exception&) {
+        // XICS and guest RAM are separate state objects. Since the RAM API
+        // commits response segments all-or-nothing, restore the XICS snapshot
+        // if that commit fails after a recognized service has run.
+        if (invocation.recognized) rollbackXics();
+        return PPC64_H_PARAMETER;
+    }
+    clearReservation();
+    hasCachedInstruction_ = false;
+    return invocation.recognized ? PPC64_H_SUCCESS : PPC64_H_PARAMETER;
 }
 
 std::unique_ptr<IISA> createPPC64ISA() {

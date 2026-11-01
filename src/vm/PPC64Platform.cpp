@@ -255,6 +255,21 @@ bool buildStructure(const PPC64PlatformConfiguration& configuration,
         builder.endNode();
     }
 
+    if (configuration.rtasEnabled) {
+        if (!builder.node("rtas") ||
+            !builder.string("compatible",
+                            "guidexos,hosted-direct-hcall-rtas-v1") ||
+            !property("rtas-version", 1) ||
+            !property("ibm,set-xive", 0x200AU) ||
+            !property("ibm,get-xive", 0x200BU) ||
+            !property("ibm,int-off", 0x200CU) ||
+            !property("ibm,int-on", 0x200DU)) {
+            setReason(reason, "failed to encode the bounded RTAS service discovery node");
+            return false;
+        }
+        builder.endNode();
+    }
+
     const std::vector<PPC64MemoryRange> defaultMemory{{layout.ramBase,
         layout.ramSize, "guest RAM", true}};
     const auto& guestMemory = layout.guestMemoryRanges.empty()
@@ -376,6 +391,11 @@ bool validatePPC64PlatformConfiguration(
         setReason(reason, "unsupported PPC64 interrupt mode");
         return false;
     }
+    if (configuration.rtasEnabled &&
+        configuration.interruptMode != PPC64InterruptMode::XICS_COMPAT) {
+        setReason(reason, "the bounded RTAS service profile requires XICS compatibility mode");
+        return false;
+    }
     if (configuration.timebaseFrequency == 0 ||
         configuration.timebaseFrequency > std::numeric_limits<uint32_t>::max() ||
         configuration.ticksPerInstruction == 0) {
@@ -441,6 +461,7 @@ bool samePPC64PlatformConfiguration(
         left.requestedFdtAddress != right.requestedFdtAddress ||
         left.maximumFdtSize != right.maximumFdtSize ||
         left.virtualTerminalEnabled != right.virtualTerminalEnabled ||
+        left.rtasEnabled != right.rtasEnabled ||
         left.virtualTerminalId != right.virtualTerminalId ||
         left.virtualTerminalInterruptSourceId !=
             right.virtualTerminalInterruptSourceId ||

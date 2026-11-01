@@ -469,7 +469,9 @@ void testProgramDthroughFTimebaseLifecycleAndCheckpoint() {
     input.read(reinterpret_cast<char*>(header.data()), header.size());
     CHECK(input.good());
     CHECK(std::string(reinterpret_cast<char*>(header.data()), 8) == "GXPPC64V");
-    CHECK(header[8] == 6 && header[9] == 0 && header[10] == 0 && header[11] == 0);
+    // Phase 18 adds RTAS profile and independently saved XICS configuration
+    // state to the PPC64 checkpoint payload.
+    CHECK(header[8] == 7 && header[9] == 0 && header[10] == 0 && header[11] == 0);
     vm->writeGR(21, 0x1234);
     CHECK(vm->step());
     CHECK(vm->readDiagnosticCheckpoint(path.string(), "phase10-platform", &error));

@@ -39,6 +39,9 @@ struct PPC64PlatformConfiguration {
     uint64_t maximumFdtSize = 64 * 1024;
     // Expose the VM-owned PAPR hvterm1 through the guest FDT when requested.
     bool virtualTerminalEnabled = false;
+    // Expose the bounded direct-H_RTAS foundation only when XICS is enabled.
+    // This advertises service tokens, never a firmware entry address.
+    bool rtasEnabled = false;
     uint32_t virtualTerminalId = PPC64_DEFAULT_VIRTUAL_TERMINAL_ID;
     // Set by VirtualMachine when it binds hvterm1 to an allocated XICS edge
     // source. Zero denotes polling-only terminal operation.

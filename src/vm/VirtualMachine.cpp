@@ -981,9 +981,13 @@ bool VirtualMachine::configurePPC64Platform(
     }
     auto* plugin = getPPC64ISAPlugin();
     std::unique_ptr<ppc64::PPC64XICS> xics;
+    std::unique_ptr<ppc64::PPC64RTASServiceRegistry> rtasRegistry;
     try {
         if (configuration.interruptMode == ppc64::PPC64InterruptMode::XICS_COMPAT) {
             xics = std::make_unique<ppc64::PPC64XICS>(plugin->getActiveLPID());
+        }
+        if (configuration.rtasEnabled) {
+            rtasRegistry = std::make_unique<ppc64::PPC64RTASServiceRegistry>();
         }
     } catch (const std::exception& exception) {
         return reject(exception.what());
@@ -1029,9 +1033,11 @@ bool VirtualMachine::configurePPC64Platform(
     ppc64PlatformConfiguration_ = configured;
     ppc64VirtualTimeBase_ = std::move(clock);
     ppc64XICS_ = std::move(xics);
+    ppc64RTASRegistry_ = std::move(rtasRegistry);
     ppc64PlatformEnabled_ = true;
     plugin->attachVirtualTimeBase(ppc64VirtualTimeBase_.get());
     plugin->attachXICS(ppc64XICS_.get());
+    plugin->attachRTAS(ppc64RTASRegistry_.get());
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1588,7 +1594,25 @@ ppc64::PPC64PlatformCapabilities VirtualMachine::getPPC64PlatformCapabilities() 
     capabilities.interruptController = ppc64XICS_ != nullptr;
     capabilities.virtualTerminal =
         ppc64PlatformConfiguration_.virtualTerminalEnabled;
+    capabilities.rtas = ppc64RTASRegistry_ != nullptr &&
+                        ppc64PlatformConfiguration_.rtasEnabled;
     return capabilities;
+}
+
+ppc64::PPC64RTASServiceRegistry*
+VirtualMachine::getPPC64RTASServiceRegistry() {
+    if (isaName_ != "PPC64") {
+        throw std::logic_error("PPC64 RTAS registry requested for a different architecture");
+    }
+    return ppc64RTASRegistry_.get();
+}
+
+const ppc64::PPC64RTASServiceRegistry*
+VirtualMachine::getPPC64RTASServiceRegistry() const {
+    if (isaName_ != "PPC64") {
+        throw std::logic_error("PPC64 RTAS registry requested for a different architecture");
+    }
+    return ppc64RTASRegistry_.get();
 }
 
 uint64_t VirtualMachine::getPPC64Timebase() const {
@@ -2997,7 +3021,12 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                     found->ownerLPID != attachment.ownerLPID ||
                     found->serverId != attachment.serverId ||
                     found->type != attachment.sourceType ||
-                    found->priority != attachment.priority || found->asserted) {
+                    (!platformConfig.rtasEnabled &&
+                     found->priority != attachment.priority) ||
+                    (platformConfig.rtasEnabled &&
+                     found->savedPriority != found->priority &&
+                     found->priority != 0xffU) ||
+                    found->asserted) {
                     return reject("terminal attachment does not match its allocated XICS source");
                 }
                 if (attachment.ownerLPID == 0) rootSource = &*found;
@@ -3142,6 +3171,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         std::unique_ptr<BasicInterruptController> stagedInterruptController;
         std::unique_ptr<ppc64::PPC64VirtualTimeBase> stagedTimeBase;
         std::unique_ptr<ppc64::PPC64XICS> stagedXICS;
+        std::unique_ptr<ppc64::PPC64RTASServiceRegistry> stagedRTASRegistry;
         auto stagedTerminal = std::make_unique<ppc64::PPC64VirtualTerminal>(
             expectedTerminalId, expectedTerminalEnabled);
         std::vector<uint8_t> stagedDTB = std::move(canonicalDTB);
@@ -3157,6 +3187,10 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                 if (snapshotXicsEnabled) {
                     stagedXICS = std::make_unique<ppc64::PPC64XICS>(
                         snapshot.ppc64HasActiveLPID ? snapshot.ppc64ActiveLPID : 0);
+                }
+                if (snapshot.ppc64Platform.configuration.rtasEnabled) {
+                    stagedRTASRegistry =
+                        std::make_unique<ppc64::PPC64RTASServiceRegistry>();
                 }
             }
             stagedManager = std::make_unique<ppc64::PPC64PartitionManager>();
@@ -3225,6 +3259,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             stagedPlugin->attachVirtualTimeBase(stagedTimeBase.get());
             stagedPlugin->attachVirtualTerminal(stagedTerminal.get());
             stagedPlugin->attachXICS(stagedXICS.get());
+            stagedPlugin->attachRTAS(stagedRTASRegistry.get());
             stagedCPU = std::make_unique<CPU>(*stagedMemory, *stagedPlugin);
 
             std::string reason;
@@ -3293,8 +3328,10 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
             } else if (!snapshot.ppc64Xics.sources.empty() ||
                        !snapshot.ppc64Xics.presentations.empty() ||
                        snapshot.ppc64Xics.activeLPID != 0 ||
-                       snapshot.ppc64Xics.version !=
-                           ppc64::PPC64_XICS_SNAPSHOT_VERSION) {
+                       (snapshot.ppc64Xics.version !=
+                            ppc64::PPC64_XICS_SNAPSHOT_VERSION &&
+                        snapshot.ppc64Xics.version !=
+                            ppc64::PPC64_XICS_LEGACY_SNAPSHOT_VERSION)) {
                 return reject("legacy interrupt mode contains stale XICS state");
             }
 
@@ -3351,6 +3388,7 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         ppc64VirtualTerminal_ = std::move(stagedTerminal);
         ppc64VirtualTimeBase_ = std::move(stagedTimeBase);
         ppc64XICS_ = std::move(stagedXICS);
+        ppc64RTASRegistry_ = std::move(stagedRTASRegistry);
         ppc64PlatformEnabled_ = snapshot.ppc64Platform.enabled;
         ppc64PlatformPrepared_ = snapshot.ppc64Platform.enabled &&
             snapshot.ppc64Platform.prepared;

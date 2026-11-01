@@ -85,6 +85,7 @@ set(IO_SOURCES
     src/io/PPC64VirtualTerminal.cpp
     src/io/PPC64HostConsole.cpp
     src/io/PPC64XICS.cpp
+    src/io/PPC64RTAS.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
     src/io/FramebufferDevice.cpp
@@ -189,6 +190,7 @@ set(HEADERS
     include/PPC64PartitionMMU.h
     include/PPC64PartitionCheckpoint.h
     include/PPC64VirtualTerminal.h
+    include/PPC64RTAS.h
     include/PPC64Platform.h
     include/riscv_decoder.h
     include/SyscallDispatcher.h
@@ -992,6 +994,26 @@ endif()
 add_custom_target(test_ppc64_phase17_target DEPENDS test_ppc64_phase17)
 add_test(NAME PPC64Phase17Tests COMMAND test_ppc64_phase17)
 set_tests_properties(PPC64Phase17Tests PROPERTIES TIMEOUT 60)
+
+# PPC64 Phase 18 bounded direct-H_RTAS services and XICS integration.
+add_executable(test_ppc64_phase18
+    tests/test_ppc64_phase18.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_ppc64_phase18 PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_ppc64_phase18 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase18 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME PPC64Phase18Tests COMMAND test_ppc64_phase18)
+set_tests_properties(PPC64Phase18Tests PROPERTIES TIMEOUT 90)
 
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo

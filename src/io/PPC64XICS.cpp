@@ -93,6 +93,8 @@ bool PPC64XICS::configureSource(uint32_t sourceId, PPC64XICSSourceType type,
     source.state.enabled = enabled;
     source.state.serverId = serverId;
     source.state.priority = priority;
+    source.state.savedPriority = priority;
+    source.state.savedEnabled = enabled;
     source.state.ownerLPID = ownerLPID;
     presentation(ownerLPID);
     reevaluate(activeLPID_);
@@ -116,8 +118,87 @@ bool PPC64XICS::setSourceEnabled(uint32_t sourceId, uint16_t ownerLPID,
         return false;
     }
     source.state.enabled = enabled;
+    source.state.savedEnabled = enabled;
     if (source.state.type == PPC64XICSSourceType::LEVEL &&
         source.state.asserted && !source.state.acknowledged && enabled) {
+        source.state.pending = true;
+    }
+    reevaluate(ownerLPID);
+    reason.clear();
+    return true;
+}
+
+bool PPC64XICS::setSourceXive(uint32_t sourceId, uint16_t ownerLPID,
+                              uint32_t serverId, uint8_t priority,
+                              std::string& reason) {
+    if (!validSourceId(sourceId) || serverId != PPC64_XICS_SERVER_ID ||
+        ownerLPID != activeLPID_) {
+        setFailure(reason, "RTAS set-xive names an invalid source, server, or inactive LPID");
+        return false;
+    }
+    Source& source = sources_[sourceIndex(sourceId)];
+    if (!source.state.allocated || source.state.ownerLPID != ownerLPID) {
+        setFailure(reason, "RTAS set-xive source is not owned by the active LPID");
+        return false;
+    }
+
+    source.state.serverId = serverId;
+    source.state.priority = priority;
+    source.state.savedPriority = priority;
+    source.state.enabled = priority != 0xffU;
+    source.state.savedEnabled = source.state.enabled;
+    if (source.state.type == PPC64XICSSourceType::LEVEL &&
+        source.state.asserted && !source.state.acknowledged &&
+        source.state.enabled) {
+        source.state.pending = true;
+    }
+    reevaluate(ownerLPID);
+    reason.clear();
+    return true;
+}
+
+bool PPC64XICS::rtasInterruptOff(uint32_t sourceId, uint16_t ownerLPID,
+                                std::string& reason) {
+    if (!validSourceId(sourceId) || ownerLPID != activeLPID_) {
+        setFailure(reason, "RTAS int-off names an invalid source or inactive LPID");
+        return false;
+    }
+    Source& source = sources_[sourceIndex(sourceId)];
+    if (!source.state.allocated || source.state.ownerLPID != ownerLPID) {
+        setFailure(reason, "RTAS int-off source is not owned by the active LPID");
+        return false;
+    }
+
+    if (source.state.priority != 0xffU) {
+        source.state.savedPriority = source.state.priority;
+        source.state.savedEnabled = source.state.enabled;
+    }
+    source.state.priority = 0xffU;
+    source.state.enabled = false;
+    // Pending edge and level events remain latched while the ICS priority is
+    // masked. Reevaluation withdraws presentation without consuming the event.
+    reevaluate(ownerLPID);
+    reason.clear();
+    return true;
+}
+
+bool PPC64XICS::rtasInterruptOn(uint32_t sourceId, uint16_t ownerLPID,
+                               std::string& reason) {
+    if (!validSourceId(sourceId) || ownerLPID != activeLPID_) {
+        setFailure(reason, "RTAS int-on names an invalid source or inactive LPID");
+        return false;
+    }
+    Source& source = sources_[sourceIndex(sourceId)];
+    if (!source.state.allocated || source.state.ownerLPID != ownerLPID) {
+        setFailure(reason, "RTAS int-on source is not owned by the active LPID");
+        return false;
+    }
+
+    source.state.priority = source.state.savedPriority;
+    source.state.enabled = source.state.savedEnabled;
+    if (source.state.type == PPC64XICSSourceType::LEVEL &&
+        source.state.asserted && !source.state.acknowledged &&
+        source.state.enabled) {
         source.state.pending = true;
     }
     reevaluate(ownerLPID);
@@ -134,10 +215,6 @@ bool PPC64XICS::assertSource(uint32_t sourceId, uint16_t ownerLPID,
     Source& source = sources_[sourceIndex(sourceId)];
     if (!source.state.allocated || source.state.ownerLPID != ownerLPID) {
         setFailure(reason, "XICS source is not owned by the requested LPID");
-        return false;
-    }
-    if (!source.state.enabled) {
-        setFailure(reason, "XICS source is disabled");
         return false;
     }
     if (source.state.type == PPC64XICSSourceType::LEVEL) {
@@ -412,7 +489,9 @@ bool PPC64XICS::validateSnapshot(const PPC64XICSSnapshot& snapshot,
                                  const std::vector<uint16_t>& allowedLPIDs,
                                  uint16_t expectedActiveLPID,
                                  std::string& reason) {
-    if (snapshot.version != PPC64_XICS_SNAPSHOT_VERSION || !snapshot.enabled ||
+    if ((snapshot.version != PPC64_XICS_SNAPSHOT_VERSION &&
+         snapshot.version != PPC64_XICS_LEGACY_SNAPSHOT_VERSION) ||
+        !snapshot.enabled ||
         snapshot.activeLPID != expectedActiveLPID ||
         !allowedLPID(snapshot.activeLPID, allowedLPIDs) ||
         snapshot.sources.size() > PPC64_XICS_SOURCE_COUNT ||
@@ -427,6 +506,10 @@ bool PPC64XICS::validateSnapshot(const PPC64XICSSnapshot& snapshot,
              source.type != PPC64XICSSourceType::EDGE) ||
             source.serverId != PPC64_XICS_SERVER_ID ||
             (source.enabled && source.priority == 0xff) ||
+            (source.savedEnabled && source.savedPriority == 0xff) ||
+            (source.priority != 0xff &&
+             (source.savedPriority != source.priority ||
+              source.savedEnabled != source.enabled)) ||
             !allowedLPID(source.ownerLPID, allowedLPIDs) ||
             (source.presented && source.acknowledged) ||
             (source.type == PPC64XICSSourceType::LEVEL && source.pending &&
@@ -509,8 +592,7 @@ bool PPC64XICS::validateSnapshot(const PPC64XICSSnapshot& snapshot,
             const auto* source = sources[sourceIndex(outstanding.sourceId)];
             if (source == nullptr || !source->acknowledged ||
                 (source->pending && source->type == PPC64XICSSourceType::LEVEL) ||
-                source->ownerLPID != presentation.ownerLPID ||
-                source->priority != outstanding.acceptedPriority) {
+                source->ownerLPID != presentation.ownerLPID) {
                 setFailure(reason, "XICS acknowledgment and source state disagree");
                 return false;
             }

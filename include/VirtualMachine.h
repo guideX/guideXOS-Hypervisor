@@ -19,6 +19,7 @@
 #include "KernelPanic.h"
 #include "FramebufferDevice.h"
 #include "PPC64Platform.h"
+#include "PPC64RTAS.h"
 #include <memory>
 #include <vector>
 #include <set>
@@ -682,6 +683,8 @@ public:
     ppc64::PPC64PlatformConfiguration getPPC64PlatformConfiguration() const;
     ppc64::PPC64PlatformSnapshot getPPC64PlatformSnapshot() const;
     ppc64::PPC64PlatformCapabilities getPPC64PlatformCapabilities() const;
+    ppc64::PPC64RTASServiceRegistry* getPPC64RTASServiceRegistry();
+    const ppc64::PPC64RTASServiceRegistry* getPPC64RTASServiceRegistry() const;
     uint64_t getPPC64Timebase() const;
     bool assertPPC64ExternalInterrupt(uint16_t lpid = 0,
                                      std::string* error = nullptr);
@@ -761,6 +764,7 @@ private:
     std::unique_ptr<ppc64::PPC64PartitionManager> ppc64PartitionManager_;
     std::unique_ptr<ppc64::PPC64VirtualTerminal> ppc64VirtualTerminal_;
     std::unique_ptr<ppc64::PPC64XICS> ppc64XICS_;
+    std::unique_ptr<ppc64::PPC64RTASServiceRegistry> ppc64RTASRegistry_;
     std::shared_ptr<const uint8_t> ppc64ConsoleLifetimeToken_ =
         std::make_shared<const uint8_t>(0);
     std::map<uint16_t, std::pair<uint64_t, bool>> ppc64ConsoleOutputLeases_;
