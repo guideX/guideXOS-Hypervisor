@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,15 @@ constexpr uint32_t kSource = PPC64_XICS_FIRST_SOURCE + 1U;
 constexpr uint32_t kSc1 = ENCODING_SC_HCALL;
 constexpr uint32_t kRfid = 0x4c000024U;
 constexpr uint32_t kBctrl = (19U << 26) | (20U << 21) | (528U << 1) | 1U;
+constexpr uint64_t kLPIDPartitionTable = 0x70000U;
+constexpr uint64_t kLPIDAFirstTable = 0x80000U;
+constexpr uint64_t kLPIDBFirstTable = 0x90000U;
+constexpr uint64_t kLPIDPrivatePage = 0x100000U;
+constexpr uint64_t kPteValid = 0x8000000000000000ULL;
+constexpr uint64_t kPteLeaf = 0x4000000000000000ULL;
+constexpr uint64_t kPteReference = 0x100ULL;
+constexpr uint64_t kPteChange = 0x80ULL;
+constexpr uint64_t kPteRWX = 0x7ULL;
 
 uint32_t encodeAddi(uint8_t rt, uint8_t ra, int16_t immediate) {
     return (14U << 26) | (static_cast<uint32_t>(rt) << 21) |
@@ -122,6 +132,54 @@ std::vector<uint8_t> encodeImage(const std::vector<uint32_t>& words) {
         result.push_back(static_cast<uint8_t>(word));
     }
     return result;
+}
+
+void writeBE64(IMemory& memory, uint64_t address, uint64_t value) {
+    std::array<uint8_t, 8> bytes{};
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        bytes[i] = static_cast<uint8_t>(value >> (56U - i * 8U));
+    }
+    memory.Write(address, bytes.data(), bytes.size());
+}
+
+uint64_t partitionRadixRootWord(uint64_t root) {
+    constexpr uint64_t rts = 21;
+    return (root & 0x0fffffffffffff00ULL) |
+           ((rts & 0x18ULL) << 58) | ((rts & 0x7ULL) << 5) | 13ULL;
+}
+
+uint64_t partitionLeafPte(uint64_t backing) {
+    return kPteValid | kPteLeaf | kPteReference | kPteChange |
+           (backing & 0x01fffffffffff000ULL) | kPteRWX;
+}
+
+bool installIdentityPartition(
+    VirtualMachine& vm, uint16_t lpid, uint64_t firstTable,
+    std::shared_ptr<PPC64PartitionContext>& context, std::string& reason) {
+    auto* manager = vm.getPPC64PartitionManager();
+    if (manager == nullptr ||
+        (context = manager->createPartition(lpid, reason)) == nullptr) {
+        return false;
+    }
+    const uint64_t root = firstTable;
+    const uint64_t l1 = firstTable + 0x1000U;
+    const uint64_t l2 = firstTable + 0x2000U;
+    const uint64_t l3 = firstTable + 0x3000U;
+    writeBE64(vm.getMemory(), root, kPteValid | l1 | 9ULL);
+    writeBE64(vm.getMemory(), l1, kPteValid | l2 | 9ULL);
+    writeBE64(vm.getMemory(), l2, kPteValid | l3 | 9ULL);
+    const uint64_t pateAddress = kLPIDPartitionTable +
+                                 static_cast<uint64_t>(lpid) * 16ULL;
+    writeBE64(vm.getMemory(), pateAddress,
+        PPC64_PATE0_HR | partitionRadixRootWord(root));
+    writeBE64(vm.getMemory(), pateAddress + 8U, 0);
+    for (uint64_t guestReal = 0; guestReal < kRamSize; guestReal += 0x1000U) {
+        const uint64_t pteAddress = l3 +
+            (((guestReal >> 12) & 0x1ffULL) * 8ULL);
+        writeBE64(vm.getMemory(), pteAddress, partitionLeafPte(guestReal));
+    }
+    reason.clear();
+    return true;
 }
 
 PPC64PlatformConfiguration platform(bool trampoline = true,
@@ -323,6 +381,29 @@ void appendTrampolineCall(std::vector<uint32_t>& code,
         site->returns = returns;
     }
     code.push_back(encodeAddi(11, 11, 1)); // caller continuation
+}
+
+void appendTrampolinePointerCall(std::vector<uint32_t>& code,
+                                 uint64_t trampoline,
+                                 uint64_t blockAddress,
+                                 GuestCall* site = nullptr) {
+    emitLoad32(code, 3, static_cast<uint32_t>(blockAddress));
+    emitLoad32(code, 10, static_cast<uint32_t>(trampoline));
+    code.push_back(encodeMtspr(10, 9)); // mtctr r10
+    const size_t branchIndex = code.size();
+    code.push_back(kBctrl);
+    if (site != nullptr) {
+        site->branchIndex = branchIndex;
+        site->returnAddress = kEntry + (branchIndex + 1U) * 4U;
+        site->blockAddress = blockAddress;
+    }
+    code.push_back(encodeAddi(11, 11, 1)); // caller continuation
+}
+
+void appendCPPRCall(std::vector<uint32_t>& code, uint8_t cppr) {
+    code.push_back(encodeAddi(4, 0, cppr));
+    code.push_back(encodeAddi(3, 0, static_cast<int16_t>(PPC64_H_CPPR)));
+    code.push_back(kSc1);
 }
 
 std::vector<uint32_t> buildRTASProgram(const IndependentFDT& fdt,
@@ -684,6 +765,343 @@ void testGuestForwardingAndXICS() {
     CHECK(peer.getMemory().GetRawData() != vm.getMemory().GetRawData());
 }
 
+void testLevelTriggeredXICS() {
+    std::puts("[phase19R2-D-level-xics-through-guest-trampoline]");
+    constexpr uint32_t levelSource = kSource;
+    constexpr uint32_t prioritySource = kSource + 1U;
+    constexpr uint32_t deassertedSource = kSource + 2U;
+    VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(vm));
+    const auto layout = vm.getPPC64PlatformSnapshot().memoryLayout;
+    IndependentFDT fdt;
+    CHECK(parseIndependentFDT(vm.getPPC64FDT(), fdt));
+
+    std::string error;
+    CHECK(vm.configurePPC64InterruptSource(levelSource,
+        PPC64XICSSourceType::LEVEL, 0x55, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+    CHECK(vm.configurePPC64InterruptSource(prioritySource,
+        PPC64XICSSourceType::LEVEL, 0x44, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+    CHECK(vm.configurePPC64InterruptSource(deassertedSource,
+        PPC64XICSSourceType::LEVEL, 0x24, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+
+    std::vector<uint32_t> code;
+    std::vector<GuestCall> calls;
+    appendCPPRCall(code, 0x20); // Higher numeric priority is eligible.
+    const auto appendCall = [&](const std::string& token, uint64_t block,
+                                const std::vector<uint32_t>& arguments,
+                                uint32_t returns) {
+        GuestCall call;
+        appendTrampolineCall(code, fdt, layout.fdtBase, token, block,
+                             arguments, returns, &call);
+        calls.push_back(call);
+    };
+    appendCall("ibm,set-xive", 0x3300,
+               {levelSource, PPC64_XICS_SERVER_ID, 0x30}, 1);
+    appendCall("ibm,get-xive", 0x3340, {levelSource}, 3);
+    appendCall("ibm,int-off", 0x3380, {levelSource}, 1);
+    appendCall("ibm,int-on", 0x33c0, {levelSource}, 1);
+    appendCPPRCall(code, 0x40);
+    code.push_back(encodeMfmsr(6));
+    code.push_back(encodeOri(6, 6, static_cast<uint16_t>(MSR_EE)));
+    code.push_back(encodeMtmsr(6));
+    const uint64_t firstContinuation = kEntry + code.size() * 4U;
+    code.push_back(encodeAddi(13, 13, 1));
+
+    appendCall("ibm,int-off", 0x3400, {levelSource}, 1);
+    appendCall("ibm,int-off", 0x3440, {levelSource}, 1);
+    appendCall("ibm,get-xive", 0x3480, {levelSource}, 3);
+    appendCall("ibm,int-on", 0x34c0, {levelSource}, 1);
+    appendCall("ibm,int-on", 0x3500, {levelSource}, 1);
+    appendCall("ibm,get-xive", 0x3540, {levelSource}, 3);
+    appendCall("ibm,int-off", 0x3580, {deassertedSource}, 1);
+    appendCall("ibm,int-on", 0x35c0, {deassertedSource}, 1);
+    appendCPPRCall(code, 0x20);
+    appendCall("ibm,set-xive", 0x3600,
+               {prioritySource, PPC64_XICS_SERVER_ID, 0x10}, 1);
+    appendCPPRCall(code, 0x08);
+    appendCall("ibm,set-xive", 0x3640,
+               {PPC64_XICS_LAST_SOURCE + 1U, PPC64_XICS_SERVER_ID, 0x20}, 1);
+    appendCall("ibm,set-xive", 0x3680,
+               {prioritySource, 1U, 0x20}, 1);
+
+    CHECK(installProgram(vm, code));
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->setMSR(MSR_ME | MSR_RI);
+    const auto sourceState = [&](uint32_t sourceId) {
+        const auto snapshot = vm.getPPC64XICSSnapshot();
+        const auto found = std::find_if(snapshot.sources.begin(),
+            snapshot.sources.end(), [sourceId](const auto& source) {
+                return source.sourceId == sourceId;
+            });
+        return found == snapshot.sources.end()
+            ? PPC64XICSSourceSnapshot{} : *found;
+    };
+    const auto run = [&](size_t index) {
+        return runCall(vm, calls[index], layout.rtasEntry, false);
+    };
+
+    CHECK(steps(vm, 3));
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(run(0));
+    CHECK(readBE32(vm.getMemory(), 0x3300U + 24U) == 0U);
+    CHECK(run(1));
+    CHECK(readBE32(vm.getMemory(), 0x3340U + 16U) == 0U);
+    CHECK(readBE32(vm.getMemory(), 0x3340U + 20U) == PPC64_XICS_SERVER_ID);
+    CHECK(readBE32(vm.getMemory(), 0x3340U + 24U) == 0x30U);
+    CHECK(run(2));
+    CHECK(readBE32(vm.getMemory(), 0x3380U + 16U) == 0U);
+    CHECK(vm.assertPPC64InterruptSource(levelSource, 0, &error));
+    auto level = sourceState(levelSource);
+    CHECK(level.asserted && level.pending && !level.enabled && !level.presented);
+
+    CHECK(run(3));
+    level = sourceState(levelSource);
+    CHECK(readBE32(vm.getMemory(), 0x33c0U + 16U) == 0U);
+    CHECK(level.asserted && level.pending && level.enabled && !level.presented);
+    CHECK(steps(vm, 3)); // Raise CPPR so priority 0x30 becomes eligible.
+    level = sourceState(levelSource);
+    CHECK(level.pending && level.presented);
+    CHECK(steps(vm, 3)); // Guest enables EE; next boundary enters vector 0x500.
+    CHECK(cpu->getNIP() == firstContinuation);
+
+    const std::vector<uint32_t> levelHandler{
+        encodeAddi(3, 0, static_cast<int16_t>(PPC64_H_XIRR)), kSc1,
+        encodeAddi(8, 4, 0), encodeAddi(4, 8, 0),
+        encodeAddi(3, 0, static_cast<int16_t>(PPC64_H_EOI)), kSc1, kRfid};
+    writeWords(vm.getMemory(), 0x500, levelHandler);
+    CHECK(vm.step());
+    CHECK(cpu->getNIP() == 0x500U);
+    CHECK(cpu->getSRR0() == firstContinuation);
+    CHECK(steps(vm, 2)); // H_XIRR acknowledges the first presentation.
+    CHECK(cpu->readGPR(4) == ((0x40U << 24) | levelSource));
+    level = sourceState(levelSource);
+    CHECK(level.acknowledged && !level.pending && !level.presented);
+    CHECK(steps(vm, 4)); // H_EOI completes it while the level remains asserted.
+    level = sourceState(levelSource);
+    CHECK(level.asserted && level.pending && level.presented && !level.acknowledged);
+    CHECK(vm.step()); // rfid returns; the reasserted source enters the vector again.
+    CHECK(cpu->getNIP() == firstContinuation);
+    CHECK(vm.step());
+    CHECK(cpu->getNIP() == 0x500U);
+    CHECK(cpu->getSRR0() == firstContinuation);
+    CHECK(steps(vm, 2));
+    CHECK(cpu->readGPR(4) == ((0x40U << 24) | levelSource));
+    level = sourceState(levelSource);
+    CHECK(level.acknowledged && !level.pending && !level.presented);
+    CHECK(vm.deassertPPC64InterruptSource(levelSource, 0, &error));
+    CHECK(!sourceState(levelSource).asserted);
+    CHECK(steps(vm, 5)); // EOI after deassertion and return via rfid.
+    level = sourceState(levelSource);
+    CHECK(!level.asserted && !level.pending && !level.presented &&
+          !level.acknowledged);
+    CHECK(cpu->getNIP() == firstContinuation);
+    CHECK(vm.step()); // The guest continuation runs; no spurious vector follows.
+    CHECK(cpu->getNIP() == firstContinuation + 4U);
+    CHECK(cpu->readGPR(13) == 1U);
+    CHECK(!sourceState(levelSource).pending && !sourceState(levelSource).presented);
+
+    // Exercise saved priority over repeated disable/enable while EE is clear.
+    cpu->setMSR(MSR_ME | MSR_RI);
+    CHECK(run(4));
+    CHECK(run(5));
+    CHECK(sourceState(levelSource).priority == 0xffU);
+    CHECK(sourceState(levelSource).savedPriority == 0x30U);
+    CHECK(run(6));
+    CHECK(readBE32(vm.getMemory(), 0x3480U + 16U) == 0U);
+    CHECK(readBE32(vm.getMemory(), 0x3480U + 24U) == 0xffU);
+    CHECK(run(7));
+    CHECK(run(8));
+    CHECK(run(9));
+    CHECK(readBE32(vm.getMemory(), 0x3540U + 16U) == 0U);
+    CHECK(readBE32(vm.getMemory(), 0x3540U + 24U) == 0x30U);
+    CHECK(sourceState(levelSource).enabled);
+
+    // A level removed before int-on must not become pending again.
+    CHECK(run(10));
+    CHECK(vm.assertPPC64InterruptSource(deassertedSource, 0, &error));
+    CHECK(sourceState(deassertedSource).pending &&
+          !sourceState(deassertedSource).presented);
+    CHECK(vm.deassertPPC64InterruptSource(deassertedSource, 0, &error));
+    CHECK(run(11));
+    CHECK(!sourceState(deassertedSource).pending &&
+          !sourceState(deassertedSource).presented);
+
+    // A priority update while pending is immediately arbitrated against CPPR.
+    CHECK(steps(vm, 3)); // CPPR 0x20 masks the original priority 0x44.
+    CHECK(vm.assertPPC64InterruptSource(prioritySource, 0, &error));
+    CHECK(sourceState(prioritySource).pending &&
+          !sourceState(prioritySource).presented);
+    CHECK(run(12)); // set-xive changes pending priority to 0x10.
+    CHECK(readBE32(vm.getMemory(), 0x3600U + 24U) == 0U);
+    CHECK(sourceState(prioritySource).priority == 0x10U);
+    CHECK(sourceState(prioritySource).pending &&
+          sourceState(prioritySource).presented);
+    CHECK(steps(vm, 3)); // CPPR 0x08 masks it again.
+    CHECK(sourceState(prioritySource).pending &&
+          !sourceState(prioritySource).presented);
+    CHECK(vm.deassertPPC64InterruptSource(prioritySource, 0, &error));
+    CHECK(!sourceState(prioritySource).pending &&
+          !sourceState(prioritySource).presented);
+    const auto beforeInvalid = sourceState(prioritySource);
+
+    // Invalid RTAS source/server requests return service errors without state changes.
+    CHECK(run(13));
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(vm.getMemory(), 0x3640U + 24U) ==
+          static_cast<uint32_t>(PPC64_RTAS_OUT_PARAM_ERROR));
+    CHECK(run(14));
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(vm.getMemory(), 0x3680U + 24U) ==
+          static_cast<uint32_t>(PPC64_RTAS_OUT_PARAM_ERROR));
+    CHECK(sourceState(prioritySource).ownerLPID == beforeInvalid.ownerLPID);
+    CHECK(sourceState(prioritySource).priority == beforeInvalid.priority);
+    CHECK(sourceState(prioritySource).pending == beforeInvalid.pending);
+}
+
+void testNonRootLPIDRTASIsolation() {
+    std::puts("[phase19R2-I-nonroot-lpid-rtas-ownership]");
+    constexpr uint16_t lpidA = 7;
+    constexpr uint16_t lpidB = 8;
+    constexpr uint32_t sourceA = kSource;
+    constexpr uint32_t sourceB = kSource + 1U;
+    VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(vm));
+    std::string error;
+    auto* manager = vm.getPPC64PartitionManager();
+    CHECK(manager != nullptr);
+    CHECK(manager->configurePartitionTable(vm.getMemory(),
+        kLPIDPartitionTable, 4, error));
+    std::shared_ptr<PPC64PartitionContext> contextA;
+    std::shared_ptr<PPC64PartitionContext> contextB;
+    CHECK(installIdentityPartition(vm, lpidA, kLPIDAFirstTable,
+                                   contextA, error));
+    CHECK(installIdentityPartition(vm, lpidB, kLPIDBFirstTable,
+                                   contextB, error));
+    CHECK(manager->registerPrivateBackingRange(contextA, kLPIDPrivatePage,
+                                                0x1000U, error));
+
+    CHECK(vm.configurePPC64InterruptSource(sourceA,
+        PPC64XICSSourceType::LEVEL, 0x40, PPC64_XICS_SERVER_ID, lpidA, true,
+        &error));
+    CHECK(vm.configurePPC64InterruptSource(sourceB,
+        PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, lpidB, true,
+        &error));
+    IndependentFDT fdt;
+    CHECK(parseIndependentFDT(vm.getPPC64FDT(), fdt));
+    const uint64_t fdtBase = vm.getPPC64PlatformSnapshot().memoryLayout.fdtBase;
+    const uint64_t trampoline =
+        vm.getPPC64PlatformSnapshot().memoryLayout.rtasEntry;
+
+    std::vector<uint32_t> code;
+    appendCPPRCall(code, 0x60);
+    std::vector<GuestCall> calls(5);
+    appendTrampolineCall(code, fdt, fdtBase, "ibm,set-xive", 0x3800,
+        {sourceA, PPC64_XICS_SERVER_ID, 0x30}, 1, &calls[0]);
+    appendTrampolineCall(code, fdt, fdtBase, "ibm,set-xive", 0x3840,
+        {sourceA, PPC64_XICS_SERVER_ID, 0x10}, 1, &calls[1]);
+    appendTrampolineCall(code, fdt, fdtBase, "ibm,set-xive", 0x3880,
+        {sourceB, PPC64_XICS_SERVER_ID, 0x22}, 1, &calls[2]);
+    appendTrampolinePointerCall(code, trampoline, kLPIDPrivatePage, &calls[3]);
+    appendTrampolineCall(code, fdt, fdtBase, "ibm,get-xive", 0x38c0,
+        {sourceA}, 3, &calls[4]);
+    CHECK(installProgram(vm, code));
+
+    // The host stages a valid RTAS request in LPID A's private backing page.
+    // LPID B's identical guest-real mapping must fail before reading it.
+    writeWords(vm.getMemory(), kLPIDPrivatePage,
+        {PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3, 1, sourceA,
+         PPC64_XICS_SERVER_ID, 0x10, 0x12345678U});
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->writeGPR(14, 0x1414141414141414ULL);
+    cpu->setMSR(MSR_ME | MSR_RI);
+    CHECK(cpu->activatePartitionContext(contextA, error));
+    CHECK(cpu->getActiveLPID() == lpidA);
+    CHECK(steps(vm, 3)); // LPID A raises CPPR using a genuine guest H_CPPR.
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(runCall(vm, calls[0], trampoline, false));
+    CHECK(cpu->getActiveLPID() == lpidA);
+    CHECK(readBE32(vm.getMemory(), 0x3800U + 24U) == 0U);
+
+    auto stateA = vm.getPPC64XICSSnapshot();
+    const auto findSource = [](const PPC64XICSSnapshot& snapshot,
+                               uint32_t sourceId) {
+        const auto found = std::find_if(snapshot.sources.begin(),
+            snapshot.sources.end(), [sourceId](const auto& source) {
+                return source.sourceId == sourceId;
+            });
+        return found == snapshot.sources.end()
+            ? PPC64XICSSourceSnapshot{} : *found;
+    };
+    auto sourceStateA = findSource(stateA, sourceA);
+    CHECK(sourceStateA.allocated && sourceStateA.ownerLPID == lpidA);
+    CHECK(sourceStateA.priority == 0x30U && sourceStateA.savedPriority == 0x30U);
+    CHECK(vm.assertPPC64InterruptSource(sourceA, lpidA, &error));
+    sourceStateA = findSource(vm.getPPC64XICSSnapshot(), sourceA);
+    CHECK(sourceStateA.pending && sourceStateA.presented && sourceStateA.asserted);
+
+    const uint64_t nipBeforeB = cpu->getNIP();
+    const uint64_t msrBeforeB = cpu->getMSR();
+    const uint64_t lrBeforeB = cpu->getLR();
+    const uint64_t gpr14BeforeB = cpu->readGPR(14);
+    const uint32_t crBeforeB = cpu->getCR();
+    const uint64_t xerBeforeB = cpu->getXER();
+    CHECK(cpu->activatePartitionContext(contextB, error));
+    CHECK(cpu->getActiveLPID() == lpidB);
+    CHECK(cpu->getNIP() == nipBeforeB && cpu->getMSR() == msrBeforeB);
+    CHECK(cpu->getLR() == lrBeforeB && cpu->readGPR(14) == gpr14BeforeB);
+    CHECK(cpu->getCR() == crBeforeB && cpu->getXER() == xerBeforeB);
+    const auto switchedSnapshot = vm.getPPC64XICSSnapshot();
+    CHECK(switchedSnapshot.presentations.size() == 3U);
+    CHECK(switchedSnapshot.presentations.back().ownerLPID == lpidB);
+    CHECK(switchedSnapshot.presentations.back().presentedSourceId == 0U);
+    CHECK(runCall(vm, calls[1], trampoline, false));
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(vm.getMemory(), 0x3840U + 24U) ==
+          static_cast<uint32_t>(PPC64_RTAS_OUT_PARAM_ERROR));
+    sourceStateA = findSource(vm.getPPC64XICSSnapshot(), sourceA);
+    CHECK(sourceStateA.ownerLPID == lpidA && sourceStateA.priority == 0x30U);
+    CHECK(sourceStateA.pending && sourceStateA.asserted);
+
+    CHECK(runCall(vm, calls[2], trampoline, false));
+    CHECK(readBE32(vm.getMemory(), 0x3880U + 24U) == 0U);
+    const auto sourceStateB = findSource(vm.getPPC64XICSSnapshot(), sourceB);
+    CHECK(sourceStateB.allocated && sourceStateB.ownerLPID == lpidB);
+    CHECK(sourceStateB.priority == 0x22U && sourceStateB.enabled);
+
+    const uint64_t nipBeforeDeniedPointer = cpu->getNIP();
+    CHECK(runCall(vm, calls[3], trampoline, false));
+    CHECK(cpu->readGPR(3) == PPC64_H_PARAMETER);
+    CHECK(cpu->getNIP() == calls[3].returnAddress + 4U);
+    CHECK(readBE32(vm.getMemory(), kLPIDPrivatePage + 24U) == 0x12345678U);
+    sourceStateA = findSource(vm.getPPC64XICSSnapshot(), sourceA);
+    CHECK(sourceStateA.priority == 0x30U && sourceStateA.pending);
+    CHECK(nipBeforeDeniedPointer < cpu->getNIP());
+
+    const uint64_t nipBeforeA = cpu->getNIP();
+    const uint64_t msrBeforeA = cpu->getMSR();
+    const uint64_t lrBeforeA = cpu->getLR();
+    const uint64_t gpr14BeforeA = cpu->readGPR(14);
+    const uint32_t crBeforeA = cpu->getCR();
+    const uint64_t xerBeforeA = cpu->getXER();
+    CHECK(cpu->activatePartitionContext(contextA, error));
+    CHECK(cpu->getActiveLPID() == lpidA);
+    CHECK(cpu->getNIP() == nipBeforeA && cpu->getMSR() == msrBeforeA);
+    CHECK(cpu->getLR() == lrBeforeA && cpu->readGPR(14) == gpr14BeforeA);
+    CHECK(cpu->getCR() == crBeforeA && cpu->getXER() == xerBeforeA);
+    CHECK(runCall(vm, calls[4], trampoline, false));
+    CHECK(readBE32(vm.getMemory(), 0x38c0U + 16U) == 0U);
+    CHECK(readBE32(vm.getMemory(), 0x38c0U + 24U) == 0x30U);
+    CHECK(findSource(vm.getPPC64XICSSnapshot(), sourceB).priority == 0x22U);
+    CHECK(vm.deassertPPC64InterruptSource(sourceA, lpidA, &error));
+    sourceStateA = findSource(vm.getPPC64XICSSnapshot(), sourceA);
+    CHECK(!sourceStateA.pending && !sourceStateA.presented &&
+          !sourceStateA.asserted);
+    CHECK(vm.validatePPC64RTASTrampoline());
+}
+
 void testDirectHRTASCompatibility() {
     std::puts("[phase19-L-direct-h-rtas-compatibility]");
     VirtualMachine vm(kRamSize, 1, "PPC64", platform());
@@ -1040,6 +1458,8 @@ int main() {
     testInstalledEntryAndFDT();
     testGuestWriteProtectionAndFaults();
     testGuestForwardingAndXICS();
+    testLevelTriggeredXICS();
+    testNonRootLPIDRTASIsolation();
     testDirectHRTASCompatibility();
     testTerminalInterruptIntegration();
     testCheckpointAndFaultBoundaries();
