@@ -908,3 +908,37 @@ else()
     target_compile_options(test_mips64_vm_integration PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64VmIntegrationTests COMMAND test_mips64_vm_integration)
+
+# MIPS64-5 extended address qualification: region decoding, high VPN TLB
+# behavior, XKPHYS with bounded sparse memory, UX=0 compatibility addressing,
+# XTLB vectors, and production VM scheduler demonstrations.
+foreach(test_name IN ITEMS extended_addresses xkphys address_modes)
+    add_executable(test_mips64_${test_name}
+        tests/test_mips64_${test_name}.cpp
+        ${MIPS64_CORE_SOURCES}
+    )
+    target_include_directories(test_mips64_${test_name} PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+    if(MSVC)
+        target_compile_options(test_mips64_${test_name} PRIVATE /W4)
+    else()
+        target_compile_options(test_mips64_${test_name} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
+add_test(NAME Mips64ExtendedAddressTests COMMAND test_mips64_extended_addresses)
+add_test(NAME Mips64XkphysTests COMMAND test_mips64_xkphys)
+add_test(NAME Mips64AddressModeTests COMMAND test_mips64_address_modes)
+
+add_executable(test_mips64_extended_vm
+    tests/test_mips64_extended_vm.cpp
+    ${ALL_SOURCES}
+)
+target_include_directories(test_mips64_extended_vm PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(WIN32)
+    target_link_libraries(test_mips64_extended_vm PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_extended_vm PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_extended_vm PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64ExtendedVmTests COMMAND test_mips64_extended_vm)

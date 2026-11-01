@@ -1,9 +1,10 @@
-// MIPS64-4R1 qualification of snapshot version 4 and historical v3 handling.
+// MIPS64-5 qualification of version 5 and historical v3/v4 migration.
 #include <cstdint>
 #include <iostream>
 #include <vector>
 
 #include "mips64_interrupt_test_support.h"
+#include "mips64_extended_test_support.h"
 
 using namespace mips64;
 using namespace mips64_interrupt_test;
@@ -35,6 +36,62 @@ static void store64le(std::vector<uint8_t>& blob, size_t offset, uint64_t value)
     }
 }
 
+static std::vector<uint8_t> makeLegacyV4AddressState(
+    mips64::Mips64Cpu& source, mips64_extended_test::SparsePhysicalMemory& memory) {
+    constexpr uint64_t mappedCompatibilityKernelVa = 0xFFFFFFFFC0002000ULL;
+    constexpr uint64_t faultCompatibilityKernelVa = 0xFFFFFFFFC0005000ULL;
+    constexpr uint64_t legacyEntryHiFillMask = 0x3FFFFF0000000000ULL;
+    constexpr uint64_t legacyXContextPteBaseMask = 0x000FFFFC00000000ULL;
+    constexpr uint64_t legacyTlbVpnFillMask = 0x0001FFFFF8000000ULL;
+    constexpr uint64_t lowVpnMask = (1ULL << (mips64::kMips64SegBits - 13)) - 1ULL;
+
+    CHECK(mips64_extended_test::installTlbPair(
+        source, memory, mappedCompatibilityKernelVa,
+        mips64_extended_test::entryLo(0x12345),
+        mips64_extended_test::entryLo(0x23456), 0x2A, 2));
+    source.writeGpr(8, 0x000ABCDE00000000ULL & legacyXContextPteBaseMask);
+    CHECK(mips64_extended_test::runKernel(
+        source, memory, 0x6B00,
+        {mips64_extended_test::encCp0(5, 8, 20)})); // set XContext PTEBase
+    source.writeGpr(9, faultCompatibilityKernelVa);
+    mips64_extended_test::storeWord(
+        memory, 0x6B40, mips64_extended_test::encI(0x37, 9, 10, 0),
+        source.isLittleEndian());
+    source.setPc(mips64::kCKSeg0Base | 0x6B40);
+    CHECK(source.step(memory) == mips64::Mips64StepResult::Fault); // compat refill
+    CHECK(source.fault() == mips64::Mips64Fault::TlbRefillLoad);
+    CHECK(source.cp0BadVAddr() == faultCompatibilityKernelVa);
+    CHECK(((source.cp0XContext() >> 31) & 3) == 3);
+
+    std::vector<uint8_t> legacy = source.serialize();
+    legacy[4] = mips64::Mips64Cpu::kSerializationVersionV4;
+
+    constexpr size_t entryHiOffset = 373 + 16;
+    constexpr size_t xcontextOffset = 373 + 64;
+    constexpr size_t firstTlbEntryOffset = 445;
+    const uint64_t currentEntryHi = load64le(legacy, entryHiOffset);
+    store64le(legacy, entryHiOffset,
+              currentEntryHi | legacyEntryHiFillMask);
+
+    const uint64_t currentXContext = load64le(legacy, xcontextOffset);
+    const uint64_t oldRegion = 7ULL; // sign-extended compatibility kernel address
+    const uint64_t oldBadVpn2 = ((currentXContext >> 4) & 0x3FFFFULL) << 13;
+    const uint64_t oldXContext =
+        (currentXContext & legacyXContextPteBaseMask) |
+        (oldRegion << 31) | oldBadVpn2;
+    store64le(legacy, xcontextOffset, oldXContext);
+
+    for (unsigned index = 0; index < mips64::kTlbEntries; ++index) {
+        const size_t offset = firstTlbEntryOffset + index * 32;
+        const uint64_t currentVpn = load64le(legacy, offset);
+        const uint64_t region = (currentVpn >> 49) & 3ULL;
+        uint64_t oldVpn = (region << 49) | (currentVpn & lowVpnMask);
+        if (region == 3) oldVpn |= legacyTlbVpnFillMask;
+        store64le(legacy, offset, oldVpn);
+    }
+    return legacy;
+}
+
 static void testRoundTripBeforeCompareMatch() {
     SparsePhysicalMemory memory;
     Mips64Cpu source;
@@ -44,7 +101,7 @@ static void testRoundTripBeforeCompareMatch() {
     const std::vector<uint8_t> blob = source.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob[4] == Mips64Cpu::kSerializationVersion);
-    CHECK(blob[4] == 4);
+    CHECK(blob[4] == 5);
     CHECK(load64le(blob, kCountOffset) == 103);
     CHECK(load64le(blob, kCompareOffset) == 200);
 
@@ -177,13 +234,20 @@ static void testVersionMigrationAndRejectedRestoresAreAtomic() {
                             30, 100, nextPc));
     target.setPc(nextPc + 0x80);
     const std::vector<uint8_t> valid = target.serialize();
-    CHECK(valid[4] == 4);
+    CHECK(valid[4] == 5);
+
+    std::vector<uint8_t> historicalV4 = valid;
+    historicalV4[4] = 4; // MIPS64-4R1 compatibility-only VPN2/XContext layout.
+    Mips64Cpu migratedV4;
+    CHECK(migratedV4.deserialize(historicalV4.data(), historicalV4.size()));
+    CHECK(migratedV4.serialize()[4] == 5);
+    CHECK(migratedV4.pc() == target.pc());
 
     std::vector<uint8_t> historicalV3 = valid;
     historicalV3[4] = 3; // MIPS64-3/MIPS64-4 layout, unambiguous Cause bits.
     Mips64Cpu migrated;
     CHECK(migrated.deserialize(historicalV3.data(), historicalV3.size()));
-    CHECK(migrated.serialize()[4] == 4);
+    CHECK(migrated.serialize()[4] == 5);
     CHECK(migrated.pc() == target.pc());
 
     const std::vector<uint8_t> before = target.serialize();
@@ -221,12 +285,46 @@ static void testVersionMigrationAndRejectedRestoresAreAtomic() {
     rejectWithoutMutation(bad);
 }
 
+static void testLegacyV3V4MigrationPreservesCanonicalKernelAddressState() {
+    mips64_extended_test::SparsePhysicalMemory memory;
+    Mips64Cpu source;
+    const std::vector<uint8_t> legacyV4 = makeLegacyV4AddressState(source, memory);
+    Mips64Cpu migratedV4;
+    CHECK(migratedV4.deserialize(legacyV4.data(), legacyV4.size()));
+    CHECK(migratedV4.serialize()[4] == 5);
+    CHECK(migratedV4.cp0EntryHi() == source.cp0EntryHi());
+    CHECK(migratedV4.cp0XContext() == source.cp0XContext());
+    Mips64TlbEntry expected;
+    Mips64TlbEntry restored;
+    CHECK(source.tlbEntry(2, expected) && migratedV4.tlbEntry(2, restored));
+    CHECK(restored.vpn2 == expected.vpn2 && restored.asid == expected.asid);
+    CHECK(restored.pfn0 == expected.pfn0 && restored.pfn1 == expected.pfn1);
+
+    std::vector<uint8_t> legacyV3 = legacyV4;
+    legacyV3[4] = 3; // Cause bits are unambiguous in this state.
+    Mips64Cpu migratedV3;
+    CHECK(migratedV3.deserialize(legacyV3.data(), legacyV3.size()));
+    CHECK(migratedV3.serialize()[4] == 5);
+    CHECK(migratedV3.cp0EntryHi() == source.cp0EntryHi());
+    CHECK(migratedV3.cp0XContext() == source.cp0XContext());
+    CHECK(migratedV3.tlbEntry(2, restored) && restored.vpn2 == expected.vpn2);
+
+    const std::vector<uint8_t> before = migratedV4.serialize();
+    std::vector<uint8_t> malformed = legacyV4;
+    // Old R=3 compatibility kernel tags require the legacy [61:40] fill.
+    store64le(malformed, 373 + 16,
+              load64le(malformed, 373 + 16) & ~(1ULL << 40));
+    CHECK(!migratedV4.deserialize(malformed.data(), malformed.size()));
+    CHECK(migratedV4.serialize() == before);
+}
+
 int main() {
     testRoundTripBeforeCompareMatch();
     testPendingMaskedRoundTripAndContinuedDelivery();
     testHandlerAndBeforeEretRoundTripsAfterCompareRearm();
     testOutstandingDelaySlotRoundTrip();
     testVersionMigrationAndRejectedRestoresAreAtomic();
+    testLegacyV3V4MigrationPreservesCanonicalKernelAddressState();
     std::cout << "MIPS64 serialization qualification: " << g_pass << " passed, "
               << g_fail << " failed\n";
     return g_fail == 0 ? 0 : 1;

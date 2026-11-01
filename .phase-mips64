@@ -1,4 +1,4 @@
 project=guideXOS_Hypervisor
 arch=MIPS64
-last_completed=MIPS64-4R1
-next_expected=MIPS64-5
+last_completed=MIPS64-5
+next_expected=MIPS64-6

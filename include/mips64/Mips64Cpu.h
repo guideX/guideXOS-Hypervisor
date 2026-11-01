@@ -1,6 +1,6 @@
 #pragma once
 
-// guideXOS Hypervisor — MIPS64 Release 2 CPU (Phases MIPS64-1 + MIPS64-2 + MIPS64-3).
+// guideXOS Hypervisor — MIPS64 Release 2 CPU (Phases MIPS64-1 through MIPS64-5).
 //
 // Isolated MIPS64r2 architectural state with fetch/decode/execute,
 // Coprocessor 0 (CP0 management subset + TLB management subset), a real
@@ -18,20 +18,21 @@
 //   raw bytes according to the configured endianness. Host-native typed
 //   reads are never used for guest data.
 //
-// Execution / memory model (MIPS64-3 virtual memory):
+// Execution / memory model (MIPS64-3 through MIPS64-5 virtual memory):
 // - Guest programs issue virtual addresses (VAs). The core translates every
 //   instruction fetch, load and store to a physical address (PA) before
 //   touching the repository IMemory abstraction, which is treated as
 //   PHYSICAL memory.
 // - Compatibility segments: kuseg (mapped, U/S/K), ckseg0/ckseg1
 //   (direct-mapped kernel-only, PA = VA & 0x1FFFFFFF), cksseg (mapped,
-//   S/K), ckseg3 (mapped, kernel-only). See the segment constants below.
-// - 64-bit extended regions (XKSEG, XKPHYS, XSSEG) are NOT supported in
-//   this phase: any VA outside the compatibility segments fails explicitly
-//   with an Address Error (AdEL/AdES). A 64-bit VA is never silently
-//   truncated to 32 bits.
-// - UX/SX/KX are stored CP0 controls; they round-trip through Status but do
-//   not enable additional regions in this phase (documented limitation).
+//   S/K), ckseg3 (mapped, kernel-only).
+// - Extended regions: xuseg, xsseg and xkseg use the existing paired TLB;
+//   xkphys directly maps a 36-bit PA and reports its CCA. This processor
+//   implements SEGBITS=40 and PABITS=36. Holes and unsupported CCA encodings
+//   fault; no virtual address is silently truncated.
+// - Status.UX/SX/KX gate their corresponding extended regions. Effective
+//   privilege honors KSU/EXL/ERL, and user UX=0 data references apply the
+//   PRA's 32-bit effective-address sign-extension rule without changing fetch.
 // - Exception vectors are guest virtual addresses translated like any other
 //   fetch target (boot vectors live in the direct-mapped ckseg1 region, so
 //   they need no TLB entry).
@@ -44,9 +45,9 @@
 // - BEV=0: EBase-derived base with the same offsets; reset EBase gives
 //   refill 0xFFFFFFFF80000000 and general 0xFFFFFFFF80000180.
 // - Only a TLB miss (refill) taken with Status.EXL == 0 uses a refill
-//   vector (0x000 for the supported 32-bit compatibility regions, 0x080
-//   for 64-bit regions once supported). TLB Invalid, TLB Modified, address
-//   errors and every other exception use the general vector.
+//   vector. The compatibility/extended segment and the PRA-defined UX/SX/KX
+//   selection choose offset 0x000 or XTLB offset 0x080. TLB Invalid, TLB
+//   Modified, address errors and every other exception use the general vector.
 
 #include <array>
 #include <cstddef>
@@ -240,20 +241,25 @@ constexpr uint64_t kVectorBev1Refill = 0xFFFFFFFFBFC00200ULL;   // BEV=1 refill
 constexpr uint64_t kVectorBev1Xtlb = 0xFFFFFFFFBFC00280ULL;     // BEV=1 XTLB refill
 
 // ============================================================================
-// Virtual address map (32-bit compatibility segments + explicit exclusions)
+// Virtual-address implementation parameters and address regions
 // ============================================================================
-//
-// Only properly sign-extended 32-bit compatibility addresses are supported:
-//   kuseg  0x0000000000000000 - 0x000000007FFFFFFF  mapped, U/S/K via TLB
-//   ckseg0 0xFFFFFFFF80000000 - 0xFFFFFFFF9FFFFFFF  direct, kernel-only
-//   ckseg1 0xFFFFFFFFA0000000 - 0xFFFFFFFFBFFFFFFF  direct, kernel-only
-//   cksseg 0xFFFFFFFFC0000000 - 0xFFFFFFFFDFFFFFFF  mapped, S/K via TLB
-//   ckseg3 0xFFFFFFFFE0000000 - 0xFFFFFFFFFFFFFFFF  mapped, kernel-only via TLB
-// Direct segments translate as PA = VA & kDirectMapMask (29-bit physical).
-// Anything else (zero-extended 0x80000000-0xFFFFFFFF, XKSEG, XKPHYS, XSSEG
-// and the rest of the 64-bit space) raises AdEL/AdES explicitly and is
-// never silently truncated. 64-bit physical addresses are therefore capped
-// at 36 bits by the EntryLo PFN format (24-bit PFN + 12-bit offset).
+// This initial MIPS64r2 processor implements 40 virtual segment bits and 36
+// physical address bits. EntryLo PFN[23:0] plus the 12-bit 4-KiB page offset
+// represents exactly PABITS=36; no larger physical width is advertised.
+constexpr unsigned kMips64SegBits = 40;
+constexpr unsigned kMips64PaBits = 36;
+static_assert(kMips64SegBits > 32 && kMips64SegBits < 62,
+              "segment range arithmetic requires 32 < SEGBITS < 62");
+constexpr uint64_t kMips64SegmentSpan = 1ULL << kMips64SegBits;
+constexpr uint64_t kXusegBase = 0x0000000080000000ULL;
+constexpr uint64_t kXusegEnd = kMips64SegmentSpan - 1ULL;
+constexpr uint64_t kXssegBase = 0x4000000000000000ULL;
+constexpr uint64_t kXksegBase = 0xC000000000000000ULL;
+constexpr uint64_t kExtendedKernelSegmentSpan = kMips64SegmentSpan - 0x80000000ULL;
+constexpr uint64_t kXssegEnd = kXssegBase + kExtendedKernelSegmentSpan - 1ULL;
+constexpr uint64_t kXksegEnd = kXksegBase + kExtendedKernelSegmentSpan - 1ULL;
+
+// Compatibility and extended mapped/direct regions.
 constexpr uint64_t kKusegEnd = 0x000000007FFFFFFFULL;
 constexpr uint64_t kCKSeg0Base = 0xFFFFFFFF80000000ULL;
 constexpr uint64_t kCKSeg0End = 0xFFFFFFFF9FFFFFFFULL;
@@ -264,6 +270,24 @@ constexpr uint64_t kCKSsegEnd = 0xFFFFFFFFDFFFFFFFULL;
 constexpr uint64_t kCKSeg3Base = 0xFFFFFFFFE0000000ULL;
 constexpr uint64_t kCKSeg3End = 0xFFFFFFFFFFFFFFFFULL;
 constexpr uint64_t kDirectMapMask = 0x1FFFFFFFULL;  // PA = VA & mask (512 MiB)
+constexpr uint64_t kEntryHiRegionMask = 0xC000000000000000ULL;
+constexpr uint64_t kEntryHiVpn2Mask = (kMips64SegmentSpan - 1ULL) & ~0x1FFFULL;
+constexpr uint64_t kTlbVpn2Mask = (kEntryHiRegionMask >> 13) |
+                                  (kEntryHiVpn2Mask >> 13);
+constexpr uint64_t kPhysicalAddressMask = (1ULL << kMips64PaBits) - 1ULL;
+
+enum class Mips64Segment : uint8_t {
+    Invalid = 0,
+    CompatibilityUseg,
+    ExtendedUseg,
+    ExtendedSseg,
+    ExtendedKseg,
+    Xkphys,
+    Ckseg0,
+    Ckseg1,
+    Cksseg,
+    Ckseg3,
+};
 
 // ============================================================================
 // TLB architecture (MIPS64-3, bounded, per-CPU)
@@ -275,10 +299,12 @@ constexpr unsigned kTlbEntries = 16;  // fixed JTLB size for this phase
 // [Wired, kTlbEntries). Wired is clamped to [0, kTlbEntries] on write.
 constexpr unsigned kTlbMaxWired = kTlbEntries;
 
-// EntryHi layout: VPN2 = VA[63:13], bits 12:8 read-only zero, ASID = bits 7:0.
-constexpr uint64_t kEntryHiVpn2Mask = 0xFFFFFFFFFFFFE000ULL;
+// EntryHi layout for SEGBITS=40: R=VA[63:62], VPN2=VA[39:13],
+// bits 61:40 and 12:8 read as zero, ASID=bits 7:0. TLB entries keep the
+// packed (R || VPN2) comparison key in their existing 64-bit vpn2 field.
 constexpr uint64_t kEntryHiAsidMask = 0xFFULL;
-constexpr uint64_t kEntryHiWritableMask = kEntryHiVpn2Mask | kEntryHiAsidMask;
+constexpr uint64_t kEntryHiWritableMask = kEntryHiRegionMask | kEntryHiVpn2Mask |
+                                          kEntryHiAsidMask;
 
 // PageMask register: only bits 24:13 (the 12-bit Mask field) are writable.
 // Supported Mask values (ones-patterns) and their page sizes:
@@ -309,14 +335,13 @@ constexpr uint64_t kIndexWritableMask = kIndexPBit | kIndexFieldMask;
 // PTEBase = bits 22:4 (software-writable).
 constexpr uint64_t kContextWritableMask = 0x007FFFF0ULL;  // bits 22:4
 
-// XContext (64-bit, implemented layout): PTEBase = bits 51:34 (writable),
-// R = VA[63:61] in bits 33:31 (HW-written),
-// BadVPN2 = VA[30:13] in bits 30:13 (HW-written, 4 KiB view), zeros below.
-constexpr uint64_t kXContextPteBaseMask = 0x000FFFFC00000000ULL;  // bits 51:34
+// XContext with SEGBITS=40: PTEBase=bits 63:33, R=VA[63:62] in bits
+// 32:31, BadVPN2=VA[39:13] in bits 30:4, and bits 3:0 fixed zero.
+constexpr uint64_t kXContextPteBaseMask = 0xFFFFFFFE00000000ULL;
 
 // One paired-page TLB entry (architectural shape, per-CPU bounded array).
 struct Mips64TlbEntry {
-    uint64_t vpn2 = 0;   // VPN2 = VA[63:13] (51 bits)
+    uint64_t vpn2 = 0;   // packed (R || VPN2), with R at bits 50:49
     uint32_t pfn0 = 0;   // even-page PFN (24 bits used)
     uint32_t pfn1 = 0;   // odd-page PFN (24 bits used)
     uint16_t mask = 0;   // 12-bit PageMask value (only low bits used per size)
@@ -361,6 +386,9 @@ struct Mips64Probe {
     Mips64ExcCode code = Mips64ExcCode::AdEL;  // exception code if !ok
     Mips64Fault fault = Mips64Fault::None;     // diagnostic fault if !ok
     bool isRefill = false;                 // true: miss eligible for refill vector
+    bool useXtlbVector = false;             // selected by the segment's UX/SX/KX rule
+    Mips64Segment segment = Mips64Segment::Invalid;
+    uint8_t cacheAttribute = 0;             // CCA from XKPHYS or selected TLB half
 };
 
 // ============================================================================
@@ -500,8 +528,8 @@ public:
     uint64_t exceptionVector() const;
     // Pure vector computation for any BEV/EBase/offset combination.
     static uint64_t exceptionVectorFor(bool bev, uint64_t ebase, uint64_t offset);
-    // Refill vector for a faulting VA (offset 0x000 for the supported
-    // 32-bit compatibility regions, 0x080 for 64-bit regions).
+    // Refill vector for a faulting VA, including the PRA's compatibility
+    // segment-specific UX/SX/KX selection of normal versus XTLB offset.
     uint64_t refillVector(uint64_t faultVa) const;
 
     // Side-effect-free virtual-to-physical translation probe.
@@ -562,7 +590,7 @@ public:
     // Serialization blob layout (blob itself is always little-endian and
     // versioned; the configured CPU endianness is stored and restored):
     //   offset 0:  magic 'M','P','6','2' (4 bytes)
-    //   offset 4:  format version u8 (=4), endianness u8, reserved u16
+    //   offset 4:  format version u8 (=5), endianness u8, reserved u16
     //   offset 8:  GPR[32] x u64 LE (256 bytes)
     //   offset 264: PC u64, HI u64, LO u64 (24 bytes)
     //   offset 288: delayArmed u8, delayTarget u64 LE, delayBranch u64 LE
@@ -574,7 +602,7 @@ public:
     //   offset 445: TLB entries: 16 x 32 bytes
     //               (vpn2 u64, pfn0 u32, pfn1 u32, mask u16, asid u8,
     //                c0 u8, c1 u8, flags u8 [v0,d0,v1,d1,g,badMask],
-    //                reserved 10 bytes zero)
+    //                reserved 10 bytes zero; vpn2 stores packed R||VPN2)
     // Total: 957 bytes.
     //
     // Version history (see docs/MIPS64_PHASE4R1_ACCEPTANCE_CLOSURE.md):
@@ -585,14 +613,20 @@ public:
     //      Other v3 blobs are migrated: restored with v4 semantics and
     //      re-serialized as v4.
     //   v4 (MIPS64-4R1): same layout with the corrected Cause assignments
-    //      (IV=bit 23, DC=bit 27). Cause bits outside kCauseImplementedMask,
+    //      (IV=bit 23, DC=bit 27), legacy full-width VPN2 representation.
+    //   v5 (MIPS64-5): same byte layout, EntryHi uses R+VPN2 with SEGBITS=40,
+    //      TLB vpn2 stores packed (R||VPN2), and XContext uses its 40-bit
+    //      layout. Canonical v3/v4 snapshots migrate; noncanonical VPN fills
+    //      are rejected.
+    //      Cause bits outside kCauseImplementedMask,
     //      Status/EBase bits outside their writable masks, Count/Compare
     //      above 32 bits and non-zero delay fields with delayArmed=0 are
     //      rejected.
     // Truncation, bad magic/version, null data and out-of-range fields fail
     // safely with live state untouched.
     static constexpr std::size_t kSerializedSize = 957;
-    static constexpr uint8_t kSerializationVersion = 4;
+    static constexpr uint8_t kSerializationVersion = 5;
+    static constexpr uint8_t kSerializationVersionV4 = 4;
     static constexpr uint8_t kSerializationVersionV3 = 3;
     std::vector<uint8_t> serialize() const;
     bool deserialize(const uint8_t* data, std::size_t size);
@@ -692,7 +726,7 @@ private:
     uint32_t pageMask_ = 0;   // Mask field in bits 24:13
     uint64_t wired_ = 0;
     uint32_t context_ = 0;    // BadVPN2 in bits 31:23, PTEBase in bits 22:4
-    uint64_t xcontext_ = 0;   // PTEBase bits 51:34, R bits 33:31, BadVPN2 bits 30:13
+    uint64_t xcontext_ = 0;   // SEGBITS=40: PTEBase[63:33], R[32:31], BadVPN2[30:4]
     std::array<Mips64TlbEntry, kTlbEntries> tlb_{};
     Mips64Fault fault_ = Mips64Fault::None;
     std::string lastError_;

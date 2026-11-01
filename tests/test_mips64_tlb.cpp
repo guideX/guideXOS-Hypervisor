@@ -115,6 +115,7 @@ static void testTlbResetState() {
     SparseMemory mem;
     CHECK(setupKusegIdentityMap(cpu, mem));
     cpu.reset();
+    CHECK(clearErlFromGuest(cpu, mem));
     CHECK(cpu.cp0Random() == 15 && cpu.cp0Wired() == 0 && cpu.cp0EntryHi() == 0);
     Mips64TlbEntry e0;
     CHECK(cpu.tlbEntry(0, e0) && !e0.v0 && !e0.v1);
@@ -129,7 +130,8 @@ static void testTlbResetState() {
 static void testCp0TlbRegisters() {
     SparseMemory mem;
     Mips64Cpu cpu;
-    // EntryHi keeps VPN2 (bits 63:13) + ASID, drops bits 12:8.
+    // EntryHi keeps R, the SEGBITS=40 VPN2 field, and ASID; fill/reserved
+    // bits are forced to zero.
     // VPN2 = 0x12345, ASID = 0xAB: value = (0x12345 << 13) | 0xAB.
     const uint32_t block1[] = {
         (0x0FU << 26) | (8U << 16) | 0x91A2U,  // lui $8, 0x91A2
@@ -138,7 +140,7 @@ static void testCp0TlbRegisters() {
     };
     CHECK(runCkSeg0(cpu, mem, 0x10000, block1));
     // $8 = 0xFFFFFFFF91A280AB (lui sign-extends); bits 12:8 already zero.
-    CHECK(cpu.cp0EntryHi() == 0xFFFFFFFF91A280ABULL);
+    CHECK(cpu.cp0EntryHi() == 0xC00000FF91A280ABULL);
     // MTC0 sign-extends the low word, then masks apply.
     const uint32_t block2[] = {
         (0x0FU << 26) | (8U << 16) | 0xFFFFU,  // lui $8, 0xFFFF
@@ -146,7 +148,7 @@ static void testCp0TlbRegisters() {
         encCp0(4, 8, 10, 0),  // mtc0 $8, EntryHi (low32 = 0xFFFFFFFF)
     };
     CHECK(runCkSeg0(cpu, mem, 0x10100, block2));
-    CHECK(cpu.cp0EntryHi() == 0xFFFFFFFFFFFFE0FFULL);
+    CHECK(cpu.cp0EntryHi() == 0xC00000FFFFFFE0FFULL);
 
     // PageMask keeps only bits 24:13.
     const uint32_t block3[] = {
@@ -185,14 +187,14 @@ static void testCp0TlbRegisters() {
     CHECK(runCkSeg0(cpu, mem, 0x10500, block6));
     CHECK(cpu.cp0Context() == 0x007FFFF0ULL);
 
-    // XContext: only PTEBase (bits 51:34) is software-writable.
+    // XContext: only PTEBase (bits 63:33 for SEGBITS=40) is software-writable.
     const uint32_t block7[] = {
         (0x0FU << 26) | (8U << 16) | 0xFFFFU,  // lui -> low32 all ones
         encCp0(5, 8, 20, 0),  // dmtc0 $8, XContext (upper 32 of GPR are 0)
     };
     CHECK(runCkSeg0(cpu, mem, 0x10600, block7));
-    // lui sign-extends, so PTEBase (bits 51:34) reads all ones here.
-    CHECK(cpu.cp0XContext() == 0x000FFFFC00000000ULL);
+    // lui sign-extends, so the implemented PTEBase field reads all ones.
+    CHECK(cpu.cp0XContext() == 0xFFFFFFFE00000000ULL);
 
     // Wired clamps to [0, 16]; Random writes are ignored (read-only).
     const uint32_t block8[] = {
@@ -295,6 +297,7 @@ static void testTlbpHitMiss() {
 static void testAsidIsolation() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(clearErlFromGuest(cpu, mem));
     // Entry 3: VPN2 = 0x40, ASID = 5, 4 KiB, both pages V+D, global clear.
     // EntryHi = (0x40 << 13) | 5 = 0x80005. Lo = (pfn<<6)|7.
     const uint32_t setup[] = {
@@ -333,6 +336,7 @@ static void testAsidIsolation() {
 static void testGlobalMapping() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(clearErlFromGuest(cpu, mem));
     // Entry 2: VPN2 = 0x60, ASID = 9, global (both G set), 4 KiB.
     const uint32_t setup[] = {
         (0x0FU << 26) | (8U << 16) | 0xCU,  // lui $8, 0xC -> 0xC0000
@@ -366,6 +370,7 @@ static void testGlobalMapping() {
 static void testEvenOddSelection() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(clearErlFromGuest(cpu, mem));
     // Entry 4: VPN2 = 0x02 (pair covers VA 0x4000/0x5000), 4 KiB,
     // even pfn 0xA, odd pfn 0xB, both V+D, non-global (ASID 0).
     // Lo0 = (0xA<<6)|2 = 0x282 (V set, D/G clear), Lo1 = (0xB<<6)|7 = 0x2C7
@@ -455,6 +460,7 @@ static void testPageMaskVariations() {
     for (const Case& c : cases) {
         SparseMemory mem;
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         // VPN2 0x1100 keeps every pair base nonzero (all-zero entries would
         // otherwise shadow the base-0 pairs of the large page sizes).
         const uint64_t vpn2 = 0x1100ULL;  // aligned for every supported size
@@ -500,6 +506,7 @@ static void testPageMaskVariations() {
 static void testUnsupportedPageMask() {
     SparseMemory mem;
     Mips64Cpu cpu;
+    CHECK(clearErlFromGuest(cpu, mem));
     // Mask 0x001 is not a ones-pattern: entry stored but flagged never-match.
     const uint32_t fixed[] = {
         (0x19U << 26) | (8U << 16) | 0x2000U,  // $8 = 0x2000 (VPN2 1)
@@ -587,6 +594,7 @@ static void testCpuIsolation() {
     SparseMemory mem;
     Mips64Cpu a, b;
     CHECK(setupKusegIdentityMap(a, mem));
+    CHECK(clearErlFromGuest(b, mem));
     // b has no entries: same VA misses there while hitting in a.
     // (VPN2 nonzero to avoid matching b's all-zero entries with Invalid.)
     CHECK(a.probeAddress(0x4000ULL, Mips64Access::Load).ok);
@@ -613,7 +621,7 @@ static void testSerializationRoundTrip() {
     const std::vector<uint8_t> blob = cpu.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob.size() == 957);
-    CHECK(blob[4] == 4);  // v4 (MIPS64-4R1)
+    CHECK(blob[4] == 5);  // v5 (MIPS64-5 address field layout)
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));
     CHECK(restored.cp0EntryHi() == cpu.cp0EntryHi());
@@ -702,6 +710,7 @@ static void testInvalidRestoreRollback() {
 static void testBigEndianTlb() {
     SparseMemory mem;
     Mips64Cpu cpu(Mips64Endianness::Big);
+    CHECK(clearErlFromGuest(cpu, mem));
     // EntryHi VPN2 = 0x70, ASID 1; 4 KiB; pfn 0x33; TLBWI at 6; TLBP; TLBR.
     const uint32_t setup[] = {
         (0x0FU << 26) | (8U << 16) | 0xEU,  // lui $8, 0xE -> 0xE0000

@@ -1086,7 +1086,7 @@ static void testSerializationV2() {
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob.size() == 957);
     CHECK(blob[0] == 'M' && blob[1] == 'P' && blob[2] == '6' && blob[3] == '2');
-    CHECK(blob[4] == 4);  // v4 format (MIPS64-4R1: corrected Cause layout; TLB state appended)
+    CHECK(blob[4] == 5);  // v5: extended EntryHi, TLB VPN2 and XContext layout
 
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));

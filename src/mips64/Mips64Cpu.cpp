@@ -535,13 +535,78 @@ uint64_t Mips64Cpu::exceptionVector() const {
                               kVectorOffsetGeneral);
 }
 
+namespace {
+
+struct SegmentRange {
+    uint64_t first;
+    uint64_t last;
+    Mips64Segment segment;
+};
+
+Mips64Segment classifySegment(uint64_t va) {
+    // Architectural ranges are intentionally explicit: addresses in the
+    // gaps between the SEGBITS-limited extended segments remain invalid.
+    static constexpr SegmentRange ranges[] = {
+        {0x0000000000000000ULL, kKusegEnd, Mips64Segment::CompatibilityUseg},
+        {kXusegBase, kXusegEnd, Mips64Segment::ExtendedUseg},
+        {kXssegBase, kXssegEnd, Mips64Segment::ExtendedSseg},
+        {0x8000000000000000ULL, 0xBFFFFFFFFFFFFFFFULL, Mips64Segment::Xkphys},
+        {kXksegBase, kXksegEnd, Mips64Segment::ExtendedKseg},
+        {kCKSeg0Base, kCKSeg0End, Mips64Segment::Ckseg0},
+        {kCKSeg1Base, kCKSeg1End, Mips64Segment::Ckseg1},
+        {kCKSsegBase, kCKSsegEnd, Mips64Segment::Cksseg},
+        {kCKSeg3Base, kCKSeg3End, Mips64Segment::Ckseg3},
+    };
+    for (const SegmentRange& range : ranges) {
+        if (va >= range.first && va <= range.last) {
+            return range.segment;
+        }
+    }
+    return Mips64Segment::Invalid;
+}
+
+bool segmentUsesXtlb(Mips64Segment segment, uint64_t status) {
+    switch (segment) {
+        case Mips64Segment::CompatibilityUseg:
+        case Mips64Segment::ExtendedUseg:
+            return (status & kStatusBitUx) != 0;
+        case Mips64Segment::ExtendedSseg:
+            return (status & kStatusBitSx) != 0;
+        case Mips64Segment::ExtendedKseg:
+            return (status & kStatusBitKx) != 0;
+        case Mips64Segment::Cksseg:
+        case Mips64Segment::Ckseg3:
+            // The compatibility-segment refill rule is selected by KX in
+            // PRA Table 4-2 even though the compatibility segment itself is
+            // enabled independently of KX.
+            return (status & kStatusBitKx) != 0;
+        default:
+            return false;
+    }
+}
+
+Mips64Probe addressError(Mips64Access access, Mips64Segment segment) {
+    Mips64Probe result;
+    result.segment = segment;
+    if (access == Mips64Access::Fetch) {
+        result.fault = Mips64Fault::AddressErrorFetch;
+        result.code = Mips64ExcCode::AdEL;
+    } else if (access == Mips64Access::Store) {
+        result.fault = Mips64Fault::AddressErrorStore;
+        result.code = Mips64ExcCode::AdES;
+    } else {
+        result.fault = Mips64Fault::AddressErrorLoad;
+        result.code = Mips64ExcCode::AdEL;
+    }
+    return result;
+}
+
+}  // namespace
+
 uint64_t Mips64Cpu::refillVector(uint64_t faultVa) const {
-    // XTLB refill (offset 0x080) is selected for 64-bit-region faults once
-    // such regions are supported; all currently supported mapped regions
-    // are 32-bit compatibility segments, so offset 0x000 applies.
-    // The selection logic itself is implemented and unit-tested.
-    const bool is64BitRegion = (faultVa >> 32) != 0 && (faultVa >> 32) != 0xFFFFFFFFULL;
-    const uint64_t offset = is64BitRegion ? kVectorOffsetXtlb : kVectorOffsetRefill;
+    const uint64_t offset = segmentUsesXtlb(classifySegment(faultVa), status_)
+                                ? kVectorOffsetXtlb
+                                : kVectorOffsetRefill;
     return exceptionVectorFor((status_ & kStatusBitBev) != 0, ebase_, offset);
 }
 
@@ -604,10 +669,12 @@ void Mips64Cpu::raiseTlbException(Mips64ExcCode code, Mips64Fault fault,
     badVAddr_ = faultVa;
     context_ = (context_ & static_cast<uint32_t>(kContextWritableMask)) |
                (static_cast<uint32_t>((faultVa >> 23) & 0x1FFU) << 23);
-    const uint64_t r = (faultVa >> 61) & 0x7ULL;
-    const uint64_t badVpn2 = (faultVa >> 13) & 0x3FFFFULL;
-    xcontext_ = (xcontext_ & kXContextPteBaseMask) | (r << 31) | (badVpn2 << 13);
-    entryHi_ = (entryHi_ & kEntryHiAsidMask) | (faultVa & kEntryHiVpn2Mask);
+    const uint64_t r = (faultVa >> 62) & 0x3ULL;
+    const uint64_t badVpn2 = (faultVa & kEntryHiVpn2Mask) >> 13;
+    xcontext_ = (xcontext_ & kXContextPteBaseMask) | (r << 31) |
+                (badVpn2 << 4);
+    entryHi_ = (entryHi_ & kEntryHiAsidMask) |
+               (faultVa & (kEntryHiRegionMask | kEntryHiVpn2Mask));
     const bool exlBefore = (status_ & kStatusBitExl) != 0;
     const uint64_t vector =
         (isRefill && !exlBefore) ? refillVector(faultVa) : exceptionVector();
@@ -772,7 +839,7 @@ bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
         return true;
     }
     if (rd == kCp0RegXContext && sel == kCp0SelXContext) {
-        // Only the PTEBase field (bits 51:34) is software-writable.
+        // Only the PTEBase field (bits 63:33 for SEGBITS=40) is writable.
         xcontext_ = (xcontext_ & ~kXContextPteBaseMask) | (value & kXContextPteBaseMask);
         return true;
     }
@@ -847,105 +914,91 @@ bool Mips64Cpu::tlbEntry(unsigned index, Mips64TlbEntry& out) const {
 }
 
 Mips64Probe Mips64Cpu::probeAddress(uint64_t va, Mips64Access access) const {
-    Mips64Probe result;
-    const bool isStore = access == Mips64Access::Store;
-    const bool isFetch = access == Mips64Access::Fetch;
-
-    // -- 1. segment classification (never truncate: 64-bit VAs outside the
-    // --    compatibility segments are explicit address errors) -------------
-    enum class Segment {
-        KusegMapped,
-        CkSeg0Direct,
-        CkSeg1Direct,
-        CksSegMapped,
-        CkSeg3Mapped,
-        Bad,
-    };
-    Segment segment = Segment::Bad;
-    if ((va >> 32) == 0) {
-        segment = (va <= kKusegEnd) ? Segment::KusegMapped : Segment::Bad;
-    } else if ((va >> 32) == 0xFFFFFFFFULL) {
-        const uint32_t low = static_cast<uint32_t>(va);
-        if (low < 0x80000000U) {
-            // Reserved gap (0xFFFFFFFF00000000..0xFFFFFFFF7FFFFFFF): neither
-            // kuseg (wrong upper half) nor a kernel compatibility segment.
-            segment = Segment::Bad;
-        } else if (low <= 0x9FFFFFFFU) {
-            segment = Segment::CkSeg0Direct;
-        } else if (low <= 0xBFFFFFFFU) {
-            segment = Segment::CkSeg1Direct;
-        } else if (low <= 0xDFFFFFFFU) {
-            segment = Segment::CksSegMapped;
-        } else {
-            segment = Segment::CkSeg3Mapped;  // 0xE0000000..0xFFFFFFFF
-        }
+    const Mips64Segment segment = classifySegment(va);
+    if (segment == Mips64Segment::Invalid) {
+        return addressError(access, segment);
     }
-
-    const auto deny = [&](Mips64Fault fault, Mips64ExcCode code) {
-        result.ok = false;
-        result.fault = fault;
-        result.code = code;
-        result.isRefill = false;
-        return result;
-    };
-    if (segment == Segment::Bad) {
-        if (isFetch) {
-            return deny(Mips64Fault::AddressErrorFetch, Mips64ExcCode::AdEL);
-        }
-        if (isStore) {
-            return deny(Mips64Fault::AddressErrorStore, Mips64ExcCode::AdES);
-        }
-        return deny(Mips64Fault::AddressErrorLoad, Mips64ExcCode::AdEL);
-    }
-
-    // -- 2. privilege enforcement --------------------------------------------
     const bool kernel = isKernelMode();
     const bool supervisor = isSupervisorMode();
     bool allowed = false;
     switch (segment) {
-        case Segment::KusegMapped:
-            allowed = true;  // user, supervisor and kernel
+        case Mips64Segment::CompatibilityUseg:
+        case Mips64Segment::ExtendedUseg:
+            allowed = true;
             break;
-        case Segment::CkSeg0Direct:
-        case Segment::CkSeg1Direct:
-        case Segment::CkSeg3Mapped:
+        case Mips64Segment::ExtendedSseg:
+        case Mips64Segment::Cksseg:
+            allowed = supervisor || kernel;
+            break;
+        case Mips64Segment::ExtendedKseg:
+        case Mips64Segment::Xkphys:
+        case Mips64Segment::Ckseg0:
+        case Mips64Segment::Ckseg1:
+        case Mips64Segment::Ckseg3:
             allowed = kernel;
             break;
-        case Segment::CksSegMapped:
-            allowed = kernel || supervisor;
-            break;
-        case Segment::Bad:
-            allowed = false;
+        case Mips64Segment::Invalid:
             break;
     }
     if (!allowed) {
-        if (isFetch) {
-            return deny(Mips64Fault::AddressErrorFetch, Mips64ExcCode::AdEL);
-        }
-        if (isStore) {
-            return deny(Mips64Fault::AddressErrorStore, Mips64ExcCode::AdES);
-        }
-        return deny(Mips64Fault::AddressErrorLoad, Mips64ExcCode::AdEL);
+        return addressError(access, segment);
     }
 
-    // -- 3. direct-mapped kernel segments (no TLB involvement) ----------------
-    if (segment == Segment::CkSeg0Direct || segment == Segment::CkSeg1Direct) {
+    const uint64_t requiredEnable =
+        segment == Mips64Segment::ExtendedUseg ? kStatusBitUx :
+        segment == Mips64Segment::ExtendedSseg ? kStatusBitSx :
+        (segment == Mips64Segment::ExtendedKseg || segment == Mips64Segment::Xkphys)
+            ? kStatusBitKx : 0ULL;
+    if (requiredEnable != 0 && (status_ & requiredEnable) == 0) {
+        return addressError(access, segment);
+    }
+
+    Mips64Probe result;
+    result.segment = segment;
+    result.useXtlbVector = segmentUsesXtlb(segment, status_);
+
+    // With ERL set, the compatibility kuseg window is unmapped and uncached.
+    // This is the recovery mapping defined by PRA 4.8.
+    if (segment == Mips64Segment::CompatibilityUseg && statusErl()) {
         result.ok = true;
-        result.phys = va & kDirectMapMask;
+        result.phys = va;
+        result.cacheAttribute = 2;
         return result;
     }
 
-    // -- 4. mapped segments require a valid matching TLB entry ---------------
-    const uint64_t vpn2 = va >> 13;
+    if (segment == Mips64Segment::Ckseg0 || segment == Mips64Segment::Ckseg1) {
+        result.ok = true;
+        result.phys = va & kDirectMapMask;
+        result.cacheAttribute = segment == Mips64Segment::Ckseg1 ? 2 : 0;
+        return result;
+    }
+
+    if (segment == Mips64Segment::Xkphys) {
+        const uint64_t cca = (va >> 59) & 0x7ULL;
+        const uint64_t reservedMask = ((1ULL << 59) - 1ULL) & ~kPhysicalAddressMask;
+        // Encodings 2 (uncached) and 3 (cacheable) are mandatory. This
+        // implementation does not provide the optional historical encodings.
+        if ((va & reservedMask) != 0 || (cca != 2 && cca != 3)) {
+            return addressError(access, segment);
+        }
+        result.ok = true;
+        result.phys = va & kPhysicalAddressMask;
+        result.cacheAttribute = static_cast<uint8_t>(cca);
+        return result;
+    }
+
+    // The low compatibility kuseg remains mapped with UX=0. With ERL=1 it
+    // returned above through the unmapped compatibility recovery window.
+    // Extended kuseg and xsseg/xkseg accesses require their respective enable.
+    const uint64_t vpn2 = (va >> 13) & kTlbVpn2Mask;
     const uint8_t asid = static_cast<uint8_t>(entryHi_ & kEntryHiAsidMask);
     const int hit = tlbProbe(vpn2, asid);
     if (hit < 0) {
-        result.ok = false;
         result.isRefill = true;
-        if (isFetch) {
+        if (access == Mips64Access::Fetch) {
             result.fault = Mips64Fault::TlbRefillFetch;
             result.code = Mips64ExcCode::TLBL;
-        } else if (isStore) {
+        } else if (access == Mips64Access::Store) {
             result.fault = Mips64Fault::TlbRefillStore;
             result.code = Mips64ExcCode::TLBS;
         } else {
@@ -962,18 +1015,18 @@ Mips64Probe Mips64Cpu::probeAddress(uint64_t va, Mips64Access access) const {
     if (!valid) {
         result.ok = false;
         result.isRefill = false;
-        result.code = isStore ? Mips64ExcCode::TLBS : Mips64ExcCode::TLBL;
-        if (isFetch) {
+        result.code = access == Mips64Access::Store ? Mips64ExcCode::TLBS
+                                                    : Mips64ExcCode::TLBL;
+        if (access == Mips64Access::Fetch) {
             result.fault = Mips64Fault::TlbInvalidFetch;
-        } else if (isStore) {
+        } else if (access == Mips64Access::Store) {
             result.fault = Mips64Fault::TlbInvalidStore;
         } else {
             result.fault = Mips64Fault::TlbInvalidLoad;
         }
         return result;
     }
-    if (isStore && !dirty) {
-        result.ok = false;
+    if (access == Mips64Access::Store && !dirty) {
         result.isRefill = false;
         result.code = Mips64ExcCode::Mod;
         result.fault = Mips64Fault::TlbModified;
@@ -986,6 +1039,7 @@ Mips64Probe Mips64Cpu::probeAddress(uint64_t va, Mips64Access access) const {
     const uint64_t offset = va & (pageSize - 1ULL);
     result.ok = true;
     result.phys = (static_cast<uint64_t>(pfnEffective) << 12) | offset;
+    result.cacheAttribute = odd ? entry.c1 : entry.c0;
     return result;
 }
 
@@ -1504,7 +1558,7 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
                                           bool inDelaySlot,
                                           uint64_t branchPc) {
     const uint64_t base = readGpr(decoded.rs);
-    const uint64_t effective = base + signExtend16(decoded.imm);
+    const uint64_t originalEffective = base + signExtend16(decoded.imm);
 
     std::size_t accessSize = 0;
     bool isLoad = true;
@@ -1525,6 +1579,14 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
             setFault(Mips64Fault::UnsupportedInstruction, "not a memory operation");
             return Mips64StepResult::Fault;
     }
+
+    // MIPS64r2 PRA 4.10 preserves 32-bit user data-pointer arithmetic when
+    // UX=0. Normalize only load/store effective addresses; instruction fetch
+    // continues to validate the original full PC without this transformation.
+    const bool userCompatDataAddress = isUserMode() && (status_ & kStatusBitUx) == 0;
+    const uint64_t effective = userCompatDataAddress
+                                   ? signExtend32(static_cast<uint32_t>(originalEffective))
+                                   : originalEffective;
 
     if (accessSize > 1 && (effective % accessSize) != 0) {
         if (isLoad) {
@@ -2052,7 +2114,7 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     blob[1] = 'P';
     blob[2] = '6';
     blob[3] = '2';
-    blob[4] = kSerializationVersion;  // v4: corrected Cause DC/IV layout (MIPS64-4R1)
+    blob[4] = kSerializationVersion;  // v5: SEGBITS=40 EntryHi/TLB/XContext layout
     blob[5] = static_cast<uint8_t>(endianness_);
     // bytes 6..7 reserved (zero)
 
@@ -2136,11 +2198,12 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if (data[0] != 'M' || data[1] != 'P' || data[2] != '6' || data[3] != '2') {
         return false;
     }
-    // v1 ('MP61') and v2 blobs are rejected by size and version. v3 (MIPS64-3
-    // and MIPS64-4 builds) shares the v4 layout but used a wrong Cause
-    // assignment; see the version history in Mips64Cpu.h.
+    // v1 ('MP61') and v2 blobs are rejected by size and version. v3/v4 share
+    // this byte layout but carry the legacy full-width VPN2 and pre-MIPS64-5
+    // XContext interpretation. Canonical legacy state is normalized below.
     const uint8_t version = data[4];
-    if (version != kSerializationVersion && version != kSerializationVersionV3) {
+    if (version != kSerializationVersion && version != kSerializationVersionV4 &&
+        version != kSerializationVersionV3) {
         return false;
     }
     if (data[6] != 0 || data[7] != 0) {
@@ -2195,13 +2258,13 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     const std::size_t tlbOffset = cp0Offset + 64;
     const uint64_t index = load64(tlbOffset);
     const uint64_t random = load64(tlbOffset + 8);
-    const uint64_t entryHi = load64(tlbOffset + 16);
+    uint64_t entryHi = load64(tlbOffset + 16);
     const uint64_t entryLo0 = load64(tlbOffset + 24);
     const uint64_t entryLo1 = load64(tlbOffset + 32);
     const uint64_t pageMask = load64(tlbOffset + 40);
     const uint64_t wired = load64(tlbOffset + 48);
     const uint64_t context = load64(tlbOffset + 56);
-    const uint64_t xcontext = load64(tlbOffset + 64);
+    uint64_t xcontext = load64(tlbOffset + 64);
     // Interrupt state (MIPS64-4 / 4R1). Cause bits must lie in the implemented
     // set. A v3 blob that sets IV (bit 23) or DC (bit 27) was written with the
     // MIPS64-4 bit assignment and cannot be interpreted unambiguously.
@@ -2229,7 +2292,23 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if (random >= kTlbEntries) {
         return false;
     }
-    if ((entryHi & ~kEntryHiWritableMask) != 0) {
+    if (version < kSerializationVersion) {
+        constexpr uint64_t legacyEntryHiVpnMask = 0xFFFFFFFFFFFFE000ULL;
+        constexpr uint64_t legacyEntryHiWritableMask = legacyEntryHiVpnMask |
+                                                       kEntryHiAsidMask;
+        constexpr uint64_t legacyFillMask = 0x3FFFFF0000000000ULL;  // old EntryHi[61:40]
+        if ((entryHi & ~legacyEntryHiWritableMask) != 0) {
+            return false;
+        }
+        const uint64_t region = (entryHi & kEntryHiRegionMask) >> 62;
+        const uint64_t fill = entryHi & legacyFillMask;
+        const uint64_t canonicalFill = region == 3 ? legacyFillMask : 0ULL;
+        if (fill != canonicalFill) {
+            return false;
+        }
+        entryHi = (entryHi & kEntryHiAsidMask) |
+                  (entryHi & (kEntryHiRegionMask | kEntryHiVpn2Mask));
+    } else if ((entryHi & ~kEntryHiWritableMask) != 0) {
         return false;
     }
     if ((entryLo0 & ~kEntryLoWritableMask) != 0 || (entryLo1 & ~kEntryLoWritableMask) != 0) {
@@ -2244,7 +2323,22 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if ((context >> 32) != 0 || (context & 0xFULL) != 0) {
         return false;
     }
-    if ((xcontext & 0xFFFULL) != 0 || (xcontext >> 52) != 0) {
+    if (version < kSerializationVersion) {
+        constexpr uint64_t legacyXContextPteBaseMask = 0x000FFFFC00000000ULL;
+        constexpr uint64_t legacyXContextDataMask = 0x00000003FFFFE000ULL;
+        if ((xcontext & ~(legacyXContextPteBaseMask | legacyXContextDataMask)) != 0) {
+            return false;
+        }
+        const uint64_t oldRegion = (xcontext >> 31) & 0x7ULL;
+        if (oldRegion != 0 && oldRegion != 7) {
+            return false;  // only old compatibility useg/kernel VPNs were producible
+        }
+        const uint64_t oldBadVpn2 = (xcontext >> 13) & 0x3FFFFULL;
+        const uint64_t extendedBadVpn2 =
+            (oldRegion == 7 ? (0x1FFULL << 18) : 0ULL) | oldBadVpn2;
+        xcontext = (xcontext & legacyXContextPteBaseMask) |
+                   ((oldRegion >> 1) << 31) | (extendedBadVpn2 << 4);
+    } else if ((xcontext & 0xFULL) != 0) {
         return false;
     }
     // TLB entries.
@@ -2253,7 +2347,21 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     for (unsigned i = 0; i < kTlbEntries; ++i) {
         Mips64TlbEntry entry;
         entry.vpn2 = load64(entryOffset);
-        if ((entry.vpn2 & ~kEntryHiVpn2Mask) != 0) {
+        if (version < kSerializationVersion) {
+            constexpr uint64_t legacyTlbVpnMask = 0x0007FFFFFFFFFFFFULL;
+            constexpr uint64_t legacyFillMask = 0x0001FFFFF8000000ULL; // old vpn2[48:27]
+            constexpr uint64_t vpn2LowMask = (1ULL << (kMips64SegBits - 13)) - 1ULL;
+            if ((entry.vpn2 & ~legacyTlbVpnMask) != 0) {
+                return false;
+            }
+            const uint64_t region = (entry.vpn2 >> 49) & 0x3ULL;
+            const uint64_t fill = entry.vpn2 & legacyFillMask;
+            const uint64_t canonicalFill = region == 3 ? legacyFillMask : 0ULL;
+            if (fill != canonicalFill) {
+                return false;
+            }
+            entry.vpn2 = (region << 49) | (entry.vpn2 & vpn2LowMask);
+        } else if ((entry.vpn2 & ~kTlbVpn2Mask) != 0) {
             return false;
         }
         uint32_t pfn0 = 0, pfn1 = 0;

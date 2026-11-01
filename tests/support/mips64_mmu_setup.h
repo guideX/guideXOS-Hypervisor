@@ -47,6 +47,40 @@ inline void storeWordPhys(ia64::IMemory& mem, uint64_t phys, uint32_t word,
     mem.Write(phys, bytes, 4);
 }
 
+// Clear Status.ERL through guest CP0 instructions while preserving the other
+// writable Status fields. Reset starts with ERL=1, where compatibility kuseg
+// is architecturally unmapped; TLB-focused tests use this before mapped access.
+inline bool clearErlFromGuest(mips64::Mips64Cpu& cpu, ia64::IMemory& mem,
+                              uint64_t scratchPhys = 0x7000ULL) {
+    using namespace mips64;
+    const uint32_t words[4] = {
+        encCp0(1, 26, 12, 0),  // dmfc0 $k0, Status
+        encI(0x19, 0, 27, 0xFFFB),  // daddiu $k1, $zero, -5
+        encR(26, 27, 26, 0, 0x24),  // and $k0, $k0, $k1 (clear ERL)
+        encCp0(5, 26, 12, 0),  // dmtc0 $k0, Status
+    };
+    const bool littleEndian = cpu.isLittleEndian();
+    for (size_t i = 0; i < 4; ++i) {
+        storeWordPhys(mem, scratchPhys + static_cast<uint64_t>(i) * 4,
+                     words[i], littleEndian);
+    }
+    const uint64_t savedPc = cpu.pc();
+    const uint64_t savedK0 = cpu.readGpr(26);
+    const uint64_t savedK1 = cpu.readGpr(27);
+    cpu.setPc(kCKSeg0Base | (scratchPhys & kDirectMapMask));
+    bool ok = true;
+    for (unsigned i = 0; i < 4; ++i) {
+        if (cpu.step(mem) != Mips64StepResult::Continue) {
+            ok = false;
+            break;
+        }
+    }
+    cpu.writeGpr(26, savedK0);
+    cpu.writeGpr(27, savedK1);
+    cpu.setPc(savedPc);
+    return ok && !cpu.statusErl();
+}
+
 inline void fillPhysZeros(ia64::IMemory& mem, uint64_t phys, unsigned size) {
     std::vector<uint8_t> zeros(size, 0);
     mem.Write(phys, zeros.data(), zeros.size());
@@ -93,8 +127,8 @@ inline bool fillGuestZeros(ia64::IMemory& mem, uint64_t va, unsigned size) {
 // instructions (DMTC0/MTC0/TLBWI) executed from a CKSEG0 scratch window.
 // Requires effective kernel mode (true after reset). Preserves PC and all
 // GPRs ($k0/$26 is used transiently and restored); Status/Cause/EPC are
-// untouched; Count ticks once per prologue instruction (10 steps).
-// scratchPhys selects the 36-byte CKSEG0 scratch window (must be mapped
+// untouched; Count ticks once per prologue instruction (10 steps). scratchPhys
+// selects the CKSEG0 scratch window (must be mapped
 // physical memory, 4-byte aligned, clear of guest code/data).
     // Returns false if any prologue instruction fails to retire.
     inline bool setupKusegIdentityMap(mips64::Mips64Cpu& cpu, ia64::IMemory& mem,

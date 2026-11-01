@@ -168,7 +168,9 @@ static void testVectorTable() {
 
 // -- 2. segment classification + privilege at probe level ---------------------------------
 static void testSegmentProbe() {
+    SparseMemory mem;
     Mips64Cpu cpu;  // kernel (reset), ASID 0, no TLB entries
+    CHECK(clearErlFromGuest(cpu, mem));
     // kuseg without entry: refill (mapped, privilege OK). VPN2 nonzero so
     // the all-zero entries cannot shadow the probe with an Invalid result.
     Mips64Probe k = cpu.probeAddress(0x4000, Mips64Access::Load);
@@ -286,6 +288,7 @@ static void testRefillVectors() {
         storeWordPhys(mem, kCodePhys, (0x0FU << 26) | (4U << 16) | 2U, true);
         storeWordPhys(mem, kCodePhys + 4, encI(0x23, 4, 8, 0x120), true);
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         cpu.setPc(kCodeVirt);
         CHECK(stepOk(cpu, mem));  // lui retires
         CHECK(stepFault(cpu, mem, Mips64Fault::TlbRefillLoad));
@@ -295,11 +298,12 @@ static void testRefillVectors() {
         CHECK(cpu.cp0BadVAddr() == 0x20120ULL);
         CHECK(cpu.statusExl() && !cpu.causeBd());
         // EntryHi.VPN2 = fault VPN, ASID preserved (0); Context/XContext set.
-        CHECK(cpu.cp0EntryHi() == (0x20120ULL & 0xFFFFFFFFFFFFE000ULL));
+        CHECK(cpu.cp0EntryHi() == (0x20120ULL &
+                                   (kEntryHiRegionMask | kEntryHiVpn2Mask)));
         CHECK((cpu.cp0Context() >> 23) == ((0x20120ULL >> 23) & 0x1FFULL));
-        CHECK(((cpu.cp0XContext() >> 13) & 0x3FFFFULL) ==
-              ((0x20120ULL >> 13) & 0x3FFFFULL));
-        CHECK(((cpu.cp0XContext() >> 31) & 0x7ULL) == 0);  // R = VA[63:61]
+        CHECK(((cpu.cp0XContext() >> 4) & ((1ULL << (kMips64SegBits - 13)) - 1ULL)) ==
+              ((0x20120ULL >> 13) & ((1ULL << (kMips64SegBits - 13)) - 1ULL)));
+        CHECK(((cpu.cp0XContext() >> 31) & 0x3ULL) == 0);  // R = VA[63:62]
     }
     // Store miss -> TLBS, still refill vector when EXL was clear.
     {
@@ -307,6 +311,7 @@ static void testRefillVectors() {
         storeWordPhys(mem, kCodePhys, (0x0FU << 26) | (4U << 16) | 2U, true);
         storeWordPhys(mem, kCodePhys + 4, encI(0x2B, 4, 8, 0x120), true);
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         cpu.setPc(kCodeVirt);
         CHECK(stepOk(cpu, mem));
         CHECK(stepFault(cpu, mem, Mips64Fault::TlbRefillStore));
@@ -318,6 +323,7 @@ static void testRefillVectors() {
     {
         SparseMemory mem;  // empty: VA 0x4000 has no mapping
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         cpu.setPc(0x4000);
         CHECK(stepFault(cpu, mem, Mips64Fault::TlbRefillFetch));
         CHECK(cpu.causeExcCode() == 2);
@@ -338,6 +344,7 @@ static void testRefillVectors() {
         for (size_t i = 0; i < 2; ++i)
             storeWordPhys(mem, kScratchPhys + i * 4, code[i], true);
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         cpu.setPc(0xFFFFFFFF80004000ULL);
         CHECK(stepOk(cpu, mem));  // BEV cleared (still kernel, KSU=0)
         CHECK(cpu.exceptionVector() == 0xFFFFFFFF80000180ULL);
@@ -357,6 +364,7 @@ static void testRefillVectors() {
         for (size_t i = 0; i < 2; ++i)
             storeWordPhys(mem, kScratchPhys + i * 4, code[i], true);
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         cpu.setPc(0xFFFFFFFF80004010ULL);
         CHECK(stepFault(cpu, mem, Mips64Fault::SyscallTrap));
         CHECK(cpu.statusExl());
@@ -373,6 +381,7 @@ static void testRefillVectors() {
         storeWordPhys(mem, kCodePhys, 0x0000000CU, true);
         storeWordPhys(mem, kCodePhys + 4, 0x0000000DU, true);
         Mips64Cpu cpu;
+        CHECK(clearErlFromGuest(cpu, mem));
         cpu.setPc(kCodeVirt);
         CHECK(stepFault(cpu, mem, Mips64Fault::SyscallTrap));
         CHECK(cpu.pc() == 0xFFFFFFFFBFC00380ULL);
@@ -414,6 +423,7 @@ static void testInvalidVsModified() {
         storeWordPhys(mem, kCodePhys + static_cast<uint64_t>(i) * 4, code[i], true);
     }
     Mips64Cpu cpu;
+    CHECK(clearErlFromGuest(cpu, mem));
     CHECK(runCkSeg0(cpu, mem, 0x10000, install));
     // Prime $4 = 0x20000 first (the faulting PCs below are entered directly).
     cpu.setPc(kCodeVirt);
@@ -431,6 +441,7 @@ static void testInvalidVsModified() {
     // Load from the valid read-only odd page succeeds...
     storeData32(mem, 0x1000, 0x12345678, true);  // PA 0x1000 (pfn 1)
     Mips64Cpu cpu2;
+    CHECK(clearErlFromGuest(cpu2, mem));
     CHECK(runCkSeg0(cpu2, mem, 0x10000, install));
     cpu2.setPc(kCodeVirt);
     CHECK(stepOk(cpu2, mem));  // lui $4
@@ -443,7 +454,8 @@ static void testInvalidVsModified() {
     CHECK(cpu2.causeExcCode() == 1);
     CHECK(cpu2.pc() == 0xFFFFFFFFBFC00380ULL);
     CHECK(cpu2.cp0BadVAddr() == 0x21000ULL);
-    CHECK(cpu2.cp0EntryHi() == (0x21000ULL & 0xFFFFFFFFFFFFE000ULL));
+    CHECK(cpu2.cp0EntryHi() == (0x21000ULL &
+                                (kEntryHiRegionMask | kEntryHiVpn2Mask)));
 }
 
 // -- 7. TLB faults in branch delay slots (EPC = branch, BD = 1) ---------------------------
@@ -456,6 +468,7 @@ static void testDelaySlotTlbFault() {
     storeWordPhys(mem, kCodePhys + 4, encI(0x04, 0, 0, 1), true);  // beq $0,$0,1
     storeWordPhys(mem, kCodePhys + 8, encI(0x23, 4, 8, 0), true);  // lw (no entry)
     Mips64Cpu cpu;
+    CHECK(clearErlFromGuest(cpu, mem));
     cpu.setPc(kCodeVirt);
     CHECK(stepOk(cpu, mem));  // lui $4
     CHECK(stepOk(cpu, mem));  // branch arms the slot
