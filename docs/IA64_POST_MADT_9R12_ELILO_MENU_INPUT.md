@@ -15,7 +15,7 @@ The highest verified milestone is selection followed by the first 32 KiB of the 
 - `.phase` was `last_completed=IA64-POST-MADT-8`, `next_expected=IA64-POST-MADT-9` and is unchanged.
 - All existing build directories and historical guest artifacts were preserved. `build-9r12/` is the new isolated build and evidence directory for this work.
 - No ISO, EFI binary, FAT contents, Linux image, or initrd was modified. No branch operation or remote write was performed.
-- A local commit contains the implementation, focused tests, and this report. Its SHA is provided in the closeout response; no push was performed.
+- The implementation, focused tests, and initial report are in commit `050ecf040b621bb57352a80132642afa5562b12f` (`fix(ia64): qualify authentic ELILO menu input`). A documentation-only closeout commit records this result. At closeout, `IA64` is 2 commits ahead / 0 behind `origin/IA64`; neither commit was pushed.
 
 The authenticated reconstructed ISO and active FAT extent match the prior R9/R11 evidence:
 
@@ -182,5 +182,6 @@ Continue from the authentic `/linux` path: qualify the full kernel read and load
 
 - Outcome: **A — authentic menu selection verified; kernel file opened and initial bytes verified**.
 - Phase: unchanged at `last_completed=IA64-POST-MADT-8`, `next_expected=IA64-POST-MADT-9`.
-- Local commit: containing commit SHA is supplied in the closeout response; not pushed.
+- Implementation/evidence commit: `050ecf040b621bb57352a80132642afa5562b12f`. The final documentation-only closeout commit SHA is supplied in the closeout response; neither commit was pushed.
+- Final worktree: tracked files clean; `.phase` unchanged. Existing historical untracked build directories and new `build-9r12/` evidence were preserved.
 - Existing historical build artifacts are preserved. The new `build-9r12/` directory contains build logs, deterministic run logs, focused test logs, and the 512 MiB RAM dump used for the kernel byte comparison.
