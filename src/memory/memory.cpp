@@ -35,6 +35,7 @@ void Memory::loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) {
     }
     
     checkBounds(address, size);
+    denyProtectedWrite(address, size);
     std::memcpy(&data_[address], buffer, size);
     // Bulk loads (loader, bootstrap, checkpoint restore) mutate storage
     // without going through Write(); they must invalidate reservations.
@@ -164,8 +165,25 @@ bool Memory::ValidateGuestRealRange(uint64_t address, size_t size, bool isWrite,
         reason = e.what();
         return false;
     }
-    (void)isWrite; // RAM has no second permission layer in the flat contract.
+    if (isWrite && IsGuestWriteProtectedRange(address, size)) {
+        reason = "guest memory write denied: PERMISSION protected RTAS trampoline region";
+        return false;
+    }
     return true;
+}
+
+bool Memory::IsGuestWriteProtectedRange(uint64_t address, size_t size) const {
+    if (size == 0) return false;
+    const uint64_t maxAddress = std::numeric_limits<uint64_t>::max();
+    if (static_cast<uint64_t>(size) > maxAddress - address) return true;
+    const uint64_t end = address + static_cast<uint64_t>(size);
+    for (const GuestWriteProtectedRegion& region : guestWriteProtectedRegions_) {
+        const uint64_t regionSize =
+            static_cast<uint64_t>(region.expectedBytes.size());
+        const uint64_t regionEnd = region.base + regionSize;
+        if (address < regionEnd && region.base < end) return true;
+    }
+    return false;
 }
 
 void Memory::ReadGuestReal(uint64_t address, uint8_t* dest, size_t size) const {
@@ -179,6 +197,7 @@ void Memory::ReadGuestReal(uint64_t address, uint8_t* dest, size_t size) const {
     if (!ValidateGuestRealRange(address, size, false, reason)) {
         throw std::runtime_error("ReadGuestReal: " + reason);
     }
+    validateProtectedRead(address, size);
     std::memcpy(dest, &data_[static_cast<size_t>(address)], size);
 }
 
@@ -207,6 +226,155 @@ void Memory::WriteGuestRealTransaction(
         if (!segment.bytes.empty()) {
             reservations_->noteWrite(segment.address, segment.bytes.size());
         }
+    }
+}
+
+void Memory::commitGuestRealTransactionWithProtectedRegion(
+    const std::vector<GuestRealWriteSegment>& segments,
+    uint64_t protectedBase,
+    const std::vector<uint8_t>& expectedBytes) {
+    if (expectedBytes.empty()) {
+        throw std::invalid_argument("protected guest region cannot be empty");
+    }
+    std::string reason;
+    if (!ValidateGuestRealRange(protectedBase, expectedBytes.size(), false,
+                                reason)) {
+        throw std::runtime_error("protected guest region is unavailable: " + reason);
+    }
+    if (IsGuestWriteProtectedRange(protectedBase, expectedBytes.size())) {
+        throw std::runtime_error("protected guest region overlaps an existing protection");
+    }
+
+    bool exactProtectedWrite = false;
+    for (size_t index = 0; index < segments.size(); ++index) {
+        const GuestRealWriteSegment& segment = segments[index];
+        if (segment.bytes.empty()) continue;
+        if (!ValidateGuestRealRange(segment.address, segment.bytes.size(), true,
+                                    reason)) {
+            throw std::runtime_error("protected guest transaction: " + reason);
+        }
+        if (segment.address == protectedBase &&
+            segment.bytes == expectedBytes) {
+            exactProtectedWrite = true;
+        }
+        const uint64_t segmentEnd = segment.address + segment.bytes.size();
+        for (size_t other = 0; other < index; ++other) {
+            const GuestRealWriteSegment& prior = segments[other];
+            if (prior.bytes.empty()) continue;
+            const uint64_t priorEnd = prior.address + prior.bytes.size();
+            if (segment.address < priorEnd && prior.address < segmentEnd) {
+                throw std::runtime_error("protected guest transaction contains overlapping writes");
+            }
+        }
+        const bool overlapsProtected =
+            segment.address < protectedBase + expectedBytes.size() &&
+            protectedBase < segmentEnd;
+        if (overlapsProtected &&
+            !(segment.address == protectedBase &&
+              segment.bytes.size() == expectedBytes.size())) {
+            throw std::runtime_error("protected guest transaction does not stage the complete region");
+        }
+    }
+    if (!exactProtectedWrite) {
+        throw std::runtime_error("protected guest transaction omitted canonical region bytes");
+    }
+
+    // Allocate all protection metadata before the first storage mutation.
+    GuestWriteProtectedRegion region;
+    region.base = protectedBase;
+    region.expectedBytes = expectedBytes;
+    guestWriteProtectedRegions_.reserve(guestWriteProtectedRegions_.size() + 1U);
+    for (const GuestRealWriteSegment& segment : segments) {
+        if (segment.bytes.empty()) continue;
+        std::memcpy(&data_[static_cast<size_t>(segment.address)],
+                    segment.bytes.data(), segment.bytes.size());
+    }
+    for (const GuestRealWriteSegment& segment : segments) {
+        if (!segment.bytes.empty()) {
+            reservations_->noteWrite(segment.address, segment.bytes.size());
+        }
+    }
+    guestWriteProtectedRegions_.push_back(std::move(region));
+}
+
+void Memory::registerValidatedGuestWriteProtection(
+    uint64_t protectedBase,
+    const std::vector<uint8_t>& expectedBytes) {
+    if (expectedBytes.empty()) {
+        throw std::invalid_argument("protected guest region cannot be empty");
+    }
+    std::string reason;
+    if (!ValidateGuestRealRange(protectedBase, expectedBytes.size(), false,
+                                reason)) {
+        throw std::runtime_error("restored protected guest region is unavailable: " + reason);
+    }
+    if (IsGuestWriteProtectedRange(protectedBase, expectedBytes.size())) {
+        throw std::runtime_error("restored protected guest region overlaps an existing protection");
+    }
+    if (!std::equal(expectedBytes.begin(), expectedBytes.end(),
+                    data_.begin() + static_cast<std::ptrdiff_t>(protectedBase))) {
+        throw std::runtime_error("restored protected guest bytes do not match validated metadata");
+    }
+    GuestWriteProtectedRegion region;
+    region.base = protectedBase;
+    region.expectedBytes = expectedBytes;
+    guestWriteProtectedRegions_.push_back(std::move(region));
+}
+
+void Memory::restoreProtectedGuestRegion(
+    uint64_t protectedBase,
+    const std::vector<uint8_t>& expectedBytes) {
+    const auto found = std::find_if(
+        guestWriteProtectedRegions_.begin(), guestWriteProtectedRegions_.end(),
+        [protectedBase, &expectedBytes](const GuestWriteProtectedRegion& region) {
+            return region.base == protectedBase &&
+                   region.expectedBytes == expectedBytes;
+        });
+    if (found == guestWriteProtectedRegions_.end()) {
+        throw std::runtime_error("host reset does not match an installed protected region");
+    }
+    std::string reason;
+    if (!ValidateGuestRealRange(protectedBase, expectedBytes.size(), false,
+                                reason)) {
+        throw std::runtime_error("host reset protected region is unavailable: " + reason);
+    }
+    std::memcpy(&data_[static_cast<size_t>(protectedBase)],
+                expectedBytes.data(), expectedBytes.size());
+    reservations_->noteWrite(protectedBase, expectedBytes.size());
+}
+
+bool Memory::hasGuestWriteProtection(uint64_t base, size_t size) const {
+    return std::any_of(guestWriteProtectedRegions_.begin(),
+        guestWriteProtectedRegions_.end(), [base, size](const auto& region) {
+            return region.base == base && region.expectedBytes.size() == size;
+        });
+}
+
+void Memory::validateProtectedRead(uint64_t address, size_t size) const {
+    if (size == 0) return;
+    const uint64_t end = address + static_cast<uint64_t>(size);
+    for (const GuestWriteProtectedRegion& region : guestWriteProtectedRegions_) {
+        const uint64_t regionEnd = region.base + region.expectedBytes.size();
+        const uint64_t overlapBegin = std::max(address, region.base);
+        const uint64_t overlapEnd = std::min(end, regionEnd);
+        if (overlapBegin >= overlapEnd) continue;
+        const size_t regionOffset = static_cast<size_t>(overlapBegin - region.base);
+        const size_t memoryOffset = static_cast<size_t>(overlapBegin);
+        const size_t overlapSize = static_cast<size_t>(overlapEnd - overlapBegin);
+        if (!std::equal(region.expectedBytes.begin() +
+                            static_cast<std::ptrdiff_t>(regionOffset),
+                        region.expectedBytes.begin() +
+                            static_cast<std::ptrdiff_t>(regionOffset + overlapSize),
+                        data_.begin() + static_cast<std::ptrdiff_t>(memoryOffset))) {
+            throw std::runtime_error("protected guest read failed: trampoline integrity mismatch");
+        }
+    }
+}
+
+void Memory::denyProtectedWrite(uint64_t address, size_t size) const {
+    if (IsGuestWriteProtectedRange(address, size)) {
+        throw std::runtime_error(
+            "guest memory write denied: PERMISSION protected RTAS trampoline region");
     }
 }
 
@@ -257,6 +425,9 @@ bool Memory::UnregisterDevice(IMemoryMappedDevice* device) {
 }
 
 void Memory::Clear() {
+    if (!guestWriteProtectedRegions_.empty()) {
+        throw std::runtime_error("cannot clear memory while protected guest regions are installed");
+    }
     std::fill(data_.begin(), data_.end(), static_cast<uint8_t>(0));
     reservations_->invalidateAll();
 }
@@ -272,6 +443,17 @@ MemorySnapshot Memory::CreateSnapshot() const {
 void Memory::RestoreSnapshot(const MemorySnapshot& snapshot) {
     if (snapshot.data.size() != data_.size()) {
         throw std::invalid_argument("Memory snapshot size mismatch");
+    }
+
+    for (const GuestWriteProtectedRegion& region : guestWriteProtectedRegions_) {
+        if (region.base > snapshot.data.size() ||
+            region.expectedBytes.size() > snapshot.data.size() - region.base ||
+            !std::equal(region.expectedBytes.begin(), region.expectedBytes.end(),
+                        snapshot.data.begin() +
+                            static_cast<std::ptrdiff_t>(region.base))) {
+            throw std::invalid_argument(
+                "memory snapshot changes a protected guest region");
+        }
     }
 
     data_ = snapshot.data;
@@ -308,6 +490,7 @@ void Memory::mmuRead(uint64_t address, uint8_t* dest, size_t size) const {
 
     // If MMU is disabled, just do direct read
     if (!mmu_->IsEnabled()) {
+        validateProtectedRead(address, size);
         std::memcpy(dest, &data_[address], size);
         return;
     }
@@ -321,6 +504,7 @@ void Memory::mmuRead(uint64_t address, uint8_t* dest, size_t size) const {
 
         // Check translated physical bounds
         checkBounds(physicalAddr, size);
+        validateProtectedRead(physicalAddr, size);
 
         // Invoke read hooks
         // Note: We pass dest buffer so hooks can inspect/modify the read data
@@ -346,6 +530,7 @@ void Memory::mmuWrite(uint64_t address, const uint8_t* src, size_t size) {
 
     // If MMU is disabled, just do direct write
     if (!mmu_->IsEnabled()) {
+        denyProtectedWrite(address, size);
         std::memcpy(&data_[address], src, size);
         return;
     }
@@ -359,6 +544,7 @@ void Memory::mmuWrite(uint64_t address, const uint8_t* src, size_t size) {
 
         // Check translated physical bounds
         checkBounds(physicalAddr, size);
+        denyProtectedWrite(physicalAddr, size);
 
         // Invoke write hooks
         // Note: We need to cast away const to pass to hooks (hooks may inspect data)

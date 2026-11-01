@@ -873,6 +873,12 @@ bool PPC64ISAPlugin::validateDataRange(IMemory& memory, uint64_t ea, uint32_t wi
         // Physical bounds for the translated chunk (identity => same).
         uint64_t phys = entry->physicalAddress + (cur - pageBase);
         uint64_t segLen = segEnd - cur;
+        if (isStore && concrete->IsGuestWriteProtectedRange(
+                           phys, static_cast<size_t>(segLen))) {
+            reason = "PAGE FAULT [PERMISSION_WRITE]: protected guest trampoline region";
+            failIsPermission = true;
+            return false;
+        }
         if (phys + segLen > totalSize || phys + segLen < phys) {
             std::ostringstream oss;
             oss << "Memory address 0x" << std::hex << phys
@@ -4180,10 +4186,22 @@ bool PPC64ISAPlugin::translateAccessRange(
                                               backingReason)) {
             failure = translated;
             failure.success = false;
-            failure.fault = partitionContext_ != nullptr
-                ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
-                : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
-            failure.stage = PPC64TranslationStage::BACKEND;
+            const bool protectedWrite =
+                access == PPC64TranslationAccess::WRITE &&
+                concrete->IsGuestWriteProtectedRange(
+                    translated.hostBackingAddress, chunk);
+            failure.fault = protectedWrite
+                ? (partitionContext_ != nullptr
+                    ? PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE
+                    : PPC64TranslationFaultKind::PERMISSION_FAILURE)
+                : (partitionContext_ != nullptr
+                    ? PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE
+                    : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY);
+            failure.stage = protectedWrite
+                ? (partitionContext_ != nullptr
+                    ? PPC64TranslationStage::PARTITION
+                    : PPC64TranslationStage::PROCESS)
+                : PPC64TranslationStage::BACKEND;
             failure.reason = (partitionContext_ != nullptr
                 ? "partition backing access failed: "
                 : "flat partition backing access is unsupported: ") + backingReason;
@@ -4334,7 +4352,14 @@ bool PPC64ISAPlugin::flatGuestRealAccessRange(
     if (!concrete->ValidateGuestRealRange(
             hostBackingAddress, width,
             access == PPC64TranslationAccess::WRITE, reason)) {
-        failure.fault = PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        const bool protectedWrite =
+            access == PPC64TranslationAccess::WRITE &&
+            concrete->IsGuestWriteProtectedRange(hostBackingAddress, width);
+        failure.fault = protectedWrite
+            ? PPC64TranslationFaultKind::PERMISSION_FAILURE
+            : PPC64TranslationFaultKind::UNSUPPORTED_EMULATOR_FUNCTIONALITY;
+        failure.stage = protectedWrite ? PPC64TranslationStage::PROCESS
+                                       : PPC64TranslationStage::NONE;
         failure.reason = "flat partition backing access is unsupported: " + reason;
         reason = failure.reason;
         return false;
@@ -4467,8 +4492,15 @@ bool PPC64ISAPlugin::partitionGuestRealAccessRange(
             failure.effectiveAddress = current;
             failure.guestRealAddress = current;
             failure.hostBackingAddress = translated.hostBackingAddress;
-            failure.fault = PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
-            failure.stage = PPC64TranslationStage::BACKEND;
+            const bool protectedWrite =
+                access == PPC64TranslationAccess::WRITE &&
+                ram->IsGuestWriteProtectedRange(
+                    translated.hostBackingAddress, chunk);
+            failure.fault = protectedWrite
+                ? PPC64TranslationFaultKind::PARTITION_PERMISSION_FAILURE
+                : PPC64TranslationFaultKind::PARTITION_BACKEND_FAILURE;
+            failure.stage = protectedWrite ? PPC64TranslationStage::PARTITION
+                                           : PPC64TranslationStage::BACKEND;
             failure.contextIdentifier = partitionContext_->lpid();
             failure.reason = "partition backing range is unavailable: " + reason;
             reason = failure.reason;

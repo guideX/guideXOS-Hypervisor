@@ -19,6 +19,9 @@ inline constexpr uint32_t PPC64_RTAS_TOKEN_IBM_INT_ON = 0x200DU;
 inline constexpr uint32_t PPC64_RTAS_MAX_CELLS = 16U;
 inline constexpr uint32_t PPC64_RTAS_SERVICE_REGISTRY_VERSION = 1U;
 inline constexpr uint32_t PPC64_RTAS_FORWARDING_CODE_SIZE = 20U;
+// The hosted Memory backend protects fixed 4 KiB regions. Keep the forwarding
+// code in a dedicated region so protection cannot affect the FDT or guest data.
+inline constexpr uint32_t PPC64_RTAS_PROTECTED_REGION_SIZE = 4096U;
 // QEMU pc-bios/vof/entry.S: hv_rtas, assembled as big-endian PPC64 words.
 inline constexpr std::array<uint32_t, 5> PPC64_RTAS_FORWARDING_WORDS{{
     0x7C641B78U, // mr r4,r3

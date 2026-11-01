@@ -1077,7 +1077,7 @@ void testLevelEventsCheckpointAndLegacyProfile() {
         (static_cast<uint32_t>(header[9]) << 8) |
         (static_cast<uint32_t>(header[10]) << 16) |
         (static_cast<uint32_t>(header[11]) << 24);
-    CHECK(fileVersion == 8U);
+    CHECK(fileVersion == 9U);
     file.close();
     VirtualMachine fileRestored(kRamSize, 1, "PPC64", platform());
     CHECK(prepare(fileRestored, checkpointCode));

@@ -2,7 +2,7 @@
 
 ## Result and scope
 
-**Outcome B — partial, tested hosted implementation.** guideXOS now installs and advertises a small guest-resident RTAS forwarding entry and the hosted guest executes it through the normal PPC64 decoder and VM step path. The implementation is not a SLOF/Open Firmware environment, has no per-region execute/write protection, and has not been tested in a QEMU guest or booted with Linux. These are separate qualification levels.
+**Outcome B — partial, tested hosted implementation.** guideXOS installs and advertises a small guest-resident RTAS forwarding entry that executes through the normal PPC64 decoder and VM step path. Phase 19R1 adds VM-local write protection for the dedicated trampoline page and explicit PPC64 DSI coverage for attempted guest writes. Level-triggered XICS coverage, the complete privilege/mode/fault matrix, checkpoint boundary matrix, and full LPID ownership matrix remain open. There is no QEMU guest run, SLOF/Open Firmware environment, or Linux boot claim.
 
 The direct-FDT PPC64 platform, one CPU, XICS compatibility mode, and the bounded version-1 RTAS registry are the supported profile. Trampoline installation is optional; disabling it retains the Phase 18 direct `H_RTAS` diagnostic profile and omits RTAS entry-address properties.
 
@@ -36,31 +36,33 @@ The five instructions themselves do not write CR or XER; selected nonvolatile GP
 
 ## 4. Placement, reservation, and FDT
 
-When enabled, `VirtualMachine::preparePPC64Platform` chooses `rtasBase = (fdtBase - 20) & ~3`, sets `rtasEntry = rtasBase`, and reserves exactly 20 bytes. It checks RAM range, 4-byte alignment, 32-bit addressability, and overlap against the loaded image, maximum FDT span, initrd, supplied/platform reservations, partition/process-table reservations, and protected hypervisor handler backing. The trampoline and FDT are staged with the guest image before platform preparation is committed. Reset re-stages the canonical FDT and stub as a checked memory transaction.
+When enabled, `VirtualMachine::preparePPC64Platform` places the 20-byte entry at the start of a dedicated, 4 KiB-aligned page immediately below the FDT page, records `rtasSize = 20`, and reserves the full page in `rtasProtectionBase/rtasProtectionSize`. It checks RAM range, 32-bit addressability, and overlap against the loaded image, maximum FDT span, initrd, supplied/platform reservations, partition/process-table reservations, and protected hypervisor handler backing. The page is staged with zero-filled padding and the canonical 20-byte code; image, page, and FDT are committed together before the platform becomes prepared. Reset uses a VM-private lifecycle operation to restore the canonical page and separately restores the FDT.
 
 The independent FDT parser in `test_ppc64_phase19.cpp` verifies the emitted structure, reservation map, entry address, size, and service token cells. With the trampoline enabled, `/rtas` includes single-cell big-endian `linux,rtas-base`, `linux,rtas-entry`, `rtas-size`, existing `rtas-version = 1`, and the four token properties. In legacy mode, token discovery remains available but entry/base/size properties are omitted. This is a hosted direct-FDT profile, not a firmware-installed QEMU VOF blob or a complete Open Firmware device tree contract.
 
-The reservation prevents platform-placement conflicts; it does not make RAM immutable. The guest can write the trampoline region. `validatePPC64RTASTrampoline()` compares its bytes with the canonical sequence and detects corruption when called, and reset restores it. The interpreter does not automatically call that validator on every fetch, and there is no execute-only or read-only mapping for this region. A guest can therefore alter its own trampoline before execution. The bytes are never treated as privileged host code. The executable-backing/protection acceptance gate is consequently incomplete.
+The `Memory` instance owned by each VM tracks its own protected guest-write regions. Guest instruction fetch and data reads from the page are allowed; every write route rejects an overlapping range before mutation. This covers PPC64 real-address `Memory::Write`, translated/guest-real `WriteGuestRealTransaction`, typed `Memory::write<T>`, and host-facing `loadBuffer`; multi-segment transactions validate all segments before any copy. `RestoreSnapshot` rejects a changed protected page, `Clear` is refused while such a page is installed, and protected reads compare stored bytes with the expected image. The VM-private installation/restore methods are unavailable through guest operations. This is a page-local permission overlay in the hosted `Memory` backend, not a general PPC64 MMU permission implementation.
+
+The guest-write audit found no PPC64 guest DMA interface or mutable raw backing pointer: `GetRawData()` is read-only, and guest-visible hypercall output commits use the checked transaction path. RTAS response writes that target the protected page are rejected before dispatch/commit. The code bytes are checked on instruction fetch through `ReadGuestReal`, while `validatePPC64RTASTrampoline()` provides an additional explicit integrity check. The VM protects the full reserved page so no writable data shares its protection granule. Read-only host APIs and direct C++ access still represent host authority; they are not callable from PPC64 guest instructions.
 
 ## 5. RTAS, XICS, terminal, and isolation behavior
 
 The bounded registry exposes `ibm,set-xive`, `ibm,get-xive`, `ibm,int-off`, and `ibm,int-on`. Hosted guest programs discover tokens and entry from FDT, build parameter blocks, and call through `bctrl` into the installed stub. Tests cover valid source/server-zero operations, changed and saved priority, disable/re-enable, invalid source/server service errors, and pending edge behavior while masked. An invalid service parameter leaves the tested XICS priority unchanged. RTAS is not reimplemented by the trampoline; it forwards to the existing `H_RTAS` dispatcher and existing XICS object.
 
-Two VM instances each install a local stub and use the same guest-visible XICS source ID with different priority state. Calls and RAM remain separate. This qualifies VM isolation for the tested root LPID profile. The test does not separately exercise every non-root LPID ownership rejection through the trampoline, or pending level-triggered sources.
+Two VM instances each install a local stub and use the same guest-visible XICS source ID with different priority state. Calls, RAM, and protected-range metadata remain separate. This qualifies VM isolation for the tested root-LPID profile. The test does not separately exercise every non-root LPID ownership rejection through the trampoline or pending level-triggered sources.
 
 The terminal integration guest configures the `hvterm1` XICS source through the stub, enables external interrupts, emits guest-generated `P19O`, receives host input `Q`, and runs a guest handler using `H_XIRR`, `H_GET_TERM_CHAR`, `H_PUT_TERM_CHAR`, `H_EOI`, and `rfid`. The final guest terminal output is `P19OQ`; this is hosted execution evidence, not device or firmware boot evidence.
 
 ## 6. Fault behavior and open safety gates
 
-Covered failure checks include a misaligned trampoline PC, unmapped instruction fetch, deliberately invalid LR return target, a relocation-enabled fetch without translation setup, reservation collision during placement, byte corruption detected by the validator, and restoration after reset. These use normal VM instruction/fetch or platform validation paths; no trampoline-NIP shortcut is present.
+Covered failure checks include a misaligned trampoline PC, unmapped instruction fetch, deliberately invalid LR return target, a relocation-enabled fetch without translation setup, reservation collision during placement, and protected guest byte/halfword/word/doubleword stores. The guest receives DSI with `DAR=EA` and `DSISR=DSISR_ISSTORE|DSISR_PROTFAULT`; a cross-boundary store preserves bytes on the writable side. `stwcx.` against the protected page also takes DSI after a valid `lwarx` read. Tests verify raw, typed, bulk, and guest-real transaction writes are denied, ordinary reads and instruction fetch still work, and the guest can resume through `rfid`. These use normal VM instruction/fetch paths; no trampoline-NIP shortcut is present.
 
-The Phase 19 matrix does **not** yet cover all requested rejection cases through the stub: malformed/unmapped/cross-page RTAS parameter blocks, explicit unauthorized LPID, a guest HV-privilege escalation attempt, unsupported/corrupted stub instruction execution, protected-handler overlap as an isolated test, or bounded repeated-fault loops. Phase 18's direct-hypercall validation coverage is useful precedent but does not substitute for trampoline-path coverage. The backend's lack of write/execute protections also prevents a full memory isolation claim. These are mandatory follow-up gates, not passed tests.
+The matrix does **not** yet cover all requested rejection cases through the stub: malformed/unmapped/cross-page RTAS parameter blocks, explicit unauthorized LPID, a guest HV-privilege escalation attempt, unsupported/corrupted stub instruction execution, protected-handler overlap as an isolated test, or bounded repeated-fault loops. Direct-versus-trampoline `H_RTAS` still needs a dedicated R1 registry/safety comparison. Phase 18's direct-hypercall validation coverage is useful precedent but does not substitute for trampoline-path coverage. These are mandatory follow-up gates, not passed tests.
 
 ## 7. Lifecycle and checkpoint compatibility
 
-Platform preparation validates placement before writing and stages image, trampoline, and FDT together. Reset transactionally restores the canonical trampoline and FDT. The public validator is diagnostic and does not enforce execute integrity on each instruction fetch.
+Platform preparation validates placement before writing and atomically commits image, protected page, and FDT before publishing the entry. Reset restores the canonical protected page through a private VM lifecycle method. Reads and fetches enforce the expected protected-page bytes, so a corrupted image cannot be fetched silently.
 
-The checkpoint writer advances the PPC64 payload/file format from v7 to v8 while retaining readers for v1-v7. V8 records the trampoline-enabled configuration, service-registry version, base/entry/size, reservation/layout, CPU state, and guest RAM containing the bytes. Restore validates registry identity, profile/layout consistency, reservation, expected instruction bytes, and canonical FDT before committing staged VM state; no function pointers are serialized. Versions 1-7 remain readable; RTAS-enabled legacy records infer registry version 1. The hosted test writes and restores a v8 checkpoint after a successful call and verifies entry, code, registry, XICS, LR/NIP, then resumes one instruction. It does not checkpoint during the trampoline sequence or separately exercise pre-entry and in-flight checkpoints.
+The v9 writer extends v8 with the protected-region base and size. Readers for v1-v8 remain in the codec; v1-v7 still infer registry version 1 where applicable. A v8 checkpoint that advertises the pre-R1 trampoline has no protection metadata and is rejected by layout validation instead of being restored writable. V9 restore checks the registry identity, page alignment/length, reservation, canonical page bytes, FDT agreement, and CPU state in staged objects before committing the VM; the protected range is registered before the staged memory is published. No function pointers are serialized. Tests cover the v9 after-return round trip, continued execution, a denied write after restore, and atomic rejection of altered page bytes or protection metadata. Pre-entry, in-flight, and post-dispatch checkpoint boundaries remain open.
 
 ## 8. Authentic historical v6 fixture
 
@@ -80,57 +82,84 @@ The test verifies the `GXPPC64V` v6 header and restores the fixture through the 
 | Parameter block | r3 input copied to r4 for H_RTAS | Same pointer flow; guest-real block validated by H_RTAS dispatcher |
 | Outer result | Hypercall return in r3 | `H_SUCCESS` checked in r3 on valid dispatch |
 | Inner result | RTAS service writes cells in block | Service status/result cells checked in block |
-| Code installation | VOF copies RTAS blob to guest at instantiate time | Hosted platform installs fixed 20-byte stub adjacent to FDT |
+| Code installation | VOF copies RTAS blob to guest at instantiate time | Hosted platform installs a fixed 20-byte stub at the start of a dedicated protected page |
 | Entry discovery | QEMU pSeries/VOF firmware contract | Direct-FDT `/rtas` base, entry, size cells when enabled |
 | Entry context | VOF service entry and its firmware context | Tested real-address, big-endian, SF/IR/DR/EE/PR/HV clear; ME/RI set |
-| Protection/firmware | QEMU VOF environment | Writable guest RAM; no SLOF or complete OF interface |
+| Protection/firmware | QEMU VOF environment | VM-local guest-write protection for the 4 KiB entry page; no SLOF or complete OF interface |
 
-The source-level sequence and dispatcher contract were compared at the pinned commits above. No PPC cross-assembler was available. No QEMU guest run was performed: the authorized QAC lane was not established for this task, and no guest was launched. Status: **`REFERENCE_GUEST_PENDING`**. This documentation does not claim QEMU runtime equivalence.
+The QEMU references resolved at the pinned commit `af1179b40643a61ac8016caaba0fb26d40124fd8`: [`entry.S`, forwarding instructions](https://github.com/qemu/qemu/blob/af1179b40643a61ac8016caaba0fb26d40124fd8/pc-bios/vof/entry.S#L333-L346) and [`spapr_hcall.c`, `h_rtas` dispatch](https://github.com/qemu/qemu/blob/af1179b40643a61ac8016caaba0fb26d40124fd8/hw/ppc/spapr_hcall.c#L3209). The Linux reference at pinned commit `cbbddb6b08cc9900a87cccaa9a22bbe06aa4f50a` returned HTTP 404 for the requested `arch/powerpc/kernel/rtas_entry.S` path, so no substitute Linux revision is claimed. No PPC cross-assembler was available. No QEMU guest run was performed: the authorized QAC lane was not established for this task, and no guest was launched. Status: **`REFERENCE_GUEST_PENDING`**. This documentation does not claim QEMU runtime equivalence.
 
 ## 10. Acceptance programs A–N
 
 | Program | Result | Evidence or open item |
 | --- | --- | --- |
-| A — Installed trampoline | Pass, hosted scope | Independent expected bytes, alignment, layout, FDT and reservation checks. |
+| A — Installed trampoline | Pass, hosted scope | Independent expected bytes, dedicated-page alignment, enforced write protection, layout, FDT and reservation checks. |
 | B — First RTAS call | Pass | Guest FDT discovery, `bctrl`, five instructions, `sc 1`, `blr`, continuation and register checks. |
 | C — Outer/inner result | Pass | Valid dispatch returns `H_SUCCESS`; invalid service args yield RTAS parameter error in block. |
 | D — Four XICS services | Partial pass | All four called; source/server/priority/edge cases covered. Level and full LPID matrix remain open. |
 | E — Interrupt configuration/handling | Pass, hosted scope | Guest XICS acknowledge, handler, EOI, `rfid` path. |
 | F — Terminal integration | Pass, hosted scope | Guest output `P19O`, injected `Q`, handler output `P19OQ`. |
 | G — Calling mode | Partial pass | Tested real-address SF/IR/DR/EE/PR/HV-clear subset; no general compatibility or translated mode. |
-| H — Fault rejection | Partial | Listed fault checks pass; malformed pointer matrix, privilege escalation and protection cases remain open. |
+| H — Fault rejection | Partial | DSI protection faults and store atomicity pass. Malformed pointer matrix, privilege escalation, unsupported mode, and broader architectural faults remain open. |
 | I — Two-VM isolation | Pass, tested root-LPID scope | Separate RAM and XICS state at identical guest source ID. |
-| J — Trampoline checkpoint | Partial | V8 after-return round trip and continuation pass; pre-entry/in-flight checkpoints not covered. |
+| J — Trampoline checkpoint | Partial | V9 after-return round trip, restored protection, continuation, and corrupt-page rejection pass; pre-entry/in-flight/post-dispatch checkpoints not covered. |
 | K — Historical v6 fixture | Pass | Authentic v6 fixture restored, state checked, continuation executed. |
-| L — Legacy RTAS | Not independently repeated in Phase 19 | Trampoline-disabled FDT omission is tested; Phase 18 direct-H_RTAS tests and regressions are relied on. |
+| L — Legacy RTAS | Pass, root-LPID scope | Dedicated Phase 19R1 guest test calls direct `H_RTAS` and the trampoline in the same VM, verifies the same four-service registry, valid XICS updates, forged-token and invalid-pointer rejection, and rejection when the direct call points into protected trampoline memory. Non-root LPID ownership remains open. |
 | M — No false firmware claim | Pass, hosted profile | Entry metadata present only for enabled trampoline; disabled profile omits it. |
 | N — Integrated demonstration | Pass, hosted scope | Guest RTAS XICS configuration, terminal interrupt, guest handler, and confirmation output. |
 
-Because H, G, D, and J remain partial and memory protection is absent, the complete A–N gate is not satisfied.
+Because D, G, H, I, and J remain partial, the complete A–N gate is not satisfied.
 
 ## 11. Tests and regressions
 
-The new `PPC64Phase19Tests` executable is registered with CTest and uses production `VirtualMachine::step()` for guest instruction execution. Its final assertion count and the full CTest/IA-64 results are recorded below.
+The `PPC64Phase19Tests` executable is registered with CTest and uses production `VirtualMachine::step()` for guest instruction execution. Phase 19R1 adds guest write-denial, fault-register, atomicity, typed/raw access, fetch/read, direct-H_RTAS compatibility, and v9 checkpoint-protection checks. Final PPC64/CTest/IA-64 results are recorded in the R1 closeout section below.
 
-All PPC64 phase suites 1–18 pass in the current run. Their observed counts are: phases 1–14, 6,238; phase 15, 241; phase 16, 1,522; phase 17, 335; phase 18, 310; total **8,646**. The request's historical table says phase 15 has 238 and the total is 8,643; this checkout's Phase 15 executable reports 241, a three-check discrepancy. No assertions were removed to force the older total. Phase 19 adds 175 passing assertions.
+All PPC64 phase suites 1–18 pass in the current run. Their observed counts are: phases 1–14, 6,238; phase 15, 241; phase 16, 1,522; phase 17, 335; phase 18, 310; total **8,646**. The request's historical table says phase 15 has 238 and the total is 8,643; this checkout's Phase 15 executable reports 241, a three-check discrepancy. No assertions were removed to force the older total. The original pre-R1 Phase 19 baseline had 175 passing assertions; the R1-expanded count is in the closeout below.
 
 Known historical issue categories remain separately accounted: IA-64 NaT serialization assertion, MMU Hook-based Monitoring, typed-memory/MMIO assertion, MinGW WinSock linkage, and missing shared CTest executables. The IA-64 SAL, ACPI, interrupt-controller, processor-interrupt-block, and VM checkpoint suites run here passed. The NaT, monitoring, and typed-memory/MMIO cases were not independently qualified by those selected suites. The MinGW WinSock link failure and missing CTest executables are recorded below; no baseline comparison is available to attribute those build limits to this change.
 
 ## 12. Remaining firmware limits and next phase
 
-This work provides guest-side forwarding and a discoverable hosted entry, plus a real historical checkpoint fixture. It does not provide execute/write protection, a full Linux RTAS save/restore wrapper, SLOF/Open Firmware client services, firmware boot, Linux boot, a general RTAS service catalog, SMP, or QEMU runtime qualification. In particular, a valid `linux,rtas-entry` property alone is not proof of Linux boot readiness.
+This work provides guest-side forwarding and a discoverable hosted entry with a VM-local protected backing page, plus a real historical checkpoint fixture. It does not provide a full Linux RTAS save/restore wrapper, SLOF/Open Firmware client services, firmware boot, Linux boot, a general RTAS service catalog, SMP, or QEMU runtime qualification. In particular, a valid `linux,rtas-entry` property alone is not proof of Linux boot readiness.
 
-Recommended **PPC64-19R1**: add per-range guest write/execute permissions or an immutable guest stub facility; complete the A–N missing malformed-pointer/LPID/HV/mode/checkpoint matrix through the trampoline; verify all supported fault semantics and level-triggered XICS; then request an authorized QAC slot for a bounded QEMU reference payload. Only after these gates pass should the phase marker advance.
+Recommended **PPC64-19R2**: complete the remaining A–N malformed-pointer, privilege, execution-mode, LPID, level-triggered XICS, direct-`H_RTAS`, and checkpoint-boundary matrix through genuine guest execution; then request an authorized QAC slot for a bounded QEMU reference payload. Only after these gates pass should the phase marker advance.
 
-## 13. Final local verification record
+## 13. PPC64-19R1 closeout — Outcome B
 
-Verification on 2026-11-01 used the external build directory `E:\CodexArtifacts\guideXOS_Hypervisor\build-phase19` and MinGW GCC 15.2/Ninja.
+### Source and protection changes
 
-- The all-target CMake build did not complete. The initial Ninja run stopped on `test_syscall_dispatcher` unresolved MinGW WinSock imports (`__imp_send`, `__imp_closesocket`). A keep-going build also exposed unrelated `test_watchpoint` and `test_riscv_minimal_execution` link failures (`WinMain` for the RISC-V target). An explicit `test_elf_validation` link attempt failed on unresolved symbols including `ComputeIa64EfiAliasBase` and IA-64 CPU methods. The PPC64 Phase 1–19 executables were built.
-- Full configured CTest: **27 passed, 0 failed, 6 Not Run** out of 33. Not Run because their executables were unavailable: `SyscallTests`, `DebuggerTests`, `ProfilerTests`, `FuzzerTests`, `VMIsolationTests`, and `ELFValidationTests`. The complete registered PPC64 group passed **19/19** suites, including Phase 19.
-- Phase 19: **175 checks, 0 failures**. PPC64 phases 1–18: **8,646 checks, 0 failures** based on current executable output; see the three-check Phase 15 discrepancy above.
-- Additional unregistered IA-64 checks run directly: ACPI firmware, interrupt controller, and Processor Interrupt Block all passed. Registered IA-64 SAL and VM checkpoint tests passed in CTest.
-- The selected IA-64 tests showed no failures. The separately named historical NaT serialization, MMU Hook-based Monitoring, and typed-memory/MMIO issue categories were not independently exercised here. MinGW WinSock linkage and unavailable shared test executables remain build/test limitations.
-- QEMU runtime comparison remains `REFERENCE_GUEST_PENDING`; no QEMU guest was launched. No Linux or SLOF boot was attempted.
-- `.phase-ppc64` remains `last_completed=PPC64-18`, `next_expected=PPC64-19` because the hosted memory protection and complete A–N acceptance gates remain open.
-- Local commit and final git/worktree details are recorded in the task final report after commit.
+- Starting HEAD: `9c2ceba0b6bca836fecaa0fb739dc871651198f6`, on branch `PPC64`. The branch was ahead 2 and behind 0 of `origin/PPC64` at preflight. The `origin/PPC64` tracking ref later advanced to this same starting commit while the task was active (its reflog records an update by push at 11:00 local time); this task did not push or change branch topology. The local branch and origin were aligned before the closeout commit.
+- The enabled trampoline now occupies a dedicated 4 KiB-aligned, zero-padded protected page. FDT advertises the real 20-byte entry; the full page is reserved, and its address/size are checkpoint metadata. Placement checks cover the image, FDT, initrd, platform reservations, partition/process tables, and protected hypervisor backing.
+- Guest instruction fetch and data reads are allowed and checked against the expected page bytes. Writes through real guest stores, translated guest stores, guest-real transactions, cross-page operations, `stwcx.`, typed `Memory::write<T>`, raw `Memory::Write`, and bulk `loadBuffer` are denied before protected bytes change. PPC64 guest stores receive DSI with `DAR` and store/protection `DSISR`; the writable side of cross-boundary stores is unchanged. Guest-visible response writes share the checked transaction path. The raw backing pointer is const and there is no guest DMA interface in this build.
+- Installation and reset use VM-private lifecycle operations. Restore validates the full page and reservation in staged snapshot state before registering protection or publishing the VM. Reads and fetches also check page integrity; the explicit trampoline validator remains defense in depth.
+- This is a VM-local permission overlay in the hosted memory backend. The CPU does not implement a general page permission or execute-disable facility, and host C++ memory authority remains outside guest access controls.
+
+### Architectural and platform qualification
+
+- Added guest store-fault coverage for byte, halfword, word, doubleword, translated and real guest accesses, cross-page atomicity, reservation-based store rejection, fetch, and data reads. The guest code runs in `VirtualMachine::step()` and valid fault handling can resume with `rfid`.
+- The supported RTAS profile remains `SF=IR=DR=EE=PR=HV=0`, `ME=RI=1`, big-endian, real-address execution. Translated entry variants, 64-bit mode, interrupt-enabled entry, and recovery-state variants were not fully qualified; no broad compatibility claim is made.
+- Edge-triggered RTAS/XICS configuration and terminal interrupt handling pass. Phase 18 exercises a level source through direct `H_RTAS`, but level assertion/masking/reassertion has not been completed through the installed trampoline. The Phase 19 isolation test uses two VMs with equal guest addresses and source IDs; non-root LPID A-to-B ownership and same-VM LPID switching through the trampoline remain open.
+- The new direct-call test executes `H_RTAS` and the forwarding trampoline against the same VM-owned four-service registry. Direct calls update XICS and safely reject a forged token, an out-of-RAM pointer, and a pointer into protected trampoline memory. Complete direct-versus-trampoline malformed-block and partition-ownership parity remains part of the next gate.
+- FDT is parsed independently and checked against the installed address, code size, protection reservation, and four advertised service tokens. Disabled trampoline mode omits the entry properties. No full Open Firmware, Linux boot, or SLOF compatibility is claimed.
+
+### Checkpoint qualification
+
+- Writer version is v9 because protection base/size must persist. Readers v1-v8 are retained. A v8 checkpoint that enables the old trampoline but has no protection metadata is rejected rather than restored writable. The v9 test verifies an after-return save/restore, continued execution, denied writes after restore, and atomic rejection of page-byte and metadata corruption.
+- Pre-entry, in-trampoline, post-dispatch/pre-return, and recoverable-fault checkpoint boundaries remain unqualified. The authentic v6 fixture is retained: 2,109,857 bytes, SHA-256 `86EB3B924DCBA3F5DA48562387BAD026EDFCD0A8CF7D34B2205A3F2241832196`; the digest was verified during closeout.
+
+### Programs A–N and tests
+
+- A, B, C, E, F, K, L, and M pass for the declared hosted/root-LPID profile. D, G, H, I, and J remain partial for the level-source, mode, full fault/LPID, and checkpoint-boundary gaps above. N passes for the hosted guest RTAS/XICS/terminal flow. Therefore A–N as a whole is not accepted.
+- Phase 19R1 now reports **267 checks, 0 failures**. PPC64 Phases 1–18 report **8,646 checks** (including Phase 15's 241-check local count), for **8,913 observed PPC64 checks** across Phases 1–19.
+- The full configured CTest run reports **27 passed, 0 failed, 6 Not Run** out of 33. All registered PPC64 phase suites pass **19/19** after updating the old v8 writer assertions in Phase 10 and Phase 18 to v9. The six unavailable executables are `SyscallTests`, `DebuggerTests`, `ProfilerTests`, `FuzzerTests`, `VMIsolationTests`, and `ELFValidationTests`.
+- Registered IA-64 SAL and VM checkpoint tests pass. The available IA-64 ACPI firmware, interrupt-controller, and Processor Interrupt Block executables also pass directly. These runs found no new shared-code regression. The separately tracked NaT serialization, MMU Hook-based Monitoring, and typed-memory/MMIO diagnostics were not independently exercised in this closeout. The six unavailable shared test executables remain unqualified.
+- MinGW GCC 15.2/Ninja built the PPC64 Phase 1–19 targets and the modified Phase 10, 18, and 19 tests. The Phase 19R1 result is **267 checks, 0 failures**. `build/` remains untracked and preserved; the relocated `E:\CodexArtifacts\guideXOS_Hypervisor` artifacts were not overwritten.
+
+### Source pins, QEMU, and phase state
+
+- QEMU source comparison is pinned to commit `af1179b40643a61ac8016caaba0fb26d40124fd8`: `entry.S` copies the parameter pointer with `mr r4,r3`, loads `H_RTAS`, executes `sc 1`, then returns with `blr`; `h_rtas` dispatches through the RTAS service handler. The requested Linux pin at `cbbddb6b08cc9900a87cccaa9a22bbe06aa4f50a` returned HTTP 404 at the specified file path; it was not silently replaced.
+- QEMU runtime qualification remains **`REFERENCE_GUEST_PENDING`**. QAC authorization was not established, so no guest was launched. No Linux or firmware boot was attempted.
+- Outcome is **B — still partial**. `.phase-ppc64` remains `last_completed=PPC64-18`, `next_expected=PPC64-19`; the shared IA-64 `.phase` remains `last_completed=IA64-POST-MADT-6`, `next_expected=IA64-POST-MADT-7`.
+- The local closeout commit and ending HEAD are recorded in the final task report. No push was performed.
+
+Recommended **PPC64-19R2** scope: complete level-triggered XICS through the trampoline, non-root LPID ownership, the requested execution-mode and malformed-parameter matrix, and safe checkpoints before entry, within the trampoline, and after dispatch; then request an authorized bounded QEMU reference run.

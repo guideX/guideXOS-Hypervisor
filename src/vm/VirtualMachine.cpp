@@ -33,6 +33,13 @@ namespace ia64 {
 
 namespace {
 std::atomic<uint64_t> gNextPPC64ConsoleVMIdentity{1};
+
+std::vector<uint8_t> ppc64RTASProtectedPage() {
+    std::vector<uint8_t> bytes(ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE, 0);
+    std::copy(ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
+              ppc64::PPC64_RTAS_FORWARDING_BYTES.end(), bytes.begin());
+    return bytes;
+}
 }
 
 // ============================================================================
@@ -349,12 +356,9 @@ bool VirtualMachine::reset() {
             if (ppc64PlatformPrepared_) {
                 std::vector<GuestRealWriteSegment> writes;
                 if (ppc64PlatformConfiguration_.rtasTrampolineEnabled) {
-                    GuestRealWriteSegment trampoline;
-                    trampoline.address = ppc64GuestMemoryLayout_.rtasBase;
-                    trampoline.bytes.assign(
-                        ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
-                        ppc64::PPC64_RTAS_FORWARDING_BYTES.end());
-                    writes.push_back(std::move(trampoline));
+                    memory_->restoreProtectedGuestRegion(
+                        ppc64GuestMemoryLayout_.rtasProtectionBase,
+                        ppc64RTASProtectedPage());
                 }
                 GuestRealWriteSegment dtb;
                 dtb.address = ppc64GuestMemoryLayout_.fdtBase;
@@ -1103,13 +1107,17 @@ bool VirtualMachine::preparePPC64Platform(
     }
     layout.reservations = ppc64PlatformConfiguration_.reservedRanges;
     if (ppc64PlatformConfiguration_.rtasTrampolineEnabled) {
-        if (layout.fdtBase < ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE) {
-            return reject("RTAS trampoline placement would underflow guest RAM");
+        const uint64_t fdtPageBase = layout.fdtBase &
+            ~(static_cast<uint64_t>(ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE) - 1ULL);
+        if (fdtPageBase < ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE) {
+            return reject("RTAS protected region placement would underflow guest RAM");
         }
-        layout.rtasBase = (layout.fdtBase -
-            ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE) & ~3ULL;
+        layout.rtasBase = fdtPageBase -
+            ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE;
         layout.rtasEntry = layout.rtasBase;
         layout.rtasSize = ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE;
+        layout.rtasProtectionBase = layout.rtasBase;
+        layout.rtasProtectionSize = ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE;
     }
 
     const auto appendReservation = [&](uint64_t base, uint64_t size,
@@ -1155,9 +1163,10 @@ bool VirtualMachine::preparePPC64Platform(
         return reject("protected hypervisor handler conflicts with another platform range");
     }
     if (layout.rtasSize != 0 &&
-        !appendReservation(layout.rtasBase, layout.rtasSize,
-                           "RTAS forwarding trampoline", true)) {
-        return reject("RTAS trampoline conflicts with a reserved or protected range");
+        !appendReservation(layout.rtasProtectionBase,
+                           layout.rtasProtectionSize,
+                           "RTAS trampoline protected region", true)) {
+        return reject("RTAS protected region conflicts with a reserved or protected range");
     }
     for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
         if (imageAddress < reservation.base + reservation.size &&
@@ -1241,9 +1250,8 @@ bool VirtualMachine::preparePPC64Platform(
     writes.push_back(std::move(imageWrite));
     if (layout.rtasSize != 0) {
         GuestRealWriteSegment trampoline;
-        trampoline.address = layout.rtasBase;
-        trampoline.bytes.assign(ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
-                                ppc64::PPC64_RTAS_FORWARDING_BYTES.end());
+        trampoline.address = layout.rtasProtectionBase;
+        trampoline.bytes = ppc64RTASProtectedPage();
         writes.push_back(std::move(trampoline));
     }
     GuestRealWriteSegment fdtWrite;
@@ -1251,7 +1259,12 @@ bool VirtualMachine::preparePPC64Platform(
     fdtWrite.bytes = dtb;
     writes.push_back(std::move(fdtWrite));
     try {
-        memory_->WriteGuestRealTransaction(writes);
+        if (layout.rtasSize != 0) {
+            memory_->commitGuestRealTransactionWithProtectedRegion(
+                writes, layout.rtasProtectionBase, ppc64RTASProtectedPage());
+        } else {
+            memory_->WriteGuestRealTransaction(writes);
+        }
     } catch (const std::exception& exception) {
         return reject(std::string("guest image/FDT staging failed: ") + exception.what());
     }
@@ -1308,7 +1321,13 @@ bool VirtualMachine::validatePPC64RTASTrampoline(std::string* error) const {
     const auto& layout = ppc64GuestMemoryLayout_;
     if (layout.rtasBase != layout.rtasEntry ||
         layout.rtasSize != ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE ||
-        (layout.rtasEntry & 3ULL) != 0) {
+        layout.rtasProtectionBase != layout.rtasBase ||
+        layout.rtasProtectionSize !=
+            ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE ||
+        (layout.rtasEntry & (ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE - 1ULL)) != 0 ||
+        !memory_->hasGuestWriteProtection(
+            layout.rtasProtectionBase,
+            static_cast<size_t>(layout.rtasProtectionSize))) {
         return reject("RTAS trampoline metadata is malformed");
     }
     std::string rangeReason;
@@ -1319,15 +1338,15 @@ bool VirtualMachine::validatePPC64RTASTrampoline(std::string* error) const {
         return reject(std::string("RTAS trampoline backing is inaccessible: ") +
                       rangeReason);
     }
-    std::array<uint8_t, ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE> bytes{};
+    std::vector<uint8_t> bytes(
+        ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE, 0);
     try {
         memory_->ReadGuestReal(layout.rtasBase, bytes.data(), bytes.size());
     } catch (const std::exception& exception) {
         return reject(std::string("RTAS trampoline backing read failed: ") +
                       exception.what());
     }
-    if (!std::equal(bytes.begin(), bytes.end(),
-                    ppc64::PPC64_RTAS_FORWARDING_BYTES.begin())) {
+    if (bytes != ppc64RTASProtectedPage()) {
         return reject("RTAS trampoline bytes do not match the installed reference sequence");
     }
     if (error != nullptr) error->clear();
@@ -3173,8 +3192,9 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                     return reject("platform checkpoint omits its image or FDT reservation");
                 }
                 if (platform.configuration.rtasTrampolineEnabled &&
-                    !hasRange(layout.rtasBase, layout.rtasSize, true)) {
-                    return reject("platform checkpoint omits its RTAS trampoline reservation");
+                    !hasRange(layout.rtasProtectionBase,
+                              layout.rtasProtectionSize, true)) {
+                    return reject("platform checkpoint omits its protected RTAS region reservation");
                 }
                 for (const auto& configured : platform.configuration.reservedRanges) {
                     if (!hasRange(configured.base, configured.size,
@@ -3209,14 +3229,22 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                 }
                 if (platform.configuration.rtasTrampolineEnabled) {
                     const auto begin = snapshot.memoryState.data.begin() +
-                        static_cast<std::ptrdiff_t>(layout.rtasBase);
+                        static_cast<std::ptrdiff_t>(layout.rtasProtectionBase);
                     if (layout.rtasEntry != layout.rtasBase ||
                         layout.rtasSize !=
                             ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE ||
+                        layout.rtasProtectionBase != layout.rtasBase ||
+                        layout.rtasProtectionSize !=
+                            ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE ||
+                        (layout.rtasProtectionBase &
+                            (ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE - 1ULL)) != 0 ||
                         !std::equal(ppc64::PPC64_RTAS_FORWARDING_BYTES.begin(),
-                                    ppc64::PPC64_RTAS_FORWARDING_BYTES.end(),
-                                    begin)) {
-                        return reject("checkpoint RTAS metadata does not match its installed instruction bytes");
+                                    ppc64::PPC64_RTAS_FORWARDING_BYTES.end(), begin) ||
+                        !std::all_of(
+                            begin + ppc64::PPC64_RTAS_FORWARDING_CODE_SIZE,
+                            begin + ppc64::PPC64_RTAS_PROTECTED_REGION_SIZE,
+                            [](uint8_t byte) { return byte == 0; })) {
+                        return reject("checkpoint RTAS protection metadata or page bytes are invalid");
                     }
                 }
                 if (!ppc64::PPC64FDTBuilder::validate(
@@ -3241,6 +3269,11 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
                        platform.memoryLayout.entryAddress != 0 ||
                        platform.memoryLayout.initrdBase != 0 ||
                        platform.memoryLayout.initrdSize != 0 ||
+                       platform.memoryLayout.rtasBase != 0 ||
+                       platform.memoryLayout.rtasEntry != 0 ||
+                       platform.memoryLayout.rtasSize != 0 ||
+                       platform.memoryLayout.rtasProtectionBase != 0 ||
+                       platform.memoryLayout.rtasProtectionSize != 0 ||
                        !platform.memoryLayout.reservations.empty() ||
                        !platform.memoryLayout.guestMemoryRanges.empty()) {
                 return reject("unprepared platform checkpoint contains entry metadata");
@@ -3278,6 +3311,13 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot,
         std::vector<uint8_t> stagedDTB = std::move(canonicalDTB);
         try {
             stagedMemory->RestoreSnapshot(snapshot.memoryState);
+            if (snapshot.ppc64Platform.enabled &&
+                snapshot.ppc64Platform.prepared &&
+                snapshot.ppc64Platform.configuration.rtasTrampolineEnabled) {
+                stagedMemory->registerValidatedGuestWriteProtection(
+                    snapshot.ppc64Platform.memoryLayout.rtasProtectionBase,
+                    ppc64RTASProtectedPage());
+            }
             if (snapshot.ppc64Platform.enabled) {
                 stagedTimeBase = std::make_unique<ppc64::PPC64VirtualTimeBase>(
                     snapshot.ppc64Platform.configuration);

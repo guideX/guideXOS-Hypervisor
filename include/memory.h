@@ -18,6 +18,8 @@
 
 namespace ia64 {
 
+class VirtualMachine;
+
 struct MemorySnapshot {
     std::vector<uint8_t> data;
     std::map<uint64_t, PageEntry> pageTable;
@@ -91,6 +93,7 @@ public:
         );
         
         checkBounds(address, sizeof(T));
+        validateProtectedRead(address, sizeof(T));
         
         T value;
         std::memcpy(&value, &data_[address], sizeof(T));
@@ -114,6 +117,7 @@ public:
         );
         
         checkBounds(address, sizeof(T));
+        denyProtectedWrite(address, sizeof(T));
         
         std::memcpy(&data_[address], &value, sizeof(T));
         // Direct typed writes bypass Write(); they must still be observed.
@@ -144,6 +148,7 @@ public:
     // can preflight complete transactions before committing any bytes.
     bool ValidateGuestRealRange(uint64_t address, size_t size, bool isWrite,
                                 std::string& reason) const;
+    bool IsGuestWriteProtectedRange(uint64_t address, size_t size) const;
     void ReadGuestReal(uint64_t address, uint8_t* dest, size_t size) const;
     void WriteGuestRealTransaction(const std::vector<GuestRealWriteSegment>& segments);
 
@@ -176,6 +181,29 @@ public:
     void RestoreSnapshot(const MemorySnapshot& snapshot);
 
 private:
+    friend class VirtualMachine;
+
+    struct GuestWriteProtectedRegion {
+        uint64_t base = 0;
+        std::vector<uint8_t> expectedBytes;
+    };
+
+    // Capability-bearing operations used only by the VM lifecycle for initial
+    // publication, validated checkpoint restore, and reset.
+    void commitGuestRealTransactionWithProtectedRegion(
+        const std::vector<GuestRealWriteSegment>& segments,
+        uint64_t protectedBase,
+        const std::vector<uint8_t>& expectedBytes);
+    void registerValidatedGuestWriteProtection(
+        uint64_t protectedBase,
+        const std::vector<uint8_t>& expectedBytes);
+    void restoreProtectedGuestRegion(
+        uint64_t protectedBase,
+        const std::vector<uint8_t>& expectedBytes);
+    bool hasGuestWriteProtection(uint64_t base, size_t size) const;
+    void validateProtectedRead(uint64_t address, size_t size) const;
+    void denyProtectedWrite(uint64_t address, size_t size) const;
+
 /**
  * Check if memory access is within bounds
  * @param address Starting address
@@ -212,6 +240,7 @@ std::unique_ptr<MMU> mmu_;       // Memory Management Unit
  std::vector<IMemoryMappedDevice*> devices_;
  // Per-backend reservation coherence hub (see MemoryReservation.h).
  std::shared_ptr<MemoryReservationHub> reservations_;
+ std::vector<GuestWriteProtectedRegion> guestWriteProtectedRegions_;
  uint64_t reservationMappingGeneration_ = 0;  // last MMU generation observed
 };
 

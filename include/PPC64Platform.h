@@ -69,6 +69,8 @@ struct PPC64GuestMemoryLayout {
     uint64_t rtasBase = 0;
     uint64_t rtasEntry = 0;
     uint64_t rtasSize = 0;
+    uint64_t rtasProtectionBase = 0;
+    uint64_t rtasProtectionSize = 0;
     std::vector<PPC64MemoryRange> reservations;
     std::vector<PPC64MemoryRange> guestMemoryRanges;
 };

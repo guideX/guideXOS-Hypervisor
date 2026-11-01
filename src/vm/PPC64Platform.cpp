@@ -518,30 +518,34 @@ bool validatePPC64GuestMemoryLayout(const PPC64GuestMemoryLayout& layout,
         const bool reserved = std::any_of(
             layout.reservations.begin(), layout.reservations.end(),
             [&layout](const PPC64MemoryRange& range) {
-                return range.base == layout.rtasBase &&
-                       range.size == layout.rtasSize &&
+                return range.base == layout.rtasProtectionBase &&
+                       range.size == layout.rtasProtectionSize &&
                        range.guestAccessible &&
-                       range.purpose == "RTAS forwarding trampoline";
+                       range.purpose == "RTAS trampoline protected region";
             });
         if (layout.rtasBase != layout.rtasEntry ||
             layout.rtasSize != PPC64_RTAS_FORWARDING_CODE_SIZE ||
-            (layout.rtasBase & 3ULL) != 0 ||
+            layout.rtasProtectionBase != layout.rtasBase ||
+            layout.rtasProtectionSize != PPC64_RTAS_PROTECTED_REGION_SIZE ||
+            (layout.rtasBase & (PPC64_RTAS_PROTECTED_REGION_SIZE - 1ULL)) != 0 ||
             !rangeEnd(layout.rtasBase, layout.rtasSize, rtasEnd) ||
+            !rangeEnd(layout.rtasProtectionBase, layout.rtasProtectionSize, rtasEnd) ||
             layout.rtasBase < layout.ramBase || rtasEnd > ramEnd ||
             rtasEnd > (static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1U) ||
-            overlaps(layout.rtasBase, layout.rtasSize,
+            overlaps(layout.rtasProtectionBase, layout.rtasProtectionSize,
                      layout.imageBase, layout.imageSize) ||
-            overlaps(layout.rtasBase, layout.rtasSize,
+            overlaps(layout.rtasProtectionBase, layout.rtasProtectionSize,
                      layout.fdtBase, layout.fdtSize) ||
             (layout.initrdSize != 0 &&
-             overlaps(layout.rtasBase, layout.rtasSize,
+             overlaps(layout.rtasProtectionBase, layout.rtasProtectionSize,
                       layout.initrdBase, layout.initrdSize)) ||
             !reserved) {
             setReason(reason, "RTAS forwarding entry geometry or reservation is inconsistent");
             return false;
         }
     } else if (layout.rtasBase != 0 || layout.rtasEntry != 0 ||
-               layout.rtasSize != 0) {
+               layout.rtasSize != 0 || layout.rtasProtectionBase != 0 ||
+               layout.rtasProtectionSize != 0) {
         setReason(reason, "partial RTAS forwarding entry metadata is invalid");
         return false;
     }
