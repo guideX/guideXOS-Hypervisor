@@ -82,6 +82,9 @@ void AArch64State::deserialize(const uint8_t* buffer) {
     if (getU32LE(buffer + 4) != kStateVersion) {
         throw std::invalid_argument("AArch64State: unsupported version");
     }
+    if (getU32LE(buffer + kSerializedStateSize - 4) != 0) {
+        throw std::invalid_argument("AArch64State: reserved state word must be zero");
+    }
     size_t offset = 8;
     for (unsigned i = 0; i < 31; ++i, offset += 8) {
         x_[i] = getU64LE(buffer + offset);
@@ -247,7 +250,13 @@ bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
             feature == "LDR_IMM" || feature == "STR_IMM" || feature == "CBZ" ||
             feature == "CBNZ" || feature == "ADDS_IMM" || feature == "SUBS_IMM" ||
             feature == "CMP_IMM" || feature == "B_COND" || feature == "ADR" ||
-            feature == "ADRP" || feature == "LDR_LIT";
+            feature == "ADRP" || feature == "LDR_LIT" || feature == "STP" ||
+            feature == "LDP" || feature == "LDUR" || feature == "STUR" ||
+            feature == "LDR_PRE" || feature == "STR_PRE" || feature == "LDR_POST" ||
+            feature == "STR_POST" || feature == "AND_IMM" || feature == "ORR_IMM" ||
+            feature == "EOR_IMM" || feature == "ANDS_IMM" || feature == "TST_IMM" ||
+            feature == "MOV_BITMASK" || feature == "CSEL" || feature == "CSINC" ||
+            feature == "CSET" || feature == "CINC";
 }
 
 std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint) {

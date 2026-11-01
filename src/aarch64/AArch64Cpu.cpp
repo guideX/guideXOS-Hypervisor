@@ -39,8 +39,8 @@
 //
 // AARCH64-2 memory profile: little-endian Normal guest memory, no MMU, no
 // Device mapping, no EL-specific alignment control. Architecturally
-// permitted unaligned ordinary LDR/STR accesses are allowed; only failures
-// reported by the IMemory implementation itself become MemoryFault.
+// permitted unaligned ordinary transfers are allowed; backing-memory failures
+// and address ranges that cross 2^64 become MemoryFault.
 // Instruction fetch still requires 4-byte alignment.
 
 #include "aarch64/AArch64Cpu.h"
@@ -71,6 +71,14 @@ Decoded invalid(uint32_t word, uint64_t address, Fault fault, const char* error)
     d.fault = fault;
     d.error = error;
     return d;
+}
+
+// Effective addresses wrap modulo 2^64, but an individual backing-memory
+// transfer cannot straddle the end of that address space. Guard before
+// calling arbitrary IMemory implementations, which may otherwise overflow
+// while checking their own address ranges.
+bool addressRangeIsRepresentable(uint64_t address, size_t size) {
+    return size == 0 || address <= UINT64_MAX - static_cast<uint64_t>(size - 1);
 }
 
 std::string regName(bool is64, unsigned reg) {
@@ -175,6 +183,52 @@ bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v) {
     return result;
 }
 
+bool decodeLogicalImmediate(uint32_t immN, uint32_t immr, uint32_t imms, bool is64,
+                            uint64_t& mask) {
+    // ARM "Logical (immediate)" / DecodeBitMasks. The encoding selects an
+    // element size 2^len, a run of `ones` consecutive 1s within that element,
+    // and a right rotation immr. The resulting element pattern is replicated
+    // to the register width. Reserved encodings (mandatory-zero violations and
+    // all-ones elements) are rejected.
+    if (!is64 && immN != 0) {
+        return false; // 32-bit logical immediates require N == 0
+    }
+    unsigned len = 0; // log2(element size), 1..6
+    if (immN != 0) {
+        len = 6;
+    } else {
+        unsigned leadingOnes = 0;
+        uint32_t t = imms;
+        while (leadingOnes < 5 && (t & 0x20u) != 0) {
+            t = (t << 1) & 0x3Fu;
+            ++leadingOnes;
+        }
+        if (leadingOnes == 5) {
+            return false; // imms == 0b111111 with N == 0: no zero separator
+        }
+        len = 5 - leadingOnes;
+    }
+    const unsigned elemBits = 1u << len; // 2,4,8,16,32,64
+    // The mandatory zero separator sits at bit position `len` (N == 0 only).
+    if (len < 6 && ((imms & (1u << len)) != 0)) {
+        return false;
+    }
+    const unsigned ones = (imms & (elemBits - 1u)) + 1u;
+    if (ones >= elemBits) {
+        return false; // an all-ones element is not encodable
+    }
+    const uint64_t run = (1ull << ones) - 1ull; // ones in 1..63
+    uint64_t elem = run;
+    for (unsigned sz = elemBits; sz < 64; sz <<= 1) {
+        elem |= elem << sz;
+    }
+    const unsigned rot = immr & (elemBits - 1u);
+    const uint64_t rotated =
+        (rot == 0) ? elem : ((elem >> rot) | (elem << (64 - rot)));
+    mask = is64 ? rotated : (rotated & 0xFFFFFFFFull);
+    return true;
+}
+
 int64_t signExtend(uint32_t value, unsigned bits) {
     assert(bits >= 1 && bits <= 32);
     if (bits >= 32) {
@@ -263,7 +317,7 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
     // 000101/100101) and from every pattern below (bits[28:23] are 10000x,
     // never 100101/100010/011010). Order relative to those checks is
     // therefore irrelevant to correctness.
-    if ((word & 0x1F000000u) == 0x10000000u || (word & 0x1F000000u) == 0x90000000u) {
+    if ((word & 0x1F000000u) == 0x10000000u) {
         const bool isAdrp = (word & 0x80000000u) != 0;
         const uint32_t immlo = (word >> 29) & 3u;
         const uint32_t immhi = (word >> 5) & 0x7FFFFu;
@@ -406,32 +460,289 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         return d;
     }
 
-    // LDR/STR immediate, unsigned offset: bits[31:22] fixed except for
-    // the size low bit (bit 30). Bases: LDR Wt 0xB9400000, LDR Xt
-    // 0xF9400000, STR Wt 0xB9000000, STR Xt 0xF9000000.
-    if ((word & 0xFFC00000u) == 0xB9400000u || (word & 0xFFC00000u) == 0xF9400000u ||
-        (word & 0xFFC00000u) == 0xB9000000u || (word & 0xFFC00000u) == 0xF9000000u) {
-        const bool sf = (word & 0x40000000u) != 0; // size[0]: 0 = W, 1 = X
-        const bool isLoad = (word & 0x00400000u) != 0; // o1 bit 22
+    // LDR/STR/LDUR/STUR immediate, integer general-purpose (no SIMD/FP).
+    // Layout: size[31:30] 111 V[26]=0 (bits[25:24]) opc[23:22] imm9[20:12]
+    // mode[11:10] Rn[9:5] Rt[4:0]. Unsigned offset: bits[25:24] = 01 and
+    // imm12 at [21:10]. The imm9 family has bits[25:24] = 00 and bit21 = 0:
+    //   mode 00 = LDUR/STUR (unscaled), 01 = post-index, 10 = LDTR/STTR
+    //   (unprivileged, explicitly unsupported), 11 = pre-index.
+    // Unsigned-offset bases: 0xB9400000 / 0xF9400000 (LDR), 0xB9000000 /
+    // 0xF9000000 (STR). Indexed bases: 0xB8400000 / 0xF8400000 (LDR/LDUR),
+    // 0xB8000000 / 0xF8000000 (STR/STUR).
+    {
+        const uint32_t lsw = word & 0xFFC00000u;
+        const bool isUnsigned = (lsw == 0xB9000000u || lsw == 0xF9000000u ||
+                                 lsw == 0xB9400000u || lsw == 0xF9400000u);
+        const bool isUnscaledOrIndexed = (lsw == 0xB8000000u || lsw == 0xF8000000u ||
+                                          lsw == 0xB8400000u || lsw == 0xF8400000u);
+        if (isUnsigned || isUnscaledOrIndexed) {
+            const bool sf = (word & 0x40000000u) != 0; // size[0]: 0 = W, 1 = X
+            const bool isLoad = (word & 0x00400000u) != 0; // o1 bit 22
+            Decoded d;
+            d.sf64 = sf;
+            d.word = word;
+            d.address = address;
+            d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+            d.rd = static_cast<uint8_t>(word & 31u);
+            if (isUnsigned) {
+                d.op = isLoad ? Op::LdrImm : Op::StrImm;
+                d.addrMode = 0;
+                d.imm12 = static_cast<uint16_t>((word >> 10) & 0xFFFu);
+                // Unsigned offset scales by the access size (x4 for W, x8 for X).
+                d.memOffset = static_cast<uint64_t>(d.imm12) << (sf ? 3 : 2);
+                d.signedOffset = 0;
+            } else {
+                const uint32_t mode = (word >> 10) & 3u; // bits[11:10]
+                const uint32_t imm9 = (word >> 12) & 0x1FFu;
+                // imm9 is a signed BYTE offset: never scaled by the access size.
+                d.signedOffset = signExtend(imm9, 9);
+                if (mode == 2u) {
+                    return invalid(word, address, Fault::UnsupportedFeature,
+                                   "LDTR/STTR unprivileged addressing is outside this profile");
+                }
+                if (mode == 0u) {
+                    d.op = isLoad ? Op::Ldur : Op::Stur;
+                    d.addrMode = 0;
+                } else if (mode == 1u) {
+                    d.op = isLoad ? Op::LdrPost : Op::StrPost;
+                    d.addrMode = 2;
+                } else {
+                    d.op = isLoad ? Op::LdrPre : Op::StrPre;
+                    d.addrMode = 1;
+                }
+                // CONSTRAINED UNPREDICTABLE (Unpredictable_WBOVERLAPLD/ST):
+                // a writeback form whose base register is also the transfer
+                // register. Rejected explicitly in this bounded profile.
+                if (d.addrMode != 0 && d.rn != 31 && d.rn == d.rd) {
+                    return invalid(word, address, Fault::UnsupportedFeature,
+                                   "LDR/STR writeback overlap with the transfer register is "
+                                   "CONSTRAINED UNPREDICTABLE and rejected in this profile");
+                }
+            }
+            d.valid = true;
+            char buf[128];
+            const std::string base = (d.rn == 31) ? std::string("sp") : regName(true, d.rn);
+            const std::string rt = (d.rd == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rd);
+            const bool load = isLoad;
+            if (d.op == Op::LdrImm || d.op == Op::StrImm) {
+                std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%llu]",
+                              load ? "ldr" : "str", rt.c_str(), base.c_str(),
+                              static_cast<unsigned long long>(d.memOffset));
+            } else if (d.op == Op::Ldur || d.op == Op::Stur) {
+                std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%lld]",
+                              load ? "ldur" : "stur", rt.c_str(), base.c_str(),
+                              static_cast<long long>(d.signedOffset));
+            } else if (d.op == Op::LdrPre || d.op == Op::StrPre) {
+                std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%lld]!",
+                              load ? "ldr" : "str", rt.c_str(), base.c_str(),
+                              static_cast<long long>(d.signedOffset));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%s %s, [%s], #%lld",
+                              load ? "ldr" : "str", rt.c_str(), base.c_str(),
+                              static_cast<long long>(d.signedOffset));
+            }
+            d.disassembly = buf;
+            return d;
+        }
+    }
+
+    // STP/LDP (immediate, integer general-purpose register pair):
+    //   opc[31:30] 101 V[26]=0 mode[25:23] L[22] imm7[21:15] Rt2[14:10]
+    //   Rn[9:5] Rt[4:0].
+    //   mode 001 = post-index (0x28800000), 010 = signed offset (0x29000000),
+    //   011 = pre-index (0x29800000). L = 1 load, L = 0 store.
+    //   opc 00 = W pair, opc 10 = X pair; scale = 2 + opc[1] (4 or 8 bytes).
+    //   opc 01 (LDPSW / STGP) is outside this profile; opc 11 is unallocated.
+    {
+        const uint32_t pairMode = word & 0x3F800000u; // bits[29:23]
+        if (pairMode == 0x28000000u) {
+            const uint32_t opc = (word >> 30) & 3u;
+            if (opc == 0u || opc == 2u) {
+                return invalid(word, address, Fault::UnsupportedFeature,
+                               "STNP/LDNP non-temporal register pairs are outside this profile");
+            }
+            return invalid(word, address, Fault::UnallocatedEncoding,
+                           "non-temporal pair encoding with opc 01 or 11 is unallocated");
+        }
+        if (pairMode == 0x28800000u || pairMode == 0x29000000u ||
+            pairMode == 0x29800000u) {
+            const uint32_t opc = (word >> 30) & 3u;
+            if (opc == 1u) {
+                return invalid(word, address, Fault::UnsupportedFeature,
+                               "LDPSW/STGP (load/store pair, opc 01) is outside the implemented subset");
+            }
+            if (opc == 3u) {
+                return invalid(word, address, Fault::UnallocatedEncoding,
+                               "load/store pair with opc 11 is unallocated");
+            }
+            const bool sf = (opc == 2u); // opc 10 = X (64-bit), opc 00 = W (32-bit)
+            const bool isLoad = (word & 0x00400000u) != 0;
+            Decoded d;
+            d.op = isLoad ? Op::Ldp : Op::Stp;
+            d.valid = true;
+            d.sf64 = sf;
+            d.word = word;
+            d.address = address;
+            d.rt2 = static_cast<uint8_t>((word >> 10) & 31u);
+            d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+            d.rd = static_cast<uint8_t>(word & 31u);
+            // imm7 is a signed multiple of the element size. Multiply rather
+            // than left-shift: shifting a negative value is undefined in C++17.
+            const uint32_t imm7 = (word >> 15) & 0x7Fu;
+            d.signedOffset = signExtend(imm7, 7) * (sf ? 8 : 4);
+            if (pairMode == 0x28800000u) {
+                d.addrMode = 2; // post-index: access base, then writeback
+            } else if (pairMode == 0x29000000u) {
+                d.addrMode = 0; // signed offset, no writeback
+            } else {
+                d.addrMode = 1; // pre-index: access base+offset, then writeback
+            }
+            // CONSTRAINED UNPREDICTABLE (Unpredictable_WBOVERLAPLD/ST): a
+            // writeback form whose base register is also a transfer register.
+            // This bounded profile rejects the encoding rather than inventing
+            // a value (documented policy; see AARCH64_4_COMPILER_STACK.md).
+            if (d.addrMode != 0 && d.rn != 31 &&
+                (d.rn == d.rd || d.rn == d.rt2)) {
+                return invalid(word, address, Fault::UnsupportedFeature,
+                               "STP/LDP writeback overlap with a transfer register is "
+                               "CONSTRAINED UNPREDICTABLE and rejected in this profile");
+            }
+            // CONSTRAINED UNPREDICTABLE (Unpredictable_LDPOVERLAP): LDP with
+            // Rt == Rt2 is rejected for every addressing mode, including the
+            // XZR/XZR form (the architectural test is on t == t2 alone).
+            if (isLoad && d.rd == d.rt2) {
+                return invalid(word, address, Fault::UnsupportedFeature,
+                               "LDP with Rt == Rt2 is CONSTRAINED UNPREDICTABLE and rejected in this profile");
+            }
+            const std::string base = (d.rn == 31) ? std::string("sp") : regName(true, d.rn);
+            const std::string rt = (d.rd == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rd);
+            const std::string rt2 = (d.rt2 == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rt2);
+            const char* mnem = isLoad ? "ldp" : "stp";
+            char buf[160];
+            if (d.addrMode == 0) {
+                std::snprintf(buf, sizeof(buf), "%s %s, %s, [%s, #%lld]", mnem, rt.c_str(),
+                              rt2.c_str(), base.c_str(),
+                              static_cast<long long>(d.signedOffset));
+            } else if (d.addrMode == 1) {
+                std::snprintf(buf, sizeof(buf), "%s %s, %s, [%s, #%lld]!", mnem, rt.c_str(),
+                              rt2.c_str(), base.c_str(),
+                              static_cast<long long>(d.signedOffset));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%s %s, %s, [%s], #%lld", mnem, rt.c_str(),
+                              rt2.c_str(), base.c_str(),
+                              static_cast<long long>(d.signedOffset));
+            }
+            d.disassembly = buf;
+            return d;
+        }
+    }
+
+    // Logical (immediate): sf[31] opc[30:29] 010010 N[22] immr[21:16]
+    // imms[15:10] Rn[9:5] Rd[4:0]. opc 00 = AND, 01 = ORR, 10 = EOR,
+    // 11 = ANDS. bits[28:23] = 100100 selects the family; bit22 = N.
+    if ((word & 0x1F800000u) == 0x12000000u) {
+        const bool sf = (word & 0x80000000u) != 0;
+        const uint32_t opc = (word >> 29) & 3u;
+        const uint32_t N = (word >> 22) & 1u;
+        const uint32_t immr = (word >> 16) & 0x3Fu;
+        const uint32_t imms = (word >> 10) & 0x3Fu;
+        uint64_t mask = 0;
+        if (!decodeLogicalImmediate(N, immr, imms, sf, mask)) {
+            return invalid(word, address, Fault::UnallocatedEncoding,
+                           "logical-immediate encoding is reserved (invalid bitmask)");
+        }
         Decoded d;
-        d.op = isLoad ? Op::LdrImm : Op::StrImm;
+        switch (opc) {
+        case 0: d.op = Op::AndImm; break;
+        case 1: d.op = Op::OrrImm; break;
+        case 2: d.op = Op::EorImm; break;
+        default: d.op = Op::AndsImm; break;
+        }
         d.valid = true;
         d.sf64 = sf;
         d.word = word;
         d.address = address;
-        d.imm12 = static_cast<uint16_t>((word >> 10) & 0xFFFu);
         d.rn = static_cast<uint8_t>((word >> 5) & 31u);
         d.rd = static_cast<uint8_t>(word & 31u);
-        // Unsigned offset scales by the access size (x4 for W, x8 for X).
-        d.memOffset = static_cast<uint64_t>(d.imm12) << (sf ? 3 : 2);
+        d.immr = immr;
+        d.imms = imms;
+        d.immN = N;
+        d.logicalImm = mask;
+        d.setsFlags = (opc == 3);
+        // Non-flag-setting AND/ORR/EOR treat Rd==31 as SP; ANDS treats Rd==31
+        // as XZR/WZR (TST). Source Rn==31 is XZR/WZR for every logical op.
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%llu]",
-                      isLoad ? "ldr" : "str",
-                      d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
-                      d.rn == 31 ? "sp" : regName(true, d.rn).c_str(),
-                      static_cast<unsigned long long>(d.memOffset));
+        const std::string rdName =
+            (d.rd == 31) ? std::string((opc == 3) ? (sf ? "xzr" : "wzr") : (sf ? "sp" : "wsp"))
+                         : regName(sf, d.rd);
+        const std::string rnName = (d.rn == 31) ? std::string(sf ? "xzr" : "wzr")
+                                                : regName(sf, d.rn);
+        const char* mnem = (opc == 0) ? "and" : (opc == 1) ? "orr" : (opc == 2) ? "eor" : "ands";
+        // TST is the ANDS-with-XZR alias; MOV is the ORR-with-XZR alias.
+        if (opc == 3 && d.rd == 31) {
+            std::snprintf(buf, sizeof(buf), "tst %s, #0x%llx", rnName.c_str(),
+                          static_cast<unsigned long long>(mask));
+        } else if (opc == 1 && d.rn == 31) {
+            std::snprintf(buf, sizeof(buf), "mov %s, #0x%llx", rdName.c_str(),
+                          static_cast<unsigned long long>(mask));
+        } else {
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, #0x%llx", mnem, rdName.c_str(),
+                          rnName.c_str(), static_cast<unsigned long long>(mask));
+        }
         d.disassembly = buf;
         return d;
+    }
+
+    // CSEL/CSINC: sf[31] op[30]=0 S[29]=0 11010100[28:21] Rm[20:16]
+    // cond[15:12] 0[11] o2[10] Rn[9:5] Rd[4:0]. CSEL: o2=0, CSINC: o2=1.
+    // Every fixed bit is checked (bits[30:21] and bit 11), so no other
+    // encoding can alias onto these forms.
+    {
+        const bool fixedMatch = (word & 0x7FE00000u) == 0x1A800000u;
+        if (fixedMatch && (word & 0x800u) == 0u) {
+            const uint32_t o2 = (word >> 10) & 1u;
+            const bool sf = (word & 0x80000000u) != 0;
+            const bool isCsinc = (o2 == 1u);
+            Decoded d;
+            d.op = isCsinc ? Op::Csinc : Op::Csel;
+            d.valid = true;
+            d.sf64 = sf;
+            d.word = word;
+            d.address = address;
+            d.rm = static_cast<uint8_t>((word >> 16) & 31u);
+            d.cond = static_cast<uint8_t>((word >> 12) & 15u);
+            d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+            d.rd = static_cast<uint8_t>(word & 31u);
+            const std::string rdName = (d.rd == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rd);
+            const std::string rnName = (d.rn == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rn);
+            const std::string rmName = (d.rm == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rm);
+            const char* mnem = isCsinc ? "csinc" : "csel";
+            // Aliases are only defined for encoded conditions other than 111x.
+            // The alias condition is the INVERSE of the encoded one:
+            //   CSET Rd, <cond>     = CSINC Rd, ZR, ZR, invert(<cond>)
+            //   CINC Rd, Rn, <cond> = CSINC Rd, Rn, Rn, invert(<cond>), Rn != 31
+            const bool aliasable = (d.cond != 14u && d.cond != 15u);
+            char buf[128];
+            if (isCsinc && d.rn == 31 && d.rm == 31 && aliasable) {
+                std::snprintf(buf, sizeof(buf), "cset %s, %s", rdName.c_str(),
+                              condName(d.cond ^ 1u));
+            } else if (isCsinc && d.rn == d.rm && d.rn != 31 && aliasable) {
+                std::snprintf(buf, sizeof(buf), "cinc %s, %s, %s", rdName.c_str(),
+                              rnName.c_str(), condName(d.cond ^ 1u));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%s %s, %s, %s, %s", mnem, rdName.c_str(),
+                              rnName.c_str(), rmName.c_str(), condName(d.cond));
+            }
+            d.disassembly = buf;
+            return d;
+        }
+        // CSINV (op=1, o2=0) and CSNEG (op=1, o2=1) are allocated A64
+        // encodings outside this profile. They are reported as unsupported
+        // rather than silently treated as unallocated or executed.
+        if ((word & 0x7FE00800u) == 0x5A800000u) {
+            return invalid(word, address, Fault::UnsupportedFeature,
+                           "CSINV/CSNEG are outside the implemented subset");
+        }
     }
 
     // CBZ/CBNZ: sf[31] 011010 op[24] imm19[23:5] Rt[4:0].
@@ -496,6 +807,10 @@ Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
         return invalid(0, pc_, Fault::UnalignedPC,
                        "PC is not 4-byte aligned for A64 fetch");
     }
+    if (!addressRangeIsRepresentable(pc_, kInstructionSize)) {
+        return invalid(0, pc_, Fault::InvalidFetch,
+                       "instruction fetch range wraps the 64-bit address space");
+    }
     uint8_t bytes[kInstructionSize] = {};
     try {
         memory.Read(pc_, bytes, sizeof(bytes));
@@ -504,6 +819,9 @@ Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
         d.error += ": ";
         d.error += ex.what();
         return d;
+    } catch (...) {
+        return invalid(0, pc_, Fault::InvalidFetch,
+                       "instruction fetch failed with a non-standard memory exception");
     }
     // A64 is little-endian: byte 0 is bits [7:0]. Assembled manually so the
     // result is independent of host endianness.
@@ -614,12 +932,21 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // preserve both the destination register and PC. NZCV untouched.
         const uint64_t target = pc_ + static_cast<uint64_t>(decoded.pcOffset);
         const size_t size = decoded.sf64 ? 8 : 4;
+        if (!addressRangeIsRepresentable(target, size)) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "LDR literal access range wraps the 64-bit address space";
+            return lastFault_;
+        }
         uint8_t bytes[8] = {};
         try {
             memory.Read(target, bytes, size);
         } catch (const std::exception& ex) {
             lastFault_ = Fault::MemoryFault;
             lastError_ = std::string("LDR literal access failed: ") + ex.what();
+            return lastFault_;
+        } catch (...) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "LDR literal access failed with a non-standard memory exception";
             return lastFault_;
         }
         // Little-endian assembly independent of host endianness. Unaligned
@@ -653,6 +980,11 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
         const size_t size = decoded.sf64 ? 8 : 4;
+        if (!addressRangeIsRepresentable(address, size)) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "LDR data access range wraps the 64-bit address space";
+            return lastFault_;
+        }
         uint8_t bytes[8] = {};
         try {
             memory.Read(address, bytes, size);
@@ -660,6 +992,10 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             // Failed loads change nothing: destination and PC preserved.
             lastFault_ = Fault::MemoryFault;
             lastError_ = std::string("LDR data access failed: ") + ex.what();
+            return lastFault_;
+        } catch (...) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "LDR data access failed with a non-standard memory exception";
             return lastFault_;
         }
         // Little-endian assembly independent of host endianness.
@@ -683,6 +1019,11 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
         const size_t size = decoded.sf64 ? 8 : 4;
+        if (!addressRangeIsRepresentable(address, size)) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "STR data access range wraps the 64-bit address space";
+            return lastFault_;
+        }
         uint64_t source = 0;
         if (decoded.rd != 31) {
             source = decoded.sf64 ? x_[decoded.rd]
@@ -701,6 +1042,10 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             // reject before writing).
             lastFault_ = Fault::MemoryFault;
             lastError_ = std::string("STR data access failed: ") + ex.what();
+            return lastFault_;
+        } catch (...) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "STR data access failed with a non-standard memory exception";
             return lastFault_;
         }
         // NZCV untouched by stores; base register never written back.
@@ -760,6 +1105,302 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         } else {
             pc_ += kInstructionSize;
         }
+        break;
+    }
+    case Op::Ldp:
+    case Op::Stp: {
+        // Register pair transfer. One contiguous 2*datasize access; a failed
+        // transfer commits neither destination register nor writeback and
+        // leaves PC unchanged. Little-endian: Rt is the lower-addressed
+        // element, Rt2 the higher. Rn==31 is SP; Rt/Rt2==31 are WZR/XZR.
+        const bool isLoad = (decoded.op == Op::Ldp);
+        const size_t datasize = decoded.sf64 ? 8 : 4;
+        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t offset = static_cast<uint64_t>(decoded.signedOffset); // mod 2^64
+        // Post-index accesses the unmodified base; signed-offset and pre-index
+        // access base + offset (wrapping modulo 2^64, like all A64 addressing).
+        const uint64_t address = (decoded.addrMode == 2) ? base : base + offset;
+        if (!addressRangeIsRepresentable(address, datasize * 2)) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "LDP/STP access range wraps the 64-bit address space";
+            return lastFault_;
+        }
+        if (isLoad) {
+            uint8_t bytes[16] = {};
+            try {
+                memory.Read(address, bytes, datasize * 2);
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("LDP data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "LDP data access failed with a non-standard memory exception";
+                return lastFault_;
+            }
+            uint64_t v1 = 0;
+            uint64_t v2 = 0;
+            for (size_t i = 0; i < datasize; ++i) {
+                v1 |= static_cast<uint64_t>(bytes[i]) << (8 * i);
+                v2 |= static_cast<uint64_t>(bytes[datasize + i]) << (8 * i);
+            }
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = decoded.sf64 ? v1 : (v1 & 0xFFFFFFFFu);
+            }
+            if (decoded.rt2 != 31) {
+                x_[decoded.rt2] = decoded.sf64 ? v2 : (v2 & 0xFFFFFFFFu);
+            }
+        } else {
+            uint64_t v1 = 0;
+            uint64_t v2 = 0;
+            if (decoded.rd != 31) {
+                v1 = decoded.sf64 ? x_[decoded.rd]
+                                  : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rd]));
+            }
+            if (decoded.rt2 != 31) {
+                v2 = decoded.sf64 ? x_[decoded.rt2]
+                                  : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rt2]));
+            }
+            uint8_t bytes[16] = {};
+            for (size_t i = 0; i < datasize; ++i) {
+                bytes[i] = static_cast<uint8_t>(v1 >> (8 * i));
+                bytes[datasize + i] = static_cast<uint8_t>(v2 >> (8 * i));
+            }
+            try {
+                memory.Write(address, bytes, datasize * 2);
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("STP data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "STP data access failed with a non-standard memory exception";
+                return lastFault_;
+            }
+        }
+        // Writeback only for pre-index (1) and post-index (2), and only after
+        // the full transfer succeeded (failed transfers returned above). The
+        // written-back value is base + offset in both writeback modes.
+        if (decoded.addrMode != 0) {
+            const uint64_t wb = base + offset;
+            if (decoded.rn == 31) {
+                sp_ = wb;
+            } else {
+                x_[decoded.rn] = wb;
+            }
+        }
+        // Pair transfers preserve NZCV and unrelated registers.
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Ldur:
+    case Op::Stur: {
+        // Unscaled signed-offset access: no scaling, no writeback, base
+        // preserved. Rn==31 is SP; Rt==31 is WZR/XZR.
+        const bool isLoad = (decoded.op == Op::Ldur);
+        const size_t size = decoded.sf64 ? 8 : 4;
+        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t address =
+            base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
+        if (!addressRangeIsRepresentable(address, size)) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = isLoad ? "LDUR access range wraps the 64-bit address space"
+                                : "STUR access range wraps the 64-bit address space";
+            return lastFault_;
+        }
+        if (isLoad) {
+            uint8_t bytes[8] = {};
+            try {
+                memory.Read(address, bytes, size);
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("LDUR data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "LDUR data access failed with a non-standard memory exception";
+                return lastFault_;
+            }
+            uint64_t value = 0;
+            for (size_t i = 0; i < size; ++i) {
+                value |= static_cast<uint64_t>(bytes[i]) << (8 * i);
+            }
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = decoded.sf64 ? value : (value & 0xFFFFFFFFu);
+            }
+        } else {
+            uint64_t source = 0;
+            if (decoded.rd != 31) {
+                source = decoded.sf64
+                             ? x_[decoded.rd]
+                             : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rd]));
+            }
+            uint8_t bytes[8] = {};
+            for (size_t i = 0; i < size; ++i) {
+                bytes[i] = static_cast<uint8_t>(source >> (8 * i));
+            }
+            try {
+                memory.Write(address, bytes, size);
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("STUR data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "STUR data access failed with a non-standard memory exception";
+                return lastFault_;
+            }
+        }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::LdrPre:
+    case Op::StrPre:
+    case Op::LdrPost:
+    case Op::StrPost: {
+        // Indexed single-register access with writeback on success. Pre-index
+        // uses base+offset for the access; post-index uses the original base.
+        // The written-back value is base+offset in both cases.
+        const bool isLoad = (decoded.op == Op::LdrPre || decoded.op == Op::LdrPost);
+        const bool isPost = (decoded.op == Op::LdrPost || decoded.op == Op::StrPost);
+        const size_t size = decoded.sf64 ? 8 : 4;
+        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t address =
+            isPost ? base
+                   : base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
+        if (!addressRangeIsRepresentable(address, size)) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = isLoad ? "LDR indexed access range wraps the 64-bit address space"
+                                : "STR indexed access range wraps the 64-bit address space";
+            return lastFault_;
+        }
+        if (isLoad) {
+            uint8_t bytes[8] = {};
+            try {
+                memory.Read(address, bytes, size);
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("LDR indexed data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "LDR indexed data access failed with a non-standard memory exception";
+                return lastFault_;
+            }
+            uint64_t value = 0;
+            for (size_t i = 0; i < size; ++i) {
+                value |= static_cast<uint64_t>(bytes[i]) << (8 * i);
+            }
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = decoded.sf64 ? value : (value & 0xFFFFFFFFu);
+            }
+        } else {
+            uint64_t source = 0;
+            if (decoded.rd != 31) {
+                source = decoded.sf64
+                             ? x_[decoded.rd]
+                             : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rd]));
+            }
+            uint8_t bytes[8] = {};
+            for (size_t i = 0; i < size; ++i) {
+                bytes[i] = static_cast<uint8_t>(source >> (8 * i));
+            }
+            try {
+                memory.Write(address, bytes, size);
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("STR indexed data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "STR indexed data access failed with a non-standard memory exception";
+                return lastFault_;
+            }
+        }
+        // Writeback (pre- and post-index) only after a successful access.
+        const uint64_t wb = base + static_cast<uint64_t>(decoded.signedOffset);
+        if (decoded.rn == 31) {
+            sp_ = wb;
+        } else {
+            x_[decoded.rn] = wb;
+        }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::AndImm:
+    case Op::OrrImm:
+    case Op::EorImm:
+    case Op::AndsImm: {
+        // Logical immediate. Source Rn==31 is XZR/WZR for every form. For the
+        // non-flag-setting forms Rd==31 is SP; for ANDS Rd==31 is XZR/WZR
+        // (result discarded, flags set). ANDS sets N,Z from the width-masked
+        // result and clears C,V.
+        const uint64_t operand =
+            (decoded.rn == 31)
+                ? 0
+                : (decoded.sf64
+                       ? x_[decoded.rn]
+                       : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rn])));
+        uint64_t result = 0;
+        switch (decoded.op) {
+        case Op::OrrImm: result = operand | decoded.logicalImm; break;
+        case Op::EorImm: result = operand ^ decoded.logicalImm; break;
+        default:         result = operand & decoded.logicalImm; break; // AND, ANDS
+        }
+        if (!decoded.sf64) {
+            result &= 0xFFFFFFFFu; // 32-bit arithmetic, zero-extended
+        }
+        if (decoded.op == Op::AndsImm) {
+            const bool n = decoded.sf64 ? ((result >> 63) != 0)
+                                        : ((result >> 31) != 0);
+            setNzcv(n, result == 0, false, false);
+            // ANDS writes the result unless Rd==31 (the TST alias, XZR/WZR).
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);
+            }
+        } else if (decoded.rd == 31) {
+            // Non-flag-setting logical ops treat Rd==31 as SP.
+            sp_ = decoded.sf64 ? result
+                               : static_cast<uint64_t>(static_cast<uint32_t>(result));
+        } else {
+            x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);
+        }
+        // AND/ORR/EOR preserve NZCV.
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Csel:
+    case Op::Csinc: {
+        // Conditional select. Rn/Rm==31 are XZR/WZR; Rd==31 is XZR/WZR.
+        // NZCV is never modified. CSINC increments the second operand by one
+        // when the condition is false.
+        const uint64_t vn =
+            (decoded.rn == 31)
+                ? 0
+                : (decoded.sf64
+                       ? x_[decoded.rn]
+                       : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rn])));
+        const uint64_t vm =
+            (decoded.rm == 31)
+                ? 0
+                : (decoded.sf64
+                       ? x_[decoded.rm]
+                       : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rm])));
+        const bool cond =
+            conditionHolds(decoded.cond, flagN(), flagZ(), flagC(), flagV());
+        uint64_t result;
+        if (decoded.op == Op::Csel) {
+            result = cond ? vn : vm;
+        } else {
+            result = cond ? vn : (vm + 1);
+            if (!decoded.sf64) {
+                result &= 0xFFFFFFFFu; // 32-bit wraparound on the increment
+            }
+        }
+        if (decoded.rd != 31) {
+            x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);
+        }
+        pc_ += kInstructionSize;
         break;
     }
     case Op::Invalid:

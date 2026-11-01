@@ -1024,8 +1024,8 @@ void testPluginAndSerialization() {
     CHECK(plugin->hasFeature("ADRP"));
     CHECK(plugin->hasFeature("LDR_LIT"));
     CHECK(!plugin->hasFeature("LDRSW"));
-    CHECK(!plugin->hasFeature("STP"));
-    CHECK(!plugin->hasFeature("LDP"));
+    CHECK(plugin->hasFeature("STP"));
+    CHECK(plugin->hasFeature("LDP"));
     CHECK_EQ(4u, plugin->getInstructionLength(mem, 0x8000));
 
     // ADR + LDR literal through decode/execute/step/disassemble.

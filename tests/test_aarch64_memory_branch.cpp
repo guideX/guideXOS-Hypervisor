@@ -1248,7 +1248,7 @@ void testPluginCoverage() {
     CHECK(plugin->hasFeature("SUBS_IMM"));
     CHECK(plugin->hasFeature("CMP_IMM"));
     CHECK(plugin->hasFeature("B_COND"));
-    CHECK(!plugin->hasFeature("LDP"));
+    CHECK(plugin->hasFeature("LDP"));
 
     // Each new family decodes, executes and steps through the IISA path
     // with real semantics (memory forwarded, not a private CPU helper).

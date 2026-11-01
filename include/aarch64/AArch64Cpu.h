@@ -18,6 +18,16 @@
 //   - MOVZ/MOVK unchanged; full-width synthesis validated by tests.
 //   - Nested BL/RET programs using SUB/ADD SP + STR/LDR unsigned-offset
 //     stack frames (no STP/LDP required).
+// SCOPE (Phase AARCH64-4, additive):
+//   - STP/LDP register pairs: signed-offset, pre-index and post-index
+//     integer W/X forms, single contiguous pair transfer, documented
+//     CONSTRAINED-UNPREDICTABLE rejection policy.
+//   - LDUR/STUR unscaled signed-offset accesses (imm9, no writeback).
+//   - LDR/STR pre-index and post-index (imm9 signed, writeback on success).
+//   - Logical (immediate) AND/ORR/EOR/ANDS plus the TST and MOV aliases,
+//     with the ARM DecodeBitMasks algorithm and reserved-encoding rejection.
+//   - CSEL/CSINC conditional selection (and the CSET/CINC aliases).
+//   - A three-level nested compiler-style call chain (stp/ldp frames).
 // OUT OF SCOPE: MMU, GIC, EL1 exception model, timers, PL011, virtio, SMP,
 //   JIT, SIMD/FP, and the rest of the A64 ISA (see docs/aarch64/).
 //
@@ -34,13 +44,19 @@
 // Encoding tables used: ARM Architecture Reference Manual ARMv8-A (ARM DDI 0487),
 //   sections C6.6 (branches), C6.2 (add/sub immediate, load/store immediate),
 //   C6.2 (move wide immediate), C6.2.10/11 (ADR/ADRP), C6.2 (load literal),
-//   and C6.2 (HINT/NOP = 0xD503201F).
+//   C6.2 (logical immediate), C6.2 (conditional select), C6.2 (load/store
+//   register pair) and C6.2 (HINT/NOP = 0xD503201F).
 // Cross-checked against the machine-readable A64 ISA definitions mirrored at
 //   https://arm.jonpalmisc.com/latest_aarch64/ (RET operation target = X(n);
 //   LDR/STR unsigned-offset offset = LSL(ZeroExtend(imm12), scale);
 //   B.cond decode offset = SignExtend(imm19:'00')) and the shared
 //   ConditionHolds() pseudocode (cond 0b1110 AL and 0b1111 NV both always
 //   hold; the bit-0 inversion explicitly excludes 0b1111).
+// AARCH64-4 encodings were cross-checked against the field tables and
+//   shared pseudocode of the ARM ARM (arm.jonpalmisc.com, version 2026.06)
+//   and against well-known reference words recorded in the phase test suite
+//   (no AArch64 assembler is installed in this environment; see
+//   docs/aarch64/AARCH64_4_COMPILER_STACK.md).
 // This header is intentionally decoupled from IA-64 state (cpu_state.h),
 // the IA-64 decoder and IA-64 firmware. It only depends on the generic
 // IMemory contract (forward declared) for instruction fetch.
@@ -77,10 +93,10 @@ enum class Fault {
     InvalidFetch,        // instruction bytes not readable from guest memory
     UnallocatedEncoding, // bit pattern is unallocated/malformed in A64
     UnsupportedFeature,  // allocated A64 encoding outside the subset
-    MemoryFault,         // data access (LDR/STR) failed in backing memory
+    MemoryFault,         // guest data access failed or its address range wrapped
 };
 
-// Phase AARCH64-1 + AARCH64-2 + AARCH64-3 operation set.
+// Phase AARCH64-1 + AARCH64-2 + AARCH64-3 + AARCH64-4 operation set.
 enum class Op {
     Invalid = 0,
     Nop,
@@ -102,6 +118,20 @@ enum class Op {
     Adr,      // ADR: Xd = PC + SEx(imm21) (Rd==31 is XZR, never SP)
     Adrp,     // ADRP: Xd = (PC & ~0xFFF) + SEx(imm21)*4096 (Rd==31 is XZR)
     LdrLit,   // LDR (literal): Xt/Wt = Mem[PC + SEx(imm19)*4] via sf64
+    Stp,      // STP (register pair): signed-offset / pre / post-index
+    Ldp,      // LDP (register pair): signed-offset / pre / post-index
+    Ldur,     // LDUR (unscaled, imm9 signed): Wt/Xt = Mem[Rn + SEx(imm9)]
+    Stur,     // STUR (unscaled, imm9 signed): Mem[Rn + SEx(imm9)] = Wt/Xt
+    LdrPre,   // LDR (immediate, pre-index): writeback base = base + SEx(imm9)
+    StrPre,   // STR (immediate, pre-index): writeback base = base + SEx(imm9)
+    LdrPost,  // LDR (immediate, post-index): writeback base = base + SEx(imm9)
+    StrPost,  // STR (immediate, post-index): writeback base = base + SEx(imm9)
+    AndImm,   // AND (immediate): bitmask immediate
+    OrrImm,   // ORR (immediate): bitmask immediate (MOV alias when Rn==31)
+    EorImm,   // EOR (immediate): bitmask immediate
+    AndsImm,  // ANDS (immediate): bitmask immediate (TST alias when Rd==31)
+    Csel,     // CSEL: conditional select
+    Csinc,    // CSINC: conditional select increment (CINC/CSET aliases)
 };
 
 // Result of decoding one 32-bit A64 instruction word.
@@ -111,12 +141,29 @@ struct Decoded {
     bool sf64 = true;          // true = 64-bit (X) form, false = 32-bit (W) form
     uint8_t rd = 0;            // destination register number 0..31
     uint8_t rn = 0;            // source register number 0..31
+    uint8_t rt2 = 0;           // second transfer register (LDP/STP Rt2 field)
+    uint8_t rm = 0;            // second source register (CSEL/CSINC Rm field)
     uint8_t hw = 0;            // MOVZ/MOVK halfword selector 0..3
     uint16_t imm16 = 0;        // MOVZ/MOVK 16-bit immediate
     uint16_t imm12 = 0;        // ADD/SUB/LDR/STR 12-bit immediate
     uint8_t shift = 0;         // ADD/SUB shift amount (0 or 12); MOVZ/MOVK pos = hw*16
     int64_t branchOffset = 0;  // B/BL/CBZ/CBNZ/B.cond signed byte offset (scaled by 4)
     uint64_t memOffset = 0;    // LDR/STR scaled unsigned byte offset (imm12 << 2 or 3)
+    // Addressing mode for LDP/STP and LDR/STR indexed forms:
+    //   0 = offset (signed-offset pair, or unsigned-offset single; no writeback)
+    //   1 = pre-index  (address = base + offset, then writeback)
+    //   2 = post-index (address = base, then writeback = base + offset)
+    uint8_t addrMode = 0;
+    // Signed byte displacement, already scaled for LDP/STP (imm7 << 2/3) and
+    // unscaled for LDUR/STUR/LDR/STR indexed (SEx(imm9)). Used by all
+    // non-unsigned-offset memory forms.
+    int64_t signedOffset = 0;
+    // Logical (immediate) bitmask fields.
+    uint32_t immr = 0;         // rotate right amount (6 bits)
+    uint32_t imms = 0;         // mask length/element selector (6 bits)
+    uint32_t immN = 0;         // N bit (64-bit element selector)
+    uint64_t logicalImm = 0;   // decoded bitmask immediate
+    bool setsFlags = false;    // ANDS/TST (sets N,Z; clears C,V)
     int64_t pcOffset = 0;      // ADR/ADRP/LDR-literal signed byte displacement
                                // from the current instruction address, fully
                                // scaled (ADR x1, ADRP x4096, LDR literal x4).
@@ -184,10 +231,11 @@ public:
     Decoded fetchDecode(ia64::IMemory& memory) const;
     // Execute a previously decoded instruction. Executing an invalid
     // Decoded returns its fault and changes no architectural state.
-    // LDR/STR perform real guest-memory access through `memory`; a failed
-    // data access reports Fault::MemoryFault and changes neither the
-    // destination register nor PC. All other currently implemented
-    // instructions ignore `memory`.
+    // All implemented loads/stores, including pair, unscaled and indexed
+    // forms, access guest memory through `memory`. Failed loads preserve
+    // destinations, writeback bases and PC; failed stores do not write back
+    // or advance PC. Pair stores use one contiguous Write call, but an
+    // arbitrary IMemory backend may partially mutate bytes before throwing.
     Fault executeDecoded(const Decoded& decoded, ia64::IMemory& memory);
     // Legacy single-argument form kept for AARCH64-1 call-site
     // compatibility: behaves identically for non-memory instructions; data
@@ -222,5 +270,13 @@ int64_t signExtend(uint32_t value, unsigned bits);
 // EXCEPT for cond 0b1111 (NV), which — like 0b1110 (AL) — always holds.
 // Cond 14 and 15 are therefore NOT inverses of each other.
 bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v);
+
+// ARM "Logical (immediate)" bitmask decoding (DecodeBitMasks). Returns false
+// for reserved/unallocated encodings (mandatory-zero violations and
+// all-ones elements). The N:immr:imms triple is decoded into `mask`, which is
+// then truncated to 32 bits when !is64. Exposed so tests can anchor it against
+// independently produced encodings.
+bool decodeLogicalImmediate(uint32_t immN, uint32_t immr, uint32_t imms,
+                            bool is64, uint64_t& mask);
 
 } // namespace aarch64
