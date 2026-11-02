@@ -225,11 +225,11 @@ Start at the corrected continuation’s earlier `do_exit` / `Attempted to kill t
 
 ## 28. Commit SHA
 
-R20 implementation commit SHA: recorded after the local commit is created. The final repository HEAD SHA is also included in the closeout response. No remote operation is part of this phase.
+R20 implementation commit SHA: `c6894f3236d1b180c64f5c594a594d8c398ff3c4`. It contains the validated decoder/fault repair, test-fixture corrections, diagnostic instrumentation, and this report. A report-closeout commit records this implementation SHA and the final Git state; its own SHA is provided in the closeout response because a commit cannot include its own hash without changing it.
 
 ## 29. Tracked and untracked worktree state
 
-At closeout, the intended source, test, and report files are committed on `IA64`. `.phase` is unchanged. `build-9r20` and the historical build/evidence directories are ignored and preserved; they are not staged. The final Git status and upstream divergence are recorded in the closeout response.
+The implementation commit left a clean `IA64` worktree one commit ahead of `origin/IA64`. The report-closeout commit leaves the final worktree clean and two commits ahead. `.phase` remains unchanged. `build-9r20` and the historical build/evidence directories are ignored and preserved; they are not staged. No non-ignored untracked files remain.
 
 ## 30. Push status
 
