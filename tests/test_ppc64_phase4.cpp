@@ -138,10 +138,10 @@ static void testEncodings() {
     CHECK(DSISR_ISSTORE == 0x02000000U);
     CHECK(SRR1_PROGILL == 0x00080000U);
     CHECK(SRR1_PROGPRIV == 0x00040000U);
-    // mtmsrd (XO 178) is valid-per-ISA but unsupported here.
+    // mtmsrd (XO 178) is implemented by Phase 22 as a distinct X-form.
     uint32_t mtmsrd = (31U << 26) | (3U << 21) | (178U << 1);
     DecodedInstruction d = PPC64ISAPlugin::decodeWord(mtmsrd);
-    CHECK(!d.supported);
+    CHECK(d.supported && d.kind == DecodedKind::MTMSRD && !d.l);
     // rfid with LK set is not rfid.
     DecodedInstruction r = PPC64ISAPlugin::decodeWord(0x4C000025U);
     CHECK(!r.supported || r.kind != DecodedKind::RFID);
@@ -306,9 +306,11 @@ static void testMSR() {
         CHECK(runOne(cpu, mem, encodeMtmsr(4), 0x1000) == ISAExecutionResult::EXCEPTION);
         CHECK(cpu.getLastFault().category == PPC64FaultCategory::UNSUPPORTED_STATE);
     }
-    // mtmsr in problem state already covered; mtmsrd stays unsupported.
+    // mtmsr in problem state is covered above. A no-op privileged mtmsrd
+    // retires normally when its source and current MSR are both zero.
     uint32_t mtmsrd = (31U << 26) | (3U << 21) | (178U << 1);
-    CHECK(runOne(cpu, mem, mtmsrd, 0x1000) == ISAExecutionResult::EXCEPTION);
+    CHECK(runOne(cpu, mem, mtmsrd, 0x1000) == ISAExecutionResult::CONTINUE &&
+          cpu.getMSR() == 0 && cpu.getNIP() == 0x1004);
     // MSR with unsupported mode set externally cannot execute.
     cpu.reset();
     cpu.setMSR(MSR_IR);

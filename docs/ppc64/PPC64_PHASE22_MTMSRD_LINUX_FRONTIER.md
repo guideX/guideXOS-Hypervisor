@@ -2,11 +2,11 @@
 
 ## Result
 
-**Outcome A — PPC64-22 complete.** The supported privileged `mtmsrd RS,L` forms pass the focused architectural tests, the authenticated Linux instruction at `0xD328` retires through `VirtualMachine::step()`, and two independent replays stop at the same next frontier. The `.phase-ppc64` marker now records PPC64-22 complete and PPC64-23 next.
+**Outcome C — the equivalent PPC64-22 implementation was already present at the actual checkout HEAD.** The implementation commit `d24fead0c647ccf33d8604ca42ef5ca98430efa2` already contained MTMSRD, its focused tests, replay evidence, and the advanced PPC64 marker. This verification pass retained that implementation, reran the focused and regression suites, replayed the authentic kernel, corrected two stale assertions in earlier phase tests, and committed those compatibility updates locally. The original implementation's architectural and replay results are documented below.
 
 The implementation covers the POWER9/pSeries foundation profile. It does not implement 32-bit effective-address execution or claim a complete POWER9 hypervisor architecture.
 
-## Starting repository state
+## Original implementation commit's starting repository state
 
 - Repository: `D:\dev\guideXOS_Hypervisor_PPC64`
 - Branch: `PPC64`
@@ -15,6 +15,16 @@ The implementation covers the POWER9/pSeries foundation profile. It does not imp
 - Tracked worktree was clean at preflight. The ignored `build/` directory was retained.
 - Initial `.phase-ppc64`: `last_completed=PPC64-21`, `next_expected=PPC64-22`.
 - Shared IA-64 `.phase` was not modified.
+
+## Verification pass for the existing implementation
+
+- Actual checkout at the start of this request: HEAD `d24fead0c647ccf33d8604ca42ef5ca98430efa2`, branch `PPC64`, two local commits ahead of `origin/PPC64`, zero behind. Its parent was the requested Phase 21 starting HEAD `460583d1e9fe3919f314cd385451ac07ca8e66ea`.
+- The tracked tree was clean before revalidation; ignored `build/` was retained. `.phase-ppc64` already recorded PPC64-22 complete and PPC64-23 next. The shared IA-64 `.phase` remained untouched.
+- Phase 4's old tests still expected MTMSRD to be unsupported. They now assert the Phase 22 decode and privileged no-op retirement. Phase 20's replay test used a numeric NIP comparison that rejected a valid branch to a lower address after crossing `0xD320`; it now rejects only stopping at the old blocker.
+- Focused Phase 22 CTest passed 278 checks with zero failures. The Phase 4 suite passed 378 checks, and Phase 20 passed 99 checks; its authentic replay again reached the PVR frontier at `0xCFF4`.
+- Full configured CTest: 36 entries, 30 passed, zero executed failures, six Not Run because the Syscall, Debugger, Profiler, Fuzzer, VMIsolation, and ELFValidation executables are absent. All configured PPC64 Phase 1–22 suites passed. Standalone IA-64 ACPI, interrupt-controller, and Processor Interrupt Block tests passed; IA-64 SAL passed in CTest.
+- A fresh pair of production VM replays is preserved under `E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase22\run-1793643298714\`. Both runs matched; the bounded trace and frontier-summary hashes match the values below. No kernel, FDT, loader, or memory plan was changed.
+- QEMU runtime and QAC were not run. The full all-target build was not repeated in this verification pass; all PPC64 Phase 1–22 test targets were rebuilt successfully.
 
 ## Original Linux frontier and input identity
 

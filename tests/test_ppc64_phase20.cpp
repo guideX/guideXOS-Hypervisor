@@ -659,7 +659,9 @@ void testAuthenticKernel() {
     CHECK(first.trace.find("nip=0xd320 raw=0x798c07c6 decoded=rldicr r12,r12,32,31 advanced=1 next_nip=0xd324") != std::string::npos &&
           first.trace.find("r12_after=0x8000000000000000") != std::string::npos);
     CHECK(first.retired >= 7 && first.attempted > 7);
-    CHECK(first.stopNip > 0xd320);
+    // The continuation may branch to a numerically lower NIP after it has
+    // retired the RLDICR frontier; only reject stopping at the old blocker.
+    CHECK(first.stopNip != 0xd320);
     CHECK(first.frontierSummary.find("stop_nip=0xd320") == std::string::npos);
 
     std::string fdtError;
