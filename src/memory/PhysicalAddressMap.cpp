@@ -199,6 +199,14 @@ void PhysicalAddressMap::RegisterMmio(uint64_t base, uint64_t size,
     AddRegion(std::move(info), std::move(backend), std::move(device));
 }
 
+bool PhysicalAddressMap::RemoveRegion(uint64_t base) noexcept {
+    const auto it = std::find_if(regions_.begin(), regions_.end(),
+        [base](const Region& region) { return region.info.base == base; });
+    if (it == regions_.end()) return false;
+    regions_.erase(it);
+    return true;
+}
+
 void PhysicalAddressMap::RegisterSharedRam(
     uint64_t base, const std::shared_ptr<std::vector<uint8_t>>& backing) {
     if (!backing || backing->empty()) {

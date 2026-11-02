@@ -83,6 +83,10 @@ public:
                       std::vector<size_t> accessWidths = {1},
                       bool readable = true, bool writable = true);
 
+    // Remove one exact mapping. Used by board construction to roll back a
+    // partially registered device set after a later registration fails.
+    bool RemoveRegion(uint64_t base) noexcept;
+
     void Read(uint64_t address, uint8_t* destination, size_t size) const;
     void Write(uint64_t address, const uint8_t* source, size_t size);
 

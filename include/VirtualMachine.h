@@ -18,6 +18,7 @@
 #include "BootTraceSystem.h"
 #include "KernelPanic.h"
 #include "FramebufferDevice.h"
+#include "Mips64MaltaBootstrap.h"
 #include <memory>
 #include <vector>
 #include <set>
@@ -320,6 +321,20 @@ public:
     // Explicit opt-in for a strict 36-bit physical map on a MIPS64 VM.
     // Existing VMs retain their legacy flat-memory behavior unless called.
     PhysicalAddressMap& enableMips64PhysicalAddressMap();
+
+    // Opt-in Malta bootstrap board. Call before execution; the profile maps
+    // only the documented ROM, FPGA subset, and existing CBUS UART.
+    void configureMips64MaltaBootstrap(const MaltaBootstrapConfig& config);
+    void configureMips64MaltaBootstrap();
+    MaltaBootstrapBoard* getMips64MaltaBootstrapBoard() noexcept {
+        return maltaBootstrapBoard_.get();
+    }
+    const MaltaBootstrapBoard* getMips64MaltaBootstrapBoard() const noexcept {
+        return maltaBootstrapBoard_.get();
+    }
+    // Explicit board cold reset: resets CPU/device state and starts every CPU
+    // at the architectural MIPS64 reset vector. Generic reset() is unchanged.
+    bool coldResetMips64Malta();
 
     /**
      * Get CPU context (for advanced access)
@@ -664,6 +679,7 @@ private:
     // ========================================================================
 
     std::unique_ptr<Memory> memory_;                // Memory system (shared)
+    std::unique_ptr<MaltaBootstrapBoard> maltaBootstrapBoard_;
     std::unique_ptr<class ProcessorInterruptBlock> processorInterruptBlock_;
     std::unique_ptr<InstructionDecoder> decoder_;   // Instruction decoder (shared)
     std::vector<CPUContext> cpus_;                  // CPU contexts (isolated state)
@@ -742,6 +758,7 @@ private:
      * @return true if index is valid
      */
     bool isValidCPUIndex(int cpuIndex) const;
+    bool applyMips64MaltaColdReset(bool preserveVmCycleCount);
 };
 
 } // namespace ia64

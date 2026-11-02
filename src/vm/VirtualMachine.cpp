@@ -12,6 +12,7 @@
 #include "logger.h"
 #include "ISAPluginRegistry.h"
 #include "IA64ISAPlugin.h"
+#include "Mips64ISAPlugin.h"
 #include "VMSnapshot.h"
 #include "VMSnapshotManager.h"
 #include "VMCheckpoint.h"
@@ -252,6 +253,19 @@ if (!bootStateMachine_.powerOn()) {
             cpus_[0].state = CPUExecutionState::RUNNING;
             cpus_[0].enabled = true;
         }
+
+        // A configured Malta profile starts from its architectural reset
+        // vector. Platform-independent MIPS64 VMs retain their existing PC=0
+        // reset behavior.
+        if (maltaBootstrapBoard_) {
+            for (CPUContext& context : cpus_) {
+                auto* plugin = dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get());
+                if (!plugin) {
+                    throw std::logic_error("Malta bootstrap VM lost its MIPS64 CPU plugin");
+                }
+                plugin->core().setPc(kMaltaResetVector);
+            }
+        }
         
         // Reset execution state
         cyclesExecuted_ = 0;
@@ -403,7 +417,16 @@ bool VirtualMachine::step() {
             return false;
         }
 
-        return stepCPU(cpuIndex);
+        const bool stepSucceeded = stepCPU(cpuIndex);
+        if (stepSucceeded && maltaBootstrapBoard_ &&
+            maltaBootstrapBoard_->ConsumeSoftwareResetRequest()) {
+            if (!applyMips64MaltaColdReset(true)) {
+                LOG_ERROR("Failed to apply guest-requested Malta software reset");
+                state_ = VMState::ERROR;
+                return false;
+            }
+        }
+        return stepSucceeded;
     } catch (const std::exception& e) {
         LOG_ERROR("Exception during step: " + std::string(e.what()));
         state_ = VMState::ERROR;
@@ -824,6 +847,77 @@ PhysicalAddressMap& VirtualMachine::enableMips64PhysicalAddressMap() {
         }
     }
     return memory_->EnablePhysicalAddressMap();
+}
+
+void VirtualMachine::configureMips64MaltaBootstrap() {
+    configureMips64MaltaBootstrap(MaltaBootstrapConfig{});
+}
+
+void VirtualMachine::configureMips64MaltaBootstrap(
+    const MaltaBootstrapConfig& config) {
+    if (state_ == VMState::RUNNING || state_ == VMState::PAUSED) {
+        throw std::logic_error("Malta bootstrap profile must be configured while the VM is stopped");
+    }
+    if (state_ == VMState::ERROR) {
+        throw std::logic_error("Malta bootstrap profile cannot be configured on an errored VM");
+    }
+    if (maltaBootstrapBoard_) {
+        throw std::logic_error("Malta bootstrap profile is already configured for this VM");
+    }
+    if (cpus_.empty()) {
+        throw std::logic_error("Malta bootstrap profile requires a constructed MIPS64 VM");
+    }
+    for (const CPUContext& context : cpus_) {
+        if (!dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get())) {
+            throw std::logic_error("Malta bootstrap profile is only available to MIPS64 VMs");
+        }
+    }
+
+    PhysicalAddressMap& bus = enableMips64PhysicalAddressMap();
+    auto board = std::make_unique<MaltaBootstrapBoard>(bus, config);
+    for (CPUContext& context : cpus_) {
+        auto* plugin = dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get());
+        plugin->configureEndianness(config.endianness == mips64::Mips64Endianness::Little);
+    }
+    maltaBootstrapBoard_ = std::move(board);
+
+    // Configuration after VM initialization is supported while stopped and
+    // immediately establishes a real board reset state.
+    if (state_ != VMState::CREATED && !coldResetMips64Malta()) {
+        maltaBootstrapBoard_.reset();
+        throw std::runtime_error("failed to cold-reset configured Malta profile");
+    }
+}
+
+bool VirtualMachine::coldResetMips64Malta() {
+    if (!maltaBootstrapBoard_) {
+        LOG_ERROR("Malta cold reset requested without a configured board profile");
+        return false;
+    }
+    if (state_ == VMState::RUNNING || state_ == VMState::PAUSED ||
+        state_ == VMState::CREATED || state_ == VMState::ERROR) {
+        LOG_ERROR("Malta cold reset requires an initialized, stopped VM");
+        return false;
+    }
+    return applyMips64MaltaColdReset(false);
+}
+
+bool VirtualMachine::applyMips64MaltaColdReset(bool preserveVmCycleCount) {
+    if (!maltaBootstrapBoard_) return false;
+    const uint64_t completedCycles = cyclesExecuted_;
+    if (!reset()) return false;
+    if (preserveVmCycleCount) cyclesExecuted_ = completedCycles;
+
+    for (CPUContext& context : cpus_) {
+        auto* plugin = dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get());
+        if (!plugin) {
+            state_ = VMState::ERROR;
+            return false;
+        }
+        plugin->core().setPc(kMaltaResetVector);
+    }
+    state_ = VMState::STOPPED;
+    return true;
 }
 
 CPUContext* VirtualMachine::getCPUContext(int cpuIndex) {
