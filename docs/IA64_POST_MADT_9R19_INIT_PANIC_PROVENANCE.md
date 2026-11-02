@@ -155,4 +155,4 @@ The page-fault handler and die frame have now been connected to the panic path, 
 
 ## 17. Commit and final worktree
 
-This report is committed locally together with the checkpoint-range diagnostic change. The full commit SHA and final repository status are recorded in the closeout response; embedding the commit’s own SHA inside this file would change that SHA. No push was made.
+The primary R19 source-and-report commit is 48727b8b74abc83afaf6ab7c1a9684bf1912073f. A follow-up closeout commit records this SHA and the final worktree state; its full SHA is in the closeout response. The final worktree is clean on IA64, three commits ahead of origin/IA64, with .phase unchanged. No push was made.
