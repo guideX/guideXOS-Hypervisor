@@ -159,6 +159,52 @@ const char* condName(uint8_t cond) {
     return kNames[cond & 15u];
 }
 
+constexpr uint16_t sysregKey(uint8_t op0, uint8_t op1, uint8_t crn,
+                             uint8_t crm, uint8_t op2) {
+    return static_cast<uint16_t>((op0 << 14) | (op1 << 11) | (crn << 7) |
+                                 (crm << 3) | op2);
+}
+
+const char* sysregName(uint8_t op0, uint8_t op1, uint8_t crn,
+                       uint8_t crm, uint8_t op2) {
+    const uint16_t key = sysregKey(op0, op1, crn, crm, op2);
+    switch (key) {
+    case sysregKey(3, 0, 4, 2, 2): return "currentel";
+    case sysregKey(3, 3, 4, 2, 0): return "nzcv";
+    case sysregKey(3, 3, 4, 2, 1): return "daif";
+    case sysregKey(3, 0, 4, 1, 0): return "sp_el0";
+    case sysregKey(3, 0, 4, 2, 0): return "spsel";
+    case sysregKey(3, 0, 4, 0, 0): return "spsr_el1";
+    case sysregKey(3, 0, 4, 0, 1): return "elr_el1";
+    case sysregKey(3, 0, 12, 0, 0): return "vbar_el1";
+    case sysregKey(3, 0, 5, 2, 0): return "esr_el1";
+    case sysregKey(3, 0, 6, 0, 0): return "far_el1";
+    default: return nullptr;
+    }
+}
+
+std::string encodedSysregName(uint8_t op0, uint8_t op1, uint8_t crn,
+                              uint8_t crm, uint8_t op2) {
+    if (const char* name = sysregName(op0, op1, crn, crm, op2)) {
+        return name;
+    }
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "s%u_%u_c%u_c%u_%u", op0, op1, crn, crm, op2);
+    return buf;
+}
+
+uint32_t systemRegisterSyndrome(const Decoded& d, bool isRead) {
+    // ESR_ELx ISS for a trapped AArch64 system-register access:
+    // Op0[21:20], Op2[19:17], Op1[16:14], CRn[13:10], Rt[9:5],
+    // CRm[4:1], Direction[0] (0 = MRS, 1 = MSR).
+    return (static_cast<uint32_t>(d.sysOp0) << 20) |
+           (static_cast<uint32_t>(d.sysOp2) << 17) |
+           (static_cast<uint32_t>(d.sysOp1) << 14) |
+           (static_cast<uint32_t>(d.sysCrn) << 10) |
+           (static_cast<uint32_t>(d.rd) << 5) |
+           (static_cast<uint32_t>(d.sysCrm) << 1) | (isRead ? 0u : 1u);
+}
+
 } // namespace
 
 bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v) {
@@ -239,15 +285,37 @@ int64_t signExtend(uint32_t value, unsigned bits) {
     return static_cast<int32_t>(extended);
 }
 
-void Cpu::reset(uint64_t entryPoint) {
+void Cpu::reset(uint64_t entryPoint, ExceptionLevel initialLevel) {
     for (uint64_t& r : x_) {
         r = 0;
     }
-    sp_ = 0;
+    spEl0_ = 0;
+    spEl1_ = 0;
     pc_ = entryPoint;
-    pstate_ = 0;
+    pstate_ = (initialLevel == ExceptionLevel::EL1) ? 0x5u : 0u;
+    elrEl1_ = 0;
+    spsrEl1_ = 0;
+    vbarEl1_ = 0;
+    esrEl1_ = 0;
+    farEl1_ = 0;
     lastFault_ = Fault::None;
     lastError_.clear();
+}
+
+uint64_t& Cpu::activeSpRef() {
+    return usesSpEl0() ? spEl0_ : spEl1_;
+}
+
+const uint64_t& Cpu::activeSpRef() const {
+    return usesSpEl0() ? spEl0_ : spEl1_;
+}
+
+uint64_t Cpu::sp() const {
+    return activeSpRef();
+}
+
+void Cpu::setSp(uint64_t value) {
+    activeSpRef() = value;
 }
 
 uint64_t Cpu::readX(unsigned index) const {
@@ -273,7 +341,7 @@ uint64_t Cpu::readReg31(bool is64, bool withZero) const {
     if (withZero) {
         return 0;
     }
-    uint64_t v = sp_;
+    uint64_t v = activeSpRef();
     return is64 ? v : static_cast<uint64_t>(static_cast<uint32_t>(v));
 }
 
@@ -281,7 +349,7 @@ void Cpu::writeReg31(bool is64, bool withZero, uint64_t value) {
     if (withZero) {
         return; // writes to XZR/WZR are discarded
     }
-    sp_ = is64 ? value : static_cast<uint64_t>(static_cast<uint32_t>(value));
+    activeSpRef() = is64 ? value : static_cast<uint64_t>(static_cast<uint32_t>(value));
 }
 
 void Cpu::setNzcv(bool n, bool z, bool c, bool v) {
@@ -745,6 +813,103 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
     }
 
+    // SVC and BRK immediate instructions. HVC and SMC are recognized as
+    // allocated instructions outside this EL0/EL1-only execution profile.
+    if ((word & 0xFFE0001Fu) == 0xD4000001u ||
+        (word & 0xFFE0001Fu) == 0xD4200000u) {
+        Decoded d;
+        d.op = ((word & 0xFFE0001Fu) == 0xD4000001u) ? Op::Svc : Op::Brk;
+        d.valid = true;
+        d.word = word;
+        d.address = address;
+        d.imm16 = static_cast<uint16_t>((word >> 5) & 0xFFFFu);
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "%s #0x%x",
+                      d.op == Op::Svc ? "svc" : "brk", d.imm16);
+        d.disassembly = buf;
+        return d;
+    }
+    if ((word & 0xFFE0001Fu) == 0xD4000002u ||
+        (word & 0xFFE0001Fu) == 0xD4000003u) {
+        return invalid(word, address, Fault::UnsupportedFeature,
+                       "HVC/SMC require EL2/EL3, which are outside this profile");
+    }
+
+    // ERET uses the architectural exception return state, not X30.
+    if (word == 0xD69F03E0u) {
+        Decoded d;
+        d.op = Op::Eret;
+        d.valid = true;
+        d.word = word;
+        d.address = address;
+        d.disassembly = "eret";
+        return d;
+    }
+
+    // MRS/MSR system-register forms and the PSTATE-immediate aliases. System
+    // register fields are retained in the decoded operation so permission
+    // checks happen at execution using the guest's current EL.
+    {
+        const uint32_t top = word & 0xFFE00000u;
+        if (top == 0xD5000000u || top == 0xD5200000u) {
+            const bool isRead = top == 0xD5200000u;
+            const uint8_t op0 = static_cast<uint8_t>((word >> 19) & 3u);
+            const uint8_t op1 = static_cast<uint8_t>((word >> 16) & 7u);
+            const uint8_t crn = static_cast<uint8_t>((word >> 12) & 15u);
+            const uint8_t crm = static_cast<uint8_t>((word >> 8) & 15u);
+            const uint8_t op2 = static_cast<uint8_t>((word >> 5) & 7u);
+            const uint8_t rt = static_cast<uint8_t>(word & 31u);
+
+            if (!isRead && op0 == 0u && crn == 4u && rt == 31u) {
+                Decoded d;
+                d.op = Op::MsrPstateImm;
+                d.valid = true;
+                d.word = word;
+                d.address = address;
+                d.sysOp1 = op1;
+                d.sysCrm = crm; // four-bit immediate operand
+                d.sysOp2 = op2;
+                const char* field = nullptr;
+                if (op1 == 0u && op2 == 5u) field = "spsel";
+                if (op1 == 3u && op2 == 6u) field = "daifset";
+                if (op1 == 3u && op2 == 7u) field = "daifclr";
+                if (field == nullptr) {
+                    return invalid(word, address, Fault::UnallocatedEncoding,
+                                   "reserved PSTATE-immediate system instruction encoding");
+                }
+                char buf[48];
+                std::snprintf(buf, sizeof(buf), "msr %s, #%u", field, crm);
+                d.disassembly = buf;
+                return d;
+            }
+
+            if (op0 == 3u) {
+                Decoded d;
+                d.op = isRead ? Op::Mrs : Op::Msr;
+                d.valid = true;
+                d.word = word;
+                d.address = address;
+                d.rd = rt;
+                d.sysOp0 = op0;
+                d.sysOp1 = op1;
+                d.sysCrn = crn;
+                d.sysCrm = crm;
+                d.sysOp2 = op2;
+                const std::string reg = encodedSysregName(op0, op1, crn, crm, op2);
+                char buf[96];
+                if (isRead) {
+                    std::snprintf(buf, sizeof(buf), "mrs %s, %s",
+                                  rt == 31 ? "xzr" : regName(true, rt).c_str(), reg.c_str());
+                } else {
+                    std::snprintf(buf, sizeof(buf), "msr %s, %s", reg.c_str(),
+                                  rt == 31 ? "xzr" : regName(true, rt).c_str());
+                }
+                d.disassembly = buf;
+                return d;
+            }
+        }
+    }
+
     // CBZ/CBNZ: sf[31] 011010 op[24] imm19[23:5] Rt[4:0].
     if ((word & 0x7F000000u) == 0x34000000u || (word & 0x7F000000u) == 0x35000000u) {
         const bool sf = (word & 0x80000000u) != 0;
@@ -832,6 +997,257 @@ Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
     return decodeWord(word, pc_);
 }
 
+void Cpu::takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
+                                  uint64_t preferredReturnAddress) {
+    const uint8_t originEl = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    uint64_t vectorOffset = 0x400; // lower EL using AArch64
+    if (originEl == 1) {
+        vectorOffset = (pstate_ & kPstateSpsel) ? 0x200 : 0x000;
+    }
+
+    spsrEl1_ = pstate_;
+    elrEl1_ = preferredReturnAddress;
+    esrEl1_ = (static_cast<uint32_t>(exceptionClass) << 26) |
+              (1u << 25) | (iss & 0x01FFFFFFu); // A64 instruction length = 4 bytes
+
+    // This profile has no asynchronous interrupt delivery, but models the
+    // architectural mask state established on synchronous exception entry.
+    // NZCV is preserved, EL1h/SP_EL1 is selected, and all DAIF masks are set.
+    pstate_ = (pstate_ & (kPstateN | kPstateZ | kPstateC | kPstateV)) |
+              kPstateDAIF | 0x5u;
+    pc_ = vbarEl1_ + vectorOffset;
+}
+
+Fault Cpu::executeSystemRegister(const Decoded& decoded) {
+    const bool isRead = decoded.op == Op::Mrs;
+    const uint8_t el = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    if (el > 1) {
+        lastError_ = "system-register access from EL2/EL3 is outside this profile";
+        return Fault::UnsupportedFeature;
+    }
+
+    const uint16_t key = sysregKey(decoded.sysOp0, decoded.sysOp1,
+                                   decoded.sysCrn, decoded.sysCrm,
+                                   decoded.sysOp2);
+    const uint16_t currentElKey = sysregKey(3, 0, 4, 2, 2);
+    const uint16_t nzcvKey = sysregKey(3, 3, 4, 2, 0);
+    const uint16_t daifKey = sysregKey(3, 3, 4, 2, 1);
+    const uint16_t spEl0Key = sysregKey(3, 0, 4, 1, 0);
+    const uint16_t spselKey = sysregKey(3, 0, 4, 2, 0);
+    const uint16_t spsrKey = sysregKey(3, 0, 4, 0, 0);
+    const uint16_t elrKey = sysregKey(3, 0, 4, 0, 1);
+    const uint16_t vbarKey = sysregKey(3, 0, 12, 0, 0);
+    const uint16_t esrKey = sysregKey(3, 0, 5, 2, 0);
+    const uint16_t farKey = sysregKey(3, 0, 6, 0, 0);
+    constexpr uint32_t kSupportedSpsrFields =
+        0xF0000000u | kPstateDAIF | (1u << 20) | kPstateModeMask;
+
+    const bool known = key == currentElKey || key == nzcvKey || key == daifKey ||
+                       key == spEl0Key || key == spselKey || key == spsrKey ||
+                       key == elrKey || key == vbarKey || key == esrKey ||
+                       key == farKey;
+    if (!known) {
+        lastError_ = "system-register encoding is outside the implemented subset: " +
+                     encodedSysregName(decoded.sysOp0, decoded.sysOp1,
+                                       decoded.sysCrn, decoded.sysCrm,
+                                       decoded.sysOp2);
+        return Fault::UnsupportedFeature;
+    }
+
+    // NZCV is directly accessible at EL0. In this deterministic profile,
+    // SCTLR_EL1.UMA is fixed to zero, so DAIF accesses at EL0 trap to EL1.
+    // Other privileged-only accesses are architecturally UNDEFINED here.
+    const bool el0AccessAllowed = key == nzcvKey;
+    if (el == 0 && !el0AccessAllowed) {
+        if (key == daifKey) {
+            takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
+        } else {
+            takeSynchronousException(0x00, 0, pc_);
+        }
+        return Fault::None;
+    }
+
+    // SP_EL0 is available through the ordinary SP operand at EL0 or EL1t,
+    // but its MRS/MSR system-register encoding is UNDEFINED unless SPSel=1.
+    if (key == spEl0Key && (pstate_ & kPstateSpsel) == 0) {
+        takeSynchronousException(0x00, 0, pc_);
+        return Fault::None;
+    }
+
+    if (key == currentElKey) {
+        if (!isRead) {
+            takeSynchronousException(0x00, 0, pc_); // write to read-only register => UNDEFINED
+            return Fault::None;
+        }
+        if (decoded.rd != 31) {
+            x_[decoded.rd] = static_cast<uint64_t>(el << 2);
+        }
+    } else if (key == nzcvKey) {
+        if (isRead) {
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = pstate_ & 0xF0000000u;
+            }
+        } else {
+            const uint32_t source = decoded.rd == 31
+                ? 0u : static_cast<uint32_t>(x_[decoded.rd]);
+            pstate_ = (pstate_ & ~0xF0000000u) | (source & 0xF0000000u);
+        }
+    } else if (key == daifKey) {
+        if (isRead) {
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = pstate_ & kPstateDAIF;
+            }
+        } else {
+            const uint32_t source = decoded.rd == 31
+                ? 0u : static_cast<uint32_t>(x_[decoded.rd]);
+            pstate_ = (pstate_ & ~kPstateDAIF) | (source & kPstateDAIF);
+        }
+    } else if (key == spEl0Key) {
+        if (isRead) {
+            if (decoded.rd != 31) x_[decoded.rd] = spEl0_;
+        } else {
+            spEl0_ = decoded.rd == 31 ? 0 : x_[decoded.rd];
+        }
+    } else if (key == spselKey) {
+        if (isRead) {
+            if (decoded.rd != 31) {
+                x_[decoded.rd] = (pstate_ & kPstateSpsel) ? 1u : 0u;
+            }
+        } else {
+            // The register form writes SPSel.SP from Xt[0], with all other
+            // PSTATE fields preserved. The immediate form is also supported.
+            const uint64_t source = decoded.rd == 31 ? 0 : x_[decoded.rd];
+            pstate_ = (pstate_ & ~kPstateSpsel) |
+                      (static_cast<uint32_t>(source) & kPstateSpsel);
+        }
+    } else if (key == spsrKey) {
+        if (isRead) {
+            if (decoded.rd != 31) x_[decoded.rd] = spsrEl1_;
+        } else {
+            const uint32_t source = decoded.rd == 31
+                ? 0u : static_cast<uint32_t>(x_[decoded.rd]);
+            spsrEl1_ = source & kSupportedSpsrFields;
+        }
+    } else if (key == elrKey) {
+        if (isRead) {
+            if (decoded.rd != 31) x_[decoded.rd] = elrEl1_;
+        } else {
+            elrEl1_ = decoded.rd == 31 ? 0 : x_[decoded.rd];
+        }
+    } else if (key == vbarKey) {
+        if (isRead) {
+            if (decoded.rd != 31) x_[decoded.rd] = vbarEl1_;
+        } else {
+            // VBAR_EL1[10:0] are RES0, making every stored vector base
+            // satisfy the architectural 2 KiB alignment requirement.
+            vbarEl1_ = (decoded.rd == 31 ? 0 : x_[decoded.rd]) & ~uint64_t{0x7FF};
+        }
+    } else if (key == esrKey) {
+        if (!isRead) {
+            takeSynchronousException(0x00, 0, pc_); // ESR_EL1 is read-only
+            return Fault::None;
+        }
+        if (decoded.rd != 31) x_[decoded.rd] = esrEl1_;
+    } else if (key == farKey) {
+        if (isRead) {
+            if (decoded.rd != 31) x_[decoded.rd] = farEl1_;
+        } else {
+            farEl1_ = decoded.rd == 31 ? 0 : x_[decoded.rd];
+        }
+    }
+
+    pc_ += kInstructionSize;
+    return Fault::None;
+}
+
+Fault Cpu::executePstateImmediate(const Decoded& decoded) {
+    const uint8_t el = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    const uint8_t imm = decoded.sysCrm;
+    const bool isSpsel = decoded.sysOp1 == 0u && decoded.sysOp2 == 5u;
+    if (el > 1) {
+        lastError_ = "PSTATE control from EL2/EL3 is outside this profile";
+        return Fault::UnsupportedFeature;
+    }
+    if (el == 0 && !isSpsel) {
+        Decoded syndrome = decoded;
+        syndrome.sysOp0 = 0;
+        syndrome.sysCrn = 4;
+        syndrome.rd = 31;
+        takeSynchronousException(0x18, systemRegisterSyndrome(syndrome, false), pc_);
+        return Fault::None;
+    }
+    if (el == 0) {
+        takeSynchronousException(0x00, 0, pc_); // SPSel is UNDEFINED at EL0
+        return Fault::None;
+    }
+
+    if (isSpsel) {
+        pstate_ = (pstate_ & ~kPstateSpsel) | (imm & 1u);
+    } else if (decoded.sysOp1 == 3u && decoded.sysOp2 == 6u) {
+        if (imm & 8u) pstate_ |= kPstateD;
+        if (imm & 4u) pstate_ |= kPstateA;
+        if (imm & 2u) pstate_ |= kPstateI;
+        if (imm & 1u) pstate_ |= kPstateF;
+    } else if (decoded.sysOp1 == 3u && decoded.sysOp2 == 7u) {
+        if (imm & 8u) pstate_ &= ~kPstateD;
+        if (imm & 4u) pstate_ &= ~kPstateA;
+        if (imm & 2u) pstate_ &= ~kPstateI;
+        if (imm & 1u) pstate_ &= ~kPstateF;
+    } else {
+        lastError_ = "unsupported PSTATE immediate field";
+        return Fault::UnsupportedFeature;
+    }
+    pc_ += kInstructionSize;
+    return Fault::None;
+}
+
+Fault Cpu::executeEret(const Decoded& /*decoded*/) {
+    const uint8_t currentEl = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    if (currentEl == 0) {
+        takeSynchronousException(0x00, 0, pc_); // ERET is UNDEFINED at EL0
+        return Fault::None;
+    }
+    if (currentEl != 1) {
+        lastError_ = "ERET from EL2/EL3 is outside this profile";
+        return Fault::UnsupportedFeature;
+    }
+
+    const uint32_t mode = spsrEl1_ & kPstateModeMask;
+    const bool targetEl0 = mode == 0u;
+    const bool targetEl1 = mode == 4u || mode == 5u;
+    if (!targetEl0 && !targetEl1) {
+        // Architecturally valid returns to EL2/EL3 (or AArch32) are outside
+        // this emulator profile. They are unsupported operations, not an
+        // architectural Illegal Execution State exception.
+        if (mode == 8u || mode == 9u || mode == 12u || mode == 13u ||
+            (mode & 0x10u) != 0) {
+            lastError_ = "ERET target exception/execution level is outside this profile";
+            return Fault::UnsupportedFeature;
+        }
+        // An architecturally invalid A64 mode takes an Illegal Execution
+        // State exception to EL1. Entry is atomic with respect to the
+        // unsupported return state and records the ERET address for retry.
+        takeSynchronousException(0x0E, 0, pc_);
+        return Fault::None;
+    }
+    if ((spsrEl1_ & (1u << 20)) != 0) {
+        takeSynchronousException(0x0E, 0, pc_); // SPSR.IL => illegal return
+        return Fault::None;
+    }
+
+    constexpr uint32_t kSupportedReturnStateMask =
+        0xF0000000u | kPstateDAIF | kPstateModeMask;
+    if ((spsrEl1_ & ~kSupportedReturnStateMask) != 0) {
+        lastError_ = "ERET SPSR_EL1 contains state fields outside the implemented profile";
+        return Fault::UnsupportedFeature;
+    }
+
+    // The return is committed only after every state check succeeds.
+    pstate_ = spsrEl1_;
+    pc_ = elrEl1_;
+    return Fault::None;
+}
+
 Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     if (!decoded.valid) {
         lastFault_ = decoded.fault == Fault::None ? Fault::UnallocatedEncoding
@@ -843,6 +1259,53 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     case Op::Nop:
         pc_ += kInstructionSize;
         break;
+    case Op::Mrs:
+    case Op::Msr: {
+        const Fault result = executeSystemRegister(decoded);
+        if (result != Fault::None) {
+            lastFault_ = result;
+            return result;
+        }
+        break;
+    }
+    case Op::MsrPstateImm: {
+        const Fault result = executePstateImmediate(decoded);
+        if (result != Fault::None) {
+            lastFault_ = result;
+            return result;
+        }
+        break;
+    }
+    case Op::Svc:
+        if (static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2) > 1) {
+            lastFault_ = Fault::UnsupportedFeature;
+            lastError_ = "SVC from EL2/EL3 is outside this profile";
+            return lastFault_;
+        }
+        // SVC's preferred return address is the following instruction.
+        takeSynchronousException(0x15, decoded.imm16, pc_ + kInstructionSize);
+        break;
+    case Op::Brk: {
+        if (static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2) > 1) {
+            lastFault_ = Fault::UnsupportedFeature;
+            lastError_ = "BRK routing from EL2/EL3 is outside this profile";
+            return lastFault_;
+        }
+        // BRK is a breakpoint instruction exception. The debugger can
+        // replace the BRK at ELR_EL1 with the original instruction and retry.
+        const uint8_t ec = (static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2) == 0)
+            ? 0x3C : 0x3D;
+        takeSynchronousException(ec, decoded.imm16, pc_);
+        break;
+    }
+    case Op::Eret: {
+        const Fault result = executeEret(decoded);
+        if (result != Fault::None) {
+            lastFault_ = result;
+            return result;
+        }
+        break;
+    }
     case Op::Movz: {
         uint64_t value = static_cast<uint64_t>(decoded.imm16) << decoded.shift;
         if (!decoded.sf64) {
@@ -879,7 +1342,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     case Op::SubImm: {
         // Rn/Rd == 31 denote SP for ADD/SUB immediate (ARM DDI 0487 C6.2.4/5).
         const uint64_t rnVal = (decoded.rn == 31)
-            ? (decoded.sf64 ? sp_ : static_cast<uint64_t>(static_cast<uint32_t>(sp_)))
+            ? (decoded.sf64 ? activeSpRef() : static_cast<uint64_t>(static_cast<uint32_t>(activeSpRef())))
             : (decoded.sf64 ? x_[decoded.rn]
                             : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rn])));
         const uint64_t imm =
@@ -889,7 +1352,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             result &= 0xFFFFFFFFu; // 32-bit arithmetic, zero-extended
         }
         if (decoded.rd == 31) {
-            sp_ = decoded.sf64 ? result
+            activeSpRef() = decoded.sf64 ? result
                                : static_cast<uint64_t>(static_cast<uint32_t>(result));
         } else if (decoded.sf64) {
             x_[decoded.rd] = result;
@@ -977,7 +1440,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     }
     case Op::LdrImm: {
         // Base register 31 is SP; destination 31 is WZR/XZR (discarded).
-        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
         const size_t size = decoded.sf64 ? 8 : 4;
         if (!addressRangeIsRepresentable(address, size)) {
@@ -1016,7 +1479,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     case Op::StrImm: {
         // Base register 31 is SP; source 31 is WZR/XZR (stores zero).
         // The memory access always happens (and can fault) even for XZR.
-        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
         const size_t size = decoded.sf64 ? 8 : 4;
         if (!addressRangeIsRepresentable(address, size)) {
@@ -1077,7 +1540,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // CMP is SUBS with Rd==31 and additionally writes nothing.
         const bool is64 = decoded.sf64;
         uint64_t rnVal = (decoded.rn == 31)
-            ? (is64 ? sp_ : static_cast<uint64_t>(static_cast<uint32_t>(sp_)))
+            ? (is64 ? activeSpRef() : static_cast<uint64_t>(static_cast<uint32_t>(activeSpRef())))
             : (is64 ? x_[decoded.rn]
                     : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rn])));
         const uint64_t addend = static_cast<uint64_t>(decoded.imm12) << decoded.shift;
@@ -1115,7 +1578,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // element, Rt2 the higher. Rn==31 is SP; Rt/Rt2==31 are WZR/XZR.
         const bool isLoad = (decoded.op == Op::Ldp);
         const size_t datasize = decoded.sf64 ? 8 : 4;
-        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t offset = static_cast<uint64_t>(decoded.signedOffset); // mod 2^64
         // Post-index accesses the unmodified base; signed-offset and pre-index
         // access base + offset (wrapping modulo 2^64, like all A64 addressing).
@@ -1184,7 +1647,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         if (decoded.addrMode != 0) {
             const uint64_t wb = base + offset;
             if (decoded.rn == 31) {
-                sp_ = wb;
+                activeSpRef() = wb;
             } else {
                 x_[decoded.rn] = wb;
             }
@@ -1199,7 +1662,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // preserved. Rn==31 is SP; Rt==31 is WZR/XZR.
         const bool isLoad = (decoded.op == Op::Ldur);
         const size_t size = decoded.sf64 ? 8 : 4;
-        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address =
             base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
         if (!addressRangeIsRepresentable(address, size)) {
@@ -1264,7 +1727,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const bool isLoad = (decoded.op == Op::LdrPre || decoded.op == Op::LdrPost);
         const bool isPost = (decoded.op == Op::LdrPost || decoded.op == Op::StrPost);
         const size_t size = decoded.sf64 ? 8 : 4;
-        const uint64_t base = (decoded.rn == 31) ? sp_ : x_[decoded.rn];
+        const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address =
             isPost ? base
                    : base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
@@ -1320,7 +1783,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // Writeback (pre- and post-index) only after a successful access.
         const uint64_t wb = base + static_cast<uint64_t>(decoded.signedOffset);
         if (decoded.rn == 31) {
-            sp_ = wb;
+            activeSpRef() = wb;
         } else {
             x_[decoded.rn] = wb;
         }
@@ -1360,7 +1823,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             }
         } else if (decoded.rd == 31) {
             // Non-flag-setting logical ops treat Rd==31 as SP.
-            sp_ = decoded.sf64 ? result
+            activeSpRef() = decoded.sf64 ? result
                                : static_cast<uint64_t>(static_cast<uint32_t>(result));
         } else {
             x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);
@@ -1464,7 +1927,7 @@ RunOutcome Cpu::run(ia64::IMemory& memory, uint64_t maxSteps) {
 }
 
 std::string Cpu::dumpState() const {
-    char buf[128];
+    char buf[320];
     std::string out = "AArch64 CPU state:\n";
     for (unsigned i = 0; i < 31; ++i) {
         std::snprintf(buf, sizeof(buf), "  x%-2u = 0x%016llx%s", i,
@@ -1472,12 +1935,26 @@ std::string Cpu::dumpState() const {
                       (i % 2 == 1) ? "\n" : "  ");
         out += buf;
     }
-    std::snprintf(buf, sizeof(buf), "  sp   = 0x%016llx    pc   = 0x%016llx\n",
-                  static_cast<unsigned long long>(sp_),
-                  static_cast<unsigned long long>(pc_));
+    std::snprintf(buf, sizeof(buf),
+                  "  sp_el0 = 0x%016llx  sp_el1 = 0x%016llx  active_sp = 0x%016llx\n"
+                  "  pc     = 0x%016llx  EL=%u SPSel=%u\n",
+                  static_cast<unsigned long long>(spEl0_),
+                  static_cast<unsigned long long>(spEl1_),
+                  static_cast<unsigned long long>(activeSpRef()),
+                  static_cast<unsigned long long>(pc_),
+                  static_cast<unsigned>((pstate_ & kPstateElMask) >> 2),
+                  static_cast<unsigned>(pstate_ & kPstateSpsel));
     out += buf;
-    std::snprintf(buf, sizeof(buf), "  pstate = 0x%08x (N=%d Z=%d C=%d V=%d)\n", pstate_,
-                  flagN() ? 1 : 0, flagZ() ? 1 : 0, flagC() ? 1 : 0, flagV() ? 1 : 0);
+    std::snprintf(buf, sizeof(buf),
+                  "  pstate = 0x%08x (N=%d Z=%d C=%d V=%d DAIF=0x%x)\n"
+                  "  ELR_EL1=0x%016llx SPSR_EL1=0x%08x VBAR_EL1=0x%016llx\n"
+                  "  ESR_EL1=0x%08x FAR_EL1=0x%016llx\n",
+                  pstate_,
+                  flagN() ? 1 : 0, flagZ() ? 1 : 0, flagC() ? 1 : 0, flagV() ? 1 : 0,
+                  static_cast<unsigned>(pstate_ & kPstateDAIF),
+                  static_cast<unsigned long long>(elrEl1_), spsrEl1_,
+                  static_cast<unsigned long long>(vbarEl1_), esrEl1_,
+                  static_cast<unsigned long long>(farEl1_));
     out += buf;
     return out;
 }

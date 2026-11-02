@@ -404,7 +404,7 @@ void testFaults() {
     // Unallocated patterns fault (never executed as NOP).
     cpu.reset(0);
     FlatMemory big(0x1000);
-    const uint32_t garbage[] = {0xFFFFFFFFu, 0x00000000u, 0xD4000001u /*svc #0*/,
+    const uint32_t garbage[] = {0xFFFFFFFFu, 0x00000000u,
                                 0xD503203Fu /*hint #1, not NOP*/, 0x92800000u /*movn*/};
     for (uint32_t word : garbage) {
         if (word == 0x92800000u) {
@@ -414,6 +414,13 @@ void testFaults() {
         }
         CHECK_EQ(0u, cpu.pc());
     }
+
+    // SVC is now a real guest exception: it enters the lower-EL AArch64
+    // vector and records the architectural syndrome instead of host-failing.
+    cpu.reset(0);
+    CHECK(runOne(cpu, big, 0xD4000001u) == Fault::None); // SVC #0
+    CHECK_EQ(0x400u, cpu.pc());
+    CHECK_EQ(0x56000000u, cpu.esrEl1()); // EC=0x15, IL=1, imm16=0
 
     // Faulting execute() leaves state untouched.
     cpu.reset(0);

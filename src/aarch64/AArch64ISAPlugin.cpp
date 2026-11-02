@@ -39,6 +39,19 @@ uint64_t getU64LE(const uint8_t* in) {
     return value;
 }
 
+bool validV2Pstate(uint32_t value) {
+    constexpr uint32_t supported = 0xF0000000u | kPstateDAIF | kPstateModeMask;
+    const uint32_t mode = value & kPstateModeMask;
+    return (value & ~supported) == 0 &&
+           (mode == 0u || mode == 4u || mode == 5u);
+}
+
+bool validV2Spsr(uint32_t value) {
+    constexpr uint32_t supported = 0xF0000000u | kPstateDAIF |
+                                   (1u << 20) | kPstateModeMask;
+    return (value & ~supported) == 0;
+}
+
 ia64::ISAExecutionResult faultToResult(Fault fault) {
     // Every AARCH64-1 fault is reported deterministically as an exception;
     // unsupported instructions are never silently skipped.
@@ -67,33 +80,110 @@ void AArch64State::serialize(uint8_t* buffer) const {
     for (unsigned i = 0; i < 31; ++i, offset += 8) {
         putU64LE(buffer + offset, x_[i]);
     }
-    putU64LE(buffer + offset, sp_);
+    putU64LE(buffer + offset, spEl0_);
+    offset += 8;
+    putU64LE(buffer + offset, spEl1_);
     offset += 8;
     putU64LE(buffer + offset, pc_);
     offset += 8;
     putU32LE(buffer + offset, pstate_);
-    putU32LE(buffer + offset + 4, 0u); // reserved, must be zero
+    offset += 4;
+    putU64LE(buffer + offset, elrEl1_);
+    offset += 8;
+    putU32LE(buffer + offset, spsrEl1_);
+    offset += 4;
+    putU64LE(buffer + offset, vbarEl1_);
+    offset += 8;
+    putU32LE(buffer + offset, esrEl1_);
+    offset += 4;
+    putU64LE(buffer + offset, farEl1_);
+    offset += 8;
+    putU32LE(buffer + offset, 0u); // reserved, must be zero
 }
 
 void AArch64State::deserialize(const uint8_t* buffer) {
     if (getU32LE(buffer + 0) != kStateMagic) {
         throw std::invalid_argument("AArch64State: bad magic");
     }
-    if (getU32LE(buffer + 4) != kStateVersion) {
+    const uint32_t version = getU32LE(buffer + 4);
+    if (version != 1u && version != kStateVersion) {
         throw std::invalid_argument("AArch64State: unsupported version");
     }
-    if (getU32LE(buffer + kSerializedStateSize - 4) != 0) {
-        throw std::invalid_argument("AArch64State: reserved state word must be zero");
-    }
+
+    // Parse into locals and validate before changing this snapshot. The
+    // plugin validates the supplied vector length before calling here.
+    uint64_t x[31] = {};
     size_t offset = 8;
     for (unsigned i = 0; i < 31; ++i, offset += 8) {
-        x_[i] = getU64LE(buffer + offset);
+        x[i] = getU64LE(buffer + offset);
     }
-    sp_ = getU64LE(buffer + offset);
-    offset += 8;
-    pc_ = getU64LE(buffer + offset);
-    offset += 8;
-    pstate_ = getU32LE(buffer + offset);
+    uint64_t sp0 = 0;
+    uint64_t sp1 = 0;
+    uint64_t pc = 0;
+    uint32_t pstate = 0;
+    uint64_t elr = 0;
+    uint32_t spsr = 0;
+    uint64_t vbar = 0;
+    uint32_t esr = 0;
+    uint64_t far = 0;
+    if (version == 1u) {
+        const uint64_t legacySp = getU64LE(buffer + offset);
+        offset += 8;
+        pc = getU64LE(buffer + offset);
+        offset += 8;
+        const uint32_t legacyPstate = getU32LE(buffer + offset);
+        offset += 4;
+        if (getU32LE(buffer + offset) != 0u) {
+            throw std::invalid_argument("AArch64State: v1 reserved word must be zero");
+        }
+        // A v1 snapshot had no exception level or SP bank. Restore it to the
+        // documented compatible EL0 profile, mapping its SP to SP_EL0 and
+        // retaining only the NZCV fields that v1 architecturally modeled.
+        sp0 = legacySp;
+        pstate = legacyPstate & 0xF0000000u;
+    } else {
+        sp0 = getU64LE(buffer + offset);
+        offset += 8;
+        sp1 = getU64LE(buffer + offset);
+        offset += 8;
+        pc = getU64LE(buffer + offset);
+        offset += 8;
+        pstate = getU32LE(buffer + offset);
+        offset += 4;
+        elr = getU64LE(buffer + offset);
+        offset += 8;
+        spsr = getU32LE(buffer + offset);
+        offset += 4;
+        vbar = getU64LE(buffer + offset);
+        offset += 8;
+        esr = getU32LE(buffer + offset);
+        offset += 4;
+        far = getU64LE(buffer + offset);
+        offset += 8;
+        if (getU32LE(buffer + offset) != 0u) {
+            throw std::invalid_argument("AArch64State: v2 reserved word must be zero");
+        }
+        if (!validV2Pstate(pstate)) {
+            throw std::invalid_argument("AArch64State: invalid v2 PSTATE mode or reserved bits");
+        }
+        if (!validV2Spsr(spsr)) {
+            throw std::invalid_argument("AArch64State: SPSR_EL1 contains unsupported/reserved fields");
+        }
+        if ((vbar & 0x7FFu) != 0) {
+            throw std::invalid_argument("AArch64State: VBAR_EL1 must be 2 KiB aligned");
+        }
+    }
+
+    for (unsigned i = 0; i < 31; ++i) x_[i] = x[i];
+    spEl0_ = sp0;
+    spEl1_ = sp1;
+    pc_ = pc;
+    pstate_ = pstate;
+    elrEl1_ = elr;
+    spsrEl1_ = spsr;
+    vbarEl1_ = vbar;
+    esrEl1_ = esr;
+    farEl1_ = far;
 }
 
 std::string AArch64State::toString() const {
@@ -110,18 +200,35 @@ void AArch64State::capture(const Cpu& cpu) {
     for (unsigned i = 0; i < 31; ++i) {
         x_[i] = cpu.readX(i);
     }
-    sp_ = cpu.sp();
+    spEl0_ = cpu.spEl0();
+    spEl1_ = cpu.spEl1();
     pc_ = cpu.pc();
     pstate_ = cpu.pstate();
+    elrEl1_ = cpu.elrEl1();
+    spsrEl1_ = cpu.spsrEl1();
+    vbarEl1_ = cpu.vbarEl1();
+    esrEl1_ = cpu.esrEl1();
+    farEl1_ = cpu.farEl1();
 }
 
 void AArch64State::applyTo(Cpu& cpu) const {
     for (unsigned i = 0; i < 31; ++i) {
         cpu.writeX(i, x_[i]);
     }
-    cpu.setSp(sp_);
+    cpu.setSpEl0(spEl0_);
+    cpu.setSpEl1(spEl1_);
     cpu.setPc(pc_);
     cpu.setPstate(pstate_);
+    cpu.setElrEl1(elrEl1_);
+    cpu.setSpsrEl1(spsrEl1_);
+    cpu.setVbarEl1(vbarEl1_);
+    cpu.setEsrEl1(esrEl1_);
+    cpu.setFarEl1(farEl1_);
+}
+
+uint64_t AArch64State::sp() const {
+    const uint32_t mode = pstate_ & kPstateModeMask;
+    return (mode == 5u) ? spEl1_ : spEl0_;
 }
 
 uint64_t AArch64State::x(unsigned index) const {
@@ -131,13 +238,13 @@ uint64_t AArch64State::x(unsigned index) const {
     return x_[index];
 }
 
-AArch64ISAPlugin::AArch64ISAPlugin(uint64_t entryPoint)
-    : cpu_(entryPoint), entryPoint_(entryPoint) {
+AArch64ISAPlugin::AArch64ISAPlugin(uint64_t entryPoint, ExceptionLevel entryLevel)
+    : cpu_(entryPoint, entryLevel), entryPoint_(entryPoint), entryLevel_(entryLevel) {
     state_.capture(cpu_);
 }
 
 void AArch64ISAPlugin::reset() {
-    cpu_.reset(entryPoint_);
+    cpu_.reset(entryPoint_, entryLevel_);
     state_.capture(cpu_);
 }
 
@@ -207,7 +314,7 @@ std::vector<uint8_t> AArch64ISAPlugin::serialize_state() const {
 }
 
 bool AArch64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
-    if (data.size() != kSerializedStateSize) {
+    if (data.size() != kSerializedStateSize && data.size() != kSerializedStateV1Size) {
         return false;
     }
     AArch64State snapshot;
@@ -256,11 +363,14 @@ bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
             feature == "STR_POST" || feature == "AND_IMM" || feature == "ORR_IMM" ||
             feature == "EOR_IMM" || feature == "ANDS_IMM" || feature == "TST_IMM" ||
             feature == "MOV_BITMASK" || feature == "CSEL" || feature == "CSINC" ||
-            feature == "CSET" || feature == "CINC";
+            feature == "CSET" || feature == "CINC" || feature == "MRS" ||
+            feature == "MSR" || feature == "SVC" || feature == "BRK" ||
+            feature == "ERET" || feature == "EL0_EL1" || feature == "SP_BANKING";
 }
 
-std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint) {
-    return std::make_unique<AArch64ISAPlugin>(entryPoint);
+std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint,
+                                             ExceptionLevel entryLevel) {
+    return std::make_unique<AArch64ISAPlugin>(entryPoint, entryLevel);
 }
 
 namespace {

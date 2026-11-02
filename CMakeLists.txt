@@ -686,6 +686,7 @@ add_test(NAME AArch64FoundationTests COMMAND test_aarch64_foundation)
 add_test(NAME AArch64MemoryBranchTests COMMAND test_aarch64_memory_branch)
 add_test(NAME AArch64PcStackTests COMMAND test_aarch64_pc_stack)
 add_test(NAME AArch64CompilerStackTests COMMAND test_aarch64_compiler_stack)
+add_test(NAME AArch64ExceptionLevelTests COMMAND test_aarch64_exception_levels)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -815,4 +816,26 @@ if(MSVC)
     target_compile_options(test_aarch64_compiler_stack PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_compiler_stack PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# ---------------------------------------------------------------------------
+# AArch64 Phase AARCH64-5 EL0/EL1 exception-level and system-register tests.
+# Exercises the production CPU/plugin path, guest vectors, banked stacks,
+# exception returns and versioned architectural-state serialization.
+# ---------------------------------------------------------------------------
+add_executable(test_aarch64_exception_levels
+    tests/test_aarch64_exception_levels.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_aarch64_exception_levels PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_aarch64_exception_levels PRIVATE /W4)
+else()
+    target_compile_options(test_aarch64_exception_levels PRIVATE -Wall -Wextra -Wpedantic)
 endif()

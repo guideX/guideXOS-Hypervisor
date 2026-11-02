@@ -28,12 +28,15 @@ namespace aarch64 {
 // Canonical architecture name used for registry integration.
 inline constexpr const char* kArchName = "AArch64";
 
-// Fixed serialization layout (all fields little-endian):
+// Version-1 serialization layout (all fields little-endian):
 //   magic[4] = {'A','6','4','1'}, version u32 = 1,
 //   X0..X30 (31 x u64), SP u64, PC u64, PSTATE u32, reserved u32.
-inline constexpr std::size_t kSerializedStateSize = 4 + 4 + 31 * 8 + 8 + 8 + 4 + 4;
+// Version 2 adds SP_EL0, SP_EL1, ELR_EL1, SPSR_EL1, VBAR_EL1, ESR_EL1 and
+// FAR_EL1, replacing the single legacy SP with both banks.
+inline constexpr std::size_t kSerializedStateV1Size = 4 + 4 + 31 * 8 + 8 + 8 + 4 + 4;
+inline constexpr std::size_t kSerializedStateSize = 320;
 inline constexpr uint32_t kStateMagic = 0x41363431u; // "A641"
-inline constexpr uint32_t kStateVersion = 1u;
+inline constexpr uint32_t kStateVersion = 2u;
 
 // ISAState implementation holding an AArch64 architectural snapshot.
 class AArch64State : public ia64::ISAState {
@@ -53,25 +56,39 @@ public:
     void applyTo(Cpu& cpu) const;
 
     uint64_t x(unsigned index) const;
-    uint64_t sp() const { return sp_; }
+    uint64_t sp() const;
     uint64_t pc() const { return pc_; }
     uint32_t pstate() const { return pstate_; }
+    uint64_t spEl0() const { return spEl0_; }
+    uint64_t spEl1() const { return spEl1_; }
+    uint64_t elrEl1() const { return elrEl1_; }
+    uint32_t spsrEl1() const { return spsrEl1_; }
+    uint64_t vbarEl1() const { return vbarEl1_; }
+    uint32_t esrEl1() const { return esrEl1_; }
+    uint64_t farEl1() const { return farEl1_; }
 
 private:
     uint64_t x_[31] = {};
-    uint64_t sp_ = 0;
+    uint64_t spEl0_ = 0;
+    uint64_t spEl1_ = 0;
     uint64_t pc_ = 0;
     uint32_t pstate_ = 0;
+    uint64_t elrEl1_ = 0;
+    uint32_t spsrEl1_ = 0;
+    uint64_t vbarEl1_ = 0;
+    uint32_t esrEl1_ = 0;
+    uint64_t farEl1_ = 0;
 };
 
 // IISA implementation backed by aarch64::Cpu.
 class AArch64ISAPlugin : public ia64::IISA {
 public:
-    explicit AArch64ISAPlugin(uint64_t entryPoint = 0);
+    explicit AArch64ISAPlugin(uint64_t entryPoint = 0,
+                              ExceptionLevel entryLevel = ExceptionLevel::EL0);
 
     // -- identity ------------------------------------------------------
     std::string getName() const override { return kArchName; }
-    std::string getVersion() const override { return "AARCH64-4 (ARMv8-A A64 subset)"; }
+    std::string getVersion() const override { return "AARCH64-5 (ARMv8-A A64 subset)"; }
     void reset() override;
 
     // -- decode / execute -----------------------------------------------
@@ -109,10 +126,13 @@ private:
     AArch64State state_;
     Decoded lastDecoded_;
     uint64_t entryPoint_;
+    ExceptionLevel entryLevel_;
 };
 
 // Create an AArch64 ISA instance. No IA-64 firmware, decoder or CPU state is
 // required; entryPoint selects the initial PC (reset/entry profile).
-std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint = 0);
+std::unique_ptr<ia64::IISA> createAArch64ISA(
+    uint64_t entryPoint = 0,
+    ExceptionLevel entryLevel = ExceptionLevel::EL0);
 
 } // namespace aarch64

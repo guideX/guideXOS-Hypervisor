@@ -1052,12 +1052,11 @@ void testPluginAndSerialization() {
         CHECK_EQ(0x8008u, a64->pc());
     }
 
-    // Serialization round-trip mid-program; layout stays 280-byte v1.
+    // Serialization round-trip mid-program; the current format is v2.
     cpu->writeX(9, 0x13579BDF02468ACEull);
     cpu->setSp(0x8000);
     cpu->setNzcv(true, false, true, false);
     std::vector<uint8_t> blob = plugin->serialize_state();
-    CHECK_EQ(280u, blob.size());
     CHECK_EQ(kSerializedStateSize, blob.size());
     auto restored = createAArch64ISA(0);
     CHECK(restored->deserialize_state(blob));
@@ -1069,7 +1068,7 @@ void testPluginAndSerialization() {
     CHECK_EQ(cpu->pstate(), rcpu->pstate());
 
     // An AARCH64-1/AARCH64-2-compatible hand-built v1 blob still loads.
-    std::vector<uint8_t> v1(kSerializedStateSize, 0);
+    std::vector<uint8_t> v1(kSerializedStateV1Size, 0);
     v1[0] = 0x31;
     v1[1] = 0x34;
     v1[2] = 0x36;
@@ -1103,7 +1102,7 @@ void testPluginAndSerialization() {
         badMagic[0] = 0x00;
         CHECK(!restored->deserialize_state(badMagic));
         std::vector<uint8_t> badVersion = blob;
-        badVersion[4] = 2;
+        badVersion[4] = 3;
         CHECK(!restored->deserialize_state(badVersion));
         CHECK(!restored->deserialize_state(std::vector<uint8_t>(100, 0)));
         CHECK(!restored->deserialize_state(std::vector<uint8_t>(281, 0)));

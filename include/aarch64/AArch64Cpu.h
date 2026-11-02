@@ -1,12 +1,11 @@
 #pragma once
 
 // AArch64 (ARMv8-A, A64 instruction set) CPU architectural state,
-// instruction fetch/decode and execution for guideXOS Hypervisor
-// Phases AARCH64-1 and AARCH64-2.
+// instruction fetch/decode and execution for guideXOS Hypervisor.
 //
 // SCOPE (Phase AARCH64-1):
-//   - General-purpose registers X0-X30 plus a DISTINCT stack pointer (SP),
-//     program counter (PC) and PSTATE with NZCV in bits [31:28].
+//   - General-purpose registers X0-X30, banked SP_EL0/SP_EL1, PC and a
+//     modeled EL0/EL1 PSTATE including NZCV, DAIF, EL and SPSel.
 //   - Register 31 is context-sensitive (SP vs XZR/WZR) and is NEVER modelled
 //     as one ordinary register.
 //   - A64 fixed 32-bit little-endian fetch, deterministic reset/entry profile,
@@ -28,7 +27,9 @@
 //     with the ARM DecodeBitMasks algorithm and reserved-encoding rejection.
 //   - CSEL/CSINC conditional selection (and the CSET/CINC aliases).
 //   - A three-level nested compiler-style call chain (stp/ldp frames).
-// OUT OF SCOPE: MMU, GIC, EL1 exception model, timers, PL011, virtio, SMP,
+// SCOPE (Phase AARCH64-5, additive): EL0/EL1 synchronous exceptions, selected
+//   system registers, SVC/BRK, VBAR_EL1 vector dispatch and ERET.
+// OUT OF SCOPE: MMU, GIC interrupts, timers, PL011, virtio, SMP,
 //   JIT, SIMD/FP, and the rest of the A64 ISA (see docs/aarch64/).
 //
 // AARCH64-2 memory profile (explicit and bounded):
@@ -80,6 +81,16 @@ inline constexpr uint32_t kPstateN = 1u << 31;
 inline constexpr uint32_t kPstateZ = 1u << 30;
 inline constexpr uint32_t kPstateC = 1u << 29;
 inline constexpr uint32_t kPstateV = 1u << 28;
+inline constexpr uint32_t kPstateD = 1u << 9;
+inline constexpr uint32_t kPstateA = 1u << 8;
+inline constexpr uint32_t kPstateI = 1u << 7;
+inline constexpr uint32_t kPstateF = 1u << 6;
+inline constexpr uint32_t kPstateDAIF = kPstateD | kPstateA | kPstateI | kPstateF;
+inline constexpr uint32_t kPstateSpsel = 1u;
+inline constexpr uint32_t kPstateElMask = 3u << 2;
+inline constexpr uint32_t kPstateModeMask = 0x1Fu;
+
+enum class ExceptionLevel : uint8_t { EL0 = 0, EL1 = 1 };
 
 // Canonical NOP encoding (HINT #0): 1101010100 0000011001 000000 11111 11111.
 inline constexpr uint32_t kNopEncoding = 0xD503201Fu;
@@ -96,7 +107,7 @@ enum class Fault {
     MemoryFault,         // guest data access failed or its address range wrapped
 };
 
-// Phase AARCH64-1 + AARCH64-2 + AARCH64-3 + AARCH64-4 operation set.
+// Implemented A64 operation set.
 enum class Op {
     Invalid = 0,
     Nop,
@@ -132,6 +143,12 @@ enum class Op {
     AndsImm,  // ANDS (immediate): bitmask immediate (TST alias when Rd==31)
     Csel,     // CSEL: conditional select
     Csinc,    // CSINC: conditional select increment (CINC/CSET aliases)
+    Mrs,      // MRS Xt, system register
+    Msr,      // MSR system register, Xt
+    MsrPstateImm, // MSR SPSel/DAIFSet/DAIFClr, #imm
+    Svc,      // SVC #imm16: synchronous exception to EL1
+    Brk,      // BRK #imm16: breakpoint instruction exception
+    Eret,     // ERET: restore PSTATE from SPSR_EL1 and PC from ELR_EL1
 };
 
 // Result of decoding one 32-bit A64 instruction word.
@@ -170,6 +187,11 @@ struct Decoded {
                                // ADR/ADRP/LDR-literal only; branches use
                                // branchOffset, LDR/STR-imm use memOffset.
     uint8_t cond = 0;          // B.cond 4-bit condition code (bits [3:0])
+    uint8_t sysOp0 = 0;        // System-register encoding fields
+    uint8_t sysOp1 = 0;
+    uint8_t sysCrn = 0;
+    uint8_t sysCrm = 0;
+    uint8_t sysOp2 = 0;
     uint64_t address = 0;      // address the word was fetched from
     uint32_t word = 0;         // raw instruction word
     Fault fault = Fault::None;
@@ -187,15 +209,20 @@ struct RunOutcome {
 
 // AArch64 CPU architectural state + fetch/decode/execute.
 //
-// Reset/entry convention (initial emulator profile, NOT a claim about all
-// physical ARM reset configurations): reset(entry) zeroes X0-X30, SP, NZCV
-// and the rest of PSTATE, and sets PC = entry (default 0).
+// Reset/entry convention (deterministic emulator profile, NOT the physical
+// Arm reset architecture): reset(entry) enters EL0 using SP_EL0 by default.
+// Tests/embedders may explicitly select EL0 or EL1 at reset. EL1 entry uses
+// EL1h/SP_EL1. A real guest may transition levels only through ERET.
 class Cpu {
 public:
-    explicit Cpu(uint64_t entryPoint = 0) { reset(entryPoint); }
+    explicit Cpu(uint64_t entryPoint = 0,
+                 ExceptionLevel initialLevel = ExceptionLevel::EL0) {
+        reset(entryPoint, initialLevel);
+    }
 
     // -- reset ------------------------------------------------------------
-    void reset(uint64_t entryPoint = 0);
+    void reset(uint64_t entryPoint = 0,
+               ExceptionLevel initialLevel = ExceptionLevel::EL0);
 
     // -- X registers ------------------------------------------------------
     // Only indices 0..30 are addressable here; index 31 is rejected because
@@ -212,12 +239,33 @@ public:
     void writeReg31(bool is64, bool withZero, uint64_t value);
 
     // -- SP / PC / PSTATE --------------------------------------------------
-    uint64_t sp() const { return sp_; }
-    void setSp(uint64_t value) { sp_ = value; }
+    uint64_t sp() const;
+    void setSp(uint64_t value);
+    uint64_t spEl0() const { return spEl0_; }
+    uint64_t spEl1() const { return spEl1_; }
+    void setSpEl0(uint64_t value) { spEl0_ = value; }
+    void setSpEl1(uint64_t value) { spEl1_ = value; }
     uint64_t pc() const { return pc_; }
     void setPc(uint64_t value) { pc_ = value; }
     uint32_t pstate() const { return pstate_; }
     void setPstate(uint32_t value) { pstate_ = value; }
+    ExceptionLevel exceptionLevel() const {
+        return static_cast<ExceptionLevel>((pstate_ & kPstateElMask) >> 2);
+    }
+    bool usesSpEl0() const {
+        return exceptionLevel() == ExceptionLevel::EL0 ||
+               (pstate_ & kPstateSpsel) == 0;
+    }
+    uint64_t elrEl1() const { return elrEl1_; }
+    void setElrEl1(uint64_t value) { elrEl1_ = value; }
+    uint32_t spsrEl1() const { return spsrEl1_; }
+    void setSpsrEl1(uint32_t value) { spsrEl1_ = value; }
+    uint64_t vbarEl1() const { return vbarEl1_; }
+    void setVbarEl1(uint64_t value) { vbarEl1_ = value & ~uint64_t{0x7FF}; }
+    uint32_t esrEl1() const { return esrEl1_; }
+    void setEsrEl1(uint32_t value) { esrEl1_ = value; }
+    uint64_t farEl1() const { return farEl1_; }
+    void setFarEl1(uint64_t value) { farEl1_ = value; }
     bool flagN() const { return (pstate_ & kPstateN) != 0; }
     bool flagZ() const { return (pstate_ & kPstateZ) != 0; }
     bool flagC() const { return (pstate_ & kPstateC) != 0; }
@@ -253,10 +301,24 @@ public:
     std::string dumpState() const;
 
 private:
+    Fault executeSystemRegister(const Decoded& decoded);
+    Fault executePstateImmediate(const Decoded& decoded);
+    void takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
+                                  uint64_t preferredReturnAddress);
+    Fault executeEret(const Decoded& decoded);
+    uint64_t& activeSpRef();
+    const uint64_t& activeSpRef() const;
+
     uint64_t x_[31] = {}; // X0..X30. There is deliberately no x_[31].
-    uint64_t sp_ = 0;     // Stack pointer (register 31 in SP contexts).
+    uint64_t spEl0_ = 0;
+    uint64_t spEl1_ = 0;
     uint64_t pc_ = 0;     // Program counter (byte address, 4-aligned).
-    uint32_t pstate_ = 0; // NZCV in bits [31:28]; rest reserved-zero in phase 1.
+    uint32_t pstate_ = 0; // NZCV, DAIF, EL and SPSel; unsupported fields RES0.
+    uint64_t elrEl1_ = 0;
+    uint32_t spsrEl1_ = 0;
+    uint64_t vbarEl1_ = 0;
+    uint32_t esrEl1_ = 0;
+    uint64_t farEl1_ = 0;
     Fault lastFault_ = Fault::None;
     std::string lastError_;
 };

@@ -1180,7 +1180,7 @@ void testIntegratedLogicConditionalProgram() {
 void testPluginAndSerialization() {
     AArch64ISAPlugin plugin(0);
     FlatMemory memory(0x1000);
-    CHECK(plugin.getVersion().find("AARCH64-4") != std::string::npos);
+    CHECK(plugin.getVersion().find("AARCH64-5") != std::string::npos);
     for (const char* feature : {"STP", "LDP", "LDUR", "STUR", "LDR_PRE", "STR_POST",
                                 "AND_IMM", "ORR_IMM", "EOR_IMM", "ANDS_IMM", "TST_IMM",
                                 "MOV_BITMASK", "CSEL", "CSINC", "CSET", "CINC"}) {
@@ -1196,7 +1196,7 @@ void testPluginAndSerialization() {
     CHECK(plugin.execute(memory, decoded) == ia64::ISAExecutionResult::CONTINUE);
     CHECK_EQ(0xFF, plugin.cpu().readX(0));
     CHECK(plugin.disassemble(memory, 0).find("mov x0") == 0);
-    CHECK_EQ(280, plugin.serialize_state().size());
+    CHECK_EQ(kSerializedStateSize, plugin.serialize_state().size());
     auto* state = dynamic_cast<AArch64State*>(&plugin.getState());
     CHECK(state != nullptr);
     if (state != nullptr) {
@@ -1246,7 +1246,7 @@ void testPluginAndSerialization() {
     CHECK_EQ(0xFF, pipeline.cpu().readX(11));
     CHECK_EQ(0x10, pipeline.cpu().readX(12));
     CHECK_EQ(40, pipeline.cpu().pc());
-    CHECK_EQ(280, pipeline.serialize_state().size());
+    CHECK_EQ(kSerializedStateSize, pipeline.serialize_state().size());
 
     // Restore a hand-built previous-version v1 blob; reject corruption without
     // partially mutating live architectural state.
@@ -1289,7 +1289,7 @@ void testPluginAndSerialization() {
     CHECK(other.step(otherMemory) == ia64::ISAExecutionResult::CONTINUE);
     CHECK_EQ(0xA, plugin.cpu().readX(0));
     CHECK_EQ(0xB, other.cpu().readX(0));
-    CHECK_EQ(280, other.serialize_state().size());
+    CHECK_EQ(kSerializedStateSize, other.serialize_state().size());
 }
 
 } // namespace
