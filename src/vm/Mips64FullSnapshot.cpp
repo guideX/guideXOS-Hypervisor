@@ -83,10 +83,14 @@ bool computeLengths(const Mips64FullVmSnapshot& snapshot,
 
     // FPGA: version, endian/config bytes, LED, display, BRKRES, mailbox.
     deviceLength = 26;
-    // UART v3: v2 state plus the VM clock and armed/pending timeout deadline.
-    if (!addLength(deviceLength, 58) ||
-        !addLength(deviceLength, static_cast<uint64_t>(snapshot.uart.receiveFifo.size())) ||
-        !addLength(deviceLength, static_cast<uint64_t>(snapshot.uart.pendingHostInput.size()))) return false;
+    // UART v4: v3 state plus 3-byte FIFO/staging records carrying data,
+    // PE/FE/BI metadata, and the LSR acknowledgment state.
+    const uint64_t fifoCount = static_cast<uint64_t>(snapshot.uart.receiveFifo.size());
+    const uint64_t pendingCount = static_cast<uint64_t>(snapshot.uart.pendingHostInput.size());
+    if (fifoCount > std::numeric_limits<uint64_t>::max() / 3 ||
+        pendingCount > std::numeric_limits<uint64_t>::max() / 3 ||
+        !addLength(deviceLength, 58) || !addLength(deviceLength, fifoCount * 3) ||
+        !addLength(deviceLength, pendingCount * 3)) return false;
     // Direct IRQ route: CPU target, hardware line, Cause.IP index, level.
     if (!addLength(deviceLength, 7)) return false;
     // Console capacity, occupancy, bytes, sequence, generation, reset pending.
@@ -123,6 +127,16 @@ void hashPhysicalRegion(CanonicalHash& hash, const PhysicalRegionSnapshot& regio
     for (const auto& entry : region.sparseBytes) {
         hash.u64(entry.first);
         hash.byte(entry.second);
+    }
+}
+
+void hashReceiveCharacters(CanonicalHash& hash,
+                           const std::vector<Ns16550RxCharacter>& characters) noexcept {
+    hash.u64(static_cast<uint64_t>(characters.size()));
+    for (const Ns16550RxCharacter& character : characters) {
+        hash.byte(character.data);
+        hash.byte(character.errorFlags);
+        hash.boolean(character.errorStatusAcknowledged);
     }
 }
 
@@ -195,8 +209,8 @@ uint64_t calculateChecksum(const Mips64FullVmSnapshot& snapshot) noexcept {
     hash.boolean(snapshot.uart.fifoEnabled);
     hash.byte(snapshot.uart.receiveTriggerLevel);
     hash.boolean(snapshot.uart.receiveOverrun);
-    hash.bytes(snapshot.uart.receiveFifo);
-    hash.bytes(snapshot.uart.pendingHostInput);
+    hashReceiveCharacters(hash, snapshot.uart.receiveFifo);
+    hashReceiveCharacters(hash, snapshot.uart.pendingHostInput);
     hash.u64(snapshot.uart.virtualTimeCycle);
     hash.u64(snapshot.uart.receiveTimeoutDeadlineCycle);
     hash.boolean(snapshot.uart.receiveTimeoutArmed);

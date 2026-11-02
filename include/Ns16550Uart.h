@@ -56,9 +56,26 @@ struct Ns16550Mapping {
     static Ns16550Mapping MaltaOriented() { return {}; }
 };
 
-// Deterministic NS16550 subset with a 16-byte receive FIFO, bounded host
-// input staging, and virtual-time RX character timeout. Register
-// reads/writes are always one byte.
+// Host/device-side receiver input. errorFlags uses the NS16550 LSR PE/FE/BI
+// bit positions; a break indication is normalized to a received NUL byte.
+struct Ns16550RxInput {
+    uint8_t data = 0;
+    uint8_t errorFlags = 0;
+    static constexpr Ns16550RxInput BreakEvent() noexcept { return {0, 0x10}; }
+};
+
+// Snapshot-visible FIFO record. The acknowledgment bit records an LSR read
+// independently of RBR consumption so restore preserves the exact head state.
+struct Ns16550RxCharacter {
+    uint8_t data = 0;
+    uint8_t errorFlags = 0;
+    bool errorStatusAcknowledged = false;
+    friend bool operator==(const Ns16550RxCharacter&, const Ns16550RxCharacter&) = default;
+};
+
+// Deterministic NS16550 subset with a 16-byte receive FIFO, per-character
+// receiver error status, bounded host input staging, and virtual-time RX
+// character timeout. Register reads/writes are always one byte.
 class Ns16550Uart final : public IMmioDevice, public IVirtualTimeDevice {
 public:
     using IMmioDevice::CommitRestore;
@@ -66,13 +83,18 @@ public:
 
     static constexpr size_t kReceiveFifoCapacity = 16;
     static constexpr size_t kHostInputCapacity = 256;
+    static constexpr uint8_t kLsrParityError = 0x04;
+    static constexpr uint8_t kLsrFramingError = 0x08;
+    static constexpr uint8_t kLsrBreakIndication = 0x10;
+    static constexpr uint8_t kReceiveErrorMask =
+        kLsrParityError | kLsrFramingError | kLsrBreakIndication;
     static constexpr uint64_t kVirtualTimeUnitsPerSecond = 1'000'000;
     // Malta's QEMU serial_mm_init profile supplies baudbase=230400, which is
     // UART input clock / 16 for the 16550 baud generator.
     static constexpr uint64_t kMaltaUartReferenceClockHz = 3'686'400;
 
     struct Snapshot {
-        uint32_t version = 3;
+        uint32_t version = 4;
         uint8_t ier = 0;
         uint8_t fcrLastWrite = 0;
         uint8_t lcr = 0;
@@ -86,8 +108,8 @@ public:
         bool fifoEnabled = false;
         uint8_t receiveTriggerLevel = 1;
         bool receiveOverrun = false;
-        std::vector<uint8_t> receiveFifo;
-        std::vector<uint8_t> pendingHostInput;
+        std::vector<Ns16550RxCharacter> receiveFifo;
+        std::vector<Ns16550RxCharacter> pendingHostInput;
         uint64_t virtualTimeCycle = 0;
         uint64_t receiveTimeoutDeadlineCycle = 0;
         bool receiveTimeoutArmed = false;
@@ -95,8 +117,8 @@ public:
     };
 
     struct PreparedRestore {
-        std::vector<uint8_t> receiveFifo;
-        std::vector<uint8_t> pendingHostInput;
+        std::vector<Ns16550RxCharacter> receiveFifo;
+        std::vector<Ns16550RxCharacter> pendingHostInput;
     };
 
     explicit Ns16550Uart(std::shared_ptr<GuestConsoleSink> sink,
@@ -117,6 +139,16 @@ public:
     bool EnqueueHostInput(const std::vector<uint8_t>& bytes) {
         return EnqueueHostInput(bytes.data(), bytes.size());
     }
+    // Explicit, bounded receiver-status injection; ordinary host bytes remain
+    // accepted through the byte-only overload above.
+    bool EnqueueHostInput(const Ns16550RxInput* characters, size_t size);
+    bool EnqueueHostInput(const std::vector<Ns16550RxInput>& characters) {
+        return EnqueueHostInput(characters.data(), characters.size());
+    }
+    // Device-boundary arrival for tests/devices that model one completed UART
+    // character at a time. A full receiver FIFO rejects the new character and
+    // latches OE without modifying buffered data.
+    bool InjectReceivedCharacter(Ns16550RxInput character) noexcept;
     size_t AdvanceHostInput() noexcept;
     size_t ReceiveFifoSize() const noexcept { return receiveFifo_.size(); }
     size_t PendingHostInputSize() const noexcept { return pendingHostInput_.size(); }
@@ -152,8 +184,8 @@ private:
     bool fifoEnabled_ = false;
     uint8_t receiveTriggerLevel_ = 1;
     mutable bool receiveOverrun_ = false;
-    mutable std::vector<uint8_t> receiveFifo_;
-    std::vector<uint8_t> pendingHostInput_;
+    mutable std::vector<Ns16550RxCharacter> receiveFifo_;
+    std::vector<Ns16550RxCharacter> pendingHostInput_;
     mutable uint64_t virtualTimeCycle_ = 0;
     mutable uint64_t receiveTimeoutDeadlineCycle_ = 0;
     mutable bool receiveTimeoutArmed_ = false;
@@ -162,6 +194,9 @@ private:
     size_t ReceiveCapacity() const noexcept;
     bool ReceiveInterruptPending() const noexcept;
     bool ReceiveTimeoutInterruptPending() const noexcept;
+    uint8_t HeadReceiveErrors() const noexcept;
+    bool ReceiveFifoHasUnacknowledgedErrors() const noexcept;
+    bool ReceiverLineStatusPending() const noexcept;
     uint8_t InterruptIdentification() const noexcept;
     void ResetReceiveFifo() noexcept;
     void RecordReceiveActivity() const noexcept;

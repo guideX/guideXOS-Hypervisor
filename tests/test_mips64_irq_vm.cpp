@@ -79,7 +79,8 @@ GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
                           uint32_t initialStatus, uint32_t releaseStatus,
                           bool waitForRelease, bool enableIerOnRelease,
                           uint32_t compareValue, uint8_t fcrValue = 1,
-                          uint8_t expectedRxIirId = 4) {
+                          uint8_t expectedRxIirId = 4,
+                          bool recordLineStatus = false) {
     constexpr uint8_t t0 = 8, t1 = 9, t2 = 10;
     std::vector<uint32_t> boot;
     boot.push_back(encI(0x0F, 0, t0, 0xBF00)); // CKSEG1 UART base.
@@ -127,8 +128,8 @@ GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
         if (enableIerOnRelease) {
             payload.push_back(encI(0x0F, 0, t0, 0xBF00));
             payload.push_back(encI(0x0D, t0, t0, 0x0900));
-            payload.push_back(encI(0x09, 0, t1, 1));
-            payload.push_back(encI(0x28, t0, t1, 8)); // guest enables IER.RDI.
+            payload.push_back(encI(0x09, 0, t1, recordLineStatus ? 5 : 1));
+            payload.push_back(encI(0x28, t0, t1, 8)); // guest enables requested RX sources.
         }
         payload.push_back(encI(0x0D, 0, t2, static_cast<uint16_t>(releaseStatus)));
         payload.push_back(encCp0(4, t2, 12)); // guest unmasks/IE enables.
@@ -153,7 +154,7 @@ GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
     const size_t noTimerBranch = handler.size();
     handler.push_back(0);
     handler.push_back(0);
-    handler.push_back(encI(0x09, 0, t5, 2000));
+    handler.push_back(encI(0x09, 0, t5, recordLineStatus ? 60000 : 2000));
     handler.push_back(encCp0(4, t5, 11)); // Compare acknowledges timer only.
     const size_t afterTimer = handler.size();
     patchBranch(handler, noTimerBranch, afterTimer, 0x04, t4, 0);
@@ -162,27 +163,34 @@ GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
     handler.push_back(encI(0x24, t0, t3, 16)); // lbu IIR.
     handler.push_back(encI(0x28, 19, t3, 0x208)); // save IIR.
     handler.push_back(encI(0x0C, t3, t4, 0x0E)); // isolate IIR source id.
-    handler.push_back(encI(0x09, 0, t5, expectedRxIirId));
-    const size_t noRxBranch = handler.size();
-    handler.push_back(0);
-    handler.push_back(0);
+    size_t noRxBranch = 0;
+    if (!recordLineStatus) {
+        handler.push_back(encI(0x09, 0, t5, expectedRxIirId));
+        noRxBranch = handler.size();
+        handler.push_back(0);
+        handler.push_back(0);
+    }
     const size_t rxLoop = handler.size();
     handler.push_back(encI(0x24, t0, t4, 40)); // lbu LSR.
-    handler.push_back(encI(0x0C, t4, t4, 1));  // LSR.DR.
+    const uint8_t readyReg = recordLineStatus ? 14 : t4;
+    handler.push_back(encI(0x0C, t4, readyReg, 1)); // LSR.DR, retaining full LSR if recording.
     const size_t emptyBranch = handler.size();
     handler.push_back(0);
     handler.push_back(0);
+    if (recordLineStatus) {
+        handler.push_back(encI(0x28, 16, t4, 1)); // save LSR beside this character.
+    }
     handler.push_back(encI(0x24, t0, t1, 0)); // lbu RBR consumes a byte.
     handler.push_back(encI(0x28, 16, t1, 0)); // store into guest RAM.
-    handler.push_back(encI(0x09, 16, 16, 1)); // advance receive pointer.
+    handler.push_back(encI(0x09, 16, 16, recordLineStatus ? 2 : 1)); // record stride.
     handler.push_back(encI(0x28, t0, t1, 0)); // echo through guest THR.
     const size_t loopBranch = handler.size();
     handler.push_back(0);
     handler.push_back(0);
     patchBranch(handler, loopBranch, rxLoop, 0x04, 0, 0);
     const size_t done = handler.size();
-    patchBranch(handler, noRxBranch, done, 0x05, t4, t5);
-    patchBranch(handler, emptyBranch, done, 0x04, t4, 0);
+    if (!recordLineStatus) patchBranch(handler, noRxBranch, done, 0x05, t4, t5);
+    patchBranch(handler, emptyBranch, done, 0x04, readyReg, 0);
     handler.push_back(encI(0x09, 17, 17, 1)); // one interrupt completed.
     handler.push_back(encI(0x2B, 19, 17, 0x20C));
     handler.push_back(0x42000018U);             // eret.
@@ -209,11 +217,12 @@ std::unique_ptr<VirtualMachine> makeVm(Mips64Endianness endian,
                                        uint32_t compareValue = 0,
                                        size_t cpuCount = 1,
                                        uint8_t fcrValue = 1,
-                                       uint8_t expectedRxIirId = 4) {
+                                       uint8_t expectedRxIirId = 4,
+                                       bool recordLineStatus = false) {
     GuestImage image = makeGuestImage(endian, initialIer, initialStatus,
                                       releaseStatus, waitForRelease,
                                       enableIerOnRelease, compareValue,
-                                      fcrValue, expectedRxIirId);
+                                      fcrValue, expectedRxIirId, recordLineStatus);
     MaltaBootstrapConfig config;
     config.endianness = endian;
     config.useBuiltInDemoRom = false;
@@ -527,7 +536,8 @@ void testTransactionalReceiveSnapshotReplay() {
               beforeBadRestore.integrityChecksum);
     };
     Mips64FullVmSnapshot badQueue = bothPending;
-    badQueue.uart.receiveFifo.resize(Ns16550Uart::kReceiveFifoCapacity + 1, 0xAA);
+    badQueue.uart.receiveFifo.resize(Ns16550Uart::kReceiveFifoCapacity + 1,
+                                    Ns16550RxCharacter{0xAA, 0, false});
     checkBad(std::move(badQueue));
     Mips64FullVmSnapshot badVersion = bothPending;
     badVersion.uartComponentVersion = 99;
@@ -690,7 +700,7 @@ void testTransactionalTimeoutSnapshotReplay() {
     const uint64_t half = (deadline - start) / 2;
     CHECK(vm->run(half) == half);
     const Mips64FullVmSnapshot armed = vm->captureMips64FullSnapshot();
-    CHECK(armed.uart.version == 3 && armed.uartComponentVersion == 3);
+    CHECK(armed.uart.version == 4 && armed.uartComponentVersion == 4);
     CHECK(armed.uart.virtualTimeCycle == armed.totalVirtualCycles);
     CHECK(armed.uart.receiveTimeoutArmed && !armed.uart.receiveTimeoutPending);
     CHECK(armed.uart.receiveTimeoutDeadlineCycle == deadline);
@@ -769,7 +779,10 @@ void testTransactionalTimeoutSnapshotReplay() {
     CHECK(readUartRegister(*partialVm, 0) == input[1]);
     const std::vector<uint8_t> suffix(input.begin() + 2, input.end());
     const Mips64FullVmSnapshot partial = partialVm->captureMips64FullSnapshot();
-    CHECK(partial.uart.receiveFifo == suffix);
+    CHECK(partial.uart.receiveFifo.size() == suffix.size());
+    for (size_t index = 0; index < suffix.size(); ++index) {
+        CHECK(partial.uart.receiveFifo[index].data == suffix[index]);
+    }
     CHECK(partial.uart.receiveTimeoutArmed && !partial.uart.receiveTimeoutPending);
     const uint64_t partialRemaining = partial.uart.receiveTimeoutDeadlineCycle -
         partialVm->getCyclesExecuted();
@@ -900,6 +913,282 @@ void testTransactionalTimeoutSnapshotReplay() {
     }
 }
 
+void testProductionGuestLineStatusAndTimeout() {
+    for (const Mips64Endianness endian :
+         {Mips64Endianness::Little, Mips64Endianness::Big}) {
+        auto vm = makeVm(endian, 0x05, kStatusIm4Im7IeMasked,
+                         kStatusIm4Im7Ie, true, false, 20, 1, 0x41, 6, true);
+        CHECK(vm != nullptr);
+        if (!vm) continue;
+        runToReady(*vm);
+        CHECK((plugin(*vm)->core().cp0Cause() &
+               (kCauseIp7Bit | kCauseBitTi)) == (kCauseIp7Bit | kCauseBitTi));
+
+        const std::vector<Ns16550RxInput> firstBatch{
+            {'A', Ns16550Uart::kLsrParityError},
+            {'B', 0},
+            {'C', Ns16550Uart::kLsrFramingError},
+            {'X', Ns16550Uart::kLsrBreakIndication}};
+        CHECK(vm->enqueueMips64UartReceiverInput(firstBatch));
+        CHECK(readUartRegister(*vm, 2) == 0xC6);
+        CHECK((plugin(*vm)->core().cp0Cause() &
+               (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi)) ==
+              (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi));
+        releaseGuest(*vm, endian);
+        CHECK(vm->run(1600) == 1600);
+
+        const std::vector<uint8_t> firstBytes{'A', 'B', 'C', 0};
+        CHECK(vm->getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes() == firstBytes);
+        CHECK(readWord(*vm, kHandlerCountPhysical, endian) == 1);
+        CHECK(readByte(*vm, kIirPhysical) == 0xC6);
+        const uint32_t firstCause = readWord(*vm, kCausePhysical, endian);
+        CHECK((firstCause & (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi)) ==
+              (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi));
+        CHECK(((firstCause & kCauseExcCodeMask) >> kCauseExcCodeShift) ==
+              static_cast<uint32_t>(Mips64ExcCode::Int));
+        const std::vector<uint8_t> firstLsr{0xE5, 0xE1, 0xE9, 0xF1};
+        for (size_t index = 0; index < firstBytes.size(); ++index) {
+            CHECK(readByte(*vm, kGuestBufferPhysical + index * 2) == firstBytes[index]);
+            CHECK(readByte(*vm, kGuestBufferPhysical + index * 2 + 1) == firstLsr[index]);
+        }
+        const uint64_t firstEpc = readDoubleWord(*vm, 0x3230, endian);
+        const uint64_t firstStatus = readDoubleWord(*vm, 0x3238, endian);
+        CHECK(firstEpc >= 0xFFFFFFFF80001000ULL && firstEpc < 0xFFFFFFFF80002000ULL);
+        CHECK((firstStatus & kStatusBitExl) != 0);
+        CHECK((plugin(*vm)->core().cp0Cause() & kCauseIp4Bit) == 0);
+        CHECK(!plugin(*vm)->core().statusExl());
+        CHECK(readWord(*vm, kWorkCounterPhysical, endian) != 0);
+
+        const std::vector<Ns16550RxInput> ordinary{{'Z', 0}};
+        CHECK(vm->enqueueMips64UartReceiverInput(ordinary));
+        CHECK(readUartRegister(*vm, 2) == 0xC1); // Below trigger, timeout not yet due.
+        const uint64_t timeoutDeadline = vm->getMips64MaltaBootstrapBoard()->Uart()
+            ->ReceiveTimeoutDeadline();
+        const uint64_t untilTimeout = timeoutDeadline - vm->getCyclesExecuted();
+        CHECK(vm->run(untilTimeout) == untilTimeout);
+        CHECK(vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK(readUartRegister(*vm, 2) == 0xCC);
+        CHECK(vm->run(1000) == 1000);
+
+        CHECK(vm->getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes() ==
+              std::vector<uint8_t>({'A', 'B', 'C', 0, 'Z'}));
+        CHECK(readWord(*vm, kHandlerCountPhysical, endian) == 2);
+        CHECK(readByte(*vm, kIirPhysical) == 0xCC);
+        CHECK(readByte(*vm, kGuestBufferPhysical + 8) == 'Z');
+        CHECK(readByte(*vm, kGuestBufferPhysical + 9) == 0x61);
+        CHECK((plugin(*vm)->core().cp0Cause() & kCauseIp4Bit) == 0);
+        CHECK(!plugin(*vm)->core().statusExl());
+        CHECK(readWord(*vm, kWorkCounterPhysical, endian) != 0);
+        CHECK(vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveFifoSize() == 0);
+        CHECK(!*vm->getMips64MaltaBootstrapBoard()->Uart()->InterruptSignal());
+
+        // The UART condition remains pending under both architectural
+        // exception-level suppressors and is delivered after guest MTC0 Status.
+        for (const uint64_t exceptionLevel : {kStatusBitExl, kStatusBitErl}) {
+            auto suppressed = makeVm(endian, 0x05,
+                static_cast<uint32_t>(kStatusIm4Ie | exceptionLevel),
+                kStatusIm4Ie, true, false, 0, 1, 1, 6, true);
+            CHECK(suppressed != nullptr);
+            if (!suppressed) continue;
+            CHECK(suppressed->run(100) == 100);
+            CHECK(plugin(*suppressed)->core().statusExl() ==
+                  (exceptionLevel == kStatusBitExl));
+            CHECK(plugin(*suppressed)->core().statusErl() ==
+                  (exceptionLevel == kStatusBitErl));
+            CHECK(suppressed->enqueueMips64UartReceiverInput(
+                {{'E', Ns16550Uart::kLsrParityError}}));
+            CHECK(readUartRegister(*suppressed, 2) == 0xC6);
+            CHECK((plugin(*suppressed)->core().cp0Cause() & kCauseIp4Bit) != 0);
+            CHECK(suppressed->run(50) == 50);
+            CHECK(readWord(*suppressed, kHandlerCountPhysical, endian) == 0);
+            CHECK(plugin(*suppressed)->core().cp0Cause() & kCauseIp4Bit);
+            releaseGuest(*suppressed, endian);
+            CHECK(suppressed->run(700) == 700);
+            CHECK(readWord(*suppressed, kHandlerCountPhysical, endian) == 1);
+            CHECK(readByte(*suppressed, kGuestBufferPhysical) == 'E');
+            CHECK(readByte(*suppressed, kGuestBufferPhysical + 1) == 0xE5);
+            CHECK((plugin(*suppressed)->core().cp0Cause() & kCauseIp4Bit) == 0);
+            CHECK(!plugin(*suppressed)->core().statusExl());
+            CHECK(!plugin(*suppressed)->core().statusErl());
+        }
+    }
+}
+
+void testTransactionalReceiverErrorSnapshotReplay() {
+    const auto endian = Mips64Endianness::Little;
+
+    // IER[2]-masked PE survives a full-VM snapshot. Guest code enables it,
+    // handles the resulting line-status interrupt, and repeats identically.
+    auto masked = makeVm(endian, 0x01, kStatusIm4MaskedIe, kStatusIm4Ie,
+                         true, true, 0, 1, 0x41, 6, true);
+    CHECK(masked != nullptr);
+    if (!masked) return;
+    runToReady(*masked);
+    CHECK(masked->enqueueMips64UartReceiverInput({{'M', Ns16550Uart::kLsrParityError}}));
+    CHECK(readUartRegister(*masked, 2) == 0xC1);
+    const Mips64FullVmSnapshot maskedPending = masked->captureMips64FullSnapshot();
+    CHECK(maskedPending.formatVersion == 2 && maskedPending.uartComponentVersion == 4);
+    CHECK(maskedPending.uart.receiveFifo.size() == 1);
+    CHECK(maskedPending.uart.receiveFifo[0].errorFlags == Ns16550Uart::kLsrParityError);
+    CHECK(!maskedPending.routedUartInterruptLevel);
+    releaseGuest(*masked, endian);
+    CHECK(masked->run(600) == 600);
+    const Mips64FullVmSnapshot maskedComplete = masked->captureMips64FullSnapshot();
+    CHECK(readByte(*masked, kIirPhysical) == 0xC6);
+    CHECK(readByte(*masked, kGuestBufferPhysical) == 'M');
+    CHECK(readByte(*masked, kGuestBufferPhysical + 1) == 0xE5);
+    CHECK(masked->restoreMips64FullSnapshot(maskedPending));
+    releaseGuest(*masked, endian);
+    CHECK(masked->run(600) == 600);
+    CHECK(sameReplayState(maskedComplete, masked->captureMips64FullSnapshot()));
+
+    // A line-status error at FIFO head competes with RDA and timer IP7. The
+    // genuine guest sees IIR C6, acknowledges both independent sources, and
+    // replays the same byte/error records after restoration.
+    auto head = makeVm(endian, 0x05, kStatusIm4Im7IeMasked,
+                       kStatusIm4Im7Ie, true, false, 20, 1, 1, 6, true);
+    CHECK(head != nullptr);
+    if (!head) return;
+    runToReady(*head);
+    const std::vector<Ns16550RxInput> headBatch{
+        {'A', Ns16550Uart::kLsrParityError},
+        {'B', 0},
+        {'C', Ns16550Uart::kLsrFramingError},
+        {'X', Ns16550Uart::kLsrBreakIndication}};
+    CHECK(head->enqueueMips64UartReceiverInput(headBatch));
+    CHECK(readUartRegister(*head, 2) == 0xC6);
+    CHECK((plugin(*head)->core().cp0Cause() &
+           (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi)) ==
+          (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi));
+    const Mips64FullVmSnapshot atErrorHead = head->captureMips64FullSnapshot();
+    CHECK(atErrorHead.uart.receiveFifo.front().errorFlags == Ns16550Uart::kLsrParityError);
+    releaseGuest(*head, endian);
+    CHECK(head->run(1000) == 1000);
+    const Mips64FullVmSnapshot headComplete = head->captureMips64FullSnapshot();
+    CHECK(readWord(*head, kHandlerCountPhysical, endian) == 1);
+    CHECK(readByte(*head, kIirPhysical) == 0xC6);
+    CHECK(readWord(*head, kCausePhysical, endian) & kCauseIp7Bit);
+    CHECK(head->restoreMips64FullSnapshot(atErrorHead));
+    releaseGuest(*head, endian);
+    CHECK(head->run(1000) == 1000);
+    CHECK(sameReplayState(headComplete, head->captureMips64FullSnapshot()));
+
+    // A clean head with a later FE keeps bit 7 set without prematurely
+    // raising RLS. Popping the clean byte exposes FE at the new FIFO head.
+    auto deep = makeVm(endian, 0x05, kStatusIm4MaskedIe, kStatusIm4Ie,
+                       true, false, 0, 1, 0x41, 6, true);
+    CHECK(deep != nullptr);
+    if (!deep) return;
+    runToReady(*deep);
+    CHECK(deep->enqueueMips64UartReceiverInput({
+        {'A', 0}, {'C', Ns16550Uart::kLsrFramingError}}));
+    CHECK(readUartRegister(*deep, 2) == 0xC1);
+    CHECK(readUartRegister(*deep, 5) == 0xE1);
+    const Mips64FullVmSnapshot errorDeeper = deep->captureMips64FullSnapshot();
+    CHECK(readUartRegister(*deep, 0) == 'A');
+    CHECK(deep->run(1) == 1); // Publishes the newly exposed error to CPU0 INT2.
+    CHECK(readUartRegister(*deep, 2) == 0xC6);
+    const Mips64FullVmSnapshot exposedError = deep->captureMips64FullSnapshot();
+    CHECK(deep->restoreMips64FullSnapshot(errorDeeper));
+    CHECK(readUartRegister(*deep, 0) == 'A');
+    CHECK(deep->run(1) == 1);
+    CHECK(sameReplayState(exposedError, deep->captureMips64FullSnapshot()));
+    releaseGuest(*deep, endian);
+    CHECK(deep->run(600) == 600);
+    const Mips64FullVmSnapshot deepComplete = deep->captureMips64FullSnapshot();
+    CHECK(readByte(*deep, kGuestBufferPhysical) == 'C');
+    CHECK(readByte(*deep, kGuestBufferPhysical + 1) == 0xE9);
+    CHECK(deep->restoreMips64FullSnapshot(exposedError));
+    releaseGuest(*deep, endian);
+    CHECK(deep->run(600) == 600);
+    CHECK(sameReplayState(deepComplete, deep->captureMips64FullSnapshot()));
+
+    // Full hardware FIFO and OE latch replay with data preservation. The
+    // bounded host staging rejection remains a separate atomic policy.
+    auto overrun = makeVm(endian, 0x04, kStatusIm4MaskedIe, kStatusIm4Ie,
+                          true, false, 0, 1, 1, 6, false);
+    CHECK(overrun != nullptr);
+    if (!overrun) return;
+    runToReady(*overrun);
+    for (uint8_t value = 0; value < Ns16550Uart::kReceiveFifoCapacity; ++value) {
+        CHECK(overrun->receiveMips64UartCharacter({value, 0}));
+    }
+    CHECK(!overrun->receiveMips64UartCharacter({0xEE, 0}));
+    CHECK(readUartRegister(*overrun, 2) == 0xC6);
+    CHECK((plugin(*overrun)->core().cp0Cause() & kCauseIp4Bit) != 0);
+    const Mips64FullVmSnapshot overrunPending = overrun->captureMips64FullSnapshot();
+    CHECK(overrunPending.uart.receiveOverrun);
+    CHECK(overrunPending.routedUartInterruptLevel);
+    CHECK(readUartRegister(*overrun, 5) == 0x63);
+    CHECK(readUartRegister(*overrun, 0) == 0);
+    CHECK(overrun->run(1) == 1); // UART level deasserts independently of data.
+    const Mips64FullVmSnapshot overrunComplete = overrun->captureMips64FullSnapshot();
+    CHECK(overrun->restoreMips64FullSnapshot(overrunPending));
+    CHECK(readUartRegister(*overrun, 5) == 0x63);
+    CHECK(readUartRegister(*overrun, 0) == 0);
+    CHECK(overrun->run(1) == 1);
+    CHECK(sameReplayState(overrunComplete, overrun->captureMips64FullSnapshot()));
+
+    auto stagingOverflow = makeVm(endian, 0x04, kStatusIm4MaskedIe, kStatusIm4Ie,
+                                  true, false, 0, 1, 1, 6, false);
+    CHECK(stagingOverflow != nullptr);
+    if (!stagingOverflow) return;
+    runToReady(*stagingOverflow);
+    const std::vector<Ns16550RxInput> tooMany(
+        Ns16550Uart::kHostInputCapacity + 1, Ns16550RxInput{0x55, 0});
+    CHECK(!stagingOverflow->enqueueMips64UartReceiverInput(tooMany));
+    CHECK(stagingOverflow->getMips64MaltaBootstrapBoard()->Uart()->ReceiveFifoSize() == 0);
+    CHECK(stagingOverflow->getMips64MaltaBootstrapBoard()->Uart()->PendingHostInputSize() == 0);
+    CHECK(readUartRegister(*stagingOverflow, 2) == 0xC6);
+    CHECK(readUartRegister(*stagingOverflow, 5) == 0x62);
+    CHECK((plugin(*stagingOverflow)->core().cp0Cause() & kCauseIp4Bit) != 0);
+
+    // Break snapshots retain the zero character and BI metadata across a
+    // matching independent VM; rejected metadata leaves destination intact.
+    auto breakSource = makeVm(endian, 0, kStatusIm4Ie, kStatusIm4Ie,
+                              false, false, 0, 1, 1, 4, false);
+    CHECK(breakSource != nullptr);
+    if (!breakSource) return;
+    runToReady(*breakSource);
+    CHECK(breakSource->enqueueMips64UartReceiverInput(
+        {Ns16550RxInput::BreakEvent()}));
+    const Mips64FullVmSnapshot breakPending = breakSource->captureMips64FullSnapshot();
+    CHECK(breakPending.uart.receiveFifo.front().data == 0);
+    CHECK(breakPending.uart.receiveFifo.front().errorFlags == Ns16550Uart::kLsrBreakIndication);
+    auto independent = makeVm(endian, 0, kStatusIm4Ie, kStatusIm4Ie,
+                              false, false, 0, 1, 1, 4, false);
+    CHECK(independent != nullptr);
+    if (!independent) return;
+    CHECK(independent->restoreMips64FullSnapshot(breakPending));
+    const uint64_t sourceChecksum = breakSource->captureMips64FullSnapshot().integrityChecksum;
+    CHECK(readUartRegister(*independent, 5) == 0xF1);
+    CHECK(readUartRegister(*independent, 0) == 0);
+    const Mips64FullVmSnapshot breakComplete = independent->captureMips64FullSnapshot();
+    CHECK(independent->restoreMips64FullSnapshot(breakPending));
+    CHECK(readUartRegister(*independent, 5) == 0xF1);
+    CHECK(readUartRegister(*independent, 0) == 0);
+    CHECK(sameReplayState(breakComplete, independent->captureMips64FullSnapshot()));
+    CHECK(breakSource->captureMips64FullSnapshot().integrityChecksum == sourceChecksum);
+
+    const uint64_t beforeBadRestore = independent->captureMips64FullSnapshot().integrityChecksum;
+    auto rejectWithoutMutation = [&](Mips64FullVmSnapshot bad) {
+        CHECK(bad.RefreshIntegrity());
+        std::string error;
+        CHECK(!independent->restoreMips64FullSnapshot(bad, &error));
+        CHECK(!error.empty());
+        CHECK(independent->captureMips64FullSnapshot().integrityChecksum == beforeBadRestore);
+    };
+    Mips64FullVmSnapshot badFlags = breakPending;
+    badFlags.uart.receiveFifo[0].errorFlags = 0x80;
+    rejectWithoutMutation(std::move(badFlags));
+    Mips64FullVmSnapshot badBreakData = breakPending;
+    badBreakData.uart.receiveFifo[0].data = 'X';
+    rejectWithoutMutation(std::move(badBreakData));
+    Mips64FullVmSnapshot oldUartVersion = breakPending;
+    oldUartVersion.uartComponentVersion = 3;
+    rejectWithoutMutation(std::move(oldUartVersion));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -909,6 +1198,8 @@ int main(int argc, char** argv) {
     else if (mode == "snapshot") testTransactionalReceiveSnapshotReplay();
     else if (mode == "timeout_guest") testProductionTimeoutGuestAndThresholdSemantics();
     else if (mode == "timeout_snapshot") testTransactionalTimeoutSnapshotReplay();
+    else if (mode == "line_status_guest") testProductionGuestLineStatusAndTimeout();
+    else if (mode == "line_status_snapshot") testTransactionalReceiverErrorSnapshotReplay();
     else return 2;
     std::cout << "MIPS64 IRQ VM[" << mode << "]: " << gPass
               << " passed, " << gFail << " failed\n";

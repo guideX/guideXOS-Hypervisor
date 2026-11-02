@@ -964,10 +964,46 @@ bool VirtualMachine::enqueueMips64UartInput(const uint8_t* bytes, size_t size) {
     const auto& uart = maltaBootstrapBoard_->Uart();
     if (!uart) return false;
     uart->AdvanceVirtualTime(cyclesExecuted_);
-    if (!uart->EnqueueHostInput(bytes, size)) return false;
+    if (!uart->EnqueueHostInput(bytes, size)) {
+        synchronizeMips64UartInterrupt();
+        return false;
+    }
     uart->AdvanceHostInput();
     synchronizeMips64UartInterrupt();
     return true;
+}
+
+bool VirtualMachine::enqueueMips64UartReceiverInput(
+    const std::vector<Ns16550RxInput>& characters) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
+    if (!maltaBootstrapBoard_ ||
+        (state_ != VMState::CREATED && state_ != VMState::STOPPED && state_ != VMState::PAUSED)) {
+        return false;
+    }
+    const auto& uart = maltaBootstrapBoard_->Uart();
+    if (!uart) return false;
+    uart->AdvanceVirtualTime(cyclesExecuted_);
+    if (!uart->EnqueueHostInput(characters)) {
+        synchronizeMips64UartInterrupt();
+        return false;
+    }
+    uart->AdvanceHostInput();
+    synchronizeMips64UartInterrupt();
+    return true;
+}
+
+bool VirtualMachine::receiveMips64UartCharacter(Ns16550RxInput character) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
+    if (!maltaBootstrapBoard_ ||
+        (state_ != VMState::CREATED && state_ != VMState::STOPPED && state_ != VMState::PAUSED)) {
+        return false;
+    }
+    const auto& uart = maltaBootstrapBoard_->Uart();
+    if (!uart) return false;
+    uart->AdvanceVirtualTime(cyclesExecuted_);
+    const bool accepted = uart->InjectReceivedCharacter(character);
+    synchronizeMips64UartInterrupt();
+    return accepted;
 }
 
 void VirtualMachine::synchronizeMips64UartInterrupt() noexcept {
@@ -1086,10 +1122,13 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         }
         if (snapshot.cpuComponentVersion != Mips64FullVmSnapshot::kCpuSerializationVersion ||
             snapshot.memoryComponentVersion != 1 || snapshot.fpgaComponentVersion != 1 ||
-            snapshot.uartComponentVersion != 3 || snapshot.irqRoutingComponentVersion != 1 ||
+            snapshot.irqRoutingComponentVersion != 1 ||
             snapshot.consoleComponentVersion != 1 ||
             snapshot.schedulerComponentVersion != 1 || snapshot.vmComponentVersion != 1) {
             return fail("unsupported MIPS64 snapshot component version");
+        }
+        if (snapshot.uartComponentVersion != 4 || snapshot.uart.version != 4) {
+            return fail("unsupported MIPS64 UART snapshot component version; expected v4");
         }
         const MaltaBootstrapConfig& config = maltaBootstrapBoard_->Config();
         if (snapshot.byteOrderTag != 0x01020304 || snapshot.endianness != config.endianness ||

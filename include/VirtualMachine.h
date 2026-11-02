@@ -346,6 +346,12 @@ public:
     bool enqueueMips64UartInput(const std::vector<uint8_t>& bytes) {
         return enqueueMips64UartInput(bytes.data(), bytes.size());
     }
+    // Explicit test/device input preserving per-character PE/FE/BI metadata.
+    // It uses the same bounded staging queue and VM mutation boundary.
+    bool enqueueMips64UartReceiverInput(const std::vector<Ns16550RxInput>& characters);
+    // Deliver one completed receiver character directly at a safe VM boundary.
+    // A full UART FIFO rejects this character and records hardware OE.
+    bool receiveMips64UartCharacter(Ns16550RxInput character);
 
     // Full in-memory snapshot for the supported MIPS64 Malta subset. This is
     // an ISA-aware API and is separate from the legacy IA-64 snapshot formats.

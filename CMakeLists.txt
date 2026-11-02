@@ -979,6 +979,18 @@ else()
 endif()
 add_test(NAME Mips64UartTests COMMAND test_mips64_uart)
 
+add_executable(test_mips64_uart_line_status
+    tests/test_mips64_uart_line_status.cpp
+    src/memory/PhysicalAddressMap.cpp
+    src/io/Ns16550Uart.cpp
+)
+if(MSVC)
+    target_compile_options(test_mips64_uart_line_status PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_uart_line_status PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64UartLineStatusTests COMMAND test_mips64_uart_line_status)
+
 add_executable(test_mips64_uart_timeout
     tests/test_mips64_uart_timeout.cpp
     src/memory/PhysicalAddressMap.cpp
@@ -1061,3 +1073,5 @@ add_test(NAME Mips64InterruptGuestTests COMMAND test_mips64_interrupt_guest gues
 add_test(NAME Mips64IrqSnapshotTests COMMAND test_mips64_interrupt_guest snapshot)
 add_test(NAME Mips64UartTimeoutGuestTests COMMAND test_mips64_interrupt_guest timeout_guest)
 add_test(NAME Mips64UartTimeoutSnapshotTests COMMAND test_mips64_interrupt_guest timeout_snapshot)
+add_test(NAME Mips64UartLineStatusGuestTests COMMAND test_mips64_interrupt_guest line_status_guest)
+add_test(NAME Mips64UartLineStatusSnapshotTests COMMAND test_mips64_interrupt_guest line_status_snapshot)

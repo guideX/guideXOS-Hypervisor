@@ -194,7 +194,7 @@ void testTimeoutSnapshotState() {
     source.input({0, 0xFF, 3});
     source.uart->AdvanceVirtualTime(90);
     const Ns16550Uart::Snapshot armed = source.uart->CaptureSnapshot();
-    CHECK(armed.version == 3 && Ns16550Uart::ValidateSnapshot(armed));
+    CHECK(armed.version == 4 && Ns16550Uart::ValidateSnapshot(armed));
     CHECK(armed.receiveTimeoutArmed && !armed.receiveTimeoutPending);
 
     Fixture destination;

@@ -1,5 +1,6 @@
 #include "Ns16550Uart.h"
 
+#include <algorithm>
 #include <map>
 #include <limits>
 #include <stdexcept>
@@ -10,17 +11,27 @@ namespace {
 constexpr uint8_t kLcrDlab = 0x80;
 constexpr uint8_t kLsrTransmitterReady = 0x60;  // THRE | TEMT
 constexpr uint8_t kIerReceiveData = 0x01;
+constexpr uint8_t kIerReceiverLineStatus = 0x04;
 constexpr uint8_t kIirNoInterrupt = 0x01;
 constexpr uint8_t kIirReceiveData = 0x04;
+constexpr uint8_t kIirReceiverLineStatus = 0x06;
 constexpr uint8_t kIirReceiveTimeout = 0x0C;
 constexpr uint8_t kIirFifoEnabled = 0xC0;
 constexpr uint8_t kLsrDataReady = 0x01;
 constexpr uint8_t kLsrOverrun = 0x02;
+constexpr uint8_t kLsrFifoError = 0x80;
 
 bool checkedMultiply(uint64_t left, uint64_t right, uint64_t& result) noexcept {
     if (left != 0 && right > std::numeric_limits<uint64_t>::max() / left) return false;
     result = left * right;
     return true;
+}
+
+Ns16550RxCharacter makeReceiveCharacter(Ns16550RxInput input) noexcept {
+    if ((input.errorFlags & Ns16550Uart::kLsrBreakIndication) != 0) input.data = 0;
+    return {input.data,
+            static_cast<uint8_t>(input.errorFlags & Ns16550Uart::kReceiveErrorMask),
+            false};
 }
 
 uint64_t ceilDivide(uint64_t numerator, uint64_t denominator) noexcept {
@@ -132,11 +143,30 @@ bool Ns16550Uart::ReceiveTimeoutInterruptPending() const noexcept {
            receiveFifo_.size() < receiveTriggerLevel_;
 }
 
+uint8_t Ns16550Uart::HeadReceiveErrors() const noexcept {
+    if (receiveFifo_.empty() || receiveFifo_.front().errorStatusAcknowledged) return 0;
+    return receiveFifo_.front().errorFlags;
+}
+
+bool Ns16550Uart::ReceiveFifoHasUnacknowledgedErrors() const noexcept {
+    return fifoEnabled_ && std::any_of(receiveFifo_.begin(), receiveFifo_.end(),
+        [](const Ns16550RxCharacter& character) {
+            return character.errorFlags != 0 && !character.errorStatusAcknowledged;
+        });
+}
+
+bool Ns16550Uart::ReceiverLineStatusPending() const noexcept {
+    return receiveOverrun_ || HeadReceiveErrors() != 0;
+}
+
 uint8_t Ns16550Uart::InterruptIdentification() const noexcept {
     const uint8_t fifoBits = fifoEnabled_ ? kIirFifoEnabled : 0;
-    const uint8_t receiveCause = ReceiveInterruptPending() ? kIirReceiveData :
-        (((ier_ & kIerReceiveData) != 0 && ReceiveTimeoutInterruptPending())
-            ? kIirReceiveTimeout : kIirNoInterrupt);
+    const uint8_t receiveCause =
+        (((ier_ & kIerReceiverLineStatus) != 0 && ReceiverLineStatusPending())
+            ? kIirReceiverLineStatus :
+         ReceiveInterruptPending() ? kIirReceiveData :
+         (((ier_ & kIerReceiveData) != 0 && ReceiveTimeoutInterruptPending())
+            ? kIirReceiveTimeout : kIirNoInterrupt));
     return static_cast<uint8_t>(fifoBits | receiveCause);
 }
 
@@ -190,8 +220,9 @@ void Ns16550Uart::AdvanceVirtualTime(uint64_t virtualCycle) noexcept {
 }
 
 std::optional<bool> Ns16550Uart::InterruptSignal() const noexcept {
-    return (ier_ & kIerReceiveData) != 0 &&
-        (ReceiveInterruptPending() || ReceiveTimeoutInterruptPending());
+    return ((ier_ & kIerReceiverLineStatus) != 0 && ReceiverLineStatusPending()) ||
+        ((ier_ & kIerReceiveData) != 0 &&
+         (ReceiveInterruptPending() || ReceiveTimeoutInterruptPending()));
 }
 
 bool Ns16550Uart::EnqueueHostInput(const uint8_t* bytes, size_t size) {
@@ -202,7 +233,38 @@ bool Ns16550Uart::EnqueueHostInput(const uint8_t* bytes, size_t size) {
         receiveOverrun_ = true;
         return false;
     }
-    pendingHostInput_.insert(pendingHostInput_.end(), bytes, bytes + size);
+    for (size_t index = 0; index < size; ++index) {
+        pendingHostInput_.push_back({bytes[index], 0, false});
+    }
+    return true;
+}
+
+bool Ns16550Uart::EnqueueHostInput(const Ns16550RxInput* characters, size_t size) {
+    if (size == 0) return true;
+    if (characters == nullptr) return false;
+    for (size_t index = 0; index < size; ++index) {
+        if ((characters[index].errorFlags & ~kReceiveErrorMask) != 0) return false;
+    }
+
+    const size_t queued = receiveFifo_.size() + pendingHostInput_.size();
+    if (queued > kHostInputCapacity || size > kHostInputCapacity - queued) {
+        receiveOverrun_ = true;
+        return false;
+    }
+    for (size_t index = 0; index < size; ++index) {
+        pendingHostInput_.push_back(makeReceiveCharacter(characters[index]));
+    }
+    return true;
+}
+
+bool Ns16550Uart::InjectReceivedCharacter(Ns16550RxInput character) noexcept {
+    if ((character.errorFlags & ~kReceiveErrorMask) != 0) return false;
+    if (receiveFifo_.size() >= ReceiveCapacity()) {
+        receiveOverrun_ = true;
+        return false;
+    }
+    receiveFifo_.push_back(makeReceiveCharacter(character));
+    RecordReceiveActivity();
     return true;
 }
 
@@ -239,7 +301,7 @@ void Ns16550Uart::Read(uint64_t offset, uint8_t* destination, size_t size) const
             if ((lcr_ & kLcrDlab) != 0) {
                 value = divisorLatchLow_;
             } else if (!receiveFifo_.empty()) {
-                value = receiveFifo_.front();
+                value = receiveFifo_.front().data;
                 receiveFifo_.erase(receiveFifo_.begin());
                 // A real RBR read acknowledges timeout and restarts the
                 // inactivity interval for any bytes that remain.
@@ -259,8 +321,14 @@ void Ns16550Uart::Read(uint64_t offset, uint8_t* destination, size_t size) const
         case 5:
             value = static_cast<uint8_t>(kLsrTransmitterReady |
                 (!receiveFifo_.empty() ? kLsrDataReady : 0) |
-                (receiveOverrun_ ? kLsrOverrun : 0));
+                (receiveOverrun_ ? kLsrOverrun : 0) | HeadReceiveErrors() |
+                (ReceiveFifoHasUnacknowledgedErrors() ? kLsrFifoError : 0));
             receiveOverrun_ = false; // LSR read acknowledges the sticky OE bit.
+            if (!receiveFifo_.empty() && receiveFifo_.front().errorFlags != 0) {
+                // PE/FE/BI belong to this character and are acknowledged by
+                // LSR, while RBR remains responsible for consuming the byte.
+                receiveFifo_.front().errorStatusAcknowledged = true;
+            }
             break;
         case 6: value = 0; break;  // MSR: no external modem inputs
         case 7: value = scratch_; break;
@@ -289,7 +357,7 @@ void Ns16550Uart::Write(uint64_t offset, const uint8_t* source, size_t size) {
                 ++transmitCount_;
             }
             break;
-        case 1:  // IER or DLM. Only receive-data IRQ is implemented.
+        case 1:  // IER or DLM. Only receive-data and receiver line-status IRQs are implemented.
             if ((lcr_ & kLcrDlab) != 0) divisorLatchHigh_ = value;
             else ier_ = static_cast<uint8_t>(value & 0x0F);
             break;
@@ -384,23 +452,47 @@ bool Ns16550Uart::ValidateSnapshot(const Snapshot& snapshot) noexcept {
         snapshot.receiveTimeoutDeadlineCycle <= snapshot.virtualTimeCycle;
     const bool pendingValid = !snapshot.receiveTimeoutPending ||
         (fifoEnabled && hasFifoData && snapshot.receiveTimeoutDeadlineCycle != 0);
-    return snapshot.version == 3 && snapshot.dlab == ((snapshot.lcr & kLcrDlab) != 0) &&
+    const auto validCharacter = [](const Ns16550RxCharacter& character,
+                                   bool allowAcknowledged) noexcept {
+        return (character.errorFlags & ~kReceiveErrorMask) == 0 &&
+               (character.errorStatusAcknowledged
+                    ? (allowAcknowledged && character.errorFlags != 0) : true) &&
+               ((character.errorFlags & Ns16550Uart::kLsrBreakIndication) == 0 ||
+                    character.data == 0);
+    };
+    const bool fifoCharactersValid = std::all_of(
+        snapshot.receiveFifo.begin(), snapshot.receiveFifo.end(),
+        [&validCharacter](const Ns16550RxCharacter& character) {
+            return validCharacter(character, true);
+        });
+    const bool pendingCharactersValid = std::all_of(
+        snapshot.pendingHostInput.begin(), snapshot.pendingHostInput.end(),
+        [&validCharacter](const Ns16550RxCharacter& character) {
+            return validCharacter(character, false);
+        });
+    return snapshot.version == 4 && snapshot.dlab == ((snapshot.lcr & kLcrDlab) != 0) &&
            snapshot.transmitterReady && snapshot.fifoEnabled == fifoEnabled &&
            snapshot.receiveTriggerLevel == expectedTrigger &&
            snapshot.receiveFifo.size() <= capacity &&
            snapshot.pendingHostInput.size() <= kHostInputCapacity &&
            snapshot.receiveFifo.size() + snapshot.pendingHostInput.size() <= kHostInputCapacity &&
-           (snapshot.ier & 0xF0) == 0 &&
+           fifoCharactersValid && pendingCharactersValid && (snapshot.ier & 0xF0) == 0 &&
            (snapshot.fcrLastWrite & 0x38) == 0 && timeoutStateValid &&
            deadlineValid && expiredDeadlineValid && pendingValid;
 }
 
 bool Ns16550Uart::SnapshotInterruptSignal(const Snapshot& snapshot) noexcept {
-    return ValidateSnapshot(snapshot) && (snapshot.ier & kIerReceiveData) != 0 &&
-           (snapshot.receiveFifo.size() >= snapshot.receiveTriggerLevel ||
-            (snapshot.fifoEnabled && snapshot.receiveTimeoutPending &&
-             !snapshot.receiveFifo.empty() &&
-             snapshot.receiveFifo.size() < snapshot.receiveTriggerLevel));
+    if (!ValidateSnapshot(snapshot)) return false;
+    const bool lineStatusPending = snapshot.receiveOverrun ||
+        (!snapshot.receiveFifo.empty() &&
+         snapshot.receiveFifo.front().errorFlags != 0 &&
+         !snapshot.receiveFifo.front().errorStatusAcknowledged);
+    const bool receivePending = snapshot.receiveFifo.size() >= snapshot.receiveTriggerLevel ||
+        (snapshot.fifoEnabled && snapshot.receiveTimeoutPending &&
+         !snapshot.receiveFifo.empty() &&
+         snapshot.receiveFifo.size() < snapshot.receiveTriggerLevel);
+    return (((snapshot.ier & kIerReceiverLineStatus) != 0) && lineStatusPending) ||
+           (((snapshot.ier & kIerReceiveData) != 0) && receivePending);
 }
 
 bool Ns16550Uart::PrepareRestore(const Snapshot& snapshot, PreparedRestore& prepared) const {
