@@ -1,0 +1,28 @@
+             VMA              LMA     Size Align Out     In      Symbol
+               0                0 80000000     1 . = 0x80000000
+        80000000         80000000      334     4 .text
+        80000000         80000000      334     4         D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_ima_guest\.build\guest.o:(.text.entry)
+        80000000         80000000        0     1                 $x
+        80000000         80000000       d8     1                 _start
+        800000d8         800000d8       48     1                 machine_trap
+        80000120         80000120      214     1                 supervisor_entry
+        800002b8         800002b8        0     1                 guest_failure
+        800002bc         800002bc        0     1                 write_signature
+        800002bc         800002bc        0     1                 .Lpcrel_hi2
+        80000334         80000334        0     4         D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_ima_guest\.build\guest.o:(.text)
+        80000334         80000334        c     1 . = ALIGN(16)
+        80000340         80000340     7cc0     1 . = 0x80008000
+        80008000         80008000       60     8 .signature
+        80008000         80008000       60     8         D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_ima_guest\.build\guest.o:(.signature)
+        80008000         80008000        0     1                 $d
+        80008000         80008000        0     1                 guest_signature
+               0                0       49     1 .riscv.attributes
+               0                0       49     1         <internal>:(.riscv.attributes)
+               0                0       63     1 .comment
+               0                0       63     1         <internal>:(.comment)
+               0                0      1e0     8 .symtab
+               0                0      1e0     8         <internal>:(.symtab)
+               0                0       47     1 .shstrtab
+               0                0       47     1         <internal>:(.shstrtab)
+               0                0       d4     1 .strtab
+               0                0       d4     1         <internal>:(.strtab)
