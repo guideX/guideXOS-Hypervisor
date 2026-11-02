@@ -338,6 +338,15 @@ public:
     // at the architectural MIPS64 reset vector. Generic reset() is unchanged.
     bool coldResetMips64Malta();
 
+    // Queue exact guest input for the configured Malta CBUS UART. The call is
+    // atomic and accepted only at a stopped/paused VM boundary; it never runs
+    // guest code. On queue-full, the whole byte span is rejected and UART OE
+    // is latched for guest inspection.
+    bool enqueueMips64UartInput(const uint8_t* bytes, size_t size);
+    bool enqueueMips64UartInput(const std::vector<uint8_t>& bytes) {
+        return enqueueMips64UartInput(bytes.data(), bytes.size());
+    }
+
     // Full in-memory snapshot for the supported MIPS64 Malta subset. This is
     // an ISA-aware API and is separate from the legacy IA-64 snapshot formats.
     // These operations serialize with VM-managed execution and loading. The
@@ -776,6 +785,7 @@ private:
      */
     bool isValidCPUIndex(int cpuIndex) const;
     bool applyMips64MaltaColdReset(bool preserveVmCycleCount);
+    void synchronizeMips64UartInterrupt() noexcept;
 };
 
 } // namespace ia64

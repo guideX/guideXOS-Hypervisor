@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "Ns16550Uart.h"
@@ -68,10 +69,10 @@ static void testMaltaOrientedMappingAndRegisterSubset() {
     CHECK(readReg(map, config, 3) == 0x03);
     CHECK(readReg(map, config, 1) == 0);  // IER is independently selected.
     writeReg(map, config, 1, 0x0F);
-    CHECK(readReg(map, config, 1) == 0x0F);  // Retained, but IRQ delivery is absent.
+    CHECK(readReg(map, config, 1) == 0x0F);  // Reserved IER sources stay inactive.
     CHECK(readReg(map, config, 2) == 0x01);
-    writeReg(map, config, 2, 0x07);  // FCR write accepted; no FIFO behavior claimed.
-    CHECK(readReg(map, config, 2) == 0x01);  // IIR is read-only/no interrupt.
+    writeReg(map, config, 2, 0x07);  // FIFO enabled, RX reset, TX reset accepted.
+    CHECK(readReg(map, config, 2) == 0xC1); // FIFO identification, no pending RX IRQ.
     writeReg(map, config, 4, 0x03);
     CHECK(readReg(map, config, 4) == 0x03);  // MCR storage only.
     CHECK(readReg(map, config, 6) == 0);     // No modem inputs.
@@ -107,6 +108,108 @@ static void testMaltaOrientedMappingAndRegisterSubset() {
     CHECK(readReg(map, config, 5) == 0x60);
 }
 
+static void testReceiveQueueInterruptAndFifoControls() {
+    PhysicalAddressMap map;
+    auto sink = std::make_shared<GuestConsoleSink>(64);
+    auto uart = std::make_shared<Ns16550Uart>(sink, 3);
+    const Ns16550Mapping config = Ns16550Mapping::MaltaOriented();
+    map.RegisterMmio(config.physicalBase, config.RegionSize(), uart, {1});
+    writeReg(map, config, 2, 0x01); // Enable the 16-byte receive FIFO.
+
+    const std::vector<uint8_t> binary{0x67, 0x00, 0x58};
+    CHECK(uart->EnqueueHostInput(binary));
+    CHECK(uart->ReceiveFifoSize() == 0 && uart->PendingHostInputSize() == binary.size());
+    CHECK(uart->AdvanceHostInput() == binary.size());
+    CHECK(readReg(map, config, 5) == 0x61); // DR + THRE + TEMT.
+    CHECK(readReg(map, config, 2) == 0xC1); // IER disabled.
+    CHECK(uart->InterruptSignal().has_value() && !*uart->InterruptSignal());
+
+    writeReg(map, config, 1, 0x01);
+    CHECK(readReg(map, config, 2) == 0xC4); // Receive-data available.
+    CHECK(uart->InterruptSignal().has_value() && *uart->InterruptSignal());
+    CHECK(readReg(map, config, 0) == 0x67);
+    CHECK(readReg(map, config, 5) == 0x61);
+    CHECK(readReg(map, config, 0) == 0x00); // NUL is preserved as a byte.
+    CHECK(readReg(map, config, 0) == 0x58);
+    CHECK(readReg(map, config, 5) == 0x60);
+    CHECK(readReg(map, config, 2) == 0xC1);
+    CHECK(!*uart->InterruptSignal()); // RBR reads acknowledge the RX source.
+
+    // Trigger 4 is honored; a pending byte below the threshold is retained.
+    writeReg(map, config, 2, 0x41);
+    const std::vector<uint8_t> belowTrigger{1, 2, 3};
+    CHECK(uart->EnqueueHostInput(belowTrigger));
+    uart->AdvanceHostInput();
+    CHECK(readReg(map, config, 5) == 0x61);
+    CHECK(readReg(map, config, 2) == 0xC1);
+    CHECK(!*uart->InterruptSignal());
+    CHECK(uart->EnqueueHostInput(std::vector<uint8_t>{4}));
+    uart->AdvanceHostInput();
+    CHECK(readReg(map, config, 2) == 0xC4);
+    CHECK(*uart->InterruptSignal());
+    CHECK(readReg(map, config, 0) == 1);
+    CHECK(readReg(map, config, 0) == 2);
+    CHECK(readReg(map, config, 0) == 3);
+    CHECK(readReg(map, config, 5) == 0x61); // One byte remains below trigger.
+    CHECK(!*uart->InterruptSignal());
+    CHECK(readReg(map, config, 0) == 4);
+
+    for (const auto triggerCase : {std::pair<uint8_t, size_t>{0x80, 8},
+                                   std::pair<uint8_t, size_t>{0xC0, 14}}) {
+        writeReg(map, config, 2, static_cast<uint8_t>(0x03 | triggerCase.first));
+        CHECK(uart->ReceiveFifoSize() == 0);
+        CHECK(uart->EnqueueHostInput(std::vector<uint8_t>(triggerCase.second - 1, 0x5A)));
+        uart->AdvanceHostInput();
+        CHECK(!*uart->InterruptSignal());
+        CHECK(readReg(map, config, 2) == 0xC1);
+        CHECK(uart->EnqueueHostInput(std::vector<uint8_t>{0x5A}));
+        uart->AdvanceHostInput();
+        CHECK(*uart->InterruptSignal());
+        CHECK(readReg(map, config, 2) == 0xC4);
+        CHECK(readReg(map, config, 0) == 0x5A);
+        CHECK(!*uart->InterruptSignal()); // Falls below configured trigger.
+        while (uart->ReceiveFifoSize() != 0) CHECK(readReg(map, config, 0) == 0x5A);
+    }
+
+    // Disable/re-enable IER preserves received data and recalculates IRQ.
+    writeReg(map, config, 2, 0x01);
+    CHECK(uart->EnqueueHostInput(std::vector<uint8_t>{0xAA}));
+    uart->AdvanceHostInput();
+    writeReg(map, config, 1, 0);
+    CHECK((readReg(map, config, 5) & 1) != 0);
+    CHECK(!*uart->InterruptSignal());
+    writeReg(map, config, 1, 1);
+    CHECK(*uart->InterruptSignal());
+    CHECK(readReg(map, config, 0) == 0xAA);
+    CHECK(!*uart->InterruptSignal());
+
+    const std::vector<uint8_t> overflow(Ns16550Uart::kHostInputCapacity + 1, 0xEE);
+    CHECK(!uart->EnqueueHostInput(overflow)); // Atomic rejection, OE is visible.
+    CHECK(readReg(map, config, 5) & 0x02);
+    CHECK((readReg(map, config, 5) & 0x02) == 0); // LSR read clears sticky OE.
+    CHECK(uart->PendingHostInputSize() == 0);
+
+    CHECK(uart->EnqueueHostInput(std::vector<uint8_t>(16, 0x44)));
+    uart->AdvanceHostInput();
+    CHECK(uart->ReceiveFifoSize() == 16);
+    writeReg(map, config, 2, 0x03); // FIFO enable + receive FIFO clear.
+    CHECK(uart->ReceiveFifoSize() == 0);
+    CHECK(readReg(map, config, 5) == 0x60);
+    CHECK(!*uart->InterruptSignal());
+
+    writeReg(map, config, 3, 0x80); // DLAB selects divisor latch at offset zero.
+    writeReg(map, config, 0, 0x12);
+    writeReg(map, config, 1, 0x34);
+    CHECK(readReg(map, config, 0) == 0x12 && readReg(map, config, 1) == 0x34);
+    writeReg(map, config, 3, 0x03);
+    CHECK(readReg(map, config, 1) == 1); // IER survives DLAB selection.
+
+    map.ResetDevices();
+    CHECK(readReg(map, config, 5) == 0x60);
+    CHECK(readReg(map, config, 2) == 0x01);
+    CHECK(uart->ReceiveFifoSize() == 0 && uart->PendingHostInputSize() == 0);
+}
+
 static void testBinaryOutputAndCapacityAtomicity() {
     PhysicalAddressMap map;
     auto sink = std::make_shared<GuestConsoleSink>(3);
@@ -127,6 +230,7 @@ static void testBinaryOutputAndCapacityAtomicity() {
 int main() {
     testMaltaOrientedMappingAndRegisterSubset();
     testBinaryOutputAndCapacityAtomicity();
+    testReceiveQueueInterruptAndFifoControls();
     std::cout << "test_mips64_uart: " << g_pass << " passed, "
               << g_fail << " failed\n";
     return g_fail == 0 ? 0 : 1;

@@ -484,6 +484,7 @@ void Mips64Cpu::reset() {
     delayBranch_ = 0;
     status_ = kStatusReset;
     cause_ = 0;
+    hardwareInterruptLines_ = 0;
     epc_ = 0;
     errorEpc_ = 0;
     badVAddr_ = 0;
@@ -503,6 +504,25 @@ void Mips64Cpu::reset() {
     xcontext_ = 0;
     tlb_.fill(Mips64TlbEntry{});
     clearFault();
+}
+
+void Mips64Cpu::setHardwareInterruptLine(unsigned line, bool asserted) noexcept {
+    if (line >= 6) return;
+    const uint8_t mask = static_cast<uint8_t>(1U << line);
+    if (asserted) hardwareInterruptLines_ |= mask;
+    else hardwareInterruptLines_ &= static_cast<uint8_t>(~mask);
+}
+
+bool Mips64Cpu::hardwareInterruptLine(unsigned line) const noexcept {
+    return line < 6 && (hardwareInterruptLines_ & static_cast<uint8_t>(1U << line)) != 0;
+}
+
+uint64_t Mips64Cpu::hardwareInterruptCauseBits() const noexcept {
+    uint64_t bits = 0;
+    for (unsigned line = 0; line < 6; ++line) {
+        if (hardwareInterruptLine(line)) bits |= uint64_t{1} << (10 + line);
+    }
+    return bits;
 }
 
 uint64_t Mips64Cpu::readGpr(unsigned index) const {
@@ -767,7 +787,7 @@ bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
         return true;
     }
     if (rd == kCp0RegCause && sel == kCp0SelCause) {
-        out = cause_ & kCauseImplementedMask;
+        out = (cause_ | hardwareInterruptCauseBits()) & kCauseImplementedMask;
         return true;
     }
     if (rd == kCp0RegEpc && sel == kCp0SelEpc) {
@@ -1917,20 +1937,13 @@ Mips64StepResult Mips64Cpu::step(ia64::IMemory& memory) {
     }
     clearFault();
     // Asynchronous interrupt delivery at instruction boundary.
-    const bool timerPending = (cause_ & kCauseBitTi) != 0;
-    const bool sw0 = (cause_ & (1ULL << 8)) != 0;
-    const bool sw1 = (cause_ & (1ULL << 9)) != 0;
-    const bool im0 = (status_ & (1ULL << 8)) != 0;
-    const bool im1 = (status_ & (1ULL << 9)) != 0;
-    const bool im7 = (status_ & (1ULL << 15)) != 0;
+    const uint64_t pending = (cause_ | hardwareInterruptCauseBits()) & kCauseIpMask;
     const bool ie = (status_ & kStatusBitIe) != 0;
     const bool exl = (status_ & kStatusBitExl) != 0;
     const bool erl = (status_ & kStatusBitErl) != 0;
     bool deliver = false;
     if (ie && !exl && !erl) {
-        if (timerPending && im7) deliver = true;
-        if (sw0 && im0) deliver = true;
-        if (sw1 && im1) deliver = true;
+        deliver = (pending & status_ & kStatusImMask) != 0;
     }
     if (deliver) {
         const uint64_t address = pc_;
@@ -2273,7 +2286,8 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     // Interrupt state (MIPS64-4 / 4R1). Cause bits must lie in the implemented
     // set. A v3 blob that sets IV (bit 23) or DC (bit 27) was written with the
     // MIPS64-4 bit assignment and cannot be interpreted unambiguously.
-    if ((cause & ~kCauseImplementedMask) != 0) {
+    if ((cause & ~kCauseImplementedMask) != 0 ||
+        (cause & kCauseIpExternalSerializedMask) != 0) {
         return false;
     }
     if (version == kSerializationVersionV3 && (cause & (kCauseBitIv | kCauseBitDc)) != 0) {

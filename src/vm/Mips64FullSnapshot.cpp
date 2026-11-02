@@ -7,7 +7,7 @@ namespace {
 
 constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
 constexpr uint64_t kFnvPrime = 1099511628211ULL;
-constexpr uint64_t kHeaderFixedSize = 132;
+constexpr uint64_t kHeaderFixedSize = 136;
 constexpr uint64_t kMaximumComponentSize = 512ULL * 1024ULL * 1024ULL;
 
 class CanonicalHash {
@@ -83,8 +83,12 @@ bool computeLengths(const Mips64FullVmSnapshot& snapshot,
 
     // FPGA: version, endian/config bytes, LED, display, BRKRES, mailbox.
     deviceLength = 26;
-    // UART: version, implemented registers, DLAB/ready, transmit count.
-    if (!addLength(deviceLength, 21)) return false;
+    // UART v2: v1 state, FIFO/trigger/overrun, and two length-prefixed RX queues.
+    if (!addLength(deviceLength, 40) ||
+        !addLength(deviceLength, static_cast<uint64_t>(snapshot.uart.receiveFifo.size())) ||
+        !addLength(deviceLength, static_cast<uint64_t>(snapshot.uart.pendingHostInput.size()))) return false;
+    // Direct IRQ route: CPU target, hardware line, Cause.IP index, level.
+    if (!addLength(deviceLength, 7)) return false;
     // Console capacity, occupancy, bytes, sequence, generation, reset pending.
     if (!addLength(deviceLength, 33) ||
         !addLength(deviceLength, static_cast<uint64_t>(snapshot.console.bytes.size()))) return false;
@@ -144,6 +148,7 @@ uint64_t calculateChecksum(const Mips64FullVmSnapshot& snapshot) noexcept {
     hash.u32(snapshot.memoryComponentVersion);
     hash.u32(snapshot.fpgaComponentVersion);
     hash.u32(snapshot.uartComponentVersion);
+    hash.u32(snapshot.irqRoutingComponentVersion);
     hash.u32(snapshot.consoleComponentVersion);
     hash.u32(snapshot.schedulerComponentVersion);
     hash.u32(snapshot.vmComponentVersion);
@@ -187,6 +192,16 @@ uint64_t calculateChecksum(const Mips64FullVmSnapshot& snapshot) noexcept {
     hash.boolean(snapshot.uart.dlab);
     hash.boolean(snapshot.uart.transmitterReady);
     hash.u64(snapshot.uart.transmitCount);
+    hash.boolean(snapshot.uart.fifoEnabled);
+    hash.byte(snapshot.uart.receiveTriggerLevel);
+    hash.boolean(snapshot.uart.receiveOverrun);
+    hash.bytes(snapshot.uart.receiveFifo);
+    hash.bytes(snapshot.uart.pendingHostInput);
+
+    hash.u32(snapshot.uartInterruptTargetCpu);
+    hash.byte(snapshot.uartHardwareInterruptLine);
+    hash.byte(snapshot.uartCauseIp);
+    hash.boolean(snapshot.routedUartInterruptLevel);
 
     hash.u64(static_cast<uint64_t>(snapshot.console.capacityBytes));
     hash.bytes(snapshot.console.bytes);

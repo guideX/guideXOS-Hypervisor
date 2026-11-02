@@ -36,7 +36,7 @@ struct Mips64FullSnapshotCpu {
 // VMStateSnapshot/VMCheckpointCodec, which retain their established IA-64
 // state model and on-disk format.
 struct Mips64FullVmSnapshot {
-    static constexpr uint16_t kFormatVersion = 1;
+    static constexpr uint16_t kFormatVersion = 2;
     static constexpr uint32_t kCpuSerializationVersion = 5;
 
     std::array<uint8_t, 8> magic{{'G', 'X', 'M', '6', '4', 'S', 'N', 'P'}};
@@ -59,7 +59,8 @@ struct Mips64FullVmSnapshot {
     uint32_t cpuComponentVersion = kCpuSerializationVersion;
     uint32_t memoryComponentVersion = 1;
     uint32_t fpgaComponentVersion = 1;
-    uint32_t uartComponentVersion = 1;
+    uint32_t uartComponentVersion = 2;
+    uint32_t irqRoutingComponentVersion = 1;
     uint32_t consoleComponentVersion = 1;
     uint32_t schedulerComponentVersion = 1;
     uint32_t vmComponentVersion = 1;
@@ -68,6 +69,12 @@ struct Mips64FullVmSnapshot {
     PhysicalAddressMapSnapshot physicalMemory;
     MaltaFpgaRegisters::Snapshot fpga;
     Ns16550Uart::Snapshot uart;
+    // This is a validated derived level: UART RX eligibility routed to CPU0
+    // hardware INT2 (Cause.IP4). CPU state blobs intentionally exclude pins.
+    uint32_t uartInterruptTargetCpu = 0;
+    uint8_t uartHardwareInterruptLine = 2;
+    uint8_t uartCauseIp = 4;
+    bool routedUartInterruptLevel = false;
     GuestConsoleSink::Snapshot console;
     bool pendingDeferredBoardReset = false;
 

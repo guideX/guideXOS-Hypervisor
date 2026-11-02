@@ -309,6 +309,134 @@ static void testIndependentTimerStatePerCpu() {
     CHECK(second.pc() == secondNext);
 }
 
+static void testExternalHardwareInt2MapsToIp4AndHonorsMasks() {
+    SparsePhysicalMemory memory;
+    Mips64Cpu cpu;
+    uint64_t nextPc = 0;
+    CHECK(installAndRunToTimer(cpu, memory, kProgramBase, 0, 100, 1000, nextPc));
+    storeWord(memory, nextPc, 0);
+    storeWord(memory, kGeneralVectorBev0, 0x42000018U); // eret
+
+    const std::vector<uint8_t> cpuV5BeforePin = cpu.serialize();
+    cpu.setHardwareInterruptLine(2, true); // Malta INT2 is Cause.IP4.
+    CHECK(cpu.hardwareInterruptLine(2));
+    CHECK((cpu.cp0Cause() & kCauseIp4Bit) != 0);
+    CHECK(cpuV5BeforePin.size() == Mips64Cpu::kSerializedSize &&
+          Mips64Cpu::kSerializedSize == 957);
+    CHECK(cpu.serialize() == cpuV5BeforePin); // Board pins stay outside CPU v5.
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue); // IM4/IE are clear.
+    CHECK((cpu.cp0Cause() & kCauseIp4Bit) != 0); // Masking retains the line.
+
+    GuestProgram clearCause(memory, cpu.pc());
+    clearCause.emit(encI(0x09, 0, 8, 0));
+    clearCause.emit(encCp0(4, 8, 13)); // MTC0 cannot clear external IP4.
+    CHECK(appendRun(cpu, memory, cpu.pc(), clearCause.wordCount()));
+    CHECK((cpu.cp0Cause() & kCauseIp4Bit) != 0);
+
+    GuestProgram enable(memory, cpu.pc());
+    enable.emit(encI(0x09, 0, 8, 0x1101)); // IE | IM4.
+    enable.emit(encCp0(4, 8, 12));
+    CHECK(appendRun(cpu, memory, cpu.pc(), enable.wordCount()));
+    const uint64_t restartPc = cpu.pc();
+    CHECK(cpu.step(memory) == Mips64StepResult::Interrupt);
+    CHECK(cpu.cp0Epc() == restartPc);
+    CHECK(cpu.causeExcCode() == static_cast<uint8_t>(Mips64ExcCode::Int));
+    CHECK(cpu.pc() == kGeneralVectorBev0 && cpu.statusExl());
+    CHECK((cpu.cp0Cause() & kCauseIp4Bit) != 0);
+
+    // EXL suppresses resampling; deasserting the source clears IP4 without
+    // needing to read or write Cause, then ERET resumes at EPC.
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue); // eret while line asserted
+    CHECK(!cpu.statusExl());
+    CHECK(cpu.pc() == restartPc);
+    CHECK(cpu.step(memory) == Mips64StepResult::Interrupt); // level remains asserted
+    CHECK(cpu.statusExl());
+    cpu.setHardwareInterruptLine(2, false);
+    CHECK((cpu.cp0Cause() & kCauseIp4Bit) == 0);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue); // eret now resumes
+    CHECK(!cpu.statusExl() && cpu.pc() == restartPc);
+
+    // External INT2 can arrive while EXL is already set and remains pending
+    // until software clears EXL; it is delivered at the next boundary.
+    GuestProgram enterExl(memory, cpu.pc());
+    enterExl.emit(encI(0x09, 0, 8, 0x1103));
+    enterExl.emit(encCp0(4, 8, 12));
+    CHECK(appendRun(cpu, memory, cpu.pc(), enterExl.wordCount()));
+    storeWord(memory, cpu.pc(), 0);
+    cpu.setHardwareInterruptLine(2, true);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue);
+    CHECK(cpu.statusExl() && (cpu.cp0Cause() & kCauseIp4Bit) != 0);
+    GuestProgram leaveExl(memory, cpu.pc());
+    leaveExl.emit(encI(0x09, 0, 8, 0x1101));
+    leaveExl.emit(encCp0(4, 8, 12));
+    CHECK(appendRun(cpu, memory, cpu.pc(), leaveExl.wordCount()));
+    CHECK(cpu.step(memory) == Mips64StepResult::Interrupt);
+    CHECK(cpu.statusExl() && cpu.causeExcCode() == static_cast<uint8_t>(Mips64ExcCode::Int));
+    cpu.setHardwareInterruptLine(2, false);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue);
+
+    // ERL independently suppresses the same external request.
+    SparsePhysicalMemory erlMemory;
+    Mips64Cpu erlCpu;
+    uint64_t erlNext = 0;
+    CHECK(installAndRunToTimer(erlCpu, erlMemory, kProgramBase, 0x00000004U,
+                               10, 1000, erlNext));
+    storeWord(erlMemory, erlNext, 0);
+    erlCpu.setHardwareInterruptLine(2, true);
+    CHECK(erlCpu.step(erlMemory) == Mips64StepResult::Continue);
+    CHECK(erlCpu.statusErl() && (erlCpu.cp0Cause() & kCauseIp4Bit) != 0);
+}
+
+static void testExternalInterruptBranchDelayAndTimerIndependence() {
+    SparsePhysicalMemory memory;
+    Mips64Cpu cpu;
+    uint64_t nextPc = 0;
+    CHECK(installAndRunToTimer(cpu, memory, kProgramBase, 0x1101, 10, 1000, nextPc));
+    const uint64_t branchPc = nextPc;
+    storeWord(memory, branchPc, encI(0x04, 0, 0, 1)); // beq zero,zero,+1
+    storeWord(memory, branchPc + 4, encI(0x09, 0, 16, 1)); // delay-slot marker
+    storeWord(memory, branchPc + 8, encI(0x09, 0, 17, 2)); // branch target
+    storeWord(memory, branchPc + 12, 0);
+    storeWord(memory, kGeneralVectorBev0, 0x42000018U);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue); // retire branch
+    CHECK(cpu.delayArmed() && cpu.pc() == branchPc + 4);
+    cpu.setHardwareInterruptLine(2, true);
+    CHECK(cpu.step(memory) == Mips64StepResult::Interrupt); // delay-slot boundary
+    CHECK(cpu.causeBd() && cpu.cp0Epc() == branchPc);
+    cpu.setHardwareInterruptLine(2, false);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue); // ERET to branch
+    CHECK(cpu.pc() == branchPc);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue);
+    CHECK(cpu.delayArmed());
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue);
+    CHECK(cpu.readGpr(16) == 1 && cpu.readGpr(17) == 2);
+
+    // The pending UART input and Count/Compare are independent causes.
+    SparsePhysicalMemory overlapMemory;
+    Mips64Cpu overlap;
+    uint64_t overlapPc = 0;
+    CHECK(installAndRunToTimer(overlap, overlapMemory, kProgramBase, 0,
+                               10, 100, overlapPc));
+    overlap.setHardwareInterruptLine(2, true);
+    for (unsigned i = 0; i < 90; ++i) storeWord(overlapMemory, overlapPc + i * 4, 0);
+    for (unsigned i = 0; i < 90; ++i) {
+        CHECK(overlap.step(overlapMemory) == Mips64StepResult::Continue);
+    }
+    CHECK((overlap.cp0Cause() & (kCauseIp4Bit | kTimerMask)) ==
+          (kCauseIp4Bit | kTimerMask));
+    CHECK((overlap.cp0Cause() & kCauseIp7Bit) != 0); // timer IP7
+
+    GuestProgram acknowledgeTimer(overlapMemory, overlap.pc());
+    acknowledgeTimer.load32(9, 200);
+    acknowledgeTimer.emit(encCp0(5, 9, 11)); // Compare clears TI/IP7 only.
+    CHECK(appendRun(overlap, overlapMemory, overlap.pc(), acknowledgeTimer.wordCount()));
+    CHECK((overlap.cp0Cause() & (kCauseBitTi | kCauseIp7Bit)) == 0);
+    CHECK((overlap.cp0Cause() & kCauseIp4Bit) != 0);
+    overlap.setHardwareInterruptLine(2, false);
+    CHECK((overlap.cp0Cause() & kCauseIp4Bit) == 0);
+}
+
 int main() {
     testVirtualClockWrapAndCauseLatch();
     testTimerDeliveryAndCauseFields();
@@ -321,6 +449,8 @@ int main() {
     testBranchLikelyAnnulment();
     testGuestHandlerAcknowledgesRearmsAndReturnsTwice();
     testIndependentTimerStatePerCpu();
+    testExternalHardwareInt2MapsToIp4AndHonorsMasks();
+    testExternalInterruptBranchDelayAndTimerIndependence();
     std::cout << "MIPS64 interrupt qualification: " << g_pass << " passed, "
               << g_fail << " failed\n";
     return g_fail == 0 ? 0 : 1;

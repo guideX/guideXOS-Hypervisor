@@ -55,12 +55,19 @@ struct Ns16550Mapping {
     static Ns16550Mapping MaltaOriented() { return {}; }
 };
 
-// Deterministic transmit-only 16550 subset. Register reads/writes are always
-// one byte. DLAB selects DLL/DLM; no receive data or interrupt source exists.
+// Deterministic NS16550 subset with a 16-byte receive FIFO and bounded host
+// input staging. RX character-timeout and transmitter-empty interrupts are
+// not modeled. Register reads/writes are always one byte.
 class Ns16550Uart final : public IMmioDevice {
 public:
+    using IMmioDevice::CommitRestore;
+    using IMmioDevice::PrepareRestore;
+
+    static constexpr size_t kReceiveFifoCapacity = 16;
+    static constexpr size_t kHostInputCapacity = 256;
+
     struct Snapshot {
-        uint32_t version = 1;
+        uint32_t version = 2;
         uint8_t ier = 0;
         uint8_t fcrLastWrite = 0;
         uint8_t lcr = 0;
@@ -71,6 +78,16 @@ public:
         bool dlab = false;
         bool transmitterReady = true;
         uint64_t transmitCount = 0;
+        bool fifoEnabled = false;
+        uint8_t receiveTriggerLevel = 1;
+        bool receiveOverrun = false;
+        std::vector<uint8_t> receiveFifo;
+        std::vector<uint8_t> pendingHostInput;
+    };
+
+    struct PreparedRestore {
+        std::vector<uint8_t> receiveFifo;
+        std::vector<uint8_t> pendingHostInput;
     };
 
     explicit Ns16550Uart(std::shared_ptr<GuestConsoleSink> sink,
@@ -80,14 +97,28 @@ public:
     void Read(uint64_t offset, uint8_t* destination, size_t size) const override;
     void Write(uint64_t offset, const uint8_t* source, size_t size) override;
     void Reset() override;
-    std::optional<bool> InterruptSignal() const noexcept override { return false; }
+    std::optional<bool> InterruptSignal() const noexcept override;
     std::map<std::string, uint64_t> InspectState() const override;
+
+    // Atomic bounded enqueue: false rejects the whole span and latches OE.
+    // Input is moved into the receive FIFO only at an explicit scheduler
+    // boundary via AdvanceHostInput().
+    bool EnqueueHostInput(const uint8_t* bytes, size_t size);
+    bool EnqueueHostInput(const std::vector<uint8_t>& bytes) {
+        return EnqueueHostInput(bytes.data(), bytes.size());
+    }
+    size_t AdvanceHostInput() noexcept;
+    size_t ReceiveFifoSize() const noexcept { return receiveFifo_.size(); }
+    size_t PendingHostInputSize() const noexcept { return pendingHostInput_.size(); }
+    bool ReceiveOverrun() const noexcept { return receiveOverrun_; }
 
     uint64_t RegionSize() const noexcept { return 8 * (uint64_t{1} << registerShift_); }
     const std::shared_ptr<GuestConsoleSink>& Sink() const noexcept { return sink_; }
-    Snapshot CaptureSnapshot() const noexcept;
+    Snapshot CaptureSnapshot() const;
     static bool ValidateSnapshot(const Snapshot& snapshot) noexcept;
-    void RestoreSnapshot(const Snapshot& snapshot) noexcept;
+    static bool SnapshotInterruptSignal(const Snapshot& snapshot) noexcept;
+    bool PrepareRestore(const Snapshot& snapshot, PreparedRestore& prepared) const;
+    void CommitRestore(const Snapshot& snapshot, PreparedRestore&& prepared) noexcept;
 
 private:
     unsigned RegisterIndex(uint64_t offset) const;
@@ -102,6 +133,16 @@ private:
     uint8_t divisorLatchLow_ = 0;
     uint8_t divisorLatchHigh_ = 0;
     uint64_t transmitCount_ = 0;
+    bool fifoEnabled_ = false;
+    uint8_t receiveTriggerLevel_ = 1;
+    mutable bool receiveOverrun_ = false;
+    mutable std::vector<uint8_t> receiveFifo_;
+    std::vector<uint8_t> pendingHostInput_;
+
+    size_t ReceiveCapacity() const noexcept;
+    bool ReceiveInterruptPending() const noexcept;
+    uint8_t InterruptIdentification() const noexcept;
+    void ResetReceiveFifo() noexcept;
 };
 
 }  // namespace ia64

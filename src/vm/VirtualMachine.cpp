@@ -192,9 +192,17 @@ try {
 }
 
 VirtualMachine::~VirtualMachine() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     // Halt execution if running
     if (state_ == VMState::RUNNING) {
         halt();
+    }
+    for (CPUContext& context : cpus_) {
+        if (context.isaPlugin) {
+            if (auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get())) {
+                plugin->core().setHardwareInterruptLine(2, false);
+            }
+        }
     }
     
     // Subsystems are automatically destroyed in reverse order:
@@ -269,6 +277,7 @@ if (!bootStateMachine_.powerOn()) {
                 }
                 plugin->core().setPc(kMaltaResetVector);
             }
+            synchronizeMips64UartInterrupt();
         }
         
         // Reset execution state
@@ -338,6 +347,7 @@ bool VirtualMachine::reset() {
         if (memory_ && memory_->GetPhysicalAddressMap()) {
             memory_->GetPhysicalAddressMap()->ResetDevices();
         }
+        synchronizeMips64UartInterrupt();
         
         // Clear all memory watchpoints (from debugger)
         for (const auto& entry : memoryBreakpoints_) {
@@ -378,9 +388,9 @@ bool VirtualMachine::reset() {
 
 void VirtualMachine::halt() {
     std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
-if (state_ == VMState::RUNNING) {
-    LOG_INFO("Halting VirtualMachine execution");
-    state_ = VMState::STOPPED;
+    if (state_ == VMState::RUNNING) {
+        LOG_INFO("Halting VirtualMachine execution");
+        state_ = VMState::STOPPED;
         
         // Halt all running CPUs
         for (auto& ctx : cpus_) {
@@ -389,6 +399,9 @@ if (state_ == VMState::RUNNING) {
             }
         }
     }
+    // Keep the CPU pin derived from the live UART level even when execution
+    // stops; pending device state is preserved, while stale route state is not.
+    synchronizeMips64UartInterrupt();
 }
 
 // ============================================================================
@@ -942,6 +955,31 @@ bool VirtualMachine::coldResetMips64Malta() {
     return applyMips64MaltaColdReset(false);
 }
 
+bool VirtualMachine::enqueueMips64UartInput(const uint8_t* bytes, size_t size) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
+    if (!maltaBootstrapBoard_ ||
+        (state_ != VMState::CREATED && state_ != VMState::STOPPED && state_ != VMState::PAUSED)) {
+        return false;
+    }
+    const auto& uart = maltaBootstrapBoard_->Uart();
+    if (!uart || !uart->EnqueueHostInput(bytes, size)) return false;
+    uart->AdvanceHostInput();
+    synchronizeMips64UartInterrupt();
+    return true;
+}
+
+void VirtualMachine::synchronizeMips64UartInterrupt() noexcept {
+    const bool asserted = maltaBootstrapBoard_ && maltaBootstrapBoard_->Uart() &&
+        maltaBootstrapBoard_->Uart()->InterruptSignal().value_or(false);
+    for (size_t index = 0; index < cpus_.size(); ++index) {
+        auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(cpus_[index].isaPlugin.get());
+        if (plugin) {
+            // Malta CBUS UART: hardware INT2 -> Cause.IP4, CPU0 only.
+            plugin->core().setHardwareInterruptLine(2, index == 0 && asserted);
+        }
+    }
+}
+
 Mips64FullVmSnapshot VirtualMachine::captureMips64FullSnapshot() const {
     std::unique_lock<std::recursive_mutex> boundaryLock(
         mips64SnapshotBoundaryMutex_, std::try_to_lock);
@@ -975,6 +1013,11 @@ Mips64FullVmSnapshot VirtualMachine::captureMips64FullSnapshot() const {
     snapshot.physicalMemory = memory_->GetPhysicalAddressMap()->CaptureSnapshot();
     snapshot.fpga = maltaBootstrapBoard_->Fpga()->CaptureSnapshot();
     snapshot.uart = maltaBootstrapBoard_->Uart()->CaptureSnapshot();
+    snapshot.uartInterruptTargetCpu = 0;
+    snapshot.uartHardwareInterruptLine = 2;
+    snapshot.uartCauseIp = 4;
+    snapshot.routedUartInterruptLevel =
+        Ns16550Uart::SnapshotInterruptSignal(snapshot.uart);
     snapshot.console = maltaBootstrapBoard_->ConsoleSink()->CaptureSnapshot();
     snapshot.pendingDeferredBoardReset = maltaBootstrapBoard_->HasSoftwareResetRequest();
     snapshot.vmStateValue = static_cast<uint32_t>(state_);
@@ -1038,7 +1081,8 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         }
         if (snapshot.cpuComponentVersion != Mips64FullVmSnapshot::kCpuSerializationVersion ||
             snapshot.memoryComponentVersion != 1 || snapshot.fpgaComponentVersion != 1 ||
-            snapshot.uartComponentVersion != 1 || snapshot.consoleComponentVersion != 1 ||
+            snapshot.uartComponentVersion != 2 || snapshot.irqRoutingComponentVersion != 1 ||
+            snapshot.consoleComponentVersion != 1 ||
             snapshot.schedulerComponentVersion != 1 || snapshot.vmComponentVersion != 1) {
             return fail("unsupported MIPS64 snapshot component version");
         }
@@ -1072,7 +1116,11 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         }
         if (snapshot.pendingDeferredBoardReset != snapshot.fpga.resetPending ||
             !maltaBootstrapBoard_->Fpga()->ValidateSnapshot(snapshot.fpga) ||
-            !Ns16550Uart::ValidateSnapshot(snapshot.uart)) {
+            !Ns16550Uart::ValidateSnapshot(snapshot.uart) ||
+            snapshot.uartInterruptTargetCpu != 0 ||
+            snapshot.uartHardwareInterruptLine != 2 || snapshot.uartCauseIp != 4 ||
+            snapshot.routedUartInterruptLevel !=
+                Ns16550Uart::SnapshotInterruptSignal(snapshot.uart)) {
             return fail("snapshot Malta FPGA, UART, or deferred-reset state is invalid");
         }
         for (size_t index = 0; index < cpus_.size(); ++index) {
@@ -1195,6 +1243,10 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         if (injectFailure(Mips64SnapshotFailurePoint::DeviceStatePreparation)) {
             return fail("injected device state preparation failure");
         }
+        Ns16550Uart::PreparedRestore stagedUart;
+        if (!maltaBootstrapBoard_->Uart()->PrepareRestore(snapshot.uart, stagedUart)) {
+            return fail("snapshot UART receive state could not be staged");
+        }
         GuestConsoleSink::PreparedRestore stagedConsole;
         if (!maltaBootstrapBoard_->ConsoleSink()->PrepareRestore(snapshot.console, stagedConsole)) {
             return fail("snapshot console capacity, occupancy, or output sequence is invalid");
@@ -1221,7 +1273,8 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
             context.lastActivationTime = record.lastActivationTime;
         }
         maltaBootstrapBoard_->Fpga()->RestoreSnapshot(snapshot.fpga);
-        maltaBootstrapBoard_->Uart()->RestoreSnapshot(snapshot.uart);
+        maltaBootstrapBoard_->Uart()->CommitRestore(snapshot.uart, std::move(stagedUart));
+        synchronizeMips64UartInterrupt();
         maltaBootstrapBoard_->ConsoleSink()->CommitRestore(std::move(stagedConsole));
         const bool schedulerCommitted = liveScheduler->restoreSnapshot(std::move(stagedScheduler));
         if (!schedulerCommitted) std::terminate();
@@ -1851,7 +1904,17 @@ if (!isValidCPUIndex(cpuIndex)) {
             state_ = VMState::RUNNING;
         }
 
+        if (maltaBootstrapBoard_) {
+            maltaBootstrapBoard_->Uart()->AdvanceHostInput();
+            synchronizeMips64UartInterrupt();
+        }
         const bool success = cpu->step();
+        if (maltaBootstrapBoard_) {
+            // Publish MMIO acknowledgements and the next staged input byte at
+            // the retired instruction boundary, without entering the CPU.
+            maltaBootstrapBoard_->Uart()->AdvanceHostInput();
+            synchronizeMips64UartInterrupt();
+        }
         if (!success) {
             if (cpu->isHalted()) {
                 ctx.state = CPUExecutionState::HALTED;

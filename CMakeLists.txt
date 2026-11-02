@@ -1031,3 +1031,19 @@ add_test(NAME Mips64SnapshotDevicesTests COMMAND test_mips64_malta snapshot_devi
 add_test(NAME Mips64SnapshotRestoreTests COMMAND test_mips64_malta snapshot_restore)
 add_test(NAME Mips64SnapshotVmTests COMMAND test_mips64_malta snapshot_vm)
 add_test(NAME Mips64SnapshotCompatibilityTests COMMAND test_mips64_malta snapshot_compat)
+
+# MIPS64-9 production-scheduler UART interrupt guest and RX/IRQ replay.
+add_executable(test_mips64_interrupt_guest
+    tests/test_mips64_irq_vm.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_interrupt_guest PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_interrupt_guest PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_interrupt_guest PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64InterruptGuestTests COMMAND test_mips64_interrupt_guest guest)
+add_test(NAME Mips64IrqSnapshotTests COMMAND test_mips64_interrupt_guest snapshot)

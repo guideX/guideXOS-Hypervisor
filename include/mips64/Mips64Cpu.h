@@ -214,12 +214,16 @@ constexpr uint64_t kCauseBitTi = 1ULL << 30;  // Timer Interrupt pending (read-o
 constexpr uint64_t kCauseBitDc = 1ULL << 27;  // Disable Count (software-writable)
 constexpr uint64_t kCauseBitIv = 1ULL << 23;  // Interrupt Vector select (software-writable)
 constexpr uint64_t kCauseIp7Bit = 1ULL << 15; // IP7 hardware-pending (timer routing)
+constexpr uint64_t kCauseIp4Bit = 1ULL << 12; // Malta CPU hardware INT2 input
+constexpr uint64_t kCauseIpHardwareMask = 0x0000FC00ULL; // IP[7:2], bits 15:10
+constexpr uint64_t kCauseIpExternalSerializedMask = 0x00007C00ULL; // IP[6:2] are pins
 constexpr uint64_t kCauseIpSwMask = 0x00000300ULL;  // IP[1:0], bits 9:8
+constexpr uint64_t kCauseIpMask = 0x0000FF00ULL;    // effective IP[7:0]
 constexpr unsigned kCauseExcCodeShift = 2;
 constexpr uint64_t kCauseExcCodeMask = 0x7CULL;  // bits 6:2
 // Every Cause bit this core implements (reads outside this mask are zero).
 constexpr uint64_t kCauseImplementedMask = kCauseBitBd | kCauseBitTi | kCauseBitDc |
-                                           kCauseBitIv | kCauseIp7Bit | kCauseIpSwMask |
+                                           kCauseBitIv | kCauseIpHardwareMask | kCauseIpSwMask |
                                            kCauseExcCodeMask;
 // Cause bits software may change through MTC0/DMTC0.
 constexpr uint64_t kCauseSoftwareWritableMask = kCauseIpSwMask | kCauseBitDc | kCauseBitIv;
@@ -483,7 +487,7 @@ public:
 
     // -- CP0 access -----------------------------------------------------------
     uint64_t cp0Status() const { return status_; }
-    uint64_t cp0Cause() const { return cause_; }
+    uint64_t cp0Cause() const { return cause_ | hardwareInterruptCauseBits(); }
     uint64_t cp0Epc() const { return epc_; }
     uint64_t cp0ErrorEpc() const { return errorEpc_; }
     uint64_t cp0BadVAddr() const { return badVAddr_; }
@@ -500,6 +504,12 @@ public:
     uint64_t cp0PageMask() const { return pageMask_; }
     uint64_t cp0Wired() const { return wired_; }
     uint64_t cp0XContext() const { return xcontext_; }
+
+    // Board-owned, level-sensitive MIPS hardware interrupt inputs INT0..INT5.
+    // The line maps to Cause.IP(2 + line); changing a pin never enters an
+    // exception directly. The next CPU instruction boundary samples it.
+    void setHardwareInterruptLine(unsigned line, bool asserted) noexcept;
+    bool hardwareInterruptLine(unsigned line) const noexcept;
 
     bool statusExl() const { return (status_ & kStatusBitExl) != 0; }
     bool statusErl() const { return (status_ & kStatusBitErl) != 0; }
@@ -641,6 +651,7 @@ public:
     static const char* opName(Mips64Op op);
 
 private:
+    uint64_t hardwareInterruptCauseBits() const noexcept;
     void setFault(Mips64Fault fault, const std::string& message);
     void clearFault();
 
@@ -715,6 +726,7 @@ private:
     // CP0 subset.
     uint64_t status_ = kStatusReset;
     uint64_t cause_ = 0;
+    uint8_t hardwareInterruptLines_ = 0;
     uint64_t epc_ = 0;
     uint64_t errorEpc_ = 0;
     uint64_t badVAddr_ = 0;

@@ -297,20 +297,33 @@ void testSafeGuestSoftwareResetAndColdReset() {
     // The guest performs one SW to SOFTRES; the device only records the
     // request. The VM applies reset after that instruction retires.
     const std::vector<uint32_t> resetProgram{
+        encI(0x0F, 0, 8, 0xBF00),       // CBUS UART base
+        encI(0x0D, 8, 8, 0x0900),
+        encI(0x09, 0, 9, 1),
+        encI(0x28, 8, 9, 8),            // guest enables UART RX interrupt
+        encI(0x09, 0, 9, 0x1000),
+        (0x10U << 26) | (4U << 21) | (9U << 16) | (12U << 11), // mtc0 Status: IM4, IE=0
         encI(0x0F, 0, 8, 0xBF00),
-        encI(0x0D, 8, 8, 0x0500),
+        encI(0x0D, 8, 8, 0x0500),       // FPGA SOFTRES
         encI(0x09, 0, 9, 0x42),
         encI(0x2B, 8, 9, 0),
     };
     const auto resetImage = encodeWords(resetProgram, true);
     CHECK(vm.loadProgram(resetImage.data(), resetImage.size(), 0x1000));
     core->core().setPc(0xFFFFFFFF80001000ULL);
+    CHECK(vm.run(6) == 6);
+    const uint8_t pendingInput = 0xA5;
+    CHECK(vm.enqueueMips64UartInput(&pendingInput, 1));
+    CHECK((core->core().cp0Cause() & kCauseIp4Bit) != 0);
+    CHECK((core->core().cp0Status() & 1) == 0);
     CHECK(vm.run(4) == 4);
     CHECK(board->SoftwareResetRequestCount() == 1);
     CHECK(!board->HasSoftwareResetRequest());
     CHECK(vm.getIP() == kMaltaResetVector);
     CHECK(core->core().cp0Status() == kStatusReset);
     CHECK(core->core().cp0Count() == 0 && core->core().cp0Compare() == 0);
+    CHECK((core->core().cp0Cause() & kCauseIp4Bit) == 0);
+    CHECK(board->Uart()->ReceiveFifoSize() == 0 && board->Uart()->PendingHostInputSize() == 0);
     CHECK(board->ConsoleSink()->Bytes().empty());
 
     // A bounded second run starts fetching the ROM again, proving reset was
@@ -438,6 +451,12 @@ bool sameReplayState(const Mips64FullVmSnapshot& left,
         left.uart.divisorLatchLow != right.uart.divisorLatchLow ||
         left.uart.divisorLatchHigh != right.uart.divisorLatchHigh ||
         left.uart.transmitCount != right.uart.transmitCount ||
+        left.uart.fifoEnabled != right.uart.fifoEnabled ||
+        left.uart.receiveTriggerLevel != right.uart.receiveTriggerLevel ||
+        left.uart.receiveOverrun != right.uart.receiveOverrun ||
+        left.uart.receiveFifo != right.uart.receiveFifo ||
+        left.uart.pendingHostInput != right.uart.pendingHostInput ||
+        left.routedUartInterruptLevel != right.routedUartInterruptLevel ||
         left.console.bytes != right.console.bytes || left.console.sequence != right.console.sequence ||
         left.physicalMemory.regions.size() != right.physicalMemory.regions.size()) return false;
     for (size_t i = 0; i < left.cpus.size(); ++i) {
@@ -491,6 +510,13 @@ void testSnapshotFormatAndCpuV5Restore() {
     CHECK(badVersion.RefreshIntegrity());
     std::string error;
     CHECK(!vm.restoreMips64FullSnapshot(badVersion, &error));
+    CHECK(!error.empty());
+    CHECK(vm.captureMips64FullSnapshot().integrityChecksum == beforeFailure.integrityChecksum);
+
+    Mips64FullVmSnapshot oldFormat = snapshot;
+    oldFormat.formatVersion = 1; // Transmit-only UART v1 is intentionally incompatible.
+    CHECK(oldFormat.RefreshIntegrity());
+    CHECK(!vm.restoreMips64FullSnapshot(oldFormat, &error));
     CHECK(!error.empty());
     CHECK(vm.captureMips64FullSnapshot().integrityChecksum == beforeFailure.integrityChecksum);
 
