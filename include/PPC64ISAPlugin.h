@@ -110,6 +110,9 @@ constexpr size_t STATE_SIZE_V5 = STATE_SIZE_V4 + 8;
 // all other bits preserved.
 constexpr uint64_t MSR_SF = 1ULL << 63;
 constexpr uint64_t MSR_HV = 1ULL << 60;
+// POWER9 Book3S secure-state bit (IBM bit 41). This profile stores the bit
+// for architectural preservation but does not expose secure-state changes.
+constexpr uint64_t MSR_S = 1ULL << 22;
 constexpr uint64_t MSR_EE = 1ULL << 15;
 constexpr uint64_t MSR_PR = 1ULL << 14;
 constexpr uint64_t MSR_FP = 1ULL << 13;
@@ -127,6 +130,13 @@ constexpr uint64_t MSR_LE = 1ULL << 0;
 constexpr uint64_t MSR_MUST_BE_ZERO =
     MSR_IP | MSR_LE;
 constexpr uint64_t MSR_RELOCATION = MSR_IR | MSR_DR;
+// MTMSRD L=0 fields modeled by this CPU profile. HV, S, ME, LE and all
+// unmodeled/reserved fields are deliberately absent from this write mask.
+// SF is represented, but a transition is rejected until 32-bit effective
+// address execution is implemented.
+constexpr uint64_t MSR_MTMSRD_WRITABLE =
+    MSR_SF | MSR_EE | MSR_PR | MSR_FP | MSR_FE0 | MSR_SE | MSR_BE |
+    MSR_FE1 | MSR_IR | MSR_DR | MSR_RI;
 // SRR1 mask: bits loaded from MSR upon interrupt (Linux SRR1_MSR_BITS).
 // Remaining low bits (0x783F0000) carry interrupt-specific cause.
 constexpr uint64_t SRR1_MSR_MASK = ~0x783F0000ULL;
@@ -237,8 +247,8 @@ constexpr uint16_t XO_BCLR = 16;
 constexpr uint16_t XO_BCCTR = 528;
 // Phase 4 X-form MSR access (opcode 31) and XL-form return (opcode 19).
 // mfmsr RT: opcode 31, XO 83, RA=RB=0, Rc=0 (AIX Appendix F; Linux reg.h).
-// mtmsr RS: opcode 31, XO 146, RA=RB=0, Rc=0. mtmsrd (XO 178) is valid per
-// ISA but explicitly unsupported in this profile (rejected, not delivered).
+// mtmsr RS: opcode 31, XO 146, RA=RB=0, Rc=0. mtmsrd (XO 178) has a
+// separate L bit in the RB field; the remaining reserved bits must be zero.
 // rfid: opcode 19, XO 18, exact encoding 0x4C000024 (all other XL fields 0;
 // instructionsets.com/powerisa/rfid: XL-form, privileged, SRR0->PC/MSR<-SRR1).
 constexpr uint16_t XO_MFMSR = 83;
@@ -416,6 +426,7 @@ enum class DecodedKind {
     MTSPR,      // mtspr (XFX-form, XO 467; SPR in {1,8,9} + Phase 4 priv set)
     MFMSR,      // mfmsr (X-form, opcode 31 XO 83, privileged, Phase 4)
     MTMSR,      // mtmsr (X-form, opcode 31 XO 146, privileged, Phase 4)
+    MTMSRD,     // mtmsrd (X-form, opcode 31 XO 178, privileged, Phase 22)
     RFID,       // rfid (XL-form 0x4C000024, privileged, Phase 4)
     HRFID,      // hrfid (XL-form 0x4C000224, hypervisor privileged)
     LBZ,        // lbz   (D-form, opcode 34)
@@ -715,8 +726,10 @@ public:
     void setHDAR(uint64_t v) { state_.hdar = v; }
     void setHDSISR(uint32_t v) { state_.hdsisr = v; }
     void setMSR(uint64_t v) {
-        if ((state_.msr & MSR_RELOCATION) != (v & MSR_RELOCATION)) {
-            clearReservation();
+        if (state_.msr != v) {
+            if ((state_.msr & MSR_RELOCATION) != (v & MSR_RELOCATION)) {
+                clearReservation();
+            }
             hasCachedInstruction_ = false;
         }
         state_.msr = v;
@@ -864,7 +877,7 @@ private:
     // True for valid-per-ISA but explicitly unimplemented encodings that must
     // stay terminal emulator EXCEPTIONs (never guest Program interrupts):
     // update-indexed load/stores, OE=1 on addc/adde/subfc (addco/addeo/
-    // subfco), mtmsrd (XO 178). Determined from the decoded word/kind.
+    // subfco). Determined from the decoded word/kind.
     static bool isUnimplementedValid(const DecodedInstruction& instr);
     // Per-page MMU permission validation for the full [ea,ea+width) range.
     // Returns true when every touched page passes. On false, `reason`

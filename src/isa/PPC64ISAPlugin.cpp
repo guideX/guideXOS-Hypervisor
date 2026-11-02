@@ -786,10 +786,6 @@ bool PPC64ISAPlugin::isUnimplementedValid(const DecodedInstruction& instr) {
         combined == (XO_SUBFC + 512)) {
         return true;
     }
-    // mtmsrd (XO 178) is valid-per-ISA but unsupported in this profile.
-    if (combined == XO_MTMSRD) {
-        return true;
-    }
     return false;
 }
 
@@ -1541,13 +1537,14 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             } else if (combined == XO_MFMSR || combined == XO_MTMSR ||
                        combined == XO_MTMSRD) {
                 // Phase 4 MSR access: RA and RB field positions must be zero
-                // and Rc must be 0 (X-form with no record bit). mtmsrd
-                // (XO 178) is valid-per-ISA but explicitly unsupported.
+                // and Rc must be 0 for mfmsr/mtmsr. MTMSRD uses RB[0] as L;
+                // RB[1:4] are reserved.
                 const uint16_t raPos = static_cast<uint16_t>((word >> 16) & 0x1FU);
                 const uint16_t rbPos = static_cast<uint16_t>((word >> 11) & 0x1FU);
                 if (combined == XO_MTMSRD) {
-                    instr.kind = DecodedKind::UNSUPPORTED;
-                    instr.supported = false;
+                    instr.kind = DecodedKind::MTMSRD;
+                    instr.l = (rbPos & 0x10U) != 0;
+                    instr.supported = !rc && raPos == 0 && (rbPos & 0x0FU) == 0;
                 } else if (rc || raPos != 0 || rbPos != 0) {
                     instr.kind = (combined == XO_MFMSR) ? DecodedKind::MFMSR
                                                        : DecodedKind::MTMSR;
@@ -1877,6 +1874,11 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
                 break;
             }
             out << "mtmsr r" << static_cast<int>(instr.rt);
+            break;
+        case DecodedKind::MTMSRD:
+            out << "mtmsrd r" << static_cast<int>(instr.rt);
+            if (instr.l) out << ",1";
+            if (!instr.supported) out << " ; invalid encoding";
             break;
         case DecodedKind::RFID:
             out << "rfid";
@@ -3595,6 +3597,65 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
+        case DecodedKind::MTMSRD: {
+            // mtmsrd is privileged. Reserved fields have already been
+            // rejected by decode(), before this execution path can mutate
+            // architectural state.
+            if (inProblemState()) {
+                recordFault(PPC64FaultCategory::PRIVILEGE_VIOLATION, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtmsrd in problem state", false);
+                return maybeDeliver(memory, ISAExecutionResult::EXCEPTION,
+                                    VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
+            }
+
+            const uint64_t oldMSR = state_.msr;
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t writeMask = instr.l
+                ? (MSR_EE | MSR_RI)
+                : MSR_MTMSRD_WRITABLE;
+            uint64_t proposed = (oldMSR & ~writeMask) | (source & writeMask);
+
+            if (!instr.l) {
+                // Book3S 64-bit server state requires EE/IR/DR on entry to
+                // problem state. Secure hypervisor state (S:HV:PR=110) runs
+                // without process relocation. S/HV remain protected fields.
+                if ((proposed & MSR_PR) != 0) {
+                    proposed |= MSR_EE | MSR_IR | MSR_DR;
+                }
+                if ((proposed & (MSR_S | MSR_HV | MSR_PR)) ==
+                    (MSR_S | MSR_HV)) {
+                    proposed &= ~MSR_RELOCATION;
+                }
+            }
+
+            // The current interpreter has 64-bit address generation only.
+            // Reject SF transitions instead of retiring them with stale
+            // effective-address semantics.
+            if (((proposed ^ oldMSR) & MSR_SF) != 0) {
+                recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtmsrd SF transition requires unsupported 32-bit execution mode",
+                            false);
+                return ISAExecutionResult::EXCEPTION;
+            }
+
+            std::string modeReason;
+            if (!isProposedMSRValid(proposed, memory, modeReason)) {
+                recordFault(PPC64FaultCategory::UNSUPPORTED_STATE, cia,
+                            instr.raw, true, 0, false, PPC64AccessType::NONE, 0,
+                            "mtmsrd requests unsupported MSR mode: " + modeReason,
+                            false);
+                return ISAExecutionResult::EXCEPTION;
+            }
+
+            // This invalidates decode state and any reservation tied to the
+            // old translation context. VirtualMachine reevaluates pending
+            // XICS/DEC interrupts at the next boundary, after retirement.
+            setMSR(proposed);
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
         case DecodedKind::RFID: {
             // rfid: privileged (requires PR=0). Target from SRR0 (low 2 bits
             // ignored, as on hardware); MSR restored from SRR1 masked by
@@ -4179,7 +4240,7 @@ bool PPC64ISAPlugin::isProposedMSRValid(uint64_t proposed, IMemory& memory,
         return false;
     }
     if (((proposed ^ state_.msr) & MSR_HV) != 0) {
-        reason = "mtmsr/rfid cannot change MSR[HV] authority";
+        reason = "guest MSR instructions cannot change MSR[HV] authority";
         return false;
     }
     if ((proposed & MSR_HV) != 0 &&

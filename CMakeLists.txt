@@ -1078,6 +1078,27 @@ endif()
 add_test(NAME PPC64Phase21Tests COMMAND test_ppc64_phase21)
 set_tests_properties(PPC64Phase21Tests PROPERTIES TIMEOUT 120)
 
+# PPC64 Phase 22 MTMSRD decode, MSR transitions, interrupt qualification, and
+# authenticated Linux replay through the production VM execution path.
+add_executable(test_ppc64_phase22
+    tests/test_ppc64_phase22.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase22 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase22 PRIVATE
+    PPC64_PHASE22_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase22 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase22 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase22Tests COMMAND test_ppc64_phase22)
+set_tests_properties(PPC64Phase22Tests PROPERTIES TIMEOUT 240)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp
