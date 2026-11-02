@@ -197,6 +197,21 @@ std::vector<uint8_t> readMemory(IMemory& memory, uint64_t address, size_t size) 
 
 std::string independentlyDecodeFrontier(uint32_t word) {
     const uint32_t primary = (word >> 26) & 0x3FU;
+    if (primary == 30) {
+        // Independent MD-form decode for the next observed frontier. XO=0 is
+        // rldicl; this test labels the instruction without implementing it.
+        const uint32_t rs = (word >> 21) & 0x1FU;
+        const uint32_t ra = (word >> 16) & 0x1FU;
+        const uint32_t sh = ((word >> 11) & 0x1FU) | (((word >> 1) & 1U) << 5);
+        const uint32_t mb = ((word >> 6) & 0x1FU) | (((word >> 5) & 1U) << 5);
+        const uint32_t xo = (word >> 2) & 0x7U;
+        if (xo == 0) {
+            std::ostringstream decoded;
+            decoded << "rldicl r" << std::dec << ra << ",r" << rs << "," << sh
+                    << "," << mb << " (Rc=" << (word & 1U) << ")";
+            return decoded.str();
+        }
+    }
     if (primary != 21) return "no independent decode for primary opcode " +
                                 std::to_string(primary);
     // Power ISA X-form field layout for rlwinm, decoded independently of the
@@ -938,9 +953,9 @@ void testAuthenticLinuxContinuation() {
     CHECK(first.pvrPostTime == first.pvrPreTime + 1);
     CHECK(first.retired > 27);
     CHECK(first.stopNip != 0xCFF4);
-    CHECK(first.stopNip == 0xCFF8);
-    CHECK(first.frontierWord == 0x5400843EU);
-    CHECK(first.independentFrontierDecode == "rlwinm r0,r0,16,16,31 (Rc=0)");
+    CHECK(first.stopNip == 0xD024);
+    CHECK(first.frontierWord == 0x7B398000U);
+    CHECK(first.independentFrontierDecode == "rldicl r25,r25,16,0 (Rc=0)");
     CHECK(first.trace.find("nip=0xcff4 raw=0x7c1f42a6 decoded=mfspr r0,287 retired=1 next_nip=0xcff8") !=
           std::string::npos);
     CHECK(first.frontier.find("stop_nip=0x") != std::string::npos);
@@ -974,9 +989,10 @@ void testAuthenticLinuxContinuation() {
     CHECK(writeText(runDirectory / "bounded-linux-trace.txt", first.trace));
     CHECK(writeText(runDirectory / "frontier-summary.txt", first.frontier));
     CHECK(writeText(runDirectory / "frontier-independent-decode.txt",
-        "word=0x5400843e\nprimary_opcode=21\n"
-        "independent_decode=rlwinm r0,r0,16,16,31 (Rc=0)\n"
-        "field_source=Power ISA rlwinm field layout\n"));
+        "word=0x7b398000\nprimary_opcode=30\nRS=25\nRA=25\nSH=16\n"
+        "MD_XO=0\nMB=0\nRc=0\n"
+        "independent_decode=rldicl r25,r25,16,0 (Rc=0)\n"
+        "field_source=Power ISA MD-form field layout\n"));
     CHECK(writeText(runDirectory / "physical-memory-plan.txt", first.memoryPlan));
     CHECK(writeText(runDirectory / "entry-registers.txt", first.entryRegisters));
     {

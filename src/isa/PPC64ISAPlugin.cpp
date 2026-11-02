@@ -95,11 +95,36 @@ uint64_t rotateLeft64(uint64_t value, unsigned shift) {
     return (value << shift) | (value >> (64U - shift));
 }
 
+uint32_t rotateLeft32(uint32_t value, unsigned shift) {
+    shift &= 31U;
+    if (shift == 0U) {
+        return value;
+    }
+    return static_cast<uint32_t>((value << shift) | (value >> (32U - shift)));
+}
+
 uint64_t maskPowerBits0Through(unsigned end) {
     // Power ISA numbers the most-significant bit as bit 0. Keep the top
     // end+1 bits and avoid a shift by 64 for the end==63 boundary.
     return end >= 63U ? std::numeric_limits<uint64_t>::max()
                       : (std::numeric_limits<uint64_t>::max() << (63U - end));
+}
+
+uint64_t maskPowerBits(unsigned start, unsigned end) {
+    // Power bit 0 is the most significant bit. M-form word masks are shifted
+    // into bit positions MB+32..ME+32 in a 64-bit GPR; when MB > ME, the mask
+    // wraps across bit 63 to bit 0, as required by Book I's MASK definition.
+    uint64_t mask = 0;
+    unsigned bit = start & 63U;
+    const unsigned stop = end & 63U;
+    for (;;) {
+        mask |= uint64_t{1} << (63U - bit);
+        if (bit == stop) {
+            break;
+        }
+        bit = (bit + 1U) & 63U;
+    }
+    return mask;
 }
 
 }  // namespace
@@ -1304,6 +1329,16 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.uimm = static_cast<uint16_t>(word & 0xFFFF);
             instr.supported = true;
             break;
+        case OPCODE_RLWINM:
+            instr.kind = DecodedKind::RLWINM;
+            instr.rt = static_cast<uint8_t>((word >> 21) & 0x1FU); // RS
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1FU); // RA
+            instr.sh = static_cast<uint8_t>((word >> 11) & 0x1FU);
+            instr.mb = static_cast<uint8_t>((word >> 6) & 0x1FU);
+            instr.me = static_cast<uint8_t>((word >> 1) & 0x1FU);
+            instr.rc = (word & 1U) != 0;
+            instr.supported = true;
+            break;
         case 30: {
             // MD-form rotate instructions split their sixth immediate bits
             // into the low-order encoding bits. Implement only rldicr here;
@@ -1788,6 +1823,14 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (instr.rc) {
                 out << ".";
             }
+            break;
+        case DecodedKind::RLWINM:
+            out << "rlwinm" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt)
+                << "," << static_cast<unsigned>(instr.sh)
+                << "," << static_cast<unsigned>(instr.mb)
+                << "," << static_cast<unsigned>(instr.me);
             break;
         case DecodedKind::CMP:
             out << (instr.l ? "cmpd " : "cmpw ");
@@ -3301,6 +3344,26 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t source = state_.gpr[instr.rt];
             const uint64_t result = rotateLeft64(source, instr.sh) &
                                     maskPowerBits0Through(instr.me);
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::RLWINM: {
+            // ROTL32 is defined over the low-order word replicated in both
+            // halves of a 64-bit value. This representation matters for
+            // wrapping M masks, which can select upper GPR bits in 64-bit
+            // Book3S semantics. Read RS before writing RA for aliasing.
+            const uint32_t source = static_cast<uint32_t>(state_.gpr[instr.rt]);
+            const uint32_t rotated = rotateLeft32(source, instr.sh);
+            const uint64_t replicated = (static_cast<uint64_t>(rotated) << 32) |
+                                        static_cast<uint64_t>(rotated);
+            const uint64_t mask = maskPowerBits(
+                static_cast<unsigned>(instr.mb) + 32U,
+                static_cast<unsigned>(instr.me) + 32U);
+            const uint64_t result = replicated & mask;
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);

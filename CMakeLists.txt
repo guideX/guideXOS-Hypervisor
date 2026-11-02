@@ -1119,6 +1119,26 @@ endif()
 add_test(NAME PPC64Phase23Tests COMMAND test_ppc64_phase23)
 set_tests_properties(PPC64Phase23Tests PROPERTIES TIMEOUT 300)
 
+# PPC64 Phase 24 RLWINM semantics, production guest execution, and Linux replay.
+add_executable(test_ppc64_phase24
+    tests/test_ppc64_phase24.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase24 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase24 PRIVATE
+    PPC64_PHASE24_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase24 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase24 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase24Tests COMMAND test_ppc64_phase24)
+set_tests_properties(PPC64Phase24Tests PROPERTIES TIMEOUT 300)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

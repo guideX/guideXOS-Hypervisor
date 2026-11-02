@@ -203,6 +203,7 @@ constexpr uint8_t OPCODE_XORI = 26;
 constexpr uint8_t OPCODE_XORIS = 27;
 constexpr uint8_t OPCODE_ANDI_DOT = 28;
 constexpr uint8_t OPCODE_ANDIS_DOT = 29;
+constexpr uint8_t OPCODE_RLWINM = 21;
 // Phase 3 D-form integer load/store opcodes (Power ISA Book I §4.6).
 constexpr uint8_t OPCODE_LWZ = 32;
 constexpr uint8_t OPCODE_LWZU = 33;
@@ -415,6 +416,7 @@ enum class DecodedKind {
     ANDIS_DOT,  // andis.     (D-form opcode 29; always records CR0)
     XORI,       // xori       (D-form opcode 26; never records)
     XORIS,      // xoris      (D-form opcode 27; never records)
+    RLWINM,     // rlwinm[.] (M-form, primary opcode 21)
     RLDICR,     // rldicr[.] (MD-form, primary opcode 30, MD XO 1)
     CMP,        // cmp        (X-form, XO 0; signed, L selects 32/64-bit)
     CMPL,       // cmpl       (X-form, XO 32; unsigned, L selects 32/64-bit)
@@ -497,7 +499,8 @@ struct DecodedInstruction {
     uint16_t ds = 0;     // DS-form 14-bit displacement field (bits 2-15)
     uint8_t dsXo = 0;    // DS-form 2-bit XO field (word bits 0-1)
     uint8_t sh = 0;      // MD-form 6-bit shift amount
-    uint8_t me = 0;      // MD-form 6-bit mask end (Power ISA bit numbering)
+    uint8_t mb = 0;      // M-form 5-bit mask begin (Power ISA bit numbering)
+    uint8_t me = 0;      // mask end (M-form 5-bit; MD-form 6-bit)
 };
 
 /**
