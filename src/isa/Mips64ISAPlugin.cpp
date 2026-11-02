@@ -204,6 +204,13 @@ void Mips64ISAPlugin::configureEndianness(bool littleEndian) {
     hasCachedInstruction_ = false;
 }
 
+void Mips64ISAPlugin::SwapCoreState(Mips64Cpu& staged) noexcept {
+    state_.cpu().SwapArchitecturalState(staged);
+    hasCachedInstruction_ = false;
+    cachedAddress_ = 0;
+    cachedInstruction_ = Mips64Decoded{};
+}
+
 bool Mips64ISAPlugin::hasFeature(const std::string& feature) const {
     if (feature == "mips64r2") return true;
     if (feature == "delay_slot") return true;

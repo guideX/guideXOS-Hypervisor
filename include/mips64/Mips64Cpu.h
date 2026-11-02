@@ -633,6 +633,7 @@ public:
     static constexpr uint8_t kSerializationVersionV3 = 3;
     std::vector<uint8_t> serialize() const;
     bool deserialize(const uint8_t* data, std::size_t size);
+    void SwapArchitecturalState(Mips64Cpu& other) noexcept;
 
     // -- debugging ---------------------------------------------------------------
     std::string toString() const;

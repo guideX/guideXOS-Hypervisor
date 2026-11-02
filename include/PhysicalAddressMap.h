@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ia64 {
@@ -42,6 +43,15 @@ public:
     virtual ~IPhysicalRegionBackend() = default;
     virtual void Read(uint64_t offset, uint8_t* destination, size_t size) const = 0;
     virtual void Write(uint64_t offset, const uint8_t* source, size_t size) = 0;
+    virtual uint8_t BackendKind() const noexcept = 0;
+    virtual const void* BackingIdentity() const noexcept = 0;
+    virtual void CaptureState(struct PhysicalRegionSnapshot& snapshot) const = 0;
+    virtual bool PrepareRestore(
+        const struct PhysicalRegionSnapshot& snapshot,
+        std::unique_ptr<class IPhysicalRegionPreparedState>& prepared,
+        std::string* error) const = 0;
+    virtual void CommitRestore(
+        std::unique_ptr<class IPhysicalRegionPreparedState> prepared) noexcept = 0;
 };
 
 // MMIO targets receive offsets within exactly one prevalidated physical
@@ -53,6 +63,14 @@ public:
     virtual void Reset() = 0;
     virtual std::optional<bool> InterruptSignal() const noexcept { return std::nullopt; }
     virtual std::map<std::string, uint64_t> InspectState() const { return {}; }
+    uint8_t BackendKind() const noexcept override;
+    const void* BackingIdentity() const noexcept override;
+    void CaptureState(struct PhysicalRegionSnapshot& snapshot) const override;
+    bool PrepareRestore(const struct PhysicalRegionSnapshot& snapshot,
+                        std::unique_ptr<class IPhysicalRegionPreparedState>& prepared,
+                        std::string* error) const override;
+    void CommitRestore(
+        std::unique_ptr<class IPhysicalRegionPreparedState> prepared) noexcept override;
 };
 
 struct PhysicalRegionInfo {
@@ -62,6 +80,35 @@ struct PhysicalRegionInfo {
     bool readable = true;
     bool writable = true;
     std::vector<size_t> accessWidths;
+};
+
+enum class PhysicalBackendKind : uint8_t { DenseRam = 1, SparseRam = 2, Rom = 3, Mmio = 4 };
+
+// Backend-owned physical-map image. Non-RAM records carry only their
+// manifest; MMIO state is captured through the device's own typed interface.
+struct PhysicalRegionSnapshot {
+    PhysicalRegionInfo info;
+    PhysicalBackendKind backendKind = PhysicalBackendKind::DenseRam;
+    uint64_t backingId = 0;
+    size_t sparseCapacity = 0;
+    std::vector<uint8_t> denseBytes;
+    std::vector<std::pair<uint64_t, uint8_t>> sparseBytes;
+};
+
+struct PhysicalAddressMapSnapshot {
+    std::vector<PhysicalRegionSnapshot> regions;
+    uint64_t payloadBytes = 0;
+};
+
+class IPhysicalRegionPreparedState {
+public:
+    virtual ~IPhysicalRegionPreparedState() = default;
+};
+
+class PreparedPhysicalAddressMapRestore {
+    friend class PhysicalAddressMap;
+    std::vector<std::pair<std::shared_ptr<IPhysicalRegionBackend>,
+                          std::unique_ptr<IPhysicalRegionPreparedState>>> states_;
 };
 
 class PhysicalAddressMap {
@@ -92,6 +139,12 @@ public:
 
     void ResetDevices();
     std::vector<PhysicalRegionInfo> Regions() const;
+    PhysicalAddressMapSnapshot CaptureSnapshot() const;
+    bool PrepareRestore(const PhysicalAddressMapSnapshot& snapshot,
+                        PreparedPhysicalAddressMapRestore& prepared,
+                        std::string* error = nullptr) const;
+    void CommitRestore(PreparedPhysicalAddressMapRestore&& prepared) noexcept;
+    bool IsMappedDeviceAt(uint64_t base, const IMmioDevice* device) const noexcept;
     bool IsEmpty() const noexcept { return regions_.empty(); }
 
 private:

@@ -62,6 +62,7 @@ public:
 
     SimpleCPUSchedulerState createSnapshot() const;
     bool restoreSnapshot(const SimpleCPUSchedulerState& snapshot);
+    bool restoreSnapshot(SimpleCPUSchedulerState&& snapshot) noexcept;
 
 private:
     int lastCPUIndex_;      // Last CPU that was selected

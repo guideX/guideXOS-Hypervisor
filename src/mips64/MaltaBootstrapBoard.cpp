@@ -303,6 +303,33 @@ uint64_t MaltaFpgaRegisters::ResetRequestCount() const noexcept {
     return resetMailbox_->requests.load();
 }
 
+MaltaFpgaRegisters::Snapshot MaltaFpgaRegisters::CaptureSnapshot() const noexcept {
+    Snapshot snapshot;
+    snapshot.endianness = endianness_;
+    snapshot.switches = switches_;
+    snapshot.jumpers = jumpers_;
+    snapshot.ledBar = ledBar_;
+    snapshot.asciiDisplay = asciiDisplay_;
+    snapshot.breakReset = breakReset_;
+    snapshot.resetPending = resetMailbox_->pending.load();
+    snapshot.resetRequestCount = resetMailbox_->requests.load();
+    return snapshot;
+}
+
+bool MaltaFpgaRegisters::ValidateSnapshot(const Snapshot& snapshot) const noexcept {
+    return snapshot.version == 1 && snapshot.endianness == endianness_ &&
+           snapshot.switches == switches_ && snapshot.jumpers == jumpers_ &&
+           (!snapshot.resetPending || snapshot.resetRequestCount != 0);
+}
+
+void MaltaFpgaRegisters::RestoreSnapshot(const Snapshot& snapshot) noexcept {
+    ledBar_ = snapshot.ledBar;
+    asciiDisplay_ = snapshot.asciiDisplay;
+    breakReset_ = snapshot.breakReset;
+    resetMailbox_->requests.store(snapshot.resetRequestCount);
+    resetMailbox_->pending.store(snapshot.resetPending);
+}
+
 std::vector<uint8_t> MaltaBootstrapBoard::BuildDemoBootRom(
     mips64::Mips64Endianness endianness) {
     return encodeWords(makeBootstrapWords(), endianness,

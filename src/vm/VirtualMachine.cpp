@@ -20,6 +20,9 @@
 #include <stdexcept>
 #include <sstream>
 #include <algorithm>
+#include <array>
+#include <exception>
+#include <limits>
 
 namespace ia64 {
 
@@ -209,6 +212,7 @@ VirtualMachine::~VirtualMachine() {
 // ============================================================================
 
 bool VirtualMachine::init() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
 LOG_INFO("Initializing VirtualMachine...");
     
 // Record memory allocation in boot trace
@@ -294,6 +298,7 @@ if (!bootStateMachine_.powerOn()) {
 }
 
 bool VirtualMachine::reset() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     LOG_INFO("Resetting VirtualMachine...");
     
     try {
@@ -372,6 +377,7 @@ bool VirtualMachine::reset() {
 }
 
 void VirtualMachine::halt() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
 if (state_ == VMState::RUNNING) {
     LOG_INFO("Halting VirtualMachine execution");
     state_ = VMState::STOPPED;
@@ -390,6 +396,7 @@ if (state_ == VMState::RUNNING) {
 // ============================================================================
 
 bool VirtualMachine::step() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot step - VM not initialized");
         return false;
@@ -398,6 +405,17 @@ bool VirtualMachine::step() {
     if (state_ == VMState::ERROR) {
         LOG_ERROR("Cannot step - VM in error state");
         return false;
+    }
+
+    // A restored SOFTRES mailbox is handled at the next VM boundary before
+    // the scheduler lets another guest instruction run.
+    if (maltaBootstrapBoard_ && maltaBootstrapBoard_->ConsumeSoftwareResetRequest()) {
+        if (!applyMips64MaltaColdReset(true)) {
+            LOG_ERROR("Failed to apply pending Malta software reset");
+            state_ = VMState::ERROR;
+            return false;
+        }
+        return true;
     }
 
     if (state_ != VMState::RUNNING && state_ != VMState::PAUSED) {
@@ -435,6 +453,7 @@ bool VirtualMachine::step() {
 }
 
 uint64_t VirtualMachine::run(uint64_t maxCycles) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     LOG_INFO("Starting VM execution" + 
              (maxCycles > 0 ? " (max cycles: " + std::to_string(maxCycles) + ")" : " (unlimited)"));
     
@@ -485,6 +504,7 @@ uint64_t VirtualMachine::run(uint64_t maxCycles) {
 // ============================================================================
 
 bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t loadAddress) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!data || size == 0) {
         LOG_ERROR("Invalid program data");
         return false;
@@ -532,6 +552,7 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
 }
 
 void VirtualMachine::setEntryPoint(uint64_t address) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
 std::ostringstream oss;
 oss << "Setting entry point to 0x" << std::hex << address << std::dec;
 LOG_INFO(oss.str());
@@ -663,6 +684,7 @@ uint64_t VirtualMachine::readGR(size_t index) const {
 }
 
 void VirtualMachine::writeGR(size_t index, uint64_t value) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (activeCPUIndex_ < 0 || activeCPUIndex_ >= static_cast<int>(cpus_.size())) {
         throw std::runtime_error("No active CPU");
     }
@@ -682,6 +704,7 @@ int VirtualMachine::getActiveCPUIndex() const {
 }
 
 bool VirtualMachine::setActiveCPU(int cpuIndex) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!isValidCPUIndex(cpuIndex)) {
         LOG_ERROR("Invalid CPU index: " + std::to_string(cpuIndex));
         return false;
@@ -728,6 +751,7 @@ uint64_t VirtualMachine::readGR(int cpuIndex, size_t regIndex) const {
 }
 
 void VirtualMachine::writeGR(int cpuIndex, size_t regIndex, uint64_t value) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!isValidCPUIndex(cpuIndex)) {
         throw std::out_of_range("Invalid CPU index");
     }
@@ -748,6 +772,7 @@ uint64_t VirtualMachine::getIP(int cpuIndex) const {
 }
 
 void VirtualMachine::setIP(int cpuIndex, uint64_t address) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!isValidCPUIndex(cpuIndex)) {
         throw std::out_of_range("Invalid CPU index");
     }
@@ -835,6 +860,7 @@ const IMemory& VirtualMachine::getMemory() const {
 }
 
 PhysicalAddressMap& VirtualMachine::enableMips64PhysicalAddressMap() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (state_ == VMState::RUNNING || state_ == VMState::PAUSED) {
         throw std::logic_error("MIPS64 physical map must be configured while the VM is stopped");
     }
@@ -850,11 +876,13 @@ PhysicalAddressMap& VirtualMachine::enableMips64PhysicalAddressMap() {
 }
 
 void VirtualMachine::configureMips64MaltaBootstrap() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     configureMips64MaltaBootstrap(MaltaBootstrapConfig{});
 }
 
 void VirtualMachine::configureMips64MaltaBootstrap(
     const MaltaBootstrapConfig& config) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (state_ == VMState::RUNNING || state_ == VMState::PAUSED) {
         throw std::logic_error("Malta bootstrap profile must be configured while the VM is stopped");
     }
@@ -901,6 +929,7 @@ void VirtualMachine::configureMips64MaltaBootstrap(
 }
 
 bool VirtualMachine::coldResetMips64Malta() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!maltaBootstrapBoard_) {
         LOG_ERROR("Malta cold reset requested without a configured board profile");
         return false;
@@ -911,6 +940,303 @@ bool VirtualMachine::coldResetMips64Malta() {
         return false;
     }
     return applyMips64MaltaColdReset(false);
+}
+
+Mips64FullVmSnapshot VirtualMachine::captureMips64FullSnapshot() const {
+    std::unique_lock<std::recursive_mutex> boundaryLock(
+        mips64SnapshotBoundaryMutex_, std::try_to_lock);
+    if (!boundaryLock.owns_lock()) {
+        throw std::logic_error("MIPS64 full snapshot requires an idle VM mutation boundary");
+    }
+    if (state_ != VMState::STOPPED && state_ != VMState::PAUSED) {
+        throw std::logic_error("MIPS64 full snapshot requires a stopped or paused instruction boundary");
+    }
+    if (!maltaBootstrapBoard_ || !memory_ || !memory_->GetPhysicalAddressMap()) {
+        throw std::logic_error("MIPS64 full snapshots require the configured Malta physical map");
+    }
+    const auto* scheduler = dynamic_cast<const SimpleCPUScheduler*>(scheduler_.get());
+    if (!scheduler || cpus_.empty() || cpus_.size() > 64 ||
+        activeCPUIndex_ < -1 || activeCPUIndex_ >= static_cast<int>(cpus_.size())) {
+        throw std::logic_error("MIPS64 full snapshot encountered an inconsistent VM scheduler");
+    }
+
+    Mips64FullVmSnapshot snapshot;
+    const MaltaBootstrapConfig& config = maltaBootstrapBoard_->Config();
+    snapshot.cpuCount = static_cast<uint32_t>(cpus_.size());
+    snapshot.endianness = config.endianness;
+    snapshot.ramSize = static_cast<uint64_t>(memory_->GetTotalSize());
+    snapshot.romSize = static_cast<uint64_t>(maltaBootstrapBoard_->BootRomImage().size());
+    snapshot.romContentHash = Mips64FullSnapshotHashBytes(maltaBootstrapBoard_->BootRomImage());
+    snapshot.flashMirrorMapped = config.mapFlashMirror;
+    snapshot.configuredSwitches = config.switches;
+    snapshot.configuredJumpers = config.jumpers;
+    snapshot.builtInDemoRom = config.useBuiltInDemoRom;
+    snapshot.mmuEnabled = memory_->IsMMUEnabled();
+    snapshot.physicalMemory = memory_->GetPhysicalAddressMap()->CaptureSnapshot();
+    snapshot.fpga = maltaBootstrapBoard_->Fpga()->CaptureSnapshot();
+    snapshot.uart = maltaBootstrapBoard_->Uart()->CaptureSnapshot();
+    snapshot.console = maltaBootstrapBoard_->ConsoleSink()->CaptureSnapshot();
+    snapshot.pendingDeferredBoardReset = maltaBootstrapBoard_->HasSoftwareResetRequest();
+    snapshot.vmStateValue = static_cast<uint32_t>(state_);
+    snapshot.activeCpuIndex = activeCPUIndex_;
+    snapshot.totalVirtualCycles = cyclesExecuted_;
+    snapshot.scheduler = scheduler->createSnapshot();
+
+    snapshot.cpus.reserve(cpus_.size());
+    for (size_t index = 0; index < cpus_.size(); ++index) {
+        const CPUContext& context = cpus_[index];
+        const auto* plugin = dynamic_cast<const mips64::Mips64ISAPlugin*>(context.isaPlugin.get());
+        if (!context.cpu || !plugin || context.cpuId != index) {
+            throw std::logic_error("MIPS64 full snapshot requires one valid MIPS64 core per CPU");
+        }
+        Mips64FullSnapshotCpu cpu;
+        cpu.cpuId = context.cpuId;
+        cpu.architecturalState = plugin->core().serialize();
+        cpu.executionState = context.state;
+        cpu.cyclesExecuted = context.cyclesExecuted;
+        cpu.instructionsExecuted = context.instructionsExecuted;
+        cpu.idleCycles = context.idleCycles;
+        cpu.enabled = context.enabled;
+        cpu.lastActivationTime = context.lastActivationTime;
+        snapshot.cpus.push_back(std::move(cpu));
+    }
+    if (!snapshot.RefreshIntegrity()) {
+        throw std::length_error("MIPS64 full snapshot exceeds its bounded format limits");
+    }
+    return snapshot;
+}
+
+bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snapshot,
+                                               std::string* error) {
+    auto fail = [error](const char* message) {
+        if (error) *error = message;
+        return false;
+    };
+    std::unique_lock<std::recursive_mutex> boundaryLock(
+        mips64SnapshotBoundaryMutex_, std::try_to_lock);
+    if (!boundaryLock.owns_lock()) {
+        return fail("MIPS64 full restore requires an idle VM mutation boundary");
+    }
+    try {
+        const Mips64SnapshotFailurePoint injectedFailure = mips64SnapshotFailurePointForTesting_;
+        mips64SnapshotFailurePointForTesting_ = Mips64SnapshotFailurePoint::None;
+        const auto injectFailure = [injectedFailure](Mips64SnapshotFailurePoint point) {
+            return injectedFailure == point;
+        };
+        if (state_ != VMState::STOPPED && state_ != VMState::PAUSED) {
+            return fail("MIPS64 full restore requires a stopped or paused instruction boundary");
+        }
+        if (!maltaBootstrapBoard_ || !memory_ || !memory_->GetPhysicalAddressMap()) {
+            return fail("destination VM does not have the MIPS64 Malta physical map");
+        }
+        if (!snapshot.ValidateIntegrity()) return fail("snapshot component lengths or integrity checksum are invalid");
+        constexpr std::array<uint8_t, 8> expectedMagic{{'G', 'X', 'M', '6', '4', 'S', 'N', 'P'}};
+        if (snapshot.magic != expectedMagic || snapshot.formatVersion != Mips64FullVmSnapshot::kFormatVersion ||
+            snapshot.isaIdentity != "MIPS64" ||
+            snapshot.boardProfileIdentity != "MaltaBootstrapSubset") {
+            return fail("unsupported MIPS64 full snapshot format or identity");
+        }
+        if (snapshot.cpuComponentVersion != Mips64FullVmSnapshot::kCpuSerializationVersion ||
+            snapshot.memoryComponentVersion != 1 || snapshot.fpgaComponentVersion != 1 ||
+            snapshot.uartComponentVersion != 1 || snapshot.consoleComponentVersion != 1 ||
+            snapshot.schedulerComponentVersion != 1 || snapshot.vmComponentVersion != 1) {
+            return fail("unsupported MIPS64 snapshot component version");
+        }
+        const MaltaBootstrapConfig& config = maltaBootstrapBoard_->Config();
+        if (snapshot.byteOrderTag != 0x01020304 || snapshot.endianness != config.endianness ||
+            snapshot.cpuCount != cpus_.size() || snapshot.cpus.size() != cpus_.size() ||
+            snapshot.ramSize != memory_->GetTotalSize() ||
+            snapshot.romBase != kMaltaResetRomBase ||
+            snapshot.romSize != maltaBootstrapBoard_->BootRomImage().size() ||
+            snapshot.romContentHash != Mips64FullSnapshotHashBytes(maltaBootstrapBoard_->BootRomImage()) ||
+            snapshot.flashMirrorMapped != config.mapFlashMirror ||
+            snapshot.configuredSwitches != config.switches ||
+            snapshot.configuredJumpers != config.jumpers ||
+            snapshot.builtInDemoRom != config.useBuiltInDemoRom ||
+            snapshot.mmuEnabled != memory_->IsMMUEnabled()) {
+            return fail("snapshot board, ROM, endianness, RAM, or VM configuration does not match");
+        }
+        if (snapshot.vmStateValue != static_cast<uint32_t>(VMState::STOPPED) &&
+            snapshot.vmStateValue != static_cast<uint32_t>(VMState::PAUSED)) {
+            return fail("snapshot contains an unsupported VM lifecycle state");
+        }
+        if (snapshot.activeCpuIndex < -1 ||
+            snapshot.activeCpuIndex >= static_cast<int32_t>(cpus_.size())) {
+            return fail("snapshot active CPU index is invalid");
+        }
+        if (snapshot.scheduler.numCPUs != static_cast<int>(cpus_.size()) ||
+            snapshot.scheduler.quantumSize == 0 || snapshot.scheduler.lastCPUIndex < -1 ||
+            snapshot.scheduler.lastCPUIndex >= static_cast<int>(cpus_.size()) ||
+            snapshot.scheduler.cpuBundleCounters.size() != cpus_.size()) {
+            return fail("snapshot round-robin scheduler state is invalid");
+        }
+        if (snapshot.pendingDeferredBoardReset != snapshot.fpga.resetPending ||
+            !maltaBootstrapBoard_->Fpga()->ValidateSnapshot(snapshot.fpga) ||
+            !Ns16550Uart::ValidateSnapshot(snapshot.uart)) {
+            return fail("snapshot Malta FPGA, UART, or deferred-reset state is invalid");
+        }
+        for (size_t index = 0; index < cpus_.size(); ++index) {
+            if (!cpus_[index].cpu ||
+                !dynamic_cast<mips64::Mips64ISAPlugin*>(cpus_[index].isaPlugin.get()) ||
+                cpus_[index].cpuId != index) {
+                return fail("destination VM has an unsupported CPU plugin or identity");
+            }
+        }
+
+        const PhysicalAddressMapSnapshot& physical = snapshot.physicalMemory;
+        if (injectFailure(Mips64SnapshotFailurePoint::RegionManifestValidation)) {
+            return fail("injected region manifest validation failure");
+        }
+        if (physical.regions.empty() || physical.regions.size() > 64) {
+            return fail("snapshot physical region manifest is invalid");
+        }
+        uint64_t previousEnd = 0;
+        bool firstRegion = true;
+        size_t resetRomCount = 0;
+        size_t flashRomCount = 0;
+        bool foundBaseRam = false;
+        for (const PhysicalRegionSnapshot& region : physical.regions) {
+            if (region.info.size == 0 || region.info.base >= kPhysicalAddressLimit ||
+                region.info.size > kPhysicalAddressLimit - region.info.base ||
+                (!firstRegion && region.info.base < previousEnd)) {
+                return fail("snapshot physical region layout is overlapping or out of range");
+            }
+            firstRegion = false;
+            previousEnd = region.info.base + region.info.size;
+            if (region.info.type == PhysicalRegionType::Ram) {
+                if (!region.info.readable || !region.info.writable ||
+                    (region.backendKind != PhysicalBackendKind::DenseRam &&
+                     region.backendKind != PhysicalBackendKind::SparseRam)) {
+                    return fail("snapshot contains an unsupported RAM backend or permission set");
+                }
+                if (region.info.base == 0) {
+                    if (foundBaseRam || region.info.size != snapshot.ramSize ||
+                        region.backendKind != PhysicalBackendKind::DenseRam) {
+                        return fail("snapshot base RAM geometry is invalid");
+                    }
+                    foundBaseRam = true;
+                }
+            } else if (region.info.type == PhysicalRegionType::Rom) {
+                if (region.backendKind != PhysicalBackendKind::Rom || !region.info.readable ||
+                    region.info.writable || region.info.size != kMaltaBootImageWindow) {
+                    return fail("snapshot contains an unsupported ROM mapping");
+                }
+                if (region.info.base == kMaltaResetRomBase) ++resetRomCount;
+                else if (region.info.base == kMaltaFlashBase) ++flashRomCount;
+                else return fail("snapshot contains a ROM outside the Malta profile");
+            } else if (region.info.type == PhysicalRegionType::Mmio) {
+                if (region.backendKind != PhysicalBackendKind::Mmio || !region.info.readable ||
+                    !region.info.writable) {
+                    return fail("snapshot contains an unsupported MMIO region");
+                }
+                if (region.info.base == kMaltaFpgaBase) {
+                    if (region.info.size != 0x900 ||
+                        !memory_->GetPhysicalAddressMap()->IsMappedDeviceAt(
+                            kMaltaFpgaBase, maltaBootstrapBoard_->Fpga().get())) {
+                        return fail("snapshot Malta FPGA device registration is invalid");
+                    }
+                } else if (region.info.base == kMaltaUartBase) {
+                    if (region.info.size != 0x40 ||
+                        !memory_->GetPhysicalAddressMap()->IsMappedDeviceAt(
+                            kMaltaUartBase, maltaBootstrapBoard_->Uart().get())) {
+                        return fail("snapshot UART device registration is invalid");
+                    }
+                } else return fail("snapshot contains an unsupported MMIO device");
+            } else return fail("snapshot contains an unsupported physical region type");
+        }
+        if (!foundBaseRam || resetRomCount != 1 ||
+            flashRomCount != (config.mapFlashMirror ? 1U : 0U)) {
+            return fail("snapshot Malta RAM or ROM map is incomplete");
+        }
+
+        std::vector<mips64::Mips64Cpu> stagedCpus;
+        stagedCpus.reserve(snapshot.cpus.size());
+        if (injectFailure(Mips64SnapshotFailurePoint::CpuStateValidation)) {
+            return fail("injected MIPS64 CPU state validation failure");
+        }
+        for (size_t index = 0; index < snapshot.cpus.size(); ++index) {
+            const Mips64FullSnapshotCpu& record = snapshot.cpus[index];
+            if (record.cpuId != index || record.architecturalState.size() != mips64::Mips64Cpu::kSerializedSize ||
+                record.architecturalState[4] != mips64::Mips64Cpu::kSerializationVersion ||
+                record.architecturalState[5] != static_cast<uint8_t>(snapshot.endianness) ||
+                std::any_of(record.architecturalState.begin() + 8,
+                            record.architecturalState.begin() + 16,
+                            [](uint8_t value) { return value != 0; })) {
+                return fail("snapshot MIPS64 CPU record identity or v5 state is invalid");
+            }
+            switch (record.executionState) {
+                case CPUExecutionState::IDLE:
+                case CPUExecutionState::RUNNING:
+                case CPUExecutionState::HALTED:
+                case CPUExecutionState::WAITING:
+                case CPUExecutionState::ERROR: break;
+                default: return fail("snapshot CPU execution state is invalid");
+            }
+            stagedCpus.emplace_back(snapshot.endianness);
+            mips64::Mips64Cpu& staged = stagedCpus.back();
+            if (!staged.deserialize(record.architecturalState.data(), record.architecturalState.size()) ||
+                staged.serialize() != record.architecturalState) {
+                return fail("snapshot MIPS64 CPU v5 architectural state failed validation");
+            }
+        }
+
+        PreparedPhysicalAddressMapRestore stagedMemory;
+        const bool containsSparseRam = std::any_of(
+            physical.regions.begin(), physical.regions.end(),
+            [](const PhysicalRegionSnapshot& region) {
+                return region.info.type == PhysicalRegionType::Ram &&
+                       region.backendKind == PhysicalBackendKind::SparseRam;
+            });
+        if (containsSparseRam &&
+            injectFailure(Mips64SnapshotFailurePoint::SparseMemoryPreparation)) {
+            return fail("injected sparse-memory preparation failure");
+        }
+        if (!memory_->GetPhysicalAddressMap()->PrepareRestore(physical, stagedMemory, error)) return false;
+        if (injectFailure(Mips64SnapshotFailurePoint::DeviceStatePreparation)) {
+            return fail("injected device state preparation failure");
+        }
+        GuestConsoleSink::PreparedRestore stagedConsole;
+        if (!maltaBootstrapBoard_->ConsoleSink()->PrepareRestore(snapshot.console, stagedConsole)) {
+            return fail("snapshot console capacity, occupancy, or output sequence is invalid");
+        }
+        SimpleCPUSchedulerState stagedScheduler = snapshot.scheduler;
+        auto* liveScheduler = dynamic_cast<SimpleCPUScheduler*>(scheduler_.get());
+        if (!liveScheduler) return fail("destination VM scheduler type is unsupported");
+        if (injectFailure(Mips64SnapshotFailurePoint::RestoreCommitPreparation)) {
+            return fail("injected restore commit preparation failure");
+        }
+
+        // Every validation and potentially allocating preparation is complete.
+        memory_->GetPhysicalAddressMap()->CommitRestore(std::move(stagedMemory));
+        for (size_t index = 0; index < cpus_.size(); ++index) {
+            auto* plugin = static_cast<mips64::Mips64ISAPlugin*>(cpus_[index].isaPlugin.get());
+            plugin->SwapCoreState(stagedCpus[index]);
+            CPUContext& context = cpus_[index];
+            const Mips64FullSnapshotCpu& record = snapshot.cpus[index];
+            context.state = record.executionState;
+            context.cyclesExecuted = record.cyclesExecuted;
+            context.instructionsExecuted = record.instructionsExecuted;
+            context.idleCycles = record.idleCycles;
+            context.enabled = record.enabled;
+            context.lastActivationTime = record.lastActivationTime;
+        }
+        maltaBootstrapBoard_->Fpga()->RestoreSnapshot(snapshot.fpga);
+        maltaBootstrapBoard_->Uart()->RestoreSnapshot(snapshot.uart);
+        maltaBootstrapBoard_->ConsoleSink()->CommitRestore(std::move(stagedConsole));
+        const bool schedulerCommitted = liveScheduler->restoreSnapshot(std::move(stagedScheduler));
+        if (!schedulerCommitted) std::terminate();
+        activeCPUIndex_ = snapshot.activeCpuIndex;
+        cyclesExecuted_ = snapshot.totalVirtualCycles;
+        state_ = VMState::PAUSED;
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception& exception) {
+        if (error) *error = std::string("MIPS64 full snapshot restore preparation failed: ") + exception.what();
+        return false;
+    } catch (...) {
+        if (error) *error = "MIPS64 full snapshot restore preparation failed";
+        return false;
+    }
 }
 
 bool VirtualMachine::applyMips64MaltaColdReset(bool preserveVmCycleCount) {
@@ -1121,6 +1447,7 @@ bool VirtualMachine::clearMemoryBreakpoint(size_t breakpointId) {
 }
 
 bool VirtualMachine::stepBundle() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!isValidCPUIndex(activeCPUIndex_)) {
         if (cpus_.empty()) {
             return false;
@@ -1186,6 +1513,7 @@ DebuggerControlFlowState VirtualMachine::inspectControlFlow() const {
 }
 
 DebuggerSnapshot VirtualMachine::createSnapshot() const {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     DebuggerSnapshot snapshot;
     snapshot.memory = memory_->CreateSnapshot();
     snapshot.vmState = state_;
@@ -1211,6 +1539,7 @@ DebuggerSnapshot VirtualMachine::createSnapshot() const {
 }
 
 bool VirtualMachine::restoreSnapshot(const DebuggerSnapshot& snapshot) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (snapshot.cpus.size() != cpus_.size()) {
         return false;
     }
@@ -1242,6 +1571,7 @@ bool VirtualMachine::restoreSnapshot(const DebuggerSnapshot& snapshot) {
 }
 
 bool VirtualMachine::rewindToLastSnapshot() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (snapshotHistory_.empty()) {
         return false;
     }
@@ -1471,6 +1801,7 @@ bool VirtualMachine::isValidCPUIndex(int cpuIndex) const {
 
 
 bool VirtualMachine::stepCPU(int cpuIndex) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
 if (state_ == VMState::CREATED) {
     LOG_ERROR("Cannot step CPU - VM not initialized");
     return false;
@@ -1585,6 +1916,7 @@ if (!isValidCPUIndex(cpuIndex)) {
 }
 
 int VirtualMachine::stepAllCPUs() {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot step all CPUs - VM not initialized");
         return 0;
@@ -1629,6 +1961,7 @@ int VirtualMachine::stepAllCPUs() {
 }
 
 uint64_t VirtualMachine::stepQuantum(int cpuIndex, uint64_t bundleCount) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (state_ == VMState::CREATED) {
         LOG_ERROR("Cannot step quantum - VM not initialized");
         return 0;
@@ -1681,6 +2014,7 @@ uint64_t VirtualMachine::getQuantumSize() const {
 }
 
 void VirtualMachine::setQuantumSize(uint64_t bundleCount) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!scheduler_) {
         LOG_ERROR("Cannot set quantum size - scheduler not initialized");
         return;
@@ -1699,6 +2033,7 @@ void VirtualMachine::setQuantumSize(uint64_t bundleCount) {
 // ============================================================================
 
 std::string VirtualMachine::createFullSnapshot(const std::string& name, const std::string& description) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!snapshotManager_) {
         LOG_ERROR("Snapshot manager not initialized");
         return "";
@@ -1724,6 +2059,7 @@ std::string VirtualMachine::createFullSnapshot(const std::string& name, const st
 std::string VirtualMachine::createDeltaSnapshot(const std::string& parentSnapshotId, 
                                                  const std::string& name, 
                                                  const std::string& description) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     if (!snapshotManager_) {
         LOG_ERROR("Snapshot manager not initialized");
         return "";
@@ -1756,6 +2092,7 @@ std::string VirtualMachine::createDeltaSnapshot(const std::string& parentSnapsho
 }
 
 bool VirtualMachine::restoreFromSnapshot(const std::string& snapshotId) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
 if (!snapshotManager_) {
     LOG_ERROR("Snapshot manager not initialized");
     return false;
@@ -1784,6 +2121,7 @@ VMStateSnapshot snapshot = snapshotManager_->resolveSnapshot(snapshotId);
 }
 
 VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     VMStateSnapshot snapshot;
     
     // Capture CPU states
@@ -1846,6 +2184,7 @@ VMStateSnapshot VirtualMachine::captureVMSnapshot() const {
 }
 
 bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     // Validate snapshot
     if (snapshot.cpus.size() != cpus_.size()) {
         LOG_ERROR("Snapshot CPU count mismatch");
@@ -1920,12 +2259,14 @@ bool VirtualMachine::restoreVMSnapshot(const VMStateSnapshot& snapshot) {
 bool VirtualMachine::writeDiagnosticCheckpoint(const std::string& path,
                                                const std::string& guestIdentity,
                                                std::string* error) const {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     return VMCheckpointCodec::write(*this, path, guestIdentity, error);
 }
 
 bool VirtualMachine::readDiagnosticCheckpoint(const std::string& path,
                                               const std::string& expectedGuestIdentity,
                                               std::string* error) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
     return VMCheckpointCodec::read(*this, path, expectedGuestIdentity, error);
 }
 

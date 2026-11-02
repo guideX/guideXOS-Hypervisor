@@ -86,6 +86,7 @@ public:
     // Test/diagnostic access to the underlying core.
     Mips64Cpu& core() { return state_.cpu(); }
     const Mips64Cpu& core() const { return state_.cpu(); }
+    void SwapCoreState(Mips64Cpu& staged) noexcept;
 
 private:
     Mips64ISAState state_;

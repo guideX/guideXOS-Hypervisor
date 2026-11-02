@@ -239,6 +239,20 @@ bool SimpleCPUScheduler::restoreSnapshot(const SimpleCPUSchedulerState& snapshot
     return true;
 }
 
+bool SimpleCPUScheduler::restoreSnapshot(SimpleCPUSchedulerState&& snapshot) noexcept {
+    if (snapshot.numCPUs < 0 || snapshot.lastCPUIndex < -1 ||
+        snapshot.lastCPUIndex >= snapshot.numCPUs ||
+        snapshot.cpuBundleCounters.size() != static_cast<size_t>(snapshot.numCPUs) ||
+        snapshot.quantumSize == 0) {
+        return false;
+    }
+    lastCPUIndex_ = snapshot.lastCPUIndex;
+    numCPUs_ = snapshot.numCPUs;
+    quantumSize_ = snapshot.quantumSize;
+    cpuBundleCounters_.swap(snapshot.cpuBundleCounters);
+    return true;
+}
+
 // ============================================================================
 // Private Helper Methods
 // ============================================================================

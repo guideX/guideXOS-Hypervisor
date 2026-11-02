@@ -19,6 +19,7 @@
 #include "KernelPanic.h"
 #include "FramebufferDevice.h"
 #include "Mips64MaltaBootstrap.h"
+#include "Mips64FullSnapshot.h"
 #include <memory>
 #include <vector>
 #include <set>
@@ -27,6 +28,7 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <mutex>
 
 namespace ia64 {
 
@@ -335,6 +337,18 @@ public:
     // Explicit board cold reset: resets CPU/device state and starts every CPU
     // at the architectural MIPS64 reset vector. Generic reset() is unchanged.
     bool coldResetMips64Malta();
+
+    // Full in-memory snapshot for the supported MIPS64 Malta subset. This is
+    // an ISA-aware API and is separate from the legacy IA-64 snapshot formats.
+    // These operations serialize with VM-managed execution and loading. The
+    // caller must quiesce direct mutation through advanced memory/CPU/device
+    // handles for the duration of capture or restore.
+    Mips64FullVmSnapshot captureMips64FullSnapshot() const;
+    bool restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snapshot,
+                                   std::string* error = nullptr);
+    void setMips64SnapshotFailurePointForTesting(Mips64SnapshotFailurePoint point) noexcept {
+        mips64SnapshotFailurePointForTesting_ = point;
+    }
 
     /**
      * Get CPU context (for advanced access)
@@ -706,6 +720,9 @@ private:
     size_t nextMemoryBreakpointId_;
     size_t maxSnapshotHistory_;
     uint64_t cyclesExecuted_;                       // Total cycles executed (all CPUs)
+    Mips64SnapshotFailurePoint mips64SnapshotFailurePointForTesting_ =
+        Mips64SnapshotFailurePoint::None;
+    mutable std::recursive_mutex mips64SnapshotBoundaryMutex_;
     std::string lastBreakReason_;
     
     // VM Snapshot Manager

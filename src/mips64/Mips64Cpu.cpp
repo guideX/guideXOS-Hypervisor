@@ -2446,6 +2446,38 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     return true;
 }
 
+void Mips64Cpu::SwapArchitecturalState(Mips64Cpu& other) noexcept {
+    using std::swap;
+    gpr_.swap(other.gpr_);
+    swap(pc_, other.pc_);
+    swap(hi_, other.hi_);
+    swap(lo_, other.lo_);
+    swap(delayArmed_, other.delayArmed_);
+    swap(delayTarget_, other.delayTarget_);
+    swap(delayBranch_, other.delayBranch_);
+    swap(status_, other.status_);
+    swap(cause_, other.cause_);
+    swap(epc_, other.epc_);
+    swap(errorEpc_, other.errorEpc_);
+    swap(badVAddr_, other.badVAddr_);
+    swap(ebase_, other.ebase_);
+    swap(count_, other.count_);
+    swap(compare_, other.compare_);
+    swap(index_, other.index_);
+    swap(random_, other.random_);
+    swap(entryHi_, other.entryHi_);
+    swap(entryLo0_, other.entryLo0_);
+    swap(entryLo1_, other.entryLo1_);
+    swap(pageMask_, other.pageMask_);
+    swap(wired_, other.wired_);
+    swap(context_, other.context_);
+    swap(xcontext_, other.xcontext_);
+    tlb_.swap(other.tlb_);
+    swap(fault_, other.fault_);
+    lastError_.swap(other.lastError_);
+    swap(endianness_, other.endianness_);
+}
+
 std::string Mips64Cpu::toString() const {
     std::ostringstream out;
     out << "MIPS64r2 CPU (" << (isLittleEndian() ? "little" : "big") << "-endian)\n";

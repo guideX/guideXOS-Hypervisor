@@ -41,6 +41,18 @@ struct MaltaResetMailbox {
 // the selected guest byte order and accept aligned 32-bit transactions only.
 class MaltaFpgaRegisters final : public IMmioDevice {
 public:
+    struct Snapshot {
+        uint32_t version = 1;
+        mips64::Mips64Endianness endianness = mips64::Mips64Endianness::Little;
+        uint8_t switches = 0;
+        uint8_t jumpers = 0;
+        uint8_t ledBar = 0;
+        std::array<char, 8> asciiDisplay{};
+        uint8_t breakReset = 0x0A;
+        bool resetPending = false;
+        uint64_t resetRequestCount = 0;
+    };
+
     MaltaFpgaRegisters(mips64::Mips64Endianness endianness,
                        uint8_t switches, uint8_t jumpers,
                        std::shared_ptr<MaltaResetMailbox> resetMailbox);
@@ -56,6 +68,9 @@ public:
     uint8_t BreakReset() const noexcept { return breakReset_; }
     bool ResetPending() const noexcept;
     uint64_t ResetRequestCount() const noexcept;
+    Snapshot CaptureSnapshot() const noexcept;
+    bool ValidateSnapshot(const Snapshot& snapshot) const noexcept;
+    void RestoreSnapshot(const Snapshot& snapshot) noexcept;
 
 private:
     uint32_t ReadRegister(uint64_t offset) const;

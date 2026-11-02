@@ -17,11 +17,46 @@ GuestConsoleSink::GuestConsoleSink(size_t capacityBytes)
 
 bool GuestConsoleSink::Append(uint8_t byte) {
     if (bytes_.size() >= capacityBytes_) return false;
+    if (sequence_ == UINT64_MAX) return false;
     bytes_.push_back(byte);
+    ++sequence_;
     return true;
 }
 
-void GuestConsoleSink::Clear() { bytes_.clear(); }
+void GuestConsoleSink::Clear() {
+    bytes_.clear();
+    sequence_ = 0;
+    if (generation_ != UINT64_MAX) ++generation_;
+}
+
+GuestConsoleSink::Snapshot GuestConsoleSink::CaptureSnapshot() const {
+    Snapshot snapshot;
+    snapshot.capacityBytes = capacityBytes_;
+    snapshot.bytes = bytes_;
+    snapshot.sequence = sequence_;
+    snapshot.generation = generation_;
+    return snapshot;
+}
+
+bool GuestConsoleSink::PrepareRestore(const Snapshot& snapshot,
+                                      PreparedRestore& prepared) const {
+    if (snapshot.capacityBytes != capacityBytes_ ||
+        snapshot.bytes.size() > capacityBytes_ ||
+        snapshot.sequence != snapshot.bytes.size() || generation_ == UINT64_MAX) {
+        return false;
+    }
+    PreparedRestore staged;
+    staged.bytes = snapshot.bytes;
+    staged.sequence = snapshot.sequence;
+    prepared = std::move(staged);
+    return true;
+}
+
+void GuestConsoleSink::CommitRestore(PreparedRestore&& prepared) noexcept {
+    bytes_.swap(prepared.bytes);
+    sequence_ = prepared.sequence;
+    ++generation_;
+}
 
 Ns16550Uart::Ns16550Uart(std::shared_ptr<GuestConsoleSink> sink,
                          unsigned registerShift)
@@ -82,6 +117,8 @@ void Ns16550Uart::Write(uint64_t offset, const uint8_t* source, size_t size) {
             } else if (!sink_->Append(value)) {
                 throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
                                        "guest console sink capacity exceeded");
+            } else if (transmitCount_ != UINT64_MAX) {
+                ++transmitCount_;
             }
             break;
         case 1:  // IER or DLM. Stored for inspection; no IRQ delivery is modeled.
@@ -112,13 +149,46 @@ void Ns16550Uart::Reset() {
     scratch_ = 0;
     divisorLatchLow_ = 0;
     divisorLatchHigh_ = 0;
+    transmitCount_ = 0;
     sink_->Clear();
+}
+
+Ns16550Uart::Snapshot Ns16550Uart::CaptureSnapshot() const noexcept {
+    Snapshot snapshot;
+    snapshot.ier = ier_;
+    snapshot.fcrLastWrite = fcrLastWrite_;
+    snapshot.lcr = lcr_;
+    snapshot.mcr = mcr_;
+    snapshot.scratch = scratch_;
+    snapshot.divisorLatchLow = divisorLatchLow_;
+    snapshot.divisorLatchHigh = divisorLatchHigh_;
+    snapshot.dlab = (lcr_ & kLcrDlab) != 0;
+    snapshot.transmitterReady = true;
+    snapshot.transmitCount = transmitCount_;
+    return snapshot;
+}
+
+bool Ns16550Uart::ValidateSnapshot(const Snapshot& snapshot) noexcept {
+    return snapshot.version == 1 && snapshot.dlab == ((snapshot.lcr & kLcrDlab) != 0) &&
+           snapshot.transmitterReady;
+}
+
+void Ns16550Uart::RestoreSnapshot(const Snapshot& snapshot) noexcept {
+    ier_ = snapshot.ier;
+    fcrLastWrite_ = snapshot.fcrLastWrite;
+    lcr_ = snapshot.lcr;
+    mcr_ = snapshot.mcr;
+    scratch_ = snapshot.scratch;
+    divisorLatchLow_ = snapshot.divisorLatchLow;
+    divisorLatchHigh_ = snapshot.divisorLatchHigh;
+    transmitCount_ = snapshot.transmitCount;
 }
 
 std::map<std::string, uint64_t> Ns16550Uart::InspectState() const {
     return {{"IER", ier_}, {"FCR_last_write", fcrLastWrite_}, {"LCR", lcr_},
             {"MCR", mcr_}, {"SCR", scratch_}, {"DLL", divisorLatchLow_},
-            {"DLM", divisorLatchHigh_}, {"console_bytes", sink_->Bytes().size()}};
+            {"DLM", divisorLatchHigh_}, {"transmit_count", transmitCount_},
+            {"console_bytes", sink_->Bytes().size()}};
 }
 
 }  // namespace ia64

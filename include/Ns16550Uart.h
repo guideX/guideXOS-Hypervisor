@@ -13,15 +13,34 @@ namespace ia64 {
 // is involved. Append failure at capacity leaves the current output intact.
 class GuestConsoleSink {
 public:
+    struct Snapshot {
+        size_t capacityBytes = 0;
+        std::vector<uint8_t> bytes;
+        uint64_t sequence = 0;
+        uint64_t generation = 0;
+    };
+
+    struct PreparedRestore {
+        std::vector<uint8_t> bytes;
+        uint64_t sequence = 0;
+    };
+
     explicit GuestConsoleSink(size_t capacityBytes = 64 * 1024);
     bool Append(uint8_t byte);
     void Clear();
     size_t Capacity() const noexcept { return capacityBytes_; }
     const std::vector<uint8_t>& Bytes() const noexcept { return bytes_; }
+    uint64_t Sequence() const noexcept { return sequence_; }
+    uint64_t Generation() const noexcept { return generation_; }
+    Snapshot CaptureSnapshot() const;
+    bool PrepareRestore(const Snapshot& snapshot, PreparedRestore& prepared) const;
+    void CommitRestore(PreparedRestore&& prepared) noexcept;
 
 private:
     size_t capacityBytes_;
     std::vector<uint8_t> bytes_;
+    uint64_t sequence_ = 0;
+    uint64_t generation_ = 0;
 };
 
 struct Ns16550Mapping {
@@ -40,6 +59,20 @@ struct Ns16550Mapping {
 // one byte. DLAB selects DLL/DLM; no receive data or interrupt source exists.
 class Ns16550Uart final : public IMmioDevice {
 public:
+    struct Snapshot {
+        uint32_t version = 1;
+        uint8_t ier = 0;
+        uint8_t fcrLastWrite = 0;
+        uint8_t lcr = 0;
+        uint8_t mcr = 0;
+        uint8_t scratch = 0;
+        uint8_t divisorLatchLow = 0;
+        uint8_t divisorLatchHigh = 0;
+        bool dlab = false;
+        bool transmitterReady = true;
+        uint64_t transmitCount = 0;
+    };
+
     explicit Ns16550Uart(std::shared_ptr<GuestConsoleSink> sink,
                          unsigned registerShift = 0);
 
@@ -52,6 +85,9 @@ public:
 
     uint64_t RegionSize() const noexcept { return 8 * (uint64_t{1} << registerShift_); }
     const std::shared_ptr<GuestConsoleSink>& Sink() const noexcept { return sink_; }
+    Snapshot CaptureSnapshot() const noexcept;
+    static bool ValidateSnapshot(const Snapshot& snapshot) noexcept;
+    void RestoreSnapshot(const Snapshot& snapshot) noexcept;
 
 private:
     unsigned RegisterIndex(uint64_t offset) const;
@@ -65,6 +101,7 @@ private:
     uint8_t scratch_ = 0;
     uint8_t divisorLatchLow_ = 0;
     uint8_t divisorLatchHigh_ = 0;
+    uint64_t transmitCount_ = 0;
 };
 
 }  // namespace ia64

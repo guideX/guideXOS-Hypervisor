@@ -102,6 +102,7 @@ set(VM_SOURCES
     src/vm/KernelPanic.cpp
     src/vm/VMSnapshotManager.cpp
     src/vm/VMCheckpoint.cpp
+    src/vm/Mips64FullSnapshot.cpp
 )
 
 set(STORAGE_SOURCES
@@ -1024,3 +1025,9 @@ add_test(NAME Mips64MaltaFpgaTests COMMAND test_mips64_malta fpga)
 add_test(NAME Mips64MaltaResetTests COMMAND test_mips64_malta reset)
 add_test(NAME Mips64MaltaBootTests COMMAND test_mips64_malta boot)
 add_test(NAME Mips64MaltaOwnershipTests COMMAND test_mips64_malta ownership)
+add_test(NAME Mips64SnapshotFormatTests COMMAND test_mips64_malta snapshot_format)
+add_test(NAME Mips64SnapshotMemoryTests COMMAND test_mips64_malta snapshot_memory)
+add_test(NAME Mips64SnapshotDevicesTests COMMAND test_mips64_malta snapshot_devices)
+add_test(NAME Mips64SnapshotRestoreTests COMMAND test_mips64_malta snapshot_restore)
+add_test(NAME Mips64SnapshotVmTests COMMAND test_mips64_malta snapshot_vm)
+add_test(NAME Mips64SnapshotCompatibilityTests COMMAND test_mips64_malta snapshot_compat)
