@@ -223,8 +223,19 @@ std::string decodeMFormIndependent(uint32_t word) {
     return text.str();
 }
 
-std::string decodeFrontierIndependent(uint32_t word) {
+std::string decodeFrontierIndependent(uint32_t word, uint64_t nip) {
     const unsigned opcode = (word >> 26) & 0x3FU;
+    if (opcode == 18U) {
+        int64_t displacement = static_cast<int64_t>(word & 0x03FFFFFCU);
+        if ((displacement & 0x02000000LL) != 0) displacement |= ~0x03FFFFFFLL;
+        const uint64_t target = (word & 2U) != 0
+            ? static_cast<uint64_t>(displacement)
+            : nip + static_cast<uint64_t>(displacement);
+        std::ostringstream text;
+        text << ((word & 1U) != 0 ? "bl" : "b") << " 0x"
+             << std::hex << target;
+        return text.str();
+    }
     if (opcode == 21U) return decodeMFormIndependent(word);
     if (opcode == 30U) {
         const unsigned rs = (word >> 21) & 31U;
@@ -630,12 +641,21 @@ LinuxReplay runLinuxReplay(const std::vector<uint8_t>& kernel) {
     for (uint64_t attempt = 0; attempt < instructionBudget; ++attempt) {
         const auto before = vm.getPPC64RegisterView();
         std::array<uint8_t, 4> bytes{};
-        vm.getMemory().Read(before.nip, bytes.data(), bytes.size());
-        const uint32_t word = (static_cast<uint32_t>(bytes[0]) << 24) |
-            (static_cast<uint32_t>(bytes[1]) << 16) |
-            (static_cast<uint32_t>(bytes[2]) << 8) | bytes[3];
+        bool wordFetched = true;
+        try {
+            vm.getMemory().Read(before.nip, bytes.data(), bytes.size());
+        } catch (const std::exception&) {
+            wordFetched = false;
+        }
+        uint32_t word = wordFetched
+            ? (static_cast<uint32_t>(bytes[0]) << 24) |
+              (static_cast<uint32_t>(bytes[1]) << 16) |
+              (static_cast<uint32_t>(bytes[2]) << 8) | bytes[3]
+            : 0U;
         auto* plugin = vm.getPPC64ISAPlugin();
-        const std::string decoded = plugin->disassemble(vm.getMemory(), before.nip);
+        const std::string decoded = wordFetched
+            ? plugin->disassemble(vm.getMemory(), before.nip)
+            : "<raw instruction unavailable: fetch address outside backing RAM>";
         const uint64_t timeBefore = vm.getPPC64Timebase();
         const bool advanced = vm.step();
         const auto after = vm.getPPC64RegisterView();
@@ -659,9 +679,27 @@ LinuxReplay runLinuxReplay(const std::vector<uint8_t>& kernel) {
             result.lastNip = before.nip;
             result.lastWord = word;
         }
+        uint32_t frontierCandidate = word;
+        if (!wordFetched && !elf.loadSegments.empty()) {
+            const auto& segment = elf.loadSegments.front();
+            if (before.nip >= segment.virtualAddress) {
+                const uint64_t offset = before.nip - segment.virtualAddress;
+                if (offset <= segment.fileBytes.size() &&
+                    segment.fileBytes.size() - static_cast<size_t>(offset) >= 4) {
+                    const auto index = static_cast<size_t>(offset);
+                    frontierCandidate =
+                        (static_cast<uint32_t>(segment.fileBytes[index]) << 24) |
+                        (static_cast<uint32_t>(segment.fileBytes[index + 1]) << 16) |
+                        (static_cast<uint32_t>(segment.fileBytes[index + 2]) << 8) |
+                        segment.fileBytes[index + 3];
+                }
+            }
+        }
         trace << "step=" << std::dec << attempt << " nip=0x" << std::hex
-              << before.nip << " raw=0x" << std::setw(8) << std::setfill('0')
-              << word << " decoded=" << decoded << " retired="
+              << before.nip;
+        if (wordFetched) trace << " raw=0x" << std::setw(8) << std::setfill('0') << word;
+        else trace << " raw=unavailable";
+        trace << " decoded=" << decoded << " retired="
               << (advanced ? 1 : 0) << " next_nip=0x" << after.nip
               << " r11_before=0x" << before.gpr[11]
               << " r11_after=0x" << after.gpr[11]
@@ -674,8 +712,9 @@ LinuxReplay runLinuxReplay(const std::vector<uint8_t>& kernel) {
         if (!advanced) {
             result.stopNip = plugin->hasFault()
                 ? plugin->getLastFault().cia : after.nip;
-            result.frontierWord = word;
-            result.frontierDecode = decodeFrontierIndependent(word);
+            result.frontierWord = frontierCandidate;
+            result.frontierDecode = decodeFrontierIndependent(frontierCandidate,
+                                                               before.nip);
             result.stopReason = plugin->getLastExecutionDiagnostic();
             std::ostringstream frontier;
             frontier << "category="
@@ -684,8 +723,11 @@ LinuxReplay runLinuxReplay(const std::vector<uint8_t>& kernel) {
                                    plugin->getLastFault().category))
                              : "bounded-stop")
                      << "\nstop_nip=0x" << std::hex << result.stopNip
-                     << "\nraw_instruction=0x" << std::setw(8)
-                     << std::setfill('0') << word << "\ndecoder_text="
+                     << "\nraw_instruction=";
+            if (wordFetched) frontier << "0x" << std::setw(8) << std::setfill('0') << word;
+            else frontier << "unavailable-from-VM\nelf_linked_address_candidate=0x"
+                          << std::setw(8) << std::setfill('0') << frontierCandidate;
+            frontier << "\ndecoder_text="
                      << decoded << "\nstop_reason=" << result.stopReason
                      << "\nindependent_decode=" << result.frontierDecode
                      << "\npre_msr=0x" << before.msr << "\ncr=0x" << before.cr
@@ -767,9 +809,10 @@ void testAuthenticLinuxReplay() {
     CHECK(first.retired >= 29);
     CHECK(first.stopNip != kLinuxInstructionNip);
     CHECK(first.frontierWord != kLinuxRlwinm);
-    CHECK(first.stopNip == 0xD024);
-    CHECK(first.frontierWord == 0x7B398000U);
-    CHECK(first.frontierDecode == "rldicl r25,r25,16,0");
+    CHECK(first.retired == 46 && first.attempted == 47);
+    CHECK(first.stopNip == 0xC00000000000D060ULL);
+    CHECK(first.frontierWord == 0x480002D5U);
+    CHECK(first.frontierDecode == "bl 0xc00000000000d334");
 
     const auto oldTracePath = std::filesystem::path(
         R"(E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase23\run-1793645712747\bounded-linux-trace.txt)");

@@ -255,9 +255,13 @@ void testRecordFormAndXerPreservation() {
 
 void testDecodeIsolation() {
     std::puts("[phase21-md-mds-isolation]");
-    for (uint8_t operation : {uint8_t{0}, uint8_t{2}, uint8_t{3},
-                              uint8_t{4}, uint8_t{5}, uint8_t{6},
-                              uint8_t{7}}) {
+    // Phase 25 now assigns operation 0 to RLDICL; RLDICR remains operation 1.
+    const auto rldicl = PPC64ISAPlugin::decodeWord(
+        encodeRldicr(3, 4, 5, 6, false, 0));
+    CHECK(rldicl.kind == DecodedKind::RLDICL);
+    CHECK(rldicl.supported && rldicl.sh == 5 && rldicl.mb == 6);
+    for (uint8_t operation : {uint8_t{2}, uint8_t{3}, uint8_t{4},
+                              uint8_t{5}, uint8_t{6}, uint8_t{7}}) {
         const auto decoded = PPC64ISAPlugin::decodeWord(
             encodeRldicr(3, 4, 5, 6, false, operation));
         CHECK(decoded.kind == DecodedKind::UNSUPPORTED);
