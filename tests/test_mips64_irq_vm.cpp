@@ -78,7 +78,8 @@ struct GuestImage {
 GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
                           uint32_t initialStatus, uint32_t releaseStatus,
                           bool waitForRelease, bool enableIerOnRelease,
-                          uint32_t compareValue) {
+                          uint32_t compareValue, uint8_t fcrValue = 1,
+                          uint8_t expectedRxIirId = 4) {
     constexpr uint8_t t0 = 8, t1 = 9, t2 = 10;
     std::vector<uint32_t> boot;
     boot.push_back(encI(0x0F, 0, t0, 0xBF00)); // CKSEG1 UART base.
@@ -92,7 +93,8 @@ GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
     boot.push_back(encI(0x09, 0, t1, 3));
     boot.push_back(encI(0x28, t0, t1, 0x18)); // LCR: 8N1, DLAB clear.
     boot.push_back(encI(0x09, 0, t1, 1));
-    boot.push_back(encI(0x28, t0, t1, 16));   // FCR: 16-byte FIFO, trigger 1.
+    boot.push_back(encI(0x09, 0, t1, fcrValue)); // FCR profile supplied by test.
+    boot.push_back(encI(0x28, t0, t1, 16));
     boot.push_back(encI(0x09, 0, t1, initialIer));
     boot.push_back(encI(0x28, t0, t1, 8));    // IER.
     boot.push_back(encI(0x09, 0, t1, 0));
@@ -160,7 +162,7 @@ GuestImage makeGuestImage(Mips64Endianness endian, uint8_t initialIer,
     handler.push_back(encI(0x24, t0, t3, 16)); // lbu IIR.
     handler.push_back(encI(0x28, 19, t3, 0x208)); // save IIR.
     handler.push_back(encI(0x0C, t3, t4, 0x0E)); // isolate IIR source id.
-    handler.push_back(encI(0x09, 0, t5, 4));
+    handler.push_back(encI(0x09, 0, t5, expectedRxIirId));
     const size_t noRxBranch = handler.size();
     handler.push_back(0);
     handler.push_back(0);
@@ -205,10 +207,13 @@ std::unique_ptr<VirtualMachine> makeVm(Mips64Endianness endian,
                                        bool waitForRelease,
                                        bool enableIerOnRelease,
                                        uint32_t compareValue = 0,
-                                       size_t cpuCount = 1) {
+                                       size_t cpuCount = 1,
+                                       uint8_t fcrValue = 1,
+                                       uint8_t expectedRxIirId = 4) {
     GuestImage image = makeGuestImage(endian, initialIer, initialStatus,
                                       releaseStatus, waitForRelease,
-                                      enableIerOnRelease, compareValue);
+                                      enableIerOnRelease, compareValue,
+                                      fcrValue, expectedRxIirId);
     MaltaBootstrapConfig config;
     config.endianness = endian;
     config.useBuiltInDemoRom = false;
@@ -271,7 +276,8 @@ void runToReady(VirtualMachine& vm) {
 }
 
 void checkEcho(VirtualMachine& vm, const std::vector<uint8_t>& input,
-               Mips64Endianness endian, bool expectTimerCause = false) {
+               Mips64Endianness endian, bool expectTimerCause = false,
+               uint8_t expectedIir = 0xC4) {
     CHECK(vm.getState() == VMState::STOPPED);
     MaltaBootstrapBoard* board = vm.getMips64MaltaBootstrapBoard();
     CHECK(board != nullptr);
@@ -282,7 +288,7 @@ void checkEcho(VirtualMachine& vm, const std::vector<uint8_t>& input,
         vm.getMemory().Read(kGuestBufferPhysical + index, &received[index], 1);
     }
     CHECK(received == input);
-    CHECK(readByte(vm, kIirPhysical) == 0xC4);
+    CHECK(readByte(vm, kIirPhysical) == expectedIir);
     CHECK(readWord(vm, kHandlerCountPhysical, endian) == 1);
     const uint32_t cause = readWord(vm, kCausePhysical, endian);
     CHECK((cause & kCauseIp4Bit) != 0);
@@ -314,6 +320,10 @@ bool sameReplayState(const Mips64FullVmSnapshot& a, const Mips64FullVmSnapshot& 
         a.uart.fifoEnabled != b.uart.fifoEnabled ||
         a.uart.receiveTriggerLevel != b.uart.receiveTriggerLevel ||
         a.uart.receiveOverrun != b.uart.receiveOverrun ||
+        a.uart.virtualTimeCycle != b.uart.virtualTimeCycle ||
+        a.uart.receiveTimeoutDeadlineCycle != b.uart.receiveTimeoutDeadlineCycle ||
+        a.uart.receiveTimeoutArmed != b.uart.receiveTimeoutArmed ||
+        a.uart.receiveTimeoutPending != b.uart.receiveTimeoutPending ||
         a.uart.transmitCount != b.uart.transmitCount ||
         a.uartInterruptTargetCpu != b.uartInterruptTargetCpu ||
         a.uartHardwareInterruptLine != b.uartHardwareInterruptLine ||
@@ -539,6 +549,357 @@ void testTransactionalReceiveSnapshotReplay() {
     }
 }
 
+uint8_t readUartRegister(VirtualMachine& vm, unsigned reg) {
+    uint8_t value = 0xFF;
+    vm.getMemory().Read(kMaltaUartBase + reg * 8, &value, 1);
+    return value;
+}
+
+void testProductionTimeoutGuestAndThresholdSemantics() {
+    // Seven bytes are strictly below the eight-byte trigger. The prompt's
+    // example "guideXOS" is eight ASCII bytes, so it is covered below at the
+    // fourteen-byte trigger and at the eight-byte normal-RDA boundary.
+    const std::vector<uint8_t> sevenBytes{'g','u','i','d','e','X','O'};
+    const std::vector<uint8_t> eightBytes{'g','u','i','d','e','X','O','S'};
+    for (Mips64Endianness endian : {Mips64Endianness::Little, Mips64Endianness::Big}) {
+        auto timeoutVm = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                                false, false, 0, 1, 0x87, 12);
+        CHECK(timeoutVm != nullptr);
+        if (!timeoutVm) continue;
+        runToReady(*timeoutVm);
+        auto uart = timeoutVm->getMips64MaltaBootstrapBoard()->Uart();
+        CHECK(uart->ReceiveTimeoutDeadline() == 0);
+        CHECK(timeoutVm->enqueueMips64UartInput(sevenBytes));
+        const uint64_t deadline = uart->ReceiveTimeoutDeadline();
+        const uint64_t start = timeoutVm->getCyclesExecuted();
+        CHECK(deadline - start == 174);
+        CHECK(uart->ReceiveFifoSize() == sevenBytes.size());
+        CHECK(readUartRegister(*timeoutVm, 2) == 0xC1);
+        CHECK(!uart->ReceiveTimeoutPending());
+        CHECK((plugin(*timeoutVm)->core().cp0Cause() & kCauseIp4Bit) == 0);
+
+        CHECK(timeoutVm->run(deadline - start - 1) == deadline - start - 1);
+        CHECK(timeoutVm->getCyclesExecuted() == deadline - 1);
+        CHECK(readUartRegister(*timeoutVm, 2) == 0xC1);
+        CHECK(!uart->ReceiveTimeoutPending());
+        CHECK((plugin(*timeoutVm)->core().cp0Cause() & kCauseIp4Bit) == 0);
+        CHECK(timeoutVm->run(1) == 1);
+        CHECK(timeoutVm->getCyclesExecuted() == deadline);
+        CHECK(uart->ReceiveTimeoutPending());
+        CHECK(readUartRegister(*timeoutVm, 2) == 0xCC);
+        CHECK((plugin(*timeoutVm)->core().cp0Cause() & kCauseIp4Bit) != 0);
+        CHECK(timeoutVm->run(1000) == 1000);
+        checkEcho(*timeoutVm, sevenBytes, endian, false, 0xCC);
+
+        // The example's final byte is deliberately sent after the first
+        // sub-trigger timeout. It demonstrates the full guideXOS echo at the
+        // eight-byte trigger without misclassifying an eight-byte FIFO as a
+        // timeout condition.
+        CHECK(timeoutVm->enqueueMips64UartInput(std::vector<uint8_t>{'S'}));
+        CHECK(readUartRegister(*timeoutVm, 2) == 0xC1);
+        const uint64_t lastByteDeadline = uart->ReceiveTimeoutDeadline();
+        const uint64_t lastByteRemaining = lastByteDeadline - timeoutVm->getCyclesExecuted();
+        CHECK(timeoutVm->run(lastByteRemaining) == lastByteRemaining);
+        CHECK(readUartRegister(*timeoutVm, 2) == 0xCC);
+        CHECK(timeoutVm->run(1000) == 1000);
+        CHECK(timeoutVm->getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes() == eightBytes);
+        for (size_t index = 0; index < eightBytes.size(); ++index) {
+            CHECK(readByte(*timeoutVm, kGuestBufferPhysical + index) == eightBytes[index]);
+        }
+        CHECK(readWord(*timeoutVm, kHandlerCountPhysical, endian) == 2);
+        CHECK(readByte(*timeoutVm, kIirPhysical) == 0xCC);
+        CHECK(!plugin(*timeoutVm)->core().statusExl());
+
+        // A long bounded run cannot redeliver a drained timeout or duplicate
+        // logical UART output.
+        CHECK(timeoutVm->run(4096) == 4096);
+        CHECK(readWord(*timeoutVm, kHandlerCountPhysical, endian) == 2);
+        CHECK(timeoutVm->getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes() == eightBytes);
+
+        // Eight-byte guideXOS is below trigger 14 and times out normally.
+        auto fourteenTrigger = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                                      false, false, 0, 1, 0xC7, 12);
+        CHECK(fourteenTrigger != nullptr);
+        if (!fourteenTrigger) continue;
+        runToReady(*fourteenTrigger);
+        CHECK(fourteenTrigger->enqueueMips64UartInput(eightBytes));
+        CHECK(readUartRegister(*fourteenTrigger, 2) == 0xC1);
+        CHECK((plugin(*fourteenTrigger)->core().cp0Cause() & kCauseIp4Bit) == 0);
+        const uint64_t fourteenDeadline = fourteenTrigger->getMips64MaltaBootstrapBoard()
+            ->Uart()->ReceiveTimeoutDeadline();
+        const uint64_t fourteenRemaining = fourteenDeadline - fourteenTrigger->getCyclesExecuted();
+        CHECK(fourteenTrigger->run(fourteenRemaining) == fourteenRemaining);
+        CHECK(readUartRegister(*fourteenTrigger, 2) == 0xCC);
+        CHECK(fourteenTrigger->run(1000) == 1000);
+        checkEcho(*fourteenTrigger, eightBytes, endian, false, 0xCC);
+
+        // At trigger eight, the same eight bytes assert ordinary RDA (0x04),
+        // and no character-timeout state is created.
+        auto exactlyEight = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                                   false, false, 0, 1, 0x87, 4);
+        CHECK(exactlyEight != nullptr);
+        if (!exactlyEight) continue;
+        runToReady(*exactlyEight);
+        CHECK(exactlyEight->enqueueMips64UartInput(eightBytes));
+        CHECK(readUartRegister(*exactlyEight, 2) == 0xC4);
+        CHECK(!exactlyEight->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK((plugin(*exactlyEight)->core().cp0Cause() & kCauseIp4Bit) != 0);
+        CHECK(exactlyEight->run(1000) == 1000);
+        checkEcho(*exactlyEight, eightBytes, endian, false, 0xC4);
+    }
+
+    // The VM clock advances once per round-robin scheduler step, including
+    // when two CPUs are enabled. It is not counted once per vCPU.
+    auto twoCpu = makeVm(Mips64Endianness::Little, 1, kStatusIm4Ie,
+                         kStatusIm4Ie, false, false, 0, 2, 0x87, 12);
+    CHECK(twoCpu != nullptr);
+    if (twoCpu) {
+        CPUContext* second = twoCpu->getCPUContext(1);
+        CHECK(second != nullptr);
+        if (second) {
+            second->enabled = true;
+            second->state = CPUExecutionState::RUNNING;
+        }
+        CHECK(twoCpu->run(200) == 200);
+        CHECK(twoCpu->getCPUContext(0)->cyclesExecuted > 0);
+        CHECK(twoCpu->getCPUContext(1)->cyclesExecuted > 0);
+        CHECK(twoCpu->enqueueMips64UartInput(sevenBytes));
+        const uint64_t twoCpuDeadline = twoCpu->getMips64MaltaBootstrapBoard()->Uart()
+            ->ReceiveTimeoutDeadline();
+        CHECK(twoCpuDeadline - twoCpu->getCyclesExecuted() == 174);
+        CHECK(twoCpu->run(173) == 173);
+        CHECK(!twoCpu->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK(twoCpu->run(1) == 1);
+        CHECK(twoCpu->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK(twoCpu->run(1200) == 1200);
+        checkEcho(*twoCpu, sevenBytes, Mips64Endianness::Little, false, 0xCC);
+    }
+}
+
+void testTransactionalTimeoutSnapshotReplay() {
+    const auto endian = Mips64Endianness::Little;
+    const std::vector<uint8_t> input{'g','u','i','d','e','X','O'};
+    auto vm = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                     false, false, 0, 1, 0x87, 12);
+    CHECK(vm != nullptr);
+    if (!vm) return;
+    runToReady(*vm);
+    CHECK(vm->enqueueMips64UartInput(input));
+    const uint64_t deadline = vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutDeadline();
+    const uint64_t start = vm->getCyclesExecuted();
+    const uint64_t half = (deadline - start) / 2;
+    CHECK(vm->run(half) == half);
+    const Mips64FullVmSnapshot armed = vm->captureMips64FullSnapshot();
+    CHECK(armed.uart.version == 3 && armed.uartComponentVersion == 3);
+    CHECK(armed.uart.virtualTimeCycle == armed.totalVirtualCycles);
+    CHECK(armed.uart.receiveTimeoutArmed && !armed.uart.receiveTimeoutPending);
+    CHECK(armed.uart.receiveTimeoutDeadlineCycle == deadline);
+
+    uint64_t remaining = deadline - vm->getCyclesExecuted();
+    CHECK(vm->run(remaining) == remaining);
+    CHECK(vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+    const Mips64FullVmSnapshot boundary = vm->captureMips64FullSnapshot();
+    CHECK(boundary.uart.receiveTimeoutPending && !boundary.uart.receiveTimeoutArmed);
+    CHECK(readUartRegister(*vm, 2) == 0xCC);
+    CHECK(vm->run(1000) == 1000);
+    checkEcho(*vm, input, endian, false, 0xCC);
+    const Mips64FullVmSnapshot firstComplete = vm->captureMips64FullSnapshot();
+
+    // Replay A: restore halfway-armed state and reach the same exact edge.
+    CHECK(vm->restoreMips64FullSnapshot(armed));
+    CHECK(vm->getCyclesExecuted() == armed.totalVirtualCycles);
+    CHECK(vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutDeadline() == deadline);
+    CHECK(vm->run(remaining) == remaining);
+    const Mips64FullVmSnapshot replayBoundary = vm->captureMips64FullSnapshot();
+    CHECK(replayBoundary.uart.receiveTimeoutPending);
+    CHECK(sameReplayState(boundary, replayBoundary));
+    CHECK(vm->run(1000) == 1000);
+    CHECK(sameReplayState(firstComplete, vm->captureMips64FullSnapshot()));
+
+    // Replay B: one unit before expiry remains quiet; one more unit expires.
+    CHECK(vm->restoreMips64FullSnapshot(armed));
+    const uint64_t toOneBefore = deadline - vm->getCyclesExecuted() - 1;
+    CHECK(vm->run(toOneBefore) == toOneBefore);
+    CHECK(vm->getCyclesExecuted() == deadline - 1);
+    CHECK(!vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+    CHECK(readUartRegister(*vm, 2) == 0xC1);
+    CHECK((plugin(*vm)->core().cp0Cause() & kCauseIp4Bit) == 0);
+    const Mips64FullVmSnapshot oneBefore = vm->captureMips64FullSnapshot();
+    CHECK(vm->restoreMips64FullSnapshot(oneBefore));
+    CHECK(vm->run(1) == 1);
+    CHECK(vm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+    CHECK(sameReplayState(boundary, vm->captureMips64FullSnapshot()));
+
+    // Replay C: IER keeps the device source enabled while CPU Status.IM4 masks
+    // delivery. The pending source survives a snapshot and guest unmask.
+    auto masked = makeVm(endian, 1, kStatusIm4MaskedIe, kStatusIm4Ie,
+                         true, false, 0, 1, 0x87, 12);
+    CHECK(masked != nullptr);
+    if (!masked) return;
+    runToReady(*masked);
+    CHECK(masked->enqueueMips64UartInput(input));
+    const uint64_t maskedDeadline = masked->getMips64MaltaBootstrapBoard()->Uart()
+        ->ReceiveTimeoutDeadline();
+    const uint64_t maskedRemaining = maskedDeadline - masked->getCyclesExecuted();
+    CHECK(masked->run(maskedRemaining) == maskedRemaining);
+    CHECK(masked->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+    CHECK((plugin(*masked)->core().cp0Cause() & kCauseIp4Bit) != 0);
+    CHECK((plugin(*masked)->core().cp0Status() & kCauseIp4Bit) == 0);
+    CHECK(readUartRegister(*masked, 2) == 0xCC);
+    const Mips64FullVmSnapshot pendingMasked = masked->captureMips64FullSnapshot();
+    CHECK(pendingMasked.routedUartInterruptLevel);
+    releaseGuest(*masked, endian);
+    CHECK(masked->run(1000) == 1000);
+    checkEcho(*masked, input, endian, false, 0xCC);
+    const Mips64FullVmSnapshot maskedComplete = masked->captureMips64FullSnapshot();
+    CHECK(masked->restoreMips64FullSnapshot(pendingMasked));
+    releaseGuest(*masked, endian);
+    CHECK(masked->run(1000) == 1000);
+    CHECK(sameReplayState(maskedComplete, masked->captureMips64FullSnapshot()));
+
+    // Replay D: real RBR register accesses leave an ordered sub-trigger FIFO;
+    // its rearmed timeout and suffix reproduce through the production guest.
+    auto partialVm = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                            false, false, 0, 1, 0x87, 12);
+    CHECK(partialVm != nullptr);
+    if (!partialVm) return;
+    runToReady(*partialVm);
+    CHECK(partialVm->enqueueMips64UartInput(input));
+    CHECK(readUartRegister(*partialVm, 0) == input[0]);
+    CHECK(readUartRegister(*partialVm, 0) == input[1]);
+    const std::vector<uint8_t> suffix(input.begin() + 2, input.end());
+    const Mips64FullVmSnapshot partial = partialVm->captureMips64FullSnapshot();
+    CHECK(partial.uart.receiveFifo == suffix);
+    CHECK(partial.uart.receiveTimeoutArmed && !partial.uart.receiveTimeoutPending);
+    const uint64_t partialRemaining = partial.uart.receiveTimeoutDeadlineCycle -
+        partialVm->getCyclesExecuted();
+    CHECK(partialVm->run(partialRemaining) == partialRemaining);
+    CHECK(partialVm->run(1000) == 1000);
+    checkEcho(*partialVm, suffix, endian, false, 0xCC);
+    const Mips64FullVmSnapshot partialComplete = partialVm->captureMips64FullSnapshot();
+    CHECK(partialVm->restoreMips64FullSnapshot(partial));
+    CHECK(partialVm->getMips64MaltaBootstrapBoard()->Uart()->ReceiveFifoSize() == suffix.size());
+    CHECK(partialVm->run(partialRemaining) == partialRemaining);
+    CHECK(partialVm->run(1000) == 1000);
+    CHECK(sameReplayState(partialComplete, partialVm->captureMips64FullSnapshot()));
+
+    // Replay E: timer IP7 and UART timeout IP4 are pending at the same
+    // boundary; guest acknowledges Compare and then the UART through RBR.
+    auto overlap = makeVm(endian, 1, kStatusIm4Im7IeMasked,
+                          kStatusIm4Im7Ie, true, false, 20, 1, 0x87, 12);
+    CHECK(overlap != nullptr);
+    if (!overlap) return;
+    runToReady(*overlap);
+    uint64_t guard = 0;
+    while ((plugin(*overlap)->core().cp0Cause() & kCauseBitTi) == 0 && guard < 512) {
+        CHECK(overlap->run(1) == 1);
+        ++guard;
+    }
+    CHECK(guard < 512 && (plugin(*overlap)->core().cp0Cause() & kCauseBitTi) != 0);
+    CHECK(overlap->enqueueMips64UartInput(input));
+    const uint64_t overlapDeadline = overlap->getMips64MaltaBootstrapBoard()->Uart()
+        ->ReceiveTimeoutDeadline();
+    const uint64_t overlapRemaining = overlapDeadline - overlap->getCyclesExecuted();
+    CHECK(overlap->run(overlapRemaining) == overlapRemaining);
+    const uint64_t bothPendingCause = plugin(*overlap)->core().cp0Cause();
+    CHECK((bothPendingCause & (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi)) ==
+          (kCauseIp4Bit | kCauseIp7Bit | kCauseBitTi));
+    CHECK(readUartRegister(*overlap, 2) == 0xCC);
+    const Mips64FullVmSnapshot bothPending = overlap->captureMips64FullSnapshot();
+    releaseGuest(*overlap, endian);
+    CHECK(overlap->run(1200) == 1200);
+    checkEcho(*overlap, input, endian, true, 0xCC);
+    const Mips64FullVmSnapshot overlapComplete = overlap->captureMips64FullSnapshot();
+    CHECK(overlap->restoreMips64FullSnapshot(bothPending));
+    releaseGuest(*overlap, endian);
+    CHECK(overlap->run(1200) == 1200);
+    CHECK(sameReplayState(overlapComplete, overlap->captureMips64FullSnapshot()));
+
+    // Replay F: malformed deadline/clock/length/version/IRQ records all fail
+    // before any destination CPU, memory, output, or device mutation.
+    const Mips64FullVmSnapshot beforeFailedRestore = overlap->captureMips64FullSnapshot();
+    auto rejectWithoutMutation = [&](Mips64FullVmSnapshot bad, bool refresh) {
+        if (refresh) CHECK(bad.RefreshIntegrity());
+        std::string error;
+        CHECK(!overlap->restoreMips64FullSnapshot(bad, &error));
+        CHECK(!error.empty());
+        CHECK(overlap->captureMips64FullSnapshot().integrityChecksum ==
+              beforeFailedRestore.integrityChecksum);
+    };
+    Mips64FullVmSnapshot badDeadline = bothPending;
+    badDeadline.uart.receiveTimeoutDeadlineCycle = badDeadline.uart.virtualTimeCycle + 1;
+    rejectWithoutMutation(std::move(badDeadline), true);
+    Mips64FullVmSnapshot badUartClock = bothPending;
+    ++badUartClock.uart.virtualTimeCycle;
+    rejectWithoutMutation(std::move(badUartClock), true);
+    Mips64FullVmSnapshot badVmClock = bothPending;
+    ++badVmClock.totalVirtualCycles;
+    rejectWithoutMutation(std::move(badVmClock), true);
+    Mips64FullVmSnapshot oldUartVersion = bothPending;
+    oldUartVersion.uartComponentVersion = 2;
+    rejectWithoutMutation(std::move(oldUartVersion), true);
+    Mips64FullVmSnapshot badLength = bothPending;
+    ++badLength.deviceComponentLength;
+    rejectWithoutMutation(std::move(badLength), false);
+    Mips64FullVmSnapshot badIrqRoute = bothPending;
+    badIrqRoute.uartHardwareInterruptLine = 3;
+    rejectWithoutMutation(std::move(badIrqRoute), true);
+
+    auto coldReset = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                            false, false, 0, 1, 0x87, 12);
+    CHECK(coldReset != nullptr);
+    if (coldReset) {
+        runToReady(*coldReset);
+        CHECK(coldReset->enqueueMips64UartInput(input));
+        const uint64_t coldDeadline = coldReset->getMips64MaltaBootstrapBoard()->Uart()
+            ->ReceiveTimeoutDeadline();
+        const uint64_t coldRemaining = coldDeadline - coldReset->getCyclesExecuted();
+        CHECK(coldReset->run(coldRemaining) == coldRemaining);
+        CHECK(coldReset->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK(coldReset->coldResetMips64Malta());
+        CHECK(coldReset->getMips64MaltaBootstrapBoard()->Uart()->ReceiveFifoSize() == 0);
+        CHECK(!coldReset->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK(coldReset->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutDeadline() == 0);
+        CHECK(coldReset->getMips64MaltaBootstrapBoard()->Uart()->VirtualTimeCycle() == 0);
+    }
+
+    // Malta FPGA SOFTRES is applied at the next VM boundary and resets all
+    // timeout state while preserving the established VM cycle count policy.
+    CHECK(overlap->enqueueMips64UartInput(input));
+    const uint64_t resetDeadline = overlap->getMips64MaltaBootstrapBoard()->Uart()
+        ->ReceiveTimeoutDeadline();
+    const uint64_t resetRemaining = resetDeadline - overlap->getCyclesExecuted();
+    CHECK(overlap->run(resetRemaining) == resetRemaining);
+    CHECK(overlap->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+    writeWord(*overlap, kMaltaFpgaBase + 0x500, 0x42, endian);
+    CHECK(overlap->getMips64MaltaBootstrapBoard()->HasSoftwareResetRequest());
+    CHECK(overlap->step());
+    CHECK(overlap->getMips64MaltaBootstrapBoard()->Uart()->ReceiveFifoSize() == 0);
+    CHECK(!overlap->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+    CHECK(overlap->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutDeadline() == 0);
+    CHECK(overlap->getMips64MaltaBootstrapBoard()->Uart()->VirtualTimeCycle() ==
+          overlap->getCyclesExecuted());
+    CHECK((plugin(*overlap)->core().cp0Cause() & kCauseIp4Bit) == 0);
+
+    // Cross-VM restore resumes from the exact armed deadline and keeps the
+    // source VM unchanged.
+    auto independent = makeVm(endian, 1, kStatusIm4Ie, kStatusIm4Ie,
+                              false, false, 0, 1, 0x87, 12);
+    CHECK(independent != nullptr);
+    if (independent) {
+        CHECK(independent->restoreMips64FullSnapshot(armed));
+        const uint64_t sourceChecksum = vm->captureMips64FullSnapshot().integrityChecksum;
+        CHECK(independent->getCyclesExecuted() == armed.totalVirtualCycles);
+        const uint64_t independentRemaining = armed.uart.receiveTimeoutDeadlineCycle -
+            independent->getCyclesExecuted();
+        CHECK(independent->run(independentRemaining) == independentRemaining);
+        CHECK(independent->getMips64MaltaBootstrapBoard()->Uart()->ReceiveTimeoutPending());
+        CHECK(independent->run(1000) == 1000);
+        checkEcho(*independent, input, endian, false, 0xCC);
+        CHECK(vm->captureMips64FullSnapshot().integrityChecksum == sourceChecksum);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -546,6 +907,8 @@ int main(int argc, char** argv) {
     const std::string mode = argv[1];
     if (mode == "guest") testProductionGuestEchoBothEndiansAndMaskedSources();
     else if (mode == "snapshot") testTransactionalReceiveSnapshotReplay();
+    else if (mode == "timeout_guest") testProductionTimeoutGuestAndThresholdSemantics();
+    else if (mode == "timeout_snapshot") testTransactionalTimeoutSnapshotReplay();
     else return 2;
     std::cout << "MIPS64 IRQ VM[" << mode << "]: " << gPass
               << " passed, " << gFail << " failed\n";

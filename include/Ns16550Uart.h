@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PhysicalAddressMap.h"
+#include "IVirtualTimeDevice.h"
 
 #include <cstdint>
 #include <memory>
@@ -55,19 +56,23 @@ struct Ns16550Mapping {
     static Ns16550Mapping MaltaOriented() { return {}; }
 };
 
-// Deterministic NS16550 subset with a 16-byte receive FIFO and bounded host
-// input staging. RX character-timeout and transmitter-empty interrupts are
-// not modeled. Register reads/writes are always one byte.
-class Ns16550Uart final : public IMmioDevice {
+// Deterministic NS16550 subset with a 16-byte receive FIFO, bounded host
+// input staging, and virtual-time RX character timeout. Register
+// reads/writes are always one byte.
+class Ns16550Uart final : public IMmioDevice, public IVirtualTimeDevice {
 public:
     using IMmioDevice::CommitRestore;
     using IMmioDevice::PrepareRestore;
 
     static constexpr size_t kReceiveFifoCapacity = 16;
     static constexpr size_t kHostInputCapacity = 256;
+    static constexpr uint64_t kVirtualTimeUnitsPerSecond = 1'000'000;
+    // Malta's QEMU serial_mm_init profile supplies baudbase=230400, which is
+    // UART input clock / 16 for the 16550 baud generator.
+    static constexpr uint64_t kMaltaUartReferenceClockHz = 3'686'400;
 
     struct Snapshot {
-        uint32_t version = 2;
+        uint32_t version = 3;
         uint8_t ier = 0;
         uint8_t fcrLastWrite = 0;
         uint8_t lcr = 0;
@@ -83,6 +88,10 @@ public:
         bool receiveOverrun = false;
         std::vector<uint8_t> receiveFifo;
         std::vector<uint8_t> pendingHostInput;
+        uint64_t virtualTimeCycle = 0;
+        uint64_t receiveTimeoutDeadlineCycle = 0;
+        bool receiveTimeoutArmed = false;
+        bool receiveTimeoutPending = false;
     };
 
     struct PreparedRestore {
@@ -98,6 +107,7 @@ public:
     void Write(uint64_t offset, const uint8_t* source, size_t size) override;
     void Reset() override;
     std::optional<bool> InterruptSignal() const noexcept override;
+    void AdvanceVirtualTime(uint64_t virtualCycle) noexcept override;
     std::map<std::string, uint64_t> InspectState() const override;
 
     // Atomic bounded enqueue: false rejects the whole span and latches OE.
@@ -111,6 +121,12 @@ public:
     size_t ReceiveFifoSize() const noexcept { return receiveFifo_.size(); }
     size_t PendingHostInputSize() const noexcept { return pendingHostInput_.size(); }
     bool ReceiveOverrun() const noexcept { return receiveOverrun_; }
+    bool ReceiveTimeoutArmed() const noexcept { return receiveTimeoutArmed_; }
+    bool ReceiveTimeoutPending() const noexcept { return receiveTimeoutPending_; }
+    uint64_t ReceiveTimeoutDeadline() const noexcept { return receiveTimeoutDeadlineCycle_; }
+    uint64_t VirtualTimeCycle() const noexcept { return virtualTimeCycle_; }
+    static uint64_t CharacterTimeoutVirtualUnits(uint8_t lcr,
+                                                  uint16_t divisor) noexcept;
 
     uint64_t RegionSize() const noexcept { return 8 * (uint64_t{1} << registerShift_); }
     const std::shared_ptr<GuestConsoleSink>& Sink() const noexcept { return sink_; }
@@ -138,11 +154,19 @@ private:
     mutable bool receiveOverrun_ = false;
     mutable std::vector<uint8_t> receiveFifo_;
     std::vector<uint8_t> pendingHostInput_;
+    mutable uint64_t virtualTimeCycle_ = 0;
+    mutable uint64_t receiveTimeoutDeadlineCycle_ = 0;
+    mutable bool receiveTimeoutArmed_ = false;
+    mutable bool receiveTimeoutPending_ = false;
 
     size_t ReceiveCapacity() const noexcept;
     bool ReceiveInterruptPending() const noexcept;
+    bool ReceiveTimeoutInterruptPending() const noexcept;
     uint8_t InterruptIdentification() const noexcept;
     void ResetReceiveFifo() noexcept;
+    void RecordReceiveActivity() const noexcept;
+    void ArmReceiveTimeout() const noexcept;
+    void CancelReceiveTimeout() const noexcept;
 };
 
 }  // namespace ia64

@@ -962,7 +962,9 @@ bool VirtualMachine::enqueueMips64UartInput(const uint8_t* bytes, size_t size) {
         return false;
     }
     const auto& uart = maltaBootstrapBoard_->Uart();
-    if (!uart || !uart->EnqueueHostInput(bytes, size)) return false;
+    if (!uart) return false;
+    uart->AdvanceVirtualTime(cyclesExecuted_);
+    if (!uart->EnqueueHostInput(bytes, size)) return false;
     uart->AdvanceHostInput();
     synchronizeMips64UartInterrupt();
     return true;
@@ -1013,6 +1015,9 @@ Mips64FullVmSnapshot VirtualMachine::captureMips64FullSnapshot() const {
     snapshot.physicalMemory = memory_->GetPhysicalAddressMap()->CaptureSnapshot();
     snapshot.fpga = maltaBootstrapBoard_->Fpga()->CaptureSnapshot();
     snapshot.uart = maltaBootstrapBoard_->Uart()->CaptureSnapshot();
+    if (snapshot.uart.virtualTimeCycle != cyclesExecuted_) {
+        throw std::logic_error("MIPS64 UART virtual clock is not synchronized to the VM boundary");
+    }
     snapshot.uartInterruptTargetCpu = 0;
     snapshot.uartHardwareInterruptLine = 2;
     snapshot.uartCauseIp = 4;
@@ -1081,7 +1086,7 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         }
         if (snapshot.cpuComponentVersion != Mips64FullVmSnapshot::kCpuSerializationVersion ||
             snapshot.memoryComponentVersion != 1 || snapshot.fpgaComponentVersion != 1 ||
-            snapshot.uartComponentVersion != 2 || snapshot.irqRoutingComponentVersion != 1 ||
+            snapshot.uartComponentVersion != 3 || snapshot.irqRoutingComponentVersion != 1 ||
             snapshot.consoleComponentVersion != 1 ||
             snapshot.schedulerComponentVersion != 1 || snapshot.vmComponentVersion != 1) {
             return fail("unsupported MIPS64 snapshot component version");
@@ -1117,6 +1122,7 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         if (snapshot.pendingDeferredBoardReset != snapshot.fpga.resetPending ||
             !maltaBootstrapBoard_->Fpga()->ValidateSnapshot(snapshot.fpga) ||
             !Ns16550Uart::ValidateSnapshot(snapshot.uart) ||
+            snapshot.uart.virtualTimeCycle != snapshot.totalVirtualCycles ||
             snapshot.uartInterruptTargetCpu != 0 ||
             snapshot.uartHardwareInterruptLine != 2 || snapshot.uartCauseIp != 4 ||
             snapshot.routedUartInterruptLevel !=
@@ -1297,6 +1303,7 @@ bool VirtualMachine::applyMips64MaltaColdReset(bool preserveVmCycleCount) {
     const uint64_t completedCycles = cyclesExecuted_;
     if (!reset()) return false;
     if (preserveVmCycleCount) cyclesExecuted_ = completedCycles;
+    maltaBootstrapBoard_->Uart()->AdvanceVirtualTime(cyclesExecuted_);
 
     for (CPUContext& context : cpus_) {
         auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get());
@@ -1905,14 +1912,14 @@ if (!isValidCPUIndex(cpuIndex)) {
         }
 
         if (maltaBootstrapBoard_) {
+            maltaBootstrapBoard_->Uart()->AdvanceVirtualTime(cyclesExecuted_);
             maltaBootstrapBoard_->Uart()->AdvanceHostInput();
             synchronizeMips64UartInterrupt();
         }
         const bool success = cpu->step();
         if (maltaBootstrapBoard_) {
-            // Publish MMIO acknowledgements and the next staged input byte at
-            // the retired instruction boundary, without entering the CPU.
-            maltaBootstrapBoard_->Uart()->AdvanceHostInput();
+            // Publish MMIO acknowledgements immediately. Staged input moves
+            // after the global virtual cycle is advanced below.
             synchronizeMips64UartInterrupt();
         }
         if (!success) {
@@ -1941,6 +1948,16 @@ if (!isValidCPUIndex(cpuIndex)) {
         }
         cyclesExecuted_++;
         scheduler_->onCPUExecuted(cpuIndex, 1);
+
+        if (maltaBootstrapBoard_) {
+            // One VM virtual-time unit elapses per successful scheduler CPU
+            // step, regardless of the selected vCPU. Clocked devices observe
+            // the new cycle before the next instruction can sample interrupts.
+            maltaBootstrapBoard_->Uart()->AdvanceVirtualTime(cyclesExecuted_);
+            maltaBootstrapBoard_->Uart()->AdvanceHostInput();
+            maltaBootstrapBoard_->Uart()->AdvanceVirtualTime(cyclesExecuted_);
+            synchronizeMips64UartInterrupt();
+        }
         
         // Record instruction milestone every 10000 instructions
         if (bootTraceSystem_.isEnabled() && cpu->didLastStepRetireInstruction() &&

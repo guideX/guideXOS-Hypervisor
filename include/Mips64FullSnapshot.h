@@ -59,7 +59,7 @@ struct Mips64FullVmSnapshot {
     uint32_t cpuComponentVersion = kCpuSerializationVersion;
     uint32_t memoryComponentVersion = 1;
     uint32_t fpgaComponentVersion = 1;
-    uint32_t uartComponentVersion = 2;
+    uint32_t uartComponentVersion = 3;
     uint32_t irqRoutingComponentVersion = 1;
     uint32_t consoleComponentVersion = 1;
     uint32_t schedulerComponentVersion = 1;

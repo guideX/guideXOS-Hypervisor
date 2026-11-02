@@ -1,6 +1,7 @@
 #include "Ns16550Uart.h"
 
 #include <map>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -11,9 +12,20 @@ constexpr uint8_t kLsrTransmitterReady = 0x60;  // THRE | TEMT
 constexpr uint8_t kIerReceiveData = 0x01;
 constexpr uint8_t kIirNoInterrupt = 0x01;
 constexpr uint8_t kIirReceiveData = 0x04;
+constexpr uint8_t kIirReceiveTimeout = 0x0C;
 constexpr uint8_t kIirFifoEnabled = 0xC0;
 constexpr uint8_t kLsrDataReady = 0x01;
 constexpr uint8_t kLsrOverrun = 0x02;
+
+bool checkedMultiply(uint64_t left, uint64_t right, uint64_t& result) noexcept {
+    if (left != 0 && right > std::numeric_limits<uint64_t>::max() / left) return false;
+    result = left * right;
+    return true;
+}
+
+uint64_t ceilDivide(uint64_t numerator, uint64_t denominator) noexcept {
+    return numerator / denominator + (numerator % denominator != 0 ? 1 : 0);
+}
 }
 
 GuestConsoleSink::GuestConsoleSink(size_t capacityBytes)
@@ -77,24 +89,109 @@ size_t Ns16550Uart::ReceiveCapacity() const noexcept {
     return fifoEnabled_ ? kReceiveFifoCapacity : 1;
 }
 
+uint64_t Ns16550Uart::CharacterTimeoutVirtualUnits(uint8_t lcr,
+                                                   uint16_t divisor) noexcept {
+    const uint64_t dataBits = 5 + (lcr & 0x03);
+    const bool parityEnabled = (lcr & 0x08) != 0;
+    // Count half-bits so the 5-bit, 1.5-stop-bit mode stays exact.
+    const uint64_t stopHalfBits = (lcr & 0x04) == 0 ? 2 : (dataBits == 5 ? 3 : 4);
+    const uint64_t frameHalfBits = 2 + dataBits * 2 + (parityEnabled ? 2 : 0) + stopHalfBits;
+
+    uint64_t numerator = 0;
+    uint64_t denominator = 0;
+    if (divisor == 0) {
+        // QEMU's Malta 16550 profile uses a deterministic 3500-baud fallback
+        // for divisor zero; the PC16550D datasheet says zero is not recommended.
+        // Four frames are 2 * frameHalfBits bits.
+        if (!checkedMultiply(frameHalfBits, 2, numerator) ||
+            !checkedMultiply(numerator, kVirtualTimeUnitsPerSecond, numerator)) {
+            return std::numeric_limits<uint64_t>::max();
+        }
+        denominator = 3500;
+    } else {
+        // Four frames * (half-bits / 2) * 16 * divisor, scaled to VM units.
+        // The fixed Malta reference is 3,686,400 Hz (QEMU baudbase 230400 * 16).
+        if (!checkedMultiply(frameHalfBits, 32, numerator) ||
+            !checkedMultiply(numerator, divisor, numerator) ||
+            !checkedMultiply(numerator, kVirtualTimeUnitsPerSecond, numerator)) {
+            return std::numeric_limits<uint64_t>::max();
+        }
+        denominator = kMaltaUartReferenceClockHz;
+    }
+    const uint64_t duration = ceilDivide(numerator, denominator);
+    return duration == 0 ? 1 : duration;
+}
+
 bool Ns16550Uart::ReceiveInterruptPending() const noexcept {
     return (ier_ & kIerReceiveData) != 0 &&
            receiveFifo_.size() >= receiveTriggerLevel_;
 }
 
+bool Ns16550Uart::ReceiveTimeoutInterruptPending() const noexcept {
+    return fifoEnabled_ && receiveTimeoutPending_ && !receiveFifo_.empty() &&
+           receiveFifo_.size() < receiveTriggerLevel_;
+}
+
 uint8_t Ns16550Uart::InterruptIdentification() const noexcept {
     const uint8_t fifoBits = fifoEnabled_ ? kIirFifoEnabled : 0;
-    return static_cast<uint8_t>(fifoBits |
-        (ReceiveInterruptPending() ? kIirReceiveData : kIirNoInterrupt));
+    const uint8_t receiveCause = ReceiveInterruptPending() ? kIirReceiveData :
+        (((ier_ & kIerReceiveData) != 0 && ReceiveTimeoutInterruptPending())
+            ? kIirReceiveTimeout : kIirNoInterrupt);
+    return static_cast<uint8_t>(fifoBits | receiveCause);
 }
 
 void Ns16550Uart::ResetReceiveFifo() noexcept {
     receiveFifo_.clear();
     receiveOverrun_ = false;
+    CancelReceiveTimeout();
+}
+
+void Ns16550Uart::CancelReceiveTimeout() const noexcept {
+    receiveTimeoutDeadlineCycle_ = 0;
+    receiveTimeoutArmed_ = false;
+    receiveTimeoutPending_ = false;
+}
+
+void Ns16550Uart::ArmReceiveTimeout() const noexcept {
+    if (!fifoEnabled_ || receiveFifo_.empty()) {
+        CancelReceiveTimeout();
+        return;
+    }
+    const uint16_t divisor = static_cast<uint16_t>(divisorLatchLow_) |
+        (static_cast<uint16_t>(divisorLatchHigh_) << 8);
+    const uint64_t duration = CharacterTimeoutVirtualUnits(lcr_, divisor);
+    receiveTimeoutDeadlineCycle_ = duration > UINT64_MAX - virtualTimeCycle_
+        ? UINT64_MAX : virtualTimeCycle_ + duration;
+    receiveTimeoutArmed_ = true;
+}
+
+void Ns16550Uart::RecordReceiveActivity() const noexcept {
+    ArmReceiveTimeout();
+}
+
+void Ns16550Uart::AdvanceVirtualTime(uint64_t virtualCycle) noexcept {
+    // Restore/reset sets the clock explicitly. Normal scheduler updates are
+    // monotonic; ignore an accidental stale update instead of moving time back.
+    if (virtualCycle < virtualTimeCycle_) return;
+    virtualTimeCycle_ = virtualCycle;
+    if (!fifoEnabled_ || receiveFifo_.empty()) {
+        CancelReceiveTimeout();
+        return;
+    }
+    if (receiveTimeoutDeadlineCycle_ == 0) {
+        ArmReceiveTimeout();
+    }
+    if (virtualTimeCycle_ >= receiveTimeoutDeadlineCycle_) {
+        receiveTimeoutArmed_ = false;
+        if (receiveFifo_.size() < receiveTriggerLevel_) {
+            receiveTimeoutPending_ = true;
+        }
+    }
 }
 
 std::optional<bool> Ns16550Uart::InterruptSignal() const noexcept {
-    return ReceiveInterruptPending();
+    return (ier_ & kIerReceiveData) != 0 &&
+        (ReceiveInterruptPending() || ReceiveTimeoutInterruptPending());
 }
 
 bool Ns16550Uart::EnqueueHostInput(const uint8_t* bytes, size_t size) {
@@ -115,6 +212,7 @@ size_t Ns16550Uart::AdvanceHostInput() noexcept {
     while (!pendingHostInput_.empty() && receiveFifo_.size() < capacity) {
         receiveFifo_.push_back(pendingHostInput_.front());
         pendingHostInput_.erase(pendingHostInput_.begin());
+        RecordReceiveActivity();
         ++moved;
     }
     return moved;
@@ -143,6 +241,11 @@ void Ns16550Uart::Read(uint64_t offset, uint8_t* destination, size_t size) const
             } else if (!receiveFifo_.empty()) {
                 value = receiveFifo_.front();
                 receiveFifo_.erase(receiveFifo_.begin());
+                // A real RBR read acknowledges timeout and restarts the
+                // inactivity interval for any bytes that remain.
+                receiveTimeoutPending_ = false;
+                if (receiveFifo_.empty()) CancelReceiveTimeout();
+                else RecordReceiveActivity();
             }
             break;
         case 1:  // IER or DLM
@@ -190,7 +293,7 @@ void Ns16550Uart::Write(uint64_t offset, const uint8_t* source, size_t size) {
             if ((lcr_ & kLcrDlab) != 0) divisorLatchHigh_ = value;
             else ier_ = static_cast<uint8_t>(value & 0x0F);
             break;
-        case 2: { // FCR is write-only; RX FIFO is 16 bytes, with no timeout IRQ.
+        case 2: { // FCR is write-only.
             fcrLastWrite_ = value;
             const bool wasEnabled = fifoEnabled_;
             fifoEnabled_ = (value & 0x01) != 0;
@@ -199,7 +302,10 @@ void Ns16550Uart::Write(uint64_t offset, const uint8_t* source, size_t size) {
             receiveTriggerLevel_ = fifoEnabled_ ? triggerLevels[trigger] : 1;
             if ((value & 0x02) != 0 || (wasEnabled && !fifoEnabled_)) {
                 ResetReceiveFifo();
+            } else if (!wasEnabled && fifoEnabled_ && !receiveFifo_.empty()) {
+                RecordReceiveActivity();
             }
+            AdvanceVirtualTime(virtualTimeCycle_);
             break;
         }
         case 3: lcr_ = value; break;
@@ -229,6 +335,8 @@ void Ns16550Uart::Reset() {
     receiveOverrun_ = false;
     receiveFifo_.clear();
     pendingHostInput_.clear();
+    virtualTimeCycle_ = 0;
+    CancelReceiveTimeout();
     sink_->Clear();
 }
 
@@ -249,6 +357,10 @@ Ns16550Uart::Snapshot Ns16550Uart::CaptureSnapshot() const {
     snapshot.receiveOverrun = receiveOverrun_;
     snapshot.receiveFifo = receiveFifo_;
     snapshot.pendingHostInput = pendingHostInput_;
+    snapshot.virtualTimeCycle = virtualTimeCycle_;
+    snapshot.receiveTimeoutDeadlineCycle = receiveTimeoutDeadlineCycle_;
+    snapshot.receiveTimeoutArmed = receiveTimeoutArmed_;
+    snapshot.receiveTimeoutPending = receiveTimeoutPending_;
     return snapshot;
 }
 
@@ -258,19 +370,37 @@ bool Ns16550Uart::ValidateSnapshot(const Snapshot& snapshot) noexcept {
     constexpr uint8_t triggerLevels[] = {1, 4, 8, 14};
     const uint8_t expectedTrigger = fifoEnabled ? triggerLevels[triggerCode] : 1;
     const size_t capacity = fifoEnabled ? kReceiveFifoCapacity : 1;
-    return snapshot.version == 2 && snapshot.dlab == ((snapshot.lcr & kLcrDlab) != 0) &&
+    const bool hasFifoData = !snapshot.receiveFifo.empty();
+    const bool timeoutStateValid = fifoEnabled
+        ? (hasFifoData ? snapshot.receiveTimeoutDeadlineCycle != 0
+                       : (!snapshot.receiveTimeoutArmed && !snapshot.receiveTimeoutPending &&
+                          snapshot.receiveTimeoutDeadlineCycle == 0))
+        : (!snapshot.receiveTimeoutArmed && !snapshot.receiveTimeoutPending &&
+           snapshot.receiveTimeoutDeadlineCycle == 0);
+    const bool deadlineValid = !snapshot.receiveTimeoutArmed ||
+        snapshot.receiveTimeoutDeadlineCycle > snapshot.virtualTimeCycle;
+    const bool expiredDeadlineValid = snapshot.receiveTimeoutArmed ||
+        snapshot.receiveTimeoutDeadlineCycle == 0 ||
+        snapshot.receiveTimeoutDeadlineCycle <= snapshot.virtualTimeCycle;
+    const bool pendingValid = !snapshot.receiveTimeoutPending ||
+        (fifoEnabled && hasFifoData && snapshot.receiveTimeoutDeadlineCycle != 0);
+    return snapshot.version == 3 && snapshot.dlab == ((snapshot.lcr & kLcrDlab) != 0) &&
            snapshot.transmitterReady && snapshot.fifoEnabled == fifoEnabled &&
            snapshot.receiveTriggerLevel == expectedTrigger &&
            snapshot.receiveFifo.size() <= capacity &&
            snapshot.pendingHostInput.size() <= kHostInputCapacity &&
            snapshot.receiveFifo.size() + snapshot.pendingHostInput.size() <= kHostInputCapacity &&
            (snapshot.ier & 0xF0) == 0 &&
-           (snapshot.fcrLastWrite & 0x38) == 0;
+           (snapshot.fcrLastWrite & 0x38) == 0 && timeoutStateValid &&
+           deadlineValid && expiredDeadlineValid && pendingValid;
 }
 
 bool Ns16550Uart::SnapshotInterruptSignal(const Snapshot& snapshot) noexcept {
     return ValidateSnapshot(snapshot) && (snapshot.ier & kIerReceiveData) != 0 &&
-           snapshot.receiveFifo.size() >= snapshot.receiveTriggerLevel;
+           (snapshot.receiveFifo.size() >= snapshot.receiveTriggerLevel ||
+            (snapshot.fifoEnabled && snapshot.receiveTimeoutPending &&
+             !snapshot.receiveFifo.empty() &&
+             snapshot.receiveFifo.size() < snapshot.receiveTriggerLevel));
 }
 
 bool Ns16550Uart::PrepareRestore(const Snapshot& snapshot, PreparedRestore& prepared) const {
@@ -301,6 +431,10 @@ void Ns16550Uart::CommitRestore(const Snapshot& snapshot, PreparedRestore&& prep
     receiveOverrun_ = snapshot.receiveOverrun;
     receiveFifo_.swap(prepared.receiveFifo);
     pendingHostInput_.swap(prepared.pendingHostInput);
+    virtualTimeCycle_ = snapshot.virtualTimeCycle;
+    receiveTimeoutDeadlineCycle_ = snapshot.receiveTimeoutDeadlineCycle;
+    receiveTimeoutArmed_ = snapshot.receiveTimeoutArmed;
+    receiveTimeoutPending_ = snapshot.receiveTimeoutPending;
 }
 
 std::map<std::string, uint64_t> Ns16550Uart::InspectState() const {
@@ -309,7 +443,11 @@ std::map<std::string, uint64_t> Ns16550Uart::InspectState() const {
             {"DLM", divisorLatchHigh_}, {"transmit_count", transmitCount_},
             {"console_bytes", sink_->Bytes().size()}, {"rx_fifo_bytes", receiveFifo_.size()},
             {"host_input_bytes", pendingHostInput_.size()}, {"fifo_enabled", fifoEnabled_},
-            {"rx_trigger", receiveTriggerLevel_}, {"rx_overrun", receiveOverrun_}};
+            {"rx_trigger", receiveTriggerLevel_}, {"rx_overrun", receiveOverrun_},
+            {"virtual_time_cycle", virtualTimeCycle_},
+            {"rx_timeout_deadline", receiveTimeoutDeadlineCycle_},
+            {"rx_timeout_armed", receiveTimeoutArmed_},
+            {"rx_timeout_pending", receiveTimeoutPending_}};
 }
 
 }  // namespace ia64

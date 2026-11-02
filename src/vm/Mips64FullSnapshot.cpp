@@ -83,8 +83,8 @@ bool computeLengths(const Mips64FullVmSnapshot& snapshot,
 
     // FPGA: version, endian/config bytes, LED, display, BRKRES, mailbox.
     deviceLength = 26;
-    // UART v2: v1 state, FIFO/trigger/overrun, and two length-prefixed RX queues.
-    if (!addLength(deviceLength, 40) ||
+    // UART v3: v2 state plus the VM clock and armed/pending timeout deadline.
+    if (!addLength(deviceLength, 58) ||
         !addLength(deviceLength, static_cast<uint64_t>(snapshot.uart.receiveFifo.size())) ||
         !addLength(deviceLength, static_cast<uint64_t>(snapshot.uart.pendingHostInput.size()))) return false;
     // Direct IRQ route: CPU target, hardware line, Cause.IP index, level.
@@ -197,6 +197,10 @@ uint64_t calculateChecksum(const Mips64FullVmSnapshot& snapshot) noexcept {
     hash.boolean(snapshot.uart.receiveOverrun);
     hash.bytes(snapshot.uart.receiveFifo);
     hash.bytes(snapshot.uart.pendingHostInput);
+    hash.u64(snapshot.uart.virtualTimeCycle);
+    hash.u64(snapshot.uart.receiveTimeoutDeadlineCycle);
+    hash.boolean(snapshot.uart.receiveTimeoutArmed);
+    hash.boolean(snapshot.uart.receiveTimeoutPending);
 
     hash.u32(snapshot.uartInterruptTargetCpu);
     hash.byte(snapshot.uartHardwareInterruptLine);
