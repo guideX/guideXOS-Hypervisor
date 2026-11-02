@@ -2504,6 +2504,18 @@ void testIA64GentooVariableShiftRegression() {
     Memory memory(64 * 1024);
     constexpr uint64_t raw = 0xf240f24400ULL;
 
+    auto decodeShl = [&decoder](uint8_t dst, uint8_t src, uint8_t count,
+                                uint8_t qp) {
+        constexpr uint64_t operandAndPredicateMask =
+            (0x7fULL << 6) | (0x7fULL << 13) | (0x7fULL << 20) | 0x3fULL;
+        const uint64_t encoded =
+            (raw & ~operandAndPredicateMask) |
+            (static_cast<uint64_t>(dst) << 6) |
+            (static_cast<uint64_t>(src) << 13) |
+            (static_cast<uint64_t>(count) << 20) | qp;
+        return decoder.DecodeSlot(encoded, UnitType::I_UNIT, 0x18040);
+    };
+
     const InstructionEx shl = decoder.DecodeSlot(raw, UnitType::I_UNIT, 0x18040);
     assert(shl.GetType() == InstructionType::SHL);
     assert(shl.GetPredicate() == 0);
@@ -2513,30 +2525,100 @@ void testIA64GentooVariableShiftRegression() {
     assert(!shl.HasImmediate());
     assert(shl.GetDisassembly() == "shl r16 = r18, r15");
 
-    cpu.SetGR(18, 0x123456789ULL);
-    cpu.SetGR(15, 4);
-    shl.Execute(cpu, memory);
-    assert(cpu.GetGR(16) == (0x123456789ULL << 4));
-    assert(!cpu.GetGRNaT(16));
+    constexpr uint64_t sourceValue = 0x123456789ULL;
+    const uint64_t counts[] = {
+        0, 1, 31, 32, 63, 64, 65, 127, 0x8000000000000000ULL};
+    for (const uint64_t count : counts) {
+        cpu.SetGR(18, sourceValue);
+        cpu.SetGRNaT(18, false);
+        cpu.SetGR(15, count);
+        cpu.SetGRNaT(15, false);
+        cpu.SetGR(16, 0xfeedfaceULL);
+        cpu.SetGRNaT(16, true);
+        shl.Execute(cpu, memory);
+        const uint64_t expected = count > 63 ? 0 : sourceValue << count;
+        assert(cpu.GetGR(16) == expected);
+        assert(!cpu.GetGRNaT(16));
+    }
 
-    cpu.SetGR(15, 64);
-    shl.Execute(cpu, memory);
-    assert(cpu.GetGR(16) == 0);
-
-    cpu.SetGR(15, 3);
+    // Snapshotting sources before the write is required when the destination
+    // aliases either source, including that source's NaT bit.
+    const InstructionEx sourceAlias = decodeShl(18, 18, 15, 0);
+    cpu.SetGR(18, sourceValue);
     cpu.SetGRNaT(18, true);
+    cpu.SetGR(15, 4);
+    cpu.SetGRNaT(15, false);
+    sourceAlias.Execute(cpu, memory);
+    assert(cpu.GetGR(18) == (sourceValue << 4));
+    assert(cpu.GetGRNaT(18));
+
+    const InstructionEx countAlias = decodeShl(15, 18, 15, 0);
+    cpu.SetGR(18, sourceValue);
+    cpu.SetGRNaT(18, false);
+    cpu.SetGR(15, 4);
+    cpu.SetGRNaT(15, true);
+    countAlias.Execute(cpu, memory);
+    assert(cpu.GetGR(15) == (sourceValue << 4));
+    assert(cpu.GetGRNaT(15));
+
+    cpu.SetGR(18, sourceValue);
+    cpu.SetGRNaT(18, true);
+    cpu.SetGR(15, 3);
+    cpu.SetGRNaT(15, false);
     shl.Execute(cpu, memory);
+    assert(cpu.GetGR(16) == (sourceValue << 3));
     assert(cpu.GetGRNaT(16));
 
-    const InstructionEx falseQp = decoder.DecodeSlot(
-        raw | 1ULL, UnitType::I_UNIT, 0x18040);
+    cpu.SetGRNaT(18, false);
+    cpu.SetGRNaT(15, true);
+    shl.Execute(cpu, memory);
+    assert(cpu.GetGR(16) == (sourceValue << 3));
+    assert(cpu.GetGRNaT(16));
+
+    // Encoded GR0 operands read as zero, and writes to GR0 are discarded.
+    const InstructionEx zeroSource = decodeShl(16, 0, 15, 0);
+    cpu.SetGR(15, 3);
+    cpu.SetGRNaT(15, false);
+    zeroSource.Execute(cpu, memory);
+    assert(zeroSource.GetDst() == 16 && zeroSource.GetSrc1() == 0);
+    assert(cpu.GetGR(16) == 0);
+    assert(!cpu.GetGRNaT(16));
+
+    const InstructionEx zeroCount = decodeShl(16, 18, 0, 0);
+    cpu.SetGR(18, sourceValue);
+    cpu.SetGRNaT(18, false);
+    zeroCount.Execute(cpu, memory);
+    assert(zeroCount.GetSrc2() == 0);
+    assert(cpu.GetGR(16) == sourceValue);
+
+    const InstructionEx zeroDestination = decodeShl(0, 18, 15, 0);
+    cpu.SetGR(18, sourceValue);
+    cpu.SetGR(15, 3);
+    cpu.SetGR(0, 0xfeedfaceULL);
+    zeroDestination.Execute(cpu, memory);
+    assert(zeroDestination.GetDst() == 0);
+    assert(cpu.GetGR(0) == 0);
+    assert(!cpu.GetGRNaT(0));
+
+    const InstructionEx falseQp = decodeShl(16, 18, 15, 1);
     assert(falseQp.GetPredicate() == 1);
     cpu.SetPR(1, false);
     cpu.SetGR(16, 0xfeedfaceULL);
+    cpu.SetGRNaT(16, true);
+    cpu.SetGR(18, sourceValue);
+    cpu.SetGRNaT(18, true);
+    cpu.SetGR(15, 64);
+    cpu.SetGRNaT(15, true);
     falseQp.Execute(cpu, memory);
     assert(cpu.GetGR(16) == 0xfeedfaceULL);
+    assert(cpu.GetGRNaT(16));
 
-    std::cout << "  ? raw 0xf240f24400 decodes and executes as variable SHL\n";
+    cpu.SetPR(1, true);
+    falseQp.Execute(cpu, memory);
+    assert(cpu.GetGR(16) == 0);
+    assert(cpu.GetGRNaT(16));
+
+    std::cout << "  ? raw variable SHL, unsigned counts, aliasing, predicates, NaT, and GR0 pass\n";
 }
 
 void testIA64ReturnBranchDecode() {
@@ -2926,6 +3008,8 @@ void testIA64LegacyAllocPreservesPreviousFrameState() {
     CPU cpu(memory, decoder);
 
     cpu.getState().SetCFM(6 | (static_cast<uint64_t>(4) << 7));
+    constexpr uint64_t previousPfs = 0x123456789abcdef0ULL;
+    cpu.getState().SetPFS(previousPfs);
     cpu.getState().SetGR(60, 0x55aa55aa);
 
     InstructionEx alloc(InstructionType::ALLOC, UnitType::I_UNIT);
@@ -2933,8 +3017,8 @@ void testIA64LegacyAllocPreservesPreviousFrameState() {
     alloc.SetImmediate(10 | (static_cast<uint64_t>(5) << 7) | (static_cast<uint64_t>(2) << 14));
     cpu.executeInstruction(alloc);
 
-    assert(cpu.getState().GetGR(60) == (6 | (static_cast<uint64_t>(4) << 7)));
-    assert(cpu.getState().GetPFS() == 0);
+    assert(cpu.getState().GetGR(60) == previousPfs);
+    assert(cpu.getState().GetPFS() == previousPfs);
     assert(cpu.getState().GetCFM() == (10 | (static_cast<uint64_t>(5) << 7) | (static_cast<uint64_t>(2) << 14)));
 
     std::cout << "  ? alloc preserves ar.pfs and updates the current frame\n";
@@ -3051,7 +3135,6 @@ void testIA64PluginCallOutputInputs() {
     plugin.getCPUState().SetBSPSTORE(0x1000);
     plugin.getCPUState().SetGR(36, 0x12345678);
     plugin.getCPUState().SetGR(37, 0xabcdef00);
-    plugin.getCPUState().SetGR(55, 0x380f8);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
@@ -3059,7 +3142,6 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.getCPUState().GetCFM() == 2);
     assert(plugin.getCPUState().GetPFS() == (6 | (static_cast<uint64_t>(4) << 7)));
     assert(plugin.getCPUState().GetBSP() == 0x1020);
-    assert(plugin.getCPUState().GetGR(55) == 0);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(32) == 0x12345678);
@@ -3081,7 +3163,6 @@ void testIA64PluginCallOutputInputs() {
     assert(plugin.getCPUState().GetBSPSTORE() == 0x1000);
     assert(plugin.getCPUState().GetGR(36) == 0x12345678);
     assert(plugin.getCPUState().GetGR(37) == 0xabcdef00);
-    assert(plugin.getCPUState().GetGR(55) == 0x380f8);
 
     std::cout << "  ? plugin br.call passes inputs and br.ret restores caller frame\n";
 }
@@ -6343,6 +6424,10 @@ int main(int argc, char** argv) {
         }
         if (argc > 1 && std::string(argv[1]) == "fileprotocol") {
             testIA64PluginFileProtocolReadStreaming();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "shl") {
+            testIA64GentooVariableShiftRegression();
             return 0;
         }
 

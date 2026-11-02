@@ -1808,15 +1808,20 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
         case InstructionType::SHL:
             // shl rDst = rSrc1, rSrc2
             {
-                // IA-64 uses the low six bits of a variable shift-count
-                // register; callers may intentionally pass a wrapped or
-                // negative count (for example, the MOVL patcher).
-                const uint64_t count =
-                    (hasImmediate_ ? immediate_ : cpu.GetGR(src2_)) & 0x3FULL;
-                const uint64_t result = cpu.GetGR(src1_) << count;
+                // The variable count is an unsigned GR value. Counts above
+                // 63 produce zero; they do not wrap modulo the register width.
+                // Snapshot both values and NaT bits before writing the target,
+                // since the destination may alias either source.
+                const uint64_t source = cpu.GetGR(src1_);
+                const bool sourceNaT = cpu.GetGRNaT(src1_);
+                const uint64_t count = hasImmediate_
+                    ? immediate_
+                    : cpu.GetGR(src2_);
+                const bool countNaT =
+                    !hasImmediate_ && cpu.GetGRNaT(src2_);
+                const uint64_t result = count > 63 ? 0 : source << count;
                 cpu.SetGR(dst_, result);
-                cpu.SetGRNaT(dst_, cpu.GetGRNaT(src1_) ||
-                                      (!hasImmediate_ && cpu.GetGRNaT(src2_)));
+                cpu.SetGRNaT(dst_, sourceNaT || countNaT);
             }
             break;
             

@@ -1,6 +1,7 @@
 #include "VMManager.h"
 #include "IA64ISAPlugin.h"
 #include "ProcessorInterruptBlock.h"
+#include "decoder.h"
 #include "logger.h"
 #include "memory.h"
 
@@ -34,6 +35,9 @@ struct Options {
     uint64_t postCheckpointCycles = 2'000'000;
     bool placementTelemetry = false;
     bool instructionTrace = false;
+    std::string progressLogPath;
+    uint64_t traceAfterCycles = std::numeric_limits<uint64_t>::max();
+    uint64_t traceInstructionCount = 0;
     std::string oraclePath;
     std::string checkpointWritePath;
     std::string checkpointReadPath;
@@ -152,6 +156,12 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.placementTelemetry = true;
         } else if (argument == "--instruction-trace") {
             options.instructionTrace = true;
+        } else if (argument == "--progress-log" && i + 1 < argc) {
+            options.progressLogPath = argv[++i];
+        } else if (argument == "--trace-after-cycles" && i + 1 < argc) {
+            if (!parseUnsigned(argv[++i], options.traceAfterCycles)) return false;
+        } else if (argument == "--trace-instructions" && i + 1 < argc) {
+            if (!parseUnsigned(argv[++i], options.traceInstructionCount)) return false;
         } else if (argument == "--verify-oracle" && i + 1 < argc) {
             options.oraclePath = argv[++i];
         } else if (argument == "--checkpoint-write" && i + 1 < argc) {
@@ -189,6 +199,9 @@ bool parseOptions(int argc, char** argv, Options& options) {
     return !options.isoPath.empty() && options.cycles > 0 && options.memoryMiB >= 1 &&
            options.handoffCycles > 0 && options.postCheckpointCycles > 0 &&
            (options.dumpMemoryRangePath.empty() == (options.dumpMemoryRangeSize == 0)) &&
+           options.traceInstructionCount <= 1'000'000 &&
+           (options.traceInstructionCount == 0 ||
+            options.traceAfterCycles != std::numeric_limits<uint64_t>::max()) &&
            !(options.checkpointWritePath.empty() && !options.checkpointReadPath.empty() && !options.keys.empty()) &&
            !(options.checkpointWritePath.empty() == false && !options.checkpointReadPath.empty());
 }
@@ -196,7 +209,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
 void printUsage() {
     std::cout << "Usage: ia64_iso_matrix <iso-path> [--cycles N] [--memory-mib N] "
                  "[--key NAME]... [--key-after-cycles N] [--placement-telemetry] "
-                 "[--verify-oracle PATH] [--instruction-trace] "
+                 "[--verify-oracle PATH] [--instruction-trace] [--progress-log PATH] "
+                 "[--trace-after-cycles N --trace-instructions N] "
                  "[--checkpoint-write PATH | --checkpoint-read PATH] "
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
@@ -310,14 +324,27 @@ void verifyPlacementOracle(const ia64::VirtualMachine& vm,
 
 struct ContinuationRecord {
     struct Instruction {
+        uint64_t cycle = 0;
         uint64_t ip = 0;
         size_t slot = 0;
         uint64_t itc = 0;
+        uint64_t raw = 0;
+        uint8_t predicate = 0;
+        bool predicateValue = false;
+        std::string disassembly;
+        std::array<uint64_t, 128> gr{};
+        std::array<bool, 128> grNat{};
+        uint64_t predicateMask = 0;
     };
     uint64_t cycles = 0;
+    uint64_t attemptedSteps = 0;
+    uint64_t failedSteps = 0;
+    uint64_t vmCycleStart = 0;
+    uint64_t vmCycleEnd = 0;
     size_t uniqueInstructionCount = 0;
     size_t uniqueBundleCount = 0;
     std::vector<Instruction> firstInstructions;
+    std::vector<Instruction> traceWindow;
     std::unordered_map<uint64_t, uint64_t> hotIps;
     bool panicSeen = false;
     uint64_t panicCaller = 0;
@@ -544,13 +571,20 @@ std::string readKernelCString(ia64::VirtualMachine& vm, uint64_t va, size_t maxL
 ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    bool collectHotIps = false,
                                    const std::vector<uint64_t>& probeIps = {},
-                                   std::string lockTracePath = {}) {
+                                   std::string lockTracePath = {},
+                                   uint64_t traceAfterCycles = std::numeric_limits<uint64_t>::max(),
+                                   uint64_t traceInstructionCount = 0) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     ContinuationRecord record;
+    record.vmCycleStart = vm.getCyclesExecuted();
     record.firstInstructions.reserve(64);
+    if (traceInstructionCount != 0) {
+        record.traceWindow.reserve(static_cast<size_t>(traceInstructionCount));
+    }
     std::unordered_set<uint64_t> uniqueInstructions;
     std::unordered_set<uint64_t> uniqueBundles;
+    ia64::InstructionDecoder traceDecoder;
     std::unordered_map<uint64_t, size_t> probeLineIndex;
     std::vector<uint64_t> recentPath;
     recentPath.reserve(16384);
@@ -562,11 +596,10 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
     std::ofstream lockTrace;
     ia64::Memory* concreteMemory = nullptr;
     size_t lockWriteHookId = 0;
-    const uint8_t* rawMemory = nullptr;
+    const uint8_t* rawMemory = vm.getMemory().GetRawData();
     if (!lockTracePath.empty()) {
         lockTrace.open(lockTracePath, std::ios::trunc);
         concreteMemory = dynamic_cast<ia64::Memory*>(&vm.getMemory());
-        rawMemory = vm.getMemory().GetRawData();
         uint32_t initialLockWord = 0;
         const bool initialLockAvailable = rawMemory != nullptr &&
             vmlistLockPa + sizeof(initialLockWord) <= vm.getMemory().GetTotalSize();
@@ -645,6 +678,7 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
         const uint64_t ip = vm.getIP(0);
         const size_t slot = plugin == nullptr ? 0 : plugin->getCurrentSlot();
+        const uint64_t globalCycle = vm.getCyclesExecuted();
         uniqueInstructions.insert(ip | slot);
         uniqueBundles.insert(ip & ~0xFULL);
         const uint64_t canonicalIp = canonicalKernelVma(ip);
@@ -776,10 +810,50 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             ++record.hotIps[canonicalKernelVma(ip)];
         }
         if (plugin != nullptr && record.firstInstructions.size() < 64) {
-            record.firstInstructions.push_back({
-                ip, plugin->getCurrentSlot(), vm.getCPUState(0).GetAR(44)});
+            ContinuationRecord::Instruction first;
+            first.cycle = globalCycle;
+            first.ip = ip;
+            first.slot = plugin->getCurrentSlot();
+            first.itc = vm.getCPUState(0).GetAR(44);
+            record.firstInstructions.push_back(std::move(first));
         }
-        if (!vm.step()) break;
+        if (record.traceWindow.size() < traceInstructionCount &&
+            globalCycle >= traceAfterCycles) {
+            ContinuationRecord::Instruction traced;
+            traced.cycle = globalCycle;
+            traced.ip = ip;
+            traced.slot = slot;
+            traced.itc = vm.getCPUState(0).GetAR(44);
+            const ia64::CPUState& traceCpu = vm.getCPUState(0);
+            const uint64_t physicalBundle = ip & ~0xFULL;
+            if (rawMemory != nullptr &&
+                physicalBundle + 16 <= vm.getMemory().GetTotalSize()) {
+                const ia64::Bundle bundle = traceDecoder.DecodeBundleAt(
+                    rawMemory + physicalBundle, physicalBundle);
+                if (slot < bundle.instructions.size()) {
+                    const ia64::InstructionEx& instruction = bundle.instructions[slot];
+                    traced.raw = instruction.GetRawBits();
+                    traced.predicate = instruction.GetPredicate();
+                    traced.predicateValue = traceCpu.GetPR(traced.predicate);
+                    traced.disassembly = instruction.GetDisassembly();
+                }
+            }
+            for (size_t reg = 0; reg < traced.gr.size(); ++reg) {
+                traced.gr[reg] = traceCpu.GetGR(reg);
+                traced.grNat[reg] = traceCpu.GetGRNaT(reg);
+            }
+            for (size_t predicate = 0; predicate < 64; ++predicate) {
+                if (traceCpu.GetPR(predicate)) {
+                    traced.predicateMask |= uint64_t{1} << predicate;
+                }
+            }
+            record.traceWindow.push_back(std::move(traced));
+        }
+        ++record.attemptedSteps;
+        if (!vm.step()) {
+            ++record.failedSteps;
+            break;
+        }
         ++record.cycles;
     }
     if (lockWriteHookId != 0 && concreteMemory != nullptr) {
@@ -800,6 +874,7 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                   << std::dec << "\n";
     }
     record.cpu = vm.getCPUState(0);
+    record.vmCycleEnd = vm.getCyclesExecuted();
     record.uniqueInstructionCount = uniqueInstructions.size();
     record.uniqueBundleCount = uniqueBundles.size();
     record.framebuffer = vm.getFramebufferDevice()->createSnapshot();
@@ -864,6 +939,10 @@ void writeContinuationLog(const std::string& path,
     std::ofstream output(path, std::ios::trunc);
     if (!output) return;
     output << "label=" << label << " cycles=" << record.cycles
+           << " attempted_steps=" << record.attemptedSteps
+           << " failed_steps=" << record.failedSteps
+           << " guest_cycle_start=" << record.vmCycleStart
+           << " guest_cycle_end=" << record.vmCycleEnd
            << " unique_instructions=" << record.uniqueInstructionCount
            << " unique_bundles=" << record.uniqueBundleCount
            << " first_ip=0x" << std::hex
@@ -872,14 +951,36 @@ void writeContinuationLog(const std::string& path,
            << canonicalKernelVma(record.firstInstructions.empty() ? checkpointIP : record.firstInstructions.front().ip)
            << std::dec << "\n";
     for (size_t i = 0; i < record.firstInstructions.size(); ++i) {
-        output << "instruction=" << i << " ip=0x" << std::hex << record.firstInstructions[i].ip
+        output << "instruction=" << i << " cycle=" << std::dec
+               << record.firstInstructions[i].cycle << " ip=0x" << std::hex
+               << record.firstInstructions[i].ip
                << " canonical_vma=0x" << canonicalKernelVma(record.firstInstructions[i].ip)
                << " slot=" << std::dec << record.firstInstructions[i].slot
                << " itc=" << record.firstInstructions[i].itc << "\n";
     }
     output << "final_ip=0x" << std::hex << record.cpu.GetIP()
            << " final_canonical_vma=0x" << canonicalKernelVma(record.cpu.GetIP())
-           << " final_itc=" << std::dec << record.cpu.GetAR(44) << "\n";
+           << " final_itc=" << std::dec << record.cpu.GetAR(44) << "\n"
+           << "trace_window_count=" << record.traceWindow.size() << "\n";
+    for (size_t i = 0; i < record.traceWindow.size(); ++i) {
+        const auto& instruction = record.traceWindow[i];
+        output << "trace=" << i << " cycle=" << instruction.cycle
+               << " ip=0x" << std::hex << instruction.ip
+               << " canonical_vma=0x" << canonicalKernelVma(instruction.ip)
+               << " raw=0x" << instruction.raw
+               << " predicate_mask=0x" << instruction.predicateMask
+               << std::dec << " slot=" << instruction.slot
+               << " predicate=" << static_cast<unsigned>(instruction.predicate)
+               << " predicate_value=" << (instruction.predicateValue ? 1 : 0)
+               << " itc=" << instruction.itc
+               << " disassembly=\"" << instruction.disassembly << "\"\n";
+        output << "trace_gr=" << i;
+        for (size_t reg = 0; reg < instruction.gr.size(); ++reg) {
+            output << " r" << std::dec << reg << "=0x" << std::hex << instruction.gr[reg]
+                   << (instruction.grNat[reg] ? "N" : "");
+        }
+        output << std::dec << "\n";
+    }
 }
 
 void writeHotIps(const std::string& path,
@@ -1383,9 +1484,48 @@ int main(int argc, char** argv) {
             return (traceEqual && cpuEqual && memoryEqual && framebufferEqual && consoleEqual) ? 0 : 1;
         }
 
+        ia64::VirtualMachine* progressVm = manager.getVMDirect(vmId);
         uint64_t executed = 0;
+        const bool monitorColdRun = !options.progressLogPath.empty() ||
+            !options.hotIpsPath.empty() || !options.probeIps.empty() ||
+            !options.lockTracePath.empty() || options.traceInstructionCount != 0;
+        const bool collectColdHotIps = !options.hotIpsPath.empty();
+        auto reportColdProgress = [&](const ContinuationRecord& record,
+                                      uint64_t startIP) {
+            writeContinuationLog(options.progressLogPath, "cold", record, startIP);
+            writeHotIps(options.hotIpsPath, "cold", record);
+            for (const std::string& probeLine : record.probeLines) {
+                std::cerr << probeLine << "\n";
+            }
+            const ia64::IA64ISAPlugin* progressPlugin = progressVm == nullptr
+                ? nullptr
+                : getPlugin(*progressVm);
+            std::cerr << "[IA64-PROGRESS] guestCycleStart=" << record.vmCycleStart
+                      << " guestCycleEnd=" << record.vmCycleEnd
+                      << " stepAttempts=" << record.attemptedSteps
+                      << " successfulSteps=" << record.cycles
+                      << " failedSteps=" << record.failedSteps
+                      << " uniqueInstructionAddresses=" << record.uniqueInstructionCount
+                      << " uniqueBundles=" << record.uniqueBundleCount
+                      << " finalIP=0x" << std::hex << record.cpu.GetIP()
+                      << " finalVMA=0x" << canonicalKernelVma(record.cpu.GetIP())
+                      << std::dec << " finalSlot="
+                      << (progressPlugin == nullptr ? 0 : progressPlugin->getCurrentSlot())
+                      << "\n";
+        };
         if (options.keys.empty()) {
-            executed = manager.runVM(vmId, options.cycles);
+            if (monitorColdRun) {
+                if (progressVm == nullptr) return 1;
+                const uint64_t startIP = progressVm->getIP(0);
+                const ContinuationRecord progress = runContinuation(
+                    *progressVm, options.cycles, collectColdHotIps, options.probeIps,
+                    options.lockTracePath, options.traceAfterCycles,
+                    options.traceInstructionCount);
+                executed = progress.cycles;
+                reportColdProgress(progress, startIP);
+            } else {
+                executed = manager.runVM(vmId, options.cycles);
+            }
         } else {
             if (options.keyAfterCycles >= options.cycles) {
                 std::cerr << "[IA64-MATRIX] --key-after-cycles must be less than --cycles when keys are scripted\n";
@@ -1421,7 +1561,17 @@ int main(int argc, char** argv) {
                           << " unicode=0x" << key.unicodeChar << std::dec << std::endl;
             }
 
-            executed += manager.runVM(vmId, options.cycles - options.keyAfterCycles);
+            if (monitorColdRun) {
+                const uint64_t startIP = vm->getIP(0);
+                const ContinuationRecord progress = runContinuation(
+                    *vm, options.cycles - options.keyAfterCycles,
+                    collectColdHotIps, options.probeIps, options.lockTracePath,
+                    options.traceAfterCycles, options.traceInstructionCount);
+                executed += progress.cycles;
+                reportColdProgress(progress, startIP);
+            } else {
+                executed += manager.runVM(vmId, options.cycles - options.keyAfterCycles);
+            }
         }
         reportRuntime("final");
         const ia64::VMMetadata metadata = manager.getVMMetadata(vmId);
@@ -1476,13 +1626,13 @@ int main(int argc, char** argv) {
 
         std::cout << "[IA64-MATRIX] vmId=" << vmId
                   << " cyclesExecuted=" << executed
-                  << " usageCycles=" << usage.cyclesExecuted
+                  << " usageCycles=" << (vm == nullptr ? usage.cyclesExecuted : vm->getCyclesExecuted())
                   << " state=" << ia64::vmStateToString(metadata.currentState)
                   << " error=\"" << metadata.lastError << "\""
                   << std::endl;
         std::cerr << "[IA64-MATRIX] vmId=" << vmId
                   << " cyclesExecuted=" << executed
-                  << " usageCycles=" << usage.cyclesExecuted
+                  << " usageCycles=" << (vm == nullptr ? usage.cyclesExecuted : vm->getCyclesExecuted())
                   << " state=" << ia64::vmStateToString(metadata.currentState)
                   << " internalState="
                   << (vm == nullptr ? std::string("unknown") : ia64::vmStateToString(vm->getState()))
@@ -1507,6 +1657,8 @@ int main(int argc, char** argv) {
                       << " ip=0x" << std::hex << cpu.GetIP()
                       << " slot=" << std::dec << (plugin == nullptr ? 0 : plugin->getCurrentSlot())
                       << " psr=0x" << std::hex << cpu.GetPSR()
+                      << " dt=" << std::dec << ((cpu.GetPSR() >> 17) & 1)
+                      << " iva=0x" << std::hex << cpu.GetCR(64)
                       << " cfm=0x" << cpu.GetCFM()
                       << " pfs=0x" << rse.pfs
                       << " rsc=0x" << rse.rsc
@@ -1517,6 +1669,10 @@ int main(int argc, char** argv) {
                       << " r1=0x" << cpu.GetGR(1)
                       << " br0=0x" << cpu.GetBR(0)
                       << " br6=0x" << cpu.GetBR(6)
+                      << " rr={" << cpu.GetRR(0) << ',' << cpu.GetRR(1) << ','
+                      << cpu.GetRR(2) << ',' << cpu.GetRR(3) << ','
+                      << cpu.GetRR(4) << ',' << cpu.GetRR(5) << ','
+                      << cpu.GetRR(6) << ',' << cpu.GetRR(7) << '}'
                       << " rseRing={bof:" << std::dec << static_cast<unsigned>(rse.bof)
                       << ",store:" << static_cast<unsigned>(rse.storeReg)
                       << ",load:" << static_cast<unsigned>(rse.loadReg)

@@ -1821,19 +1821,19 @@ void test_latest_boot_log_blockers() {
                  0x202900000000000ULL, cpu.GetGR(15));
     cpu.SetPR(6, true);
 
-    // IA-64 variable shift counts use only the low six bits. Linux's
-    // ia64_patch_imm64 relies on wrapped counts when patching the X-slot of a
-    // long MOVL bundle.
-    InstructionEx wrappedShl(InstructionType::SHL, UnitType::I_UNIT);
-    wrappedShl.SetOperands(14, 25, 23);
+    // Variable SHL interprets the entire GR count as unsigned. The Linux
+    // ia64_patch_imm64 helper edits MOVL instruction fields directly; it does
+    // not execute a variable SHL with a negative/wrapped count.
+    InstructionEx variableShl(InstructionType::SHL, UnitType::I_UNIT);
+    variableShl.SetOperands(14, 25, 23);
     cpu.SetGR(25, 1);
-    cpu.SetGR(23, 0xFFFFFFFFFFFFFFE9ULL); // low six bits are 41.
-    wrappedShl.Execute(cpu, memory);
-    assert_equal("variable SHL wraps negative count to its low six bits",
-                 1ULL << 41, cpu.GetGR(14));
+    cpu.SetGR(23, 0xFFFFFFFFFFFFFFE9ULL);
+    variableShl.Execute(cpu, memory);
+    assert_equal("variable SHL treats a high-bit-set count as unsigned",
+                 0, cpu.GetGR(14));
     cpu.SetGR(23, 64);
-    wrappedShl.Execute(cpu, memory);
-    assert_equal("variable SHL count 64 wraps to zero", 1, cpu.GetGR(14));
+    variableShl.Execute(cpu, memory);
+    assert_equal("variable SHL count 64 produces zero", 0, cpu.GetGR(14));
 
     // Exact authentic ELILO repeat-index update at 0x25730/0x259d0.
     // Historical Binutils decodes this A1 slot as "add r40=r40,r16,1".
