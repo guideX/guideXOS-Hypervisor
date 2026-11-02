@@ -5054,7 +5054,8 @@ void testIA64PluginEfiPoolAllocationLifecycle() {
         plugin.getCPUState().SetGR(36, size);
         plugin.getCPUState().SetGR(37, bufferOut);
         plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
-        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        const ISAExecutionResult result = plugin.step(memory);
+        assert(result == ISAExecutionResult::CONTINUE);
         return plugin.getCPUState().GetGR(8);
     };
 
@@ -5176,7 +5177,8 @@ void testIA64PluginEfiMirrorReservation() {
         plugin.getCPUState().SetGR(35, descriptorSizeAddress);
         plugin.getCPUState().SetGR(36, descriptorVersionAddress);
         plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
-        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        const ISAExecutionResult result = plugin.step(memory);
+        assert(result == ISAExecutionResult::CONTINUE);
         assert(plugin.getCPUState().GetGR(8) == efiSuccess);
         return memory.read<uint64_t>(sizeAddress);
     };
@@ -5685,7 +5687,8 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
         plugin.getCPUState().SetGR(35, memoryPointer);
         plugin.getCPUState().SetGR(37, allocatePagesSlot);
         plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
-        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        const ISAExecutionResult result = plugin.step(memory);
+        assert(result == ISAExecutionResult::CONTINUE);
         return plugin.getCPUState().GetGR(8);
     };
 
@@ -5706,7 +5709,8 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
         plugin.getCPUState().SetGR(36, descriptorVersionAddress);
         plugin.getCPUState().SetGR(37, 0);
         plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
-        assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+        const ISAExecutionResult result = plugin.step(memory);
+        assert(result == ISAExecutionResult::CONTINUE);
         assert(plugin.getCPUState().GetGR(8) == efiSuccess);
         return std::array<uint64_t, 3>{
             memory.read<uint64_t>(keyAddress),
@@ -5723,8 +5727,20 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
         assert(end <= 0x1ffb0000ULL || base >= 0x1fff0000ULL);
     };
 
+    auto expectAllocationStatus = [&](uint64_t type,
+                                      uint64_t memoryType,
+                                      uint64_t pages,
+                                      uint64_t memoryPointer,
+                                      uint64_t input,
+                                      uint64_t expectedStatus) {
+        const uint64_t status = callAllocatePages(type, memoryType, pages,
+                                                  memoryPointer, input);
+        assert(status == expectedStatus);
+        return status;
+    };
+
     uint64_t anyOutput = 0;
-    assert(callAllocatePages(0, 2, 3, 0x5000, 0) == efiSuccess);
+    expectAllocationStatus(0, 2, 3, 0x5000, 0, efiSuccess);
     anyOutput = memory.read<uint64_t>(0x5000);
     assertNoReservedOverlap(anyOutput, 3);
 
@@ -5746,7 +5762,7 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
     assert(sawLoaderDataAllocation);
 
     uint64_t secondOutput = 0;
-    assert(callAllocatePages(0, 2, 2, 0x5010, 0) == efiSuccess);
+    expectAllocationStatus(0, 2, 2, 0x5010, 0, efiSuccess);
     secondOutput = memory.read<uint64_t>(0x5010);
     assertNoReservedOverlap(secondOutput, 2);
     assert(secondOutput + 2 * pageSize <= anyOutput ||
@@ -5756,29 +5772,30 @@ void testIA64PluginAllocatePagesUsesSharedEfiMemoryMap() {
 
     uint64_t maxOutput = 0;
     constexpr uint64_t maxAddress = 0x01f1000fULL;
-    assert(callAllocatePages(1, 2, 6, 0x5020, maxAddress) == efiSuccess);
+    expectAllocationStatus(1, 2, 6, 0x5020, maxAddress, efiSuccess);
     maxOutput = memory.read<uint64_t>(0x5020);
     assertNoReservedOverlap(maxOutput, 6);
     assert(maxOutput + 6 * pageSize - 1 <= maxAddress);
 
     constexpr uint64_t exactAddress = 0x02000000ULL;
-    assert(callAllocatePages(2, 4, 2, 0x5030, exactAddress) == efiSuccess);
+    expectAllocationStatus(2, 4, 2, 0x5030, exactAddress, efiSuccess);
     assert(memory.read<uint64_t>(0x5030) == exactAddress);
     assertNoReservedOverlap(exactAddress, 2);
 
     // An exact one-page fit at the first conventional page also exercises
     // the lower boundary without touching low firmware memory.
-    assert(callAllocatePages(1, 2, 1, 0x5040, 0x100fffULL) == efiSuccess);
+    expectAllocationStatus(1, 2, 1, 0x5040, 0x100fffULL, efiSuccess);
     assert(memory.read<uint64_t>(0x5040) == 0x100000ULL);
 
     const uint64_t keyBeforeFailures = getMemoryMap()[0];
-    assert(callAllocatePages(0, 2, 1, guestMemorySize, 0) == efiInvalidParameter);
-    assert(getMemoryMap()[0] == keyBeforeFailures);
-    assert(callAllocatePages(3, 2, 1, 0x5050, 0) == efiInvalidParameter);
-    assert(callAllocatePages(0, 7, 1, 0x5060, 0) == efiInvalidParameter);
-    assert(callAllocatePages(0, 2, 0, 0x5070, 0) == efiNotFound);
-    assert(callAllocatePages(2, 2, 1, 0x5080, 0x1fe00000ULL) == efiNotFound);
-    assert(callAllocatePages(1, 2, 1, 0x5090, 0xfffULL) == efiNotFound);
+    expectAllocationStatus(0, 2, 1, guestMemorySize, 0, efiInvalidParameter);
+    const auto mapAfterInvalidPointer = getMemoryMap();
+    assert(mapAfterInvalidPointer[0] == keyBeforeFailures);
+    expectAllocationStatus(3, 2, 1, 0x5050, 0, efiInvalidParameter);
+    expectAllocationStatus(0, 7, 1, 0x5060, 0, efiInvalidParameter);
+    expectAllocationStatus(0, 2, 0, 0x5070, 0, efiNotFound);
+    expectAllocationStatus(2, 2, 1, 0x5080, 0x1fe00000ULL, efiNotFound);
+    expectAllocationStatus(1, 2, 1, 0x5090, 0xfffULL, efiNotFound);
 
     std::cout << "  ? AllocateAny/Max/Address split one shared EFI map, update MapKey, "
                  "reject invalid pointers/constraints, and preserve reserved ranges\n";

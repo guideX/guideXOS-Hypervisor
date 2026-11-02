@@ -20,6 +20,9 @@ using namespace ia64;
 constexpr uint64_t kRoot = 0x10000;
 constexpr uint64_t kOuter = 0x11000;
 constexpr uint64_t kInner = 0x12000;
+constexpr uint64_t kInterruptVectorBase = 0x1000;
+constexpr uint64_t kInterruptHandler = 0x4000;
+constexpr uint64_t kInterruptHelper = 0x5000;
 constexpr uint64_t kBackingStore = 0x8000;
 constexpr uint64_t kInitialCfm = 6ULL | (4ULL << 7);
 constexpr uint64_t kOuterCfm = 8ULL | (6ULL << 7);
@@ -184,14 +187,14 @@ void runNestedCallReturnRegression() {
     IMemory& memory = vm.getMemory();
     writeBundle(memory, kRoot, kMibStop, 0, 0, directCall(kRoot, kOuter));
     writeBundle(memory, kRoot + 0x10, kMiiStop);
-    writeBundle(memory, kOuter, kMiiStop, alloc(50, 8, 6));
+    writeBundle(memory, kOuter, kMiiStop, alloc(39, 8, 6));
     writeBundle(memory, kOuter + 0x10, kMiiStop, 0, movFromBR(38, 0));
     writeBundle(memory, kOuter + 0x20, kMibStop, 0, 0,
                 directCall(kOuter + 0x20, kInner));
     writeBundle(memory, kOuter + 0x30, kMibStop,
-                movToPfs(50), movToBR(0, 38), indirectReturn());
+                movToPfs(39), movToBR(0, 38), indirectReturn());
     writeBundle(memory, kInner, kMibStop,
-                alloc(51, 5, 3), movToPfs(51), indirectReturn());
+                alloc(36, 5, 3), movToPfs(36), indirectReturn());
 
     InstructionDecoder decoder;
     const uint8_t* rawMemory = vm.getMemory().GetRawData();
@@ -245,11 +248,136 @@ void runNestedCallReturnRegression() {
                  "architectural AR.PFS restore, stacked arguments, NaT, and BSP unwind\n";
 }
 
+void runInterruptedNestedCallRegression() {
+    VirtualMachine vm(1U << 20, 1, "IA-64");
+    require(vm.init(), "interrupted call-frame VM initialization failed");
+    CPU& processor = vm.getCPU();
+    auto* plugin = dynamic_cast<IA64ISAPlugin*>(processor.getISAPlugin());
+    require(plugin != nullptr,
+            "interrupted call-frame VM did not select IA64ISAPlugin");
+    plugin->reset();
+
+    CPUState& cpu = plugin->getCPUState();
+    cpu.SetIP(kRoot);
+    cpu.SetCFM(kInitialCfm);
+    cpu.SetPFS(0xA5A5A5A5A5A5A5A5ULL);
+    cpu.SetBSP(kBackingStore);
+    cpu.SetBSPSTORE(kBackingStore);
+    cpu.SetRSC(0);
+    cpu.SetPSR(IA64_PSR_IC | IA64_PSR_I);
+    cpu.SetCR(IA64_CR_IVA, kInterruptVectorBase);
+    plugin->setInterruptsEnabled(true);
+    cpu.SetGR(36, 0x1122334455667788ULL);
+    cpu.SetGRNaT(36, true);
+
+    IMemory& memory = vm.getMemory();
+    writeBundle(memory, kRoot, kMibStop, 0, 0,
+                directCall(kRoot, kOuter));
+    writeBundle(memory, kRoot + 0x10, kMiiStop);
+    writeBundle(memory, kOuter, kMiiStop, alloc(39, 8, 6));
+    writeBundle(memory, kOuter + 0x10, kMiiStop, 0, movFromBR(38, 0));
+    writeBundle(memory, kOuter + 0x20, kMibStop, 0, 0,
+                directCall(kOuter + 0x20, kInner));
+    writeBundle(memory, kOuter + 0x30, kMibStop,
+                movToPfs(39), movToBR(0, 38), indirectReturn());
+    writeBundle(memory, kInner, kMibStop,
+                alloc(36, 5, 3), movToPfs(36), indirectReturn());
+
+    // External interrupt entry targets IVA+0x3000. The handler covers the
+    // interrupted frame, makes a nested call, restores AR.PFS and b0, then
+    // executes the real decoded rfi instruction from a guest bundle.
+    writeBundle(memory, kInterruptHandler, kMibStop, 0, 0, 0x10000000ULL);
+    writeBundle(memory, kInterruptHandler + 0x10, kMiiStop,
+                alloc(38, 8, 6));
+    writeBundle(memory, kInterruptHandler + 0x20, kMiiStop,
+                0, movFromBR(39, 0));
+    writeBundle(memory, kInterruptHandler + 0x30, kMibStop,
+                0, 0, directCall(kInterruptHandler + 0x30,
+                                  kInterruptHelper));
+    writeBundle(memory, kInterruptHandler + 0x40, kMibStop,
+                movToPfs(38), movToBR(0, 39), 0x40000000ULL);
+    writeBundle(memory, kInterruptHelper, kMibStop,
+                alloc(35, 5, 3), movToPfs(35), indirectReturn());
+
+    constexpr uint64_t interruptedCfm = 2;
+    constexpr uint64_t interruptedPfs = kOuterCfm;
+    constexpr uint64_t interruptedB0 = kOuter + 0x30;
+    constexpr uint64_t interruptedBsp = kBackingStore + 10 * 8;
+    bool interruptInjected = false;
+    bool interruptReturned = false;
+    bool helperReturned = false;
+    for (size_t step = 0; step < 64 && cpu.GetIP() != kRoot + 0x10; ++step) {
+        const uint64_t ip = cpu.GetIP();
+        size_t slot = plugin->getCurrentSlot();
+        if (slot >= 3) slot = 0;
+        if (!interruptInjected && ip == kInner && slot == 0) {
+            require(cpu.GetCFM() == interruptedCfm &&
+                        cpu.GetPFS() == interruptedPfs &&
+                        cpu.GetBSP() == interruptedBsp &&
+                        cpu.GetBR(0) == interruptedB0,
+                    "nested-call interruption begins with the expected inner frame");
+            plugin->queueInterrupt(0xEF);
+            require(plugin->tryDeliverPendingInterrupt(),
+                    "nested-call interruption is delivered at the inner entry");
+            require(cpu.GetIP() == kInterruptHandler &&
+                        cpu.GetCR(IA64_CR_IIP) == kInner &&
+                        cpu.GetCR(IA64_CR_IPSR) == (IA64_PSR_IC | IA64_PSR_I),
+                    "interrupt entry captures the nested call resume boundary");
+            interruptInjected = true;
+            continue;
+        }
+
+        require(vm.stepCPU(0), "interrupted nested-call guest stopped early");
+
+        if (ip == kInterruptHandler && slot == 2) {
+            require(cpu.GetCR(23) == ((1ULL << 63) | interruptedCfm),
+                    "handler cover saves the inner frame in architectural IFS");
+        }
+        if (ip == kInterruptHandler + 0x30 && slot == 2) {
+            require(cpu.GetCFM() == 2 &&
+                        cpu.GetPFS() == (8ULL | (6ULL << 7)),
+                    "handler nested call establishes its own architectural frame");
+        }
+        if (ip == kInterruptHelper && slot == 2) {
+            helperReturned = true;
+        }
+        if (ip == kInterruptHandler + 0x40 && slot == 2) {
+            require(cpu.GetPFS() == interruptedPfs &&
+                        cpu.GetBR(0) == interruptedB0,
+                    "handler restores interrupted PFS and b0 before rfi");
+        }
+        if (interruptInjected && !interruptReturned && cpu.GetIP() == kInner &&
+            cpu.GetCFM() == interruptedCfm) {
+            require(cpu.GetPFS() == interruptedPfs &&
+                        cpu.GetBSP() == interruptedBsp &&
+                        cpu.GetBR(0) == interruptedB0,
+                    "rfi restores the interrupted inner frame and return link");
+            interruptReturned = true;
+        }
+    }
+
+    require(interruptInjected && interruptReturned && helperReturned,
+            "interrupted nested call completed the handler call and rfi path");
+    require(cpu.GetIP() == kRoot + 0x10,
+            "interrupted nested guest calls return to the root continuation");
+    require(cpu.GetCFM() == kInitialCfm,
+            "interrupted nested guest calls restore the root CFM");
+    require(cpu.GetBSP() == kBackingStore &&
+                cpu.GetBSPSTORE() == kBackingStore,
+            "interrupted nested guest calls unwind root BSP/BSPSTORE");
+    require(cpu.GetGR(36) == 0x1122334455667788ULL && cpu.GetGRNaT(36),
+            "interrupted nested guest calls preserve the caller value and NaT");
+
+    std::cout << "production IA-64 interrupted call-frame regression passed: "
+                 "nested handler call, PFS/b0 save, rfi, and guest return chain\n";
+}
+
 } // namespace
 
 int main() {
     try {
         runNestedCallReturnRegression();
+        runInterruptedNestedCallRegression();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "production IA-64 call-frame regression failed: "

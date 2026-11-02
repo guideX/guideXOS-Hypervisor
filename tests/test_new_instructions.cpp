@@ -711,10 +711,12 @@ void test_latest_boot_log_blockers() {
                  coverCpu.GetCR(23) & 0x3FFFFFFFFFULL);
 
     coverCpu.SetCFM(coverOldCfm);
-    coverCpu.SetCR(23, 0);
+    const uint64_t staleIfs = (1ULL << 63) | 0x12345678ULL;
+    coverCpu.SetCR(23, staleIfs);
     coverCpu.SetPSR(1ULL << 13);  // PSR.ic == 1
     cover.Execute(coverCpu, memory);
-    assert_equal("cover with PSR.ic=1 should not latch IFS", 0, coverCpu.GetCR(23));
+    assert_equal("cover with PSR.ic=1 should leave IFS untouched",
+                 staleIfs, coverCpu.GetCR(23));
     assert_equal("cover should still clear the frame marker when ic=1",
                  0, coverCpu.GetCFM());
 
@@ -5629,6 +5631,51 @@ void test_ia64_cover_rfi_restarts_spilled_return_fill() {
     std::cout << "  ? rfi restarts a deferred interrupted-frame fill" << std::endl;
 }
 
+void test_ia64_rfi_with_invalid_ifs_preserves_live_frame() {
+    std::cout << "Testing IA-64 rfi with invalid CR.IFS..." << std::endl;
+
+    CPUState cpu;
+    Memory memory(0x4000);
+    constexpr uint64_t invalidIfs = 0x0000000012345678ULL;
+    constexpr uint64_t liveCfm = 0x0000000000000185ULL;
+    constexpr uint64_t liveBsp = 0x1800;
+    constexpr uint64_t liveBof = 7;
+    constexpr uint64_t restoredPsr = (1ULL << 13) | (1ULL << 14);
+    constexpr uint64_t restoredIip = 0x2A00;
+    constexpr uint64_t handlerPsr = 0x4000;
+
+    cpu.SetCFM(liveCfm);
+    cpu.SetBSP(liveBsp);
+    cpu.SetBSPSTORE(0x1700);
+    cpu.SetRSEBOFForCheckpoint(static_cast<uint8_t>(liveBof));
+    cpu.SetRSELoadPointer(0x1710);
+    cpu.SetCR(23, invalidIfs); // IFS.v == 0; ifm is not a valid saved CFM.
+    cpu.SetCR(16, restoredPsr);
+    cpu.SetCR(19, restoredIip);
+    cpu.SetPSR(handlerPsr);
+
+    InstructionEx rfi(InstructionType::RFI, UnitType::B_UNIT);
+    rfi.Execute(cpu, memory);
+
+    assert_equal("invalid-IFS rfi does not replace the live CFM", liveCfm,
+                 cpu.GetCFM());
+    assert_equal("invalid-IFS rfi does not rewind the live BSP", liveBsp,
+                 cpu.GetBSP());
+    assert_equal("invalid-IFS rfi does not replace the live BOF", liveBof,
+                 cpu.GetRSEBOF());
+    assert_equal("invalid-IFS rfi does not replace the RSE load pointer",
+                 0x1710, cpu.GetRSELoadPointer());
+    assert_equal("invalid-IFS rfi preserves the invalid IFS contents", invalidIfs,
+                 cpu.GetCR(23));
+    assert_equal("invalid-IFS rfi still restores IPSR", restoredPsr,
+                 cpu.GetPSR());
+    assert_equal("invalid-IFS rfi still restores IIP", restoredIip,
+                 cpu.GetIP());
+
+    std::cout << "  ? invalid IFS does not force a stale CFM into the live frame"
+              << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "IA-64 Instruction Set Tests" << std::endl;
@@ -5692,6 +5739,7 @@ int main() {
         test_ia64_banked_context_survives_interruption_return();
         test_ia64_cover_rfi_restores_rse_frame();
         test_ia64_cover_rfi_restarts_spilled_return_fill();
+        test_ia64_rfi_with_invalid_ifs_preserves_live_frame();
         
         std::cout << std::endl;
         std::cout << "========================================" << std::endl;

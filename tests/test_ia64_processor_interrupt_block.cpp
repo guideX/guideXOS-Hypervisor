@@ -128,6 +128,36 @@ int main() {
                 "interrupted b0 remains intact through the entry and rfi sequence");
         require(framePlugin.getCPUState().GetPSR() == (IA64_PSR_IC | IA64_PSR_I),
                 "rfi restores the interrupted PSR from IPSR");
+
+        // Complete the interrupt, then deliver a second one with a different
+        // live CFM and a deliberately stale valid IFS marker. The second
+        // entry must discard that marker and its cover/rfi pair must use the
+        // second interrupted frame.
+        framePlugin.writeControlRegister(IA64_CR_EOI, 0);
+        constexpr uint64_t secondCfm = 0x185;
+        framePlugin.getCPUState().SetCFM(secondCfm);
+        framePlugin.getCPUState().SetIP(0x1FE00080ULL);
+        framePlugin.getCPUState().SetCR(23, ifsValid | interruptedCfm);
+        framePlugin.queueInterrupt(0xEF);
+        require(framePlugin.tryDeliverPendingInterrupt(),
+                "back-to-back interrupt test delivers its second vector");
+        require((framePlugin.getCPUState().GetCR(23) & ifsValid) == 0 &&
+                    framePlugin.getCPUState().GetCFM() == secondCfm,
+                "second interrupt clears stale IFS validity without changing live CFM");
+        cover.Execute(framePlugin.getCPUState(), frameMemory);
+        require(framePlugin.getCPUState().GetCR(23) == (ifsValid | secondCfm),
+                "second cover captures the second interrupted CFM");
+        framePlugin.getCPUState().SetCFM(0x895);
+        framePlugin.getCPUState().SetIP(rfiBundleAddress);
+        framePlugin.getCPUState().SetCR(19, 0x1FE00080ULL);
+        for (int slot = 0; slot < 3; ++slot) {
+            require(framePlugin.step(frameMemory) != ISAExecutionResult::HALT,
+                    "back-to-back interrupt test executes its second rfi");
+        }
+        require(framePlugin.getCPUState().GetCFM() == secondCfm &&
+                    framePlugin.getCPUState().GetIP() == 0x1FE00080ULL &&
+                    framePlugin.getCPUState().GetCR(23) == secondCfm,
+                "second rfi restores its own frame and consumes IFS validity");
     }
 
     const uint64_t base = ProcessorInterruptBlock::kDefaultBaseAddress;
