@@ -1551,6 +1551,12 @@ int main(int argc, char** argv) {
             printProcessorInterruptTelemetry(*vm, "restore");
             printConsoleTelemetry(*vm, "restore", consoleBytesBefore);
             dumpGuestRam(*vm, options.dumpRamPath);
+            if (!dumpGuestMemoryRange(*vm,
+                                      options.dumpMemoryRangeAddress,
+                                      options.dumpMemoryRangeSize,
+                                      options.dumpMemoryRangePath)) {
+                return 1;
+            }
             return 0;
         }
 
