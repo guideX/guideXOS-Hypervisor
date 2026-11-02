@@ -546,6 +546,9 @@ public:
     // -- endianness -----------------------------------------------------------
     Mips64Endianness endianness() const { return endianness_; }
     bool isLittleEndian() const { return endianness_ == Mips64Endianness::Little; }
+    // Platform configuration hook; resets architectural state under the new
+    // byte order while leaving CPU serialization format unchanged.
+    void configureEndianness(Mips64Endianness endianness);
 
     // -- fetch/decode/execute -------------------------------------------------
     // Fetch one instruction word at virtual `address` per configured

@@ -316,6 +316,9 @@ bool VirtualMachine::reset() {
         if (interruptController_) {
             interruptController_->Reset();
         }
+        if (memory_ && memory_->GetPhysicalAddressMap()) {
+            memory_->GetPhysicalAddressMap()->ResetDevices();
+        }
         
         // Clear all memory watchpoints (from debugger)
         for (const auto& entry : memoryBreakpoints_) {
@@ -480,8 +483,15 @@ bool VirtualMachine::loadProgram(const uint8_t* data, size_t size, uint64_t load
     }
     
     try {
-        // Write program to memory
-        memory_->Write(loadAddress, data, size);
+        // A strict physical map validates guest transaction widths. Host-side
+        // image loading is initialization, so write its bounded RAM backing
+        // directly instead of pretending an image-sized transfer is a guest
+        // bus transaction.
+        if (memory_->GetPhysicalAddressMap()) {
+            memory_->loadBuffer(loadAddress, data, size);
+        } else {
+            memory_->Write(loadAddress, data, size);
+        }
         
         // Record kernel load in boot trace
         bootTraceSystem_.recordKernelLoad(loadAddress, size, cyclesExecuted_);
@@ -799,6 +809,21 @@ IMemory& VirtualMachine::getMemory() {
 
 const IMemory& VirtualMachine::getMemory() const {
     return *memory_;
+}
+
+PhysicalAddressMap& VirtualMachine::enableMips64PhysicalAddressMap() {
+    if (state_ == VMState::RUNNING || state_ == VMState::PAUSED) {
+        throw std::logic_error("MIPS64 physical map must be configured while the VM is stopped");
+    }
+    if (cpus_.empty()) {
+        throw std::logic_error("MIPS64 physical map requires a constructed MIPS64 VM");
+    }
+    for (const CPUContext& context : cpus_) {
+        if (!context.isaPlugin || context.isaPlugin->getName() != "MIPS64") {
+            throw std::logic_error("MIPS64 physical map is only available to MIPS64 VMs");
+        }
+    }
+    return memory_->EnablePhysicalAddressMap();
 }
 
 CPUContext* VirtualMachine::getCPUContext(int cpuIndex) {

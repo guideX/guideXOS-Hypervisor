@@ -431,6 +431,11 @@ Mips64Decoded decodeInstruction(uint32_t word) {
 
 Mips64Cpu::Mips64Cpu(Mips64Endianness endianness) : endianness_(endianness) { reset(); }
 
+void Mips64Cpu::configureEndianness(Mips64Endianness endianness) {
+    endianness_ = endianness;
+    reset();
+}
+
 bool Mips64Cpu::faultEntersException(Mips64Fault fault) {
     switch (fault) {
         // Synchronous exceptions taken through enterException(): the guest

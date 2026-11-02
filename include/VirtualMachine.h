@@ -36,6 +36,7 @@ class InstructionDecoder;
 class BasicInterruptController;
 class VirtualConsole;
 class VirtualTimer;
+class PhysicalAddressMap;
 
 
 
@@ -315,6 +316,10 @@ public:
      */
     IMemory& getMemory();
     const IMemory& getMemory() const;
+
+    // Explicit opt-in for a strict 36-bit physical map on a MIPS64 VM.
+    // Existing VMs retain their legacy flat-memory behavior unless called.
+    PhysicalAddressMap& enableMips64PhysicalAddressMap();
 
     /**
      * Get CPU context (for advanced access)

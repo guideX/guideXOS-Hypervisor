@@ -7,7 +7,7 @@
 namespace ia64 {
 
 Memory::Memory(size_t size, bool enableMMU, size_t pageSize)
-    : data_(size, 0)
+    : data_(std::make_shared<std::vector<uint8_t>>(size, 0))
     , mmu_(std::make_unique<MMU>(pageSize, enableMMU))
 {
     if (size == 0) {
@@ -22,6 +22,15 @@ Memory::Memory(size_t size, bool enableMMU, size_t pageSize)
     }
 }
 
+PhysicalAddressMap& Memory::EnablePhysicalAddressMap() {
+    if (!physicalMap_) {
+        auto map = std::make_unique<PhysicalAddressMap>();
+        map->RegisterSharedRam(0, data_);
+        physicalMap_ = std::move(map);
+    }
+    return *physicalMap_;
+}
+
 void Memory::loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) {
     if (size == 0) {
         return; // Nothing to load
@@ -32,7 +41,7 @@ void Memory::loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) {
     }
     
     checkBounds(address, size);
-    std::memcpy(&data_[address], buffer, size);
+    std::memcpy(data_->data() + address, buffer, size);
 }
 
 void Memory::loadBuffer(uint64_t address, const std::vector<uint8_t>& buffer) {
@@ -48,11 +57,16 @@ void Memory::Read(uint64_t address, uint8_t* dest, size_t size) const {
         throw std::invalid_argument("Destination pointer cannot be null");
     }
 
+    if (physicalMap_) {
+        physicalMap_->Read(address, dest, size);
+        return;
+    }
+
     if (tryDeviceRead(address, dest, size)) {
         return;
     }
 
-    const uint64_t memorySize = static_cast<uint64_t>(data_.size());
+    const uint64_t memorySize = static_cast<uint64_t>(data_->size());
     if (address >= memorySize || static_cast<uint64_t>(size) > memorySize - address) {
         std::ostringstream ctx;
         ctx << "access=read"
@@ -75,11 +89,16 @@ void Memory::Write(uint64_t address, const uint8_t* src, size_t size) {
         throw std::invalid_argument("Source pointer cannot be null");
     }
 
+    if (physicalMap_) {
+        physicalMap_->Write(address, src, size);
+        return;
+    }
+
     if (tryDeviceWrite(address, src, size)) {
         return;
     }
 
-    const uint64_t memorySize = static_cast<uint64_t>(data_.size());
+    const uint64_t memorySize = static_cast<uint64_t>(data_->size());
     if (address >= memorySize || static_cast<uint64_t>(size) > memorySize - address) {
         std::ostringstream ctx;
         ctx << "access=write"
@@ -127,29 +146,29 @@ bool Memory::UnregisterDevice(IMemoryMappedDevice* device) {
 }
 
 void Memory::Clear() {
-    std::fill(data_.begin(), data_.end(), static_cast<uint8_t>(0));
+    std::fill(data_->begin(), data_->end(), static_cast<uint8_t>(0));
 }
 
 MemorySnapshot Memory::CreateSnapshot() const {
     MemorySnapshot snapshot;
-    snapshot.data = data_;
+    snapshot.data = *data_;
     snapshot.pageTable = mmu_->GetPageTable();
     snapshot.mmuEnabled = mmu_->IsEnabled();
     return snapshot;
 }
 
 void Memory::RestoreSnapshot(const MemorySnapshot& snapshot) {
-    if (snapshot.data.size() != data_.size()) {
+    if (snapshot.data.size() != data_->size()) {
         throw std::invalid_argument("Memory snapshot size mismatch");
     }
 
-    data_ = snapshot.data;
+    *data_ = snapshot.data;
     mmu_->RestorePageTable(snapshot.pageTable);
     mmu_->SetEnabled(snapshot.mmuEnabled);
 }
 
 void Memory::checkBounds(uint64_t address, size_t size) const {
-    const uint64_t memorySize = static_cast<uint64_t>(data_.size());
+    const uint64_t memorySize = static_cast<uint64_t>(data_->size());
 
     if (address >= memorySize) {
         std::ostringstream oss;
@@ -173,7 +192,7 @@ void Memory::mmuRead(uint64_t address, uint8_t* dest, size_t size) const {
 
     // If MMU is disabled, just do direct read
     if (!mmu_->IsEnabled()) {
-        std::memcpy(dest, &data_[address], size);
+        std::memcpy(dest, data_->data() + address, size);
         return;
     }
 
@@ -196,7 +215,7 @@ void Memory::mmuRead(uint64_t address, uint8_t* dest, size_t size) const {
         }
 
         // Perform actual read from physical memory
-        std::memcpy(dest, &data_[physicalAddr], size);
+        std::memcpy(dest, data_->data() + physicalAddr, size);
     } catch (const PageFault& fault) {
         // Log the page fault with full diagnostics
         MMU::LogPageFault(fault);
@@ -211,7 +230,7 @@ void Memory::mmuWrite(uint64_t address, const uint8_t* src, size_t size) {
 
     // If MMU is disabled, just do direct write
     if (!mmu_->IsEnabled()) {
-        std::memcpy(&data_[address], src, size);
+        std::memcpy(data_->data() + address, src, size);
         return;
     }
 
@@ -236,7 +255,7 @@ void Memory::mmuWrite(uint64_t address, const uint8_t* src, size_t size) {
         }
 
         // Perform actual write to physical memory
-        std::memcpy(&data_[physicalAddr], src, size);
+        std::memcpy(data_->data() + physicalAddr, src, size);
     } catch (const PageFault& fault) {
         // Log the page fault with full diagnostics
         MMU::LogPageFault(fault);

@@ -58,6 +58,7 @@ set(DECODER_SOURCES
 
 set(MEMORY_SOURCES
     src/memory/memory.cpp
+    src/memory/PhysicalAddressMap.cpp
     src/mmu/mmu.cpp
 )
 
@@ -81,6 +82,7 @@ set(LIBC_SOURCES
 set(IO_SOURCES
     src/io/Console.cpp
     src/io/ConsoleOutputBuffer.cpp
+    src/io/Ns16550Uart.cpp
     src/io/Timer.cpp
     src/io/InterruptController.cpp
     src/io/FramebufferDevice.cpp
@@ -160,6 +162,8 @@ set(HEADERS
     include/cpu.h
     include/decoder.h
     include/memory.h
+    include/PhysicalAddressMap.h
+    include/Ns16550Uart.h
     include/loader.h
     include/bootstrap.h
     include/abi.h
@@ -281,6 +285,7 @@ add_executable(test_new_instructions
     src/core/ia64_address_translation.cpp
     ${DECODER_SOURCES}
     src/memory/memory.cpp
+    src/memory/PhysicalAddressMap.cpp
     src/mmu/mmu.cpp
     src/storage/ISO9660Parser.cpp
     src/storage/FATParser.cpp
@@ -733,6 +738,7 @@ set(MIPS64_PLUGIN_SOURCES
 
 set(MIPS64_MEMORY_SOURCES
     src/memory/memory.cpp
+    src/memory/PhysicalAddressMap.cpp
     src/mmu/mmu.cpp
 )
 
@@ -942,3 +948,58 @@ else()
     target_compile_options(test_mips64_extended_vm PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64ExtendedVmTests COMMAND test_mips64_extended_vm)
+
+# MIPS64-6 physical bus, minimal 16550 UART, synthetic ROM and genuine
+# production-VM guest console demonstrations.
+add_executable(test_mips64_physical_bus
+    tests/test_mips64_physical_bus.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+target_include_directories(test_mips64_physical_bus PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(MSVC)
+    target_compile_options(test_mips64_physical_bus PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_physical_bus PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64PhysicalBusTests COMMAND test_mips64_physical_bus)
+
+add_executable(test_mips64_uart
+    tests/test_mips64_uart.cpp
+    src/memory/PhysicalAddressMap.cpp
+    src/io/Ns16550Uart.cpp
+)
+if(MSVC)
+    target_compile_options(test_mips64_uart PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_uart PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64UartTests COMMAND test_mips64_uart)
+
+add_executable(test_mips64_platform_bootstrap
+    tests/test_mips64_platform_bootstrap.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+target_include_directories(test_mips64_platform_bootstrap PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(MSVC)
+    target_compile_options(test_mips64_platform_bootstrap PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_platform_bootstrap PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64PlatformBootstrapTests COMMAND test_mips64_platform_bootstrap)
+
+add_executable(test_mips64_console_guest
+    tests/test_mips64_console_guest.cpp
+    ${ALL_SOURCES}
+)
+target_include_directories(test_mips64_console_guest PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(WIN32)
+    target_link_libraries(test_mips64_console_guest PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_console_guest PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_console_guest PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64ConsoleGuestTests COMMAND test_mips64_console_guest)

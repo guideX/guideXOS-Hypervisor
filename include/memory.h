@@ -13,6 +13,7 @@
 #include "IMemory.h"
 #include "IODevice.h"
 #include "mmu.h"
+#include "PhysicalAddressMap.h"
 
 namespace ia64 {
 
@@ -83,10 +84,13 @@ public:
             "Memory::read<T> only supports uint8_t, uint32_t, uint64_t"
         );
         
-        checkBounds(address, sizeof(T));
-        
         T value;
-        std::memcpy(&value, &data_[address], sizeof(T));
+        if (physicalMap_) {
+            Read(address, reinterpret_cast<uint8_t*>(&value), sizeof(T));
+        } else {
+            checkBounds(address, sizeof(T));
+            std::memcpy(&value, &(*data_)[address], sizeof(T));
+        }
         return value;
     }
 
@@ -106,9 +110,12 @@ public:
             "Memory::write<T> only supports uint8_t, uint32_t, uint64_t"
         );
         
-        checkBounds(address, sizeof(T));
-        
-        std::memcpy(&data_[address], &value, sizeof(T));
+        if (physicalMap_) {
+            Write(address, reinterpret_cast<const uint8_t*>(&value), sizeof(T));
+        } else {
+            checkBounds(address, sizeof(T));
+            std::memcpy(&(*data_)[address], &value, sizeof(T));
+        }
     }
 
     // IMemory interface implementation
@@ -116,12 +123,19 @@ public:
     void Write(uint64_t address, const uint8_t* src, size_t size) override;
     void loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) override;
     void loadBuffer(uint64_t address, const std::vector<uint8_t>& buffer) override;
-    size_t GetTotalSize() const override { return data_.size(); }
+    size_t GetTotalSize() const override { return data_->size(); }
     void Clear() override;
-    const uint8_t* GetRawData() const override { return data_.data(); }
+    const uint8_t* GetRawData() const override { return data_->data(); }
 
     void RegisterDevice(IMemoryMappedDevice* device);
     bool UnregisterDevice(IMemoryMappedDevice* device);
+
+    // Explicitly switch this Memory instance to strict, 36-bit physical-bus
+    // dispatch. Its existing flat backing is registered as RAM at PA 0.
+    // Without this call all legacy flat-memory and IA-64 behavior is retained.
+    PhysicalAddressMap& EnablePhysicalAddressMap();
+    PhysicalAddressMap* GetPhysicalAddressMap() noexcept { return physicalMap_.get(); }
+    const PhysicalAddressMap* GetPhysicalAddressMap() const noexcept { return physicalMap_.get(); }
 
     // ========================================================================
     // MMU Access
@@ -176,9 +190,10 @@ void mmuWrite(uint64_t address, const uint8_t* src, size_t size);
  bool tryDeviceRead(uint64_t address, uint8_t* dest, size_t size) const;
  bool tryDeviceWrite(uint64_t address, const uint8_t* src, size_t size);
 
-std::vector<uint8_t> data_;      // Flat physical memory storage
+std::shared_ptr<std::vector<uint8_t>> data_;  // Shared with opt-in RAM region
 std::unique_ptr<MMU> mmu_;       // Memory Management Unit
  std::vector<IMemoryMappedDevice*> devices_;
+std::unique_ptr<PhysicalAddressMap> physicalMap_;
 };
 
 // Legacy alias for compatibility

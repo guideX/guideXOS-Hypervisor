@@ -79,6 +79,10 @@ public:
     bool isLittleEndian() const override;
     bool hasFeature(const std::string& feature) const override;
 
+    // Select guest byte order before execution while retaining the existing
+    // VirtualMachine construction API.
+    void configureEndianness(bool littleEndian);
+
     // Test/diagnostic access to the underlying core.
     Mips64Cpu& core() { return state_.cpu(); }
     const Mips64Cpu& core() const { return state_.cpu(); }

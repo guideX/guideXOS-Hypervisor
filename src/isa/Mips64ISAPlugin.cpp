@@ -198,6 +198,12 @@ std::string Mips64ISAPlugin::disassemble(ia64::IMemory& memory, uint64_t address
 
 bool Mips64ISAPlugin::isLittleEndian() const { return state_.cpu().isLittleEndian(); }
 
+void Mips64ISAPlugin::configureEndianness(bool littleEndian) {
+    state_.cpu().configureEndianness(littleEndian ? Mips64Endianness::Little
+                                                  : Mips64Endianness::Big);
+    hasCachedInstruction_ = false;
+}
+
 bool Mips64ISAPlugin::hasFeature(const std::string& feature) const {
     if (feature == "mips64r2") return true;
     if (feature == "delay_slot") return true;
