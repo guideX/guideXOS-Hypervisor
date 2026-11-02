@@ -55,6 +55,18 @@ bool MTypeDecoder::decode(uint64_t raw_instruction, formats::MFormat& result) {
         
         const uint8_t x6row = x6 >> 2;
 
+        // M37 break.m: x4/x2/x3 are fixed zero, while imm20a and i carry
+        // the 21-bit break immediate. This must be recognized before the
+        // default M-unit fallback, which otherwise treats the encoding as a
+        // NOP and lets execution fall through the architectural fault.
+        if (major == 0x0 && x3 == 0x0 && x4 == 0x0 && x2 == 0x0) {
+            result.operation = formats::MFormat::MemOp::BREAK;
+            result.imm24 = static_cast<uint32_t>(
+                formats::extractBits(raw_instruction, 6, 20) |
+                (static_cast<uint64_t>(formats::extractBits(raw_instruction, 36, 1)) << 20));
+            return true;
+        }
+
         // M28 fc is encoded with the architectural x6 field in bits 27:32.
         // Its operand is r3 (bits 20:26); the r1/r2 fields are unused by this
         // form.  Keep this exact match ahead of the major-1 alloc decoder so
@@ -672,6 +684,11 @@ bool MTypeDecoder::toInstruction(const formats::MFormat& fmt, InstructionEx& ins
         }
         else if (fmt.operation == formats::MFormat::MemOp::RSM) {
             instr = InstructionEx(InstructionType::RSM, UnitType::M_UNIT);
+            instr.SetPredicate(fmt.qp);
+            instr.SetImmediate(fmt.imm24);
+            return true;
+        } else if (fmt.operation == formats::MFormat::MemOp::BREAK) {
+            instr = InstructionEx(InstructionType::BREAK, UnitType::M_UNIT);
             instr.SetPredicate(fmt.qp);
             instr.SetImmediate(fmt.imm24);
             return true;

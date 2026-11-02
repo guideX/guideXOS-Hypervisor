@@ -6440,11 +6440,110 @@ void testSharedMemory() {
     std::cout << "    Read:  0x" << std::hex << readValue << std::dec << "\n";
 }
 
+void testIA64BreakMDecodeAndFaultDelivery() {
+    auto require = [](bool condition, const char* message) {
+        if (!condition) throw std::runtime_error(message);
+    };
+
+    InstructionDecoder decoder;
+    constexpr uint32_t immediate = 0x12A35U;
+    const uint64_t rawBreakM =
+        (static_cast<uint64_t>(immediate & 0xFFFFFU) << 6) |
+        (static_cast<uint64_t>((immediate >> 20) & 1U) << 36);
+    const InstructionEx decoded = decoder.DecodeInstruction(rawBreakM, UnitType::M_UNIT);
+    require(decoded.GetType() == InstructionType::BREAK,
+            "M37 break.m must decode as BREAK");
+    require(decoded.HasImmediate() && decoded.GetImmediate() == immediate,
+            "M37 break.m must preserve its dispersed 21-bit immediate");
+
+    auto makeBreakBundle = [](uint8_t predicate) {
+        std::array<uint8_t, 16> bundle{};
+        const uint64_t slots[] = {
+            static_cast<uint64_t>(predicate & 0x3FU),
+            0x8000000ULL,
+            0x8000000ULL
+        };
+        auto setBits = [&bundle](size_t firstBit, uint64_t value, size_t bitCount) {
+            for (size_t bit = 0; bit < bitCount; ++bit) {
+                if (((value >> bit) & 1ULL) != 0) {
+                    const size_t targetBit = firstBit + bit;
+                    bundle[targetBit / 8] |= static_cast<uint8_t>(1U << (targetBit % 8));
+                }
+            }
+        };
+        setBits(0, 0x09, 5); // MMI stop template
+        setBits(5, slots[0], 41);
+        setBits(46, slots[1], 41);
+        setBits(87, slots[2], 41);
+        return bundle;
+    };
+
+    SparseMemory memory;
+    IA64ISAPlugin plugin(decoder);
+    plugin.setInterruptVectorBase(0x3000);
+    IA64ISAState& pluginState = dynamic_cast<IA64ISAState&>(plugin.getState());
+    CPUState& cpu = pluginState.getCPUState();
+    const auto unqualifiedBundle = makeBreakBundle(0);
+    memory.Write(0x1000, unqualifiedBundle.data(), unqualifiedBundle.size());
+    cpu.SetIP(0x1000);
+    cpu.SetPSR(IA64_PSR_IC);
+    cpu.SetCR(23, (1ULL << 63) | 0x55ULL);
+
+    const ISAExecutionResult faultResult = plugin.step(memory);
+    require(faultResult == ISAExecutionResult::CONTINUE,
+            "break.m fault delivery must resume execution at the IVT handler");
+    require(cpu.GetIP() == 0x5C00,
+            "break instruction fault must enter IVA + 0x2c00");
+    require(cpu.GetCR(IA64_CR_IIP) == 0x1000,
+            "break instruction fault must save the faulting bundle in IIP");
+    require(cpu.GetCR(IA64_CR_IPSR) == IA64_PSR_IC,
+            "break instruction fault must save the interrupted PSR and slot");
+    require(cpu.GetCR(IA64_CR_ISR) == 0,
+            "slot-zero break instruction fault must report ISR.ei zero");
+    require(cpu.GetCR(IA64_CR_IIM) == 0,
+            "break.m zero must write zero to IIM");
+    require(cpu.GetPSR() == 0,
+            "break instruction entry must clear IC, I, RI, and BN");
+    require(cpu.GetCR(23) == 0x55ULL,
+            "break instruction entry must clear only IFS.v");
+    require(pluginState.currentSlot_ == 0 && !pluginState.bundleValid_,
+            "break instruction entry must restart at slot zero of the handler");
+
+    auto predicatedBundle = makeBreakBundle(1);
+    memory.Write(0x1100, predicatedBundle.data(), predicatedBundle.size());
+    cpu.SetIP(0x1100);
+    cpu.SetPSR(IA64_PSR_IC);
+    cpu.SetPR(1, false);
+    pluginState.currentSlot_ = 0;
+    pluginState.bundleValid_ = false;
+    const ISAExecutionResult predicatedResult = plugin.step(memory);
+    require(predicatedResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1100,
+            "predicated-off break.m must retire without entering the fault vector");
+    require(pluginState.currentSlot_ == 1 && cpu.GetPSR() == IA64_PSR_IC,
+            "predicated-off break.m must preserve handler state and advance one slot");
+    require(cpu.GetCR(IA64_CR_IIP) == 0x1000,
+            "predicated-off break.m must not overwrite the previous IIP");
+
+    cpu.SetIP(0x1200);
+    cpu.SetPSR(0);
+    pluginState.currentSlot_ = 0;
+    pluginState.bundleValid_ = false;
+    const ISAExecutionResult collectionDisabledResult = plugin.step(memory);
+    require(collectionDisabledResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1200,
+            "break.m with PSR.ic clear must not take a break instruction fault");
+    require(pluginState.currentSlot_ == 1 && cpu.GetCR(IA64_CR_IIP) == 0x1000,
+            "break.m with PSR.ic clear must retire without changing interruption state");
+}
+
 int main(int argc, char** argv) {
     std::cout.setf(std::ios::unitbuf);
     std::cout << "=== ISA Plugin Architecture Tests ===\n\n";
 
     try {
+        if (argc > 1 && std::string(argv[1]) == "breakfault") {
+            testIA64BreakMDecodeAndFaultDelivery();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "loadimage") {
             testIA64PluginLoadImage();
             return 0;
@@ -6738,6 +6837,9 @@ int main(int argc, char** argv) {
         std::cout << "\n";
         
         testSharedMemory();
+        std::cout << "\n";
+
+        testIA64BreakMDecodeAndFaultDelivery();
         std::cout << "\n";
         
         std::cout << "=== All tests passed! ===\n";

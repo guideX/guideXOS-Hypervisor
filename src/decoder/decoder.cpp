@@ -4155,7 +4155,7 @@ InstructionEx InstructionDecoder::DecodeSlot(uint64_t slotBits, UnitType unitTyp
                 return result;
             }
 
-            if (major == 0x0 && x3 == 0x0 && (x6 == 0x00 || x6 == 0x01)) {
+            if (major == 0x0 && x3 == 0x0 && x6 == 0x01) {
                 result = InstructionEx(InstructionType::NOP, UnitType::M_UNIT);
                 result.SetPredicate(static_cast<uint8_t>(slotBits & 0x3F));
                 result.SetRawBits(slotBits);

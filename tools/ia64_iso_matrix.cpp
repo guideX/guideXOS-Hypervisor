@@ -51,6 +51,10 @@ struct Options {
     std::string efiFileReadCapturePath;
     std::string hotIpsPath;
     std::string lockTracePath;
+    uint64_t r14TraceStartCycle = std::numeric_limits<uint64_t>::max();
+    uint64_t r14TraceEndCycle = 0;
+    std::string r14TracePath;
+    std::vector<uint64_t> r14WatchMemoryPas;
     std::vector<uint64_t> probeIps;
     struct InputKey {
         uint16_t scanCode = 0;
@@ -186,6 +190,16 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.hotIpsPath = argv[++i];
         } else if (argument == "--lock-trace" && i + 1 < argc) {
             options.lockTracePath = argv[++i];
+        } else if (argument == "--r14-provenance" && i + 3 < argc) {
+            if (!parseUnsigned(argv[++i], options.r14TraceStartCycle) ||
+                !parseUnsigned(argv[++i], options.r14TraceEndCycle)) {
+                return false;
+            }
+            options.r14TracePath = argv[++i];
+        } else if (argument == "--r14-watch-memory-pa" && i + 1 < argc) {
+            uint64_t watchPa = 0;
+            if (!parseUnsigned(argv[++i], watchPa)) return false;
+            options.r14WatchMemoryPas.push_back(watchPa);
         } else if (argument == "--probe-ip" && i + 1 < argc) {
             uint64_t probe = 0;
             if (!parseUnsigned(argv[++i], probe)) return false;
@@ -202,6 +216,11 @@ bool parseOptions(int argc, char** argv, Options& options) {
            options.traceInstructionCount <= 1'000'000 &&
            (options.traceInstructionCount == 0 ||
             options.traceAfterCycles != std::numeric_limits<uint64_t>::max()) &&
+           (options.r14TracePath.empty()
+                ? options.r14TraceStartCycle == std::numeric_limits<uint64_t>::max() &&
+                      options.r14TraceEndCycle == 0 && options.r14WatchMemoryPas.empty()
+                : options.r14TraceStartCycle < options.r14TraceEndCycle &&
+                      options.r14TraceEndCycle - options.r14TraceStartCycle <= 100'000) &&
            !(options.checkpointWritePath.empty() && !options.checkpointReadPath.empty() && !options.keys.empty()) &&
            !(options.checkpointWritePath.empty() == false && !options.checkpointReadPath.empty());
 }
@@ -215,6 +234,7 @@ void printUsage() {
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
                  "[--dump-memory-range BASE SIZE PATH] [--hot-ips PATH] [--lock-trace PATH] "
+                 "[--r14-provenance START END PATH] [--r14-watch-memory-pa PA] "
                  "[--capture-efi-file-reads BASE]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
                  "--key-after-cycles 300000 --handoff-cycles 1200000000 "
@@ -627,12 +647,90 @@ std::string readKernelCString(ia64::VirtualMachine& vm, uint64_t va, size_t maxL
     return text;
 }
 
+bool writesGeneralRegisterFromMemoryRead(ia64::InstructionType type) {
+    switch (type) {
+        case ia64::InstructionType::LD1:
+        case ia64::InstructionType::LD2:
+        case ia64::InstructionType::LD4:
+        case ia64::InstructionType::LD8:
+        case ia64::InstructionType::LD1_S:
+        case ia64::InstructionType::LD2_S:
+        case ia64::InstructionType::LD4_S:
+        case ia64::InstructionType::LD8_S:
+        case ia64::InstructionType::CMPXCHG4_ACQ:
+        case ia64::InstructionType::CMPXCHG8_ACQ:
+        case ia64::InstructionType::CMPXCHG4_REL:
+        case ia64::InstructionType::CMPXCHG8_REL:
+        case ia64::InstructionType::XCHG4:
+        case ia64::InstructionType::FETCHADD4_ACQ:
+        case ia64::InstructionType::FETCHADD4_REL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool isMemoryBaseUpdateInstruction(ia64::InstructionType type) {
+    switch (type) {
+        case ia64::InstructionType::LD1:
+        case ia64::InstructionType::LD2:
+        case ia64::InstructionType::LD4:
+        case ia64::InstructionType::LD8:
+        case ia64::InstructionType::LD1_S:
+        case ia64::InstructionType::LD2_S:
+        case ia64::InstructionType::LD4_S:
+        case ia64::InstructionType::LD8_S:
+        case ia64::InstructionType::ST1:
+        case ia64::InstructionType::ST2:
+        case ia64::InstructionType::ST4:
+        case ia64::InstructionType::ST8:
+        case ia64::InstructionType::LDF_FILL:
+        case ia64::InstructionType::STF8:
+        case ia64::InstructionType::STF_SPILL:
+        case ia64::InstructionType::LFETCH:
+            return true;
+        default:
+            return false;
+    }
+}
+
+size_t generalRegisterMemoryReadWidth(ia64::InstructionType type) {
+    switch (type) {
+        case ia64::InstructionType::LD1:
+        case ia64::InstructionType::LD1_S:
+            return 1;
+        case ia64::InstructionType::CMPXCHG4_ACQ:
+        case ia64::InstructionType::CMPXCHG4_REL:
+        case ia64::InstructionType::XCHG4:
+        case ia64::InstructionType::FETCHADD4_ACQ:
+        case ia64::InstructionType::FETCHADD4_REL:
+            return 4;
+        case ia64::InstructionType::LD2:
+        case ia64::InstructionType::LD2_S:
+            return 2;
+        case ia64::InstructionType::LD4:
+        case ia64::InstructionType::LD4_S:
+            return 4;
+        case ia64::InstructionType::CMPXCHG8_ACQ:
+        case ia64::InstructionType::CMPXCHG8_REL:
+        case ia64::InstructionType::LD8:
+        case ia64::InstructionType::LD8_S:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
 ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    bool collectHotIps = false,
                                    const std::vector<uint64_t>& probeIps = {},
                                    std::string lockTracePath = {},
                                    uint64_t traceAfterCycles = std::numeric_limits<uint64_t>::max(),
-                                   uint64_t traceInstructionCount = 0) {
+                                   uint64_t traceInstructionCount = 0,
+                                   uint64_t r14TraceStartCycle = std::numeric_limits<uint64_t>::max(),
+                                   uint64_t r14TraceEndCycle = 0,
+                                   std::string r14TracePath = {},
+                                   std::vector<uint64_t> r14WatchMemoryPas = {}) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     ContinuationRecord record;
@@ -732,6 +830,40 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                       << " file=" << (lockTrace ? "ok" : "failed") << "\n";
         }
     }
+    std::ofstream r14Trace;
+    size_t r14ReadHookId = 0;
+    size_t r14WriteHookId = 0;
+    bool r14HooksActive = false;
+    bool r14TraceStepActive = false;
+    bool r14CurrentStepLoadsR14 = false;
+    uint64_t r14CurrentCycle = 0;
+    uint64_t r14CurrentIP = 0;
+    uint64_t r14CurrentInstructionPhysicalBundle = 0;
+    uint64_t r14CurrentEffectiveAddress = 0;
+    uint64_t r14CurrentLoadBaseValue = 0;
+    bool r14CurrentLoadBaseNaT = false;
+    uint64_t r14CurrentValue = 0;
+    bool r14CurrentNaT = false;
+    size_t r14CurrentSlot = 0;
+    size_t r14CurrentLoadWidth = 0;
+    uint64_t r14TraceStepCount = 0;
+    uint64_t r14TraceEventCount = 0;
+    bool firstR14FourThousandSeen = false;
+    bool r14InitialStateWritten = false;
+    if (!r14TracePath.empty()) {
+        r14Trace.open(r14TracePath, std::ios::trunc);
+        if (!r14Trace) {
+            throw std::runtime_error("cannot open r14 provenance trace: " + r14TracePath);
+        }
+        r14Trace << "# IA64 R14 provenance; bounded guest-cycle window; read/write hooks only observe raw guest RAM\n"
+                 << "# requested_start=" << r14TraceStartCycle
+                 << " requested_end_exclusive=" << r14TraceEndCycle
+                 << " watched_memory_pas=";
+        for (const uint64_t pa : r14WatchMemoryPas) {
+            r14Trace << "0x" << std::hex << pa << ',';
+        }
+        r14Trace << std::dec << "\n";
+    }
     constexpr uint64_t ivtFaultEntryVma = 0xA000000100000000ULL;
     for (uint64_t i = 0; i < cycles; ++i) {
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
@@ -741,6 +873,209 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
         // points at the next bundle. The upcoming VM step executes its slot 0.
         const size_t slot = rawSlot >= 3 ? 0 : rawSlot;
         const uint64_t globalCycle = vm.getCyclesExecuted();
+        const bool r14TraceThisStep = r14Trace.is_open() &&
+            globalCycle >= r14TraceStartCycle && globalCycle < r14TraceEndCycle;
+        if (r14TraceThisStep && !r14HooksActive) {
+            concreteMemory = dynamic_cast<ia64::Memory*>(&vm.getMemory());
+            if (concreteMemory == nullptr) {
+                throw std::runtime_error("r14 provenance requires the concrete IA-64 guest memory implementation");
+            }
+            for (const uint64_t watchPa : r14WatchMemoryPas) {
+                const bool available = rawMemory != nullptr &&
+                    watchPa <= vm.getMemory().GetTotalSize() &&
+                    sizeof(uint64_t) <= vm.getMemory().GetTotalSize() - watchPa;
+                r14Trace << "[R14_MEMORY_INITIAL] cycle=" << globalCycle
+                         << " pa=0x" << std::hex << watchPa << " bytes=";
+                if (available) {
+                    for (size_t byte = 0; byte < sizeof(uint64_t); ++byte) {
+                        if (byte != 0) r14Trace << ' ';
+                        r14Trace << std::setw(2) << std::setfill('0')
+                                 << static_cast<unsigned>(rawMemory[watchPa + byte]);
+                    }
+                    uint64_t value = 0;
+                    std::memcpy(&value, rawMemory + watchPa, sizeof(value));
+                    r14Trace << " value=0x" << std::setw(16) << value;
+                } else {
+                    r14Trace << "unavailable";
+                }
+                r14Trace << std::dec << std::setfill(' ') << "\n";
+            }
+            r14ReadHookId = concreteMemory->GetMMU().RegisterReadHook(
+                [&vm, &r14Trace, rawMemory, &r14TraceStepActive,
+                 &r14CurrentStepLoadsR14, &r14CurrentCycle, &r14CurrentIP,
+                 &r14CurrentInstructionPhysicalBundle, r14WatchMemoryPas,
+                 &r14CurrentEffectiveAddress, &r14CurrentLoadBaseValue,
+                 &r14CurrentLoadBaseNaT, &r14CurrentValue, &r14CurrentNaT,
+                 &r14CurrentSlot, &r14CurrentLoadWidth](
+                    ia64::HookContext& context, uint8_t* /*data*/) {
+                    const uint64_t pa = context.physicalAddress;
+                    if (!r14TraceStepActive) return;
+                    const bool instructionFetch = pa >= r14CurrentInstructionPhysicalBundle &&
+                        pa - r14CurrentInstructionPhysicalBundle < 16;
+                    const bool watchedRead = !instructionFetch && std::any_of(
+                        r14WatchMemoryPas.begin(), r14WatchMemoryPas.end(),
+                        [pa, &context](uint64_t watchPa) {
+                            if (context.physicalAddress > std::numeric_limits<uint64_t>::max() - context.size) return false;
+                            if (watchPa > std::numeric_limits<uint64_t>::max() - sizeof(uint64_t)) return false;
+                            const uint64_t accessEnd = context.physicalAddress + context.size;
+                            return pa < watchPa + sizeof(uint64_t) && accessEnd > watchPa;
+                        });
+                    const bool r14LoadRead = r14CurrentStepLoadsR14 && !instructionFetch;
+                    if (!watchedRead && !r14LoadRead) return;
+                    const bool available = rawMemory != nullptr &&
+                        pa <= vm.getMemory().GetTotalSize() &&
+                        context.size <= vm.getMemory().GetTotalSize() - pa;
+                    if (watchedRead) {
+                        r14Trace << "[R14_MEMORY_READ] cycle=" << r14CurrentCycle
+                                 << " ip=0x" << std::hex << r14CurrentIP
+                                 << " slot=" << std::dec << r14CurrentSlot
+                                 << " effective_va=0x" << std::hex << r14CurrentEffectiveAddress
+                                 << " physical_address=0x" << pa
+                                 << " width=" << std::dec << context.size
+                                 << " source_base=0x" << std::hex << r14CurrentLoadBaseValue
+                                 << " source_base_nat=" << (r14CurrentLoadBaseNaT ? 1 : 0)
+                                 << " bytes=";
+                        if (available) {
+                            for (size_t byte = 0; byte < context.size; ++byte) {
+                                if (byte != 0) r14Trace << ' ';
+                                r14Trace << std::setw(2) << std::setfill('0')
+                                         << static_cast<unsigned>(rawMemory[pa + byte]);
+                            }
+                        } else {
+                            r14Trace << "unavailable";
+                        }
+                        r14Trace << std::dec << std::setfill(' ') << "\n";
+                    }
+                    if (!r14LoadRead) return;
+                    const ia64::CPUState& cpu = vm.getCPUState(0);
+                    const uint64_t psr = cpu.GetPSR();
+                    const uint64_t region = r14CurrentEffectiveAddress >> 61;
+                    const uint64_t rr = cpu.GetRR(region);
+                    const uint64_t rid = (rr >> 8) & 0xffffffULL;
+                    uint64_t expectedPhysical = 0;
+                    uint64_t matchedDtr = std::numeric_limits<uint64_t>::max();
+                    uint64_t matchedDtlb = std::numeric_limits<uint64_t>::max();
+                    const auto checkEntry = [&](const ia64::TranslationRegisterState& entry) {
+                        if (!entry.valid || ((entry.regionValue >> 8) & 0xffffffULL) != rid) return false;
+                        const unsigned pageShift = static_cast<unsigned>((entry.itir >> 2) & 0x3fULL);
+                        if (pageShift < 12 || pageShift > 61) return false;
+                        const uint64_t pageMask = (uint64_t{1} << pageShift) - 1;
+                        if ((r14CurrentEffectiveAddress & ~pageMask) != (entry.virtualAddress & ~pageMask)) return false;
+                        expectedPhysical = ((entry.physicalAddress & ((uint64_t{1} << 50) - 1)) & ~pageMask) |
+                            (r14CurrentEffectiveAddress & pageMask);
+                        return true;
+                    };
+                    const bool dataTranslationEnabled = (psr & (1ULL << 17)) != 0;
+                    const char* translationSource = "unresolved";
+                    if (!dataTranslationEnabled) {
+                        expectedPhysical = r14CurrentEffectiveAddress;
+                        translationSource = "physical_mode";
+                    } else {
+                        for (size_t index = 0; index < ia64::NUM_TRANSLATION_REGISTERS; ++index) {
+                            if (checkEntry(cpu.GetDTR(index))) {
+                                matchedDtr = index;
+                                translationSource = "dtr";
+                                break;
+                            }
+                        }
+                        if (matchedDtr == std::numeric_limits<uint64_t>::max()) {
+                            for (size_t index = 0; index < ia64::NUM_DATA_TLB_ENTRIES; ++index) {
+                                if (checkEntry(cpu.GetDTLB(index))) {
+                                    matchedDtlb = index;
+                                    translationSource = "dtlb";
+                                    break;
+                                }
+                            }
+                        }
+                        if (translationSource[0] == 'u' && region == 7) {
+                            expectedPhysical = r14CurrentEffectiveAddress & ((uint64_t{1} << 61) - 1);
+                            translationSource = "region7_identity";
+                        } else if (translationSource[0] == 'u' && region == 6) {
+                            expectedPhysical = r14CurrentEffectiveAddress & ((uint64_t{1} << 61) - 1);
+                            translationSource = "region6_identity";
+                        }
+                    }
+                    r14Trace << "[R14_LOAD] cycle=" << r14CurrentCycle
+                             << " ip=0x" << std::hex << r14CurrentIP
+                             << " slot=" << std::dec << r14CurrentSlot
+                             << " effective_va=0x" << std::hex << r14CurrentEffectiveAddress
+                             << " hook_address=0x" << context.address
+                             << " physical_address=0x" << pa
+                             << " width=" << std::dec << context.size
+                             << " decoded_width=" << r14CurrentLoadWidth
+                             << " source_base=0x" << std::hex << r14CurrentLoadBaseValue
+                             << " source_base_nat=" << (r14CurrentLoadBaseNaT ? 1 : 0)
+                             << " psr=0x" << psr
+                             << " psr_dt=" << (dataTranslationEnabled ? 1 : 0)
+                             << " region=" << std::dec << region
+                             << " rr=0x" << std::hex << rr
+                             << " rid=0x" << rid
+                             << " translation_source=" << translationSource
+                             << " dtr_index=";
+                    if (matchedDtr == std::numeric_limits<uint64_t>::max()) r14Trace << "none";
+                    else r14Trace << std::dec << matchedDtr;
+                    r14Trace << " dtlb_index=";
+                    if (matchedDtlb == std::numeric_limits<uint64_t>::max()) r14Trace << "none";
+                    else r14Trace << std::dec << matchedDtlb;
+                    r14Trace << " expected_pa=0x" << std::hex << expectedPhysical
+                             << " pa_match=" << (expectedPhysical == pa ? 1 : 0)
+                             << " bytes=";
+                    if (available) {
+                        for (size_t byte = 0; byte < context.size; ++byte) {
+                            if (byte != 0) r14Trace << ' ';
+                            r14Trace << std::setw(2) << std::setfill('0')
+                                     << static_cast<unsigned>(rawMemory[pa + byte]);
+                        }
+                    } else {
+                        r14Trace << "unavailable";
+                    }
+                    r14Trace << std::dec << std::setfill(' ') << "\n";
+                });
+            if (!r14WatchMemoryPas.empty()) {
+                r14WriteHookId = concreteMemory->GetMMU().RegisterWriteHook(
+                    [&vm, &r14Trace, rawMemory, r14WatchMemoryPas,
+                     &r14TraceStepActive, &r14CurrentCycle, &r14CurrentIP,
+                     &r14CurrentValue, &r14CurrentNaT, &r14CurrentSlot](
+                        ia64::HookContext& context, uint8_t* data) {
+                        if (!r14TraceStepActive || data == nullptr) return;
+                        const uint64_t writeEnd = context.physicalAddress + context.size;
+                        for (const uint64_t watchPa : r14WatchMemoryPas) {
+                            if (watchPa > std::numeric_limits<uint64_t>::max() - sizeof(uint64_t)) continue;
+                            const uint64_t fieldEnd = watchPa + sizeof(uint64_t);
+                            if (context.physicalAddress >= fieldEnd || writeEnd <= watchPa) continue;
+                            uint64_t before = 0;
+                            uint64_t after = 0;
+                            const bool available = rawMemory != nullptr &&
+                                watchPa <= vm.getMemory().GetTotalSize() &&
+                                sizeof(uint64_t) <= vm.getMemory().GetTotalSize() - watchPa;
+                            if (available) {
+                                std::memcpy(&before, rawMemory + watchPa, sizeof(before));
+                                after = before;
+                                const uint64_t overlapStart = std::max(watchPa, context.physicalAddress);
+                                const uint64_t overlapEnd = std::min(fieldEnd, writeEnd);
+                                for (uint64_t address = overlapStart; address < overlapEnd; ++address) {
+                                    const unsigned shift = static_cast<unsigned>((address - watchPa) * 8);
+                                    const uint64_t mask = uint64_t{0xff} << shift;
+                                    after = (after & ~mask) |
+                                        (static_cast<uint64_t>(data[address - context.physicalAddress]) << shift);
+                                }
+                            }
+                            r14Trace << "[R14_MEMORY_WRITE] cycle=" << r14CurrentCycle
+                                     << " ip=0x" << std::hex << r14CurrentIP
+                                     << " slot=" << std::dec << r14CurrentSlot
+                                     << " watched_pa=0x" << std::hex << watchPa
+                                     << " hook_address=0x" << context.address
+                                     << " physical_address=0x" << context.physicalAddress
+                                     << " size=0x" << context.size
+                                     << " before=0x" << before << " after=0x" << after
+                                     << " r14=0x" << r14CurrentValue
+                                     << " r14_nat=" << (r14CurrentNaT ? 1 : 0)
+                                     << " available=" << (available ? 1 : 0) << std::dec << "\n";
+                        }
+                    });
+            }
+            r14HooksActive = true;
+        }
         uniqueInstructions.insert(ip | slot);
         uniqueBundles.insert(ip & ~0xFULL);
         const uint64_t canonicalIp = canonicalKernelVma(ip);
@@ -971,8 +1306,246 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             }
             record.traceWindow.push_back(std::move(traced));
         }
+        ia64::InstructionEx r14Instruction;
+        bool r14HaveInstruction = false;
+        bool r14IsLoad = false;
+        bool r14NominalWriteCandidate = false;
+        uint64_t r14BundleLo = 0;
+        uint64_t r14BundleHi = 0;
+        uint64_t r14RawInstruction = 0;
+        uint8_t r14InstructionType = 0xff;
+        uint8_t r14Predicate = 0;
+        bool r14PredicateValue = false;
+        uint8_t r14Destination = 0;
+        uint8_t r14Source1 = 0;
+        uint8_t r14Source2 = 0;
+        uint8_t r14Source3 = 0;
+        uint64_t r14Source1Value = 0;
+        uint64_t r14Source2Value = 0;
+        uint64_t r14Source3Value = 0;
+        bool r14Source1NaT = false;
+        bool r14Source2NaT = false;
+        bool r14Source3NaT = false;
+        bool r14HasImmediate = false;
+        uint64_t r14Immediate = 0;
+        std::string r14Disassembly = "unavailable";
+        uint64_t r14BeforeValue = 0;
+        bool r14BeforeNaT = false;
+        uint64_t r14BeforePsr = 0;
+        uint64_t r14BeforeCfm = 0;
+        uint64_t r14BeforePfs = 0;
+        uint64_t r14BeforeRsc = 0;
+        uint64_t r14BeforeBsp = 0;
+        uint64_t r14BeforeBspstore = 0;
+        uint64_t r14BeforeRnat = 0;
+        uint64_t r14BeforeR13 = 0;
+        uint64_t r14BeforeR32 = 0;
+        uint64_t r14BeforeB0 = 0;
+        uint64_t r14BeforeIip = 0;
+        uint64_t r14BeforeIpsr = 0;
+        uint64_t r14BeforeIfa = 0;
+        uint64_t r14BeforeIsr = 0;
+        if (r14TraceThisStep) {
+            r14CurrentStepLoadsR14 = false;
+            const ia64::CPUState& beforeCpu = vm.getCPUState(0);
+            r14BeforeValue = beforeCpu.GetGR(14);
+            r14BeforeNaT = beforeCpu.GetGRNaT(14);
+            r14BeforePsr = beforeCpu.GetPSR();
+            r14BeforeCfm = beforeCpu.GetCFM();
+            r14BeforePfs = beforeCpu.GetPFS();
+            r14BeforeRsc = beforeCpu.GetRSC();
+            r14BeforeBsp = beforeCpu.GetBSP();
+            r14BeforeBspstore = beforeCpu.GetBSPSTORE();
+            r14BeforeRnat = beforeCpu.GetRNAT();
+            r14BeforeR13 = beforeCpu.GetGR(13);
+            r14BeforeR32 = beforeCpu.GetGR(32);
+            r14BeforeB0 = beforeCpu.GetBR(0);
+            r14BeforeIip = beforeCpu.GetCR(ia64::IA64_CR_IIP);
+            r14BeforeIpsr = beforeCpu.GetCR(ia64::IA64_CR_IPSR);
+            r14BeforeIfa = beforeCpu.GetCR(20);
+            r14BeforeIsr = beforeCpu.GetCR(17);
+            if (!r14InitialStateWritten) {
+                r14Trace << "[R14_INITIAL] cycle=" << globalCycle
+                         << " ip=0x" << std::hex << ip
+                         << " r14=0x" << r14BeforeValue
+                         << " r14_nat=" << (r14BeforeNaT ? 1 : 0)
+                         << " r13=0x" << r14BeforeR13
+                         << " psr=0x" << r14BeforePsr
+                         << " cfm=0x" << r14BeforeCfm
+                         << " pfs=0x" << r14BeforePfs
+                         << " bsp=0x" << r14BeforeBsp
+                         << " bspstore=0x" << r14BeforeBspstore << std::dec << "\n";
+                r14InitialStateWritten = true;
+            }
+            const uint64_t physicalBundle = rawPhysicalBundleAddress(ip);
+            r14CurrentInstructionPhysicalBundle = physicalBundle;
+            if (rawMemory != nullptr && physicalBundle <= vm.getMemory().GetTotalSize() &&
+                16 <= vm.getMemory().GetTotalSize() - physicalBundle) {
+                for (size_t byte = 0; byte < 8; ++byte) {
+                    r14BundleLo |= static_cast<uint64_t>(rawMemory[physicalBundle + byte]) << (byte * 8);
+                    r14BundleHi |= static_cast<uint64_t>(rawMemory[physicalBundle + 8 + byte]) << (byte * 8);
+                }
+                const ia64::Bundle bundle = traceDecoder.DecodeBundleAt(
+                    rawMemory + physicalBundle, physicalBundle);
+                if (slot < bundle.instructions.size()) {
+                    r14Instruction = bundle.instructions[slot];
+                    r14HaveInstruction = true;
+                    r14RawInstruction = r14Instruction.GetRawBits();
+                    r14InstructionType = static_cast<uint8_t>(r14Instruction.GetType());
+                    r14Predicate = r14Instruction.GetPredicate();
+                    r14PredicateValue = beforeCpu.GetPR(r14Predicate);
+                    r14Destination = r14Instruction.GetDst();
+                    r14Source1 = r14Instruction.GetSrc1();
+                    r14Source2 = r14Instruction.GetSrc2();
+                    r14Source3 = r14Instruction.GetSrc3();
+                    r14Source1Value = beforeCpu.GetGR(r14Source1);
+                    r14Source2Value = beforeCpu.GetGR(r14Source2);
+                    r14Source3Value = beforeCpu.GetGR(r14Source3);
+                    r14Source1NaT = beforeCpu.GetGRNaT(r14Source1);
+                    r14Source2NaT = beforeCpu.GetGRNaT(r14Source2);
+                    r14Source3NaT = beforeCpu.GetGRNaT(r14Source3);
+                    r14HasImmediate = r14Instruction.HasImmediate();
+                    r14Immediate = r14HasImmediate ? r14Instruction.GetImmediate() : 0;
+                    r14Disassembly = r14Instruction.GetDisassembly();
+                    r14IsLoad = writesGeneralRegisterFromMemoryRead(r14Instruction.GetType());
+                    r14NominalWriteCandidate = r14Destination == 14 ||
+                        (isMemoryBaseUpdateInstruction(r14Instruction.GetType()) &&
+                         r14Source1 == 14 && (r14HasImmediate || r14Source2 != 0 ||
+                                              r14Instruction.HasRegisterUpdate()));
+                    r14CurrentStepLoadsR14 = r14IsLoad && r14Destination == 14;
+                    r14CurrentLoadWidth = generalRegisterMemoryReadWidth(r14Instruction.GetType());
+                    r14CurrentEffectiveAddress = r14IsLoad ? r14Source1Value : 0;
+                    r14CurrentLoadBaseValue = r14IsLoad ? r14Source1Value : 0;
+                    r14CurrentLoadBaseNaT = r14IsLoad && r14Source1NaT;
+                }
+            }
+            r14CurrentCycle = globalCycle;
+            r14CurrentIP = ip;
+            r14CurrentValue = r14BeforeValue;
+            r14CurrentNaT = r14BeforeNaT;
+            r14CurrentSlot = slot;
+            r14TraceStepActive = true;
+        }
         ++record.attemptedSteps;
-        if (!vm.step()) {
+        const bool stepSucceeded = vm.step();
+        if (r14TraceThisStep) {
+            r14TraceStepActive = false;
+            ++r14TraceStepCount;
+            const ia64::CPUState& afterCpu = vm.getCPUState(0);
+            const uint64_t r14AfterValue = afterCpu.GetGR(14);
+            const bool r14AfterNaT = afterCpu.GetGRNaT(14);
+            const bool r14Changed = r14BeforeValue != r14AfterValue || r14BeforeNaT != r14AfterNaT;
+            const uint64_t postIp = vm.getIP(0);
+            const ia64::IA64ISAPlugin* postPlugin = getPlugin(vm);
+            const size_t rawPostSlot = postPlugin == nullptr ? 0 : postPlugin->getCurrentSlot();
+            const size_t postSlot = rawPostSlot >= 3 ? 0 : rawPostSlot;
+            std::ostringstream stepLine;
+            stepLine << "[R14_STEP] cycle=" << globalCycle
+                     << " ip=0x" << std::hex << ip
+                     << " canonical_ip=0x" << canonicalIp
+                     << " slot=" << std::dec << slot
+                     << " raw_slot=" << rawSlot
+                     << " bundle_lo=0x" << std::hex << r14BundleLo
+                     << " bundle_hi=0x" << r14BundleHi
+                     << " raw41=0x" << r14RawInstruction
+                     << " type=" << std::dec << static_cast<unsigned>(r14InstructionType)
+                     << " pred=" << static_cast<unsigned>(r14Predicate)
+                     << " pred_true=" << (r14PredicateValue ? 1 : 0)
+                     << " dst=r" << static_cast<unsigned>(r14Destination)
+                     << " disasm=\"" << r14Disassembly << "\""
+                     << " r14_before=0x" << std::hex << r14BeforeValue
+                     << " r14_before_nat=" << (r14BeforeNaT ? 1 : 0)
+                     << " step_ok=" << (stepSucceeded ? 1 : 0)
+                     << " next_ip=0x" << postIp
+                     << " next_slot=" << std::dec << postSlot
+                     << " r14_after=0x" << std::hex << r14AfterValue
+                     << " r14_after_nat=" << (r14AfterNaT ? 1 : 0)
+                     << " pre_r13=0x" << r14BeforeR13
+                     << " post_r13=0x" << afterCpu.GetGR(13)
+                     << " pre_r32=0x" << r14BeforeR32
+                     << " post_r32=0x" << afterCpu.GetGR(32)
+                     << " pre_b0=0x" << r14BeforeB0
+                     << " post_b0=0x" << afterCpu.GetBR(0)
+                     << " pre_psr=0x" << r14BeforePsr
+                     << " post_psr=0x" << afterCpu.GetPSR()
+                     << " pre_cfm=0x" << r14BeforeCfm
+                     << " post_cfm=0x" << afterCpu.GetCFM()
+                     << " pre_pfs=0x" << r14BeforePfs
+                     << " post_pfs=0x" << afterCpu.GetPFS()
+                     << "\n";
+            r14Trace << stepLine.str();
+            if (r14HaveInstruction && (r14NominalWriteCandidate || r14Changed)) {
+                const bool first4000 = !firstR14FourThousandSeen &&
+                    r14BeforeValue != 0x4000 && r14AfterValue == 0x4000;
+                if (r14AfterValue == 0x4000) firstR14FourThousandSeen = true;
+                ++r14TraceEventCount;
+                r14Trace << "[R14_EVENT] cycle=" << globalCycle
+                         << " ip=0x" << std::hex << ip
+                         << " canonical_ip=0x" << canonicalIp
+                         << " slot=" << std::dec << slot
+                         << " raw41=0x" << std::hex << r14RawInstruction
+                         << " bundle_lo=0x" << r14BundleLo
+                         << " bundle_hi=0x" << r14BundleHi
+                         << " type=" << std::dec << static_cast<unsigned>(r14InstructionType)
+                         << " disasm=\"" << r14Disassembly << "\""
+                         << " issued=1 predicate=" << static_cast<unsigned>(r14Predicate)
+                         << " predicate_true=" << (r14PredicateValue ? 1 : 0)
+                         << " step_completed=" << (stepSucceeded ? 1 : 0)
+                         << " nominal_gr_write_candidate=" << (r14NominalWriteCandidate ? 1 : 0)
+                         << " dst=r" << static_cast<unsigned>(r14Destination)
+                         << " src1=r" << static_cast<unsigned>(r14Source1)
+                         << " src1_value=0x" << std::hex << r14Source1Value
+                         << " src1_nat=" << (r14Source1NaT ? 1 : 0)
+                         << " src2=r" << std::dec << static_cast<unsigned>(r14Source2)
+                         << " src2_value=0x" << std::hex << r14Source2Value
+                         << " src2_nat=" << (r14Source2NaT ? 1 : 0)
+                         << " src3=r" << std::dec << static_cast<unsigned>(r14Source3)
+                         << " src3_value=0x" << std::hex << r14Source3Value
+                         << " src3_nat=" << (r14Source3NaT ? 1 : 0)
+                         << " immediate=" << (r14HasImmediate ? "0x" : "none")
+                         << (r14HasImmediate ? [&]() { std::ostringstream v; v << std::hex << r14Immediate; return v.str(); }() : std::string())
+                         << " before_r14=0x" << std::hex << r14BeforeValue
+                         << " before_nat=" << (r14BeforeNaT ? 1 : 0)
+                         << " after_r14=0x" << r14AfterValue
+                         << " after_nat=" << (r14AfterNaT ? 1 : 0)
+                         << " observed_transition=" << (r14Changed ? 1 : 0)
+                         << " first_4000=" << (first4000 ? 1 : 0)
+                         << " pre_psr=0x" << r14BeforePsr
+                         << " pre_psr_ic=" << ((r14BeforePsr >> 13) & 1ULL)
+                         << " pre_cfm=0x" << r14BeforeCfm
+                         << " pre_pfs=0x" << r14BeforePfs
+                         << " pre_rsc=0x" << r14BeforeRsc
+                         << " pre_bsp=0x" << r14BeforeBsp
+                         << " pre_bspstore=0x" << r14BeforeBspstore
+                         << " pre_rnat=0x" << r14BeforeRnat
+                         << " pre_r13=0x" << r14BeforeR13
+                         << " pre_r32=0x" << r14BeforeR32
+                         << " pre_b0=0x" << r14BeforeB0
+                         << " pre_iip=0x" << r14BeforeIip
+                         << " pre_ipsr=0x" << r14BeforeIpsr
+                         << " pre_ifa=0x" << r14BeforeIfa
+                         << " pre_isr=0x" << r14BeforeIsr
+                         << " post_psr=0x" << afterCpu.GetPSR()
+                         << " post_psr_ic=" << ((afterCpu.GetPSR() >> 13) & 1ULL)
+                         << " post_cfm=0x" << afterCpu.GetCFM()
+                         << " post_pfs=0x" << afterCpu.GetPFS()
+                         << " post_rsc=0x" << afterCpu.GetRSC()
+                         << " post_bsp=0x" << afterCpu.GetBSP()
+                         << " post_bspstore=0x" << afterCpu.GetBSPSTORE()
+                         << " post_rnat=0x" << afterCpu.GetRNAT()
+                         << " post_r13=0x" << afterCpu.GetGR(13)
+                         << " post_r32=0x" << afterCpu.GetGR(32)
+                         << " post_b0=0x" << afterCpu.GetBR(0)
+                         << " post_iip=0x" << afterCpu.GetCR(ia64::IA64_CR_IIP)
+                         << " post_ipsr=0x" << afterCpu.GetCR(ia64::IA64_CR_IPSR)
+                         << " post_ifa=0x" << afterCpu.GetCR(20)
+                         << " post_isr=0x" << afterCpu.GetCR(17)
+                         << " next_ip=0x" << postIp << " next_slot=" << std::dec << postSlot
+                         << "\n";
+            }
+            if ((r14TraceStepCount & 0x3ffULL) == 0) r14Trace.flush();
+        }
+        if (!stepSucceeded) {
             ++record.failedSteps;
             record.failedStepRecorded = true;
             record.failedStepCycle = globalCycle;
@@ -985,6 +1558,24 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             break;
         }
         ++record.cycles;
+    }
+    r14TraceStepActive = false;
+    if (r14HooksActive && concreteMemory != nullptr) {
+        if (r14ReadHookId != 0) concreteMemory->GetMMU().UnregisterReadHook(r14ReadHookId);
+        if (r14WriteHookId != 0) concreteMemory->GetMMU().UnregisterWriteHook(r14WriteHookId);
+    }
+    if (r14Trace) {
+        r14Trace << "[R14_SUMMARY] requested_start=" << r14TraceStartCycle
+                 << " requested_end_exclusive=" << r14TraceEndCycle
+                 << " captured_steps=" << r14TraceStepCount
+                 << " r14_events=" << r14TraceEventCount
+                 << " first_4000_seen=" << (firstR14FourThousandSeen ? 1 : 0)
+                 << " final_cycle=" << vm.getCyclesExecuted()
+                 << " final_ip=0x" << std::hex << vm.getIP(0)
+                 << " final_r14=0x" << vm.getCPUState(0).GetGR(14)
+                 << " final_r14_nat=" << (vm.getCPUState(0).GetGRNaT(14) ? 1 : 0)
+                 << std::dec << "\n";
+        r14Trace.flush();
     }
     if (lockWriteHookId != 0 && concreteMemory != nullptr) {
         concreteMemory->GetMMU().UnregisterWriteHook(lockWriteHookId);
@@ -1438,7 +2029,11 @@ int main(int argc, char** argv) {
                                                                 collectHotIps, options.probeIps,
                                                                 options.lockTracePath,
                                                                 options.traceAfterCycles,
-                                                                options.traceInstructionCount);
+                                                                options.traceInstructionCount,
+                                                                options.r14TraceStartCycle,
+                                                                options.r14TraceEndCycle,
+                                                                options.r14TracePath,
+                                                                options.r14WatchMemoryPas);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
@@ -1709,7 +2304,8 @@ int main(int argc, char** argv) {
         uint64_t executed = 0;
         const bool monitorColdRun = !options.progressLogPath.empty() ||
             !options.hotIpsPath.empty() || !options.probeIps.empty() ||
-            !options.lockTracePath.empty() || options.traceInstructionCount != 0;
+            !options.lockTracePath.empty() || options.traceInstructionCount != 0 ||
+            !options.r14TracePath.empty();
         const bool collectColdHotIps = !options.hotIpsPath.empty();
         auto reportColdProgress = [&](const ContinuationRecord& record,
                                       uint64_t startIP) {
@@ -1741,7 +2337,9 @@ int main(int argc, char** argv) {
                 const ContinuationRecord progress = runContinuation(
                     *progressVm, options.cycles, collectColdHotIps, options.probeIps,
                     options.lockTracePath, options.traceAfterCycles,
-                    options.traceInstructionCount);
+                    options.traceInstructionCount, options.r14TraceStartCycle,
+                    options.r14TraceEndCycle, options.r14TracePath,
+                    options.r14WatchMemoryPas);
                 executed = progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {
@@ -1787,7 +2385,9 @@ int main(int argc, char** argv) {
                 const ContinuationRecord progress = runContinuation(
                     *vm, options.cycles - options.keyAfterCycles,
                     collectColdHotIps, options.probeIps, options.lockTracePath,
-                    options.traceAfterCycles, options.traceInstructionCount);
+                    options.traceAfterCycles, options.traceInstructionCount,
+                    options.r14TraceStartCycle, options.r14TraceEndCycle,
+                    options.r14TracePath, options.r14WatchMemoryPas);
                 executed += progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {

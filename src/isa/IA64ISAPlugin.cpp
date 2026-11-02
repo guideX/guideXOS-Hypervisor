@@ -3859,24 +3859,32 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
             return ISAExecutionResult::EXCEPTION;
         }
         
-        // Check for syscall
-        if (cachedInstruction_.GetType() == InstructionType::BREAK &&
-            cachedInstruction_.HasImmediate() &&
-            cachedInstruction_.GetImmediate() == 0x100000) {
-            
-            if (syscallDispatcher_) {
-                syscallDispatcher_->DispatchSyscall(state_.getCPUState(), memory);
+        if (cachedInstruction_.GetType() == InstructionType::BREAK) {
+            CPUState& cpu = state_.getCPUState();
+            const uint8_t predicate = cachedInstruction_.GetPredicate();
+            const bool predicateTrue = predicate == 0 || cpu.GetPR(predicate);
+            if (predicateTrue && (cpu.GetPSR() & IA64_PSR_IC) != 0) {
+                const uint64_t immediate = cachedInstruction_.HasImmediate()
+                    ? cachedInstruction_.GetImmediate()
+                    : 0;
+                if (immediate == 0x100000) {
+                    if (syscallDispatcher_) {
+                        syscallDispatcher_->DispatchSyscall(cpu, memory);
+                    }
+
+                    // System calls use the established direct dispatch path.
+                    state_.currentSlot_++;
+                    if (state_.currentSlot_ >= state_.currentBundle_.instructions.size()) {
+                        cpu.SetIP(cpu.GetIP() + 16);
+                        state_.bundleValid_ = false;
+                    }
+                    hasCachedInstruction_ = false;
+                    return ISAExecutionResult::SYSCALL;
+                }
+
+                enterBreakInstructionFault(immediate);
+                return ISAExecutionResult::CONTINUE;
             }
-            
-            // Advance to next instruction
-            state_.currentSlot_++;
-            if (state_.currentSlot_ >= state_.currentBundle_.instructions.size()) {
-                state_.getCPUState().SetIP(state_.getCPUState().GetIP() + 16);
-                state_.bundleValid_ = false;
-            }
-            
-            hasCachedInstruction_ = false;
-            return ISAExecutionResult::SYSCALL;
         }
 
         if (cachedInstruction_.GetType() == InstructionType::RFI) {
@@ -9471,6 +9479,46 @@ uint64_t IA64ISAPlugin::handleEfiGetMemoryMap(IMemory& memory) {
               << std::hex << requiredSize << " key=" << efiMemoryMapKey_
               << std::dec << std::endl;
     return EFI_STATUS_SUCCESS;
+}
+
+void IA64ISAPlugin::enterBreakInstructionFault(uint64_t immediate) {
+    CPUState& cpu = state_.getCPUState();
+    const uint64_t interruptedPsr = cpu.GetPSR();
+    const size_t interruptedSlot = state_.currentSlot_ & 0x3U;
+    const uint64_t savedPsr =
+        (interruptedPsr & ~(3ULL << 41)) |
+        (static_cast<uint64_t>(interruptedSlot) << 41);
+    const uint64_t faultingBundle =
+        canonicalizeKernelInstructionPointer(cpu.GetIP()) & ~0xFULL;
+
+    cpu.SetCR(IA64_CR_IIP, faultingBundle);
+    cpu.SetCR(IA64_CR_IPSR, savedPsr);
+    // ISR.ei identifies the excepting slot and matches IPSR.ri for faults.
+    cpu.SetCR(IA64_CR_ISR, static_cast<uint64_t>(interruptedSlot) << 41);
+    cpu.SetCR(IA64_CR_IIM, immediate & 0x1FFFFFULL);
+    cpu.SetCR(23, cpu.GetCR(23) & ~(1ULL << 63));
+    cpu.SetPSR(savedPsr & ~(IA64_PSR_IC | IA64_PSR_I |
+                            (3ULL << 41) | IA64_PSR_BN_MASK));
+
+    const uint64_t vectorBase = cpu.GetCR(IA64_CR_IVA) != 0
+        ? cpu.GetCR(IA64_CR_IVA)
+        : state_.interruptVectorBase_;
+    const uint64_t handlerAddress = normalizeKernelEntryIP(
+        vectorBase + IA64_BREAK_INSTRUCTION_VECTOR_OFFSET);
+    cpu.SetIP(handlerAddress);
+    state_.currentSlot_ = 0;
+    state_.bundleValid_ = false;
+    capturePredicateGroupSnapshot();
+    hasCachedInstruction_ = false;
+
+    std::ostringstream trace;
+    trace << "ip=" << BootStageTrace::Hex(faultingBundle)
+          << " vector=" << BootStageTrace::Hex(IA64_BREAK_INSTRUCTION_VECTOR_OFFSET)
+          << " handler=" << BootStageTrace::Hex(handlerAddress)
+          << " iim=" << BootStageTrace::Hex(immediate & 0x1FFFFFULL)
+          << " isr=" << BootStageTrace::Hex(cpu.GetCR(IA64_CR_ISR))
+          << " slot=" << interruptedSlot;
+    BootStageTrace::Event("IA64_BREAK_INSTRUCTION_FAULT", trace.str());
 }
 
 void IA64ISAPlugin::enterTranslationFault(

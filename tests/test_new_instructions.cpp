@@ -3421,7 +3421,7 @@ void test_application_register_moves() {
     assert_equal("mov from pr should pack predicate bits into a GR",
                  0x8000000000010003ULL, cpu.GetGR(12));
 
-    InstructionEx filler_m_nop = decoder.DecodeSlot(0x2b86ULL, UnitType::M_UNIT, 0x42008);
+    InstructionEx filler_m_nop = decoder.DecodeSlot(0x08002b86ULL, UnitType::M_UNIT, 0x42008);
     assert_true("Final-loop predicated M nop should decode",
                 filler_m_nop.GetType() == InstructionType::NOP);
     assert_equal("Final-loop M nop predicate", 6, filler_m_nop.GetPredicate());

@@ -35,6 +35,7 @@ constexpr uint64_t kIsrRead = 1ULL << 34;
 constexpr uint64_t kIsrWrite = 1ULL << 33;
 constexpr uint8_t kMiiStop = 0x01;
 constexpr uint8_t kMibStop = 0x11;
+constexpr uint64_t kNopM = 1ULL << 27;
 constexpr uint64_t kSlotMask = (1ULL << 41) - 1;
 
 void require(bool condition, const std::string& message) {
@@ -72,7 +73,7 @@ void emitM(IMemory& memory, uint64_t ip, uint64_t instruction) {
 }
 
 void emitB(IMemory& memory, uint64_t ip, uint64_t instruction) {
-    writeBundle(memory, ip, kMibStop, 0, 0, instruction);
+    writeBundle(memory, ip, kMibStop, kNopM, 0, instruction);
 }
 
 uint64_t alloc(uint8_t destination, uint8_t sof, uint8_t sol) {
@@ -194,7 +195,7 @@ RunResult runGuest(uint64_t backingStart,
     const uint64_t returnLink = kMain + 0x10;
     emitB(memory, kMain, directCall(kMain, kFunction));
     emitM(memory, returnLink, movGR(18, 16)); // caller continuation normalizes the test TTE register
-    emitM(memory, kDone, 0);
+    emitM(memory, kDone, 1ULL << 27); // nop.m (x4=1), not break.m 0
     emitM(memory, kFunction, alloc(40, 64, 64));
     emitM(memory, kFunction + 0x10, ptcL(19, 20));
     emitM(memory, kFunction + 0x20, itcD(18));
@@ -314,8 +315,8 @@ RunResult runFlushrsGuest(bool injectFaults) {
     IMemory& memory = vm.getMemory();
     constexpr uint64_t kFlushrs = 0x60000000ULL;
     emitM(memory, kMain, kFlushrs);
-    emitM(memory, kMain + 0x10, 0);
-    emitM(memory, kDone, 0);
+    emitM(memory, kMain + 0x10, 1ULL << 27); // nop.m (x4=1), not break.m 0
+    emitM(memory, kDone, 1ULL << 27); // nop.m (x4=1), not break.m 0
     emitM(memory, kPageFaultHandler, ptcL(19, 20));
     emitM(memory, kPageFaultHandler + 0x10, itcD(16));
     emitB(memory, kPageFaultHandler + 0x20, 0x40000000ULL); // rfi

@@ -125,6 +125,7 @@ struct MFormat {
         MF_A,
         SSM,
         RSM,
+        BREAK,
         RFI,
         FLUSHRS,
         LOADRS,

@@ -29,6 +29,7 @@ constexpr uint64_t kOuterCfm = 8ULL | (6ULL << 7);
 constexpr uint64_t kInnerCfm = 5ULL | (3ULL << 7);
 constexpr uint8_t kMiiStop = 0x01;
 constexpr uint8_t kMibStop = 0x11;
+constexpr uint64_t kNopM = 1ULL << 27;
 constexpr uint64_t kSlotMask = (1ULL << 41) - 1;
 
 void require(bool condition, const std::string& message) {
@@ -62,7 +63,7 @@ std::array<uint8_t, 16> makeBundle(uint8_t templateId,
 void writeBundle(IMemory& memory,
                  uint64_t ip,
                  uint8_t templateId,
-                 uint64_t slot0 = 0,
+                 uint64_t slot0 = kNopM,
                  uint64_t slot1 = 0,
                  uint64_t slot2 = 0) {
     const auto bytes = makeBundle(templateId, slot0, slot1, slot2);
@@ -185,11 +186,11 @@ void runNestedCallReturnRegression() {
     cpu.SetGR(37, 0x8877665544332211ULL);
 
     IMemory& memory = vm.getMemory();
-    writeBundle(memory, kRoot, kMibStop, 0, 0, directCall(kRoot, kOuter));
+    writeBundle(memory, kRoot, kMibStop, kNopM, 0, directCall(kRoot, kOuter));
     writeBundle(memory, kRoot + 0x10, kMiiStop);
     writeBundle(memory, kOuter, kMiiStop, alloc(39, 8, 6));
-    writeBundle(memory, kOuter + 0x10, kMiiStop, 0, movFromBR(38, 0));
-    writeBundle(memory, kOuter + 0x20, kMibStop, 0, 0,
+    writeBundle(memory, kOuter + 0x10, kMiiStop, kNopM, movFromBR(38, 0));
+    writeBundle(memory, kOuter + 0x20, kMibStop, kNopM, 0,
                 directCall(kOuter + 0x20, kInner));
     writeBundle(memory, kOuter + 0x30, kMibStop,
                 movToPfs(39), movToBR(0, 38), indirectReturn());
@@ -271,12 +272,12 @@ void runInterruptedNestedCallRegression() {
     cpu.SetGRNaT(36, true);
 
     IMemory& memory = vm.getMemory();
-    writeBundle(memory, kRoot, kMibStop, 0, 0,
+    writeBundle(memory, kRoot, kMibStop, kNopM, 0,
                 directCall(kRoot, kOuter));
     writeBundle(memory, kRoot + 0x10, kMiiStop);
     writeBundle(memory, kOuter, kMiiStop, alloc(39, 8, 6));
-    writeBundle(memory, kOuter + 0x10, kMiiStop, 0, movFromBR(38, 0));
-    writeBundle(memory, kOuter + 0x20, kMibStop, 0, 0,
+    writeBundle(memory, kOuter + 0x10, kMiiStop, kNopM, movFromBR(38, 0));
+    writeBundle(memory, kOuter + 0x20, kMibStop, kNopM, 0,
                 directCall(kOuter + 0x20, kInner));
     writeBundle(memory, kOuter + 0x30, kMibStop,
                 movToPfs(39), movToBR(0, 38), indirectReturn());
@@ -286,13 +287,13 @@ void runInterruptedNestedCallRegression() {
     // External interrupt entry targets IVA+0x3000. The handler covers the
     // interrupted frame, makes a nested call, restores AR.PFS and b0, then
     // executes the real decoded rfi instruction from a guest bundle.
-    writeBundle(memory, kInterruptHandler, kMibStop, 0, 0, 0x10000000ULL);
+    writeBundle(memory, kInterruptHandler, kMibStop, kNopM, 0, 0x10000000ULL);
     writeBundle(memory, kInterruptHandler + 0x10, kMiiStop,
                 alloc(38, 8, 6));
     writeBundle(memory, kInterruptHandler + 0x20, kMiiStop,
-                0, movFromBR(39, 0));
+                kNopM, movFromBR(39, 0));
     writeBundle(memory, kInterruptHandler + 0x30, kMibStop,
-                0, 0, directCall(kInterruptHandler + 0x30,
+                kNopM, 0, directCall(kInterruptHandler + 0x30,
                                   kInterruptHelper));
     writeBundle(memory, kInterruptHandler + 0x40, kMibStop,
                 movToPfs(38), movToBR(0, 39), 0x40000000ULL);

@@ -208,9 +208,9 @@ RunResult runFrameChain(const std::vector<uint8_t>& frameSizes,
         emitB(memory, kMain + 0x10,
               directBranch(0, kMain + 0x10, kFunctionBase));
     } else {
-        emitM(memory, kMain + 0x10, 0);
+        emitM(memory, kMain + 0x10, 1ULL << 27); // nop.m (x4=1), not break.m 0
     }
-    emitM(memory, kMain + 0x20, 0);
+    emitM(memory, kMain + 0x20, 1ULL << 27); // nop.m (x4=1), not break.m 0
 
     for (size_t level = 1; level < frameSizes.size(); ++level) {
         const uint64_t start = kFunctionBase + (level - 1) * 0x100;

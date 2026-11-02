@@ -29,7 +29,9 @@ class IA64TranslationFault;
 constexpr size_t IA64_CR_ITM = 1;
 constexpr size_t IA64_CR_IVA = 2;
 constexpr size_t IA64_CR_IPSR = 16;
+constexpr size_t IA64_CR_ISR = 17;
 constexpr size_t IA64_CR_IIP = 19;
+constexpr size_t IA64_CR_IIM = 24;
 constexpr size_t IA64_CR_LID = 64;
 constexpr size_t IA64_CR_IVR = 65;
 constexpr size_t IA64_CR_TPR = 66;
@@ -47,6 +49,7 @@ constexpr uint8_t IA64_SPURIOUS_INT_VECTOR = 0x0f;
 constexpr uint64_t IA64_PSR_IC = 1ULL << 13;
 constexpr uint64_t IA64_PSR_I = 1ULL << 14;
 constexpr uint64_t IA64_ITV_MASK = 1ULL << 16;
+constexpr uint64_t IA64_BREAK_INSTRUCTION_VECTOR_OFFSET = 0x2C00ULL;
 
 constexpr bool isIA64IrrSelector(size_t selector) {
     return selector >= IA64_CR_IRR0 && selector <= IA64_CR_IRR3;
@@ -513,6 +516,7 @@ private:
                               bool incompleteTargetFrame,
                               uint64_t faultingInstructionIP,
                               uint64_t interruptedPsr);
+    void enterBreakInstructionFault(uint64_t immediate);
     bool isInterruptEligible(uint8_t vector) const;
     int findHighestEligibleInterrupt() const;
     void updateIntervalTimer();
