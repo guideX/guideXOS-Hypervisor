@@ -1511,6 +1511,14 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 } else if (combined == 371U && !timeBaseRead) {
                     instr.kind = DecodedKind::MFSPR;
                     instr.supported = false;
+                } else if (instr.sprn == SPR_PVR &&
+                           (combined == XO_MFSPR || combined == XO_MTSPR)) {
+                    // POWER9 defines mfspr PVR as a privileged read. mtspr
+                    // PVR is a read-only-register no-op in supervisor and
+                    // hypervisor state (and faults in problem state below).
+                    instr.kind = combined == XO_MFSPR
+                        ? DecodedKind::MFSPR : DecodedKind::MTSPR;
+                    instr.supported = true;
                 } else if (instr.sprn == SPR_XER || instr.sprn == SPR_LR ||
                            instr.sprn == SPR_CTR || instr.sprn == SPR_DEC ||
                            instr.sprn == SPR_DSISR ||
@@ -3446,7 +3454,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                                     VEC_PROG, cia, SRR1_PROGPRIV, false, 0, 0);
             }
             uint64_t value = 0;
-            if (instr.sprn == SPR_XER) {
+            if (instr.sprn == SPR_PVR) {
+                // PVR is a fixed-width, immutable processor identity. The
+                // uint32_t source zero-extends when assigned to the 64-bit GPR.
+                value = static_cast<uint64_t>(PPC64_POWER9_PVR);
+            } else if (instr.sprn == SPR_XER) {
                 value = static_cast<uint64_t>(state_.xer);
             } else if (instr.sprn == SPR_LR) {
                 value = state_.lr;
@@ -3510,7 +3522,10 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             }
             // RT field position carries the source register for mtspr.
             const uint64_t value = state_.gpr[instr.rt];
-            if (instr.sprn == SPR_XER) {
+            if (instr.sprn == SPR_PVR) {
+                // POWER9 specifies mtspr PVR as a no-op in privileged and
+                // hypervisor state; the privilege check above rejects PR=1.
+            } else if (instr.sprn == SPR_XER) {
                 state_.xer = static_cast<uint32_t>(value & 0xFFFFFFFFULL);
             } else if (instr.sprn == SPR_LR) {
                 state_.lr = value;

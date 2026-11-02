@@ -9,6 +9,10 @@
 
 namespace ia64::ppc64 {
 
+// The foundation profile uses the established POWER9 DD2.0 processor
+// identity. Keep the value shared by guest SPR reads and the generated FDT.
+inline constexpr uint32_t PPC64_POWER9_PVR = 0x004E1200U;
+
 enum class PPC64PlatformProfile : uint32_t {
     NONE = 0,
     POWER9_PSERIES_FOUNDATION = 1,

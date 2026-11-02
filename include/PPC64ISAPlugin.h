@@ -312,6 +312,7 @@ constexpr uint16_t SPR_CTR = 9;
 constexpr uint16_t SPR_DEC = 22;
 constexpr uint16_t SPR_TBL = 268;
 constexpr uint16_t SPR_TBU = 269;
+constexpr uint16_t SPR_PVR = 287;
 
 // XER bit positions within the stored u32. Power ISA numbers the 64-bit XER
 // with SO=XER[32], OV=XER[33], CA=XER[34]; the low 32 bits (XER[32:63]) are
@@ -422,8 +423,8 @@ enum class DecodedKind {
     BC,         // bc/bca/bcl/bcla (B-form, opcode 16)
     BCLR,       // bclr/bclrl (XL-form, opcode 19, XO 16; target LR & ~3)
     BCCTR,      // bcctr/bcctrl (XL-form, opcode 19, XO 528; target CTR & ~3)
-    MFSPR,      // mfspr (XFX-form, XO 339; SPR in {1,8,9} + Phase 4 priv set)
-    MTSPR,      // mtspr (XFX-form, XO 467; SPR in {1,8,9} + Phase 4 priv set)
+    MFSPR,      // mfspr (XFX-form, XO 339; bounded SPR set incl. read-only PVR)
+    MTSPR,      // mtspr (XFX-form, XO 467; bounded SPR set incl. PVR no-op)
     MFMSR,      // mfmsr (X-form, opcode 31 XO 83, privileged, Phase 4)
     MTMSR,      // mtmsr (X-form, opcode 31 XO 146, privileged, Phase 4)
     MTMSRD,     // mtmsrd (X-form, opcode 31 XO 178, privileged, Phase 22)

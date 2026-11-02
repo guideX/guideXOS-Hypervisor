@@ -19,7 +19,6 @@ constexpr uint32_t kFdtProperty = 3;
 constexpr uint32_t kFdtEnd = 9;
 constexpr uint32_t kFdtVersion = 17;
 constexpr uint32_t kFdtLastCompatibleVersion = 16;
-constexpr uint32_t kPower9Pvr = 0x004e1200U;
 
 bool rangeEnd(uint64_t base, uint64_t size, uint64_t& end) {
     if (size == 0 || size > std::numeric_limits<uint64_t>::max() - base) {
@@ -253,7 +252,7 @@ bool buildStructure(const PPC64PlatformConfiguration& configuration,
     }
     if (!builder.node("PowerPC,POWER9@0") ||
         !builder.string("device_type", "cpu") || !property("reg", 0) ||
-        !property("cpu-version", kPower9Pvr) ||
+        !property("cpu-version", PPC64_POWER9_PVR) ||
         !property("timebase-frequency", static_cast<uint32_t>(configuration.timebaseFrequency)) ||
         !builder.empty("64-bit") || !builder.string("status", "okay")) {
         setReason(reason, "failed to encode the POWER9 CPU node");
