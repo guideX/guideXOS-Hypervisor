@@ -1,8 +1,8 @@
 # PPC64 Phase 20 — Linux Boot Readiness and Execution Frontier
 
-**Outcome B — audit complete; authentic kernel execution frontier pending.** No built, trustworthy PPC64 Linux kernel was present, and this host has no PPC64 cross toolchain or Linux build environment. Programs H–J therefore remain pending. No Linux instruction was executed, and no boot stage is claimed.
+**Historical pre-R1 result: Outcome B. PPC64-20R1 artifact subphase: Outcome A — artifact qualified; the original PPC64-20 execution frontier remains pending.** The R1 result below supersedes only the prior missing-artifact blocker. No Linux instruction was executed, and no boot stage is claimed.
 
-## 1. Repository state and scope
+## 1. Initial (pre-R1) repository state and scope
 
 | Item | Starting state / result |
 |---|---|
@@ -103,7 +103,7 @@ No authentic candidate was loaded. There is no first instruction word, productio
 | M — two-VM isolation | Pass in existing PPC64 platform/isolation regression coverage |
 | N — handoff | PPC64-20R1 artifact/toolchain prerequisite specified below |
 
-## 9. Regression and reproducibility results
+## 9. Historical pre-R1 regression and reproducibility results
 
 No production code changed and no Phase 20 assertions or CTest target were added. New Phase 20 assertion count: **0**. The accepted previous total is **9,549 PPC64 assertions** across Phases 1–19.
 
@@ -115,7 +115,9 @@ Shared regression results: `BasicTests`, `NewInstructionTests`, `EfiMemoryMapTes
 
 QEMU documentation and the pinned source files above were consulted at source level only. There was no QAC authorization and no QEMU/QAC process was launched. Status: **`QEMU_REFERENCE_PENDING`**. No runtime equivalence is claimed.
 
-## 11. Prioritized blockers and handoff
+## 11. Original blockers recorded before R1
+
+The P0 artifact-acquisition row and the PPC64-20R1 recommendation below describe the state before this R1 supplement. R1 closes that artifact prerequisite. The ELF loader and first-instruction execution work remain open for PPC64-20R2.
 
 | Priority | Evidence and missing behavior | Minimal next action | Regression/dependency |
 |---|---|---|---|
@@ -124,6 +126,146 @@ QEMU documentation and the pinned source files above were consulted at source le
 | **P2 — firmware negotiation risk** | Linux pSeries feature discovery reads `rtas/ibm,hypertas-functions`; current FDT omits it, so the real guest cannot discover guideXOS's PAPR service profile from that property. Linux may select assumptions inconsistent with the radix-only hypervisor subset. | Compare the exact selected kernel's pSeries probe and emit only capability names backed by implemented semantics. | Linux-specific FDT parser/feature tests; QEMU reference useful, but not needed to make the source-level change. |
 | **P3 — later or optional** | Full Open Firmware client interface, additional RTAS services, initrd, SMP, PCI/storage/network, and native XIVE are absent. | Defer until a bounded authentic kernel trace demonstrates need. | Separate milestones; QEMU comparison for firmware/runtime equivalence when authorized. |
 
-**PPC64-20R1 recommendation:** close the missing kernel artifact and reproducible toolchain/provenance prerequisite. Keep `.phase-ppc64` at PPC64-19 until an authentic kernel is available and the entry probe is qualified.
+**Historical PPC64-20R1 recommendation:** close the missing kernel artifact and reproducible toolchain/provenance prerequisite. R1 fulfills that artifact subphase; `.phase-ppc64` remains at PPC64-19 because the entry probe is not qualified.
 
-**PPC64-21 recommendation after 20R1:** use the selected image to implement a validated PPC64 ELF load map and a bounded production-VM direct-FDT entry probe, then fix only the first source/trace-confirmed Linux frontier. Do not begin broader platform work before observing that frontier.
+**Historical post-acquisition recommendation:** use the selected image to implement a validated PPC64 ELF load map and a bounded production-VM direct-FDT entry probe. The next step is PPC64-20R2, not PPC64-21; see the R1 handoff below.
+
+## 12. PPC64-20R1 artifact qualification — Outcome A
+
+This section records the completed R1 acquisition and static qualification. It does not claim the original PPC64-20 authentic-execution gate has passed.
+
+### 12.1 Repository preflight
+
+| Check | R1 result |
+|---|---|
+| Checkout / branch | `D:\dev\guideXOS_Hypervisor_PPC64`, `PPC64` |
+| Starting HEAD | `c748d2e698d2a3c0485fa6ebff268eb4f09c64a3` (the required starting commit) |
+| Starting upstream divergence | 0 behind, 7 ahead of `origin/PPC64` |
+| Starting worktree | Tracked files clean; the existing untracked `build/` was preserved |
+| `.phase-ppc64` before and after R1 | `project=guideXOS_Hypervisor_PPC64`, `last_completed=PPC64-19`, `next_expected=PPC64-20` |
+| Shared IA-64 `.phase` | Not modified |
+| Artifact root | `E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase20R1`; outside Git, not committed |
+
+The relocated artifact inventory contained Linux 3.2.78 source only, IA-64 Linux packages, guideXOS build/source artifacts, and PPC64 checkpoint files. It contained no PPC64BE kernel, config, `System.map`, cross-toolchain, or Linux-entry trace. The Linux 3.2.78 PowerPC source predates POWER9 and does not expose the later radix-MMU configuration; no build was attempted from it. No existing artifact was overwritten.
+
+### 12.2 Candidate selection and provenance
+
+The selected candidate came from Debian Ports `sid`, binary architecture `ppc64`, with a 4 KiB page configuration. Package identity was discovered from the signed `main/binary-ppc64/Packages.xz` index current on the capture date. It was not inferred from the `linux-image-powerpc64` metapackage.
+
+| Package / item | Authenticated identity | Result |
+|---|---|---|
+| `linux-image-7.2.14+deb14-powerpc64` | `7.2.14-1`, `ppc64`, 1,864 bytes; package record depends on `linux-binary-*` and modules | Rejected as the image payload; it is a small package stub |
+| `linux-binary-7.2.14+deb14-powerpc64` | `7.2.14-1`, `ppc64`, 10,992,752 bytes; SHA-256 `1e9594db5b81d7554a9a0e52fe7ab020b84fcd97a905af40d9f214a2297a6a10` | Selected; contains the actual kernel ELF |
+| `linux-headers-7.2.14+deb14-powerpc64` | `7.2.14-1`, `ppc64`, 1,480,192 bytes; SHA-256 `7448c442a37448936268704c0784f56c69e2c95e14c5d269fa95ccd0af10f172` | Configuration source; contains the matching complete `.config` |
+| `linux-config-7.2` | `7.2.14-1`, `ppc64`; SHA-256 `493b50a3faa6d6118ea03d6dca8b4e27678089ccd136046dcebc11f30608dbe4` | Preserved official Debian kernel config package and package record |
+
+The signed main Debian `sid` `InRelease` verified with the Debian archive key whose primary fingerprint is `04B54C3CDCA79751B16BC6B5225629DF75B188BD`; the valid signing subkey was `B8E5F13176D2A7A75220028078DBA3BC47EF2265`. GnuPG also reported a second signature whose public key was not in the bootstrap keyring. Only the good, fingerprint-matched signature was used. The signed main `binary-all/Packages.xz` index SHA-256 is `6ffd52e5fdbf3ddade35d4527a42a45a3428106e539d0b0951efb5080adaa043`; it authenticates the `debian-ports-archive-keyring` package.
+
+The keyring package `debian-ports-archive-keyring_2026.02.04_all.deb` has authenticated SHA-256 `9b3feecd398b14969acc3141d42ed493f322c5a2140a33d4fda4bef2ea9441a6`. Its extracted keyring SHA-256 is `7d5da83561d53da68cc44141fc34fba1c174ce073f379576091a8d9ea21bf793`. The Ports `sid` `InRelease` SHA-256 is `633f03748c27c56d527958c82fcda908a159eb35f2b0561c8aa8fd4fe360cb11` and verified with the authenticated Debian Ports 2026 signing key, primary fingerprint `5FFACC4B97F15BF3636639EBC6894E6BB25B9C99`. Its signed date was 2026-11-02 00:28:29 UTC and `Valid-Until` was 2026-11-09 00:28:29 UTC.
+
+The authenticated Ports PPC64 `Packages.xz` has SHA-256 `d803a6620a15361a21406970fa6f4847f103094ff619ac49507bd3948724876c` and size 18,204,988 bytes. Exact package stanzas and signature status logs are preserved under the external artifact root. Only `.deb` data archives were extracted; no package was installed and no maintainer scripts were run. The complete acquisition chain and commands are in `E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase20R1\ACQUISITION.md`.
+
+### 12.3 Selected image and configuration identity
+
+| Field | Verified value |
+|---|---|
+| Kernel | Debian Linux `7.2.14+deb14-powerpc64`, source package `linux` `7.2.14-1` |
+| Architecture | 64-bit PowerPC, Debian package architecture `ppc64` |
+| Endianness | Big-endian: ELF `EI_DATA=2` and `CONFIG_CPU_BIG_ENDIAN=y`; `CONFIG_CPU_LITTLE_ENDIAN` is not set |
+| Page size | 4 KiB: `CONFIG_PPC_4K_PAGES=y`; 64 KiB is not set |
+| Extracted image | `candidate/vmlinuz-7.2.14+deb14-powerpc64`, 49,045,944 bytes |
+| Image SHA-256 | `c3baf4467971e47dc8737780a17910349d6754b5c771b92d665ba12fccee50fd` |
+| Configuration | `candidate/config-7.2.14+deb14-powerpc64` |
+| Configuration SHA-256 | `592aabf1a65d0ca6b112921a7e323543727466fc394e312a1ea938d30b5b8bfa` |
+| Configuration provenance | Extracted from the matching authenticated `linux-headers-7.2.14+deb14-powerpc64` binary package |
+| `System.map` | Not included in the authenticated payloads; not generated or claimed |
+
+The `.config` proves `CONFIG_PPC64=y`, `CONFIG_PPC_BOOK3S_64=y`, `CONFIG_PPC_PSERIES=y`, `CONFIG_PPC_RADIX_MMU=y`, `CONFIG_PPC_RADIX_MMU_DEFAULT=y`, `CONFIG_PPC_XICS=y`, `CONFIG_PPC_RTAS=y`, `CONFIG_PPC_OF_BOOT_TRAMPOLINE=y`, `CONFIG_RELOCATABLE=y`, `CONFIG_HVC_CONSOLE=y`, `CONFIG_HVC_RTAS=y`, and `CONFIG_HVC_OPAL=y`. It enables SMP and initrd support, but neither an initramfs nor a root filesystem is required to reach the first kernel instruction.
+
+The CPU configuration does not claim a POWER9-only build. It sets `CONFIG_TARGET_CPU="power4"` and `CONFIG_TUNE_CPU="-mtune=power10"`; `CONFIG_POWER9_CPU` is not set. The POWER4 instruction baseline is compatible with POWER9, and CPU features are selected by the kernel at runtime. This is a justified compatible target profile, not evidence of a POWER9-specific compiler build.
+
+### 12.4 Image format and independent load-map inspection
+
+The file named `vmlinuz` is an uncompressed ELF image, not a gzip/xz payload or a boot-wrapper container. GNU `readelf` 2.46.0.20260210 at the acquisition-host path `C:\mingw64\bin\readelf.exe` independently reported ELF64, big-endian, `EM_PPC64`, `ET_EXEC`, `e_flags=0x2` (`EF_PPC64_ABI_V2`), entry `0xc000000000000000`, and build ID `2adaf1d46e2675b8e74f075564b09891df28465c`. Git for Windows `file` independently identified the image as ELF64 MSB PowerPC/OpenPOWER ELF V2.
+
+| Program header | Offset | Virtual address | Physical address | File size | Memory size | Flags | Alignment |
+|---|---:|---:|---:|---:|---:|---|---:|
+| `PT_LOAD` | `0x10000` | `0xc000000000000000` | `0x0` | `0x28865e4` | `0x29c2158` | `RWE` | `0x10000` |
+| `PT_NOTE` | `0x1a17348` | `0xc000000001a07348` | `0x1a07348` | `0x80` | `0x80` | none | `0x4` |
+
+The single load segment has valid file bounds, `p_memsz >= p_filesz`, congruent offsets/addresses for `p_align=64 KiB`, and no load-segment overlap. Its BSS requirement is physical `[0x28865e4,0x29c2158)` (size `0x13bb74`); the exclusive PT_LOAD RAM end is `0x29c2158` (about 44 MiB). The full ELF header and program-header reports are preserved under `candidate/analysis/`.
+
+`CONFIG_RELOCATABLE=y`; `.rela.dyn` has 231,806 entries. The image word at physical offset `0x5c` is `0x72756e30` (`run0`), matching Linux PowerPC startup's default relocation marker. This indicates the kernel's own startup relocation path and does not justify applying ELF relocations in the loader. The next loader must preserve the entry/trampoline data and follow Linux's exact start contract.
+
+### 12.5 Entry and guideXOS compatibility
+
+Linux's [PowerPC direct-FDT boot contract](https://docs.kernel.org/6.3/powerpc/booting.html) supplies the physical DTB in `r3`, physical kernel pointer in `r4`, and zero in `r5`. The Linux v7.2 [`head_64.S` server entry assumptions](https://github.com/torvalds/linux/blob/v7.2/arch/powerpc/kernel/head_64.S#L2260-L2277) state that pSeries/server primary entry occurs at `__start` with the MMU off. The selected ELF's `e_entry` is `0xc000000000000000`; its `PT_LOAD` physical base is zero. Those addresses have distinct ELF roles and must not be conflated: the next loader must stage the PT_LOAD bytes at `p_paddr` and enter using the artifact-specific entry interpretation.
+
+The existing `VirtualMachine::preparePPC64Platform` accepts one contiguous raw byte vector, writes it at a caller-provided base, and sets NIP to a caller-provided address. It does not parse ELF headers or program headers, map `p_paddr`, zero BSS, apply per-segment alignment, or validate the ELF entry-to-segment relationship. Passing the selected ELF file through that API would load the ELF header as guest bytes and would not implement the kernel's load map. No loader or kernel was modified in R1.
+
+The minimum PPC64-20R2 loader contract is:
+
+1. Parse and validate ELF64 BE `EM_PPC64` `ET_EXEC`; verify all `PT_LOAD` file bounds, arithmetic, alignments, overlap and RAM/reservation constraints before any guest write.
+2. Stage each `PT_LOAD` using its physical address, copy only `p_filesz`, zero `[p_paddr+p_filesz, p_paddr+p_memsz)`, and reserve `[0,0x29c2158)` for this image. Do not copy the ELF file contiguously into guest RAM.
+3. Select the artifact's ELF/start entry deliberately, keep `r3=physical FDT`, `r4=physical kernel base`, `r5=0`, and begin with the documented MMU-off single-primary-CPU state. Verify how the PPC64 interpreter handles the high entry alias before claiming execution.
+4. Place and reserve the FDT at an 8-byte-aligned address in RAM outside the kernel and any partition/process table, RTAS, or other protected range. The current deterministic top-of-RAM placement is a suitable starting point if those checks pass.
+5. Keep one CPU visible for the first probe. Do not apply `.rela.dyn` in the loader unless source or execution evidence demonstrates that requirement; the selected kernel contains a self-relocation path.
+6. Record the first executed instruction and the first actual stopping frontier. Add only platform properties/services demanded by that trace. In particular, the current FDT lacks `/rtas/ibm,hypertas-functions` and `/chosen/ibm,architecture-vec-5`; do not advertise unimplemented hypervisor calls.
+
+There is no artifact mismatch for architecture, endianness, 4 KiB pages, pSeries, radix-default support, XICS, RTAS, or a compatible POWER9 baseline. A pSeries direct-FDT path is present in the kernel source. The image has no external wrapper dependency identified, but direct entry has not been runtime-qualified. Potential runtime blockers are the guideXOS FDT hypervisor-feature gap, later RTAS/hypercall behavior, the kernel's SMP configuration versus the one-vCPU VM, and the lack of an initramfs for later userspace startup. These are not reasons to reject the image for a first-instruction probe.
+
+### 12.6 Analysis toolchain and build decision
+
+| Tool / environment | R1 qualification |
+|---|---|
+| Host | Windows 11 Pro x64, build 26300 |
+| Python | Python 3.12 standard library; used for package member extraction and the offline verifier |
+| ELF analysis | GNU `readelf` 2.46.0.20260210 at local path `C:\mingw64\bin\readelf.exe`; successfully parsed PPC64 class, endianness, machine, entry, program headers and sections |
+| Independent format check | Git for Windows `file`; identified ELF64 MSB PowerPC/OpenPOWER ELF V2 |
+| Clang / LLD | 22.1.8 / 22.1.8 installed. A freestanding PPC64BE/P9 Clang compile probe failed: no PowerPC target backend. LLD therefore was not qualified for PPC64 linking |
+| Kernel build environment | No PPC64 cross-GCC, no WSL Linux distribution, no GNU `make` (only `mingw32-make`), and Perl/Flex/Bison were not available on PATH |
+
+No Linux kernel build was attempted. The selected signed prebuilt package plus its matching configuration made a full kernel build environment unnecessary. The analyzer path above is a host-local path recorded as provenance, not a portable path requirement.
+
+### 12.7 Reproducible verification and integrity rejection
+
+The offline verifier is [ppc64_linux_artifact_verify.py](../../tools/ppc64_linux_artifact_verify.py), with its checked manifest at [PPC64_PHASE20R1_LINUX_KERNEL_MANIFEST.json](PPC64_PHASE20R1_LINUX_KERNEL_MANIFEST.json). Set `GUIDEXOS_PPC64_PHASE20R1_ROOT` to the external artifact root or pass `--artifact-root`; pass the kernel file explicitly with `--kernel`. It checks the image and config SHA-256, ELF class/endianness/machine/type/flags/entry, all program headers, PT_LOAD bounds/alignment/overlap, BSS, and required RAM extent. It performs no network access and does not modify the image.
+
+Repeated extraction from the same authenticated `.deb` produced the same kernel digest `c3baf4467971e47dc8737780a17910349d6754b5c771b92d665ba12fccee50fd` and config digest `592aabf1a65d0ca6b112921a7e323543727466fc394e312a1ea938d30b5b8bfa`. Two verifier runs and two independent `readelf -h` runs produced identical output; before/after image and config hashes were unchanged. The complete binary and metadata are preserved outside Git.
+
+`tests/test_ppc64_linux_artifact_verify.py` generates tiny temporary ELF fixtures only for validator tests. Its six tests pass and reject altered image bytes, wrong machine, wrong endianness, a truncated ELF header, and overlapping PT_LOAD ranges; the valid fixture is accepted. These synthetic fixtures are test inputs only and are not kernel candidates.
+
+### 12.8 Acceptance programs A–J
+
+| Program | Result | Evidence |
+|---|---|---|
+| A — Inventory | Pass | Relocated tree and checkout searched before acquisition; no PPC64 kernel found, Linux 3.2.78 classified as source-only |
+| B — Provenance | Pass | Debian archive signatures, authenticated keyring package, signed PPC64 Packages index, exact package records and SHA-256 chain preserved |
+| C — Architecture | Pass | Package architecture `ppc64`; ELF64 `EI_DATA=2`, `EM_PPC64`; `.config` is big-endian |
+| D — Kernel identity | Pass | Linux `7.2.14+deb14-powerpc64`, exact authenticated `.config` and hashes |
+| E — Format | Pass | Uncompressed ELF64 BE `ET_EXEC`, independent GNU `readelf` and `file` inspection |
+| F — Load layout | Pass | Full program-header table, entry, alignment, physical extent and BSS independently parsed and compared with manifest |
+| G — Toolchain | Pass for static analysis | GNU `readelf` and Python analysis path verified; no build was needed; Clang PPC backend absence recorded |
+| H — Integrity rejection | Pass | Six generated-fixture verifier tests, including altered, wrong architecture/endianness, truncated and overlapping inputs |
+| I — Repeatability | Pass | Re-extraction, hash, manifest, verifier and readelf outputs repeat deterministically; image remains unchanged |
+| J — Loader handoff | Pass | Minimal PPC64-20R2 segment-loading/direct-FDT contract is specified above |
+
+### 12.9 Regression, phase marker, and execution status
+
+The existing PPC64 Phases 1–19 suites all passed in the R1 CTest run. Phase 16 also passed in an isolated CTest rerun and in the full run. The earlier recorded full-run slow-reader timing failure is retained in the historical section; it did not reproduce in these R1 runs.
+
+Full CTest had 33 entries: **27 passed, 0 executed tests failed, and 6 were Not Run** because their executables are absent (`SyscallTests`, `DebuggerTests`, `ProfilerTests`, `FuzzerTests`, `VMIsolationTests`, and `ELFValidationTests`). The available shared `BasicTests`, `NewInstructionTests`, `EfiMemoryMapTests`, `IA64SalTests`, and `VMCheckpointTests` passed. Standalone IA-64 ACPI, interrupt-controller, and Processor Interrupt Block tests passed.
+
+The accepted baseline remains **9,549 PPC64 checks across Phases 1–19**. The new offline artifact verifier adds six separate synthetic-fixture checks; they are not included in that historical baseline total. No IA-64 `.phase` or guest runtime behavior was changed.
+
+QEMU/QAC status remains **`QEMU_REFERENCE_PENDING`**. No QEMU/QAC process was launched. No authentic Linux instruction has run under guideXOS, and no boot is claimed. Final `.phase-ppc64` remains:
+
+```ini
+project=guideXOS_Hypervisor_PPC64
+last_completed=PPC64-19
+next_expected=PPC64-20
+```
+
+### 12.10 PPC64-20R2 handoff
+
+Implement the bounded, validated ELF64 BE load map and the first production-VM direct-FDT Linux entry probe using this exact image and manifest. The first experiment should stage the one PT_LOAD segment at physical address zero, zero the BSS range, place the FDT above the image without colliding with reservations, enter at the kernel's verified start path, and supply `r3`/`r4`/`r5` as specified. Preserve MMU-off startup and one visible CPU. Record the first authentic instruction and stopping frontier before adding runtime features. Do not advance `.phase-ppc64` until the original PPC64-20 execution gate is actually satisfied.

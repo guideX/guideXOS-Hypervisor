@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "artifact_id": "debian-ports-sid-linux-7.2.14-powerpc64-4k-be",
+  "artifact_root_env": "GUIDEXOS_PPC64_PHASE20R1_ROOT",
+  "distribution": {
+    "name": "Debian Ports",
+    "suite": "sid",
+    "architecture": "ppc64",
+    "source_package": "linux",
+    "source_version": "7.2.14-1",
+    "binary_package": {
+      "name": "linux-binary-7.2.14+deb14-powerpc64",
+      "version": "7.2.14-1",
+      "architecture": "ppc64",
+      "size_bytes": 10992752,
+      "sha256": "1e9594db5b81d7554a9a0e52fe7ab020b84fcd97a905af40d9f214a2297a6a10",
+      "filename": "pool-ppc64/main/l/linux/linux-binary-7.2.14+deb14-powerpc64_7.2.14-1_ppc64.deb",
+      "package_record": "candidate/package-records/linux-binary.txt"
+    },
+    "signed_metadata": {
+      "release_uri": "https://deb.debian.org/debian-ports/dists/sid/InRelease",
+      "release_path": "bootstrap/debian-ports-sid-InRelease",
+      "release_sha256": "633f03748c27c56d527958c82fcda908a159eb35f2b0561c8aa8fd4fe360cb11",
+      "release_date_utc": "2026-11-02T00:28:29Z",
+      "release_valid_until_utc": "2026-11-09T00:28:29Z",
+      "release_signer_primary_fingerprint": "5FFACC4B97F15BF3636639EBC6894E6BB25B9C99",
+      "archive_keyring_package": {
+        "name": "debian-ports-archive-keyring",
+        "version": "2026.02.04",
+        "architecture": "all",
+        "sha256": "9b3feecd398b14969acc3141d42ed493f322c5a2140a33d4fda4bef2ea9441a6",
+        "keyring_path": "bootstrap/debian-ports-archive-keyring.pgp",
+        "keyring_sha256": "7d5da83561d53da68cc44141fc34fba1c174ce073f379576091a8d9ea21bf793",
+        "package_record": "candidate/package-records/debian-ports-archive-keyring.txt"
+      },
+      "packages_index": {
+        "path": "bootstrap/debian-ports-main-binary-ppc64-Packages.xz",
+        "release_sha256": "d803a6620a15361a21406970fa6f4847f103094ff619ac49507bd3948724876c",
+        "size_bytes": 18204988,
+        "sha256": "d803a6620a15361a21406970fa6f4847f103094ff619ac49507bd3948724876c"
+      },
+      "debian_archive_bootstrap": {
+        "release_uri": "https://deb.debian.org/debian/dists/sid/InRelease",
+        "release_path": "bootstrap/debian-sid-InRelease",
+        "release_sha256": "47ee6f440a4495f4f07cb66fd214bb10b45d917fe0b5f6a1a8ff368c67cfbf32",
+        "packages_index_path": "bootstrap/debian-main-binary-all-Packages.xz",
+        "packages_index_sha256": "6ffd52e5fdbf3ddade35d4527a42a45a3428106e539d0b0951efb5080adaa043",
+        "archive_key_primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+        "archive_key_subkey_fingerprint": "B8E5F13176D2A7A75220028078DBA3BC47EF2265"
+      }
+    }
+  },
+  "image": {
+    "path": "candidate/vmlinuz-7.2.14+deb14-powerpc64",
+    "size_bytes": 49045944,
+    "sha256": "c3baf4467971e47dc8737780a17910349d6754b5c771b92d665ba12fccee50fd"
+  },
+  "kernel": {
+    "version": "7.2.14+deb14-powerpc64",
+    "distribution_package_architecture": "ppc64",
+    "architecture": "64-bit PowerPC",
+    "endianness": "big",
+    "page_size_bytes": 4096,
+    "format": "uncompressed ELF64 big-endian ET_EXEC; the vmlinuz file is ELF, not a compressed wrapper",
+    "build_id_sha1": "2adaf1d46e2675b8e74f075564b09891df28465c"
+  },
+  "configuration": {
+    "path": "candidate/config-7.2.14+deb14-powerpc64",
+    "sha256": "592aabf1a65d0ca6b112921a7e323543727466fc394e312a1ea938d30b5b8bfa",
+    "source_package": "linux-headers-7.2.14+deb14-powerpc64_7.2.14-1_ppc64.deb",
+    "source_package_sha256": "7448c442a37448936268704c0784f56c69e2c95e14c5d269fa95ccd0af10f172",
+    "package_record": "candidate/package-records/linux-headers.txt",
+    "settings": {
+      "CONFIG_PPC64": "y",
+      "CONFIG_PPC_BOOK3S_64": "y",
+      "CONFIG_CPU_BIG_ENDIAN": "y",
+      "CONFIG_CPU_LITTLE_ENDIAN": "not set",
+      "CONFIG_PPC_PSERIES": "y",
+      "CONFIG_PPC_RADIX_MMU": "y",
+      "CONFIG_PPC_RADIX_MMU_DEFAULT": "y",
+      "CONFIG_PPC_4K_PAGES": "y",
+      "CONFIG_PPC_64K_PAGES": "not set",
+      "CONFIG_PPC_XICS": "y",
+      "CONFIG_PPC_RTAS": "y",
+      "CONFIG_RELOCATABLE": "y",
+      "CONFIG_TARGET_CPU": "power4",
+      "CONFIG_TUNE_CPU": "-mtune=power10",
+      "CONFIG_POWER9_CPU": "not set",
+      "CONFIG_PPC64_ELF_ABI_V2": "y",
+      "CONFIG_SMP": "y",
+      "CONFIG_HVC_CONSOLE": "y",
+      "CONFIG_HVC_RTAS": "y",
+      "CONFIG_HVC_OPAL": "y",
+      "CONFIG_BLK_DEV_INITRD": "y"
+    }
+  },
+  "system_map": null,
+  "elf": {
+    "class": "ELF64",
+    "endianness": "big",
+    "machine": "EM_PPC64",
+    "type": "ET_EXEC",
+    "flags": "0x2",
+    "abi_flags_description": "EF_PPC64_ABI_V2",
+    "entry": "0xc000000000000000",
+    "entry_symbol": "__start",
+    "program_headers": [
+      {
+        "type": "PT_LOAD",
+        "type_value": 1,
+        "flags": "0x7",
+        "offset": "0x10000",
+        "vaddr": "0xc000000000000000",
+        "paddr": "0x0",
+        "filesz": "0x28865e4",
+        "memsz": "0x29c2158",
+        "align": "0x10000"
+      },
+      {
+        "type": "PT_NOTE",
+        "type_value": 4,
+        "flags": "0x0",
+        "offset": "0x1a17348",
+        "vaddr": "0xc000000001a07348",
+        "paddr": "0x1a07348",
+        "filesz": "0x80",
+        "memsz": "0x80",
+        "align": "0x4"
+      }
+    ],
+    "load_segments": [
+      {
+        "type": "PT_LOAD",
+        "type_value": 1,
+        "flags": "0x7",
+        "offset": "0x10000",
+        "vaddr": "0xc000000000000000",
+        "paddr": "0x0",
+        "filesz": "0x28865e4",
+        "memsz": "0x29c2158",
+        "align": "0x10000"
+      }
+    ],
+    "bss_ranges": [
+      {
+        "paddr_start": "0x28865e4",
+        "paddr_end": "0x29c2158",
+        "vaddr_start": "0xc0000000028865e4",
+        "vaddr_end": "0xc0000000029c2158"
+      }
+    ],
+    "required_ram_extent": "0x29c2158",
+    "relocation": {
+      "config_relocatable": true,
+      "rela_dyn_entries": 231806,
+      "kernel_marker_physical_address": "0x5c",
+      "kernel_marker_word": "0x72756e30",
+      "kernel_marker_text": "run0",
+      "interpretation": "Linux's PowerPC head code treats the default marker as relocation to the linked physical start; no external relocation is asserted. The kernel retains its own .rela.dyn table and startup relocation path.",
+      "boot_wrapper": "none; direct ELF64 image with a compiled direct-FDT entry path"
+    }
+  },
+  "toolchain": {
+    "host": "Windows 11 Pro x64, build 26300",
+    "analysis_tool": "GNU readelf 2.46.0.20260210 (MinGW-W64 x86_64 build); independently parsed this PPC64 ELF",
+    "analysis_tool_path_on_acquisition_host": "C:\\mingw64\\bin\\readelf.exe",
+    "analysis_tool_path_scope": "host-local path; not portable",
+    "independent_format_tool": "file (Git for Windows); identified ELF64 MSB PowerPC OpenPOWER ELF V2",
+    "inspection_runtime": "Python 3.12 standard library",
+    "clang": "22.1.8; PPC64 target compile probe failed because the installed compiler has no compatible PowerPC backend",
+    "lld": "22.1.8; not qualified for PowerPC linking",
+    "kernel_build": "not attempted; a verified prebuilt kernel was available"
+  },
+  "compatibility": {
+    "artifact_mismatch": [],
+    "boot_wrapper_dependency": "none identified for the selected ELF direct-entry path; a pSeries direct-FDT handoff is source-supported but not yet runtime-qualified",
+    "potential_runtime_blockers": [
+      "The exact image is relocatable and has 231806 .rela.dyn entries; the next loader must preserve the ELF and follow the Linux entry/startup relocation rules.",
+      "The current guideXOS FDT omits /rtas/ibm,hypertas-functions and /chosen/ibm,architecture-vec-5, so Linux pSeries hypervisor-feature discovery is not established.",
+      "The kernel enables SMP, while the current guideXOS VM runs one vCPU; the first entry probe should keep one CPU visible and defer secondary CPU startup.",
+      "No initramfs or root filesystem is included; neither is required for the first kernel instruction, but later init may stop without one."
+    ],
+    "recommended_fdt": "Place an 8-byte-aligned FDT in guest RAM outside [0,0x29c2158) and all PAPR/RTAS reservations; pass its physical address in r3.",
+    "direct_fdt_registers": {
+      "r3": "physical address of FDT",
+      "r4": "physical address of kernel image (PT_LOAD p_paddr base is 0)",
+      "r5": "0",
+      "initial_mmu": "off",
+      "single_cpu": true
+    },
+    "kernel_entry_sources": [
+      "https://docs.kernel.org/6.3/powerpc/booting.html",
+      "https://github.com/torvalds/linux/blob/v7.2/arch/powerpc/kernel/head_64.S#L2260-L2277"
+    ],
+    "system_map_available": false
+  },
+  "provenance_files": {
+    "binary_package": "candidate/linux-binary-7.2.14+deb14-powerpc64_7.2.14-1_ppc64.deb",
+    "configuration_package": "candidate/packages/linux-headers-7.2.14+deb14-powerpc64_7.2.14-1_ppc64.deb",
+    "configuration_package_source": "candidate/packages/linux-config-7.2_7.2.14-1_ppc64.deb",
+    "authenticated_package_records": "candidate/package-records/",
+    "readelf_reports": "candidate/analysis/"
+  }
+}
