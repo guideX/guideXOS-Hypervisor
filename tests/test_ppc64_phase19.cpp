@@ -10,11 +10,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -122,6 +124,10 @@ uint32_t encodeMtmsr(uint8_t rs) {
     return (31U << 26) | (static_cast<uint32_t>(rs) << 21) | (146U << 1);
 }
 
+uint32_t encodeMfspr(uint8_t rt, uint16_t spr) {
+    return encodeXfx(rt, spr, 339U);
+}
+
 std::vector<uint8_t> encodeImage(const std::vector<uint32_t>& words) {
     std::vector<uint8_t> result;
     result.reserve(words.size() * 4U);
@@ -152,6 +158,69 @@ uint64_t partitionLeafPte(uint64_t backing) {
     return kPteValid | kPteLeaf | kPteReference | kPteChange |
            (backing & 0x01fffffffffff000ULL) | kPteRWX;
 }
+
+bool installIdentityProcessRadix(VirtualMachine& vm,
+                                 bool codeExecutable = true) {
+    constexpr uint64_t processTable = 0x40000U;
+    constexpr uint64_t root = 0x70000U;
+    constexpr uint64_t level1 = 0x71000U;
+    constexpr uint64_t level2 = 0x72000U;
+    constexpr uint64_t level3 = 0x73000U;
+    std::string reason;
+    auto* cpu = vm.getPPC64ISAPlugin();
+    if (cpu == nullptr || !cpu->configureRadixTranslation(
+            PPC64RadixConfiguration{processTable, 5U, 0U, 0U, kRamSize},
+            vm.getMemory(), reason)) {
+        std::printf("Phase 19R3 process radix setup failed: %s\n",
+                    reason.c_str());
+        return false;
+    }
+    writeBE64(vm.getMemory(), processTable, partitionRadixRootWord(root));
+    writeBE64(vm.getMemory(), root, kPteValid | level1 | 9ULL);
+    writeBE64(vm.getMemory(), level1, kPteValid | level2 | 9ULL);
+    writeBE64(vm.getMemory(), level2, kPteValid | level3 | 9ULL);
+    for (uint64_t page = 0; page < kRamSize; page += 0x1000U) {
+        uint64_t permissions = kPteRWX;
+        if (!codeExecutable && page == kEntry) permissions &= ~1ULL;
+        const uint64_t leaf = kPteValid | kPteLeaf | kPteReference |
+            kPteChange | (page & 0x01fffffffffff000ULL) | permissions;
+        writeBE64(vm.getMemory(), level3 + (((page >> 12) & 0x1ffULL) * 8U),
+                  leaf);
+    }
+    return true;
+}
+
+void writeWords(IMemory& memory, uint64_t address,
+                const std::vector<uint32_t>& words);
+
+void writeRTASRequest(IMemory& memory, uint64_t address, uint32_t token,
+                      uint32_t nargs, uint32_t nret,
+                      const std::vector<uint32_t>& arguments) {
+    std::vector<uint32_t> words{token, nargs, nret};
+    words.insert(words.end(), arguments.begin(), arguments.end());
+    writeWords(memory, address, words);
+}
+
+class CountingMMIODevice final : public IMemoryMappedDevice {
+public:
+    CountingMMIODevice(uint64_t base, size_t size) : base_(base), size_(size) {}
+    uint64_t GetBaseAddress() const override { return base_; }
+    size_t GetSize() const override { return size_; }
+    bool Read(uint64_t, uint8_t* data, size_t size) const override {
+        ++reads;
+        std::fill(data, data + size, 0);
+        return true;
+    }
+    bool Write(uint64_t, const uint8_t*, size_t) override {
+        ++writes;
+        return true;
+    }
+    mutable size_t reads = 0;
+    size_t writes = 0;
+private:
+    uint64_t base_;
+    size_t size_;
+};
 
 bool installIdentityPartition(
     VirtualMachine& vm, uint16_t lpid, uint64_t firstTable,
@@ -189,6 +258,24 @@ PPC64PlatformConfiguration platform(bool trampoline = true,
     result.rtasEnabled = true;
     result.rtasTrampolineEnabled = trampoline;
     result.virtualTerminalEnabled = terminal;
+    return result;
+}
+
+PPC64PlatformConfiguration partitionPlatform() {
+    auto result = platform();
+    result.reservedRanges.push_back(
+        {kLPIDPartitionTable, 0x10000U, "partition table", true});
+    for (const auto& [base, name] : std::array<std::pair<uint64_t, const char*>, 8>{
+             std::pair<uint64_t, const char*>{kLPIDAFirstTable, "LPID 7 radix root"},
+             {kLPIDAFirstTable + 0x1000U, "LPID 7 radix l1"},
+             {kLPIDAFirstTable + 0x2000U, "LPID 7 radix l2"},
+             {kLPIDAFirstTable + 0x3000U, "LPID 7 radix l3"},
+             {kLPIDBFirstTable, "LPID 8 radix root"},
+             {kLPIDBFirstTable + 0x1000U, "LPID 8 radix l1"},
+             {kLPIDBFirstTable + 0x2000U, "LPID 8 radix l2"},
+             {kLPIDBFirstTable + 0x3000U, "LPID 8 radix l3"}}) {
+        result.reservedRanges.push_back({base, 0x1000U, name, true});
+    }
     return result;
 }
 
@@ -857,6 +944,64 @@ void testLevelTriggeredXICS() {
     auto level = sourceState(levelSource);
     CHECK(level.asserted && level.pending && !level.enabled && !level.presented);
 
+    // C6: checkpoint the asserted but masked source, restore it, then continue
+    // through the guest int-on call and interrupt acknowledgement path.
+    const VMStateSnapshot pendingMaskedCheckpoint = vm.captureVMSnapshot();
+    CHECK(vm.restoreVMSnapshot(pendingMaskedCheckpoint));
+    cpu = vm.getPPC64ISAPlugin();
+    level = sourceState(levelSource);
+    CHECK(level.asserted && level.pending && !level.enabled && !level.presented);
+
+    const auto c6Path = std::filesystem::temp_directory_path() /
+        ("guidexos-p19r3-C6-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) +
+         ".gxcp");
+    CHECK(!std::filesystem::exists(c6Path));
+    CHECK(vm.pause());
+    std::string c6Error;
+    CHECK(VMCheckpointCodec::write(vm, c6Path.string(), "p19r3-C6", &c6Error));
+    CHECK(vm.resume());
+
+    VirtualMachine c6Restored(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(c6Restored));
+    CHECK(VMCheckpointCodec::read(c6Restored, c6Path.string(),
+                                  "p19r3-C6", &c6Error));
+    auto* c6CPU = c6Restored.getPPC64ISAPlugin();
+    const auto c6Source = [&]() {
+        const auto snapshot = c6Restored.getPPC64XICSSnapshot();
+        const auto found = std::find_if(snapshot.sources.begin(),
+            snapshot.sources.end(), [levelSource](const auto& source) {
+                return source.sourceId == levelSource;
+            });
+        return found == snapshot.sources.end()
+            ? PPC64XICSSourceSnapshot{} : *found;
+    };
+    CHECK(c6Source().asserted && c6Source().pending &&
+          !c6Source().enabled && !c6Source().presented);
+    CHECK(c6Restored.validatePPC64RTASTrampoline());
+    CHECK(c6Restored.resume());
+    CHECK(runCall(c6Restored, calls[3], layout.rtasEntry, false));
+    CHECK(readBE32(c6Restored.getMemory(), 0x33c0U + 16U) == 0U);
+    CHECK(steps(c6Restored, 6U)); // CPPR, then guest enables EE.
+    CHECK(c6CPU->getNIP() == firstContinuation);
+    CHECK(c6Restored.step());
+    CHECK(c6CPU->getNIP() == 0x500U);
+    CHECK(c6CPU->getSRR0() == firstContinuation);
+    const std::vector<uint32_t> c6Handler{
+        encodeAddi(3, 0, static_cast<int16_t>(PPC64_H_XIRR)), kSc1,
+        encodeAddi(8, 4, 0), encodeAddi(4, 8, 0),
+        encodeAddi(3, 0, static_cast<int16_t>(PPC64_H_EOI)), kSc1, kRfid};
+    writeWords(c6Restored.getMemory(), 0x500U, c6Handler);
+    CHECK(steps(c6Restored, 6U)); // H_XIRR acknowledges; H_EOI completes.
+    CHECK(c6CPU->readGPR(4) == ((0x40U << 24) | levelSource));
+    CHECK(c6Source().asserted && c6Source().pending &&
+          c6Source().presented && !c6Source().acknowledged);
+    CHECK(c6Restored.deassertPPC64InterruptSource(levelSource, 0, &error));
+    CHECK(c6Restored.step()); // guest rfid returns with no source to reassert.
+    CHECK(c6CPU->getNIP() == firstContinuation);
+    std::error_code c6CleanupError;
+    CHECK(std::filesystem::remove(c6Path, c6CleanupError));
+
     CHECK(run(3));
     level = sourceState(levelSource);
     CHECK(readBE32(vm.getMemory(), 0x33c0U + 16U) == 0U);
@@ -967,7 +1112,8 @@ void testNonRootLPIDRTASIsolation() {
     constexpr uint16_t lpidB = 8;
     constexpr uint32_t sourceA = kSource;
     constexpr uint32_t sourceB = kSource + 1U;
-    VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+    constexpr uint64_t lpidBPrivateBacking = kLPIDPrivatePage + 0x10000U;
+    VirtualMachine vm(kRamSize, 1, "PPC64", partitionPlatform());
     CHECK(prepareCapacity(vm));
     std::string error;
     auto* manager = vm.getPPC64PartitionManager();
@@ -982,6 +1128,19 @@ void testNonRootLPIDRTASIsolation() {
                                    contextB, error));
     CHECK(manager->registerPrivateBackingRange(contextA, kLPIDPrivatePage,
                                                 0x1000U, error));
+    const uint64_t bL3 = kLPIDBFirstTable + 0x3000U;
+    const auto partitionPTE = [bL3](uint64_t guestReal) {
+        return bL3 + (((guestReal >> 12) & 0x1ffULL) * 8U);
+    };
+    // The same guest-real block maps to distinct backing for LPID 8. A second
+    // LPID-8 mapping deliberately aliases LPID 7's private backing and must be
+    // rejected by the partition ownership check.
+    writeBE64(vm.getMemory(), partitionPTE(kLPIDPrivatePage),
+              partitionLeafPte(lpidBPrivateBacking));
+    writeBE64(vm.getMemory(), partitionPTE(kLPIDPrivatePage + 0x1000U),
+              partitionLeafPte(kLPIDPrivatePage));
+    CHECK(manager->registerPrivateBackingRange(contextB,
+        lpidBPrivateBacking, 0x1000U, error));
 
     CHECK(vm.configurePPC64InterruptSource(sourceA,
         PPC64XICSSourceType::LEVEL, 0x40, PPC64_XICS_SERVER_ID, lpidA, true,
@@ -997,7 +1156,7 @@ void testNonRootLPIDRTASIsolation() {
 
     std::vector<uint32_t> code;
     appendCPPRCall(code, 0x60);
-    std::vector<GuestCall> calls(5);
+    std::vector<GuestCall> calls(6);
     appendTrampolineCall(code, fdt, fdtBase, "ibm,set-xive", 0x3800,
         {sourceA, PPC64_XICS_SERVER_ID, 0x30}, 1, &calls[0]);
     appendTrampolineCall(code, fdt, fdtBase, "ibm,set-xive", 0x3840,
@@ -1005,8 +1164,10 @@ void testNonRootLPIDRTASIsolation() {
     appendTrampolineCall(code, fdt, fdtBase, "ibm,set-xive", 0x3880,
         {sourceB, PPC64_XICS_SERVER_ID, 0x22}, 1, &calls[2]);
     appendTrampolinePointerCall(code, trampoline, kLPIDPrivatePage, &calls[3]);
+    appendTrampolinePointerCall(code, trampoline,
+        kLPIDPrivatePage + 0x1000U, &calls[4]);
     appendTrampolineCall(code, fdt, fdtBase, "ibm,get-xive", 0x38c0,
-        {sourceA}, 3, &calls[4]);
+        {sourceA}, 3, &calls[5]);
     CHECK(installProgram(vm, code));
 
     // The host stages a valid RTAS request in LPID A's private backing page.
@@ -1014,6 +1175,9 @@ void testNonRootLPIDRTASIsolation() {
     writeWords(vm.getMemory(), kLPIDPrivatePage,
         {PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3, 1, sourceA,
          PPC64_XICS_SERVER_ID, 0x10, 0x12345678U});
+    writeWords(vm.getMemory(), lpidBPrivateBacking,
+        {PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3, 1, sourceB,
+         PPC64_XICS_SERVER_ID, 0x12, 0x87654321U});
     auto* cpu = vm.getPPC64ISAPlugin();
     cpu->writeGPR(14, 0x1414141414141414ULL);
     cpu->setMSR(MSR_ME | MSR_RI);
@@ -1071,10 +1235,15 @@ void testNonRootLPIDRTASIsolation() {
     CHECK(sourceStateB.allocated && sourceStateB.ownerLPID == lpidB);
     CHECK(sourceStateB.priority == 0x22U && sourceStateB.enabled);
 
-    const uint64_t nipBeforeDeniedPointer = cpu->getNIP();
     CHECK(runCall(vm, calls[3], trampoline, false));
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(vm.getMemory(), lpidBPrivateBacking + 24U) == 0U);
+    CHECK(findSource(vm.getPPC64XICSSnapshot(), sourceB).priority == 0x12U);
+
+    const uint64_t nipBeforeDeniedPointer = cpu->getNIP();
+    CHECK(runCall(vm, calls[4], trampoline, false));
     CHECK(cpu->readGPR(3) == PPC64_H_PARAMETER);
-    CHECK(cpu->getNIP() == calls[3].returnAddress + 4U);
+    CHECK(cpu->getNIP() == calls[4].returnAddress + 4U);
     CHECK(readBE32(vm.getMemory(), kLPIDPrivatePage + 24U) == 0x12345678U);
     sourceStateA = findSource(vm.getPPC64XICSSnapshot(), sourceA);
     CHECK(sourceStateA.priority == 0x30U && sourceStateA.pending);
@@ -1091,15 +1260,207 @@ void testNonRootLPIDRTASIsolation() {
     CHECK(cpu->getNIP() == nipBeforeA && cpu->getMSR() == msrBeforeA);
     CHECK(cpu->getLR() == lrBeforeA && cpu->readGPR(14) == gpr14BeforeA);
     CHECK(cpu->getCR() == crBeforeA && cpu->getXER() == xerBeforeA);
-    CHECK(runCall(vm, calls[4], trampoline, false));
+    CHECK(runCall(vm, calls[5], trampoline, false));
     CHECK(readBE32(vm.getMemory(), 0x38c0U + 16U) == 0U);
     CHECK(readBE32(vm.getMemory(), 0x38c0U + 24U) == 0x30U);
-    CHECK(findSource(vm.getPPC64XICSSnapshot(), sourceB).priority == 0x22U);
+    CHECK(findSource(vm.getPPC64XICSSnapshot(), sourceB).priority == 0x12U);
     CHECK(vm.deassertPPC64InterruptSource(sourceA, lpidA, &error));
     sourceStateA = findSource(vm.getPPC64XICSSnapshot(), sourceA);
     CHECK(!sourceStateA.pending && !sourceStateA.presented &&
           !sourceStateA.asserted);
+    // C8: restore a valid non-root LPID with its active binding and XICS
+    // ownership intact; the VM continues to use a single explicit CPU state.
+    const VMStateSnapshot lpidCheckpoint = vm.captureVMSnapshot();
+    CHECK(vm.restoreVMSnapshot(lpidCheckpoint));
+    auto* restoredCPU = vm.getPPC64ISAPlugin();
+    CHECK(restoredCPU != nullptr);
+    CHECK(restoredCPU != nullptr && restoredCPU->getActiveLPID() == lpidA);
+    CHECK(restoredCPU != nullptr && restoredCPU->hasActivePartitionContext());
+    CHECK(findSource(vm.getPPC64XICSSnapshot(), sourceA).ownerLPID == lpidA);
+    CHECK(findSource(vm.getPPC64XICSSnapshot(), sourceB).ownerLPID == lpidB);
+    CHECK(readBE32(vm.getMemory(), kLPIDPrivatePage + 24U) == 0x12345678U);
     CHECK(vm.validatePPC64RTASTrampoline());
+
+    const auto c8Path = std::filesystem::temp_directory_path() /
+        ("guidexos-p19r3-C8-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) +
+         ".gxcp");
+    CHECK(!std::filesystem::exists(c8Path));
+    CHECK(vm.pause());
+    CHECK(VMCheckpointCodec::write(vm, c8Path.string(), "p19r3-C8", &error));
+    CHECK(vm.resume());
+    VirtualMachine c8Restored(kRamSize, 1, "PPC64", partitionPlatform());
+    CHECK(prepareCapacity(c8Restored));
+    CHECK(VMCheckpointCodec::read(c8Restored, c8Path.string(),
+                                  "p19r3-C8", &error));
+    auto* c8CPU = c8Restored.getPPC64ISAPlugin();
+    CHECK(c8CPU->getActiveLPID() == lpidA);
+    CHECK(c8CPU->hasActivePartitionContext());
+    CHECK(c8Restored.validatePPC64RTASTrampoline());
+    const auto c8Xics = c8Restored.getPPC64XICSSnapshot();
+    const auto c8SourceA = std::find_if(c8Xics.sources.begin(),
+        c8Xics.sources.end(), [sourceA](const auto& source) {
+            return source.sourceId == sourceA;
+        });
+    const auto c8SourceB = std::find_if(c8Xics.sources.begin(),
+        c8Xics.sources.end(), [sourceB](const auto& source) {
+            return source.sourceId == sourceB;
+        });
+    CHECK(c8SourceA != c8Xics.sources.end() &&
+          c8SourceA->ownerLPID == lpidA);
+    CHECK(c8SourceB != c8Xics.sources.end() &&
+          c8SourceB->ownerLPID == lpidB);
+    CHECK(readBE32(c8Restored.getMemory(),
+                   kLPIDPrivatePage + 24U) == 0x12345678U);
+    std::error_code c8CleanupError;
+    CHECK(std::filesystem::remove(c8Path, c8CleanupError));
+}
+
+void testR3ExplicitLPIDCPUContextSwitch() {
+    std::puts("[phase19R3-I-host-mediated-A-B-A-register-restore]");
+    constexpr uint16_t lpidA = 7;
+    constexpr uint16_t lpidB = 8;
+    constexpr uint64_t privateB = kLPIDPrivatePage + 0x10000U;
+    VirtualMachine vm(kRamSize, 1, "PPC64", partitionPlatform());
+    CHECK(prepareCapacity(vm));
+    std::string error;
+    auto* manager = vm.getPPC64PartitionManager();
+    CHECK(manager != nullptr);
+    CHECK(manager->configurePartitionTable(vm.getMemory(),
+        kLPIDPartitionTable, 4, error));
+    std::shared_ptr<PPC64PartitionContext> contextA;
+    std::shared_ptr<PPC64PartitionContext> contextB;
+    CHECK(installIdentityPartition(vm, lpidA, kLPIDAFirstTable,
+                                   contextA, error));
+    CHECK(installIdentityPartition(vm, lpidB, kLPIDBFirstTable,
+                                   contextB, error));
+    const uint64_t bL3 = kLPIDBFirstTable + 0x3000U;
+    const uint64_t privatePTE = bL3 +
+        (((kLPIDPrivatePage >> 12) & 0x1ffULL) * 8U);
+    writeBE64(vm.getMemory(), privatePTE, partitionLeafPte(privateB));
+    CHECK(manager->registerPrivateBackingRange(contextA, kLPIDPrivatePage,
+                                                0x1000U, error));
+    CHECK(manager->registerPrivateBackingRange(contextB, privateB,
+                                                0x1000U, error));
+    CHECK(vm.configurePPC64InterruptSource(kSource,
+        PPC64XICSSourceType::EDGE, 0x40, PPC64_XICS_SERVER_ID, lpidA, true,
+        &error));
+    CHECK(vm.configurePPC64InterruptSource(kSource + 1U,
+        PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, lpidB, true,
+        &error));
+
+    const std::vector<uint32_t> code{
+        encodeD(36, 3, 4, 0), // stw r3,0(r4) through the active LPID mapping
+        encodeAddi(10, 10, 1),
+        encodeAddi(11, 11, 1),
+        encodeAddi(12, 12, 1),
+        encodeAddi(13, 13, 1)};
+    CHECK(installProgram(vm, code));
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->setMSR(MSR_ME | MSR_RI);
+
+    CHECK(cpu->activatePartitionContext(contextA, error));
+    cpu->setPC(kEntry);
+    cpu->writeGPR(3, 0x71U);
+    cpu->writeGPR(4, kLPIDPrivatePage);
+    cpu->writeGPR(10, 10U);
+    cpu->writeGPR(15, 0xaaaaaaaaU);
+    CHECK(vm.step());
+    CHECK(cpu->getNIP() == kEntry + 4U);
+    CHECK(readBE32(vm.getMemory(), kLPIDPrivatePage) == 0x71U);
+    const std::vector<uint8_t> savedA = cpu->serialize_state();
+
+    CHECK(cpu->activatePartitionContext(contextB, error));
+    cpu->setPC(kEntry);
+    cpu->writeGPR(3, 0x82U);
+    cpu->writeGPR(4, kLPIDPrivatePage);
+    cpu->writeGPR(10, 20U);
+    cpu->writeGPR(15, 0xbbbbbbbbU);
+    const std::vector<uint8_t> initialB = cpu->serialize_state();
+    CHECK(cpu->activatePartitionContext(contextA, error));
+    CHECK(cpu->deserialize_state(savedA));
+    CHECK(cpu->getActiveLPID() == lpidA);
+    CHECK(cpu->getNIP() == kEntry + 4U);
+    CHECK(cpu->readGPR(3) == 0x71U && cpu->readGPR(10) == 10U);
+    CHECK(cpu->readGPR(15) == 0xaaaaaaaaU);
+    CHECK(steps(vm, 4U));
+    CHECK(cpu->getNIP() == kEntry + 20U);
+
+    CHECK(cpu->activatePartitionContext(contextB, error));
+    CHECK(cpu->deserialize_state(initialB));
+    CHECK(cpu->getActiveLPID() == lpidB);
+    CHECK(cpu->getNIP() == kEntry);
+    CHECK(cpu->readGPR(3) == 0x82U && cpu->readGPR(10) == 20U);
+    CHECK(cpu->readGPR(15) == 0xbbbbbbbbU);
+    CHECK(steps(vm, code.size()));
+    CHECK(cpu->getNIP() == kEntry + code.size() * 4U);
+    CHECK(readBE32(vm.getMemory(), privateB) == 0x82U);
+    CHECK(readBE32(vm.getMemory(), kLPIDPrivatePage) == 0x71U);
+    const auto xics = vm.getPPC64XICSSnapshot();
+    const auto stateA = std::find_if(xics.sources.begin(), xics.sources.end(),
+        [](const auto& source) { return source.sourceId == kSource; });
+    const auto stateB = std::find_if(xics.sources.begin(), xics.sources.end(),
+        [](const auto& source) { return source.sourceId == kSource + 1U; });
+    CHECK(stateA != xics.sources.end() && stateA->ownerLPID == lpidA);
+    CHECK(stateB != xics.sources.end() && stateB->ownerLPID == lpidB);
+    CHECK(vm.validatePPC64RTASTrampoline());
+}
+
+void testR3LPIDCannotBeForgedThroughPIDR() {
+    std::puts("[phase19R3-I-PIDR-does-not-forge-LPID]");
+    constexpr uint16_t lpidA = 7;
+    constexpr uint16_t lpidB = 8;
+    VirtualMachine vm(kRamSize, 1, "PPC64", partitionPlatform());
+    CHECK(prepareCapacity(vm));
+    std::string error;
+    auto* manager = vm.getPPC64PartitionManager();
+    CHECK(manager != nullptr);
+    CHECK(manager->configurePartitionTable(vm.getMemory(),
+        kLPIDPartitionTable, 4, error));
+    std::shared_ptr<PPC64PartitionContext> contextA;
+    std::shared_ptr<PPC64PartitionContext> contextB;
+    CHECK(installIdentityPartition(vm, lpidA, kLPIDAFirstTable,
+                                   contextA, error));
+    CHECK(installIdentityPartition(vm, lpidB, kLPIDBFirstTable,
+                                   contextB, error));
+    CHECK(vm.configurePPC64InterruptSource(kSource,
+        PPC64XICSSourceType::EDGE, 0x40, PPC64_XICS_SERVER_ID, lpidA, true,
+        &error));
+    CHECK(vm.configurePPC64InterruptSource(kSource + 1U,
+        PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, lpidB, true,
+        &error));
+
+    IndependentFDT fdt;
+    CHECK(parseIndependentFDT(vm.getPPC64FDT(), fdt));
+    std::vector<uint32_t> code;
+    emitLoad32(code, 5, lpidA); // guest PIDR value, not the hypervisor LPID
+    code.push_back(encodeMtspr(5, SPR_PIDR));
+    GuestCall call;
+    appendTrampolineCall(code, fdt,
+        vm.getPPC64PlatformSnapshot().memoryLayout.fdtBase,
+        "ibm,set-xive", 0x3980U,
+        {kSource, PPC64_XICS_SERVER_ID, 0x22U}, 1U, &call);
+    CHECK(installProgram(vm, code));
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->setMSR(MSR_ME | MSR_RI);
+    CHECK(cpu->activatePartitionContext(contextB, error));
+    CHECK(cpu->getActiveLPID() == lpidB);
+    CHECK(runCall(vm, call,
+        vm.getPPC64PlatformSnapshot().memoryLayout.rtasEntry, false));
+    CHECK(cpu->getPIDR() == lpidA);
+    CHECK(cpu->getActiveLPID() == lpidB);
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(vm.getMemory(), 0x3980U + 24U) ==
+          static_cast<uint32_t>(PPC64_RTAS_OUT_PARAM_ERROR));
+    const auto xics = vm.getPPC64XICSSnapshot();
+    const auto sourceA = std::find_if(xics.sources.begin(), xics.sources.end(),
+        [](const auto& source) { return source.sourceId == kSource; });
+    const auto sourceB = std::find_if(xics.sources.begin(), xics.sources.end(),
+        [](const auto& source) { return source.sourceId == kSource + 1U; });
+    CHECK(sourceA != xics.sources.end() && sourceA->ownerLPID == lpidA);
+    CHECK(sourceA != xics.sources.end() && sourceA->priority == 0x40U);
+    CHECK(sourceB != xics.sources.end() && sourceB->ownerLPID == lpidB);
+    CHECK(sourceB != xics.sources.end() && sourceB->priority == 0x44U);
 }
 
 void testDirectHRTASCompatibility() {
@@ -1107,9 +1468,17 @@ void testDirectHRTASCompatibility() {
     VirtualMachine vm(kRamSize, 1, "PPC64", platform());
     CHECK(prepareCapacity(vm));
     std::string error;
+    std::shared_ptr<PPC64PartitionContext> unauthorizedContext;
+    CHECK(vm.getPPC64PartitionManager()->configurePartitionTable(
+        vm.getMemory(), kLPIDPartitionTable, 4, error));
+    CHECK(installIdentityPartition(vm, 7U, kLPIDAFirstTable,
+                                   unauthorizedContext, error));
     CHECK(vm.configurePPC64InterruptSource(
         kSource, PPC64XICSSourceType::EDGE, 0x44,
         PPC64_XICS_SERVER_ID, 0, true, &error));
+    CHECK(vm.configurePPC64InterruptSource(
+        kSource + 1U, PPC64XICSSourceType::EDGE, 0x55,
+        PPC64_XICS_SERVER_ID, 7U, true, &error));
     auto* cpu = vm.getPPC64ISAPlugin();
     cpu->setMSR(MSR_ME | MSR_RI);
     auto* const registry = vm.getPPC64RTASServiceRegistry();
@@ -1191,6 +1560,18 @@ void testDirectHRTASCompatibility() {
           beforeBadToken.sources[0].priority);
     CHECK(vm.getPPC64RTASServiceRegistry() == registry);
 
+    constexpr uint32_t kUnauthorizedSourceBlock = 0x3240U;
+    writeBlock(kUnauthorizedSourceBlock,
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U, 1U,
+        {kSource + 1U, PPC64_XICS_SERVER_ID, 0x11U});
+    CHECK(directCall(kUnauthorizedSourceBlock));
+    CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(vm.getMemory(), kUnauthorizedSourceBlock + 24U) ==
+          static_cast<uint32_t>(PPC64_RTAS_OUT_PARAM_ERROR));
+    CHECK(vm.getPPC64XICSSnapshot().sources[0].priority ==
+          beforeBadToken.sources[0].priority);
+    CHECK(vm.getPPC64XICSSnapshot().sources[1].priority == 0x55U);
+
     CHECK(directCall(static_cast<uint32_t>(kRamSize)));
     CHECK(cpu->readGPR(3) == PPC64_H_PARAMETER);
     CHECK(vm.getPPC64XICSSnapshot().sources[0].priority ==
@@ -1202,6 +1583,16 @@ void testDirectHRTASCompatibility() {
     CHECK(cpu->readGPR(3) == PPC64_H_PARAMETER);
     CHECK(vm.validatePPC64RTASTrampoline());
     CHECK(vm.getPPC64RTASServiceRegistry() == registry);
+
+    const uint64_t protectedResponseRequest = protectedEntry - 24U;
+    writeBlock(static_cast<uint32_t>(protectedResponseRequest),
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U, 1U,
+        {kSource, 0U, 0x11U});
+    CHECK(directCall(static_cast<uint32_t>(protectedResponseRequest)));
+    CHECK(cpu->readGPR(3) == PPC64_H_PARAMETER);
+    CHECK(vm.getPPC64XICSSnapshot().sources[0].priority ==
+          beforeBadToken.sources[0].priority);
+    CHECK(vm.validatePPC64RTASTrampoline());
 }
 
 std::vector<uint32_t> terminalHandler() {
@@ -1348,6 +1739,29 @@ void testCheckpointAndFaultBoundaries() {
         PPC64_RTAS_PROTECTED_REGION_SIZE / 2U;
     CHECK(!restored.restoreVMSnapshot(corruptPermissionMetadata));
     CHECK(restored.getPPC64ISAPlugin()->getNIP() == restoredNIP);
+
+    VMStateSnapshot corruptOwner = vm.captureVMSnapshot();
+    CHECK(!corruptOwner.ppc64Xics.sources.empty());
+    if (!corruptOwner.ppc64Xics.sources.empty()) {
+        corruptOwner.ppc64Xics.sources[0].ownerLPID = 7U;
+    }
+    CHECK(!restored.restoreVMSnapshot(corruptOwner));
+    CHECK(restored.getPPC64ISAPlugin()->getNIP() == restoredNIP);
+    CHECK(restored.getPPC64XICSSnapshot().sources[0].priority == 0x33U);
+
+    VMStateSnapshot corruptRTASIdentity = vm.captureVMSnapshot();
+    corruptRTASIdentity.ppc64Platform.rtasServiceRegistryVersion = 99U;
+    CHECK(!restored.restoreVMSnapshot(corruptRTASIdentity));
+    CHECK(restored.getPPC64ISAPlugin()->getNIP() == restoredNIP);
+
+    VMStateSnapshot corruptRegisters = vm.captureVMSnapshot();
+    CHECK(!corruptRegisters.cpus.empty());
+    if (!corruptRegisters.cpus.empty() &&
+        !corruptRegisters.cpus[0].isaState.empty()) {
+        corruptRegisters.cpus[0].isaState[0] ^= 0xffU;
+    }
+    CHECK(!restored.restoreVMSnapshot(corruptRegisters));
+    CHECK(restored.getPPC64ISAPlugin()->getNIP() == restoredNIP);
     std::filesystem::remove(checkpointPath, removeError);
 
     VirtualMachine badEntry(kRamSize, 1, "PPC64", platform());
@@ -1385,6 +1799,531 @@ void testCheckpointAndFaultBoundaries() {
         relocated.getPPC64PlatformSnapshot().memoryLayout.rtasEntry);
     CHECK(!relocated.step()); // no process/radix translation profile is configured
     CHECK(relocated.getLastExecutionDiagnostic().size() != 0U);
+}
+
+void testR3ExecutionModesAndPrivilege() {
+    std::puts("[phase19R3-G-modes-and-privilege]");
+    const auto runMode = [](const char* name, uint64_t initialMSR,
+                            uint64_t entryTranslation, bool transition) {
+        std::printf("[phase19R3-mode-%s]\n", name);
+        VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+        CHECK(prepareCapacity(vm));
+        auto* cpu = vm.getPPC64ISAPlugin();
+        if (entryTranslation != 0) CHECK(installIdentityProcessRadix(vm));
+        std::string error;
+        CHECK(vm.configurePPC64InterruptSource(kSource,
+            PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, 0, true,
+            &error));
+        IndependentFDT fdt;
+        CHECK(parseIndependentFDT(vm.getPPC64FDT(), fdt));
+        std::vector<uint32_t> code;
+        if (transition) {
+            code.push_back(encodeMfmsr(6));
+            code.push_back(encodeD(28, 6, 6,
+                                   static_cast<int16_t>(0xffcfU)));
+            code.push_back(encodeMtmsr(6));
+            code.push_back(ENCODING_ISYNC);
+        }
+        GuestCall call;
+        appendTrampolineCall(code, fdt,
+            vm.getPPC64PlatformSnapshot().memoryLayout.fdtBase,
+            "ibm,set-xive", 0x3900U, {kSource, 0U, 0x33U}, 1U, &call);
+        CHECK(installProgram(vm, code));
+        cpu->setGuestDeliveryEnabled(true);
+        cpu->setMSR(initialMSR | entryTranslation);
+        CHECK(runCall(vm, call,
+            vm.getPPC64PlatformSnapshot().memoryLayout.rtasEntry, false));
+        CHECK(cpu->getNIP() == call.returnAddress + 4U);
+        CHECK(cpu->getLR() == call.returnAddress);
+        CHECK(cpu->readGPR(3) == PPC64_H_SUCCESS);
+        CHECK(readBE32(vm.getMemory(), 0x3900U + 24U) == 0U);
+        CHECK(vm.getPPC64XICSSnapshot().sources[0].priority == 0x33U);
+        CHECK(cpu->getMSR() == (initialMSR & ~entryTranslation));
+        CHECK(vm.validatePPC64RTASTrampoline());
+    };
+
+    // SF=1 is exercised only for a low 32-bit real-address parameter block;
+    // this is not a qualification of a general 64-bit RTAS ABI.
+    runMode("sf1-low-real-address", MSR_SF | MSR_ME | MSR_RI, 0, false);
+    // A translated supervisor caller clears IR and/or DR with privileged
+    // mtmsr plus isync before entering the real-address RTAS stub.
+    runMode("ir-to-real", MSR_ME | MSR_RI, MSR_IR, true);
+    runMode("dr-to-real", MSR_ME | MSR_RI, MSR_DR, true);
+    runMode("ir-dr-to-real", MSR_ME | MSR_RI,
+            MSR_IR | MSR_DR, true);
+    runMode("me-clear", MSR_RI, 0, false);
+    runMode("ri-clear", MSR_ME, 0, false);
+
+    VirtualMachine problem(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(problem));
+    std::string error;
+    CHECK(problem.configurePPC64InterruptSource(kSource,
+        PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+    IndependentFDT fdt;
+    CHECK(parseIndependentFDT(problem.getPPC64FDT(), fdt));
+    std::vector<uint32_t> code;
+    GuestCall call;
+    appendTrampolineCall(code, fdt,
+        problem.getPPC64PlatformSnapshot().memoryLayout.fdtBase,
+        "ibm,set-xive", 0x3940U, {kSource, 0U, 0x22U}, 1U, &call);
+    writeWords(problem.getMemory(), call.blockAddress + 24U, {0x5a5a5a5aU});
+    CHECK(installProgram(problem, code));
+    auto* problemCPU = problem.getPPC64ISAPlugin();
+    problemCPU->setMSR(MSR_PR | MSR_ME | MSR_RI);
+    CHECK(runCall(problem, call,
+        problem.getPPC64PlatformSnapshot().memoryLayout.rtasEntry, false));
+    CHECK(problemCPU->getNIP() == call.returnAddress + 4U);
+    CHECK(problemCPU->readGPR(3) == PPC64_H_PRIVILEGE);
+    CHECK(problemCPU->getMSR() == (MSR_PR | MSR_ME | MSR_RI));
+    CHECK(readBE32(problem.getMemory(), call.blockAddress + 24U) ==
+          0x5a5a5a5aU);
+    CHECK(problem.getPPC64XICSSnapshot().sources[0].priority == 0x44U);
+
+    // A real guest mtmsr attempt to set HV is rejected without changing MSR.
+    VirtualMachine noHV(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(noHV));
+    const uint64_t forgedMSR = MSR_HV | MSR_ME | MSR_RI;
+    writeBE64(noHV.getMemory(), 0x3200U, forgedMSR);
+    std::vector<uint32_t> noHVCode{
+        encodeDS(58, 3, 4, 0), // ld r3,0(r4)
+        encodeMtmsr(3)};
+    CHECK(installProgram(noHV, noHVCode));
+    auto* noHVCPU = noHV.getPPC64ISAPlugin();
+    noHVCPU->setGuestDeliveryEnabled(true);
+    noHVCPU->setMSR(MSR_ME | MSR_RI);
+    noHVCPU->writeGPR(4, 0x3200U);
+    CHECK(noHV.step());
+    CHECK(!noHV.step());
+    CHECK(noHVCPU->getMSR() == (MSR_ME | MSR_RI));
+    CHECK((noHVCPU->getMSR() & MSR_HV) == 0);
+    CHECK(noHV.getLastExecutionDiagnostic().size() != 0U);
+
+    // Hypervisor-only SPR reads from guest state take Program/privilege.
+    VirtualMachine hypervisorSPR(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(hypervisorSPR));
+    CHECK(installProgram(hypervisorSPR,
+        {encodeMfspr(3, SPR_HSRR0)}));
+    auto* hvCPU = hypervisorSPR.getPPC64ISAPlugin();
+    hvCPU->setGuestDeliveryEnabled(true);
+    hvCPU->setMSR(MSR_ME | MSR_RI);
+    CHECK(hypervisorSPR.step());
+    CHECK(hvCPU->getNIP() == VEC_PROG);
+    CHECK(hvCPU->getSRR0() == kEntry);
+    CHECK((hvCPU->getSRR1() & SRR1_PROGPRIV) == SRR1_PROGPRIV);
+    CHECK((hvCPU->getMSR() & MSR_HV) == 0);
+}
+
+void testR3InstructionFaultMatrix() {
+    std::puts("[phase19R3-H-instruction-fault-matrix]");
+
+    VirtualMachine unaligned(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(unaligned));
+    auto* cpu = unaligned.getPPC64ISAPlugin();
+    cpu->setGuestDeliveryEnabled(true);
+    cpu->setMSR(MSR_ME | MSR_RI);
+    const uint64_t unalignedNIP =
+        unaligned.getPPC64PlatformSnapshot().memoryLayout.rtasEntry + 1U;
+    cpu->setPC(unalignedNIP);
+    CHECK(unaligned.step());
+    CHECK(cpu->getNIP() == VEC_ALIGN);
+    CHECK(cpu->getSRR0() == unalignedNIP);
+    CHECK(cpu->getMSR() == MSR_ME);
+
+    VirtualMachine unmapped(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(unmapped));
+    cpu = unmapped.getPPC64ISAPlugin();
+    cpu->setGuestDeliveryEnabled(true);
+    cpu->setMSR(MSR_ME | MSR_RI);
+    const uint64_t unmappedNIP = kRamSize + 0x100U;
+    cpu->setPC(unmappedNIP);
+    CHECK(unmapped.step());
+    CHECK(cpu->getNIP() == VEC_ISI);
+    CHECK(cpu->getSRR0() == unmappedNIP);
+    CHECK((cpu->getSRR1() & SRR1_ISI_NOPT) == SRR1_ISI_NOPT);
+
+    VirtualMachine invalid(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(invalid));
+    writeWords(invalid.getMemory(), kEntry, {0xffffffffU});
+    cpu = invalid.getPPC64ISAPlugin();
+    cpu->setGuestDeliveryEnabled(true);
+    cpu->setMSR(MSR_ME | MSR_RI);
+    cpu->setPC(kEntry);
+    CHECK(invalid.step());
+    CHECK(cpu->getNIP() == VEC_PROG);
+    CHECK(cpu->getSRR0() == kEntry);
+    CHECK((cpu->getSRR1() & SRR1_PROGILL) == SRR1_PROGILL);
+
+    VirtualMachine nonExecutable(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(nonExecutable));
+    CHECK(installIdentityProcessRadix(nonExecutable, false));
+    cpu = nonExecutable.getPPC64ISAPlugin();
+    cpu->setGuestDeliveryEnabled(true);
+    cpu->setMSR(MSR_ME | MSR_RI | MSR_IR);
+    cpu->setPC(kEntry);
+    CHECK(nonExecutable.step());
+    CHECK(cpu->getNIP() == VEC_ISI);
+    CHECK(cpu->getSRR0() == kEntry);
+    CHECK((cpu->getSRR1() & SRR1_ISI_PROT) == SRR1_ISI_PROT);
+
+    VirtualMachine invalidReturn(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(invalidReturn));
+    writeWords(invalidReturn.getMemory(), kEntry,
+               {encodeMtspr(5, SPR_LR), 0x4e800020U}); // mtlr r5; blr
+    cpu = invalidReturn.getPPC64ISAPlugin();
+    cpu->setGuestDeliveryEnabled(true);
+    cpu->setMSR(MSR_ME | MSR_RI);
+    const uint64_t invalidLR = kRamSize + 0x1000U;
+    cpu->writeGPR(5, invalidLR);
+    cpu->setPC(kEntry);
+    CHECK(invalidReturn.step());
+    CHECK(cpu->getLR() == invalidLR);
+    CHECK(invalidReturn.step());
+    CHECK(cpu->getNIP() == invalidLR);
+    CHECK(invalidReturn.step());
+    CHECK(cpu->getNIP() == VEC_ISI);
+    CHECK(cpu->getSRR0() == invalidLR);
+    CHECK((cpu->getSRR1() & SRR1_ISI_NOPT) == SRR1_ISI_NOPT);
+}
+
+void testR3MalformedRTASInputs() {
+    std::puts("[phase19R3-H-malformed-rtas-inputs]");
+    VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(vm));
+    std::string error;
+    CHECK(vm.configurePPC64InterruptSource(kSource,
+        PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+    const auto layout = vm.getPPC64PlatformSnapshot().memoryLayout;
+    std::vector<uint32_t> code;
+    emitLoad32(code, 3, static_cast<uint32_t>(PPC64_H_RTAS));
+    code.push_back(kSc1);
+    CHECK(installProgram(vm, code));
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->setMSR(MSR_ME | MSR_RI);
+    const auto issue = [&](uint64_t pointer) {
+        cpu->setMSR(MSR_ME | MSR_RI);
+        cpu->setPC(kEntry);
+        cpu->writeGPR(4, pointer);
+        if (!steps(vm, 3U)) return uint64_t{0xffffffffffffffffULL};
+        CHECK(cpu->getNIP() == kEntry + 12U);
+        return cpu->readGPR(3);
+    };
+    const auto unchangedSource = [&]() {
+        const auto snapshot = vm.getPPC64XICSSnapshot();
+        const auto found = std::find_if(snapshot.sources.begin(),
+            snapshot.sources.end(), [](const auto& source) {
+                return source.sourceId == kSource;
+            });
+        CHECK(found != snapshot.sources.end());
+        if (found != snapshot.sources.end()) {
+            CHECK(found->priority == 0x44U);
+            CHECK(found->enabled);
+            CHECK(!found->pending);
+        }
+    };
+
+    CHECK(issue(0) == PPC64_H_PARAMETER);
+    unchangedSource();
+    CHECK(issue(0x3201U) == PPC64_H_PARAMETER); // unaligned block
+    unchangedSource();
+    CHECK(issue(kRamSize) == PPC64_H_PARAMETER); // inaccessible guest RAM
+    unchangedSource();
+    CHECK(issue(std::numeric_limits<uint64_t>::max() - 3U) ==
+          PPC64_H_PARAMETER); // aligned request whose range overflows
+    unchangedSource();
+
+    constexpr uint64_t kBadCounts = 0x3300U;
+    writeRTASRequest(vm.getMemory(), kBadCounts,
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, PPC64_RTAS_MAX_CELLS, 1U, {});
+    writeWords(vm.getMemory(), kBadCounts + 76U, {0x5a5a5a5aU});
+    CHECK(issue(kBadCounts) == PPC64_H_PARAMETER);
+    CHECK(readBE32(vm.getMemory(), kBadCounts + 76U) == 0x5a5a5a5aU);
+    unchangedSource();
+
+    constexpr uint64_t kNoReturn = 0x3340U;
+    writeRTASRequest(vm.getMemory(), kNoReturn,
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U, 0U,
+        {kSource, PPC64_XICS_SERVER_ID, 0x22U});
+    CHECK(issue(kNoReturn) == PPC64_H_PARAMETER);
+    unchangedSource();
+
+    constexpr uint64_t kRAMCrossing = kRamSize - 8U;
+    CHECK(issue(kRAMCrossing) == PPC64_H_PARAMETER); // 12-byte header crosses RAM
+    unchangedSource();
+
+    CountingMMIODevice mmio(0x7000U, 0x1000U);
+    auto* memory = dynamic_cast<Memory*>(&vm.getMemory());
+    CHECK(memory != nullptr);
+    if (memory != nullptr) memory->RegisterDevice(&mmio);
+    constexpr uint64_t kMMIOCrossing = 0x6ff8U;
+    writeWords(vm.getMemory(), kMMIOCrossing,
+               {PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U});
+    CHECK(issue(kMMIOCrossing) == PPC64_H_PARAMETER);
+    CHECK(mmio.reads == 0U && mmio.writes == 0U);
+    unchangedSource();
+    CHECK(issue(0x7000U) == PPC64_H_PARAMETER); // MMIO-backed request
+    CHECK(mmio.reads == 0U && mmio.writes == 0U);
+    unchangedSource();
+    CHECK(memory != nullptr && memory->UnregisterDevice(&mmio));
+
+    constexpr uint64_t kNoWritableResponse = kRamSize - 24U;
+    writeRTASRequest(vm.getMemory(), kNoWritableResponse,
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U, 1U,
+        {kSource, PPC64_XICS_SERVER_ID, 0x22U});
+    CHECK(issue(kNoWritableResponse) == PPC64_H_PARAMETER);
+    unchangedSource();
+
+    const uint64_t protectedResponse = layout.rtasProtectionBase;
+    const uint64_t protectedResponseRequest = protectedResponse - 24U;
+    writeRTASRequest(vm.getMemory(), protectedResponseRequest,
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U, 1U,
+        {kSource, PPC64_XICS_SERVER_ID, 0x22U});
+    CHECK(issue(protectedResponseRequest) == PPC64_H_PARAMETER);
+    unchangedSource();
+    CHECK(vm.validatePPC64RTASTrampoline());
+
+    std::shared_ptr<PPC64PartitionContext> hypervisorContext;
+    auto* manager = vm.getPPC64PartitionManager();
+    CHECK(manager != nullptr);
+    CHECK(manager->configurePartitionTable(vm.getMemory(),
+        kLPIDPartitionTable, 4U, error));
+    CHECK(installIdentityPartition(vm, 7U, kLPIDAFirstTable,
+                                   hypervisorContext, error));
+    const uint64_t l3 = kLPIDAFirstTable + 0x3000U;
+    writeBE64(vm.getMemory(), l3 + 3U * 8U, partitionLeafPte(0));
+    constexpr uint32_t protectedSource = kSource + 2U;
+    CHECK(vm.configurePPC64InterruptSource(protectedSource,
+        PPC64XICSSourceType::EDGE, 0x44U, PPC64_XICS_SERVER_ID, 7U, true,
+        &error));
+    CHECK(cpu->activatePartitionContext(hypervisorContext, error));
+    constexpr uint64_t hypervisorBacking = 0;
+    CHECK(cpu->configureHypervisorMemory(vm.getMemory(), hypervisorBacking,
+                                          0x1000U, error));
+    constexpr uint64_t hypervisorResponseRequest = 0x2fe8U;
+    writeWords(vm.getMemory(), hypervisorBacking, {0x5a5a5a5aU});
+    writeRTASRequest(vm.getMemory(), hypervisorResponseRequest,
+        PPC64_RTAS_TOKEN_IBM_SET_XIVE, 3U, 1U,
+        {protectedSource, PPC64_XICS_SERVER_ID, 0x22U});
+    CHECK(issue(hypervisorResponseRequest) == PPC64_H_PARAMETER);
+    CHECK(readBE32(vm.getMemory(), hypervisorBacking) == 0x5a5a5a5aU);
+    unchangedSource();
+    const auto protectedSourceState = vm.getPPC64XICSSnapshot().sources;
+    const auto protectedSourceEntry = std::find_if(
+        protectedSourceState.begin(), protectedSourceState.end(),
+        [protectedSource](const auto& source) {
+            return source.sourceId == protectedSource;
+        });
+    CHECK(protectedSourceEntry != protectedSourceState.end());
+    if (protectedSourceEntry != protectedSourceState.end()) {
+        CHECK(protectedSourceEntry->ownerLPID == 7U);
+        CHECK(protectedSourceEntry->priority == 0x44U);
+    }
+
+    constexpr uint64_t kUnsupportedToken = 0x4380U;
+    writeRTASRequest(vm.getMemory(), kUnsupportedToken, 0xfeed1234U, 1U, 1U,
+                     {kSource});
+    writeWords(vm.getMemory(), kUnsupportedToken + 16U,
+               {0x5a5a5a5aU});
+    CHECK(issue(kUnsupportedToken) == PPC64_H_PARAMETER);
+    CHECK(readBE32(vm.getMemory(), kUnsupportedToken + 16U) ==
+          static_cast<uint32_t>(PPC64_RTAS_OUT_PARAM_ERROR));
+    unchangedSource();
+}
+
+void testR3GuestFaultRecovery() {
+    std::puts("[phase19R3-H-guest-dsi-recovery-then-rtas]");
+    VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(vm));
+    const auto layout = vm.getPPC64PlatformSnapshot().memoryLayout;
+    std::string error;
+    CHECK(vm.configurePPC64InterruptSource(kSource,
+        PPC64XICSSourceType::EDGE, 0x44, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+
+    const std::vector<uint32_t> dsiHandler{
+        encodeMfspr(6, SPR_DAR),
+        encodeMfspr(7, SPR_DSISR),
+        encodeD(36, 6, 0, 0x2000),
+        encodeD(36, 7, 0, 0x2004),
+        encodeAddis(5, 0, 1),
+        encodeAddi(5, 5, 4),
+        encodeMtspr(5, SPR_SRR0),
+        kRfid};
+    writeWords(vm.getMemory(), VEC_DSI, dsiHandler);
+
+    std::vector<uint32_t> code{encodeD(36, 4, 3, 0)}; // stw to protected page
+    IndependentFDT fdt;
+    CHECK(parseIndependentFDT(vm.getPPC64FDT(), fdt));
+    GuestCall call;
+    appendTrampolineCall(code, fdt, layout.fdtBase, "ibm,set-xive",
+        0x3900U, {kSource, PPC64_XICS_SERVER_ID, 0x33U}, 1U, &call);
+    CHECK(installProgram(vm, code));
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->setGuestDeliveryEnabled(true);
+    cpu->setMSR(MSR_ME | MSR_RI);
+    cpu->writeGPR(3, layout.rtasProtectionBase);
+    cpu->writeGPR(4, 0xaabbccddU);
+    CHECK(vm.step());
+    CHECK(cpu->getNIP() == VEC_DSI);
+    CHECK(cpu->getSRR0() == kEntry);
+    CHECK(cpu->getDAR() == layout.rtasProtectionBase);
+    CHECK(cpu->getDSISR() == (DSISR_ISSTORE | DSISR_PROTFAULT));
+
+    // Save and restore the actual DSI vector through writer v9, then let
+    // guest code inspect DAR/DSISR, advance SRR0, and return with rfid.
+    const auto c7Path = std::filesystem::temp_directory_path() /
+        ("guidexos-p19r3-C7-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) +
+         ".gxcp");
+    CHECK(!std::filesystem::exists(c7Path));
+    CHECK(vm.pause());
+    std::string c7Error;
+    CHECK(VMCheckpointCodec::write(vm, c7Path.string(), "p19r3-C7", &c7Error));
+    CHECK(vm.resume());
+    VirtualMachine restored(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(restored));
+    CHECK(VMCheckpointCodec::read(restored, c7Path.string(),
+                                  "p19r3-C7", &c7Error));
+    auto* restoredCPU = restored.getPPC64ISAPlugin();
+    CHECK(restoredCPU->getNIP() == VEC_DSI);
+    CHECK(restoredCPU->getSRR0() == kEntry);
+    CHECK(restoredCPU->getDAR() == layout.rtasProtectionBase);
+    CHECK(restoredCPU->getDSISR() == (DSISR_ISSTORE | DSISR_PROTFAULT));
+    CHECK(restored.validatePPC64RTASTrampoline());
+    bool protectedWriteDenied = false;
+    try {
+        const uint8_t corrupt = 0;
+        restored.getMemory().Write(layout.rtasProtectionBase, &corrupt, 1U);
+    } catch (const std::exception&) {
+        protectedWriteDenied = true;
+    }
+    CHECK(protectedWriteDenied);
+    CHECK(restored.resume());
+    CHECK(steps(restored, dsiHandler.size()));
+    CHECK(restoredCPU->getNIP() == kEntry + 4U);
+    CHECK(restoredCPU->getMSR() == (MSR_ME | MSR_RI));
+    CHECK(readBE32(restored.getMemory(), 0x2000U) == layout.rtasProtectionBase);
+    CHECK(readBE32(restored.getMemory(), 0x2004U) ==
+          (DSISR_ISSTORE | DSISR_PROTFAULT));
+    CHECK(restored.getPPC64XICSSnapshot().sources[0].priority == 0x44U);
+    CHECK(restored.validatePPC64RTASTrampoline());
+
+    CHECK(runCall(restored, call, layout.rtasEntry, false));
+    CHECK(restoredCPU->getNIP() == call.returnAddress + 4U);
+    CHECK(restoredCPU->getLR() == call.returnAddress);
+    CHECK(restoredCPU->readGPR(3) == PPC64_H_SUCCESS);
+    CHECK(readBE32(restored.getMemory(), 0x3900U + 24U) == 0U);
+    CHECK(restored.getPPC64XICSSnapshot().sources[0].priority == 0x33U);
+    CHECK(restored.validatePPC64RTASTrampoline());
+    std::error_code c7CleanupError;
+    CHECK(std::filesystem::remove(c7Path, c7CleanupError));
+}
+
+void testR3SerializedCheckpointBoundaries() {
+    std::puts("[phase19R3-J-checkpoint-C1-C5]");
+    VirtualMachine vm(kRamSize, 1, "PPC64", platform());
+    CHECK(prepareCapacity(vm));
+    IndependentFDT fdt;
+    CHECK(parseIndependentFDT(vm.getPPC64FDT(), fdt));
+    std::string error;
+    CHECK(vm.configurePPC64InterruptSource(kSource,
+        PPC64XICSSourceType::EDGE, 0x40, PPC64_XICS_SERVER_ID, 0, true,
+        &error));
+    std::vector<uint32_t> code;
+    GuestCall call;
+    appendTrampolineCall(code, fdt,
+        vm.getPPC64PlatformSnapshot().memoryLayout.fdtBase,
+        "ibm,set-xive", 0x3900U, {kSource, 0U, 0x33U}, 1U, &call);
+    CHECK(installProgram(vm, code));
+    auto* cpu = vm.getPPC64ISAPlugin();
+    cpu->setMSR(MSR_ME | MSR_RI);
+
+    struct SavedBoundary {
+        std::string label;
+        std::filesystem::path path;
+        uint64_t nip;
+    };
+    std::vector<SavedBoundary> saved;
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto saveBoundary = [&](const char* label, uint64_t nip) {
+        CHECK(cpu->getNIP() == nip);
+        const auto path = std::filesystem::temp_directory_path() /
+            ("guidexos-p19r3-" + std::to_string(nonce) + "-" + label + ".gxcp");
+        if (std::filesystem::exists(path)) {
+            CHECK(false); // Never replace an existing checkpoint artifact.
+            return;
+        }
+        CHECK(vm.pause());
+        std::string checkpointError;
+        const bool wrote = VMCheckpointCodec::write(
+            vm, path.string(), std::string("p19r3-") + label,
+            &checkpointError);
+        CHECK(wrote);
+        if (!wrote) {
+            std::printf("R3 %s checkpoint write failed: %s\n", label,
+                        checkpointError.c_str());
+        } else {
+            saved.push_back({label, path, nip});
+        }
+        CHECK(vm.resume());
+    };
+
+    const uint64_t branchNIP = kEntry + call.branchIndex * 4U;
+    const uint64_t trampoline =
+        vm.getPPC64PlatformSnapshot().memoryLayout.rtasEntry;
+    CHECK(stepUntilNIP(vm, branchNIP, 512U));
+    saveBoundary("C1-before-entry", branchNIP);
+    CHECK(vm.step()); // bctrl enters the authentic trampoline.
+    CHECK(cpu->getNIP() == trampoline);
+    CHECK(vm.step()); // mr r4,r3
+    saveBoundary("C2-after-pointer-transfer", trampoline + 4U);
+    CHECK(steps(vm, 2U)); // lis/ori, now immediately before sc 1.
+    saveBoundary("C3-before-sc1", trampoline + 12U);
+    CHECK(vm.step()); // H_RTAS completes exactly at the next instruction boundary.
+    saveBoundary("C4-after-sc1", trampoline + 16U);
+    CHECK(vm.step()); // blr returns to the caller.
+    saveBoundary("C5-after-return", call.returnAddress);
+
+    for (const auto& boundary : saved) {
+        VirtualMachine restored(kRamSize, 1, "PPC64", platform());
+        CHECK(prepareCapacity(restored));
+        std::string checkpointError;
+        CHECK(VMCheckpointCodec::read(restored, boundary.path.string(),
+            std::string("p19r3-") + boundary.label, &checkpointError));
+        CHECK(restored.validatePPC64RTASTrampoline());
+        auto* restoredCPU = restored.getPPC64ISAPlugin();
+        CHECK(restoredCPU->getNIP() == boundary.nip);
+        if (boundary.label == "C2-after-pointer-transfer") {
+            CHECK(restoredCPU->readGPR(4) == call.blockAddress);
+            CHECK(restoredCPU->getLR() == call.returnAddress);
+        } else if (boundary.label == "C3-before-sc1") {
+            CHECK(restoredCPU->readGPR(3) == PPC64_H_RTAS);
+            CHECK(restoredCPU->readGPR(4) == call.blockAddress);
+        } else if (boundary.label == "C4-after-sc1") {
+            CHECK(restoredCPU->readGPR(3) == PPC64_H_SUCCESS);
+            CHECK(restored.getPPC64XICSSnapshot().sources[0].priority ==
+                  0x33U);
+            // If restore incorrectly rewinds to sc 1, this malformed request
+            // changes the outer status. Correct restore executes only blr.
+            writeWords(restored.getMemory(), call.blockAddress + 8U, {0U});
+        }
+        CHECK(restored.resume());
+        CHECK(stepUntilNIP(restored, call.returnAddress + 4U, 32U));
+        CHECK(restoredCPU->getNIP() == call.returnAddress + 4U);
+        CHECK(restoredCPU->getLR() == call.returnAddress);
+        CHECK(restoredCPU->readGPR(3) == PPC64_H_SUCCESS);
+        CHECK(restored.getPPC64XICSSnapshot().sources[0].priority == 0x33U);
+        CHECK(restored.validatePPC64RTASTrampoline());
+        if (boundary.label == "C5-after-return") {
+            CHECK(restoredCPU->readGPR(11) == 1U);
+        }
+    }
+
+    for (const auto& boundary : saved) {
+        std::error_code cleanupError;
+        CHECK(std::filesystem::remove(boundary.path, cleanupError));
+    }
 }
 
 void testHistoricalV6Fixture() {
@@ -1460,9 +2399,16 @@ int main() {
     testGuestForwardingAndXICS();
     testLevelTriggeredXICS();
     testNonRootLPIDRTASIsolation();
+    testR3ExplicitLPIDCPUContextSwitch();
+    testR3LPIDCannotBeForgedThroughPIDR();
     testDirectHRTASCompatibility();
     testTerminalInterruptIntegration();
     testCheckpointAndFaultBoundaries();
+    testR3ExecutionModesAndPrivilege();
+    testR3InstructionFaultMatrix();
+    testR3MalformedRTASInputs();
+    testR3GuestFaultRecovery();
+    testR3SerializedCheckpointBoundaries();
     testHistoricalV6Fixture();
     std::printf("PPC64 Phase 19: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
