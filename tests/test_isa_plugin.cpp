@@ -423,8 +423,9 @@ public:
 
 class FakeIndirectBranchDecoder : public IDecoder {
 public:
-    explicit FakeIndirectBranchDecoder(uint64_t target = 0x2408)
-        : target_(target) {}
+    explicit FakeIndirectBranchDecoder(uint64_t target = 0x2408,
+                                       bool branchRegisterTarget = false)
+        : target_(target), branchRegisterTarget_(branchRegisterTarget) {}
 
     InstructionBundle DecodeBundleNew(const uint8_t* bundleData) const override {
         (void)bundleData;
@@ -441,7 +442,9 @@ public:
 
         InstructionEx branch(InstructionType::BR_COND, UnitType::B_UNIT);
         branch.SetOperands(0, 6, 0);
-        branch.SetBranchTarget(target_);
+        if (!branchRegisterTarget_) {
+            branch.SetBranchTarget(target_);
+        }
         branch.SetRawBits(0x200000c000ULL);
 
         Bundle bundle;
@@ -459,6 +462,7 @@ public:
 
 private:
     uint64_t target_;
+    bool branchRegisterTarget_;
 };
 
 class FakeIndirectCallDecoder : public IDecoder {
@@ -1274,6 +1278,21 @@ public:
             nestedCall.SetBranchTarget(0x3000);
             nestedCall.SetRawBits(0x21);
             bundle.instructions.push_back(nestedCall);
+        } else if (bundleIP == 0x2010) {
+            InstructionEx restoreOuterPfs(InstructionType::MOV_TO_AR, UnitType::M_UNIT);
+            restoreOuterPfs.SetOperands(64, 50, 0);
+            restoreOuterPfs.SetRawBits(0x201);
+            bundle.instructions.push_back(restoreOuterPfs);
+
+            InstructionEx restoreOuterReturn(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
+            restoreOuterReturn.SetOperands(0, 38, 0);
+            restoreOuterReturn.SetRawBits(0x202);
+            bundle.instructions.push_back(restoreOuterReturn);
+
+            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
+            ret.SetOperands(0, 0, 0);
+            ret.SetRawBits(0x203);
+            bundle.instructions.push_back(ret);
         } else if (bundleIP == 0x3000) {
             InstructionEx alloc(InstructionType::ALLOC, UnitType::M_UNIT);
             alloc.SetOperands(51, 0, 0);
@@ -1281,10 +1300,10 @@ public:
             alloc.SetRawBits(0x30);
             bundle.instructions.push_back(alloc);
 
-            InstructionEx restoreOuterReturn(InstructionType::MOV_TO_BR, UnitType::I_UNIT);
-            restoreOuterReturn.SetOperands(0, 32, 0);
-            restoreOuterReturn.SetRawBits(0x31);
-            bundle.instructions.push_back(restoreOuterReturn);
+            InstructionEx restorePfs(InstructionType::MOV_TO_AR, UnitType::M_UNIT);
+            restorePfs.SetOperands(64, 51, 0);
+            restorePfs.SetRawBits(0x31);
+            bundle.instructions.push_back(restorePfs);
 
             InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
             ret.SetOperands(0, 0, 0);
@@ -1342,24 +1361,13 @@ public:
             ret.SetOperands(0, 0, 0);
             ret.SetRawBits(0x22);
             bundle.instructions.push_back(ret);
-        } else if (bundleIP == 0x1010) {
-            InstructionEx branch(InstructionType::BR_COND, UnitType::B_UNIT);
-            branch.SetOperands(0, 0, 0);
-            branch.SetBranchTarget(0x3000);
-            branch.SetRawBits(0x30);
-            bundle.instructions.push_back(branch);
-        } else if (bundleIP == 0x3000) {
-            InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
-            ret.SetOperands(0, 0, 0);
-            ret.SetRawBits(0x31);
-            bundle.instructions.push_back(ret);
         } else if (bundleIP >= 0x4000 && bundleIP < 0x52d0) {
             InstructionEx call(InstructionType::BR_CALL, UnitType::B_UNIT);
             call.SetOperands(0, 0, 0);
             call.SetBranchTarget(0x6000);
             call.SetRawBits(0x40);
             bundle.instructions.push_back(call);
-        } else if (bundleIP == 0x6000 || bundleIP == 0x7000) {
+        } else if (bundleIP == 0x6000) {
             InstructionEx ret(InstructionType::BR_RET, UnitType::B_UNIT);
             ret.SetOperands(0, 0, 0);
             ret.SetRawBits(0x41);
@@ -3167,8 +3175,8 @@ void testIA64PluginCallOutputInputs() {
     std::cout << "  ? plugin br.call passes inputs and br.ret restores caller frame\n";
 }
 
-void testIA64PluginCallFrameRestoreSkipsStaleFrames() {
-    std::cout << "Testing IA-64 plugin call-frame restore skips stale frames...\n";
+void testIA64PluginNestedCallFrameRestoresArchitecturally() {
+    std::cout << "Testing IA-64 plugin nested call frames restore through AR.PFS...\n";
 
     Memory memory(64 * 1024);
     FakeStaleCallFrameDecoder decoder;
@@ -3192,17 +3200,28 @@ void testIA64PluginCallFrameRestoreSkipsStaleFrames() {
     assert(plugin.getCPUState().GetIP() == 0x3000);
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetPFS() == (8 | (static_cast<uint64_t>(6) << 7)));
     assert(plugin.getCPUState().GetCFM() == (5 | (static_cast<uint64_t>(3) << 7)));
 
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetBR(0) == 0x1010);
+    assert(plugin.getCPUState().GetPFS() == (8 | (static_cast<uint64_t>(6) << 7)));
 
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == 0x2010);
+    assert(plugin.getCPUState().GetCFM() == (8 | (static_cast<uint64_t>(6) << 7)));
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetPFS() == 0x206);
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetBR(0) == 0x1010);
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x1010);
     assert(plugin.getCPUState().GetCFM() == initialCfm);
     assert(plugin.getCPUState().GetGR(36) == 0x12345678);
+    assert(plugin.getCPUState().GetBSP() == plugin.getCPUState().GetBSPSTORE());
 
-    std::cout << "  ? returning to an older saved address restores the matching caller frame\n";
+    std::cout << "  ? nested return restores the outer CFM from its saved AR.PFS\n";
+    std::cout << "  ? outer return restores the entry CFM and stacked argument register\n";
 }
 
 void testIA64PluginCanonicalReturnRestoresCallFrame() {
@@ -3239,8 +3258,8 @@ void testIA64PluginCanonicalReturnRestoresCallFrame() {
     std::cout << "  ? canonical IA-64 return aliases restore the saved flat call frame\n";
 }
 
-void testIA64PluginNonLocalReturnRestoresCompletedFrame() {
-    std::cout << "Testing IA-64 plugin non-local return restores a completed caller frame...\n";
+void testIA64PluginCallFramesSurviveLongSequentialCalls() {
+    std::cout << "Testing IA-64 plugin call frames across long sequential calls...\n";
 
     Memory memory(64 * 1024);
     FakeCompletedCallFrameDecoder decoder;
@@ -3255,38 +3274,34 @@ void testIA64PluginNonLocalReturnRestoresCompletedFrame() {
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x2000);
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetIP() == 0x1010);
-    assert(plugin.getCPUState().GetCFM() == initialCfm);
-    assert(plugin.getCPUState().GetGR(35) == savedLocal);
-
-    plugin.getCPUState().SetGR(35, 0);
-    plugin.getCPUState().SetBR(0, 0x1010);
+    assert(plugin.getCPUState().GetCFM() == (8 | (static_cast<uint64_t>(6) << 7)));
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetIP() == 0x3000);
+    assert(plugin.getCPUState().GetGR(35) == 0);
     assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetIP() == 0x1010);
     assert(plugin.getCPUState().GetCFM() == initialCfm);
     assert(plugin.getCPUState().GetGR(35) == savedLocal);
 
-    // Age the completed-frame table past the old bounded-history limit.  The
-    // saved setjmp continuation must remain recoverable by return address.
+    const uint64_t initialBsp = plugin.getCPUState().GetBSP();
+    const uint64_t initialBspstore = plugin.getCPUState().GetBSPSTORE();
+    // Repeated real call/return transitions remain architectural after the
+    // number of calls that once exceeded the legacy host-frame history.
     plugin.getCPUState().SetIP(0x4000);
     for (size_t i = 0; i < 301; ++i) {
         assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
         assert(plugin.getCPUState().GetIP() == 0x6000);
+        assert(plugin.getCPUState().GetBSP() != initialBsp);
         assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
         assert(plugin.getCPUState().GetIP() == 0x4010 + i * 0x10);
+        assert(plugin.getCPUState().GetCFM() == initialCfm);
+        assert(plugin.getCPUState().GetPFS() == initialCfm);
+        assert(plugin.getCPUState().GetBSP() == initialBsp);
+        assert(plugin.getCPUState().GetBSPSTORE() == initialBspstore);
     }
 
-    plugin.getCPUState().SetIP(0x7000);
-    plugin.getCPUState().SetGR(35, 0);
-    plugin.getCPUState().SetBR(0, 0x1010);
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetIP() == 0x1010);
-    assert(plugin.getCPUState().GetCFM() == initialCfm);
     assert(plugin.getCPUState().GetGR(35) == savedLocal);
 
-    std::cout << "  ? a later non-local return restores the saved stacked-register frame\n";
+    std::cout << "  ? 301 completed calls return through AR.PFS/BSP without host frame history\n";
 }
 
 void testIA64PluginIndirectBranchExecution() {
@@ -3336,7 +3351,7 @@ void testIA64PluginEfiServiceThunkLinksReturn() {
     uint8_t bundleBytes[16] = {};
     memory.Write(0x1990, bundleBytes, sizeof(bundleBytes));
 
-    FakeIndirectBranchDecoder decoder;
+    FakeIndirectBranchDecoder decoder(0, true);
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0x1990);
     plugin.getCPUState().SetBR(6, 0x1fe00f80ULL);
@@ -4237,6 +4252,7 @@ void testIA64PluginHandleProtocolReturnsLoadedImage() {
     plugin.getCPUState().SetIP(0x1a50);
     plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
     plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+    plugin.getCPUState().SetGR(35, 0x1ULL);
     plugin.getCPUState().SetGR(36, 0x3000);
     plugin.getCPUState().SetGR(37, 0x4000);
     plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
@@ -4310,6 +4326,7 @@ void testIA64PluginHandleProtocolZeroGuidFallbacks() {
         plugin.getCPUState().SetIP(0x1a50);
         plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
         plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+        plugin.getCPUState().SetGR(35, 0x1ULL);
         plugin.getCPUState().SetGR(36, 0x3000);
         plugin.getCPUState().SetGR(37, 0x4000);
         plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
@@ -4335,6 +4352,7 @@ void testIA64PluginHandleProtocolZeroGuidFallbacks() {
         plugin.getCPUState().SetIP(0x1cc0);
         plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
         plugin.getCPUState().SetBR(0, 0x1fe00e80ULL);
+        plugin.getCPUState().SetGR(35, 0x1ULL);
         plugin.getCPUState().SetGR(36, 0x3000);
         plugin.getCPUState().SetGR(37, 0x4000);
         plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
@@ -4383,7 +4401,7 @@ void testIA64PluginOpenVolumeReturnsRootFileProtocol() {
 void testIA64PluginOpenVolumeUsesVmManagerBootImageHandoff() {
     std::cout << "Testing IA-64 plugin boot-image handoff into OpenVolume/FileProtocol.Open...\n";
 
-    SparseMemory memory;
+    SizedSparseMemory memory(0x20050000ULL);
     uint8_t bundleBytes[16] = {};
     memory.Write(0x30e40, bundleBytes, sizeof(bundleBytes));
     const uint16_t kernelPath[] = { '\\','E','F','I','\\','B','O','O','T','\\','B','O','O','T','I','A','6','4','.','E','F','I',0 };
@@ -4984,7 +5002,7 @@ void testIA64PluginAllocatePoolReturnsScratchBuffer() {
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(0xa210);
     plugin.getCPUState().SetCFM(6 | (static_cast<uint64_t>(3) << 7));
-    plugin.getCPUState().SetBR(6, 0x1fe00e00ULL);
+    plugin.getCPUState().SetBR(6, 0x1fdb0e00ULL);
     plugin.getCPUState().SetGR(35, 2);
     plugin.getCPUState().SetGR(36, 0x30);
     plugin.getCPUState().SetGR(37, 0x5000);
@@ -6152,8 +6170,8 @@ void testIA64PluginTopLevelReturnHalts() {
     std::cout << "  ? br.ret b0 with zero return address halts cleanly\n";
 }
 
-void testIA64PluginOutOfBoundsLoadRecovery() {
-    std::cout << "Testing IA-64 plugin out-of-bounds load recovery...\n";
+void testIA64PluginOutOfBoundsLoadPreservesFaultingState() {
+    std::cout << "Testing IA-64 plugin out-of-bounds load fault state...\n";
 
     Memory memory(64 * 1024);
     uint8_t bundleBytes[16] = {};
@@ -6165,16 +6183,16 @@ void testIA64PluginOutOfBoundsLoadRecovery() {
     plugin.getCPUState().SetGR(8, 0xffff00000004ULL);
     plugin.getCPUState().SetGR(14, 0xdeadbeefcafebabeULL);
 
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetGR(14) == 0);
-    assert(plugin.getCPUState().GetGR(8) == 8);
-    assert(plugin.getCPUState().GetIP() == 0x1010);
+    assert(plugin.step(memory) == ISAExecutionResult::EXCEPTION);
+    assert(plugin.getCPUState().GetGR(14) == 0xdeadbeefcafebabeULL);
+    assert(plugin.getCPUState().GetGR(8) == 0xffff00000004ULL);
+    assert(plugin.getCPUState().GetIP() == 0x1000);
 
-    std::cout << "  ? failed ld8 clears the stale destination and contains post-increment base state\n";
+    std::cout << "  ? failed ld8 reports an exception without committing destination, post-increment, or IP\n";
 }
 
-void testIA64PluginOutOfBoundsProbeClearsBase() {
-    std::cout << "Testing IA-64 plugin out-of-bounds probe load base recovery...\n";
+void testIA64PluginOutOfBoundsProbePreservesFaultingState() {
+    std::cout << "Testing IA-64 plugin out-of-bounds probe load fault state...\n";
 
     Memory memory(64 * 1024);
     uint8_t bundleBytes[16] = {};
@@ -6186,12 +6204,12 @@ void testIA64PluginOutOfBoundsProbeClearsBase() {
     plugin.getCPUState().SetGR(14, 0x685421cd4c01b829ULL);
     plugin.getCPUState().SetGR(15, 0xdeadbeefULL);
 
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
-    assert(plugin.getCPUState().GetGR(15) == 0);
-    assert(plugin.getCPUState().GetGR(14) == 0);
-    assert(plugin.getCPUState().GetIP() == 0x2010);
+    assert(plugin.step(memory) == ISAExecutionResult::EXCEPTION);
+    assert(plugin.getCPUState().GetGR(15) == 0xdeadbeefULL);
+    assert(plugin.getCPUState().GetGR(14) == 0x685421cd4c01b829ULL);
+    assert(plugin.getCPUState().GetIP() == 0x2000);
 
-    std::cout << "  ? failed probe load clears both destination and invalid base pointer\n";
+    std::cout << "  ? failed probe load reports an exception without changing the base, destination, or IP\n";
 }
 
 void testIA64PluginIndirectSelfCallExecution() {
@@ -6541,9 +6559,9 @@ int main(int argc, char** argv) {
         testIA64PluginCallOutputInputs();
         std::cout << "\n";
 
-        testIA64PluginCallFrameRestoreSkipsStaleFrames();
+        testIA64PluginNestedCallFrameRestoresArchitecturally();
         testIA64PluginCanonicalReturnRestoresCallFrame();
-        testIA64PluginNonLocalReturnRestoresCompletedFrame();
+        testIA64PluginCallFramesSurviveLongSequentialCalls();
         std::cout << "\n";
 
         testIA64PluginIndirectBranchExecution();
@@ -6670,10 +6688,10 @@ int main(int argc, char** argv) {
         testIA64PluginTopLevelReturnHalts();
         std::cout << "\n";
 
-        testIA64PluginOutOfBoundsLoadRecovery();
+        testIA64PluginOutOfBoundsLoadPreservesFaultingState();
         std::cout << "\n";
 
-        testIA64PluginOutOfBoundsProbeClearsBase();
+        testIA64PluginOutOfBoundsProbePreservesFaultingState();
         std::cout << "\n";
 
         testIA64PluginIndirectSelfCallExecution();

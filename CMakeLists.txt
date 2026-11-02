@@ -578,6 +578,21 @@ else()
     target_compile_options(test_ia64_rse_fault_restart PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Focused production-decoder regression for nested IA-64 call/return frames.
+add_executable(test_ia64_call_frame_return
+    tests/test_ia64_call_frame_return.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ia64_call_frame_return PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_ia64_call_frame_return PRIVATE /W4)
+else()
+    target_compile_options(test_ia64_call_frame_return PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_ia64_checkpoint_context_continuation PRIVATE /W4)
 else()
@@ -745,6 +760,7 @@ add_test(NAME IA64SalTests COMMAND test_ia64_sal)
 add_test(NAME VMCheckpointTests COMMAND test_vm_checkpoint)
 add_test(NAME IA64CheckpointContextContinuationTests COMMAND test_ia64_checkpoint_context_continuation)
 add_test(NAME IA64RSEFaultRestartTests COMMAND test_ia64_rse_fault_restart)
+add_test(NAME IA64CallFrameReturnTests COMMAND test_ia64_call_frame_return)
 add_test(NAME SyscallTests COMMAND test_syscall_dispatcher)
 add_test(NAME DebuggerTests COMMAND test_debugger)
 add_test(NAME ProfilerTests COMMAND test_profiler)

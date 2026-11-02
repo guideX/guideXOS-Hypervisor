@@ -329,18 +329,66 @@ struct ContinuationRecord {
         size_t slot = 0;
         uint64_t itc = 0;
         uint64_t raw = 0;
+        uint64_t rawBundleLo = 0;
+        uint64_t rawBundleHi = 0;
+        uint8_t instructionType = 0;
         uint8_t predicate = 0;
         bool predicateValue = false;
+        uint8_t destination = 0;
+        uint8_t source1 = 0;
+        uint8_t source2 = 0;
+        uint8_t source3 = 0;
+        uint64_t source1Value = 0;
+        uint64_t source2Value = 0;
+        bool source1Nat = false;
+        bool source2Nat = false;
+        uint64_t immediate = 0;
+        bool hasImmediate = false;
         std::string disassembly;
         std::array<uint64_t, 128> gr{};
         std::array<bool, 128> grNat{};
+        std::array<uint64_t, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedGRPhysical{};
+        std::array<bool, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedGRPhysicalNat{};
+        std::array<uint8_t, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedPhysicalIndex{};
+        std::array<uint8_t, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedPartition{};
         uint64_t predicateMask = 0;
+        uint64_t psr = 0;
+        uint64_t cfm = 0;
+        uint64_t pfs = 0;
+        uint64_t rsc = 0;
+        uint64_t bsp = 0;
+        uint64_t bspstore = 0;
+        uint64_t bspLoad = 0;
+        uint64_t rnat = 0;
+        uint8_t bof = 0;
+        uint8_t storeReg = 0;
+        uint8_t loadReg = 0;
+        uint8_t sof = 0;
+        uint8_t sol = 0;
+        uint8_t sor = 0;
+        std::array<uint64_t, ia64::NUM_REGION_REGISTERS> rr{};
+        uint64_t pta = 0;
+        uint64_t iva = 0;
+        uint64_t iip = 0;
+        uint64_t ipsr = 0;
+        uint64_t iha = 0;
+        uint64_t ifa = 0;
+        uint64_t isr = 0;
+        uint64_t itir = 0;
+        bool interruptPending = false;
+        bool interruptInService = false;
+        std::vector<ia64::TranslationRegisterState> validDtlb;
     };
     uint64_t cycles = 0;
     uint64_t attemptedSteps = 0;
     uint64_t failedSteps = 0;
     uint64_t vmCycleStart = 0;
     uint64_t vmCycleEnd = 0;
+    uint64_t failedStepCycle = 0;
+    uint64_t failedStepIP = 0;
+    size_t failedStepSlot = 0;
+    size_t failedTraceIndex = std::numeric_limits<size_t>::max();
+    bool failedStepRecorded = false;
     size_t uniqueInstructionCount = 0;
     size_t uniqueBundleCount = 0;
     std::vector<Instruction> firstInstructions;
@@ -550,6 +598,16 @@ uint64_t canonicalKernelVma(uint64_t rawIP) {
     return bundleIP;
 }
 
+uint64_t rawPhysicalBundleAddress(uint64_t rawIP) {
+    constexpr uint64_t virtualBase = 0xA000000100000000ULL;
+    constexpr uint64_t physicalBase = 0x04000000ULL;
+    constexpr uint64_t span = 0x01000000ULL;
+    if (rawIP >= virtualBase && rawIP - virtualBase < span) {
+        rawIP = physicalBase + (rawIP - virtualBase);
+    }
+    return rawIP & ~0xFULL;
+}
+
 std::string readKernelCString(ia64::VirtualMachine& vm, uint64_t va, size_t maxLength) {
     constexpr uint64_t virtualBase = 0xA000000100000000ULL;
     constexpr uint64_t physicalBase = 0x04000000ULL;
@@ -677,7 +735,10 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
     for (uint64_t i = 0; i < cycles; ++i) {
         ia64::IA64ISAPlugin* plugin = getPlugin(vm);
         const uint64_t ip = vm.getIP(0);
-        const size_t slot = plugin == nullptr ? 0 : plugin->getCurrentSlot();
+        const size_t rawSlot = plugin == nullptr ? 0 : plugin->getCurrentSlot();
+        // Completing slot 2 leaves the plugin cursor at 3 while IP already
+        // points at the next bundle. The upcoming VM step executes its slot 0.
+        const size_t slot = rawSlot >= 3 ? 0 : rawSlot;
         const uint64_t globalCycle = vm.getCyclesExecuted();
         uniqueInstructions.insert(ip | slot);
         uniqueBundles.insert(ip & ~0xFULL);
@@ -825,16 +886,31 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             traced.slot = slot;
             traced.itc = vm.getCPUState(0).GetAR(44);
             const ia64::CPUState& traceCpu = vm.getCPUState(0);
-            const uint64_t physicalBundle = ip & ~0xFULL;
+            const uint64_t physicalBundle = rawPhysicalBundleAddress(ip);
             if (rawMemory != nullptr &&
                 physicalBundle + 16 <= vm.getMemory().GetTotalSize()) {
+                for (size_t byte = 0; byte < 8; ++byte) {
+                    traced.rawBundleLo |= static_cast<uint64_t>(rawMemory[physicalBundle + byte]) << (byte * 8);
+                    traced.rawBundleHi |= static_cast<uint64_t>(rawMemory[physicalBundle + 8 + byte]) << (byte * 8);
+                }
                 const ia64::Bundle bundle = traceDecoder.DecodeBundleAt(
                     rawMemory + physicalBundle, physicalBundle);
                 if (slot < bundle.instructions.size()) {
                     const ia64::InstructionEx& instruction = bundle.instructions[slot];
                     traced.raw = instruction.GetRawBits();
+                    traced.instructionType = static_cast<uint8_t>(instruction.GetType());
                     traced.predicate = instruction.GetPredicate();
                     traced.predicateValue = traceCpu.GetPR(traced.predicate);
+                    traced.destination = instruction.GetDst();
+                    traced.source1 = instruction.GetSrc1();
+                    traced.source2 = instruction.GetSrc2();
+                    traced.source3 = instruction.GetSrc3();
+                    traced.source1Value = traceCpu.GetGR(traced.source1);
+                    traced.source2Value = traceCpu.GetGR(traced.source2);
+                    traced.source1Nat = traceCpu.GetGRNaT(traced.source1);
+                    traced.source2Nat = traceCpu.GetGRNaT(traced.source2);
+                    traced.hasImmediate = instruction.HasImmediate();
+                    traced.immediate = traced.hasImmediate ? instruction.GetImmediate() : 0;
                     traced.disassembly = instruction.GetDisassembly();
                 }
             }
@@ -842,16 +918,66 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 traced.gr[reg] = traceCpu.GetGR(reg);
                 traced.grNat[reg] = traceCpu.GetGRNaT(reg);
             }
+            const ia64::RSEState& traceRse = traceCpu.GetRSEState();
+            for (size_t offset = 0; offset < ia64::NUM_STACKED_GENERAL_REGISTERS; ++offset) {
+                const size_t ringIndex = traceCpu.GetRSEPhysicalIndex(offset);
+                const size_t physical = ia64::NUM_STATIC_GR + ringIndex;
+                traced.stackedGRPhysical[offset] = traceCpu.GetGRPhysical(physical);
+                traced.stackedGRPhysicalNat[offset] = traceCpu.GetGRNaTPhysical(physical);
+                traced.stackedPhysicalIndex[offset] = static_cast<uint8_t>(physical);
+                traced.stackedPartition[offset] = static_cast<uint8_t>(traceRse.physicalPartition[ringIndex]);
+            }
             for (size_t predicate = 0; predicate < 64; ++predicate) {
                 if (traceCpu.GetPR(predicate)) {
                     traced.predicateMask |= uint64_t{1} << predicate;
                 }
+            }
+            traced.psr = traceCpu.GetPSR();
+            traced.cfm = traceCpu.GetCFM();
+            traced.pfs = traceCpu.GetPFS();
+            traced.rsc = traceCpu.GetRSC();
+            traced.bsp = traceCpu.GetBSP();
+            traced.bspstore = traceCpu.GetBSPSTORE();
+            traced.bspLoad = traceCpu.GetRSELoadPointer();
+            traced.rnat = traceCpu.GetRNAT();
+            traced.bof = traceCpu.GetRSEBOF();
+            traced.storeReg = traceCpu.GetRSEStoreReg();
+            traced.loadReg = traceCpu.GetRSELoadReg();
+            traced.sof = traceCpu.GetSOF();
+            traced.sol = traceCpu.GetSOL();
+            traced.sor = traceCpu.GetSOR();
+            for (size_t region = 0; region < traced.rr.size(); ++region) {
+                traced.rr[region] = traceCpu.GetRR(region);
+            }
+            traced.pta = traceCpu.GetCR(8);
+            traced.iva = traceCpu.GetCR(ia64::IA64_CR_IVA);
+            traced.iip = traceCpu.GetCR(ia64::IA64_CR_IIP);
+            traced.ipsr = traceCpu.GetCR(ia64::IA64_CR_IPSR);
+            traced.iha = traceCpu.GetCR(25);
+            traced.ifa = traceCpu.GetCR(20);
+            traced.isr = traceCpu.GetCR(17);
+            traced.itir = traceCpu.GetCR(21);
+            if (plugin != nullptr) {
+                traced.interruptPending = plugin->hasPendingInterrupt();
+                traced.interruptInService = plugin->hasInServiceInterrupt();
+            }
+            for (size_t index = 0; index < ia64::NUM_DATA_TLB_ENTRIES; ++index) {
+                const ia64::TranslationRegisterState& entry = traceCpu.GetDTLB(index);
+                if (entry.valid) traced.validDtlb.push_back(entry);
             }
             record.traceWindow.push_back(std::move(traced));
         }
         ++record.attemptedSteps;
         if (!vm.step()) {
             ++record.failedSteps;
+            record.failedStepRecorded = true;
+            record.failedStepCycle = globalCycle;
+            record.failedStepIP = ip;
+            record.failedStepSlot = slot;
+            if (!record.traceWindow.empty() &&
+                record.traceWindow.back().cycle == globalCycle) {
+                record.failedTraceIndex = record.traceWindow.size() - 1;
+            }
             break;
         }
         ++record.cycles;
@@ -968,19 +1094,94 @@ void writeContinuationLog(const std::string& path,
                << " ip=0x" << std::hex << instruction.ip
                << " canonical_vma=0x" << canonicalKernelVma(instruction.ip)
                << " raw=0x" << instruction.raw
+               << " raw_bundle_hi=0x" << instruction.rawBundleHi
+               << " raw_bundle_lo=0x" << instruction.rawBundleLo
                << " predicate_mask=0x" << instruction.predicateMask
                << std::dec << " slot=" << instruction.slot
+               << " instruction_type=" << static_cast<unsigned>(instruction.instructionType)
                << " predicate=" << static_cast<unsigned>(instruction.predicate)
                << " predicate_value=" << (instruction.predicateValue ? 1 : 0)
+               << " dst=r" << static_cast<unsigned>(instruction.destination)
+               << " src1=r" << static_cast<unsigned>(instruction.source1)
+               << " src1_value=0x" << std::hex << instruction.source1Value
+               << (instruction.source1Nat ? "N" : "")
+               << " src2=r" << std::dec << static_cast<unsigned>(instruction.source2)
+               << " src2_value=0x" << std::hex << instruction.source2Value
+               << (instruction.source2Nat ? "N" : "")
+               << " src3=r" << std::dec << static_cast<unsigned>(instruction.source3)
+               << " immediate=" << (instruction.hasImmediate ? "0x" : "none")
+               << (instruction.hasImmediate ? [&]() { std::ostringstream v; v << std::hex << instruction.immediate; return v.str(); }() : std::string())
                << " itc=" << instruction.itc
-               << " disassembly=\"" << instruction.disassembly << "\"\n";
+               << " disassembly=\"" << instruction.disassembly << "\""
+               << " psr=0x" << std::hex << instruction.psr
+               << " cfm=0x" << instruction.cfm
+               << " pfs=0x" << instruction.pfs
+               << " rsc=0x" << instruction.rsc
+               << " bsp=0x" << instruction.bsp
+               << " bspstore=0x" << instruction.bspstore
+               << " bspLoad=0x" << instruction.bspLoad
+               << " rnat=0x" << instruction.rnat
+               << std::dec << " bof=" << static_cast<unsigned>(instruction.bof)
+               << " storeReg=" << static_cast<unsigned>(instruction.storeReg)
+               << " loadReg=" << static_cast<unsigned>(instruction.loadReg)
+               << " sof=" << static_cast<unsigned>(instruction.sof)
+               << " sol=" << static_cast<unsigned>(instruction.sol)
+               << " sor=" << static_cast<unsigned>(instruction.sor)
+               << " pta=0x" << std::hex << instruction.pta
+               << " iva=0x" << instruction.iva
+               << " iip=0x" << instruction.iip
+               << " ipsr=0x" << instruction.ipsr
+               << " iha=0x" << instruction.iha
+               << " ifa=0x" << instruction.ifa
+               << " isr=0x" << instruction.isr
+               << " itir=0x" << instruction.itir
+               << " interrupt_pending=" << (instruction.interruptPending ? 1 : 0)
+               << " interrupt_in_service=" << (instruction.interruptInService ? 1 : 0)
+               << " rr={";
+        for (size_t region = 0; region < instruction.rr.size(); ++region) {
+            if (region != 0) output << ',';
+            output << std::hex << instruction.rr[region];
+        }
+        output << "} dtlb_valid=" << std::dec << instruction.validDtlb.size() << "\n";
+        for (size_t entry = 0; entry < instruction.validDtlb.size(); ++entry) {
+            const ia64::TranslationRegisterState& tr = instruction.validDtlb[entry];
+            output << "trace_dtlb=" << i << "," << entry
+                   << " va=0x" << std::hex << tr.virtualAddress
+                   << " pa=0x" << tr.physicalAddress
+                   << " itir=0x" << tr.itir
+                   << " rr=0x" << tr.regionValue << "\n";
+        }
         output << "trace_gr=" << i;
         for (size_t reg = 0; reg < instruction.gr.size(); ++reg) {
             output << " r" << std::dec << reg << "=0x" << std::hex << instruction.gr[reg]
                    << (instruction.grNat[reg] ? "N" : "");
         }
         output << std::dec << "\n";
+        output << "trace_rse=" << i;
+        for (size_t offset = 0; offset < instruction.stackedGRPhysical.size(); ++offset) {
+            output << " s" << std::dec << offset << ":p"
+                   << static_cast<unsigned>(instruction.stackedPhysicalIndex[offset]) << "=0x" << std::hex
+                   << instruction.stackedGRPhysical[offset]
+                   << (instruction.stackedGRPhysicalNat[offset] ? "N" : "")
+                   << ":owner=" << std::dec
+                   << static_cast<unsigned>(instruction.stackedPartition[offset]);
+        }
+        output << "\n";
     }
+    if (record.failedStepRecorded) {
+        output << "failed_step cycle=" << record.failedStepCycle
+               << " ip=0x" << std::hex << record.failedStepIP
+               << " canonical_vma=0x" << canonicalKernelVma(record.failedStepIP)
+               << std::dec << " slot=" << record.failedStepSlot
+               << " trace_index=";
+        if (record.failedTraceIndex == std::numeric_limits<size_t>::max()) {
+            output << "unavailable\n";
+        } else {
+            output << record.failedTraceIndex << "\n";
+        }
+    }
+    for (const std::string& line : record.faultTrace) output << line << "\n";
+    for (const std::string& line : record.interruptTrace) output << line << "\n";
 }
 
 void writeHotIps(const std::string& path,
@@ -1222,14 +1423,19 @@ int main(int argc, char** argv) {
                 return 1;
             }
             const uint64_t consoleBytesBefore = vm->getConsoleTotalBytes();
+            const uint64_t restoredCheckpointIP = vm->getIP(0);
             const bool collectHotIps = !options.hotIpsPath.empty();
             const ContinuationRecord restored = runContinuation(*vm, options.postCheckpointCycles,
                                                                 collectHotIps, options.probeIps,
-                                                                options.lockTracePath);
+                                                                options.lockTracePath,
+                                                                options.traceAfterCycles,
+                                                                options.traceInstructionCount);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
-            writeContinuationLog(restoreLog, "restore", restored, vm->getIP(0));
+            writeContinuationLog(restoreLog, "restore", restored, restoredCheckpointIP);
+            writeContinuationLog(options.progressLogPath, "restore", restored,
+                                 restoredCheckpointIP);
             writeHotIps(options.hotIpsPath, "restore", restored);
             quietCheckpointDiagnostics.restore();
             std::cout << "[IA64-CHECKPOINT] restored path=\"" << options.checkpointReadPath
@@ -1658,7 +1864,7 @@ int main(int argc, char** argv) {
                       << " slot=" << std::dec << (plugin == nullptr ? 0 : plugin->getCurrentSlot())
                       << " psr=0x" << std::hex << cpu.GetPSR()
                       << " dt=" << std::dec << ((cpu.GetPSR() >> 17) & 1)
-                      << " iva=0x" << std::hex << cpu.GetCR(64)
+                      << " iva=0x" << std::hex << cpu.GetCR(ia64::IA64_CR_IVA)
                       << " cfm=0x" << cpu.GetCFM()
                       << " pfs=0x" << rse.pfs
                       << " rsc=0x" << rse.rsc
