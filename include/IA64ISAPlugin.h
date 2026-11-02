@@ -44,6 +44,7 @@ constexpr size_t IA64_CR_CMCV = 74;
 constexpr size_t IA64_CR_LRR0 = 80;
 constexpr size_t IA64_CR_LRR1 = 81;
 constexpr uint8_t IA64_SPURIOUS_INT_VECTOR = 0x0f;
+constexpr uint64_t IA64_PSR_IC = 1ULL << 13;
 constexpr uint64_t IA64_PSR_I = 1ULL << 14;
 constexpr uint64_t IA64_ITV_MASK = 1ULL << 16;
 

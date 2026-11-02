@@ -2739,16 +2739,28 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
                     (static_cast<size_t>(cpu.GetRSEBOF()) +
                      NUM_STACKED_GENERAL_REGISTERS - restoredSof) %
                     NUM_STACKED_GENERAL_REGISTERS);
+                const uint64_t bspstore = cpu.GetBSPSTORE();
                 cpu.SetRSEBOFForCheckpoint(restoredBof);
                 const uint64_t restoredBsp = advanceRsePointer(
                     cpu.GetBSP(), -static_cast<int64_t>(restoredSof));
                 cpu.SetBSP(restoredBsp);
                 cpu.SetCFM(restoredCfm);
-                for (size_t offset = 0; offset < restoredSof; ++offset) {
-                    cpu.SetRSEPhysicalPartition(
-                        (static_cast<size_t>(restoredBof) + offset) %
-                            NUM_STACKED_GENERAL_REGISTERS,
-                        RSERegisterPartition::CURRENT);
+                if (restoredBsp < bspstore) {
+                    // Cover can move the interrupted frame into the backing
+                    // store while the handler runs. Restart the deferred RSE
+                    // return fill at the interrupted frame, rather than using
+                    // a load frontier the handler may have changed.
+                    // IA64ISAPlugin::step resumes this fill before executing
+                    // the restored IP.
+                    cpu.SetRSELoadPointer(restoredBsp);
+                    cpu.SetRSELoadRegForCheckpoint(restoredBof);
+                } else {
+                    for (size_t offset = 0; offset < restoredSof; ++offset) {
+                        cpu.SetRSEPhysicalPartition(
+                            (static_cast<size_t>(restoredBof) + offset) %
+                                NUM_STACKED_GENERAL_REGISTERS,
+                            RSERegisterPartition::CURRENT);
+                    }
                 }
                 cpu.SetCR(23, ifs & ~kIfsValid);
             }

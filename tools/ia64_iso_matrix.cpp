@@ -347,6 +347,7 @@ struct ContinuationRecord {
         std::string disassembly;
         std::array<uint64_t, 128> gr{};
         std::array<bool, 128> grNat{};
+        std::array<uint64_t, 8> br{};
         std::array<uint64_t, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedGRPhysical{};
         std::array<bool, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedGRPhysicalNat{};
         std::array<uint8_t, ia64::NUM_STACKED_GENERAL_REGISTERS> stackedPhysicalIndex{};
@@ -918,6 +919,9 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 traced.gr[reg] = traceCpu.GetGR(reg);
                 traced.grNat[reg] = traceCpu.GetGRNaT(reg);
             }
+            for (size_t reg = 0; reg < traced.br.size(); ++reg) {
+                traced.br[reg] = traceCpu.GetBR(reg);
+            }
             const ia64::RSEState& traceRse = traceCpu.GetRSEState();
             for (size_t offset = 0; offset < ia64::NUM_STACKED_GENERAL_REGISTERS; ++offset) {
                 const size_t ringIndex = traceCpu.GetRSEPhysicalIndex(offset);
@@ -1155,6 +1159,11 @@ void writeContinuationLog(const std::string& path,
         for (size_t reg = 0; reg < instruction.gr.size(); ++reg) {
             output << " r" << std::dec << reg << "=0x" << std::hex << instruction.gr[reg]
                    << (instruction.grNat[reg] ? "N" : "");
+        }
+        output << std::dec << "\n";
+        output << "trace_br=" << i;
+        for (size_t reg = 0; reg < instruction.br.size(); ++reg) {
+            output << " b" << std::dec << reg << "=0x" << std::hex << instruction.br[reg];
         }
         output << std::dec << "\n";
         output << "trace_rse=" << i;

@@ -5457,7 +5457,11 @@ void testIA64PluginInitialEfiImageAllocation() {
     assert(plugin.reserveEfiMemoryRange(mirrorStart, mirrorSize, 0U));
 
     IA64ISAPlugin::InitialEfiImageInfo info;
-    assert(plugin.loadInitialEfiImage(memory, image, info));
+    const bool initialImageLoaded = plugin.loadInitialEfiImage(memory, image, info);
+    assert(initialImageLoaded);
+    if (!initialImageLoaded) {
+        throw std::runtime_error("initial EFI image allocation failed");
+    }
     assert(info.preferredImageBase == 0);
     assert(info.imageBase != 0);
     assert(info.imageBase + info.imageSize <= guestMemorySize);
@@ -5502,12 +5506,16 @@ void testIA64PluginInitialEfiImageAllocation() {
     plugin.getCPUState().SetGR(40, 0x9318);
     plugin.getCPUState().SetGR(41, 0x9320);
     plugin.getCPUState().SetGR(8, 0xffffffffffffffffULL);
-    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    const ISAExecutionResult getMemoryMapResult = plugin.step(memory);
+    assert(getMemoryMapResult == ISAExecutionResult::CONTINUE);
     assert(plugin.getCPUState().GetGR(8) == 0);
 
     const uint64_t mapBytes = memory.read<uint64_t>(0x9300);
     const uint64_t descriptorSize = memory.read<uint64_t>(0x9318);
     assert(descriptorSize == 40);
+    if (descriptorSize != 40 || mapBytes > 0x10000ULL || mapBytes % descriptorSize != 0) {
+        throw std::runtime_error("GetMemoryMap returned an invalid descriptor buffer size");
+    }
     bool sawImage = false;
     bool sawOverlap = false;
     for (uint64_t offset = 0; offset < mapBytes; offset += descriptorSize) {

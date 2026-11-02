@@ -10339,9 +10339,13 @@ bool IA64ISAPlugin::servicePendingInterrupt() {
     // destructive operation for this pending vector.
     interruptInService_ = true;
     inServiceVector_ = vector;
+    const uint64_t interruptedPsr = cpu.GetPSR();
     cpu.SetCR(IA64_CR_IIP, cpu.GetIP());
-    cpu.SetCR(IA64_CR_IPSR, cpu.GetPSR());
-    cpu.SetPSR(cpu.GetPSR() & ~(IA64_PSR_I | IA64_PSR_BN_MASK));
+    cpu.SetCR(IA64_CR_IPSR, interruptedPsr);
+    if ((interruptedPsr & IA64_PSR_IC) != 0) {
+        cpu.SetCR(23, cpu.GetCR(23) & ~(1ULL << 63));
+    }
+    cpu.SetPSR(interruptedPsr & ~(IA64_PSR_I | IA64_PSR_IC | IA64_PSR_BN_MASK));
     const uint64_t iva = cpu.GetCR(IA64_CR_IVA);
     // External interrupts enter through the architectural external interrupt
     // vector, not the CR.IVR device vector.  Using the device vector here

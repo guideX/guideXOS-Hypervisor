@@ -5554,6 +5554,81 @@ void test_ia64_cover_rfi_restores_rse_frame() {
     std::cout << "  ? cover/rfi restores the architectural frame" << std::endl;
 }
 
+void test_ia64_cover_rfi_restarts_spilled_return_fill() {
+    std::cout << "Testing IA-64 rfi restarts a spilled interrupted RSE frame..."
+              << std::endl;
+
+    constexpr uint64_t interruptedCfm = 3ULL | (1ULL << 7);
+    constexpr uint64_t interruptedBsp = 0x1000;
+    constexpr uint64_t coveredBsp = 0x1018;
+    const auto verifyRestart = [&](uint64_t stalePointer,
+                                   uint8_t staleLoadReg,
+                                   bool hadPartialFill) {
+        CPUState cpu;
+        Memory memory(0x4000);
+        cpu.SetBSP(interruptedBsp);
+        cpu.SetBSPSTORE(interruptedBsp);
+        cpu.SetCFM(interruptedCfm);
+        cpu.SetGR(32, 0x1111222233334444ULL);
+        cpu.SetGR(33, 0x5555666677778888ULL);
+        cpu.SetGR(34, 0x9999AAAABBBBCCCCULL);
+        cpu.SetGRNaT(32, true);
+        cpu.SetRNAT(1ULL);
+        cpu.SetPSR(0);
+
+        InstructionEx cover(InstructionType::COVER, UnitType::B_UNIT);
+        cover.Execute(cpu, memory);
+
+        // Model the kernel's flush of the covered frame to its backing store
+        // and reuse of its physical ring slots by later handler frames.
+        memory.write<uint64_t>(0x1000, 0x1111222233334444ULL);
+        memory.write<uint64_t>(0x1008, 0x5555666677778888ULL);
+        memory.write<uint64_t>(0x1010, 0x9999AAAABBBBCCCCULL);
+        for (size_t offset = 0; offset < 3; ++offset) {
+            cpu.SetGRPhysical(NUM_STATIC_GR + offset, 0);
+            cpu.SetGRNaTPhysical(NUM_STATIC_GR + offset, false);
+            cpu.SetRSEPhysicalPartition(offset, RSERegisterPartition::CLEAN);
+        }
+        if (hadPartialFill) {
+            cpu.SetGRPhysical(NUM_STATIC_GR, 0x1111222233334444ULL);
+            cpu.SetRSEPhysicalPartition(0, RSERegisterPartition::CLEAN);
+        }
+        cpu.SetBSPSTORE(coveredBsp);
+        cpu.SetRSELoadPointer(stalePointer);
+        cpu.SetRSELoadRegForCheckpoint(staleLoadReg);
+        cpu.SetCFM(2); // live handler frame
+        cpu.SetCR(16, 1ULL << 14);
+        cpu.SetCR(19, 0x2400);
+
+        InstructionEx rfi(InstructionType::RFI, UnitType::B_UNIT);
+        rfi.Execute(cpu, memory);
+
+        assert_equal("rfi restores the interrupted BSP before the deferred fill",
+                     interruptedBsp, cpu.GetBSP());
+        assert_equal("rfi restarts the return fill at the interrupted BSP",
+                     interruptedBsp, cpu.GetRSELoadPointer());
+        assert_equal("rfi restarts the load ring at the interrupted BOF", 0,
+                     cpu.GetRSELoadReg());
+        assert_equal("rfi leaves the spilled frame pending for the execution loop",
+                     coveredBsp, cpu.GetBSPSTORE());
+
+        ResumeIncompleteRseReturnFrame(cpu, memory);
+        assert_equal("RSE return fill restores the interrupted local",
+                     0x1111222233334444ULL, cpu.GetGR(32));
+        assert_equal("RSE return fill restores the interrupted output",
+                     0x9999AAAABBBBCCCCULL, cpu.GetGR(34));
+        assert_true("RSE return fill restores the interrupted NaT bit",
+                    cpu.GetGRNaT(32));
+        assert_equal("RSE return fill retires the backing-store frontier",
+                     interruptedBsp, cpu.GetBSPSTORE());
+    };
+
+    verifyRestart(coveredBsp, 3, false);       // stale end-of-handler frontier
+    verifyRestart(interruptedBsp + 8, 1, true); // stale in-range partial frontier
+
+    std::cout << "  ? rfi restarts a deferred interrupted-frame fill" << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "IA-64 Instruction Set Tests" << std::endl;
@@ -5616,6 +5691,7 @@ int main() {
         test_ia64_static_register_banks();
         test_ia64_banked_context_survives_interruption_return();
         test_ia64_cover_rfi_restores_rse_frame();
+        test_ia64_cover_rfi_restarts_spilled_return_fill();
         
         std::cout << std::endl;
         std::cout << "========================================" << std::endl;

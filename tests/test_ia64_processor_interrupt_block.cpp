@@ -43,21 +43,27 @@ int main() {
         });
     memory.RegisterDevice(&pib);
 
-    // The partial RSE backing-store model does not yet implement the
-    // interruption-time rename/transfer path. The plugin therefore still
-    // snapshots the interrupted CFM/stacked view around rfi in this test.
+    // Exercise interruption entry's IFS invalidation and the architectural
+    // cover/rfi frame save and restore with the real production decoder.
     {
         IA64ISAPlugin framePlugin(decoder);
         // Place the staged bundle inside the synthetic EFI handoff region so
         // the fetch path does not reinterpret its first qword as a function
         // descriptor (which would redirect execution to the template bits).
         Memory frameMemory(0x20000000ULL);
-        constexpr uint64_t interruptedCfm = 4;
+        constexpr uint64_t interruptedCfm = 0x40e;
+        constexpr uint64_t interruptedReturnAddress = 0xA00000010082E920ULL;
+        constexpr uint64_t ifsValid = 1ULL << 63;
         framePlugin.getCPUState().SetCFM(interruptedCfm);
         framePlugin.getCPUState().SetGR(32, 0x1111'2222'3333'4444ULL);
         framePlugin.getCPUState().SetGR(33, 0x5555'6666'7777'8888ULL);
         framePlugin.getCPUState().SetGR(34, 0x9999'AAAA'BBBB'CCCCULL);
         framePlugin.getCPUState().SetGR(35, 0xDDDD'EEEE'FFFF'0000ULL);
+        framePlugin.getCPUState().SetGR(37, interruptedReturnAddress);
+        framePlugin.getCPUState().SetBR(0, 0xA000000100123450ULL);
+        framePlugin.getCPUState().SetIP(0x1FE00040ULL);
+        framePlugin.getCPUState().SetPSR(IA64_PSR_IC);
+        framePlugin.getCPUState().SetCR(23, ifsValid | 2);
 
         framePlugin.setInterruptsEnabled(true);
         framePlugin.queueInterrupt(0xEF);
@@ -65,14 +71,29 @@ int main() {
                 "interrupt frame test delivers an external interrupt");
         require(framePlugin.hasInServiceInterrupt(),
                 "interrupt frame test marks the vector in service");
+        require(framePlugin.getCPUState().GetCR(19) == 0x1FE00040ULL &&
+                    framePlugin.getCPUState().GetCR(16) ==
+                        (IA64_PSR_IC | IA64_PSR_I),
+                "interrupt entry records IIP and IPSR when interruption collection is enabled");
+        require((framePlugin.getCPUState().GetPSR() & (IA64_PSR_IC | IA64_PSR_I)) == 0,
+                "interrupt entry clears PSR.ic and PSR.i");
+        require((framePlugin.getCPUState().GetCR(23) & ifsValid) == 0,
+                "interrupt entry invalidates stale IFS state");
+        require(framePlugin.getCPUState().GetCFM() == interruptedCfm &&
+                    framePlugin.getCPUState().GetGR(37) == interruptedReturnAddress &&
+                    framePlugin.getCPUState().GetBR(0) == 0xA000000100123450ULL,
+                "interrupt entry leaves the live frame and branch registers unchanged");
 
         // The handler saves the interrupted register frame architecturally
         // before using the stacked-register ring. RFI consumes CR.IFS; no
         // plugin-owned register snapshot participates in this path.
         InstructionEx cover(InstructionType::COVER, UnitType::B_UNIT);
         cover.Execute(framePlugin.getCPUState(), frameMemory);
-        require(framePlugin.getCPUState().GetRSEBOF() == 4,
+        require(framePlugin.getCPUState().GetRSEBOF() ==
+                    (interruptedCfm & 0x7FULL),
                 "interrupt handler cover advances the physical register-stack base");
+        require(framePlugin.getCPUState().GetCR(23) == (ifsValid | interruptedCfm),
+                "cover saves the interrupted frame marker after interruption entry");
 
         // The handler clobbers the register stack with its own frame.
         framePlugin.getCPUState().SetCFM(0x895);
@@ -87,7 +108,6 @@ int main() {
         frameMemory.Write(rfiBundleAddress, rfiBundle, sizeof(rfiBundle));
         framePlugin.getCPUState().SetIP(rfiBundleAddress);
         framePlugin.getCPUState().SetCR(19, 0x1FE00020ULL);
-        framePlugin.getCPUState().SetCR(16, 0);
         // The rfi is the third slot of the bundle; advance through the two
         // leading nops before the return executes.
         for (int slot = 0; slot < 3; ++slot) {
@@ -102,6 +122,12 @@ int main() {
                 "interrupted stacked registers survive the handler and rfi");
         require(framePlugin.getCPUState().GetCFM() == interruptedCfm,
                 "interrupted CFM survives the handler and rfi");
+        require(framePlugin.getCPUState().GetGR(37) == interruptedReturnAddress,
+                "interrupted stacked return link survives cover and rfi");
+        require(framePlugin.getCPUState().GetBR(0) == 0xA000000100123450ULL,
+                "interrupted b0 remains intact through the entry and rfi sequence");
+        require(framePlugin.getCPUState().GetPSR() == (IA64_PSR_IC | IA64_PSR_I),
+                "rfi restores the interrupted PSR from IPSR");
     }
 
     const uint64_t base = ProcessorInterruptBlock::kDefaultBaseAddress;
