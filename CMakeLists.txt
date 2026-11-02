@@ -906,6 +906,37 @@ else()
     target_compile_options(test_riscv_opensbi_timer PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-11 authentic OpenSBI PLIC discovery and UART receive interrupt delivery.
+set(RISCV_OPENSBI_PLIC_UART_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_plic_uart)
+set(RISCV_OPENSBI_PLIC_UART_SUPERVISOR_ELF_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv11_plic_uart_supervisor.elf)
+set(RISCV_OPENSBI_PLIC_UART_DTB_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv11_plic_uart_platform.dtb)
+configure_file(${RISCV_OPENSBI_PLIC_UART_FIXTURE_DIR}/supervisor.elf
+               ${RISCV_OPENSBI_PLIC_UART_SUPERVISOR_ELF_COPY} COPYONLY)
+configure_file(${RISCV_OPENSBI_PLIC_UART_FIXTURE_DIR}/platform.dtb
+               ${RISCV_OPENSBI_PLIC_UART_DTB_COPY} COPYONLY)
+add_executable(test_riscv_opensbi_plic_uart
+    tests/test_riscv_opensbi_plic_uart.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_opensbi_plic_uart PRIVATE bcrypt)
+add_test(NAME RiscVOpenSbiPlicUartTests
+         COMMAND test_riscv_opensbi_plic_uart
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_OPENSBI_PLIC_UART_SUPERVISOR_ELF_COPY}
+                 ${RISCV_OPENSBI_PLIC_UART_DTB_COPY})
+if(MSVC)
+    target_compile_options(test_riscv_opensbi_plic_uart PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_opensbi_plic_uart PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

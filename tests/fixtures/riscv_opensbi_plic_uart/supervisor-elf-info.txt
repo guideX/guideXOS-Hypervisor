@@ -1,0 +1,667 @@
+
+File: D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_opensbi_plic_uart\.build\supervisor.elf
+Format: elf64-littleriscv
+Arch: riscv64
+AddressSize: 64bit
+LoadName: <Not found>
+ElfHeader {
+  Ident {
+    Magic: (7F 45 4C 46)
+    Class: 64-bit (0x2)
+    DataEncoding: LittleEndian (0x1)
+    FileVersion: 1
+    OS/ABI: SystemV (0x0)
+    ABIVersion: 0
+    Unused: (00 00 00 00 00 00 00)
+  }
+  Type: Executable (0x2)
+  Machine: EM_RISCV (0xF3)
+  Version: 1
+  Entry: 0x80200000
+  ProgramHeaderOffset: 0x40
+  SectionHeaderOffset: 0x2808
+  Flags [ (0x0)
+  ]
+  HeaderSize: 64
+  ProgramHeaderEntrySize: 56
+  ProgramHeaderCount: 5
+  SectionHeaderEntrySize: 64
+  SectionHeaderCount: 8
+  StringTableSectionIndex: 6
+}
+Sections [
+  Section {
+    Index: 0
+    Name:  (0)
+    Type: SHT_NULL (0x0)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x0
+    Size: 0
+    Link: 0
+    Info: 0
+    AddressAlignment: 0
+    EntrySize: 0
+  }
+  Section {
+    Index: 1
+    Name: .text (1)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x6)
+      SHF_ALLOC (0x2)
+      SHF_EXECINSTR (0x4)
+    ]
+    Address: 0x80200000
+    Offset: 0x1000
+    Size: 1060
+    Link: 0
+    Info: 0
+    AddressAlignment: 4
+    EntrySize: 0
+  }
+  Section {
+    Index: 2
+    Name: .rodata (7)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x80200430
+    Offset: 0x1430
+    Size: 40
+    Link: 0
+    Info: 0
+    AddressAlignment: 16
+    EntrySize: 0
+  }
+  Section {
+    Index: 3
+    Name: .bss (15)
+    Type: SHT_NOBITS (0x8)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x80210000
+    Offset: 0x2000
+    Size: 4096
+    Link: 0
+    Info: 0
+    AddressAlignment: 4096
+    EntrySize: 0
+  }
+  Section {
+    Index: 4
+    Name: .riscv.attributes (20)
+    Type: SHT_RISCV_ATTRIBUTES (0x70000003)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2000
+    Size: 73
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 5
+    Name: .symtab (38)
+    Type: SHT_SYMTAB (0x2)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2050
+    Size: 1200
+    Link: 7
+    Info: 49
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 6
+    Name: .shstrtab (46)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2500
+    Size: 64
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 7
+    Name: .strtab (56)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2540
+    Size: 705
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+]
+ProgramHeaders [
+  ProgramHeader {
+    Type: PT_LOAD (0x1)
+    Offset: 0x1000
+    VirtualAddress: 0x80200000
+    PhysicalAddress: 0x80200000
+    FileSize: 1060
+    MemSize: 1060
+    Flags [ (0x5)
+      PF_R (0x4)
+      PF_X (0x1)
+    ]
+    Alignment: 4096
+  }
+  ProgramHeader {
+    Type: PT_LOAD (0x1)
+    Offset: 0x1430
+    VirtualAddress: 0x80200430
+    PhysicalAddress: 0x80200430
+    FileSize: 40
+    MemSize: 40
+    Flags [ (0x4)
+      PF_R (0x4)
+    ]
+    Alignment: 4096
+  }
+  ProgramHeader {
+    Type: PT_LOAD (0x1)
+    Offset: 0x2000
+    VirtualAddress: 0x80210000
+    PhysicalAddress: 0x80210000
+    FileSize: 0
+    MemSize: 4096
+    Flags [ (0x6)
+      PF_R (0x4)
+      PF_W (0x2)
+    ]
+    Alignment: 4096
+  }
+  ProgramHeader {
+    Type: PT_GNU_STACK (0x6474E551)
+    Offset: 0x0
+    VirtualAddress: 0x0
+    PhysicalAddress: 0x0
+    FileSize: 0
+    MemSize: 0
+    Flags [ (0x6)
+      PF_R (0x4)
+      PF_W (0x2)
+    ]
+    Alignment: 0
+  }
+  ProgramHeader {
+    Type: PT_RISCV_ATTRIBUTES (0x70000003)
+    Offset: 0x2000
+    VirtualAddress: 0x0
+    PhysicalAddress: 0x0
+    FileSize: 73
+    MemSize: 73
+    Flags [ (0x4)
+      PF_R (0x4)
+    ]
+    Alignment: 1
+  }
+]
+Symbols [
+  Symbol {
+    Name:  (0)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Undefined (0x0)
+  }
+  Symbol {
+    Name: RESULT_BASE (1)
+    Value: 0x83E00000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: SIGNATURE_BASE (13)
+    Value: 0x83E00100
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: GUEST_STACK_TOP (28)
+    Value: 0x83FFFFF0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: EXPECTED_FDT (44)
+    Value: 0x82200000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: COMPLETE_WORD (57)
+    Value: 0x434F4D504C455445
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: SIGNATURE_MAGIC (71)
+    Value: 0x47584F5352495356
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: UART_BASE (87)
+    Value: 0x10000000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: PLIC_BASE (97)
+    Value: 0xC000000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: PLIC_PRIORITY_10 (107)
+    Value: 0xC000028
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: PLIC_ENABLE_S (124)
+    Value: 0xC002080
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: PLIC_THRESHOLD_S (138)
+    Value: 0xC201000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: PLIC_CLAIM_S (155)
+    Value: 0xC201004
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: SEIE_BIT (168)
+    Value: 0x200
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: SIE_BIT (177)
+    Value: 0x2
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: EXPECTED_SEIP (185)
+    Value: 0x8000000000000009
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: $x (199)
+    Value: 0x80200000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_hart (202)
+    Value: 0x802003C8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_fdt (212)
+    Value: 0x802003D0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: page_table_root (221)
+    Value: 0x80210000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .bss (0x3)
+  }
+  Symbol {
+    Name: supervisor_external_entry (237)
+    Value: 0x802001D4
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_seie (263)
+    Value: 0x802003D8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_mask_pending (273)
+    Value: 0x802003E0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: after_first_interrupt (291)
+    Value: 0x80200160
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: poll_second_byte (313)
+    Value: 0x80200168
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_local_mask_pending (330)
+    Value: 0x802003E8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: after_second_interrupt (354)
+    Value: 0x802001A4
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: wait_third_interrupt (377)
+    Value: 0x802001B4
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: write_completion (398)
+    Value: 0x80200320
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_interrupt (415)
+    Value: 0x802003F0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_extra_interrupt (430)
+    Value: 0x80200408
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: first_interrupt_state (451)
+    Value: 0x80200230
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: second_interrupt_state (473)
+    Value: 0x80200254
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: third_interrupt_state (496)
+    Value: 0x8020025C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: service_interrupt (518)
+    Value: 0x80200260
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_iir (536)
+    Value: 0x802003F8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_claim (545)
+    Value: 0x80200400
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: first_interrupt_done (556)
+    Value: 0x802002D0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: second_interrupt_done (577)
+    Value: 0x802002EC
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: interrupt_return (599)
+    Value: 0x802002FC
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: irq_message (616)
+    Value: 0x80200430
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: write_message_loop (628)
+    Value: 0x80200334
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: write_signature (647)
+    Value: 0x80200350
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: guest_done (663)
+    Value: 0x802003C0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail (674)
+    Value: 0x8020040C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_wait (679)
+    Value: 0x8020041C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: $d (689)
+    Value: 0x80200430
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: $d (692)
+    Value: 0x80210000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .bss (0x3)
+  }
+  Symbol {
+    Name: $d (695)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: _start (698)
+    Value: 0x80200000
+    Size: 1060
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x1)
+  }
+]

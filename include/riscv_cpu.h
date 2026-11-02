@@ -300,6 +300,39 @@ struct MachineUartMapping {
     bool enabled = false;
 };
 
+// Bounded one-hart PLIC profile using the QEMU virt register layout. Source
+// IDs 1..sourceCount are implemented; source zero is permanently reserved.
+constexpr uint32_t kMachinePlicMaxSources = 96;
+constexpr uint64_t kMachinePlicRegionSize = 0x400000ULL;
+struct MachinePlicMapping {
+    uint64_t baseAddress = 0x0C000000ULL;
+    uint32_t sourceCount = kMachinePlicMaxSources;
+    bool enabled = false;
+};
+
+enum class MachinePlicContext : uint8_t { Machine = 0, Supervisor = 1 };
+
+struct MachinePlicDiagnostics {
+    uint64_t priorityWrites = 0;
+    uint64_t enableWrites = 0;
+    uint64_t thresholdWrites = 0;
+    uint64_t claimReads = 0;
+    uint64_t completionWrites = 0;
+};
+
+enum class MachineMmioDevice : uint8_t { Uart, Plic, Timer };
+enum class MachineMmioOperation : uint8_t { Read, Write, Inject };
+struct MachineMmioEvent {
+    uint64_t sequence = 0;
+    uint64_t pc = 0;
+    uint64_t address = 0;
+    uint32_t value = 0;
+    uint8_t size = 0;
+    PrivilegeMode privilege = PrivilegeMode::Machine;
+    MachineMmioDevice device = MachineMmioDevice::Uart;
+    MachineMmioOperation operation = MachineMmioOperation::Read;
+};
+
 // SBI error codes (SBI Base, returned in a0 as signed 64-bit values).
 constexpr uint64_t kSbiSuccess = 0ULL;
 constexpr uint64_t kSbiErrFailed = static_cast<uint64_t>(-1LL);
@@ -440,6 +473,24 @@ public:
     const MachineUartMapping& machineUartMapping() const { return uartMapping_; }
     bool configureMachineUart(const MachineUartMapping& mapping);
     const std::string& machineUartOutput() const { return uartOutput_; }
+    const MachinePlicMapping& machinePlicMapping() const { return plicMapping_; }
+    bool configureMachinePlic(const MachinePlicMapping& mapping);
+    // Explicit host/test boundary for a serial receive event. The bounded
+    // non-FIFO model holds one byte; a second byte before RBR is read is
+    // rejected and sets the UART overrun indication.
+    bool injectMachineUartReceiveByte(uint8_t byte);
+    // Device-pin injection for isolated PLIC arbitration tests. The end-to-end
+    // firmware proof injects only through the UART receive boundary.
+    bool setMachinePlicSourceInputForTest(uint32_t source, bool asserted);
+    bool machineUartReceiveDataReady() const { return uartReceiveDataReady_; }
+    bool machineUartReceiveOverrun() const { return uartReceiveOverrun_; }
+    bool machineUartReceiveIrqAsserted() const;
+    bool machinePlicOutput(MachinePlicContext context) const;
+    bool machinePlicSourcePending(uint32_t source) const;
+    bool machinePlicSourceAsserted(uint32_t source) const;
+    const MachinePlicDiagnostics& machinePlicDiagnostics() const { return plicDiagnostics_; }
+    const std::vector<MachineMmioEvent>& machineMmioTrace() const { return machineMmioTrace_; }
+    uint64_t machineMmioEventSequence() const { return mmioEventSequence_; }
     uint64_t mmioReadCount() const { return mmioReadCount_; }
     uint64_t mmioWriteCount() const { return mmioWriteCount_; }
 
@@ -557,6 +608,18 @@ private:
     bool selectInterrupt(uint64_t& cause) const;
     bool wfiWakeEligible() const;
     void updateTimerPending();
+    uint64_t interruptPendingBits() const;
+    void resetPlicState();
+    void updateUartInterrupt() const;
+    void setPlicSourceLevel(uint32_t source, bool asserted) const;
+    bool plicMmioOverlaps(uint64_t paddr, size_t size) const;
+    bool readPlicMmio(uint64_t paddr, uint8_t* dst, size_t size, bool& handled) const;
+    bool writePlicMmio(uint64_t paddr, const uint8_t* src, size_t size, bool& handled);
+    bool plicHasEligibleSource(uint32_t context) const;
+    uint32_t plicClaim(uint32_t context) const;
+    void plicComplete(uint32_t context, uint32_t source) const;
+    void recordMmioEvent(MachineMmioDevice device, MachineMmioOperation operation,
+                         uint64_t address, size_t size, uint32_t value) const;
     void retireInstruction();
     bool timerMmioOverlaps(uint64_t paddr, size_t size) const;
     bool readTimerMmio(uint64_t paddr, uint8_t* dst, size_t size, bool& handled) const;
@@ -603,15 +666,30 @@ private:
     // Interrupt source and deterministic MTIMER state.
     MachineTimerMapping timerMapping_{};
     MachineUartMapping uartMapping_{};
+    MachinePlicMapping plicMapping_{};
     uint8_t uartInterruptEnable_ = 0;
     uint8_t uartLineControl_ = 0;
     uint8_t uartModemControl_ = 0;
     uint8_t uartScratch_ = 0;
     uint8_t uartDivisorLow_ = 0;
     uint8_t uartDivisorHigh_ = 0;
+    mutable uint8_t uartReceiveByte_ = 0;
+    mutable bool uartReceiveDataReady_ = false;
+    mutable bool uartReceiveOverrun_ = false;
     std::string uartOutput_;
     mutable uint64_t mmioReadCount_ = 0;
     uint64_t mmioWriteCount_ = 0;
+    mutable std::array<uint32_t, kMachinePlicMaxSources + 1> plicPriority_{};
+    mutable std::array<uint32_t, (kMachinePlicMaxSources + 32) / 32> plicPending_{};
+    mutable std::array<std::array<uint32_t, (kMachinePlicMaxSources + 32) / 32>, 2>
+        plicEnable_{};
+    mutable std::array<uint32_t, 2> plicThreshold_{};
+    // -1 means unclaimed; otherwise the owning context index (0 or 1).
+    mutable std::array<int8_t, kMachinePlicMaxSources + 1> plicClaimedBy_{};
+    mutable std::array<bool, kMachinePlicMaxSources + 1> plicSourceLevel_{};
+    mutable MachinePlicDiagnostics plicDiagnostics_{};
+    mutable std::vector<MachineMmioEvent> machineMmioTrace_;
+    mutable uint64_t mmioEventSequence_ = 0;
     uint64_t mtime_ = 0;
     uint64_t mtimecmp_ = UINT64_MAX;
     uint64_t supervisorTimerDeadline_ = UINT64_MAX;

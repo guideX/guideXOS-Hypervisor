@@ -1,0 +1,199 @@
+guideXOS Hypervisor — Phase RISCV-11 Report
+Authentic OpenSBI PLIC and UART Receive Interrupts
+
+Outcome: A
+
+Repository state
+----------------
+Required branch: RISCV
+Upstream: origin/RISCV
+Starting HEAD: 95f096907a01a3e0dc4fc28fade8d9655d3ec3c7
+Starting upstream divergence: 0/1 (one local commit ahead)
+Starting worktree: clean
+Starting phase marker: RISCV-10 complete; RISCV-11 next
+The expected starting HEAD matched. No branch operation was performed, and
+the existing local commit was retained. The local implementation commit SHA
+is recorded in the completion message. The final worktree contains no
+uncommitted tracked changes.
+
+Preservation and pre-edit regression
+------------------------------------
+The relocated artifact directory E:\CodexArtifacts\guideXOS_Hypervisor was
+checked before edits; no relevant moved RISC-V firmware, image, trace, or
+checkpoint was found or touched. RISCV-9/RISCV-10 firmware and fixtures were
+preserved. The shared .phase marker and IA-64 implementation files were not
+modified.
+
+All 15 pre-existing RISC-V CTest suites passed in Debug before implementation.
+The known-good OpenSBI v1.8.1 fw_jump image was reused byte-for-byte; the
+OpenSBI source was not patched or rebuilt. Its source commit is
+74434f255873d74e56cc50aa762d1caf24c099f8 and its SHA-256 is:
+  CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+
+PLIC implementation
+--------------------
+The bounded controller is connected through the existing guest physical
+MMIO path in RV64CPU. Its map is:
+
+  Base:                  0x0C000000
+  Priority:              base + 0x000000, 4 bytes per source
+  Pending:               base + 0x001000, read-only bitmap
+  Enables:               base + 0x002000 + context * 0x80
+  Enable stride:         0x80
+  Context threshold:     base + 0x200000 + context * 0x1000
+  Context claim/complete:threshold + 4
+  Context stride:        0x1000
+  Sources:               1..96 (source 0 reserved)
+  Supported contexts:    hart 0 M=0, S=1
+
+Registers require aligned 32-bit accesses and use little-endian values.
+Source priority is bounded to three bits. Priority zero disables eligibility;
+eligible priority must exceed the context threshold. Arbitration selects the
+highest priority then the lowest source ID. Claim atomically clears pending
+and records the claiming context. Invalid completion does not release a claim;
+completion of an asserted level source re-pends it. Context outputs are derived
+from enabled, pending, eligible sources. M/S state is per CPU and resets with
+that CPU. S-mode accesses to the M-context bank are rejected.
+
+UART subset and source wiring
+-----------------------------
+The existing UART transmit path remains at 0x10000000. The receive profile
+uses byte accesses and a one-byte non-FIFO holding register. Implemented
+behavior includes RBR clear-on-read, IER receive enable, IIR receive-data
+identification, LCR DLAB selection, DLL/DLM, LSR data-ready/overrun, and FCR
+receive reset. FIFO is disabled and is not advertised. While occupied, a new
+input is dropped and overrun is recorded. The host test uses the explicit
+injectMachineUartReceiveByte boundary; it does not service the guest handler.
+UART RX drives PLIC source 10 as a level. RBR clears the device request;
+completion while a level remains asserted permits controller re-pending.
+
+OpenSBI FDT and discovery
+------------------------
+The independently parsed DTB retains the RISCV-10 RAM, hart, 10 MHz timebase,
+UART, and ACLINT MTIMER descriptions and adds:
+
+  compatible = "sifive,plic-1.0.0", "riscv,plic0"
+  reg = <0x0 0x0c000000 0x0 0x00400000>
+  riscv,ndev = <96>
+  interrupts-extended = <&cpu0_intc 11>, <&cpu0_intc 9>
+  UART interrupt-parent = <&plic0>; interrupts = <10>
+
+Both compatible strings are recognized by the pinned OpenSBI v1.8.1 PLIC
+driver. The parser tests the phandle, interrupt IDs, base/size/source count,
+UART mapping, and malformed/missing controller cases. The authentic firmware
+run records OpenSBI M-mode priority writes (97), enable writes (9), and
+threshold writes (3) through actual PLIC MMIO. The independent S-mode guest
+then writes its source priority, enable and threshold through the same path.
+This is runtime discovery/initialization evidence, not a synthetic success
+flag.
+
+Authentic guest execution evidence
+----------------------------------
+The workload uses the production RV64CPU::step() path and authentic OpenSBI
+FW_JUMP handoff. The independently assembled RV64IMA_Zicsr guest checks its
+hart/FDT inputs, installs stvec, enables Sv39 with mapped guest RAM and device
+addresses, configures UART RX and PLIC source 10, and runs actual S-mode code.
+It verifies scause = 0x8000000000000009 in its handler, reads IIR, claims
+source 10, reads RBR, writes received-byte and claim records in guest RAM,
+completes the claim, and returns with SRET. The harness never writes SEIP,
+guest trap CSRs, claim state, or completion data as a shortcut.
+
+Three separate host input events were accepted at guest readiness handshakes:
+  0x41 ('A'), 0x62 ('b'), 0x7E ('~')
+The guest recorded them in that order and recorded claim ID 10 for each.
+There were three architectural supervisor external interrupt entries, three
+guest claims/completions, three SRET returns, and two guest WFI instructions
+with one interrupt wake. First, SEIE was locally enabled while global SIE was
+clear; the guest observed pending state through WFI and sip before enabling
+global SIE. Later, global SIE remained enabled while local SEIE was cleared;
+the guest observed UART DR and sip.SEIP before enabling SEIE again. Each
+masked receive was subsequently delivered to the S-mode handler. The guest
+runs this workload with Sv39 enabled (satp mode 8) through the UART and PLIC
+MMIO accesses.
+
+The guest writes the exact message:
+  Hello from OpenSBI UART IRQ on guideXOS
+It then writes the version-11 result signature, with the completion word last.
+The verified signature records hart 0, FDT address 0x82200000, three events,
+received bytes 0x41/0x62/0x7E, claim IDs 10/10/10, cause 0x8000000000000009,
+handler/trap state, global-mask evidence, and three serviced interrupts. The
+completion word is 0x434F4D504C455445 ("COMPLETE"). The final completion store
+was an S-mode SD at PC 0x802003BC.
+
+The focused Debug run completed in 4,806,326 emulator steps (4,805,665
+M-retired, 620 S-retired), with 2,778 MMIO reads and 2,930 writes. It recorded
+three SEIP traps, three SRETs, and the expected OpenSBI initialization writes.
+Its bounded trace includes UART injection and line state, PLIC MMIO, pending
+state, claims/completions, SEIP changes, trap causes and PCs, WFI, RBR reads,
+SRET, and guest completion. Diagnostic history is bounded to recent events.
+
+Artifact provenance
+-------------------
+The reproducible fixture is tests/fixtures/riscv_opensbi_plic_uart/. It records
+the compiler (clang 22.1.8), DTC 1.7.2, build flags, OpenSBI provenance,
+register map, and generated binary hashes in binary-manifest.txt.
+
+  OpenSBI fw_jump.bin SHA-256:
+    CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+  supervisor.bin SHA-256:
+    E88D76B210576DF5F16F7ABD1C5CD38602512F1747B00FEC51A2F1FC142FAEBF
+  supervisor.elf SHA-256:
+    380D7FF098621E28356CB08FCB25A8D97EF6E67C938B2AEA8803990174EC03D7
+  platform.dtb SHA-256:
+    A8A6ED44358757C49CF6F0F1735B34B6194CE29757CADE7808AAB9AE0B4E68D8
+
+New target, tests, and regression results
+-----------------------------------------
+RiscVOpenSbiPlicUartTests adds 166 runtime checks covering FDT contract and
+rejection cases; MMIO alignment, widths, offsets and ownership; priority,
+threshold, enable, arbitration, claim/completion/re-pending; UART receive,
+overrun, DLAB, reset and unsupported modes; reset and instance isolation;
+authentic firmware initialization; bounded execution; and the guest proof.
+
+  Pre-edit RISC-V Debug baseline:             15/15 passed
+  Final RISC-V Debug regression:              16/16 passed (328.39 sec)
+  Focused RISC-V-11 Debug target:               1/1 passed (166 checks)
+  Focused RISC-V-11 Release target:             1/1 passed
+  EfiMemoryMapTests + IA64SalTests, Debug:      2/2 passed
+  EfiMemoryMapTests + IA64SalTests, Release:    2/2 passed
+  git diff --check: passed
+
+The existing Debug suites include the independent RISCV-9 SBI Base and
+RISCV-10 SBI TIME/timer proofs. Their authentic firmware regressions passed
+in the final 16-suite Debug run. Existing unrelated test_io_devices assertion
+and legacy test_elf_validation IA-64 link limitations were not changed and
+remain outside the selected regressions. No IA-64 implementation file was
+edited. No QEMU or Linux boot was attempted.
+
+Files added or updated
+----------------------
+  CMakeLists.txt
+  include/riscv_cpu.h
+  src/riscv/riscv_cpu.cpp
+  tests/test_riscv_opensbi_plic_uart.cpp
+  tests/fixtures/riscv_opensbi_plic_uart/ (DTS, DTB, independent S-mode
+    assembly/linker input, payload binaries, build script, README, inspection
+    data, and manifest)
+  docs/riscv/phase-riscv-11-report.txt
+  docs/riscv/rv64-decoder-status.txt
+  .phase-riscv
+
+Linux and platform blockers
+---------------------------
+This result proves one bounded single-hart external-interrupt route; it is not
+complete QEMU virt compatibility. There is no Linux boot, Linux Image loader,
+SMP, PMP isolation, APLIC/IMSIC, virtio, PCI, storage/networking, or complete
+NS16550 behavior. A future Linux attempt must select a compatible kernel and
+firmware ISA profile, add/document Linux Image loading and entry registers,
+ensure RAM/reservations cover firmware/kernel/initramfs, and implement the
+devices and interrupt routes required by its selected console and root-device
+configuration. SBI HSM/IPI/RFENCE/SRST/DBCN use cases also need an explicit
+platform decision if the selected kernel exercises them.
+
+Recommended RISCV-12 target
+--------------------------
+Keep the single-hart scope and introduce a second independently pending guest
+device source. Prove deterministic arbitration, guest priority and threshold
+masking, architectural pending behavior, claim/completion ordering, and
+level-triggered re-pending under Sv39 before expanding the device set or
+starting Linux integration.

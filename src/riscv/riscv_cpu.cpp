@@ -330,9 +330,13 @@ void RV64CPU::reset() {
     uartScratch_ = 0;
     uartDivisorLow_ = 0;
     uartDivisorHigh_ = 0;
+    uartReceiveByte_ = 0;
+    uartReceiveDataReady_ = false;
+    uartReceiveOverrun_ = false;
     uartOutput_.clear();
     mmioReadCount_ = 0;
     mmioWriteCount_ = 0;
+    resetPlicState();
     updateTimerPending();
     // Guest memory image is preserved across reset; PC restarts at its base.
     if (memLoaded_) {
@@ -422,6 +426,17 @@ bool RV64CPU::uartMmioOverlaps(uint64_t paddr, size_t size) const {
     return paddr < uartEnd && uartMapping_.baseAddress < accessEnd;
 }
 
+bool RV64CPU::plicMmioOverlaps(uint64_t paddr, size_t size) const {
+    if (!plicMapping_.enabled || size == 0 ||
+        static_cast<uint64_t>(size) > UINT64_MAX - paddr ||
+        plicMapping_.baseAddress > UINT64_MAX - kMachinePlicRegionSize) {
+        return false;
+    }
+    const uint64_t accessEnd = paddr + static_cast<uint64_t>(size);
+    const uint64_t plicEnd = plicMapping_.baseAddress + kMachinePlicRegionSize;
+    return paddr < plicEnd && plicMapping_.baseAddress < accessEnd;
+}
+
 bool RV64CPU::readUartMmio(uint64_t paddr, uint8_t* dst, size_t size,
                            bool& handled) const {
     handled = uartMmioOverlaps(paddr, size);
@@ -435,21 +450,38 @@ bool RV64CPU::readUartMmio(uint64_t paddr, uint8_t* dst, size_t size,
     uint8_t value = 0;
     switch (offset) {
         case 0:
-            value = (uartLineControl_ & 0x80U) != 0U ? uartDivisorLow_ : 0U;
+            if ((uartLineControl_ & 0x80U) != 0U) {
+                value = uartDivisorLow_;
+            } else {
+                value = uartReceiveDataReady_ ? uartReceiveByte_ : 0U;
+                uartReceiveDataReady_ = false;
+                updateUartInterrupt();
+            }
             break;
         case 1:
             value = (uartLineControl_ & 0x80U) != 0U ? uartDivisorHigh_
                                                      : uartInterruptEnable_;
             break;
-        case 2: value = 0x01U; break;  // No interrupt pending.
+        case 2:
+            // FIFO capability bits remain zero: only the non-FIFO receive
+            // data-available interrupt is implemented.
+            value = machineUartReceiveIrqAsserted() ? 0x04U : 0x01U;
+            break;
         case 3: value = uartLineControl_; break;
         case 4: value = uartModemControl_; break;
-        case 5: value = 0x60U; break;  // THR and transmitter are empty.
+        case 5:
+            value = static_cast<uint8_t>(0x60U |
+                (uartReceiveDataReady_ ? 0x01U : 0U) |
+                (uartReceiveOverrun_ ? 0x02U : 0U));
+            uartReceiveOverrun_ = false;
+            break;
         case 6: value = 0; break;      // No modem inputs are connected.
         case 7: value = uartScratch_; break;
         default: return false;
     }
     dst[0] = value;
+    recordMmioEvent(MachineMmioDevice::Uart, MachineMmioOperation::Read,
+                    paddr, size, value);
     return true;
 }
 
@@ -474,9 +506,18 @@ bool RV64CPU::writeUartMmio(uint64_t paddr, const uint8_t* src, size_t size,
             break;
         case 1:
             if ((uartLineControl_ & 0x80U) != 0U) uartDivisorHigh_ = value;
-            else uartInterruptEnable_ = value & 0x0FU;
+            else {
+                // Receive-data-available is the only enabled interrupt mode.
+                uartInterruptEnable_ = value & 0x01U;
+                updateUartInterrupt();
+            }
             break;
-        case 2:  // FCR: transmit-only fixture has no FIFO state to clear.
+        case 2:  // FCR: non-FIFO profile supports receiver reset only.
+            if ((value & 0x02U) != 0U) {
+                uartReceiveDataReady_ = false;
+                uartReceiveOverrun_ = false;
+                updateUartInterrupt();
+            }
             break;
         case 3: uartLineControl_ = value; break;
         case 4: uartModemControl_ = value & 0x1FU; break;
@@ -486,6 +527,126 @@ bool RV64CPU::writeUartMmio(uint64_t paddr, const uint8_t* src, size_t size,
         case 7: uartScratch_ = value; break;
         default: return false;
     }
+    recordMmioEvent(MachineMmioDevice::Uart, MachineMmioOperation::Write,
+                    paddr, size, value);
+    return true;
+}
+
+bool RV64CPU::readPlicMmio(uint64_t paddr, uint8_t* dst, size_t size,
+                           bool& handled) const {
+    handled = plicMmioOverlaps(paddr, size);
+    if (!handled) return true;
+    if (dst == nullptr || size != 4 || (paddr & 3ULL) != 0ULL ||
+        paddr < plicMapping_.baseAddress) {
+        return false;
+    }
+    const uint64_t offset = paddr - plicMapping_.baseAddress;
+    uint32_t value = 0;
+    bool valid = false;
+    if (offset < 0x1000ULL) {
+        const uint32_t source = static_cast<uint32_t>(offset / 4ULL);
+        if ((offset & 3ULL) == 0ULL && source <= plicMapping_.sourceCount) {
+            value = source == 0 ? 0U : plicPriority_[source];
+            valid = true;
+        }
+    } else if (offset >= 0x1000ULL && offset < 0x1010ULL) {
+        const uint32_t word = static_cast<uint32_t>((offset - 0x1000ULL) / 4ULL);
+        if (((offset - 0x1000ULL) & 3ULL) == 0ULL && word < plicPending_.size()) {
+            value = plicPending_[word] & ~1U;
+            const uint32_t firstSource = word * 32U;
+            if (firstSource > plicMapping_.sourceCount) value = 0;
+            else if (plicMapping_.sourceCount - firstSource < 31U) {
+                const uint32_t validBits = plicMapping_.sourceCount - firstSource + 1U;
+                value &= (1U << validBits) - 1U;
+            }
+            valid = true;
+        }
+    } else if (offset >= 0x2000ULL && offset < 0x2100ULL) {
+        const uint32_t context = static_cast<uint32_t>((offset - 0x2000ULL) / 0x80ULL);
+        const uint32_t within = static_cast<uint32_t>((offset - 0x2000ULL) % 0x80ULL);
+        const uint32_t word = within / 4U;
+        if (context < 2U && (within & 3U) == 0U && word < plicEnable_[context].size()) {
+            if (priv_ == PrivilegeMode::Supervisor && context == 0U) return false;
+            value = plicEnable_[context][word];
+            valid = true;
+        }
+    } else if (offset >= 0x200000ULL && offset < 0x202000ULL) {
+        const uint32_t context = static_cast<uint32_t>((offset - 0x200000ULL) / 0x1000ULL);
+        const uint32_t within = static_cast<uint32_t>((offset - 0x200000ULL) % 0x1000ULL);
+        if (context < 2U && within == 0U) {
+            if (priv_ == PrivilegeMode::Supervisor && context == 0U) return false;
+            value = plicThreshold_[context];
+            valid = true;
+        } else if (context < 2U && within == 4U) {
+            if (priv_ == PrivilegeMode::Supervisor && context == 0U) return false;
+            value = plicClaim(context);
+            ++plicDiagnostics_.claimReads;
+            valid = true;
+        }
+    }
+    if (!valid) return false;
+    for (size_t i = 0; i < 4; ++i) dst[i] = static_cast<uint8_t>(value >> (8U * i));
+    recordMmioEvent(MachineMmioDevice::Plic, MachineMmioOperation::Read,
+                    paddr, size, value);
+    return true;
+}
+
+bool RV64CPU::writePlicMmio(uint64_t paddr, const uint8_t* src, size_t size,
+                            bool& handled) {
+    handled = plicMmioOverlaps(paddr, size);
+    if (!handled) return true;
+    if (src == nullptr || size != 4 || (paddr & 3ULL) != 0ULL ||
+        paddr < plicMapping_.baseAddress) {
+        return false;
+    }
+    uint32_t value = static_cast<uint32_t>(src[0]) |
+        (static_cast<uint32_t>(src[1]) << 8) |
+        (static_cast<uint32_t>(src[2]) << 16) |
+        (static_cast<uint32_t>(src[3]) << 24);
+    const uint64_t offset = paddr - plicMapping_.baseAddress;
+    bool valid = false;
+    if (offset < 0x1000ULL) {
+        const uint32_t source = static_cast<uint32_t>(offset / 4ULL);
+        if ((offset & 3ULL) == 0ULL && source <= plicMapping_.sourceCount) {
+            if (source != 0) plicPriority_[source] = value & 0x7U;
+            ++plicDiagnostics_.priorityWrites;
+            valid = true;
+        }
+    } else if (offset >= 0x2000ULL && offset < 0x2100ULL) {
+        const uint32_t context = static_cast<uint32_t>((offset - 0x2000ULL) / 0x80ULL);
+        const uint32_t within = static_cast<uint32_t>((offset - 0x2000ULL) % 0x80ULL);
+        const uint32_t word = within / 4U;
+        if (context < 2U && (within & 3U) == 0U && word < plicEnable_[context].size()) {
+            if (priv_ == PrivilegeMode::Supervisor && context == 0U) return false;
+            value &= ~1U;  // Source zero is never enabled.
+            const uint32_t firstSource = word * 32U;
+            if (firstSource > plicMapping_.sourceCount) value = 0;
+            else if (plicMapping_.sourceCount - firstSource < 31U) {
+                const uint32_t validBits = plicMapping_.sourceCount - firstSource + 1U;
+                value &= (1U << validBits) - 1U;
+            }
+            plicEnable_[context][word] = value;
+            ++plicDiagnostics_.enableWrites;
+            valid = true;
+        }
+    } else if (offset >= 0x200000ULL && offset < 0x202000ULL) {
+        const uint32_t context = static_cast<uint32_t>((offset - 0x200000ULL) / 0x1000ULL);
+        const uint32_t within = static_cast<uint32_t>((offset - 0x200000ULL) % 0x1000ULL);
+        if (context < 2U && within == 0U) {
+            if (priv_ == PrivilegeMode::Supervisor && context == 0U) return false;
+            plicThreshold_[context] = value & 0x7U;
+            ++plicDiagnostics_.thresholdWrites;
+            valid = true;
+        } else if (context < 2U && within == 4U) {
+            if (priv_ == PrivilegeMode::Supervisor && context == 0U) return false;
+            plicComplete(context, value);
+            ++plicDiagnostics_.completionWrites;
+            valid = true;
+        }
+    }
+    if (!valid) return false;
+    recordMmioEvent(MachineMmioDevice::Plic, MachineMmioOperation::Write,
+                    paddr, size, value);
     return true;
 }
 
@@ -561,6 +722,11 @@ bool RV64CPU::readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const {
         return memLoaded_;
     }
     bool handled = false;
+    const bool plicRead = readPlicMmio(paddr, dst, size, handled);
+    if (handled) {
+        if (plicRead) ++mmioReadCount_;
+        return plicRead;
+    }
     const bool uartRead = readUartMmio(paddr, dst, size, handled);
     if (handled) {
         if (uartRead) ++mmioReadCount_;
@@ -615,6 +781,11 @@ bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
         return memLoaded_;
     }
     bool handled = false;
+    const bool plicWrite = writePlicMmio(paddr, src, size, handled);
+    if (handled) {
+        if (plicWrite) ++mmioWriteCount_;
+        return plicWrite;
+    }
     const bool uartWrite = writeUartMmio(paddr, src, size, handled);
     if (handled) {
         if (uartWrite) ++mmioWriteCount_;
@@ -660,6 +831,18 @@ bool RV64CPU::configureMachineTimer(const MachineTimerMapping& mapping) {
             return false;
         }
     }
+    if (plicMapping_.enabled) {
+        const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
+                                 uint64_t rhs, uint64_t rhsSize) {
+            return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
+        };
+        if (overlaps(mapping.mtimecmpAddress, 8, plicMapping_.baseAddress,
+                     kMachinePlicRegionSize) ||
+            overlaps(mapping.mtimeAddress, 8, plicMapping_.baseAddress,
+                     kMachinePlicRegionSize)) {
+            return false;
+        }
+    }
     timerMapping_ = mapping;
     updateTimerPending();
     return true;
@@ -667,8 +850,11 @@ bool RV64CPU::configureMachineTimer(const MachineTimerMapping& mapping) {
 
 bool RV64CPU::configureMachineUart(const MachineUartMapping& mapping) {
     if (!mapping.enabled) {
+        setPlicSourceLevel(10, false);
         uartMapping_ = mapping;
         uartOutput_.clear();
+        uartReceiveDataReady_ = false;
+        uartReceiveOverrun_ = false;
         return true;
     }
     if ((mapping.baseAddress & 7ULL) != 0ULL ||
@@ -685,6 +871,11 @@ bool RV64CPU::configureMachineUart(const MachineUartMapping& mapping) {
         overlaps(mapping.baseAddress, 8, timerMapping_.mtimecmpAddress, 8)) {
         return false;
     }
+    if (plicMapping_.enabled &&
+        overlaps(mapping.baseAddress, 8, plicMapping_.baseAddress,
+                 kMachinePlicRegionSize)) {
+        return false;
+    }
     uartMapping_ = mapping;
     uartInterruptEnable_ = 0;
     uartLineControl_ = 0;
@@ -692,8 +883,188 @@ bool RV64CPU::configureMachineUart(const MachineUartMapping& mapping) {
     uartScratch_ = 0;
     uartDivisorLow_ = 0;
     uartDivisorHigh_ = 0;
+    uartReceiveByte_ = 0;
+    uartReceiveDataReady_ = false;
+    uartReceiveOverrun_ = false;
     uartOutput_.clear();
+    setPlicSourceLevel(10, false);
     return true;
+}
+
+bool RV64CPU::configureMachinePlic(const MachinePlicMapping& mapping) {
+    if (!mapping.enabled) {
+        plicMapping_ = mapping;
+        resetPlicState();
+        return true;
+    }
+    if ((mapping.baseAddress & 0xFFFULL) != 0ULL ||
+        mapping.baseAddress > UINT64_MAX - kMachinePlicRegionSize ||
+        mapping.sourceCount == 0 || mapping.sourceCount > kMachinePlicMaxSources ||
+        (memLoaded_ && rangeInGuest(mapping.baseAddress, kMachinePlicRegionSize))) {
+        return false;
+    }
+    const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
+                             uint64_t rhs, uint64_t rhsSize) {
+        if (lhs > UINT64_MAX - lhsSize || rhs > UINT64_MAX - rhsSize) return true;
+        return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
+    };
+    if (overlaps(mapping.baseAddress, kMachinePlicRegionSize,
+                 timerMapping_.mtimeAddress, 8) ||
+        overlaps(mapping.baseAddress, kMachinePlicRegionSize,
+                 timerMapping_.mtimecmpAddress, 8) ||
+        (uartMapping_.enabled && overlaps(mapping.baseAddress, kMachinePlicRegionSize,
+                                          uartMapping_.baseAddress, 8))) {
+        return false;
+    }
+    plicMapping_ = mapping;
+    resetPlicState();
+    updateUartInterrupt();
+    return true;
+}
+
+bool RV64CPU::injectMachineUartReceiveByte(uint8_t byte) {
+    if (!uartMapping_.enabled) return false;
+    recordMmioEvent(MachineMmioDevice::Uart, MachineMmioOperation::Inject,
+                    uartMapping_.baseAddress, 1, byte);
+    if (uartReceiveDataReady_) {
+        uartReceiveOverrun_ = true;
+        return false;
+    }
+    uartReceiveByte_ = byte;
+    uartReceiveDataReady_ = true;
+    updateUartInterrupt();
+    return true;
+}
+
+bool RV64CPU::setMachinePlicSourceInputForTest(uint32_t source, bool asserted) {
+    if (!plicMapping_.enabled || source == 0 || source == 10 ||
+        source > plicMapping_.sourceCount) {
+        return false;
+    }
+    setPlicSourceLevel(source, asserted);
+    recordMmioEvent(MachineMmioDevice::Plic, MachineMmioOperation::Inject,
+                    plicMapping_.baseAddress, sizeof(uint32_t),
+                    (source & 0xFFFFU) | (asserted ? 0x10000U : 0U));
+    return true;
+}
+
+bool RV64CPU::machineUartReceiveIrqAsserted() const {
+    return uartReceiveDataReady_ && (uartInterruptEnable_ & 0x01U) != 0U;
+}
+
+bool RV64CPU::machinePlicOutput(MachinePlicContext context) const {
+    if (!plicMapping_.enabled) return false;
+    return plicHasEligibleSource(static_cast<uint32_t>(context));
+}
+
+bool RV64CPU::machinePlicSourcePending(uint32_t source) const {
+    if (!plicMapping_.enabled || source == 0 || source > plicMapping_.sourceCount) return false;
+    return (plicPending_[source / 32U] & (1U << (source % 32U))) != 0U;
+}
+
+bool RV64CPU::machinePlicSourceAsserted(uint32_t source) const {
+    if (!plicMapping_.enabled || source == 0 || source > plicMapping_.sourceCount) return false;
+    return plicSourceLevel_[source];
+}
+
+void RV64CPU::resetPlicState() {
+    plicPriority_.fill(0);
+    plicPending_.fill(0);
+    for (auto& context : plicEnable_) context.fill(0);
+    plicThreshold_.fill(0);
+    plicClaimedBy_.fill(-1);
+    plicSourceLevel_.fill(false);
+    plicDiagnostics_ = MachinePlicDiagnostics{};
+    machineMmioTrace_.clear();
+    mmioEventSequence_ = 0;
+}
+
+void RV64CPU::recordMmioEvent(MachineMmioDevice device, MachineMmioOperation operation,
+                              uint64_t address, size_t size, uint32_t value) const {
+    constexpr size_t traceCapacity = 8192;
+    if (machineMmioTrace_.size() == traceCapacity) machineMmioTrace_.erase(machineMmioTrace_.begin());
+    MachineMmioEvent event;
+    event.sequence = ++mmioEventSequence_;
+    event.pc = state_.GetPC();
+    event.address = address;
+    event.value = value;
+    event.size = static_cast<uint8_t>(size);
+    event.privilege = priv_;
+    event.device = device;
+    event.operation = operation;
+    machineMmioTrace_.push_back(event);
+}
+
+void RV64CPU::setPlicSourceLevel(uint32_t source, bool asserted) const {
+    if (!plicMapping_.enabled || source == 0 || source > plicMapping_.sourceCount) return;
+    plicSourceLevel_[source] = asserted;
+    const uint32_t word = source / 32U;
+    const uint32_t bit = 1U << (source % 32U);
+    if (asserted && plicClaimedBy_[source] < 0) plicPending_[word] |= bit;
+}
+
+void RV64CPU::updateUartInterrupt() const {
+    setPlicSourceLevel(10, machineUartReceiveIrqAsserted());
+}
+
+bool RV64CPU::plicHasEligibleSource(uint32_t context) const {
+    if (context > 1U) return false;
+    for (uint32_t source = 1; source <= plicMapping_.sourceCount; ++source) {
+        const uint32_t word = source / 32U;
+        const uint32_t bit = 1U << (source % 32U);
+        if ((plicPending_[word] & bit) != 0U &&
+            (plicEnable_[context][word] & bit) != 0U &&
+            plicClaimedBy_[source] < 0 &&
+            plicPriority_[source] > plicThreshold_[context]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t RV64CPU::plicClaim(uint32_t context) const {
+    if (context > 1U) return 0;
+    uint32_t selected = 0;
+    uint32_t selectedPriority = 0;
+    for (uint32_t source = 1; source <= plicMapping_.sourceCount; ++source) {
+        const uint32_t word = source / 32U;
+        const uint32_t bit = 1U << (source % 32U);
+        const uint32_t priority = plicPriority_[source];
+        if ((plicPending_[word] & bit) == 0U ||
+            (plicEnable_[context][word] & bit) == 0U ||
+            plicClaimedBy_[source] >= 0 || priority == 0U ||
+            priority <= plicThreshold_[context]) {
+            continue;
+        }
+        if (priority > selectedPriority || (priority == selectedPriority &&
+                                           (selected == 0 || source < selected))) {
+            selected = source;
+            selectedPriority = priority;
+        }
+    }
+    if (selected != 0) {
+        plicPending_[selected / 32U] &= ~(1U << (selected % 32U));
+        plicClaimedBy_[selected] = static_cast<int8_t>(context);
+    }
+    return selected;
+}
+
+void RV64CPU::plicComplete(uint32_t context, uint32_t source) const {
+    if (context > 1U || source == 0 || source > plicMapping_.sourceCount ||
+        plicClaimedBy_[source] != static_cast<int8_t>(context)) {
+        return;
+    }
+    plicClaimedBy_[source] = -1;
+    if (plicSourceLevel_[source]) {
+        plicPending_[source / 32U] |= 1U << (source % 32U);
+    }
+}
+
+uint64_t RV64CPU::interruptPendingBits() const {
+    uint64_t pending = mip_;
+    if (machinePlicOutput(MachinePlicContext::Machine)) pending |= kInterruptMachineExternalBit;
+    if (machinePlicOutput(MachinePlicContext::Supervisor)) pending |= kInterruptSupervisorExternalBit;
+    return pending;
 }
 
 void RV64CPU::updateTimerPending() {
@@ -753,7 +1124,7 @@ bool RV64CPU::setInterruptPending(uint64_t cause, bool pending) {
 }
 
 bool RV64CPU::wfiWakeEligible() const {
-    return (mip_ & mie_ & kInterruptImplementedMask) != 0ULL;
+    return (interruptPendingBits() & mie_ & kInterruptImplementedMask) != 0ULL;
 }
 
 bool RV64CPU::waitingForInterrupt() const {
@@ -869,8 +1240,8 @@ bool RV64CPU::csrRead(uint32_t csr, uint64_t& value) const {
         case kCsrMideleg: value = mideleg_; return true;
         case kCsrMie: value = mie_ & kMieWritableMask; return true;
         case kCsrSie: value = mie_ & mideleg_ & kInterruptSupervisorMask; return true;
-        case kCsrMip: value = mip_ & kInterruptImplementedMask; return true;
-        case kCsrSip: value = mip_ & mideleg_ & kInterruptSupervisorMask; return true;
+        case kCsrMip: value = interruptPendingBits() & kInterruptImplementedMask; return true;
+        case kCsrSip: value = interruptPendingBits() & mideleg_ & kInterruptSupervisorMask; return true;
         case kCsrMtvec: value = mtvec_; return true;
         case kCsrStvec: value = stvec_; return true;
         case kCsrMscratch: value = mscratch_; return true;
@@ -1077,9 +1448,10 @@ bool RV64CPU::selectInterrupt(uint64_t& cause) const {
         kInterruptMachineTimer, kInterruptSupervisorExternal,
         kInterruptSupervisorSoftware, kInterruptSupervisorTimer,
     };
+    const uint64_t pending = interruptPendingBits();
     for (const uint64_t candidate : priority) {
         const uint64_t bit = 1ULL << candidate;
-        if ((mip_ & mie_ & bit) == 0ULL) continue;
+        if ((pending & mie_ & bit) == 0ULL) continue;
         const bool delegated = (mideleg_ & bit) != 0ULL;
         if (delegated) {
             // A delegated interrupt targets S-mode and never interrupts M-mode.

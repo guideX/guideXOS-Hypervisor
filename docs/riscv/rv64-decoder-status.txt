@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-9)
+RISC-V Decoder and Execution Status (updated Phase RISCV-11)
 
 Current decoded instruction families:
 - RV64I
@@ -479,42 +479,64 @@ Validation and next target:
   https://github.com/riscv-software-src/opensbi/blob/master/docs/platform/qemu_virt.md
   https://github.com/torvalds/linux/blob/master/arch/riscv/kernel/sbi.c
 
---- Current executable status after Phase RISCV-10 ---
+--- Current executable status after Phase RISCV-11 ---
 
 - Production RV64CPU::step() executes genuine OpenSBI v1.8.1 generic FW_JUMP
-  machine code and performs its MRET-controlled S-mode handoff. RISCV-10 reuses
-  the exact RISCV-9 firmware bytes and adds the real ACLINT MTIMER FDT and
-  deterministic MMIO device behavior. No host SBI provider is installed in
-  either authentic firmware proof.
+  machine code and performs its MRET-controlled S-mode handoff. RISCV-11
+  reuses the exact RISCV-10 firmware bytes and adds a bounded PLIC-compatible
+  controller and UART receive interrupt path. No host SBI provider is
+  installed in the authentic firmware proofs.
 - The pinned firmware is built for RV64IMA_Zicsr. Its ET_DYN ELF is retained
   and inspected; the paired configured raw fw_jump.bin is loaded in the
   bounded 2 MiB firmware slot. The existing static ET_EXEC RISC-V ELF loader
   is not weakened. Independent supervisor ELFs are loaded at 0x80200000.
 - The FDT at 0x82200000 describes 64 MiB RAM, one RV64IMA_Zicsr/Sv39 hart, the
-  CPU interrupt controller, 10 MHz timebase, supported byte-transmit UART,
-  and riscv,aclint-mtimer with named mtime=0x0200BFF8 and
-  mtimecmp=0x02004000 64-bit registers connected to hart 0 cause 7. OpenSBI
-  reported "Platform Timer Device : aclint-mtimer @ 10000000Hz" at startup.
-  No software or external interrupt controller is advertised. The platform
-  remains single-hart with deterministic CPU virtual time.
-- The timer advances one virtual tick per retired guest instruction; the
-  bounded harness advances virtual time during WFI. mtime >= mtimecmp asserts
-  MTIP independently of MTIE. OpenSBI's machine timer code handles cause 7 and
-  presents delegated cause 5 as STIP using architectural CSR state. Three
-  guest S-mode timer handlers rearm via SBI TIME and return with SRET. The
-  supervisor runs with Sv39 enabled. The full evidence and hashes are in
-  phase-riscv-10-report.txt.
-- M-mode mvendorid/marchid/mimpid reads return zero and writes remain illegal,
-  matching the unassigned-ID profile; unknown CSRs remain traps. The opt-in
-  UART covers eight byte-wide registers; wider or out-of-range accesses fault.
-  It is not a complete NS16550 or QEMU virt model.
-- Validation: all 15 RISC-V CTest suites passed in Debug; the final focused
-  timer suite also passed after trace instrumentation. The focused timer suite
-  passed in Release. EfiMemoryMapTests and IA64SalTests passed in Debug and
-  Release (2/2 each). The unrelated pre-existing test_io_devices assertion
-  and test_elf_validation IA-64 link limitations remain outside this phase.
-- Next target recommendation: implement one selected external-interrupt
-  controller/device path with bounded guest-visible delivery evidence. Keep
-  SMP and Linux boot out of scope until the selected FDT, loader, memory, and
-  interrupt contracts are separately established. Inspect firmware ISA and
-  advertised services before expanding CPU or platform support.
+  CPU interrupt controller, 10 MHz timebase, UART, riscv,aclint-mtimer with
+  mtime=0x0200BFF8 and mtimecmp=0x02004000 connected to hart 0 cause 7, and a
+  96-source PLIC at 0x0C000000. The PLIC uses M/S contexts 0/1 and connects
+  hart 0 causes 11/9. UART receive source 10 is routed to that PLIC. OpenSBI
+  v1.8.1 discovers the `sifive,plic-1.0.0` / `riscv,plic0` compatible and
+  executes priority, enable and threshold writes through guest MMIO. The
+  platform remains single-hart with deterministic CPU virtual time.
+- Timer behavior from RISCV-10 remains active: virtual time advances one tick
+  per retired guest instruction, mtime >= mtimecmp asserts MTIP, and OpenSBI
+  turns MTIP into delegated STIP through its SBI TIME path. The independent
+  RISCV-10 proof is preserved in phase-riscv-10-report.txt.
+- The PLIC implements 32-bit aligned little-endian MMIO, source priorities,
+  read-only pending bits, per-context enables and thresholds, highest
+  priority arbitration with lowest-ID ties, claim/complete ownership, level
+  re-pending, and MEIP/SEIP outputs. Priority zero and priority at or below
+  threshold are ineligible. M-mode cannot be routed through the S context.
+  State is per CPU instance. This is a bounded single-hart profile, not full
+  QEMU virt or general multi-context PLIC compatibility.
+- UART receive implements a non-FIFO, one-byte holding register: RBR, IER RX,
+  IIR receive identification, LCR/DLAB with DLL/DLM, LSR DR/OE, and FCR RX
+  reset behavior. Overrun drops the new byte and sets OE. Host injection
+  raises the UART level; reading RBR clears it. It is not a complete NS16550.
+- The independent S-mode guest receives authentic FW_JUMP handoff, enables
+  Sv39, and executes all PLIC/UART accesses through RV64CPU::step(). Three
+  separate inputs (0x41, 0x62, 0x7E) caused three architectural SEIP cause-9
+  traps (mcause/scause interrupt bit set), source-10 claims, RBR reads,
+  guest-memory records, PLIC completions, and SRETs. Guest-visible checks prove
+  source state survives both global SIE masking and local SEIE masking, then
+  delivers after re-enable. Guest WFI executes twice and wakes once. The
+  version-11 signature stores all three bytes/claims and the completion word
+  last; the guest also emits the requested message. Full trace and artifact
+  hashes are in phase-riscv-11-report.txt.
+- Validation: all 16 RISC-V CTest suites passed in Debug, including the
+  authentic OpenSBI PLIC/UART suite. The focused new target passed in both
+  Debug and Release. EfiMemoryMapTests and IA64SalTests passed in Debug and
+  Release (2/2 each), with no IA-64 source edits. Existing unrelated
+  test_io_devices and legacy test_elf_validation limitations remain outside
+  this phase.
+- Linux remains out of scope. The platform has one hart and no PMP, APLIC,
+  IMSIC, virtio, PCI, storage, networking, or general FIFO UART. A Linux target
+  still needs an explicit firmware/kernel ISA profile, Linux Image loader and
+  entry contract, adequate memory/reservations, and devices selected for the
+  root filesystem, console, and interrupt model. This result makes no claim
+  of complete QEMU virt compatibility.
+- Recommended RISCV-12 target: retain one hart and validate arbitration among
+  at least two independently pending guest device sources, including masking,
+  priority ordering, claim/complete, and level re-pending under Sv39. Use that
+  evidence to select the next platform/device contract before any Linux boot
+  work.
