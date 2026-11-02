@@ -52,6 +52,10 @@ bool validV2Spsr(uint32_t value) {
     return (value & ~supported) == 0;
 }
 
+bool validSctlr(uint64_t value) {
+    return (value & ~((1ULL << 0) | (1ULL << 19))) == 0;
+}
+
 ia64::ISAExecutionResult faultToResult(Fault fault) {
     // Every AARCH64-1 fault is reported deterministically as an exception;
     // unsupported instructions are never silently skipped.
@@ -98,7 +102,18 @@ void AArch64State::serialize(uint8_t* buffer) const {
     offset += 4;
     putU64LE(buffer + offset, farEl1_);
     offset += 8;
-    putU32LE(buffer + offset, 0u); // reserved, must be zero
+    putU32LE(buffer + offset, exceptionVectorPending_ ? 1u : 0u);
+    offset += 4;
+    putU64LE(buffer + offset, sctlrEl1_); offset += 8;
+    putU64LE(buffer + offset, tcrEl1_); offset += 8;
+    putU64LE(buffer + offset, ttbr0El1_); offset += 8;
+    putU64LE(buffer + offset, ttbr1El1_); offset += 8;
+    putU64LE(buffer + offset, mairEl1_); offset += 8;
+    putU64LE(buffer + offset, effectiveSctlrEl1_); offset += 8;
+    putU64LE(buffer + offset, effectiveTcrEl1_); offset += 8;
+    putU64LE(buffer + offset, effectiveTtbr0El1_); offset += 8;
+    putU64LE(buffer + offset, effectiveTtbr1El1_); offset += 8;
+    putU64LE(buffer + offset, effectiveMairEl1_);
 }
 
 void AArch64State::deserialize(const uint8_t* buffer) {
@@ -106,7 +121,7 @@ void AArch64State::deserialize(const uint8_t* buffer) {
         throw std::invalid_argument("AArch64State: bad magic");
     }
     const uint32_t version = getU32LE(buffer + 4);
-    if (version != 1u && version != kStateVersion) {
+    if (version != 1u && version != 2u && version != kStateVersion) {
         throw std::invalid_argument("AArch64State: unsupported version");
     }
 
@@ -126,6 +141,10 @@ void AArch64State::deserialize(const uint8_t* buffer) {
     uint64_t vbar = 0;
     uint32_t esr = 0;
     uint64_t far = 0;
+    uint64_t sctlr = 0, tcr = 0, ttbr0 = 0, ttbr1 = 0, mair = 0;
+    uint64_t effectiveSctlr = 0, effectiveTcr = 0;
+    uint64_t effectiveTtbr0 = 0, effectiveTtbr1 = 0, effectiveMair = 0;
+    bool exceptionVectorPending = false;
     if (version == 1u) {
         const uint64_t legacySp = getU64LE(buffer + offset);
         offset += 8;
@@ -160,17 +179,42 @@ void AArch64State::deserialize(const uint8_t* buffer) {
         offset += 4;
         far = getU64LE(buffer + offset);
         offset += 8;
-        if (getU32LE(buffer + offset) != 0u) {
-            throw std::invalid_argument("AArch64State: v2 reserved word must be zero");
+        const uint32_t stateFlags = getU32LE(buffer + offset);
+        if ((version == 2u && stateFlags != 0u) ||
+            (version == 3u && (stateFlags & ~1u) != 0)) {
+            throw std::invalid_argument("AArch64State: reserved state flags are nonzero");
         }
+        exceptionVectorPending = version == 3u && (stateFlags & 1u) != 0;
         if (!validV2Pstate(pstate)) {
-            throw std::invalid_argument("AArch64State: invalid v2 PSTATE mode or reserved bits");
+            throw std::invalid_argument("AArch64State: invalid PSTATE mode or reserved bits");
         }
         if (!validV2Spsr(spsr)) {
             throw std::invalid_argument("AArch64State: SPSR_EL1 contains unsupported/reserved fields");
         }
         if ((vbar & 0x7FFu) != 0) {
             throw std::invalid_argument("AArch64State: VBAR_EL1 must be 2 KiB aligned");
+        }
+        if (version == 3u) {
+            offset += 4; // v3 exception-vector flag word, parsed above
+            sctlr = getU64LE(buffer + offset); offset += 8;
+            tcr = getU64LE(buffer + offset); offset += 8;
+            ttbr0 = getU64LE(buffer + offset); offset += 8;
+            ttbr1 = getU64LE(buffer + offset); offset += 8;
+            mair = getU64LE(buffer + offset); offset += 8;
+            effectiveSctlr = getU64LE(buffer + offset); offset += 8;
+            effectiveTcr = getU64LE(buffer + offset); offset += 8;
+            effectiveTtbr0 = getU64LE(buffer + offset); offset += 8;
+            effectiveTtbr1 = getU64LE(buffer + offset); offset += 8;
+            effectiveMair = getU64LE(buffer + offset);
+            if (!validSctlr(sctlr) || !validSctlr(effectiveSctlr)) {
+                throw std::invalid_argument("AArch64State: unsupported SCTLR_EL1 fields");
+            }
+            std::string reason;
+            if (((sctlr & 1u) != 0 && !AArch64MMU::validateTcr(tcr, &reason)) ||
+                ((effectiveSctlr & 1u) != 0 &&
+                 !AArch64MMU::validateTcr(effectiveTcr, &reason))) {
+                throw std::invalid_argument("AArch64State: invalid active TCR_EL1 state: " + reason);
+            }
         }
     }
 
@@ -184,6 +228,17 @@ void AArch64State::deserialize(const uint8_t* buffer) {
     vbarEl1_ = vbar;
     esrEl1_ = esr;
     farEl1_ = far;
+    sctlrEl1_ = sctlr;
+    tcrEl1_ = tcr;
+    ttbr0El1_ = ttbr0;
+    ttbr1El1_ = ttbr1;
+    mairEl1_ = mair;
+    effectiveSctlrEl1_ = effectiveSctlr;
+    effectiveTcrEl1_ = effectiveTcr;
+    effectiveTtbr0El1_ = effectiveTtbr0;
+    effectiveTtbr1El1_ = effectiveTtbr1;
+    effectiveMairEl1_ = effectiveMair;
+    exceptionVectorPending_ = exceptionVectorPending;
 }
 
 std::string AArch64State::toString() const {
@@ -209,6 +264,17 @@ void AArch64State::capture(const Cpu& cpu) {
     vbarEl1_ = cpu.vbarEl1();
     esrEl1_ = cpu.esrEl1();
     farEl1_ = cpu.farEl1();
+    sctlrEl1_ = cpu.sctlrEl1();
+    tcrEl1_ = cpu.tcrEl1();
+    ttbr0El1_ = cpu.ttbr0El1();
+    ttbr1El1_ = cpu.ttbr1El1();
+    mairEl1_ = cpu.mairEl1();
+    effectiveSctlrEl1_ = cpu.effectiveSctlrEl1();
+    effectiveTcrEl1_ = cpu.effectiveTcrEl1();
+    effectiveTtbr0El1_ = cpu.effectiveTtbr0El1();
+    effectiveTtbr1El1_ = cpu.effectiveTtbr1El1();
+    effectiveMairEl1_ = cpu.effectiveMairEl1();
+    exceptionVectorPending_ = cpu.exceptionVectorPending_;
 }
 
 void AArch64State::applyTo(Cpu& cpu) const {
@@ -224,6 +290,17 @@ void AArch64State::applyTo(Cpu& cpu) const {
     cpu.setVbarEl1(vbarEl1_);
     cpu.setEsrEl1(esrEl1_);
     cpu.setFarEl1(farEl1_);
+    cpu.sctlrEl1_ = sctlrEl1_;
+    cpu.tcrEl1_ = tcrEl1_;
+    cpu.ttbr0El1_ = ttbr0El1_;
+    cpu.ttbr1El1_ = ttbr1El1_;
+    cpu.mairEl1_ = mairEl1_;
+    cpu.effectiveSctlrEl1_ = effectiveSctlrEl1_;
+    cpu.effectiveTcrEl1_ = effectiveTcrEl1_;
+    cpu.effectiveTtbr0El1_ = effectiveTtbr0El1_;
+    cpu.effectiveTtbr1El1_ = effectiveTtbr1El1_;
+    cpu.effectiveMairEl1_ = effectiveMairEl1_;
+    cpu.exceptionVectorPending_ = exceptionVectorPending_;
 }
 
 uint64_t AArch64State::sp() const {
@@ -269,7 +346,12 @@ size_t AArch64ISAPlugin::getInstructionLength(ia64::IMemory& /*memory*/,
 ia64::ISAExecutionResult AArch64ISAPlugin::execute(
     ia64::IMemory& memory, const ia64::ISADecodeResult& decodeResult) {
     if (!decodeResult.valid || decodeResult.internalData == nullptr) {
-        return ia64::ISAExecutionResult::EXCEPTION;
+        if (decodeResult.internalData == nullptr) return ia64::ISAExecutionResult::EXCEPTION;
+        const Decoded* failed = static_cast<const Decoded*>(decodeResult.internalData);
+        if (!failed->hasMemoryAbort) return ia64::ISAExecutionResult::EXCEPTION;
+        const Fault fault = cpu_.executeDecoded(*failed, memory);
+        state_.capture(cpu_);
+        return faultToResult(fault);
     }
     const Decoded* decoded = static_cast<const Decoded*>(decodeResult.internalData);
     // AARCH64-2: guest memory is forwarded so LDR/STR execute real data
@@ -314,9 +396,15 @@ std::vector<uint8_t> AArch64ISAPlugin::serialize_state() const {
 }
 
 bool AArch64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
-    if (data.size() != kSerializedStateSize && data.size() != kSerializedStateV1Size) {
+    if (data.size() != kSerializedStateSize && data.size() != kSerializedStateV2Size &&
+        data.size() != kSerializedStateV1Size) {
         return false;
     }
+    const uint32_t version = getU32LE(data.data() + 4);
+    if ((version == 1u && data.size() != kSerializedStateV1Size) ||
+        (version == 2u && data.size() != kSerializedStateV2Size) ||
+        (version == 3u && data.size() != kSerializedStateSize) ||
+        (version < 1u || version > 3u)) return false;
     AArch64State snapshot;
     try {
         snapshot.deserialize(data.data());
@@ -333,20 +421,7 @@ std::string AArch64ISAPlugin::dumpState() const {
 }
 
 std::string AArch64ISAPlugin::disassemble(ia64::IMemory& memory, uint64_t address) {
-    if ((address & 3u) != 0) {
-        return "<unaligned>";
-    }
-    uint8_t bytes[kInstructionSize] = {};
-    try {
-        memory.Read(address, bytes, sizeof(bytes));
-    } catch (const std::exception&) {
-        return "<unreadable>";
-    }
-    const uint32_t word = static_cast<uint32_t>(bytes[0]) |
-                          (static_cast<uint32_t>(bytes[1]) << 8) |
-                          (static_cast<uint32_t>(bytes[2]) << 16) |
-                          (static_cast<uint32_t>(bytes[3]) << 24);
-    const Decoded decoded = Cpu::decodeWord(word, address);
+    const Decoded decoded = cpu_.fetchDecodeAt(memory, address);
     return decoded.valid ? decoded.disassembly : std::string("<invalid>: ") + decoded.error;
 }
 
@@ -365,7 +440,10 @@ bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
             feature == "MOV_BITMASK" || feature == "CSEL" || feature == "CSINC" ||
             feature == "CSET" || feature == "CINC" || feature == "MRS" ||
             feature == "MSR" || feature == "SVC" || feature == "BRK" ||
-            feature == "ERET" || feature == "EL0_EL1" || feature == "SP_BANKING";
+            feature == "ERET" || feature == "DSB" || feature == "DMB" ||
+            feature == "ISB" || feature == "SCTLR_EL1" || feature == "TCR_EL1" ||
+            feature == "TTBR0_EL1" || feature == "TTBR1_EL1" || feature == "MAIR_EL1" ||
+            feature == "STAGE1_MMU" || feature == "EL0_EL1" || feature == "SP_BANKING";
 }
 
 std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint,

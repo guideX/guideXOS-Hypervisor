@@ -1102,7 +1102,7 @@ void testPluginAndSerialization() {
         badMagic[0] = 0x00;
         CHECK(!restored->deserialize_state(badMagic));
         std::vector<uint8_t> badVersion = blob;
-        badVersion[4] = 3;
+        badVersion[4] = 4;
         CHECK(!restored->deserialize_state(badVersion));
         CHECK(!restored->deserialize_state(std::vector<uint8_t>(100, 0)));
         CHECK(!restored->deserialize_state(std::vector<uint8_t>(281, 0)));

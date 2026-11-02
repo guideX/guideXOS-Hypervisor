@@ -27,15 +27,17 @@
 //     with the ARM DecodeBitMasks algorithm and reserved-encoding rejection.
 //   - CSEL/CSINC conditional selection (and the CSET/CINC aliases).
 //   - A three-level nested compiler-style call chain (stp/ldp frames).
-// SCOPE (Phase AARCH64-5, additive): EL0/EL1 synchronous exceptions, selected
-//   system registers, SVC/BRK, VBAR_EL1 vector dispatch and ERET.
-// OUT OF SCOPE: MMU, GIC interrupts, timers, PL011, virtio, SMP,
+// SCOPE (Phase AARCH64-5/6, additive): EL0/EL1 synchronous exceptions,
+//   selected system registers, SVC/BRK, VBAR_EL1 vector dispatch, ERET and a
+//   bounded guest-controlled EL0/EL1 Stage-1 4 KiB MMU. With SCTLR_EL1.M=0,
+//   the established flat-memory execution profile remains active.
+// OUT OF SCOPE: Stage-2, EL2/EL3, GIC interrupts, timers, PL011, virtio, SMP,
 //   JIT, SIMD/FP, and the rest of the A64 ISA (see docs/aarch64/).
 //
 // AARCH64-2 memory profile (explicit and bounded):
 //   - Little-endian guest data access through the generic IMemory contract.
-//   - Normal memory, no MMU, no Device mapping, no EL-specific system
-//     registers (SCTLR_ELx.A alignment control is therefore deferred).
+//   - Normal memory, no Device mapping, no SCTLR_ELx.A alignment control
+//     (deferred); Stage-1 translation is an additive AARCH64-6 profile.
 //   - Architecturally permitted unaligned ordinary LDR/STR accesses are
 //     ALLOWED in this profile (ARM permits them for Normal memory when
 //     alignment checking is disabled).
@@ -66,6 +68,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "aarch64/AArch64MMU.h"
 
 namespace ia64 {
 class IMemory; // generic memory contract; no IA-64 specifics required
@@ -105,6 +109,7 @@ enum class Fault {
     UnallocatedEncoding, // bit pattern is unallocated/malformed in A64
     UnsupportedFeature,  // allocated A64 encoding outside the subset
     MemoryFault,         // guest data access failed or its address range wrapped
+    TranslationFault,    // guest-controlled Stage-1 translation/access abort
 };
 
 // Implemented A64 operation set.
@@ -149,6 +154,9 @@ enum class Op {
     Svc,      // SVC #imm16: synchronous exception to EL1
     Brk,      // BRK #imm16: breakpoint instruction exception
     Eret,     // ERET: restore PSTATE from SPSR_EL1 and PC from ELR_EL1
+    Dsb,      // DSB: ordered single-CPU memory operation
+    Dmb,      // DMB: ordered single-CPU memory operation
+    Isb,      // ISB: instruction context synchronization event
 };
 
 // Result of decoding one 32-bit A64 instruction word.
@@ -195,6 +203,11 @@ struct Decoded {
     uint64_t address = 0;      // address the word was fetched from
     uint32_t word = 0;         // raw instruction word
     Fault fault = Fault::None;
+    bool hasMemoryAbort = false;
+    bool memoryAbortInstruction = false;
+    bool memoryAbortWrite = false;
+    bool memoryAbortWalk = false;
+    uint8_t memoryAbortStatus = 0;
     std::string error;         // human-readable fault detail (empty when valid)
     std::string disassembly;   // valid only
 };
@@ -266,6 +279,21 @@ public:
     void setEsrEl1(uint32_t value) { esrEl1_ = value; }
     uint64_t farEl1() const { return farEl1_; }
     void setFarEl1(uint64_t value) { farEl1_ = value; }
+    uint64_t sctlrEl1() const { return sctlrEl1_; }
+    uint64_t tcrEl1() const { return tcrEl1_; }
+    uint64_t ttbr0El1() const { return ttbr0El1_; }
+    uint64_t ttbr1El1() const { return ttbr1El1_; }
+    uint64_t mairEl1() const { return mairEl1_; }
+    uint64_t effectiveSctlrEl1() const { return effectiveSctlrEl1_; }
+    uint64_t effectiveTcrEl1() const { return effectiveTcrEl1_; }
+    uint64_t effectiveTtbr0El1() const { return effectiveTtbr0El1_; }
+    uint64_t effectiveTtbr1El1() const { return effectiveTtbr1El1_; }
+    uint64_t effectiveMairEl1() const { return effectiveMairEl1_; }
+    void setSctlrEl1(uint64_t value) { sctlrEl1_ = effectiveSctlrEl1_ = value; }
+    void setTcrEl1(uint64_t value) { tcrEl1_ = effectiveTcrEl1_ = value; }
+    void setTtbr0El1(uint64_t value) { ttbr0El1_ = effectiveTtbr0El1_ = value; }
+    void setTtbr1El1(uint64_t value) { ttbr1El1_ = effectiveTtbr1El1_ = value; }
+    void setMairEl1(uint64_t value) { mairEl1_ = effectiveMairEl1_ = value; }
     bool flagN() const { return (pstate_ & kPstateN) != 0; }
     bool flagZ() const { return (pstate_ & kPstateZ) != 0; }
     bool flagC() const { return (pstate_ & kPstateC) != 0; }
@@ -277,6 +305,7 @@ public:
     static Decoded decodeWord(uint32_t word, uint64_t address);
     // Fetch 4 bytes little-endian at PC and decode.
     Decoded fetchDecode(ia64::IMemory& memory) const;
+    Decoded fetchDecodeAt(ia64::IMemory& memory, uint64_t address) const;
     // Execute a previously decoded instruction. Executing an invalid
     // Decoded returns its fault and changes no architectural state.
     // All implemented loads/stores, including pair, unscaled and indexed
@@ -301,10 +330,24 @@ public:
     std::string dumpState() const;
 
 private:
+    friend class AArch64State;
     Fault executeSystemRegister(const Decoded& decoded);
     Fault executePstateImmediate(const Decoded& decoded);
     void takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
                                   uint64_t preferredReturnAddress);
+    void synchronizeTranslationContext();
+    void takeMemoryAbort(uint64_t faultAddress, MMUAccess access,
+                         uint8_t faultStatus, bool duringTableWalk);
+    bool readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
+                         uint8_t* destination, size_t size, MMUAccess access,
+                         Decoded* fetchFault, uint8_t* status = nullptr,
+                         bool* duringWalk = nullptr,
+                         uint64_t* faultAddress = nullptr) const;
+    bool writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
+                          const uint8_t* source, size_t size,
+                          uint8_t* status = nullptr,
+                          bool* duringWalk = nullptr,
+                          uint64_t* faultAddress = nullptr);
     Fault executeEret(const Decoded& decoded);
     uint64_t& activeSpRef();
     const uint64_t& activeSpRef() const;
@@ -319,6 +362,20 @@ private:
     uint64_t vbarEl1_ = 0;
     uint32_t esrEl1_ = 0;
     uint64_t farEl1_ = 0;
+    uint64_t sctlrEl1_ = 0;
+    uint64_t tcrEl1_ = 0;
+    uint64_t ttbr0El1_ = 0;
+    uint64_t ttbr1El1_ = 0;
+    uint64_t mairEl1_ = 0;
+    uint64_t effectiveSctlrEl1_ = 0;
+    uint64_t effectiveTcrEl1_ = 0;
+    uint64_t effectiveTtbr0El1_ = 0;
+    uint64_t effectiveTtbr1El1_ = 0;
+    uint64_t effectiveMairEl1_ = 0;
+    // True until the first instruction at the latest exception vector has
+    // been fetched and dispatched. A failed fetch in this window is fatal,
+    // preventing an unmapped vector from repeatedly aborting into itself.
+    bool exceptionVectorPending_ = false;
     Fault lastFault_ = Fault::None;
     std::string lastError_;
 };

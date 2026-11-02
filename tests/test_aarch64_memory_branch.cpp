@@ -1303,7 +1303,7 @@ void testPluginCoverage() {
 
     // AARCH64-1 280-byte blobs stay compatible: hand-built v1 state loads.
     // (Magic 0x41363431 stored little-endian: bytes 31 34 36 41.)
-    std::vector<uint8_t> v1(kSerializedStateSize, 0);
+    std::vector<uint8_t> v1(kSerializedStateV1Size, 0);
     v1[0] = 0x31;
     v1[1] = 0x34;
     v1[2] = 0x36;

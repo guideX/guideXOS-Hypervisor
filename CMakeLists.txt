@@ -687,6 +687,7 @@ add_test(NAME AArch64MemoryBranchTests COMMAND test_aarch64_memory_branch)
 add_test(NAME AArch64PcStackTests COMMAND test_aarch64_pc_stack)
 add_test(NAME AArch64CompilerStackTests COMMAND test_aarch64_compiler_stack)
 add_test(NAME AArch64ExceptionLevelTests COMMAND test_aarch64_exception_levels)
+add_test(NAME AArch64MMUTests COMMAND test_aarch64_mmu)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -727,6 +728,7 @@ endif()
 set(AARCH64_SOURCES
     src/aarch64/AArch64Cpu.cpp
     src/aarch64/AArch64ISAPlugin.cpp
+    src/aarch64/AArch64MMU.cpp
 )
 
 add_executable(test_aarch64_foundation
@@ -838,4 +840,23 @@ if(MSVC)
     target_compile_options(test_aarch64_exception_levels PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_exception_levels PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# AARCH64-6: bounded Stage-1 MMU table walking, permissions and production CPU
+# translation/fault integration. Uses the same CPU and ISA plugin as the guest.
+add_executable(test_aarch64_mmu
+    tests/test_aarch64_mmu.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_aarch64_mmu PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_aarch64_mmu PRIVATE /W4)
+else()
+    target_compile_options(test_aarch64_mmu PRIVATE -Wall -Wextra -Wpedantic)
 endif()

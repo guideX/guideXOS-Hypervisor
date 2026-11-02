@@ -1180,7 +1180,7 @@ void testIntegratedLogicConditionalProgram() {
 void testPluginAndSerialization() {
     AArch64ISAPlugin plugin(0);
     FlatMemory memory(0x1000);
-    CHECK(plugin.getVersion().find("AARCH64-5") != std::string::npos);
+    CHECK(plugin.getVersion().find("AARCH64-6") != std::string::npos);
     for (const char* feature : {"STP", "LDP", "LDUR", "STUR", "LDR_PRE", "STR_POST",
                                 "AND_IMM", "ORR_IMM", "EOR_IMM", "ANDS_IMM", "TST_IMM",
                                 "MOV_BITMASK", "CSEL", "CSINC", "CSET", "CINC"}) {

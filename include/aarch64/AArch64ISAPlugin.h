@@ -32,11 +32,14 @@ inline constexpr const char* kArchName = "AArch64";
 //   magic[4] = {'A','6','4','1'}, version u32 = 1,
 //   X0..X30 (31 x u64), SP u64, PC u64, PSTATE u32, reserved u32.
 // Version 2 adds SP_EL0, SP_EL1, ELR_EL1, SPSR_EL1, VBAR_EL1, ESR_EL1 and
-// FAR_EL1, replacing the single legacy SP with both banks.
+// FAR_EL1, replacing the single legacy SP with both banks. Version 3 appends
+// programmed and context-synchronized SCTLR/TCR/TTBR0/TTBR1/MAIR state. The
+// v3 reserved word stores one bounded exception-vector dispatch flag.
 inline constexpr std::size_t kSerializedStateV1Size = 4 + 4 + 31 * 8 + 8 + 8 + 4 + 4;
-inline constexpr std::size_t kSerializedStateSize = 320;
+inline constexpr std::size_t kSerializedStateV2Size = 320;
+inline constexpr std::size_t kSerializedStateSize = 400;
 inline constexpr uint32_t kStateMagic = 0x41363431u; // "A641"
-inline constexpr uint32_t kStateVersion = 2u;
+inline constexpr uint32_t kStateVersion = 3u;
 
 // ISAState implementation holding an AArch64 architectural snapshot.
 class AArch64State : public ia64::ISAState {
@@ -66,6 +69,11 @@ public:
     uint64_t vbarEl1() const { return vbarEl1_; }
     uint32_t esrEl1() const { return esrEl1_; }
     uint64_t farEl1() const { return farEl1_; }
+    uint64_t sctlrEl1() const { return sctlrEl1_; }
+    uint64_t tcrEl1() const { return tcrEl1_; }
+    uint64_t ttbr0El1() const { return ttbr0El1_; }
+    uint64_t ttbr1El1() const { return ttbr1El1_; }
+    uint64_t mairEl1() const { return mairEl1_; }
 
 private:
     uint64_t x_[31] = {};
@@ -78,6 +86,17 @@ private:
     uint64_t vbarEl1_ = 0;
     uint32_t esrEl1_ = 0;
     uint64_t farEl1_ = 0;
+    uint64_t sctlrEl1_ = 0;
+    uint64_t tcrEl1_ = 0;
+    uint64_t ttbr0El1_ = 0;
+    uint64_t ttbr1El1_ = 0;
+    uint64_t mairEl1_ = 0;
+    uint64_t effectiveSctlrEl1_ = 0;
+    uint64_t effectiveTcrEl1_ = 0;
+    uint64_t effectiveTtbr0El1_ = 0;
+    uint64_t effectiveTtbr1El1_ = 0;
+    uint64_t effectiveMairEl1_ = 0;
+    bool exceptionVectorPending_ = false;
 };
 
 // IISA implementation backed by aarch64::Cpu.
@@ -88,7 +107,7 @@ public:
 
     // -- identity ------------------------------------------------------
     std::string getName() const override { return kArchName; }
-    std::string getVersion() const override { return "AARCH64-5 (ARMv8-A A64 subset)"; }
+    std::string getVersion() const override { return "AARCH64-6 (ARMv8-A Stage-1 MMU subset)"; }
     void reset() override;
 
     // -- decode / execute -----------------------------------------------

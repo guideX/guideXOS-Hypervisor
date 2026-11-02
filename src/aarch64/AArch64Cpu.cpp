@@ -179,6 +179,11 @@ const char* sysregName(uint8_t op0, uint8_t op1, uint8_t crn,
     case sysregKey(3, 0, 12, 0, 0): return "vbar_el1";
     case sysregKey(3, 0, 5, 2, 0): return "esr_el1";
     case sysregKey(3, 0, 6, 0, 0): return "far_el1";
+    case sysregKey(3, 0, 1, 0, 0): return "sctlr_el1";
+    case sysregKey(3, 0, 2, 0, 2): return "tcr_el1";
+    case sysregKey(3, 0, 2, 0, 0): return "ttbr0_el1";
+    case sysregKey(3, 0, 2, 0, 1): return "ttbr1_el1";
+    case sysregKey(3, 0, 10, 2, 0): return "mair_el1";
     default: return nullptr;
     }
 }
@@ -298,6 +303,10 @@ void Cpu::reset(uint64_t entryPoint, ExceptionLevel initialLevel) {
     vbarEl1_ = 0;
     esrEl1_ = 0;
     farEl1_ = 0;
+    sctlrEl1_ = tcrEl1_ = ttbr0El1_ = ttbr1El1_ = mairEl1_ = 0;
+    effectiveSctlrEl1_ = effectiveTcrEl1_ = effectiveTtbr0El1_ =
+        effectiveTtbr1El1_ = effectiveMairEl1_ = 0;
+        exceptionVectorPending_ = false;
     lastFault_ = Fault::None;
     lastError_.clear();
 }
@@ -358,6 +367,144 @@ void Cpu::setNzcv(bool n, bool z, bool c, bool v) {
     if (z) pstate_ |= kPstateZ;
     if (c) pstate_ |= kPstateC;
     if (v) pstate_ |= kPstateV;
+}
+
+void Cpu::synchronizeTranslationContext() {
+    effectiveSctlrEl1_ = sctlrEl1_;
+    effectiveTcrEl1_ = tcrEl1_;
+    effectiveTtbr0El1_ = ttbr0El1_;
+    effectiveTtbr1El1_ = ttbr1El1_;
+    effectiveMairEl1_ = mairEl1_;
+}
+
+void Cpu::takeMemoryAbort(uint64_t faultAddress, MMUAccess access,
+                          uint8_t faultStatus, bool duringTableWalk) {
+    const bool instruction = access == MMUAccess::Instruction;
+    const bool write = access == MMUAccess::Write;
+    const uint8_t originEl = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    const uint8_t exceptionClass = instruction
+        ? (originEl == 0 ? 0x20u : 0x21u)
+        : (originEl == 0 ? 0x24u : 0x25u);
+    uint32_t iss = faultStatus & 0x3Fu;
+    if (!instruction) {
+        if (write) iss |= 1u << 6;
+    }
+    // S1PTW describes a stage-2 fault on a stage-1 table-walk access; it is
+    // RES0 in this stage-1-only profile. The FSC itself distinguishes a walk
+    // external abort (0x14..0x17) from an output-memory external abort (0x10).
+    (void)duringTableWalk;
+    if (faultStatus == 0x10u || (faultStatus >= 0x14u && faultStatus <= 0x17u)) {
+        iss |= 1u << 9; // synchronous external abort, including instruction aborts
+    }
+    farEl1_ = faultAddress;
+    takeSynchronousException(exceptionClass, iss, pc_);
+    lastFault_ = Fault::None;
+    lastError_.clear();
+}
+
+bool Cpu::readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
+                          uint8_t* destination, size_t size, MMUAccess access,
+                          Decoded* fetchFault, uint8_t* status,
+                          bool* duringWalk, uint64_t* faultAddress) const {
+    if ((effectiveSctlrEl1_ & 1u) == 0) {
+        memory.Read(virtualAddress, destination, size);
+        return true;
+    }
+    const auto fail = [&](uint8_t dfsc, bool walk, uint64_t faultVa) {
+        if (status != nullptr) *status = dfsc;
+        if (duringWalk != nullptr) *duringWalk = walk;
+        if (faultAddress != nullptr) *faultAddress = faultVa;
+        if (fetchFault != nullptr) {
+            fetchFault->hasMemoryAbort = true;
+            fetchFault->memoryAbortInstruction = access == MMUAccess::Instruction;
+            fetchFault->memoryAbortWrite = access == MMUAccess::Write;
+            fetchFault->memoryAbortWalk = walk;
+            fetchFault->memoryAbortStatus = dfsc;
+        }
+        return false;
+    };
+    if (size == 0) return true;
+    if (!addressRangeIsRepresentable(virtualAddress, size)) return fail(0x00, false, virtualAddress);
+    struct Segment { uint64_t pa; size_t offset; size_t size; };
+    std::vector<Segment> segments;
+    size_t completed = 0;
+    while (completed < size) {
+        const uint64_t va = virtualAddress + static_cast<uint64_t>(completed);
+        const size_t pageRemaining = static_cast<size_t>(AArch64MMU::kPageSize -
+            (va & (AArch64MMU::kPageSize - 1u)));
+        const size_t count = (size - completed < pageRemaining) ? size - completed : pageRemaining;
+        const MMUResult translated = AArch64MMU::translate(
+            memory, va, static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2), access,
+            effectiveTcrEl1_, effectiveTtbr0El1_, effectiveTtbr1El1_,
+            effectiveMairEl1_, (effectiveSctlrEl1_ & (1u << 19)) != 0);
+        if (!translated.success) return fail(translated.faultStatus, translated.duringTableWalk, va);
+        const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
+        if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
+            const uint64_t validBytes = translated.physicalAddress > total
+                ? 0 : total - translated.physicalAddress;
+            return fail(0x10, false, va + (validBytes < count ? validBytes : count));
+        }
+        segments.push_back({translated.physicalAddress, completed, count});
+        completed += count;
+    }
+    for (const Segment& segment : segments) {
+        try {
+            memory.Read(segment.pa, destination + segment.offset, segment.size);
+        } catch (...) {
+            return fail(0x10, false, virtualAddress + segment.offset);
+        }
+    }
+    return true;
+}
+
+bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
+                           const uint8_t* source, size_t size,
+                           uint8_t* status, bool* duringWalk,
+                           uint64_t* faultAddress) {
+    if ((effectiveSctlrEl1_ & 1u) == 0) {
+        memory.Write(virtualAddress, source, size);
+        return true;
+    }
+    const auto fail = [&](uint8_t dfsc, bool walk, uint64_t faultVa) {
+        if (status != nullptr) *status = dfsc;
+        if (duringWalk != nullptr) *duringWalk = walk;
+        if (faultAddress != nullptr) *faultAddress = faultVa;
+        return false;
+    };
+    if (size == 0) return true;
+    if (!addressRangeIsRepresentable(virtualAddress, size)) return fail(0x00, false, virtualAddress);
+    struct Segment { uint64_t pa; size_t offset; size_t size; };
+    std::vector<Segment> segments;
+    size_t completed = 0;
+    while (completed < size) {
+        const uint64_t va = virtualAddress + static_cast<uint64_t>(completed);
+        const size_t pageRemaining = static_cast<size_t>(AArch64MMU::kPageSize -
+            (va & (AArch64MMU::kPageSize - 1u)));
+        const size_t count = (size - completed < pageRemaining) ? size - completed : pageRemaining;
+        const MMUResult translated = AArch64MMU::translate(
+            memory, va, static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2), MMUAccess::Write,
+            effectiveTcrEl1_, effectiveTtbr0El1_, effectiveTtbr1El1_,
+            effectiveMairEl1_, (effectiveSctlrEl1_ & (1u << 19)) != 0);
+        if (!translated.success) return fail(translated.faultStatus, translated.duringTableWalk, va);
+        const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
+        if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
+            const uint64_t validBytes = translated.physicalAddress > total
+                ? 0 : total - translated.physicalAddress;
+            return fail(0x10, false, va + (validBytes < count ? validBytes : count));
+        }
+        segments.push_back({translated.physicalAddress, completed, count});
+        completed += count;
+    }
+    // Translate and bounds-check the entire virtual range before the first
+    // physical write, so a later-page permission fault cannot partially store.
+    for (const Segment& segment : segments) {
+        try {
+            memory.Write(segment.pa, source + segment.offset, segment.size);
+        } catch (...) {
+            return fail(0x10, false, virtualAddress + segment.offset);
+        }
+    }
+    return true;
 }
 
 Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
@@ -846,6 +993,35 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         return d;
     }
 
+    // DSB/DMB/ISB. The single-CPU profile executes DSB and DMB in program
+    // order; ISB additionally commits pending translation-control writes.
+    {
+        const uint32_t barrier = word & 0xFFFFF0FFu;
+        if (barrier == 0xD503309Fu || barrier == 0xD50330BFu ||
+            barrier == 0xD50330DFu) {
+            const uint8_t option = static_cast<uint8_t>((word >> 8) & 0xFu);
+            const bool validOption = option == 0xFu || option == 0xEu ||
+                option == 0xDu || option == 0xBu || option == 0xAu ||
+                option == 0x9u || option == 0x7u || option == 0x6u ||
+                option == 0x5u || option == 0x3u || option == 0x2u ||
+                option == 0x1u;
+            const bool isIsb = barrier == 0xD50330DFu;
+            if ((isIsb && option != 0xFu) || (!isIsb && !validOption)) {
+                return invalid(word, address, Fault::UnallocatedEncoding,
+                               "reserved DSB/DMB/ISB option");
+            }
+            Decoded d;
+            d.op = barrier == 0xD503309Fu ? Op::Dsb :
+                   barrier == 0xD50330BFu ? Op::Dmb : Op::Isb;
+            d.valid = true;
+            d.word = word;
+            d.address = address;
+            d.sysCrm = option;
+            d.disassembly = d.op == Op::Dsb ? "dsb" : d.op == Op::Dmb ? "dmb" : "isb";
+            return d;
+        }
+    }
+
     // MRS/MSR system-register forms and the PSTATE-immediate aliases. System
     // register fields are retained in the decoded operation so permission
     // checks happen at execution using the guest's current EL.
@@ -968,24 +1144,38 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
 }
 
 Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
-    if ((pc_ & 3u) != 0) {
-        return invalid(0, pc_, Fault::UnalignedPC,
+    return fetchDecodeAt(memory, pc_);
+}
+
+Decoded Cpu::fetchDecodeAt(ia64::IMemory& memory, uint64_t address) const {
+    if ((address & 3u) != 0) {
+        return invalid(0, address, Fault::UnalignedPC,
                        "PC is not 4-byte aligned for A64 fetch");
     }
-    if (!addressRangeIsRepresentable(pc_, kInstructionSize)) {
-        return invalid(0, pc_, Fault::InvalidFetch,
+    if (!addressRangeIsRepresentable(address, kInstructionSize)) {
+        return invalid(0, address, Fault::InvalidFetch,
                        "instruction fetch range wraps the 64-bit address space");
     }
     uint8_t bytes[kInstructionSize] = {};
     try {
-        memory.Read(pc_, bytes, sizeof(bytes));
+        Decoded fetchFault;
+        if (!readGuestMemory(memory, address, bytes, sizeof(bytes),
+                             MMUAccess::Instruction, &fetchFault)) {
+            Decoded d = invalid(0, address, Fault::TranslationFault,
+                                "Stage-1 instruction fetch abort");
+            d.hasMemoryAbort = true;
+            d.memoryAbortInstruction = true;
+            d.memoryAbortStatus = fetchFault.memoryAbortStatus;
+            d.memoryAbortWalk = fetchFault.memoryAbortWalk;
+            return d;
+        }
     } catch (const std::exception& ex) {
-        Decoded d = invalid(0, pc_, Fault::InvalidFetch, "instruction fetch failed");
+        Decoded d = invalid(0, address, Fault::InvalidFetch, "instruction fetch failed");
         d.error += ": ";
         d.error += ex.what();
         return d;
     } catch (...) {
-        return invalid(0, pc_, Fault::InvalidFetch,
+        return invalid(0, address, Fault::InvalidFetch,
                        "instruction fetch failed with a non-standard memory exception");
     }
     // A64 is little-endian: byte 0 is bits [7:0]. Assembled manually so the
@@ -994,11 +1184,13 @@ Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
                           (static_cast<uint32_t>(bytes[1]) << 8) |
                           (static_cast<uint32_t>(bytes[2]) << 16) |
                           (static_cast<uint32_t>(bytes[3]) << 24);
-    return decodeWord(word, pc_);
+    return decodeWord(word, address);
 }
 
 void Cpu::takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
                                   uint64_t preferredReturnAddress) {
+    // Synchronous exception entry is a context synchronization event.
+    synchronizeTranslationContext();
     const uint8_t originEl = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
     uint64_t vectorOffset = 0x400; // lower EL using AArch64
     if (originEl == 1) {
@@ -1016,6 +1208,7 @@ void Cpu::takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
     pstate_ = (pstate_ & (kPstateN | kPstateZ | kPstateC | kPstateV)) |
               kPstateDAIF | 0x5u;
     pc_ = vbarEl1_ + vectorOffset;
+    exceptionVectorPending_ = true;
 }
 
 Fault Cpu::executeSystemRegister(const Decoded& decoded) {
@@ -1039,13 +1232,19 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     const uint16_t vbarKey = sysregKey(3, 0, 12, 0, 0);
     const uint16_t esrKey = sysregKey(3, 0, 5, 2, 0);
     const uint16_t farKey = sysregKey(3, 0, 6, 0, 0);
+    const uint16_t sctlrKey = sysregKey(3, 0, 1, 0, 0);
+    const uint16_t tcrKey = sysregKey(3, 0, 2, 0, 2);
+    const uint16_t ttbr0Key = sysregKey(3, 0, 2, 0, 0);
+    const uint16_t ttbr1Key = sysregKey(3, 0, 2, 0, 1);
+    const uint16_t mairKey = sysregKey(3, 0, 10, 2, 0);
     constexpr uint32_t kSupportedSpsrFields =
         0xF0000000u | kPstateDAIF | (1u << 20) | kPstateModeMask;
 
     const bool known = key == currentElKey || key == nzcvKey || key == daifKey ||
                        key == spEl0Key || key == spselKey || key == spsrKey ||
                        key == elrKey || key == vbarKey || key == esrKey ||
-                       key == farKey;
+                       key == farKey || key == sctlrKey || key == tcrKey ||
+                       key == ttbr0Key || key == ttbr1Key || key == mairKey;
     if (!known) {
         lastError_ = "system-register encoding is outside the implemented subset: " +
                      encodedSysregName(decoded.sysOp0, decoded.sysOp1,
@@ -1074,7 +1273,45 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
         return Fault::None;
     }
 
-    if (key == currentElKey) {
+    if (!isRead && key == sctlrKey) {
+        const uint64_t source = decoded.rd == 31 ? 0 : x_[decoded.rd];
+        constexpr uint64_t supportedSctlr = (1ULL << 0) | (1ULL << 19); // M, WXN
+        if ((source & ~supportedSctlr) != 0) {
+            lastError_ = "SCTLR_EL1 fields outside M/WXN are unsupported by this memory profile";
+            return Fault::UnsupportedFeature;
+        }
+        sctlrEl1_ = source;
+    } else if (!isRead && key == tcrKey) {
+        const uint64_t source = decoded.rd == 31 ? 0 : x_[decoded.rd];
+        std::string reason;
+        if (!AArch64MMU::validateTcr(source, &reason)) {
+            lastError_ = reason;
+            return Fault::UnsupportedFeature;
+        }
+        tcrEl1_ = source;
+    } else if (!isRead && key == ttbr0Key) {
+        ttbr0El1_ = decoded.rd == 31 ? 0 : x_[decoded.rd];
+    } else if (!isRead && key == ttbr1Key) {
+        ttbr1El1_ = decoded.rd == 31 ? 0 : x_[decoded.rd];
+    } else if (!isRead && key == mairKey) {
+        mairEl1_ = decoded.rd == 31 ? 0 : x_[decoded.rd];
+    } else if (isRead && key == sctlrKey) {
+        if (decoded.rd != 31) x_[decoded.rd] = sctlrEl1_;
+    } else if (isRead && key == tcrKey) {
+        if (decoded.rd != 31) x_[decoded.rd] = tcrEl1_;
+    } else if (isRead && key == ttbr0Key) {
+        if (decoded.rd != 31) x_[decoded.rd] = ttbr0El1_;
+    } else if (isRead && key == ttbr1Key) {
+        if (decoded.rd != 31) x_[decoded.rd] = ttbr1El1_;
+    } else if (isRead && key == mairKey) {
+        if (decoded.rd != 31) x_[decoded.rd] = mairEl1_;
+    }
+
+    if (key == sctlrKey || key == tcrKey || key == ttbr0Key ||
+        key == ttbr1Key || key == mairKey) {
+        // These registers are handled above. Their programmed values become
+        // effective at the next context synchronization event (ISB/exception).
+    } else if (key == currentElKey) {
         if (!isRead) {
             takeSynchronousException(0x00, 0, pc_); // write to read-only register => UNDEFINED
             return Fault::None;
@@ -1244,19 +1481,48 @@ Fault Cpu::executeEret(const Decoded& /*decoded*/) {
 
     // The return is committed only after every state check succeeds.
     pstate_ = spsrEl1_;
+    synchronizeTranslationContext();
     pc_ = elrEl1_;
     return Fault::None;
 }
 
 Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     if (!decoded.valid) {
+        if (decoded.hasMemoryAbort) {
+            if (decoded.memoryAbortInstruction && exceptionVectorPending_) {
+                lastFault_ = Fault::TranslationFault;
+                lastError_ = "AArch64 exception vector fetch failed; stopping to avoid recursive abort entry";
+                return lastFault_;
+            }
+            const MMUAccess access = decoded.memoryAbortInstruction
+                ? MMUAccess::Instruction
+                : decoded.memoryAbortWrite ? MMUAccess::Write : MMUAccess::Read;
+            takeMemoryAbort(decoded.address, access, decoded.memoryAbortStatus,
+                            decoded.memoryAbortWalk);
+            lastFault_ = Fault::None;
+            lastError_.clear();
+            return Fault::None;
+        }
         lastFault_ = decoded.fault == Fault::None ? Fault::UnallocatedEncoding
                                                   : decoded.fault;
         lastError_ = decoded.error.empty() ? "invalid instruction" : decoded.error;
         return lastFault_;
     }
+    // A successfully fetched vector instruction establishes that exception
+    // dispatch reached guest code. Later faults are ordinary nested faults.
+    exceptionVectorPending_ = false;
     switch (decoded.op) {
     case Op::Nop:
+        pc_ += kInstructionSize;
+        break;
+    case Op::Dsb:
+    case Op::Dmb:
+        // There is one in-order CPU and no asynchronous observer in this
+        // profile, so the barriers have no additional modeled state.
+        pc_ += kInstructionSize;
+        break;
+    case Op::Isb:
+        synchronizeTranslationContext();
         pc_ += kInstructionSize;
         break;
     case Op::Mrs:
@@ -1396,13 +1662,24 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const uint64_t target = pc_ + static_cast<uint64_t>(decoded.pcOffset);
         const size_t size = decoded.sf64 ? 8 : 4;
         if (!addressRangeIsRepresentable(target, size)) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                takeMemoryAbort(target, MMUAccess::Read, 0x00, false);
+                return Fault::None;
+            }
             lastFault_ = Fault::MemoryFault;
             lastError_ = "LDR literal access range wraps the 64-bit address space";
             return lastFault_;
         }
         uint8_t bytes[8] = {};
         try {
-            memory.Read(target, bytes, size);
+            uint8_t dfsc = 0;
+            bool walkFault = false;
+            uint64_t faultVa = target;
+            if (!readGuestMemory(memory, target, bytes, size, MMUAccess::Read,
+                                nullptr, &dfsc, &walkFault, &faultVa)) {
+                takeMemoryAbort(faultVa, MMUAccess::Read, dfsc, walkFault);
+                return Fault::None;
+            }
         } catch (const std::exception& ex) {
             lastFault_ = Fault::MemoryFault;
             lastError_ = std::string("LDR literal access failed: ") + ex.what();
@@ -1444,13 +1721,24 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
         const size_t size = decoded.sf64 ? 8 : 4;
         if (!addressRangeIsRepresentable(address, size)) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                takeMemoryAbort(address, MMUAccess::Read, 0x00, false);
+                return Fault::None;
+            }
             lastFault_ = Fault::MemoryFault;
             lastError_ = "LDR data access range wraps the 64-bit address space";
             return lastFault_;
         }
         uint8_t bytes[8] = {};
         try {
-            memory.Read(address, bytes, size);
+            uint8_t dfsc = 0;
+            bool walkFault = false;
+            uint64_t faultVa = address;
+            if (!readGuestMemory(memory, address, bytes, size, MMUAccess::Read,
+                                nullptr, &dfsc, &walkFault, &faultVa)) {
+                takeMemoryAbort(faultVa, MMUAccess::Read, dfsc, walkFault);
+                return Fault::None;
+            }
         } catch (const std::exception& ex) {
             // Failed loads change nothing: destination and PC preserved.
             lastFault_ = Fault::MemoryFault;
@@ -1483,6 +1771,10 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
         const size_t size = decoded.sf64 ? 8 : 4;
         if (!addressRangeIsRepresentable(address, size)) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                takeMemoryAbort(address, MMUAccess::Write, 0x00, false);
+                return Fault::None;
+            }
             lastFault_ = Fault::MemoryFault;
             lastError_ = "STR data access range wraps the 64-bit address space";
             return lastFault_;
@@ -1497,7 +1789,13 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             bytes[i] = static_cast<uint8_t>(source >> (8 * i));
         }
         try {
-            memory.Write(address, bytes, size);
+            uint8_t dfsc = 0;
+            bool walkFault = false;
+            uint64_t faultVa = address;
+            if (!writeGuestMemory(memory, address, bytes, size, &dfsc, &walkFault, &faultVa)) {
+                takeMemoryAbort(faultVa, MMUAccess::Write, dfsc, walkFault);
+                return Fault::None;
+            }
         } catch (const std::exception& ex) {
             // Single bounded Write call: rejected stores report MemoryFault
             // without advancing PC. No broader transactionality is claimed
@@ -1584,6 +1882,11 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // access base + offset (wrapping modulo 2^64, like all A64 addressing).
         const uint64_t address = (decoded.addrMode == 2) ? base : base + offset;
         if (!addressRangeIsRepresentable(address, datasize * 2)) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                takeMemoryAbort(address, isLoad ? MMUAccess::Read : MMUAccess::Write,
+                                0x00, false);
+                return Fault::None;
+            }
             lastFault_ = Fault::MemoryFault;
             lastError_ = "LDP/STP access range wraps the 64-bit address space";
             return lastFault_;
@@ -1591,7 +1894,14 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         if (isLoad) {
             uint8_t bytes[16] = {};
             try {
-                memory.Read(address, bytes, datasize * 2);
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!readGuestMemory(memory, address, bytes, datasize * 2,
+                                     MMUAccess::Read, nullptr, &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Read, dfsc, walkFault);
+                    return Fault::None;
+                }
             } catch (const std::exception& ex) {
                 lastFault_ = Fault::MemoryFault;
                 lastError_ = std::string("LDP data access failed: ") + ex.what();
@@ -1630,7 +1940,14 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
                 bytes[datasize + i] = static_cast<uint8_t>(v2 >> (8 * i));
             }
             try {
-                memory.Write(address, bytes, datasize * 2);
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!writeGuestMemory(memory, address, bytes, datasize * 2,
+                                      &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Write, dfsc, walkFault);
+                    return Fault::None;
+                }
             } catch (const std::exception& ex) {
                 lastFault_ = Fault::MemoryFault;
                 lastError_ = std::string("STP data access failed: ") + ex.what();
@@ -1666,6 +1983,11 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const uint64_t address =
             base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
         if (!addressRangeIsRepresentable(address, size)) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                takeMemoryAbort(address, isLoad ? MMUAccess::Read : MMUAccess::Write,
+                                0x00, false);
+                return Fault::None;
+            }
             lastFault_ = Fault::MemoryFault;
             lastError_ = isLoad ? "LDUR access range wraps the 64-bit address space"
                                 : "STUR access range wraps the 64-bit address space";
@@ -1674,7 +1996,14 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         if (isLoad) {
             uint8_t bytes[8] = {};
             try {
-                memory.Read(address, bytes, size);
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!readGuestMemory(memory, address, bytes, size, MMUAccess::Read,
+                                     nullptr, &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Read, dfsc, walkFault);
+                    return Fault::None;
+                }
             } catch (const std::exception& ex) {
                 lastFault_ = Fault::MemoryFault;
                 lastError_ = std::string("LDUR data access failed: ") + ex.what();
@@ -1703,7 +2032,13 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
                 bytes[i] = static_cast<uint8_t>(source >> (8 * i));
             }
             try {
-                memory.Write(address, bytes, size);
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!writeGuestMemory(memory, address, bytes, size, &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Write, dfsc, walkFault);
+                    return Fault::None;
+                }
             } catch (const std::exception& ex) {
                 lastFault_ = Fault::MemoryFault;
                 lastError_ = std::string("STUR data access failed: ") + ex.what();
@@ -1732,6 +2067,11 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             isPost ? base
                    : base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
         if (!addressRangeIsRepresentable(address, size)) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                takeMemoryAbort(address, isLoad ? MMUAccess::Read : MMUAccess::Write,
+                                0x00, false);
+                return Fault::None;
+            }
             lastFault_ = Fault::MemoryFault;
             lastError_ = isLoad ? "LDR indexed access range wraps the 64-bit address space"
                                 : "STR indexed access range wraps the 64-bit address space";
@@ -1740,7 +2080,14 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         if (isLoad) {
             uint8_t bytes[8] = {};
             try {
-                memory.Read(address, bytes, size);
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!readGuestMemory(memory, address, bytes, size, MMUAccess::Read,
+                                     nullptr, &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Read, dfsc, walkFault);
+                    return Fault::None;
+                }
             } catch (const std::exception& ex) {
                 lastFault_ = Fault::MemoryFault;
                 lastError_ = std::string("LDR indexed data access failed: ") + ex.what();
@@ -1769,7 +2116,13 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
                 bytes[i] = static_cast<uint8_t>(source >> (8 * i));
             }
             try {
-                memory.Write(address, bytes, size);
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!writeGuestMemory(memory, address, bytes, size, &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Write, dfsc, walkFault);
+                    return Fault::None;
+                }
             } catch (const std::exception& ex) {
                 lastFault_ = Fault::MemoryFault;
                 lastError_ = std::string("STR indexed data access failed: ") + ex.what();

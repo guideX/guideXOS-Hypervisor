@@ -547,8 +547,8 @@ void testRepeatedExceptionsAndPluginState() {
     cpu.setSpsrEl1(0x15u | kPstateDAIF);
     cpu.setFarEl1(0xABCDEF0012345678ull);
     const std::vector<uint8_t> snapshot = plugin.serialize_state();
-    CHECK_EQ(320u, snapshot.size());
-    CHECK_EQ(2u, static_cast<uint32_t>(snapshot[4]));
+    CHECK_EQ(kSerializedStateSize, snapshot.size());
+    CHECK_EQ(3u, static_cast<uint32_t>(snapshot[4]));
     AArch64ISAPlugin restored(0, ExceptionLevel::EL0);
     CHECK(restored.deserialize_state(snapshot));
     CHECK_EQ(cpu.spEl0(), restored.cpu().spEl0());
@@ -559,6 +559,14 @@ void testRepeatedExceptionsAndPluginState() {
     CHECK_EQ(cpu.esrEl1(), restored.cpu().esrEl1());
     CHECK_EQ(cpu.farEl1(), restored.cpu().farEl1());
     CHECK_EQ(cpu.pstate(), restored.cpu().pstate());
+
+    // Version-2 records retain the previous 320-byte layout and restore the
+    // new MMU state to the documented disabled/default regime.
+    std::vector<uint8_t> v2(snapshot.begin(), snapshot.begin() + kSerializedStateV2Size);
+    v2[4] = 2;
+    CHECK(restored.deserialize_state(v2));
+    CHECK_EQ(0u, restored.cpu().sctlrEl1());
+    CHECK_EQ(0u, restored.cpu().tcrEl1());
 
     // Version-1 records restore to the compatible EL0 profile, with the old
     // single SP mapped to SP_EL0 and no unrepresented exception state.
@@ -588,7 +596,7 @@ void testRepeatedExceptionsAndPluginState() {
     CHECK(restored.serialize_state() == beforeState);
     CHECK(!restored.deserialize_state(std::vector<uint8_t>(319, 0)));
     bad = snapshot;
-    bad[316] = 1; // reserved word in v2
+    bad[316] = 0x80; // unsupported v3 exception-dispatch flag bit
     CHECK(!restored.deserialize_state(bad));
     CHECK(restored.dumpState() == before);
     CHECK(restored.serialize_state() == beforeState);
