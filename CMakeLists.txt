@@ -878,6 +878,34 @@ else()
     target_compile_options(test_riscv_opensbi_fw_jump PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-10 authentic OpenSBI ACLINT MTIMER discovery and recurring SBI TIME.
+set(RISCV_OPENSBI_TIMER_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_timer)
+set(RISCV_OPENSBI_TIMER_SUPERVISOR_ELF_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv10_timer_supervisor.elf)
+set(RISCV_OPENSBI_TIMER_DTB_COPY ${CMAKE_CURRENT_BINARY_DIR}/riscv10_platform.dtb)
+configure_file(${RISCV_OPENSBI_TIMER_FIXTURE_DIR}/supervisor.elf
+               ${RISCV_OPENSBI_TIMER_SUPERVISOR_ELF_COPY} COPYONLY)
+configure_file(${RISCV_OPENSBI_TIMER_FIXTURE_DIR}/platform.dtb
+               ${RISCV_OPENSBI_TIMER_DTB_COPY} COPYONLY)
+add_executable(test_riscv_opensbi_timer
+    tests/test_riscv_opensbi_timer.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_opensbi_timer PRIVATE bcrypt)
+add_test(NAME RiscVOpenSbiTimerTests
+         COMMAND test_riscv_opensbi_timer
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_OPENSBI_TIMER_SUPERVISOR_ELF_COPY}
+                 ${RISCV_OPENSBI_TIMER_DTB_COPY})
+if(MSVC)
+    target_compile_options(test_riscv_opensbi_timer PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_opensbi_timer PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

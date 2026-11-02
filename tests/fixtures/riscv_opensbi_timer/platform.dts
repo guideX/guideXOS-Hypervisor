@@ -1,0 +1,92 @@
+/dts-v1/;
+
+/ {
+	model = "guideXOS RISCV-10 OpenSBI ACLINT timer profile";
+	compatible = "guidexos,riscv10-aclint-mtimer";
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	chosen {
+		stdout-path = "/soc/serial@10000000";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x04000000>;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <10000000>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "riscv";
+			reg = <0>;
+			status = "okay";
+			riscv,isa = "rv64ima_zicsr";
+			riscv,mmu-type = "riscv,sv39";
+
+			cpu0_intc: interrupt-controller {
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+				#interrupt-cells = <1>;
+				phandle = <1>;
+			};
+		};
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		opensbi@80000000 {
+			reg = <0x0 0x80000000 0x0 0x00200000>;
+			no-map;
+		};
+		supervisor-payload@80200000 {
+			reg = <0x0 0x80200000 0x0 0x00020000>;
+			no-map;
+		};
+		firmware-fdt@82200000 {
+			reg = <0x0 0x82200000 0x0 0x00002000>;
+			no-map;
+		};
+		guest-result@83e00000 {
+			reg = <0x0 0x83e00000 0x0 0x00001000>;
+			no-map;
+		};
+		guest-stack@83ff0000 {
+			reg = <0x0 0x83ff0000 0x0 0x00010000>;
+			no-map;
+		};
+	};
+
+	/* Named regions are parsed by OpenSBI v1.8.1's ACLINT MTIMER driver. */
+	aclint-mtimer@200bff8 {
+		compatible = "riscv,aclint-mtimer";
+		reg = <0x0 0x0200bff8 0x0 0x8>,
+		      <0x0 0x02004000 0x0 0x8>;
+		reg-names = "mtime", "mtimecmp";
+		interrupts-extended = <&cpu0_intc 7>;
+		status = "okay";
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		serial@10000000 {
+			compatible = "ns16550a", "ns16550";
+			reg = <0x0 0x10000000 0x0 0x00000100>;
+			reg-shift = <0>;
+			reg-io-width = <1>;
+			clock-frequency = <3686400>;
+			current-speed = <115200>;
+			status = "okay";
+		};
+	};
+};

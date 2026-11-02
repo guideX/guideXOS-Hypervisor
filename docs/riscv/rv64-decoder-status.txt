@@ -479,39 +479,42 @@ Validation and next target:
   https://github.com/riscv-software-src/opensbi/blob/master/docs/platform/qemu_virt.md
   https://github.com/torvalds/linux/blob/master/arch/riscv/kernel/sbi.c
 
---- Current executable status after Phase RISCV-9 ---
+--- Current executable status after Phase RISCV-10 ---
 
-- In addition to the preceding RV64I/M/A, privilege, Sv39, timer, SBI, and
-  ELF64 work, production RV64CPU::step() now executes genuine OpenSBI v1.8.1
-  generic FW_JUMP machine code, then its MRET-controlled S-mode handoff.
-- The pinned image is built for RV64IMA_Zicsr. Its ET_DYN ELF is retained and
-  inspected; the paired configured raw fw_jump.bin is loaded in the bounded
-  2 MiB firmware slot. The existing static ET_EXEC RISC-V ELF loader is not
-  weakened. A separate ET_EXEC supervisor ELF is loaded at 0x80200000.
-- An FDT at 0x82200000 describes 64 MiB RAM, one RV64IMA_Zicsr/Sv39 hart,
-  CPU interrupt controller, 10 MHz timebase, and only the supported 8-bit
-  transmit UART interface. No timer or external interrupt controller is
-  advertised. The profile is single-hart, with deterministic CPU virtual time.
-- New M-mode mvendorid/marchid/mimpid CSR reads return zero and writes remain
-  illegal, matching the unassigned-ID profile. Unknown CSRs remain traps.
-  The opt-in UART covers eight byte-wide registers; wider or out-of-range
-  accesses fault. It is not a complete NS16550 or QEMU virt model.
-- The independent supervisor guest verifies S-mode, hart/FDT arguments,
-  initialized data, BSS, RV64M arithmetic, memory, and SBI Base version 3.0.
-  Its S-mode ECALL enters guest OpenSBI M-mode code and returns success/version
-  through architectural trap handling. It then writes the message and
-  versioned completion record into guest RAM. No host SBI provider is attached
-  during this proof.
-- The Release execution trace records 3,446,455 steps, 3,446,114 M-mode and
-  302 S-mode retirements, 39 recovered traps, 400 CSR operations, one SBI
-  ECALL/return, 2,473 MMIO reads, 2,480 MMIO writes, one firmware handoff, and
-  guest completion. The test imposes instruction and repeated-PC bounds.
-- Validation: 14/14 RISC-V CTest suites pass in Debug; the focused new suite
-  passes in Release. EfiMemoryMapTests and IA64SalTests pass in Debug and
+- Production RV64CPU::step() executes genuine OpenSBI v1.8.1 generic FW_JUMP
+  machine code and performs its MRET-controlled S-mode handoff. RISCV-10 reuses
+  the exact RISCV-9 firmware bytes and adds the real ACLINT MTIMER FDT and
+  deterministic MMIO device behavior. No host SBI provider is installed in
+  either authentic firmware proof.
+- The pinned firmware is built for RV64IMA_Zicsr. Its ET_DYN ELF is retained
+  and inspected; the paired configured raw fw_jump.bin is loaded in the
+  bounded 2 MiB firmware slot. The existing static ET_EXEC RISC-V ELF loader
+  is not weakened. Independent supervisor ELFs are loaded at 0x80200000.
+- The FDT at 0x82200000 describes 64 MiB RAM, one RV64IMA_Zicsr/Sv39 hart, the
+  CPU interrupt controller, 10 MHz timebase, supported byte-transmit UART,
+  and riscv,aclint-mtimer with named mtime=0x0200BFF8 and
+  mtimecmp=0x02004000 64-bit registers connected to hart 0 cause 7. OpenSBI
+  reported "Platform Timer Device : aclint-mtimer @ 10000000Hz" at startup.
+  No software or external interrupt controller is advertised. The platform
+  remains single-hart with deterministic CPU virtual time.
+- The timer advances one virtual tick per retired guest instruction; the
+  bounded harness advances virtual time during WFI. mtime >= mtimecmp asserts
+  MTIP independently of MTIE. OpenSBI's machine timer code handles cause 7 and
+  presents delegated cause 5 as STIP using architectural CSR state. Three
+  guest S-mode timer handlers rearm via SBI TIME and return with SRET. The
+  supervisor runs with Sv39 enabled. The full evidence and hashes are in
+  phase-riscv-10-report.txt.
+- M-mode mvendorid/marchid/mimpid reads return zero and writes remain illegal,
+  matching the unassigned-ID profile; unknown CSRs remain traps. The opt-in
+  UART covers eight byte-wide registers; wider or out-of-range accesses fault.
+  It is not a complete NS16550 or QEMU virt model.
+- Validation: all 15 RISC-V CTest suites passed in Debug; the final focused
+  timer suite also passed after trace instrumentation. The focused timer suite
+  passed in Release. EfiMemoryMapTests and IA64SalTests passed in Debug and
   Release (2/2 each). The unrelated pre-existing test_io_devices assertion
-  and test_elf_validation IA-64 link failures remain outside this phase.
-- Next target recommendation: select either a deterministic timer plus
-  OpenSBI SBI TIME proof, or a staged QEMU-virt compatibility milestone with
-  the required timer and external interrupt path. Linux, SMP, and unrelated
-  devices remain later targets. Inspect firmware ISA and advertised services
-  before implementing additional CPU or platform support.
+  and test_elf_validation IA-64 link limitations remain outside this phase.
+- Next target recommendation: implement one selected external-interrupt
+  controller/device path with bounded guest-visible delivery evidence. Keep
+  SMP and Linux boot out of scope until the selected FDT, loader, memory, and
+  interrupt contracts are separately established. Inspect firmware ISA and
+  advertised services before expanding CPU or platform support.

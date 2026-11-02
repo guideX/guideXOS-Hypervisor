@@ -1,0 +1,12 @@
+OpenSBI provenance: ../riscv_opensbi_fw_jump/binary-manifest.txt
+OpenSBI source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+Reused OpenSBI fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+DTC: Version: DTC 1.7.2
+Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+Timebase: 10000000 Hz; one virtual tick per retired guest instruction; bounded explicit ticks while WFI waits
+ACLINT mapping: mtime=0x0200BFF8/8, mtimecmp=0x02004000/8, hart0 MTIP cause 7
+
+C1C4F0BBE5E334004D6B0EF64EBE79479BF6E7E9701C170C6A9A2B1846F86775  supervisor.bin  981 bytes
+FB3886975C57D204D93945FE1CD737B4871EEB3B17FCBAD6676B1BB7543CC551  supervisor.elf  10216 bytes
+58BF17538A1D2A7E042E2B2B38E4B0A4AB34628E1016AC869174EE170334F65B  platform.dtb  1734 bytes

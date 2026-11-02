@@ -1,0 +1,153 @@
+guideXOS Hypervisor — Phase RISCV-10 Report
+Authentic OpenSBI SBI TIME, ACLINT MTIMER discovery, and recurring STIP
+
+Outcome: A
+
+Repository state
+----------------
+Required branch: RISCV
+Upstream: origin/RISCV
+Starting HEAD: e8705066cfe4b92d10cdf215b9738529f5820bbb
+Mission-listed expected HEAD: 4314d5bfc33af5ca7a9e4afb962e6cf0aaf2f0f6
+The checked-out HEAD was a descendant follow-on commit with only a .gitignore
+entry and three generated RISCV-7 .build fixture outputs relative to the
+listed expected HEAD. The working tree was clean and upstream divergence was
+0/0. No branch operation was performed. The final commit and worktree state
+are recorded in the completion message.
+
+Authentic firmware and FDT
+--------------------------
+OpenSBI v1.8.1 source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+The RISCV-9 fw_jump.bin was reused byte-for-byte; no OpenSBI source was
+rebuilt or patched.
+fw_jump.bin SHA-256:
+  CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+fw_jump.elf SHA-256:
+  255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+Supervisor payload ELF SHA-256:
+  FB3886975C57D204D93945FE1CD737B4871EEB3B17FCBAD6676B1BB7543CC551
+Supervisor payload raw binary SHA-256:
+  C1C4F0BBE5E334004D6B0EF64EBE79479BF6E7E9701C170C6A9A2B1846F86775
+Platform DTB SHA-256:
+  58BF17538A1D2A7E042E2B2B38E4B0A4AB34628E1016AC869174EE170334F65B
+
+The independent RV64IMA_Zicsr supervisor ELF is linked at 0x80200000.
+The DTB describes one hart, 64 MiB RAM, a 10 MHz timebase, the existing byte
+UART, and one riscv,aclint-mtimer node. Its named 64-bit regions are mtime at
+0x0200BFF8 (8 bytes) and mtimecmp at 0x02004000 (8 bytes). The node connects
+hart 0's CPU interrupt controller to machine interrupt cause 7. It advertises
+no software-interrupt or external-interrupt controller. DTB parsing, FDT
+contract rejection cases, and the decompiled DTS were checked independently
+of the firmware run.
+
+The pinned OpenSBI FDT timer driver recognizes riscv,aclint-mtimer and calls
+the ACLINT helper to locate the named register regions and match the
+interrupts-extended hart interrupt-controller phandle/cause. During actual
+firmware startup it reported:
+  Platform Timer Device : aclint-mtimer @ 10000000Hz
+This runtime registration is the positive discovery evidence; static DTB
+validity alone is not treated as proof of firmware initialization.
+
+Pinned source references:
+  https://github.com/riscv-software-src/opensbi/blob/74434f255873d74e56cc50aa762d1caf24c099f8/lib/utils/timer/fdt_timer_mtimer.c
+  https://github.com/riscv-software-src/opensbi/blob/74434f255873d74e56cc50aa762d1caf24c099f8/lib/utils/fdt/fdt_helper.c
+  https://github.com/riscv-software-src/opensbi/blob/74434f255873d74e56cc50aa762d1caf24c099f8/lib/sbi/sbi_timer.c
+  https://github.com/riscv-software-src/opensbi/blob/74434f255873d74e56cc50aa762d1caf24c099f8/lib/sbi/sbi_ecall_time.c
+
+Timer and virtual-time behavior
+-------------------------------
+The timer reuses the existing deterministic mtime/mtimecmp MMIO model. One
+virtual timer tick advances per retired guest instruction. WFI stops normal
+retirement; the test harness explicitly advances a bounded number of virtual
+ticks to the next requested deadline, then resumes architectural interrupt
+selection. No host wall clock and no timer-to-STIP host shortcut are used.
+mtime comparison is unsigned mtime >= mtimecmp; the 64-bit counter wraps
+modulo 2^64. The SBI UINT64_MAX disarm request is accepted by the model.
+Pending MTIP is derived from the timer comparison even while MTIE is masked.
+Reading and writing the mapped 64-bit registers is exercised by OpenSBI;
+invalid address, width, size, and alignment cases fail explicitly.
+
+OpenSBI execution and interrupt evidence
+-----------------------------------------
+The supervisor runs with Sv39 enabled. It checks hart/FDT inputs, probes SBI
+TIME through SBI Base, reads time, and issues real S-mode ECALL instructions.
+There is no host SBI provider attached to this run. The test recorded nine
+guest SBI ECALLs: Base version query, TIME extension probe, unsupported TIME
+FID 1 (returned -2/SBI_ENOTSUPP), and six TIME FID 0 calls. The six absolute
+timer values cover an already-expired request, a future request, a masked
+reprogrammed request, two independent rearms, and UINT64_MAX disarm. Each
+TIME call returned success and its comparator update was observed as a real
+guest M-mode MMIO store.
+
+The expired request caused an architectural MTIP trap with mcause
+0x8000000000000007; OpenSBI's M-mode vector was 0x80000448, and the captured
+M-mode trap PC was 0x802000FC. OpenSBI's actual SBI timer code clears STIP
+when scheduling and services MTIP by presenting STIP through CSR state. Three
+distinct delegated supervisor timer traps were recorded with scause
+0x8000000000000005, stvec 0x802001B0, sepc 0x80200194, and sstatus 0x120.
+Each supervisor handler increments the guest-memory event counter only after
+handler entry, reprograms the next deadline through SBI TIME, and returns by
+SRET at 0x802002B0 to 0x80200194. The test also verifies STIP clearing when a
+future deadline is programmed while both SIE and STIE are masked.
+
+The bounded run recorded 4 MTIP entries, 3 STIP handler entries, 3 WFI calls,
+3 timer-driven WFI wakes, and 3 SRET returns. Each wake was caused by a
+separately advanced deadline. The trace retains bounded boot and recent
+instruction windows, plus SBI ECALL, comparator MMIO, M-mode trap, supervisor
+trap, WFI, SRET, and completion records with guest PC, mode, instruction,
+cause, and relevant CSR state. The run completed in 4,102,440 emulator steps.
+
+Guest completion
+----------------
+After the third handler, the S-mode guest disarms the timer, writes the exact
+message:
+  Hello from OpenSBI TIMER on guideXOS
+and stores its completion word last. The validated signature is version 10,
+completion 0x434F4D504C455445 ("COMPLETE"), with three timer events and the
+recorded supervisor trap state. The final completion store executed in S-mode
+at PC 0x80200358. The test checks the full record and message in guest RAM.
+
+Validation
+----------
+- Existing RISC-V Debug CTest baseline before edits: 14/14 passed.
+- Final Debug regression set: all 15 RISC-V CTest suites passed. After the
+  final bounded trace-output instrumentation, the focused Debug timer suite
+  was rebuilt and rerun: 1/1 passed.
+- Focused Release timer suite: 1/1 passed.
+- IA-64 EfiMemoryMapTests and IA64SalTests: 2/2 passed in Debug and 2/2 in
+  Release. No IA-64 source was modified.
+- git diff --check passed before commit.
+- Existing unrelated test_io_devices assertion and legacy test_elf_validation
+  IA-64 link limitations were left untouched and are outside these selected
+  regressions.
+- No QEMU or Linux boot was attempted.
+
+Files added or updated
+----------------------
+- CMakeLists.txt: focused timer CTest target and fixture inputs.
+- tests/test_riscv_opensbi_timer.cpp: FDT/timer boundary checks and authentic
+  firmware execution assertions.
+- tests/fixtures/riscv_opensbi_timer/: DTS, DTB, independent assembly/ELF,
+  raw payload, reproducible build script, manifest, and inspection output.
+- docs/riscv/phase-riscv-10-report.txt: this report.
+- docs/riscv/rv64-decoder-status.txt: current status and next target.
+- .phase-riscv: advanced to RISCV-10 complete / RISCV-11 next after acceptance.
+
+Remaining platform and Linux blockers
+-------------------------------------
+This remains a deterministic one-hart platform profile. It has no PLIC,
+APLIC, IMSIC, device external interrupts, SMP, PMP isolation, full UART, or
+RV64C/F/D/V execution. Linux boot was explicitly out of scope and no Linux
+image loader or Linux entry-register/paging contract was added. A future Linux
+target still needs a deliberately selected firmware/kernel ISA profile, a
+Linux Image loader and entry handoff, sufficient RAM and reservations, and the
+device/external-interrupt support required by its chosen root-device and
+console configuration. This result is not a QEMU virt compatibility claim.
+
+Recommended RISCV-11 scope
+--------------------------
+Add one narrowly selected external-interrupt controller/device path with
+architectural delegation and bounded end-to-end guest evidence, while keeping
+the single-hart deterministic model. Use that to validate the next FDT and
+interrupt contracts before considering Linux. Keep PMP, SMP, Linux Image
+loading, and wider device emulation as separately scoped work.
