@@ -160,6 +160,21 @@ struct StructureBuilder {
         return property(name, bytes);
     }
 
+    bool stringList(const std::string& name,
+                    const std::vector<std::string>& values) {
+        if (values.empty()) return false;
+        std::vector<uint8_t> bytes;
+        for (const std::string& value : values) {
+            if (value.empty() || value.find('\0') != std::string::npos ||
+                value.size() > std::numeric_limits<size_t>::max() - bytes.size() - 1U) {
+                return false;
+            }
+            bytes.insert(bytes.end(), value.begin(), value.end());
+            bytes.push_back(0);
+        }
+        return property(name, bytes);
+    }
+
     bool empty(const std::string& name) {
         return property(name, {});
     }
@@ -213,13 +228,19 @@ bool fdtHeader(const uint8_t* data, size_t size, uint32_t& totalSize,
 
 bool buildStructure(const PPC64PlatformConfiguration& configuration,
                     const PPC64GuestMemoryLayout& layout,
-                    StructureBuilder& builder, std::string& reason) {
+                    StructureBuilder& builder, std::string& reason,
+                    bool linuxEntryProfile) {
     const auto property = [&](const std::string& name, uint32_t value) {
         return builder.u32(name, value);
     };
     if (!builder.node("") || !builder.string("device_type", "chrp") ||
-        !builder.string("compatible", "guideXOS,power9-pseries-foundation") ||
-        !builder.string("model", "guideXOS POWER9 pSeries foundation") ||
+        (linuxEntryProfile
+            ? !builder.stringList("compatible", {
+                  "guideXOS,power9-pseries-foundation", "IBM,pSeries"})
+            : !builder.string("compatible", "guideXOS,power9-pseries-foundation")) ||
+        !builder.string("model", linuxEntryProfile
+            ? "guideXOS POWER9 pSeries Linux direct-FDT profile"
+            : "guideXOS POWER9 pSeries foundation") ||
         !property("#address-cells", 2) || !property("#size-cells", 2)) {
         setReason(reason, "failed to encode the FDT root node");
         return false;
@@ -617,7 +638,8 @@ PPC64PlatformCapabilities getPPC64FoundationCapabilities() {
 
 bool PPC64FDTBuilder::build(const PPC64PlatformConfiguration& configuration,
                             const PPC64GuestMemoryLayout& layout,
-                            std::vector<uint8_t>& output, std::string& reason) {
+                            std::vector<uint8_t>& output, std::string& reason,
+                            bool linuxEntryProfile) {
     if (!validatePPC64PlatformConfiguration(configuration, layout.ramSize, reason) ||
         configuration.timebaseFrequency > std::numeric_limits<uint32_t>::max() ||
         configuration.timebaseFrequency == 0 ||
@@ -631,7 +653,8 @@ bool PPC64FDTBuilder::build(const PPC64PlatformConfiguration& configuration,
         return false;
     }
     StructureBuilder structure;
-    if (!buildStructure(configuration, layout, structure, reason)) return false;
+    if (!buildStructure(configuration, layout, structure, reason,
+                        linuxEntryProfile)) return false;
     uint64_t reservationBytes = 16U;
     if (layout.reservations.size() >
         (std::numeric_limits<uint32_t>::max() / 16U) - 1U) {

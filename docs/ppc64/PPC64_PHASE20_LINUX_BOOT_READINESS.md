@@ -1,5 +1,7 @@
 # PPC64 Phase 20 — Linux Boot Readiness and Execution Frontier
 
+**Current result: PPC64-20R2 Outcome A.** The authentic kernel has a reproducible production-VM instruction frontier; see Section 13. No complete Linux boot is claimed.
+
 **Historical pre-R1 result: Outcome B. PPC64-20R1 artifact subphase: Outcome A — artifact qualified; the original PPC64-20 execution frontier remains pending.** The R1 result below supersedes only the prior missing-artifact blocker. No Linux instruction was executed, and no boot stage is claimed.
 
 ## 1. Initial (pre-R1) repository state and scope
@@ -269,3 +271,103 @@ next_expected=PPC64-20
 ### 12.10 PPC64-20R2 handoff
 
 Implement the bounded, validated ELF64 BE load map and the first production-VM direct-FDT Linux entry probe using this exact image and manifest. The first experiment should stage the one PT_LOAD segment at physical address zero, zero the BSS range, place the FDT above the image without colliding with reservations, enter at the kernel's verified start path, and supply `r3`/`r4`/`r5` as specified. Preserve MMU-off startup and one visible CPU. Record the first authentic instruction and stopping frontier before adding runtime features. Do not advance `.phase-ppc64` until the original PPC64-20 execution gate is actually satisfied.
+## 13. PPC64-20R2 authentic ELF entry-frontier closeout — Outcome A
+
+This establishes the requested PPC64-20 authentic execution frontier. It does not claim a Linux boot, initialized console, RTAS call, userspace, or QEMU parity.
+
+### 13.1 Preflight and image
+
+| Item | Result |
+|---|---|
+| Checkout / branch | D:\dev\guideXOS_Hypervisor_PPC64, PPC64 |
+| Starting HEAD | 20f24f67b8f8c0f331312a3c3c69481118752a72 |
+| Validated source HEAD before closeout commit | 20f24f67b8f8c0f331312a3c3c69481118752a72; final commit SHA is reported by Git after commit |
+| Starting divergence | 0 behind, 8 ahead of origin/PPC64 |
+| Starting worktree | Tracked files clean; existing untracked build/ preserved |
+| Starting phase marker | PPC64-19 complete; PPC64-20 next |
+| Kernel | E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase20R1\candidate\vmlinuz-7.2.14+deb14-powerpc64 |
+| Kernel SHA-256 | c3baf4467971e47dc8737780a17910349d6754b5c771b92d665ba12fccee50fd |
+| Config SHA-256 | 592aabf1a65d0ca6b112921a7e323543727466fc394e312a1ea938d30b5b8bfa |
+
+Before constructing a VM, the probe invokes the committed offline artifact verifier with the checked-in manifest and external Phase20R1 root. The probe aborts on mismatch. The report validates image/config hashes, ELF identity, all program headers, PT_LOAD and BSS. The artifact was not modified.
+
+### 13.2 ELF load and memory plan
+
+The PPC64-only loader validates ELF64 BE EM_PPC64 ABI-v2 ET_EXEC, a complete program-header table, PT_LOAD/PT_NOTE subset, bounds and overflow, p_memsz >= p_filesz, alignment congruence, physical segment non-overlap, and file-backed executable entry. It maps e_entry through its executable PT_LOAD to physical entry; it does not assume every PPC64 ELF enters at zero.
+
+| Mapping | File range | Guest memory |
+|---|---|---|
+| PT_LOAD paddr 0x0, vaddr 0xc000000000000000 | offset 0x10000, filesz 0x28865e4 | [0x0,0x29c2158) |
+| BSS | — | [0x28865e4,0x29c2158), zeroed |
+| Entry | ELF e_entry 0xc000000000000000 | physical NIP 0x0 |
+
+The entire file-backed segment was independently read back and compared byte-for-byte. The entire BSS was read back in bounded chunks and verified zero, including non-page-aligned boundaries. Bytes outside PT_LOAD were not copied.
+
+All segment, FDT, optional RTAS, reservation, RAM, and MMIO checks occur before the staged guest-real write transaction. Failed-load tests cover overlapping segments, FDT collision, RTAS collision, host-protected memory, and out-of-RAM placement; guest bytes and initial NIP remain unchanged. The transaction validates all write ranges before copying staged bytes.
+
+The fresh Linux VM has 128 MiB RAM [0x0,0x8000000). Guest physical zero is ordinary guest RAM in this profile; no synthetic boot payload or RTAS trampoline occupies it. Earlier synthetic profiles remain unchanged and pass regressions. The FDT occupies [0x7ff0000,0x7ff0399), 921 bytes, aligned, above the kernel and below RAM end. Its dump is independently validated and hashed. RTAS/trampoline is disabled for this probe; collision with an enabled RTAS trampoline is rejected in tests, and no runtime RTAS placement is claimed.
+
+The Linux-entry FDT advertises the guideXOS POWER9 pSeries foundation and validated root, CPU, memory, timebase and chosen nodes. It does not claim unimplemented hypertas, hash-MMU, TCE, VIO, SMP or other PAPR capabilities. Linux did not reach FDT or firmware discovery before the observed frontier.
+
+### 13.3 Entry and execution frontier
+
+The production VM used one boot CPU, real mode and translation disabled. Initial state: NIP 0x0; MSR 0x8000000000000000 (SF=1, IR=DR=EE=PR=HV=ME=RI=0); GPR3=0x7ff0000; GPR4=0; GPR5=0; LR=CTR=0. The initial timebase is zero and no interrupt is pending. The public register view does not expose PVR; no PVR read occurred before this frontier. DEC, radix-MMU, SPR, FDT, hypercall, RTAS, terminal and exception-vector activity were not reached.
+
+Each instruction was fetched from production guest memory and stepped through VirtualMachine::step():
+
+| Attempt | NIP | Raw word | Result |
+|---:|---:|---:|---|
+| 0 | 0x0 | 0x08000048 | tdi 0,r0,72; completed |
+| 1 | 0x4 | 0x4800002c | b 0x30; completed |
+| 2 | 0x30 | 0x4800d008 | b 0xd038; completed |
+| 3 | 0xd038 | 0x480002e1 | bl 0xd318; completed |
+| 4 | 0xd318 | 0x7d6000a6 | mfmsr r11; completed, first register transition |
+| 5 | 0xd31c | 0x3d808000 | addis r12,r0,-32768; completed |
+| 6 | 0xd320 | 0x798c07c6 | unsupported; no state advance |
+
+Six instructions retired; seven were attempted against a 32-step budget. The last good instruction was at 0xd31c, with next NIP 0xd320, r11=0x8000000000000000, r12=0xffffffff80000000, and unchanged MSR. The faulting state preserves those registers and NIP 0xd320.
+
+The VM classified raw 0x798c07c6 as unsupported PPC64 opcode 30. Independent MD-form field decoding identifies rldicr r12,r12,32,31. Power ISA semantics are RA = ROTL64(RS,SH) & MASK(0,ME). With this input, rotation by 32 and the top-32-bit mask would produce 0x8000000000000000. That is analysis of the blocked instruction; guideXOS did not execute it. Semantics were checked against the [OpenPOWER ISA specification](https://openpowerfoundation.org/specifications/isa/). Linux v7.2 [head_64.S](https://github.com/torvalds/linux/blob/v7.2/arch/powerpc/kernel/head_64.S) is a source analogue only; exact Debian source patches are not established. The package ELF and fetched bytes are the runtime authority.
+
+### 13.4 Determinism and evidence
+
+Two fresh VMs with identical kernel, memory, map, platform and entry state produced identical FDTs, register snapshots, memory plans and traces. Both retired six instructions and stopped at NIP 0xd320 on raw 0x798c07c6.
+
+Run-identified artifacts are under E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase20R2\run-<epoch-ms>\ and include artifact verification, loader validation, physical memory plan, entry registers, DTB and SHA-256, initial instruction trace, bounded continuation trace, frontier summary and repeatability comparison. The final CTest probe run is run-1793595371811. Its DTB is 921 bytes with SHA-256 780eac480de5f11773fded8b3bbd959859af9d8c508b10dded7b2243eb165c37; bounded trace SHA-256 is AF822C45D2EC9460F20F4A7453EC9A2A8370560419154659B99565E5CC60CB81; frontier summary SHA-256 is 13F6B1DD01AB93245689514478D087FEDE3E265A4B98F1F93CA0DDF55A9CFB7B. The artifact verifier report SHA-256 is 5BCB2E868D4AD746DE84549A398C62038B6A5BAF1E44E294D8E362943DE84AA7. No checkpoint was made because the only stable point is the unsupported-instruction frontier.
+
+### 13.5 Programs A–N
+
+| Program | Result |
+|---|---|
+| A Artifact integrity | Pass; probe verifies exact kernel/config against manifest |
+| B ELF parsing | Pass; valid and malformed ELF cases |
+| C Transactional load | Pass; failed plans preserve RAM and NIP |
+| D Segment accuracy | Pass; full file comparison and BSS-zero readback |
+| E Entry translation | Pass; executable PT_LOAD maps high e_entry to paddr zero |
+| F Boot FDT | Pass; bounded, non-overlapping, validated |
+| G Entry registers | Pass for entry scope; direct-FDT ABI and exposed MSR state recorded |
+| H Authentic first instruction | Pass; kernel word 0x08000048 executed by production step() |
+| I Continuation | Pass; six retired instructions then a reproducible blocker |
+| J Repeatability | Pass; identical maps, state, FDT, traces and frontier |
+| K Malformed rejection | Pass; endian, machine, truncation, invalid table/offset/address, alignment, entry, sizes, flags, ABI, overlap, reservations, RAM, FDT and RTAS conflicts |
+| L Platform regression | Pass; available PPC64 Phases 1–20 and platform tests |
+| M VM isolation | Pass; two-VM memory and interrupt-state isolation probe |
+| N PPC64-21 handoff | Pass; earliest blocker and scoped recommendation below |
+
+Phase20R2 adds 99 checks in test_ppc64_phase20. The Phase 1–19 baseline remains 9,549 PPC64 checks. Six offline verifier fixture tests pass separately.
+
+### 13.6 Regressions and phase marker
+
+Full CTest had 34 entries: 28 passed, zero executed failures, six Not Run because executables are absent (Syscall, Debugger, Profiler, Fuzzer, VMIsolation and ELFValidation). All available PPC64 Phase 1–20 suites passed, including Phase 10, XICS, terminal, Phase 16 host pipes, RTAS, Phase 19 protection and Phase 20. VMCheckpoint and IA64Sal passed. Standalone IA-64 ACPI, interrupt-controller and Processor Interrupt Block tests passed; all six artifact-verifier tests passed. The earlier Phase 16 slow-reader failure did not reproduce.
+
+QEMU/QAC remains QEMU_REFERENCE_PENDING; no QEMU was launched. The shared IA-64 .phase and sibling worktrees were not modified. No Linux boot, console, hypercall, RTAS call or userspace is claimed.
+
+The authentic image loaded safely, genuine Linux instructions executed, the actual unsupported operation was independently decoded, and the frontier reproduced. Outcome A is for the PPC64-20 execution-frontier scope only. The phase marker advances to:
+
+- project=guideXOS_Hypervisor_PPC64
+- last_completed=PPC64-20
+- next_expected=PPC64-21
+
+### 13.7 PPC64-21 recommendation
+
+Implement only rldicr MD-form next: six-bit SH/ME extraction, rotate-with-wrap, architecturally numbered mask, RA/RS aliasing, and Rc=1 CR effects. Add isolated encoding and semantic tests, including raw 0x798c07c6 producing 0x8000000000000000 from the recorded r12. Then resume this same immutable kernel/profile at physical NIP 0xd320 and repeat the frontier trace. Do not preemptively implement a broad rotate family or later privileged operations such as mtmsrd before the resumed trace reaches them.

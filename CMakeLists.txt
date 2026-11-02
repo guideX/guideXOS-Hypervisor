@@ -69,6 +69,7 @@ set(LOADER_SOURCES
     src/loader/crt0.cpp
     src/loader/KernelValidator.cpp
     src/loader/TestKernelHandler.cpp
+    src/loader/PPC64ElfLoader.cpp
 )
 
 set(ABI_SOURCES
@@ -192,6 +193,7 @@ set(HEADERS
     include/PPC64VirtualTerminal.h
     include/PPC64RTAS.h
     include/PPC64Platform.h
+    include/PPC64ElfLoader.h
     include/riscv_decoder.h
     include/SyscallDispatcher.h
     include/CPUContext.h
@@ -1038,6 +1040,26 @@ endif()
 
 add_test(NAME PPC64Phase19Tests COMMAND test_ppc64_phase19)
 set_tests_properties(PPC64Phase19Tests PROPERTIES TIMEOUT 120)
+
+# PPC64 Phase 20 ELF64 BE Linux loader and authentic direct-FDT entry probe.
+add_executable(test_ppc64_phase20
+    tests/test_ppc64_phase20.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase20 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase20 PRIVATE
+    PPC64_PHASE20_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase20 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase20 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase20Tests COMMAND test_ppc64_phase20)
+set_tests_properties(PPC64Phase20Tests PROPERTIES TIMEOUT 180)
 
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo

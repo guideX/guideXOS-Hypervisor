@@ -26,6 +26,16 @@ struct PPC64MemoryRange {
     bool guestAccessible = true;
 };
 
+// A validated physical load segment staged by the Linux ELF entry path.
+// fileBytes contains only p_filesz bytes; preparePPC64PlatformSegments()
+// zero-fills the remainder through memorySize before committing guest RAM.
+struct PPC64PlatformLoadSegment {
+    uint64_t physicalAddress = 0;
+    uint64_t memorySize = 0;
+    bool executable = false;
+    std::vector<uint8_t> fileBytes;
+};
+
 struct PPC64PlatformConfiguration {
     PPC64PlatformProfile profile =
         PPC64PlatformProfile::POWER9_PSERIES_FOUNDATION;
@@ -148,7 +158,8 @@ class PPC64FDTBuilder {
 public:
     static bool build(const PPC64PlatformConfiguration& configuration,
                       const PPC64GuestMemoryLayout& layout,
-                      std::vector<uint8_t>& output, std::string& reason);
+                      std::vector<uint8_t>& output, std::string& reason,
+                      bool linuxEntryProfile = false);
     static bool validate(const uint8_t* data, size_t size,
                          std::string& reason);
 };

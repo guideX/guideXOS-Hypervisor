@@ -678,6 +678,11 @@ public:
     bool preparePPC64Platform(const std::vector<uint8_t>& image,
                               uint64_t imageAddress, uint64_t entryAddress,
                               std::string* error = nullptr);
+    // Linux ELF direct-FDT preparation. Every segment is validated and staged
+    // in one guest-real memory transaction before CPU entry state is changed.
+    bool preparePPC64PlatformSegments(
+        const std::vector<ppc64::PPC64PlatformLoadSegment>& segments,
+        uint64_t entryAddress, std::string* error = nullptr);
     bool isPPC64PlatformConfigured() const { return ppc64PlatformEnabled_; }
     bool isPPC64PlatformPrepared() const { return ppc64PlatformPrepared_; }
     ppc64::PPC64PlatformConfiguration getPPC64PlatformConfiguration() const;
@@ -759,6 +764,10 @@ public:
 private:
     friend class VMCheckpointCodec;
     friend class ppc64::PPC64ConsoleBridge;
+    bool preparePPC64PlatformSegmentsImpl(
+        const std::vector<ppc64::PPC64PlatformLoadSegment>& segments,
+        uint64_t entryAddress, bool linuxEntryProfile,
+        std::string* error);
     // ========================================================================
     // Subsystems (owned by VM)
     // ========================================================================

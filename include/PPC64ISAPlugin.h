@@ -176,6 +176,7 @@ constexpr uint64_t EXC_VECTOR_BASE = 0x0ULL;
 constexpr int MAX_NESTED_EXCEPTIONS = 16;
 
 // Primary opcodes (bits 26-31) covered by Phase 1 + Phase 2.
+constexpr uint8_t OPCODE_TDI = 2;
 constexpr uint8_t OPCODE_ADDI = 14;
 constexpr uint8_t OPCODE_ADDIS = 15;
 constexpr uint8_t OPCODE_ORI = 24;
@@ -383,6 +384,7 @@ struct PPC64Fault {
 };
 
 enum class DecodedKind {
+    TDI,        // tdi with TO=0 (architecturally non-trapping form)
     ADDI,
     ADDIS,
     ORI,
@@ -463,6 +465,7 @@ struct DecodedInstruction {
     uint8_t rt = 0;  // target / RS for OR-forms (bits 21-25)
     uint8_t ra = 0;  // source / target base (bits 16-20)
     uint8_t rb = 0;  // X-form second source (bits 11-15)
+    uint8_t to = 0;  // TDI trap-option field (bits 21-25)
     int16_t simm = 0;   // D-form signed immediate
     uint16_t uimm = 0;  // D-form unsigned immediate
     uint32_t li = 0;    // I-form 24-bit LI field (bits 2-25 of offset)

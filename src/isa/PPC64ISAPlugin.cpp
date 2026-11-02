@@ -1129,6 +1129,16 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
     instr.opcode = static_cast<uint8_t>((word >> 26) & 0x3F);
 
     switch (instr.opcode) {
+        case OPCODE_TDI:
+            instr.kind = DecodedKind::TDI;
+            instr.to = static_cast<uint8_t>((word >> 21) & 0x1FU);
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1FU);
+            instr.simm = static_cast<int16_t>(word & 0xFFFFU);
+            // The Linux fixed-entry endian fixup starts with tdi TO=0, a
+            // guaranteed no-trap form. Other TO predicates remain outside
+            // this interpreter subset and are deliberately rejected.
+            instr.supported = instr.to == 0;
+            break;
         case OPCODE_ADDI:
             instr.kind = DecodedKind::ADDI;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
@@ -1582,6 +1592,11 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
 std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, uint64_t address) {
     std::ostringstream out;
     switch (instr.kind) {
+        case DecodedKind::TDI:
+            out << "tdi " << static_cast<unsigned>(instr.to)
+                << ",r" << static_cast<unsigned>(instr.ra)
+                << "," << instr.simm;
+            break;
         case DecodedKind::ADDI:
             out << "addi r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.ra)
@@ -3049,6 +3064,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                                                   const DecodedInstruction& instr) {
     const uint64_t cia = state_.nip;
     switch (instr.kind) {
+        case DecodedKind::TDI:
+            // Only TO=0 reaches execution (see decodeWord); it has no trap
+            // predicate and therefore retires as a non-mutating instruction.
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
         case DecodedKind::ADDI: {
             // RA=0 selects the constant zero, not the contents of GPR0.
             uint64_t base = (instr.ra == 0) ? 0 : state_.gpr[instr.ra];

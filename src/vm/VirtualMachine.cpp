@@ -1060,6 +1060,25 @@ bool VirtualMachine::configurePPC64Platform(
 bool VirtualMachine::preparePPC64Platform(
     const std::vector<uint8_t>& image, uint64_t imageAddress,
     uint64_t entryAddress, std::string* error) {
+    ppc64::PPC64PlatformLoadSegment segment;
+    segment.physicalAddress = imageAddress;
+    segment.memorySize = static_cast<uint64_t>(image.size());
+    segment.executable = true;
+    segment.fileBytes = image;
+    return preparePPC64PlatformSegmentsImpl({segment}, entryAddress, false,
+                                             error);
+}
+
+bool VirtualMachine::preparePPC64PlatformSegments(
+    const std::vector<ppc64::PPC64PlatformLoadSegment>& segments,
+    uint64_t entryAddress, std::string* error) {
+    return preparePPC64PlatformSegmentsImpl(segments, entryAddress, true,
+                                             error);
+}
+
+bool VirtualMachine::preparePPC64PlatformSegmentsImpl(
+    const std::vector<ppc64::PPC64PlatformLoadSegment>& segments,
+    uint64_t entryAddress, bool linuxEntryProfile, std::string* error) {
     const auto reject = [error](const std::string& reason) {
         if (error != nullptr) *error = reason;
         return false;
@@ -1069,7 +1088,7 @@ bool VirtualMachine::preparePPC64Platform(
         ppc64PlatformPrepared_) {
         return reject("platform preparation requires a configured, stopped PPC64 VM");
     }
-    if (image.empty()) return reject("guest image is empty");
+    if (segments.empty()) return reject("guest image has no loadable segments");
     if (ppc64PlatformConfiguration_.entryMode !=
         ppc64::PPC64GuestEntryMode::DIRECT_FDT) {
         return reject("firmware-assisted entry is not implemented");
@@ -1084,20 +1103,62 @@ bool VirtualMachine::preparePPC64Platform(
     if (plugin->hasActivePartitionContext()) {
         return reject("direct-FDT preparation requires the root partition context");
     }
-    if ((imageAddress & 3ULL) != 0 || (entryAddress & 3ULL) != 0 ||
-        image.size() > std::numeric_limits<uint64_t>::max() - imageAddress) {
-        return reject("guest image or entry alignment/range is invalid");
+
+    uint64_t imageBase = std::numeric_limits<uint64_t>::max();
+    uint64_t imageEnd = 0;
+    bool executableEntry = false;
+    std::vector<std::pair<uint64_t, uint64_t>> segmentRanges;
+    segmentRanges.reserve(segments.size());
+    for (const auto& segment : segments) {
+        const uint64_t fileSize = static_cast<uint64_t>(segment.fileBytes.size());
+        if (segment.memorySize == 0 || segment.memorySize < fileSize ||
+            (segment.physicalAddress & 3ULL) != 0 ||
+            segment.memorySize > std::numeric_limits<uint64_t>::max() -
+                                     segment.physicalAddress) {
+            return reject("PT_LOAD physical range, alignment, or sizes are invalid");
+        }
+        const uint64_t segmentEnd = segment.physicalAddress + segment.memorySize;
+        if (segment.physicalAddress > ramSize ||
+            segment.memorySize > ramSize - segment.physicalAddress) {
+            return reject("PT_LOAD segment is outside configured guest RAM");
+        }
+        if (!memory_->ValidateGuestRealRange(
+                segment.physicalAddress, static_cast<size_t>(segment.memorySize),
+                true, reason)) {
+            return reject(std::string("PT_LOAD segment is not writable guest RAM: ") + reason);
+        }
+        imageBase = std::min(imageBase, segment.physicalAddress);
+        imageEnd = std::max(imageEnd, segmentEnd);
+        segmentRanges.emplace_back(segment.physicalAddress, segmentEnd);
+        if (segment.executable && fileSize >= sizeof(uint32_t) &&
+            entryAddress >= segment.physicalAddress &&
+            entryAddress <= segment.physicalAddress + fileSize - sizeof(uint32_t) &&
+            (entryAddress & 3ULL) == 0) {
+            executableEntry = true;
+        }
+    }
+    if ((entryAddress & 3ULL) != 0 || !executableEntry) {
+        return reject("entry is not an aligned instruction in file-backed executable PT_LOAD data");
+    }
+    std::sort(segmentRanges.begin(), segmentRanges.end());
+    for (size_t index = 1; index < segmentRanges.size(); ++index) {
+        if (segmentRanges[index].first < segmentRanges[index - 1U].second) {
+            return reject("PT_LOAD physical segments overlap");
+        }
     }
 
     ppc64::PPC64GuestMemoryLayout layout;
     layout.ramBase = 0;
     layout.ramSize = ramSize;
-    layout.imageBase = imageAddress;
-    layout.imageSize = static_cast<uint64_t>(image.size());
+    layout.imageBase = imageBase;
+    layout.imageSize = imageEnd - imageBase;
     layout.entryAddress = entryAddress;
     if (ppc64PlatformConfiguration_.requestedFdtAddress != 0) {
         layout.fdtBase = ppc64PlatformConfiguration_.requestedFdtAddress;
     } else {
+        if (ppc64PlatformConfiguration_.maximumFdtSize > ramSize) {
+            return reject("maximum FDT size exceeds configured guest RAM");
+        }
         layout.fdtBase = (ramSize - ppc64PlatformConfiguration_.maximumFdtSize) & ~7ULL;
     }
     layout.fdtSize = ppc64PlatformConfiguration_.maximumFdtSize;
@@ -1168,15 +1229,19 @@ bool VirtualMachine::preparePPC64Platform(
                            "RTAS trampoline protected region", true)) {
         return reject("RTAS protected region conflicts with a reserved or protected range");
     }
-    for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
-        if (imageAddress < reservation.base + reservation.size &&
-            reservation.base < imageAddress + static_cast<uint64_t>(image.size())) {
-            return reject("guest image overlaps a reserved or protected range");
+    for (const auto& segment : segments) {
+        for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
+            if (segment.physicalAddress < reservation.base + reservation.size &&
+                reservation.base < segment.physicalAddress + segment.memorySize) {
+                return reject(std::string("PT_LOAD segment overlaps reserved or protected memory: ") +
+                              reservation.purpose);
+            }
         }
-    }
-    if (!appendReservation(imageAddress, static_cast<uint64_t>(image.size()),
-                           "loaded guest image", true)) {
-        return reject("guest image overlaps a reserved or protected range");
+        if (!appendReservation(segment.physicalAddress, segment.memorySize,
+                               linuxEntryProfile ? "Linux PT_LOAD" : "loaded guest image",
+                               true)) {
+            return reject("PT_LOAD segment overlaps a reserved or protected range");
+        }
     }
     for (const ppc64::PPC64MemoryRange& reservation : layout.reservations) {
         if (reservation.base < layout.fdtBase + layout.fdtSize &&
@@ -1216,7 +1281,8 @@ bool VirtualMachine::preparePPC64Platform(
 
     std::vector<uint8_t> dtb;
     if (!ppc64::PPC64FDTBuilder::build(
-            ppc64PlatformConfiguration_, layout, dtb, reason)) {
+            ppc64PlatformConfiguration_, layout, dtb, reason,
+            linuxEntryProfile)) {
         return reject(reason);
     }
     layout.fdtSize = static_cast<uint64_t>(dtb.size());
@@ -1225,7 +1291,8 @@ bool VirtualMachine::preparePPC64Platform(
     }
     if (!ppc64::validatePPC64GuestMemoryLayout(layout, reason) ||
         !ppc64::PPC64FDTBuilder::build(
-            ppc64PlatformConfiguration_, layout, dtb, reason)) {
+            ppc64PlatformConfiguration_, layout, dtb, reason,
+            linuxEntryProfile)) {
         return reject(reason.empty() ? "final FDT validation failed" : reason);
     }
     if (layout.fdtSize != dtb.size()) {
@@ -1237,17 +1304,26 @@ bool VirtualMachine::preparePPC64Platform(
         }
         if (!ppc64::validatePPC64GuestMemoryLayout(layout, reason) ||
             !ppc64::PPC64FDTBuilder::build(
-                ppc64PlatformConfiguration_, layout, dtb, reason)) {
+                ppc64PlatformConfiguration_, layout, dtb, reason,
+                linuxEntryProfile)) {
             return reject(reason.empty() ? "FDT size did not stabilize" : reason);
         }
     }
 
     std::vector<GuestRealWriteSegment> writes;
-    writes.reserve(layout.rtasSize == 0 ? 2U : 3U);
-    GuestRealWriteSegment imageWrite;
-    imageWrite.address = imageAddress;
-    imageWrite.bytes = image;
-    writes.push_back(std::move(imageWrite));
+    writes.reserve(segments.size() + (layout.rtasSize == 0 ? 1U : 2U));
+    try {
+        for (const auto& segment : segments) {
+            GuestRealWriteSegment imageWrite;
+            imageWrite.address = segment.physicalAddress;
+            imageWrite.bytes.assign(static_cast<size_t>(segment.memorySize), 0);
+            std::copy(segment.fileBytes.begin(), segment.fileBytes.end(),
+                      imageWrite.bytes.begin());
+            writes.push_back(std::move(imageWrite));
+        }
+    } catch (const std::exception& exception) {
+        return reject(std::string("PT_LOAD staging allocation failed: ") + exception.what());
+    }
     if (layout.rtasSize != 0) {
         GuestRealWriteSegment trampoline;
         trampoline.address = layout.rtasProtectionBase;
