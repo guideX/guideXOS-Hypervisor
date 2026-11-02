@@ -1061,6 +1061,23 @@ endif()
 add_test(NAME PPC64Phase20Tests COMMAND test_ppc64_phase20)
 set_tests_properties(PPC64Phase20Tests PROPERTIES TIMEOUT 180)
 
+# PPC64 Phase 21 MD-form RLDICR decoder and production execution regressions.
+add_executable(test_ppc64_phase21
+    tests/test_ppc64_phase21.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase21 PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_ppc64_phase21 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase21 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase21Tests COMMAND test_ppc64_phase21)
+set_tests_properties(PPC64Phase21Tests PROPERTIES TIMEOUT 120)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

@@ -87,6 +87,21 @@ bool subOverflows(uint64_t a, uint64_t b, uint64_t result) {
     return ((((b ^ a) & (b ^ result)) >> 63) & 1U) != 0;
 }
 
+uint64_t rotateLeft64(uint64_t value, unsigned shift) {
+    shift &= 63U;
+    if (shift == 0U) {
+        return value;
+    }
+    return (value << shift) | (value >> (64U - shift));
+}
+
+uint64_t maskPowerBits0Through(unsigned end) {
+    // Power ISA numbers the most-significant bit as bit 0. Keep the top
+    // end+1 bits and avoid a shift by 64 for the end==63 boundary.
+    return end >= 63U ? std::numeric_limits<uint64_t>::max()
+                      : (std::numeric_limits<uint64_t>::max() << (63U - end));
+}
+
 }  // namespace
 
 // ============================================================================
@@ -1293,6 +1308,27 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.uimm = static_cast<uint16_t>(word & 0xFFFF);
             instr.supported = true;
             break;
+        case 30: {
+            // MD-form rotate instructions split their sixth immediate bits
+            // into the low-order encoding bits. Implement only rldicr here;
+            // adjacent MD/MDS operation numbers remain unsupported.
+            const uint8_t mdOperation = static_cast<uint8_t>((word >> 2) & 0x7U);
+            if (mdOperation == 1U) {  // rldicr
+                instr.kind = DecodedKind::RLDICR;
+                instr.rt = static_cast<uint8_t>((word >> 21) & 0x1FU); // RS
+                instr.ra = static_cast<uint8_t>((word >> 16) & 0x1FU); // RA
+                instr.sh = static_cast<uint8_t>(((word >> 11) & 0x1FU) |
+                                                (((word >> 1) & 1U) << 5));
+                instr.me = static_cast<uint8_t>(((word >> 6) & 0x1FU) |
+                                                (((word >> 5) & 1U) << 5));
+                instr.rc = (word & 1U) != 0;
+                instr.supported = true;
+            } else {
+                instr.kind = DecodedKind::UNSUPPORTED;
+                instr.supported = false;
+            }
+            break;
+        }
         case OPCODE_SC:
             // Keep PAPR sc 1 separate from the existing sc 0 system-call path.
             if (word == ENCODING_SC) {
@@ -1738,6 +1774,15 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << "xoris r" << static_cast<int>(instr.ra)
                 << ",r" << static_cast<int>(instr.rt)
                 << "," << instr.uimm;
+            break;
+        case DecodedKind::RLDICR:
+            out << "rldicr r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt)
+                << "," << static_cast<unsigned>(instr.sh)
+                << "," << static_cast<unsigned>(instr.me);
+            if (instr.rc) {
+                out << ".";
+            }
             break;
         case DecodedKind::CMP:
             out << (instr.l ? "cmpd " : "cmpw ");
@@ -3238,6 +3283,18 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             }
             state_.gpr[instr.ra] = s ^ mask;
             // xori/xoris never touch CR0.
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::RLDICR: {
+            // Read RS before writing RA so RA==RS uses the original source.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t result = rotateLeft64(source, instr.sh) &
+                                    maskPowerBits0Through(instr.me);
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }

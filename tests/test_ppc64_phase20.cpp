@@ -210,7 +210,10 @@ std::filesystem::path outputRoot() {
     if (const char* configured = std::getenv("GUIDEXOS_PPC64_PHASE20R2_OUTPUT")) {
         return std::filesystem::path(configured);
     }
-    return R"(E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase20R2)";
+    if (const char* configured = std::getenv("GUIDEXOS_PPC64_PHASE21_OUTPUT")) {
+        return std::filesystem::path(configured);
+    }
+    return R"(E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase21)";
 }
 
 struct ProbeResult {
@@ -345,7 +348,8 @@ ProbeResult runAuthenticProbe(const std::vector<uint8_t>& image) {
     PPC64RegisterView lastGood = registers;
     uint64_t lastGoodInstruction = registers.nip;
     uint32_t lastGoodWord = 0;
-    for (uint64_t attempt = 0; attempt < 32; ++attempt) {
+    constexpr uint64_t instructionBudget = 32;
+    for (uint64_t attempt = 0; attempt < instructionBudget; ++attempt) {
         const auto before = vm.getPPC64RegisterView();
         uint8_t bytes[4]{};
         vm.getMemory().Read(before.nip, bytes, sizeof(bytes));
@@ -374,6 +378,8 @@ ProbeResult runAuthenticProbe(const std::vector<uint8_t>& image) {
               << " r11_after=0x" << after.gpr[11]
               << " r12_before=0x" << before.gpr[12]
               << " r12_after=0x" << after.gpr[12]
+              << " cr_before=0x" << before.cr << " cr_after=0x" << after.cr
+              << " xer_before=0x" << before.xer << " xer_after=0x" << after.xer
               << " msr_before=0x" << before.msr
               << " msr_after=0x" << after.msr << "\n";
         if (!advanced) {
@@ -389,15 +395,22 @@ ProbeResult runAuthenticProbe(const std::vector<uint8_t>& image) {
             }
             trace << "stop_reason=" << result.stopReason << "\n";
             std::ostringstream frontier;
-            frontier << "category=unsupported-ppc64-instruction\n"
-                     << "fault_nip=0x" << std::hex << result.stopNip
+            frontier << "category="
+                     << (plugin->hasFault() ? "architectural-or-emulator-fault"
+                                            : "execution-stopped")
+                     << "\nstop_nip=0x" << std::hex << result.stopNip
                      << "\nraw_instruction=0x" << std::setw(8)
                      << std::setfill('0') << word
                      << "\ndecoder_text=" << decoded
                      << "\nstop_reason=" << result.stopReason
-                     << "\npre_fault_r11=0x" << before.gpr[11]
-                     << "\npre_fault_r12=0x" << before.gpr[12]
-                     << "\npre_fault_msr=0x" << before.msr
+                     << "\ncr=0x" << before.cr << "\nxer=0x" << before.xer
+                     << "\nmsr=0x" << before.msr
+                     << "\npre_instruction_gprs=";
+            for (size_t reg = 0; reg < 32; ++reg) {
+                frontier << (reg == 0 ? "" : ",") << std::dec << "r" << reg
+                         << "=0x" << std::hex << before.gpr[reg];
+            }
+            frontier
                      << "\nlast_successful_instruction_nip=0x"
                      << lastGoodInstruction
                      << "\nlast_successful_instruction_raw=0x"
@@ -406,9 +419,8 @@ ProbeResult runAuthenticProbe(const std::vector<uint8_t>& image) {
                      << "\nlast_successful_r11=0x" << lastGood.gpr[11]
                      << "\nlast_successful_r12=0x" << lastGood.gpr[12]
                      << "\nlast_successful_msr=0x" << lastGood.msr
-                     << "\nISA_semantics=rldicr RA,RS,SH,ME: ROTL64(RS,SH) & MASK(0,ME)"
-                     << "\nindependent_decode=rldicr r12,r12,32,31"
-                     << "\nobserved_effect=not executed; stop is before semantics\n";
+                     << "\nretired_instructions=" << std::dec << result.retired
+                     << "\nattempted_instructions=" << result.attempted << "\n";
             result.frontierSummary = frontier.str();
             break;
         }
@@ -416,6 +428,19 @@ ProbeResult runAuthenticProbe(const std::vector<uint8_t>& image) {
     if (result.stopReason.empty()) {
         result.stopNip = vm.getPPC64RegisterView().nip;
         result.stopReason = "bounded execution limit (32 production VM steps)";
+        const auto stopped = vm.getPPC64RegisterView();
+        std::ostringstream frontier;
+        frontier << "category=bounded-execution-limit\nstep_budget="
+                 << instructionBudget << "\nstop_nip=0x" << std::hex
+                 << result.stopNip << "\nlast_successful_instruction_nip=0x"
+                 << lastGoodInstruction << "\nlast_successful_instruction_raw=0x"
+                 << std::setw(8) << std::setfill('0') << lastGoodWord
+                 << "\nlast_successful_next_nip=0x" << lastGood.nip
+                 << "\ncr=0x" << stopped.cr << "\nxer=0x" << stopped.xer
+                 << "\nmsr=0x" << stopped.msr << "\nretired_instructions="
+                 << std::dec << result.retired << "\nattempted_instructions="
+                 << result.attempted << "\n";
+        result.frontierSummary = frontier.str();
         trace << "stop_reason=" << result.stopReason << "\n";
     }
     trace << "last_successful_instruction_nip=0x" << std::hex
@@ -611,12 +636,31 @@ void testAuthenticKernel() {
     CHECK(first.stopReason == second.stopReason);
     CHECK(first.trace.find("r3=0x") != std::string::npos);
     CHECK(first.trace.find("load_bytes_and_bss_readback=pass") != std::string::npos);
-    CHECK(first.trace.find("raw=0x08000048") != std::string::npos);
+    const std::array<std::string, 6> originalSequence{
+        "nip=0x0 raw=0x08000048 decoded=tdi 0,r0,72 advanced=1",
+        "nip=0x4 raw=0x4800002c decoded=b 0x30 advanced=1",
+        "nip=0x30 raw=0x4800d008 decoded=b 0xd038 advanced=1",
+        "nip=0xd038 raw=0x480002e1 decoded=bl 0xd318 advanced=1",
+        "nip=0xd318 raw=0x7d6000a6 decoded=mfmsr r11 advanced=1",
+        "nip=0xd31c raw=0x3d808000 decoded=addis r12,r0,-32768 advanced=1",
+    };
+    bool originalSequenceMatches = true;
+    size_t originalSequenceSearchFrom = 0;
+    for (const auto& item : originalSequence) {
+        const size_t position = first.trace.find(item, originalSequenceSearchFrom);
+        originalSequenceMatches = originalSequenceMatches &&
+            position != std::string::npos;
+        if (position != std::string::npos) {
+            originalSequenceSearchFrom = position + item.size();
+        }
+    }
+    CHECK(originalSequenceMatches);
     CHECK(first.trace.find("raw=0x798c07c6") != std::string::npos);
-    CHECK(first.frontierSummary.find("rldicr r12,r12,32,31") != std::string::npos);
-    CHECK(first.retired == 6);
-    CHECK(first.attempted == 7);
-    CHECK(first.stopNip == 0xd320);
+    CHECK(first.trace.find("nip=0xd320 raw=0x798c07c6 decoded=rldicr r12,r12,32,31 advanced=1 next_nip=0xd324") != std::string::npos &&
+          first.trace.find("r12_after=0x8000000000000000") != std::string::npos);
+    CHECK(first.retired >= 7 && first.attempted > 7);
+    CHECK(first.stopNip > 0xd320);
+    CHECK(first.frontierSummary.find("stop_nip=0xd320") == std::string::npos);
 
     std::string fdtError;
     CHECK(PPC64FDTBuilder::validate(first.fdt.data(), first.fdt.size(), fdtError));
@@ -715,15 +759,47 @@ void testAuthenticKernel() {
     }
     const std::string fdtHash =
         sha256FileWithPython(runDir / "entry-fdt.dtb", runDir / "fdt-sha256.txt");
-    CHECK(fdtHash.size() == 64);
+    CHECK(fdtHash == "780eac480de5f11773fded8b3bbd959859af9d8c508b10dded7b2243eb165c37");
+    {
+        std::ofstream manifest(runDir / "entry-state-manifest.txt",
+                               std::ios::binary | std::ios::out);
+        manifest << "kernel_path=E:\\CodexArtifacts\\guideXOS_Hypervisor\\PPC64\\Phase20R1\\candidate\\vmlinuz-7.2.14+deb14-powerpc64\n"
+                 << "kernel_sha256=c3baf4467971e47dc8737780a17910349d6754b5c771b92d665ba12fccee50fd\n"
+                 << "config_sha256=592aabf1a65d0ca6b112921a7e323543727466fc394e312a1ea938d30b5b8bfa\n"
+                 << "physical_load_region=[0x0,0x29c2158)\n"
+                 << "file_backed_region=[0x0,0x28865e4)\n"
+                 << "bss_region=[0x28865e4,0x29c2158)\n"
+                 << "entry_nip=0x0\nmsr=0x8000000000000000\n"
+                 << "gpr3=0x7ff0000\ngpr4=0\ngpr5=0\n"
+                 << "fdt_address=0x" << std::hex << first.fdtAddress << "\n"
+                 << "fdt_sha256=" << fdtHash << "\n"
+                 << "instruction_budget=32\nvirtual_time_initial=0\n"
+                 << "cpu_profile=POWER9_PSERIES_FOUNDATION\nsingle_cpu=1\n";
+    }
+    {
+        std::ofstream evidence(runDir / "instruction-decode-evidence.txt",
+                               std::ios::binary | std::ios::out);
+        evidence << "previous_linux_frontier_nip=0xd320\n"
+                 << "raw_word=0x798c07c6\n"
+                 << "primary_opcode=(word>>26)&0x3f=30\n"
+                 << "rs=(word>>21)&0x1f=12\n"
+                 << "ra=(word>>16)&0x1f=12\n"
+                 << "sh=((word>>11)&0x1f)|(((word>>1)&1)<<5)=32\n"
+                 << "me=((word>>6)&0x1f)|(((word>>5)&1)<<5)=31\n"
+                 << "md_operation=(word>>2)&7=1\nrc=word&1=0\n"
+                 << "independent_linux_encoder=PPC_RAW_RLDICR base 0x78000004 plus __PPC_SH64 and __PPC_ME64\n"
+                 << "independent_power_isa_description=ROTL64(RS,SH)&MASK(0,ME)\n"
+                 << "observed_source=0xffffffff80000000\n"
+                 << "observed_result=0x8000000000000000\n";
+    }
     {
         std::ofstream repeatability(runDir / "repeatability.txt",
                                     std::ios::binary | std::ios::app);
         repeatability << "fdt_sha256=" << fdtHash << "\n";
         CHECK(repeatability.good());
     }
-    std::printf("Phase20R2 artifact run: %s\n", runDir.string().c_str());
-    std::printf("Phase20R2 frontier: %s at 0x%llx after %llu steps\n",
+    std::printf("Phase21 Linux replay artifact run: %s\n", runDir.string().c_str());
+    std::printf("Phase21 Linux frontier: %s at 0x%llx after %llu steps\n",
                 first.stopReason.c_str(),
                 static_cast<unsigned long long>(first.stopNip),
                 static_cast<unsigned long long>(first.retired));

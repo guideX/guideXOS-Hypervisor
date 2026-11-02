@@ -404,6 +404,7 @@ enum class DecodedKind {
     ANDIS_DOT,  // andis.     (D-form opcode 29; always records CR0)
     XORI,       // xori       (D-form opcode 26; never records)
     XORIS,      // xoris      (D-form opcode 27; never records)
+    RLDICR,     // rldicr[.] (MD-form, primary opcode 30, MD XO 1)
     CMP,        // cmp        (X-form, XO 0; signed, L selects 32/64-bit)
     CMPL,       // cmpl       (X-form, XO 32; unsigned, L selects 32/64-bit)
     CMPI,       // cmpi       (D-form opcode 11; signed immediate)
@@ -483,6 +484,8 @@ struct DecodedInstruction {
     uint16_t sprn = 0;   // XFX-form SPR number
     uint16_t ds = 0;     // DS-form 14-bit displacement field (bits 2-15)
     uint8_t dsXo = 0;    // DS-form 2-bit XO field (word bits 0-1)
+    uint8_t sh = 0;      // MD-form 6-bit shift amount
+    uint8_t me = 0;      // MD-form 6-bit mask end (Power ISA bit numbering)
 };
 
 /**
