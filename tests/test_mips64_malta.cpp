@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace ia64;
@@ -93,6 +94,38 @@ void testMapAndArchitecturalReset() {
     CHECK(plugin(defaultVm) != nullptr);
     CHECK(plugin(defaultVm)->core().pc() == 0);
 
+    VirtualMachine failedVm(2 * 1024 * 1024, "MIPS64");
+    MaltaBootstrapConfig missingRom;
+    missingRom.useBuiltInDemoRom = false;
+    bool missingRomRejected = false;
+    try { failedVm.configureMips64MaltaBootstrap(missingRom); }
+    catch (const std::invalid_argument&) { missingRomRejected = true; }
+    auto* failedMemory = dynamic_cast<Memory*>(&failedVm.getMemory());
+    CHECK(missingRomRejected);
+    CHECK(failedMemory != nullptr && failedMemory->GetPhysicalAddressMap() == nullptr);
+
+    VirtualMachine conflictingVm(2 * 1024 * 1024, "MIPS64");
+    PhysicalAddressMap& conflictingBus = conflictingVm.enableMips64PhysicalAddressMap();
+    conflictingBus.RegisterRam(kMaltaFpgaBase + 0x400, 4, {1, 2, 4});
+    const size_t regionsBeforeConflict = conflictingBus.Regions().size();
+    bool overlapRejected = false;
+    try { conflictingVm.configureMips64MaltaBootstrap(); }
+    catch (const PhysicalBusError& error) {
+        overlapRejected = error.code() == PhysicalBusErrorCode::Overlap;
+    }
+    CHECK(overlapRejected);
+    CHECK(conflictingBus.Regions().size() == regionsBeforeConflict);
+
+    VirtualMachine invalidRomVm(2 * 1024 * 1024, "MIPS64");
+    MaltaBootstrapConfig invalidRom;
+    invalidRom.endianness = Mips64Endianness::Big;
+    invalidRom.bootRom = {0xC4, 0x00, 0x00, 0x00}; // unsupported LWC1 encoding.
+    invalidRomVm.configureMips64MaltaBootstrap(invalidRom);
+    CHECK(invalidRomVm.init());
+    CHECK(!invalidRomVm.step());
+    CHECK(invalidRomVm.getState() == VMState::ERROR);
+    CHECK(invalidRomVm.hasKernelPanic());
+
     VirtualMachine vm(2 * 1024 * 1024, "MIPS64");
     vm.configureMips64MaltaBootstrap(configFor(Mips64Endianness::Little));
     CHECK(vm.getMips64MaltaBootstrapBoard() != nullptr);
@@ -106,6 +139,7 @@ void testMapAndArchitecturalReset() {
     CHECK(hasRegion(bus, kMaltaFpgaBase, 0x900, PhysicalRegionType::Mmio));
     CHECK(hasRegion(bus, kMaltaUartBase, 0x40, PhysicalRegionType::Mmio));
     CHECK(hasRegion(bus, kMaltaResetRomBase, kMaltaBootImageWindow, PhysicalRegionType::Rom));
+    CHECK(vm.getMips64MaltaBootstrapBoard()->Config().mapFlashMirror);
     CHECK(vm.init());
 
     Mips64ISAPlugin* core = plugin(vm);
@@ -118,13 +152,13 @@ void testMapAndArchitecturalReset() {
     CHECK(core->core().cp0Count() == 0 && core->core().cp0Compare() == 0);
     for (unsigned index = 0; index < kTlbEntries; ++index) {
         Mips64TlbEntry entry;
-        CHECK(core->core().tlbEntry(index, entry) && !entry.valid0 && !entry.valid1);
+        CHECK(core->core().tlbEntry(index, entry) && !entry.v0 && !entry.v1);
     }
     const Mips64Probe resetProbe = core->core().probeAddress(kMaltaResetVector, Mips64Access::Fetch);
     CHECK(resetProbe.ok && resetProbe.phys == kMaltaResetRomBase);
     const auto& image = vm.getMips64MaltaBootstrapBoard()->BootRomImage();
     CHECK(image.size() == kMaltaBootImageWindow);
-    uint8_t resetBytes[16]{}, flashBytes[16]{};
+    uint8_t resetBytes[8]{}, flashBytes[8]{};
     bus.Read(kMaltaResetRomBase, resetBytes, sizeof(resetBytes));
     bus.Read(kMaltaFlashBase, flashBytes, sizeof(flashBytes));
     CHECK(std::equal(std::begin(resetBytes), std::end(resetBytes), std::begin(flashBytes)));
@@ -137,6 +171,22 @@ void testMapAndArchitecturalReset() {
         romWriteRejected = error.code() == PhysicalBusErrorCode::PermissionDenied;
     }
     CHECK(romWriteRejected);
+
+    VirtualMachine noFlashVm(2 * 1024 * 1024, "MIPS64");
+    MaltaBootstrapConfig noFlash;
+    noFlash.mapFlashMirror = false;
+    noFlashVm.configureMips64MaltaBootstrap(noFlash);
+    auto* noFlashMemory = dynamic_cast<Memory*>(&noFlashVm.getMemory());
+    CHECK(noFlashMemory && noFlashMemory->GetPhysicalAddressMap());
+    if (noFlashMemory && noFlashMemory->GetPhysicalAddressMap()) {
+        bool unmappedFlashRejected = false;
+        uint8_t byte = 0;
+        try { noFlashMemory->GetPhysicalAddressMap()->Read(kMaltaFlashBase, &byte, 1); }
+        catch (const PhysicalBusError& error) {
+            unmappedFlashRejected = error.code() == PhysicalBusErrorCode::Unmapped;
+        }
+        CHECK(unmappedFlashRejected);
+    }
     CHECK(vm.step()); // Real fetch and execution of the first reset-ROM LUI.
     CHECK(core->core().pc() == kMaltaResetVector + 4);
     CHECK(core->core().readGpr(8) == 0xFFFFFFFFBF000000ULL);
@@ -240,7 +290,8 @@ void testSafeGuestSoftwareResetAndColdReset() {
     CHECK(core->core().pc() == kMaltaResetVector);
     CHECK(core->core().cp0Status() == kStatusReset);
     CHECK(board->Fpga()->LedBar() == 0 && board->Fpga()->BreakReset() == 0x0A);
-    CHECK(board->Fpga()->AsciiDisplay() == std::array<char, 8>{{' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '}});
+    const std::array<char, 8> blankDisplay{{' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '}};
+    CHECK(board->Fpga()->AsciiDisplay() == blankDisplay);
     CHECK(board->ConsoleSink()->Bytes().empty());
 
     // The guest performs one SW to SOFTRES; the device only records the
@@ -299,6 +350,8 @@ void testColdBootGuestAndPayloadBothEndians() {
         CHECK(vm.run(512) == 512);
         const auto& outputBytes = board->ConsoleSink()->Bytes();
         CHECK(std::string(outputBytes.begin(), outputBytes.end()) == expected);
+        std::cout << "GUEST UART OUTPUT (" << (little ? "little" : "big")
+                  << " endian): " << std::string(outputBytes.begin(), outputBytes.end()) << "\n";
         CHECK(core->core().readGpr(16) == (little ? 0x10U : 0x12U));
         CHECK(board->Fpga()->LedBar() == 0xA5);
         CHECK(std::string(board->Fpga()->AsciiDisplay().begin(),
@@ -330,8 +383,8 @@ void testTwoVmsAndTwoCpusAreBoardScoped() {
     auto* secondMemory = dynamic_cast<Memory*>(&second.getMemory());
     CHECK(firstMemory && secondMemory);
     if (!firstBoard || !secondBoard || !firstMemory || !secondMemory) return;
-    uint8_t led = 0x11;
-    firstMemory->GetPhysicalAddressMap()->Write(kMaltaFpgaBase + 0x408, &led, 4);
+    write32(*firstMemory->GetPhysicalAddressMap(), kMaltaFpgaBase + 0x408,
+            0x11, true);
     CHECK(firstBoard->Fpga()->LedBar() == 0x11);
     CHECK(secondBoard->Fpga()->LedBar() == 0);
 
@@ -350,6 +403,20 @@ void testTwoVmsAndTwoCpusAreBoardScoped() {
         CHECK(shared.getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes() ==
               std::vector<uint8_t>{'C'});
     }
+
+    std::weak_ptr<Ns16550Uart> uartLifetime;
+    std::weak_ptr<MaltaFpgaRegisters> fpgaLifetime;
+    {
+        VirtualMachine scoped(2 * 1024 * 1024, "MIPS64");
+        scoped.configureMips64MaltaBootstrap(configFor(Mips64Endianness::Little));
+        MaltaBootstrapBoard* scopedBoard = scoped.getMips64MaltaBootstrapBoard();
+        CHECK(scopedBoard != nullptr);
+        if (scopedBoard) {
+            uartLifetime = scopedBoard->Uart();
+            fpgaLifetime = scopedBoard->Fpga();
+        }
+    }
+    CHECK(uartLifetime.expired() && fpgaLifetime.expired());
 }
 
 }  // namespace

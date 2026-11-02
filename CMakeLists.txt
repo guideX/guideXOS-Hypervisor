@@ -40,6 +40,7 @@ set(ISA_SOURCES
       src/isa/ISAPluginRegistry.cpp
       src/isa/ExampleISAPlugin.cpp
       src/mips64/Mips64Cpu.cpp
+      src/mips64/MaltaBootstrapBoard.cpp
       src/isa/Mips64ISAPlugin.cpp
   )
 
@@ -164,6 +165,7 @@ set(HEADERS
     include/memory.h
     include/PhysicalAddressMap.h
     include/Ns16550Uart.h
+    include/Mips64MaltaBootstrap.h
     include/loader.h
     include/bootstrap.h
     include/abi.h
@@ -1003,3 +1005,22 @@ else()
     target_compile_options(test_mips64_console_guest PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64ConsoleGuestTests COMMAND test_mips64_console_guest)
+
+# MIPS64-7 opt-in Malta board, FPGA, reset, and guest cold-boot acceptance.
+add_executable(test_mips64_malta
+    tests/test_mips64_malta.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_malta PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_malta PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_malta PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64MaltaMapTests COMMAND test_mips64_malta map)
+add_test(NAME Mips64MaltaFpgaTests COMMAND test_mips64_malta fpga)
+add_test(NAME Mips64MaltaResetTests COMMAND test_mips64_malta reset)
+add_test(NAME Mips64MaltaBootTests COMMAND test_mips64_malta boot)
+add_test(NAME Mips64MaltaOwnershipTests COMMAND test_mips64_malta ownership)

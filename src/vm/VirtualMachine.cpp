@@ -259,7 +259,7 @@ if (!bootStateMachine_.powerOn()) {
         // reset behavior.
         if (maltaBootstrapBoard_) {
             for (CPUContext& context : cpus_) {
-                auto* plugin = dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get());
+                auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get());
                 if (!plugin) {
                     throw std::logic_error("Malta bootstrap VM lost its MIPS64 CPU plugin");
                 }
@@ -868,15 +868,26 @@ void VirtualMachine::configureMips64MaltaBootstrap(
         throw std::logic_error("Malta bootstrap profile requires a constructed MIPS64 VM");
     }
     for (const CPUContext& context : cpus_) {
-        if (!dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get())) {
+        if (!dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get())) {
             throw std::logic_error("Malta bootstrap profile is only available to MIPS64 VMs");
         }
     }
 
+    if (memory_->GetTotalSize() == 0 || memory_->GetTotalSize() >= kMaltaFlashBase) {
+        throw std::invalid_argument("Malta bootstrap RAM must fit below the 0x1E000000 flash window");
+    }
+
+    const bool mapAlreadyEnabled = memory_->GetPhysicalAddressMap() != nullptr;
     PhysicalAddressMap& bus = enableMips64PhysicalAddressMap();
-    auto board = std::make_unique<MaltaBootstrapBoard>(bus, config);
+    std::unique_ptr<MaltaBootstrapBoard> board;
+    try {
+        board = std::make_unique<MaltaBootstrapBoard>(bus, config);
+    } catch (...) {
+        if (!mapAlreadyEnabled) memory_->DisableEmptyPhysicalAddressMap();
+        throw;
+    }
     for (CPUContext& context : cpus_) {
-        auto* plugin = dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get());
+        auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get());
         plugin->configureEndianness(config.endianness == mips64::Mips64Endianness::Little);
     }
     maltaBootstrapBoard_ = std::move(board);
@@ -909,7 +920,7 @@ bool VirtualMachine::applyMips64MaltaColdReset(bool preserveVmCycleCount) {
     if (preserveVmCycleCount) cyclesExecuted_ = completedCycles;
 
     for (CPUContext& context : cpus_) {
-        auto* plugin = dynamic_cast<Mips64ISAPlugin*>(context.isaPlugin.get());
+        auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get());
         if (!plugin) {
             state_ = VMState::ERROR;
             return false;

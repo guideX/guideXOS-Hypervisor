@@ -134,6 +134,9 @@ public:
     // dispatch. Its existing flat backing is registered as RAM at PA 0.
     // Without this call all legacy flat-memory and IA-64 behavior is retained.
     PhysicalAddressMap& EnablePhysicalAddressMap();
+    // Undo a newly enabled, still-unconfigured physical map after failed
+    // platform construction. Existing callers' mappings are never cleared.
+    void DisableEmptyPhysicalAddressMap();
     PhysicalAddressMap* GetPhysicalAddressMap() noexcept { return physicalMap_.get(); }
     const PhysicalAddressMap* GetPhysicalAddressMap() const noexcept { return physicalMap_.get(); }
 

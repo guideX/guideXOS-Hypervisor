@@ -31,6 +31,15 @@ PhysicalAddressMap& Memory::EnablePhysicalAddressMap() {
     return *physicalMap_;
 }
 
+void Memory::DisableEmptyPhysicalAddressMap() {
+    if (physicalMap_ && physicalMap_->Regions().size() == 1 &&
+        physicalMap_->Regions().front().base == 0 &&
+        physicalMap_->Regions().front().type == PhysicalRegionType::Ram &&
+        physicalMap_->Regions().front().size == data_->size()) {
+        physicalMap_.reset();
+    }
+}
+
 void Memory::loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) {
     if (size == 0) {
         return; // Nothing to load
