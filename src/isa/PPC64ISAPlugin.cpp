@@ -18,6 +18,23 @@ namespace ppc64 {
 
 namespace {
 
+// Book III-S POWER9 real-mode guest accesses form a guest-real address from
+// the low 60 effective-address bits.  This conversion is only applied by the
+// guest real-mode paths below; active LPID contexts still perform the normal
+// partition-scoped radix translation after this step.
+constexpr uint64_t POWER9_REAL_MODE_GUEST_ADDRESS_MASK =
+    0x0FFFFFFFFFFFFFFFULL;
+
+uint64_t guestRealAddressFromRealModeEA(uint64_t effectiveAddress,
+                                        uint64_t msr) {
+    // This emulator profile only qualifies 64-bit guest real mode.  Keep
+    // SF=0 addresses on their existing path rather than inferring 64-bit
+    // address semantics from a high effective address alone.
+    return (msr & MSR_SF) != 0
+        ? effectiveAddress & POWER9_REAL_MODE_GUEST_ADDRESS_MASK
+        : effectiveAddress;
+}
+
 // Explicit little-endian codec for the checkpoint payload so snapshots
 // are byte-stable regardless of host endianness.
 void putU32(uint8_t* out, uint32_t value) {
@@ -2136,15 +2153,17 @@ ISADecodeResult PPC64ISAPlugin::decode(IMemory& memory) {
         PPC64TranslationResult translationFailure;
         std::string reason;
         const bool processTranslated = (state_.msr & MSR_IR) != 0;
+        const uint64_t guestRealAddress = processTranslated
+            ? state_.nip : guestRealAddressFromRealModeEA(state_.nip, state_.msr);
         const bool rangeValid = processTranslated
             ? translateAccessRange(memory, state_.nip, INSN_WIDTH,
                                    PPC64TranslationAccess::FETCH, segments,
                                    translationFailure, reason)
             : partitionContext_ != nullptr
-                ? partitionGuestRealAccessRange(memory, state_.nip, INSN_WIDTH,
+                ? partitionGuestRealAccessRange(memory, guestRealAddress, INSN_WIDTH,
                     PPC64TranslationAccess::FETCH, segments,
                     translationFailure, reason)
-                : flatGuestRealAccessRange(memory, state_.nip, INSN_WIDTH,
+                : flatGuestRealAccessRange(memory, guestRealAddress, INSN_WIDTH,
                     PPC64TranslationAccess::FETCH, segments,
                     translationFailure, reason);
         if (!rangeValid) {
@@ -2619,6 +2638,11 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         std::string reason;
         PPC64TranslationResult translationFailure;
         bool loadSucceeded = false;
+        const bool realAddressMapped = partitionContext_ != nullptr ||
+                                       radixConfigured_;
+        const uint64_t memoryAddress =
+            (state_.msr & MSR_DR) == 0 && realAddressMapped
+                ? guestRealAddressFromRealModeEA(ea, state_.msr) : ea;
         if (inHypervisorState()) {
             uint8_t bytes[8] = {};
             loadSucceeded = hypervisorRealRead(memory, ea, width, bytes, reason);
@@ -2636,10 +2660,10 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
             ? translatedMemLoadBE(memory, ea, width, value,
                                   translationFailure, reason)
             : partitionContext_ != nullptr
-                ? partitionGuestRealMemLoadBE(memory, ea, width, value,
+                ? partitionGuestRealMemLoadBE(memory, memoryAddress, width, value,
                                               translationFailure, reason)
                 : radixConfigured_
-                    ? flatGuestRealMemLoadBE(memory, ea, width, value,
+                    ? flatGuestRealMemLoadBE(memory, memoryAddress, width, value,
                                              translationFailure, reason)
                     : memLoadBE(memory, ea, width, value, reason);
         }
@@ -2744,6 +2768,11 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
         std::string reason;
         PPC64TranslationResult translationFailure;
         bool storeSucceeded = false;
+        const bool realAddressMapped = partitionContext_ != nullptr ||
+                                       radixConfigured_;
+        const uint64_t memoryAddress =
+            (state_.msr & MSR_DR) == 0 && realAddressMapped
+                ? guestRealAddressFromRealModeEA(ea, state_.msr) : ea;
         if (inHypervisorState()) {
             uint8_t bytes[8] = {};
             for (uint32_t i = 0; i < width; ++i) {
@@ -2761,10 +2790,10 @@ ISAExecutionResult PPC64ISAPlugin::executeLoadStore(IMemory& memory,
             ? translatedMemStoreBE(memory, ea, width, source,
                                    translationFailure, reason)
             : partitionContext_ != nullptr
-                ? partitionGuestRealMemStoreBE(memory, ea, width, source,
+                ? partitionGuestRealMemStoreBE(memory, memoryAddress, width, source,
                                                translationFailure, reason)
                 : radixConfigured_
-                    ? flatGuestRealMemStoreBE(memory, ea, width, source,
+                    ? flatGuestRealMemStoreBE(memory, memoryAddress, width, source,
                                               translationFailure, reason)
                     : memStoreBE(memory, ea, width, source, reason);
         }
@@ -3015,6 +3044,8 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
     const bool partitionRealMapped = !translated && partitionContext_ != nullptr;
     const bool flatRealMapped = !translated && radixConfigured_ &&
                                 partitionContext_ == nullptr;
+    const uint64_t guestRealEA = (flatRealMapped || partitionRealMapped)
+        ? guestRealAddressFromRealModeEA(ea, state_.msr) : ea;
     uint64_t reservationAddress = ea;
     PPC64TranslationResult translationFailure;
     std::vector<TranslatedMemorySegment> translatedSegments;
@@ -3037,10 +3068,10 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
             ? translateAccessRange(memory, ea, width, translationAccess,
                                    translatedSegments, translationFailure, reason)
             : partitionRealMapped
-                ? partitionGuestRealAccessRange(memory, ea, width,
+                ? partitionGuestRealAccessRange(memory, guestRealEA, width,
                     translationAccess, translatedSegments,
                     translationFailure, reason)
-                : flatGuestRealAccessRange(memory, ea, width, translationAccess,
+                : flatGuestRealAccessRange(memory, guestRealEA, width, translationAccess,
                     translatedSegments, translationFailure, reason);
         if (!rangeValid) {
             clearReservation();
@@ -3087,10 +3118,10 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
             ? translatedMemLoadBE(memory, ea, width, value,
                                   translationFailure, reason)
             : partitionRealMapped
-                ? partitionGuestRealMemLoadBE(memory, ea, width, value,
+                ? partitionGuestRealMemLoadBE(memory, guestRealEA, width, value,
                                               translationFailure, reason)
                 : flatRealMapped
-                    ? flatGuestRealMemLoadBE(memory, ea, width, value,
+                    ? flatGuestRealMemLoadBE(memory, guestRealEA, width, value,
                                              translationFailure, reason)
                     : memLoadBE(memory, ea, width, value, reason);
         if (!loadSucceeded) {
@@ -3127,10 +3158,10 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
         } else if (flatRealMapped || partitionRealMapped) {
             std::string reason;
             const bool rangeValid = partitionRealMapped
-                ? partitionGuestRealAccessRange(memory, ea, width,
+                ? partitionGuestRealAccessRange(memory, guestRealEA, width,
                     PPC64TranslationAccess::WRITE, translatedSegments,
                     translationFailure, reason)
-                : flatGuestRealAccessRange(memory, ea, width,
+                : flatGuestRealAccessRange(memory, guestRealEA, width,
                     PPC64TranslationAccess::WRITE, translatedSegments,
                     translationFailure, reason);
             if (!rangeValid) {
@@ -3155,10 +3186,10 @@ ISAExecutionResult PPC64ISAPlugin::executeReservation(IMemory& memory,
             ? translatedMemStoreBE(memory, ea, width, source,
                                    translationFailure, reason)
             : partitionRealMapped
-                ? partitionGuestRealMemStoreBE(memory, ea, width, source,
+                ? partitionGuestRealMemStoreBE(memory, guestRealEA, width, source,
                                                translationFailure, reason)
                 : flatRealMapped
-                    ? flatGuestRealMemStoreBE(memory, ea, width, source,
+                    ? flatGuestRealMemStoreBE(memory, guestRealEA, width, source,
                                               translationFailure, reason)
                     : memStoreBE(memory, ea, width, source, reason);
         if (!storeSucceeded) {
