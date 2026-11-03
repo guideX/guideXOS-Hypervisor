@@ -20,7 +20,7 @@ namespace decoder {
  * 
  * X-format also handles:
  * - BREAK instructions (for debugging/syscalls)
- * - NOP (extended NOP with immediates)
+ * - Distinct nop.x and hint.x encodings
  */
 
 bool XTypeDecoder::decodeBreak(uint64_t slot, formats::XFormat& result) {
@@ -41,19 +41,6 @@ bool XTypeDecoder::decodeBreak(uint64_t slot, formats::XFormat& result) {
     
     result.imm21 = (i << 20) | imm_low;
     result.x3 = formats::extractBits(slot, 33, 3);
-    
-    return true;
-}
-
-bool XTypeDecoder::decodeNop(uint64_t slot, formats::XFormat& result) {
-    // NOP instruction format (X3, X4, X5)
-    // Extended NOP with optional immediate for alignment/scheduling hints
-    //
-    // Bits [0:5]:   qp
-    // Bits [6:32]:  imm27 (27-bit immediate for hints)
-    
-    result.qp = formats::extractBits(slot, 0, 6);
-    result.imm27 = formats::extractBits(slot, 6, 27);
     
     return true;
 }
@@ -88,8 +75,9 @@ bool XTypeDecoder::decodeMovl(uint64_t slot, formats::XFormat& result) {
     result.imm9d = formats::extractBits(slot, 27, 9);
     result.i = formats::extractBits(slot, 36, 1);
     result.opcode = formats::extractBits(slot, 37, 4);
-    
-    return true;
+
+    // Binutils' OpVc(6, 0) and the Itanium X2 format both fix vc to zero.
+    return result.opcode == 0x6 && result.vc == 0;
 }
 
 InstructionEx XTypeDecoder::decode(uint64_t slot) {
@@ -106,6 +94,7 @@ InstructionEx XTypeDecoder::decode(uint64_t slot) {
     uint8_t opcode = formats::extractBits(slot, 37, 4);  // Major opcode (bits 37-40)
     uint8_t x3 = formats::extractBits(slot, 33, 3);
     uint8_t x6 = formats::extractBits(slot, 27, 6);
+    uint8_t y = formats::extractBits(slot, 26, 1);
     
     formats::XFormat fmt;
     
@@ -116,23 +105,14 @@ InstructionEx XTypeDecoder::decode(uint64_t slot) {
             if (x3 == 0 && x6 == 0 && decodeBreak(slot, fmt)) {
                 inst.SetType(InstructionType::BREAK);
                 inst.SetImmediate(fmt.imm21);
-            } else if (x3 == 0 && x6 == 1) {
-                // x6=1 encodes nop.x (y=0) and hint.x (y=1).  Both have
-                // no architectural state effect in this emulator.
+            } else if (x3 == 0 && x6 == 1 && y == 0) {
                 inst.SetType(InstructionType::NOP);
+            } else if (x3 == 0 && x6 == 1 && y == 1) {
+                // hint.x has a distinct encoding and performance-hint
+                // meaning; its only modeled effect here is architectural nop.
+                inst.SetType(InstructionType::X_HINT);
             } else {
                 inst.SetType(InstructionType::UNKNOWN);
-            }
-            break;
-        }
-        
-        case 0x1:  // NOP (X-unit NOP with immediate)
-        {
-            if (decodeNop(slot, fmt)) {
-                inst.SetType(InstructionType::NOP);
-                if (fmt.imm27 != 0) {
-                    inst.SetImmediate(fmt.imm27);
-                }
             }
             break;
         }
@@ -151,19 +131,18 @@ InstructionEx XTypeDecoder::decode(uint64_t slot) {
                                 (static_cast<uint64_t>(fmt.imm9d) << 7) |
                                 fmt.imm7b;
                 inst.SetImmediate(x_imm);
+            } else {
+                inst.SetType(InstructionType::UNKNOWN);
             }
             break;
         }
         
-        // Additional X-unit instructions
-        case 0xC:  // Special instructions (movl variants, etc.)
-        case 0xD:
-        case 0xE:
-        case 0xF:
+        // Long branches are valid X-unit encodings, but their target and
+        // branch/call semantics are not implemented by this decoder/executor.
+        case 0xC:  // brl
+        case 0xD:  // brl.call
         {
-            // These are rare/special X-unit instructions
-            // For now, decode as NOP
-            inst.SetType(InstructionType::NOP);
+            inst.SetType(InstructionType::UNKNOWN);
             break;
         }
         
@@ -177,18 +156,18 @@ InstructionEx XTypeDecoder::decode(uint64_t slot) {
 }
 
 bool XTypeDecoder::isValidXUnit(uint64_t slot) {
-    // Check if this is a valid X-unit instruction
     uint8_t opcode = formats::extractBits(slot, 37, 4);
-    
-    // Valid X-unit opcodes
+    uint8_t x3 = formats::extractBits(slot, 33, 3);
+    uint8_t x6 = formats::extractBits(slot, 27, 6);
+    uint8_t y = formats::extractBits(slot, 26, 1);
+
     switch (opcode) {
-        case 0x0:  // BREAK
-        case 0x1:  // NOP
-        case 0x6:  // MOVL
-        case 0xC:
-        case 0xD:
-        case 0xE:
-        case 0xF:
+        case 0x0:
+            return x3 == 0 && ((x6 == 0) || (x6 == 1 && (y == 0 || y == 1)));
+        case 0x6:
+            return formats::extractBits(slot, 20, 1) == 0;
+        case 0xC:  // brl family, recognized but not executed
+        case 0xD:  // brl.call family, recognized but not executed
             return true;
         default:
             return false;

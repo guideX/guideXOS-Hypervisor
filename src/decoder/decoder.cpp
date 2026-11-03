@@ -1397,6 +1397,7 @@ void InstructionEx::Execute(CPUState& cpu, IMemory& memory, bool ignorePredicate
     
     switch (type_) {
         case InstructionType::NOP:
+        case InstructionType::X_HINT:
             // Nothing to do
             break;
             
@@ -3008,7 +3009,11 @@ std::string InstructionEx::GetDisassembly() const {
     
     switch (type_) {
         case InstructionType::NOP:
-            oss << "nop";
+            oss << (unit_ == UnitType::X_UNIT ? "nop.x" : "nop");
+            break;
+
+        case InstructionType::X_HINT:
+            oss << "hint.x";
             break;
             
         case InstructionType::MOV_GR:

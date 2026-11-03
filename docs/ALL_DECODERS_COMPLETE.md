@@ -7,15 +7,15 @@ I've added the **X-Type decoder** and verified that M-Type, I-Type, and B-Type d
 ### Files Created
 
 1. **`src\decoder\xtype_decoder.cpp`** - NEW
-   - Complete X-Type instruction decoder
-   - Handles BREAK, NOP (X-unit), and MOVL X-portion
+   - X-Type instruction decoder
+   - Handles BREAK, distinct NOP/HINT forms, and the MOVL X-portion
    - ~180 lines of decoder logic
 
 ### Files Modified
 
 2. **`include\ia64_decoders.h`**
    - Added `XTypeDecoder` class declaration
-   - Methods: decode(), decodeBreak(), decodeNop(), decodeMovl(), isValidXUnit()
+   - Methods: decode(), decodeBreak(), decodeMovl(), isValidXUnit()
 
 3. **`src\decoder\decoder.cpp`**
    - Updated X_UNIT case to call XTypeDecoder
@@ -33,10 +33,10 @@ I've added the **X-Type decoder** and verified that M-Type, I-Type, and B-Type d
 - Used by operating systems for system calls
 - 21-bit immediate encodes break type/number
 
-**NOP (X3, X4, X5 Formats)**
-- `nop.x imm27` - Extended NOP with 27-bit immediate
-- Used for alignment and scheduling hints
-- Can encode prefetch/cache hints
+**NOP/HINT (X0 Format)**
+- `nop.x` - X-unit no-op selected by `x3=0`, `x6=1`, and `y=0`
+- `hint.x` - distinct performance-hint form selected by `x3=0`, `x6=1`, and `y=1`
+- Both have no modeled architectural state effect; `hint.x` retains its mnemonic in decode/disassembly
 
 **MOVL X-Portion (X1 Format)**
 - Second half of the MOVL (Move Long) instruction

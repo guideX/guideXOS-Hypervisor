@@ -506,6 +506,15 @@ add_executable(test_isa_plugin
     ${HEADERS}
 )
 
+# Focused X-unit matrix runs through the same production decoder/executor
+# binary as the full plugin suite.
+add_custom_target(test_ia64_x_unit_decode
+    COMMAND $<TARGET_FILE:test_isa_plugin> xunit
+    DEPENDS test_isa_plugin
+    COMMENT "Running IA-64 X-unit decode/execution qualification"
+    VERBATIM
+)
+
 if(WIN32)
     target_link_libraries(test_isa_plugin PRIVATE ws2_32)
 endif()
@@ -755,6 +764,7 @@ add_dependencies(webui_example copy_web_files)
 enable_testing()
 add_test(NAME BasicTests COMMAND ia64emu_tests)
 add_test(NAME NewInstructionTests COMMAND test_new_instructions)
+add_test(NAME IA64XUnitDecodeTests COMMAND test_isa_plugin xunit)
 add_test(NAME EfiMemoryMapTests COMMAND test_efi_memory_map)
 add_test(NAME IA64SalTests COMMAND test_ia64_sal)
 add_test(NAME VMCheckpointTests COMMAND test_vm_checkpoint)

@@ -7,6 +7,7 @@
 #include "PEParser.h"
 #include "memory.h"
 #include "decoder.h"
+#include "ia64_decoders.h"
 #include "cpu.h"
 #include <iostream>
 #include <cassert>
@@ -45,6 +46,7 @@ public:
     size_t GetTotalSize() const override { return 0; }
     void Clear() override { bytes_.clear(); }
     const uint8_t* GetRawData() const override { return nullptr; }
+    std::map<uint64_t, uint8_t> snapshot() const { return bytes_; }
 
 private:
     std::map<uint64_t, uint8_t> bytes_;
@@ -6488,7 +6490,7 @@ void testIA64BreakMDecodeAndFaultDelivery() {
     constexpr uint64_t kIpsrSentinel = 0x1122334455667788ULL;
     constexpr uint64_t kIsrSentinel = 0x8877665544332211ULL;
     constexpr uint64_t kIimSentinel = 0x123456ULL;
-    constexpr uint64_t kIfsSentinel = 0xA5A5A5A5A5A5A5A5ULL;
+    constexpr uint64_t kIfsSentinel = 0x25A5A5A5A5A5A5A5ULL; // IFS.v clear in the saved value.
 
     SparseMemory memory;
     IA64ISAPlugin plugin(decoder);
@@ -6671,6 +6673,437 @@ void testIA64BreakMDecodeAndFaultDelivery() {
             "slot-two break.x must save IIP, ri, ei, and its immediate");
 }
 
+void testIA64XUnitDecodeMatrix() {
+    auto require = [](bool condition, const char* message) {
+        if (!condition) throw std::runtime_error(message);
+    };
+
+    constexpr uint64_t kBundleIp = 0x1000;
+    constexpr uint64_t kIvBase = 0x3000;
+    constexpr uint64_t kIipSentinel = 0xA000;
+    constexpr uint64_t kIpsrSentinel = 0x1122334455667788ULL;
+    constexpr uint64_t kIsrSentinel = 0x8877665544332211ULL;
+    constexpr uint64_t kIimSentinel = 0x123456ULL;
+    constexpr uint64_t kIfsSentinel = 0x25A5A5A5A5A5A5A5ULL; // IFS.v clear in the saved value.
+    constexpr uint64_t kMUnitNop = 1ULL << 27; // M0 x4=1, nop.m
+    constexpr uint64_t kAuthenticNopX = 0x08000000ULL;
+    constexpr uint64_t kZeroBreakX = 0;
+    constexpr uint64_t kHintX = 0x0C000000ULL;
+    constexpr uint64_t kSlotMask = (1ULL << 41) - 1;
+
+    auto encodeBundle = [](uint8_t templateType, const std::array<uint64_t, 3>& slots) {
+        std::array<uint8_t, 16> bundle{};
+        auto setBits = [&bundle](size_t firstBit, uint64_t value, size_t bitCount) {
+            for (size_t bit = 0; bit < bitCount; ++bit) {
+                if (((value >> bit) & 1ULL) != 0) {
+                    const size_t targetBit = firstBit + bit;
+                    bundle[targetBit / 8] |= static_cast<uint8_t>(1U << (targetBit % 8));
+                }
+            }
+        };
+        setBits(0, templateType, 5);
+        setBits(5, slots[0], 41);
+        setBits(46, slots[1], 41);
+        setBits(87, slots[2], 41);
+        return bundle;
+    };
+    auto makeNopX = [](uint8_t predicate, uint32_t imm21) {
+        return (1ULL << 27) |
+               (static_cast<uint64_t>(imm21 & 0xFFFFFU) << 6) |
+               (static_cast<uint64_t>((imm21 >> 20) & 1U) << 36) |
+               static_cast<uint64_t>(predicate & 0x3FU);
+    };
+    auto makeHintX = [](uint8_t predicate, uint32_t imm21) {
+        return (1ULL << 27) | (1ULL << 26) |
+               (static_cast<uint64_t>(imm21 & 0xFFFFFU) << 6) |
+               (static_cast<uint64_t>((imm21 >> 20) & 1U) << 36) |
+               static_cast<uint64_t>(predicate & 0x3FU);
+    };
+    auto makeBreakX = [](uint32_t immediate, uint8_t predicate) {
+        return (static_cast<uint64_t>(immediate & 0xFFFFFU) << 6) |
+               (static_cast<uint64_t>((immediate >> 20) & 1U) << 36) |
+               static_cast<uint64_t>(predicate & 0x3FU);
+    };
+    auto makeMovlX = [](uint8_t destination, uint64_t immediate, uint8_t predicate) {
+        return (6ULL << 37) |
+               (static_cast<uint64_t>(destination & 0x7FU) << 6) |
+               (static_cast<uint64_t>(immediate & 0x7FULL) << 13) |
+               (static_cast<uint64_t>((immediate >> 21) & 1ULL) << 21) |
+               (static_cast<uint64_t>((immediate >> 16) & 0x1FULL) << 22) |
+               (static_cast<uint64_t>((immediate >> 7) & 0x1FFULL) << 27) |
+               (static_cast<uint64_t>((immediate >> 63) & 1ULL) << 36) |
+               static_cast<uint64_t>(predicate & 0x3FU);
+    };
+
+    struct CpuSnapshot {
+        std::array<uint64_t, NUM_PHYSICAL_GENERAL_REGISTERS> gr{};
+        std::array<bool, NUM_PHYSICAL_GENERAL_REGISTERS> nat{};
+        std::array<std::array<uint8_t, 16>, NUM_FLOAT_REGISTERS> fr{};
+        std::array<bool, NUM_PREDICATE_REGISTERS> pr{};
+        std::array<uint64_t, NUM_BRANCH_REGISTERS> br{};
+        std::array<uint64_t, NUM_REGION_REGISTERS> rr{};
+        std::array<uint64_t, NUM_CONTROL_REGISTERS> cr{};
+        std::array<uint64_t, NUM_APPLICATION_REGISTERS> ar{};
+        uint64_t psr = 0;
+        uint64_t cfm = 0;
+        RSEState rse;
+    };
+    auto snapshotCpu = [](const CPUState& cpu) {
+        CpuSnapshot snapshot;
+        for (size_t i = 0; i < snapshot.gr.size(); ++i) {
+            snapshot.gr[i] = cpu.GetGRPhysical(i);
+            snapshot.nat[i] = cpu.GetGRNaTPhysical(i);
+        }
+        for (size_t i = 0; i < snapshot.fr.size(); ++i) {
+            cpu.GetFRPhysical(i, snapshot.fr[i].data());
+        }
+        for (size_t i = 0; i < snapshot.pr.size(); ++i) snapshot.pr[i] = cpu.GetPR(i);
+        for (size_t i = 0; i < snapshot.br.size(); ++i) snapshot.br[i] = cpu.GetBR(i);
+        for (size_t i = 0; i < snapshot.rr.size(); ++i) snapshot.rr[i] = cpu.GetRR(i);
+        for (size_t i = 0; i < snapshot.cr.size(); ++i) snapshot.cr[i] = cpu.GetCR(i);
+        for (size_t i = 0; i < snapshot.ar.size(); ++i) snapshot.ar[i] = cpu.GetAR(i);
+        snapshot.psr = cpu.GetPSR();
+        snapshot.cfm = cpu.GetCFM();
+        snapshot.rse = cpu.GetRSEState();
+        return snapshot;
+    };
+    auto sameArchitecturalState = [](const CpuSnapshot& a, const CpuSnapshot& b) {
+        if (a.gr != b.gr || a.nat != b.nat || a.fr != b.fr || a.pr != b.pr ||
+            a.br != b.br || a.rr != b.rr || a.cr != b.cr ||
+            a.psr != b.psr || a.cfm != b.cfm ||
+            a.rse.cfm != b.rse.cfm || a.rse.rsc != b.rse.rsc ||
+            a.rse.bsp != b.rse.bsp || a.rse.bspstore != b.rse.bspstore ||
+            a.rse.rnat != b.rse.rnat || a.rse.pfs != b.rse.pfs ||
+            a.rse.bspLoad != b.rse.bspLoad || a.rse.bof != b.rse.bof ||
+            a.rse.storeReg != b.rse.storeReg || a.rse.loadReg != b.rse.loadReg ||
+            a.rse.physicalPartition != b.rse.physicalPartition ||
+            a.rse.sof != b.rse.sof || a.rse.sol != b.rse.sol || a.rse.sor != b.rse.sor) {
+            return false;
+        }
+        for (size_t i = 0; i < a.ar.size(); ++i) {
+            if (i != 44 && a.ar[i] != b.ar[i]) return false; // AR.ITC advances per step.
+        }
+        return true;
+    };
+    auto seedCpu = [](CPUState& cpu) {
+        for (size_t i = 0; i < NUM_PHYSICAL_GENERAL_REGISTERS; ++i) {
+            cpu.SetGRPhysical(i, 0xA000000000000000ULL + 0x101ULL * i);
+            cpu.SetGRNaTPhysical(i, (i % 7) == 3);
+        }
+        for (size_t i = 0; i < NUM_FLOAT_REGISTERS; ++i) {
+            std::array<uint8_t, 16> value{};
+            value[0] = static_cast<uint8_t>(i + 1);
+            value[15] = static_cast<uint8_t>(0xFFU - i);
+            cpu.SetFRPhysical(i, value.data());
+        }
+        for (size_t i = 1; i < NUM_PREDICATE_REGISTERS; ++i) {
+            cpu.SetPR(i, (i % 3) == 0);
+        }
+        cpu.SetPR(6, false);
+        for (size_t i = 0; i < NUM_BRANCH_REGISTERS; ++i) {
+            cpu.SetBR(i, 0xB000000000000000ULL + i);
+        }
+        for (size_t i = 0; i < NUM_REGION_REGISTERS; ++i) {
+            cpu.SetRR(i, 0x3900000000000000ULL + i);
+        }
+        for (size_t i = 0; i < NUM_CONTROL_REGISTERS; ++i) {
+            cpu.SetCR(i, 0xC000000000000000ULL + i);
+        }
+        for (size_t i = 0; i < NUM_APPLICATION_REGISTERS; ++i) {
+            cpu.SetAR(i, 0xA400000000000000ULL + i);
+        }
+        cpu.SetRSC(3);
+        cpu.SetBSP(0x2200);
+        cpu.SetBSPSTORE(0x2200);
+        cpu.SetRNAT(0xA55A);
+        cpu.SetPFS(0x58E);
+        cpu.SetRSELoadPointer(0x2200);
+        cpu.SetRSEBOFForCheckpoint(5);
+        cpu.SetRSEStoreRegForCheckpoint(9);
+        cpu.SetRSELoadRegForCheckpoint(9);
+        cpu.SetCFM(3);
+        for (size_t i = 0; i < NUM_STACKED_GENERAL_REGISTERS; ++i) {
+            cpu.SetRSEPhysicalPartition(i, static_cast<RSERegisterPartition>(1 + (i % 3)));
+        }
+        cpu.SetPSR(IA64_PSR_IC);
+    };
+    auto seedMemory = [](SparseMemory& memory) {
+        const std::array<uint8_t, 16> marker{{
+            0x52, 0x32, 0x32, 0x2D, 0x58, 0x2D, 0x55, 0x4E,
+            0x49, 0x54, 0x2D, 0x4D, 0x41, 0x54, 0x52, 0x58
+        }};
+        memory.Write(0x4000, marker.data(), marker.size());
+    };
+
+    InstructionDecoder decoder;
+    require((kZeroBreakX ^ kAuthenticNopX) == (1ULL << 27),
+            "break.x and authentic nop.x fixtures must differ only in x6 bit 27");
+    require((kAuthenticNopX ^ kHintX) == (1ULL << 26),
+            "nop.x and hint.x fixtures must differ only in y bit 26");
+    require(decoder.DecodeInstruction(kZeroBreakX, UnitType::X_UNIT).GetType() == InstructionType::BREAK,
+            "all-zero X slot must remain break.x, not a NOP");
+    require(decoder.DecodeInstruction(kAuthenticNopX, UnitType::X_UNIT).GetType() == InstructionType::NOP,
+            "authentic R21 raw X slot 0x08000000 must decode as nop.x");
+    require(decoder.DecodeInstruction(kHintX, UnitType::X_UNIT).GetType() == InstructionType::X_HINT,
+            "x6=1/y=1 must remain distinguishable as hint.x");
+
+    auto runNoopCase = [&](const char* name, uint64_t xSlot, uint64_t lSlot,
+                           InstructionType expectedType, uint8_t predicate,
+                           bool predicateValue) {
+        SparseMemory memory;
+        seedMemory(memory);
+        IA64ISAPlugin plugin(decoder);
+        plugin.setInterruptVectorBase(kIvBase);
+        IA64ISAState& pluginState = dynamic_cast<IA64ISAState&>(plugin.getState());
+        CPUState& cpu = pluginState.getCPUState();
+        seedCpu(cpu);
+        cpu.SetCR(IA64_CR_IVA, kIvBase);
+        cpu.SetPR(predicate, predicateValue);
+        cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+        cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+        cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+        cpu.SetCR(IA64_CR_IIM, kIimSentinel);
+        cpu.SetCR(23, (1ULL << 63) | kIfsSentinel);
+
+        const InstructionEx decoded = decoder.DecodeInstruction(xSlot, UnitType::X_UNIT);
+        require(decoded.GetType() == expectedType, name);
+        require(decoded.GetPredicate() == predicate, "X-unit qualifying predicate must be preserved");
+        require(ia64::decoder::XTypeDecoder::isValidXUnit(xSlot), "supported nop.x/hint.x forms must validate");
+        const std::array<uint64_t, 3> slots{{kMUnitNop, lSlot & kSlotMask, xSlot}};
+        const auto bundleBytes = encodeBundle(0x04, slots); // MLX: M, L, X
+        const Bundle bundle = decoder.DecodeBundleAt(bundleBytes.data(), kBundleIp);
+        require(bundle.instructions.size() == 3 &&
+                    bundle.instructions[0].GetUnit() == UnitType::M_UNIT &&
+                    bundle.instructions[1].GetUnit() == UnitType::L_UNIT &&
+                    bundle.instructions[2].GetUnit() == UnitType::X_UNIT &&
+                    bundle.instructions[2].GetType() == expectedType,
+                "nop.x/hint.x must decode from the X slot of an MLX bundle");
+        const std::string expectedDisassembly = expectedType == InstructionType::NOP ? "nop.x" : "hint.x";
+        require(bundle.instructions[2].GetDisassembly() == expectedDisassembly,
+                "X-unit no-op form must retain its mnemonic in disassembly");
+
+        memory.Write(kBundleIp, bundleBytes.data(), bundleBytes.size());
+        cpu.SetIP(kBundleIp);
+        pluginState.currentSlot_ = 0;
+        pluginState.bundleValid_ = false;
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 1,
+                "MLX M slot must progress before the X-unit instruction");
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 2,
+                "MLX L immediate slot must progress before the X-unit instruction");
+        const CpuSnapshot before = snapshotCpu(cpu);
+        const auto memoryBefore = memory.snapshot();
+        const uint64_t itcBefore = cpu.GetAR(44);
+        const ISAExecutionResult result = plugin.step(memory);
+        const CpuSnapshot after = snapshotCpu(cpu);
+        require(result == ISAExecutionResult::CONTINUE && cpu.GetIP() == kBundleIp + 16 &&
+                    pluginState.currentSlot_ == 3 && !pluginState.bundleValid_,
+                "nop.x/hint.x must retire and advance to the next bundle");
+        require(sameArchitecturalState(before, after) && cpu.GetAR(44) == itcBefore,
+                "nop.x/hint.x must not mutate registers, NaTs, CRs, RSE state, or other architectural state");
+        require(memory.snapshot() == memoryBefore,
+                "nop.x/hint.x must not change guest memory");
+        require(cpu.GetCR(IA64_CR_IIP) == kIipSentinel &&
+                    cpu.GetCR(IA64_CR_IPSR) == kIpsrSentinel &&
+                    cpu.GetCR(IA64_CR_ISR) == kIsrSentinel &&
+                    cpu.GetCR(IA64_CR_IIM) == kIimSentinel &&
+                    cpu.GetCR(23) == ((1ULL << 63) | kIfsSentinel),
+                "nop.x/hint.x must not enter the break vector or mutate interruption state");
+    };
+
+    runNoopCase("authentic R21 nop.x must decode as NOP", kAuthenticNopX, 0,
+                InstructionType::NOP, 0, true);
+    runNoopCase("immediate-bearing nop.x must decode as NOP",
+                makeNopX(0, 0x154321U), 0x123456789AULL,
+                InstructionType::NOP, 0, true);
+    runNoopCase("hint.x must decode separately from nop.x",
+                makeHintX(0, 0x0ABCDEU), 0x0FEDCBA987ULL,
+                InstructionType::X_HINT, 0, true);
+    runNoopCase("predicated-off nop.x must still decode as NOP",
+                makeNopX(6, 0x12345U), 0x10001ULL,
+                InstructionType::NOP, 6, false);
+    runNoopCase("predicated-off hint.x must still decode as hint.x",
+                makeHintX(6, 0x54321U), 0x12345ULL,
+                InstructionType::X_HINT, 6, false);
+
+    auto runBreakCase = [&](const char* name, uint32_t immediate, uint64_t lSlot,
+                            uint8_t predicate, bool predicateValue,
+                            bool collectionEnabled, bool expectFault) {
+        SparseMemory memory;
+        seedMemory(memory);
+        IA64ISAPlugin plugin(decoder);
+        plugin.setInterruptVectorBase(kIvBase);
+        IA64ISAState& pluginState = dynamic_cast<IA64ISAState&>(plugin.getState());
+        CPUState& cpu = pluginState.getCPUState();
+        seedCpu(cpu);
+        cpu.SetCR(IA64_CR_IVA, kIvBase);
+        cpu.SetPSR(collectionEnabled ? IA64_PSR_IC : 0);
+        cpu.SetPR(predicate, predicateValue);
+        cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+        cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+        cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+        cpu.SetCR(IA64_CR_IIM, kIimSentinel);
+        cpu.SetCR(23, (1ULL << 63) | kIfsSentinel);
+
+        const uint64_t xSlot = makeBreakX(immediate, predicate);
+        const InstructionEx decoded = decoder.DecodeInstruction(xSlot, UnitType::X_UNIT);
+        require(decoded.GetType() == InstructionType::BREAK && decoded.HasImmediate() &&
+                    decoded.GetImmediate() == immediate,
+                name);
+        require(ia64::decoder::XTypeDecoder::isValidXUnit(xSlot), "break.x encoding must pass X-unit validation");
+        const std::array<uint64_t, 3> slots{{kMUnitNop, lSlot & kSlotMask, xSlot}};
+        const auto bundleBytes = encodeBundle(0x04, slots);
+        const Bundle bundle = decoder.DecodeBundleAt(bundleBytes.data(), kBundleIp);
+        require(bundle.instructions.size() == 3 &&
+                    bundle.instructions[2].GetUnit() == UnitType::X_UNIT &&
+                    bundle.instructions[2].GetType() == InstructionType::BREAK,
+                "break.x must remain a BREAK in MLX slot 2");
+        memory.Write(kBundleIp, bundleBytes.data(), bundleBytes.size());
+        cpu.SetIP(kBundleIp);
+        pluginState.currentSlot_ = 0;
+        pluginState.bundleValid_ = false;
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 1,
+                "MLX M slot must retire before break.x");
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 2,
+                "MLX L immediate slot must retire before break.x");
+        const CpuSnapshot before = snapshotCpu(cpu);
+        const auto memoryBefore = memory.snapshot();
+        const uint64_t itcBefore = cpu.GetAR(44);
+        const ISAExecutionResult result = plugin.step(memory);
+
+        if (expectFault) {
+            require(result == ISAExecutionResult::CONTINUE && cpu.GetIP() == kIvBase + 0x2C00,
+                    "qualified break.x must enter the Break Instruction vector");
+            require(cpu.GetCR(IA64_CR_IIP) == kBundleIp &&
+                        ((cpu.GetCR(IA64_CR_IPSR) >> 41) & 0x3ULL) == 2 &&
+                        cpu.GetCR(IA64_CR_ISR) == (2ULL << 41),
+                    "break.x must save IIP, IPSR.ri, and ISR.ei for slot 2");
+            require(cpu.GetCR(IA64_CR_IIM) == immediate,
+                    "break.x must place only imm62[20:0] in IIM, independent of the L-slot upper 41 bits");
+            require(cpu.GetCR(23) == kIfsSentinel && cpu.GetPSR() == 0,
+                    "break.x interruption entry must clear IFS.v and the enabled interruption PSR bits");
+            require(memory.snapshot() == memoryBefore,
+                    "break.x fault delivery must not change guest memory");
+        } else {
+            const CpuSnapshot after = snapshotCpu(cpu);
+            require(result == ISAExecutionResult::CONTINUE && cpu.GetIP() == kBundleIp + 16 &&
+                        pluginState.currentSlot_ == 3 && !pluginState.bundleValid_,
+                    "predicated-off or collection-disabled break.x must retire normally");
+            require(sameArchitecturalState(before, after) && cpu.GetAR(44) == itcBefore &&
+                        cpu.GetCR(IA64_CR_IIP) == kIipSentinel &&
+                        cpu.GetCR(IA64_CR_IPSR) == kIpsrSentinel &&
+                        cpu.GetCR(IA64_CR_ISR) == kIsrSentinel &&
+                        cpu.GetCR(IA64_CR_IIM) == kIimSentinel &&
+                        cpu.GetCR(23) == ((1ULL << 63) | kIfsSentinel),
+                    "nullified break.x must preserve registers, RSE, and interruption state");
+            require(memory.snapshot() == memoryBefore,
+                    "nullified break.x must not change guest memory");
+        }
+    };
+
+    runBreakCase("break.x imm62=0 must decode with IIM zero", 0, 0, 0, true, true, true);
+    runBreakCase("break.x must reconstruct imm21 including bit 20",
+                 0x154321U, 0x123456789AULL, 0, true, true, true);
+    runBreakCase("predicated-off break.x must not raise a fault",
+                 0x54321U, 0x1555555555ULL, 6, false, true, false);
+    runBreakCase("break.x with PSR.ic clear must not raise a fault",
+                 0x12345U, 0x0FEDCBA987ULL, 0, true, false, false);
+
+    constexpr uint64_t kMovlImmediate = 0xD123456789ABCDEFULL;
+    constexpr uint8_t kMovlDestination = 17;
+    const uint64_t movlX = makeMovlX(kMovlDestination, kMovlImmediate, 0);
+    const uint64_t movlL = (kMovlImmediate >> 22) & kSlotMask;
+    require(ia64::decoder::XTypeDecoder::isValidXUnit(movlX), "movl vc=0 must validate as a supported X form");
+    require(decoder.DecodeInstruction(movlX, UnitType::X_UNIT).GetType() == InstructionType::MOVL,
+            "movl X slot must retain the MOVL classification");
+    const auto movlBytes = encodeBundle(0x04, {{kMUnitNop, movlL, movlX}});
+    const Bundle movlBundle = decoder.DecodeBundleAt(movlBytes.data(), kBundleIp);
+    require(movlBundle.instructions.size() == 2 &&
+                movlBundle.instructions[1].GetUnit() == UnitType::L_UNIT &&
+                movlBundle.instructions[1].GetType() == InstructionType::MOVL &&
+                movlBundle.instructions[1].GetDst() == kMovlDestination &&
+                movlBundle.instructions[1].GetImmediate() == kMovlImmediate,
+            "MLX MOVL must reconstruct all 64 immediate bits from the L and X slots");
+    {
+        SparseMemory memory;
+        seedMemory(memory);
+        IA64ISAPlugin plugin(decoder);
+        IA64ISAState& pluginState = dynamic_cast<IA64ISAState&>(plugin.getState());
+        CPUState& cpu = pluginState.getCPUState();
+        seedCpu(cpu);
+        memory.Write(kBundleIp, movlBytes.data(), movlBytes.size());
+        cpu.SetIP(kBundleIp);
+        pluginState.currentSlot_ = 0;
+        pluginState.bundleValid_ = false;
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 1,
+                "MOVL bundle M slot must retire before the combined L+X instruction");
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE && cpu.GetIP() == kBundleIp + 16 &&
+                    cpu.GetGR(kMovlDestination) == kMovlImmediate &&
+                    !cpu.GetGRNaT(kMovlDestination),
+                "valid MOVL must execute with the reconstructed 64-bit immediate");
+    }
+
+    const std::vector<std::pair<std::string, uint64_t>> unsupported{
+        {"unassigned X major opcode 1", 1ULL << 37},
+        {"reserved X3 extension", 1ULL << 33},
+        {"reserved X6 extension", 2ULL << 27},
+        {"reserved X major opcode 7", 7ULL << 37},
+        {"reserved X major opcode E", 0xEULL << 37},
+        {"reserved X major opcode F", 0xFULL << 37},
+        {"movl with reserved vc=1", (6ULL << 37) | (1ULL << 20)},
+        {"recognized but unsupported brl", 0xCULL << 37},
+        {"recognized but unsupported brl.call", 0xDULL << 37},
+    };
+    require(ia64::decoder::XTypeDecoder::isValidXUnit(0xCULL << 37) &&
+                ia64::decoder::XTypeDecoder::isValidXUnit(0xDULL << 37),
+            "valid brl and brl.call encodings must be recognized even while unsupported");
+    for (const auto& [name, raw] : unsupported) {
+        const bool validEncoding = raw == (0xCULL << 37) || raw == (0xDULL << 37);
+        require(ia64::decoder::XTypeDecoder::isValidXUnit(raw) == validEncoding,
+                "X-unit validity check must separate recognized long branches from reserved encodings");
+        require(decoder.DecodeInstruction(raw, UnitType::X_UNIT).GetType() == InstructionType::UNKNOWN,
+                name.c_str());
+        SparseMemory memory;
+        seedMemory(memory);
+        IA64ISAPlugin plugin(decoder);
+        IA64ISAState& pluginState = dynamic_cast<IA64ISAState&>(plugin.getState());
+        CPUState& cpu = pluginState.getCPUState();
+        seedCpu(cpu);
+        cpu.SetIP(kBundleIp);
+        const auto bundleBytes = encodeBundle(0x04, {{kMUnitNop, 0, raw}});
+        const Bundle bundle = decoder.DecodeBundleAt(bundleBytes.data(), kBundleIp);
+        require(bundle.instructions.size() == 3 &&
+                    bundle.instructions[2].GetUnit() == UnitType::X_UNIT &&
+                    bundle.instructions[2].GetType() == InstructionType::UNKNOWN,
+                "unsupported X forms must remain UNKNOWN in the production MLX bundle decoder");
+        memory.Write(kBundleIp, bundleBytes.data(), bundleBytes.size());
+        pluginState.currentSlot_ = 0;
+        pluginState.bundleValid_ = false;
+        require(plugin.step(memory) == ISAExecutionResult::CONTINUE &&
+                    plugin.step(memory) == ISAExecutionResult::CONTINUE &&
+                    pluginState.currentSlot_ == 2,
+                "unsupported X form must be reached after the MLX prefix slots");
+        const CpuSnapshot before = snapshotCpu(cpu);
+        const auto memoryBefore = memory.snapshot();
+        require(plugin.step(memory) == ISAExecutionResult::EXCEPTION &&
+                    cpu.GetIP() == kBundleIp && pluginState.currentSlot_ == 2,
+                "unsupported/reserved X form must raise explicit decode failure, not execute as NOP");
+        const CpuSnapshot after = snapshotCpu(cpu);
+        require(sameArchitecturalState(before, after) && memory.snapshot() == memoryBefore,
+                "unsupported X decode must not mutate guest registers or memory before reporting failure");
+    }
+
+    const auto nonMlxBytes = encodeBundle(0x00, {{kMUnitNop, 0, kHintX}}); // MII, slot 2 is I-unit
+    const Bundle nonMlxBundle = decoder.DecodeBundleAt(nonMlxBytes.data(), kBundleIp);
+    require(nonMlxBundle.instructions.size() == 3 &&
+                nonMlxBundle.instructions[2].GetUnit() == UnitType::I_UNIT &&
+                nonMlxBundle.instructions[2].GetType() != InstructionType::X_HINT,
+            "X-unit NOP/HINT encodings must not be interpreted as X forms outside an MLX template");
+
+    // Preserve R20/R21's neighboring unit-family checks in this focused target.
+    testIA64BreakMDecodeAndFaultDelivery();
+    std::cout << "[PASS] IA-64 X-unit decode/execution qualification matrix\n";
+}
+
 int main(int argc, char** argv) {
     std::cout.setf(std::ios::unitbuf);
     std::cout << "=== ISA Plugin Architecture Tests ===\n\n";
@@ -6678,6 +7111,10 @@ int main(int argc, char** argv) {
     try {
         if (argc > 1 && std::string(argv[1]) == "breakfault") {
             testIA64BreakMDecodeAndFaultDelivery();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "xunit") {
+            testIA64XUnitDecodeMatrix();
             return 0;
         }
         if (argc > 1 && std::string(argv[1]) == "loadimage") {
@@ -6710,6 +7147,7 @@ int main(int argc, char** argv) {
         }
 
         testISAStateSerialization();
+        testIA64XUnitDecodeMatrix();
         std::cout << "\n";
         
         testISAPluginCreation();

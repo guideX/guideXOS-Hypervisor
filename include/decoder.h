@@ -290,7 +290,11 @@ enum class InstructionType {
     COVER,      // Cover the current register-stack frame and reset the RRB
     CLRRB,      // Clear the rotating-register base (clrrb / clrrb.pr)
 
-    UNKNOWN
+    UNKNOWN,
+
+    // The X-unit performance hint is architecturally distinct from nop.x,
+    // even though this emulator models its execution as a no-op.
+    X_HINT
 };
 
 enum class CompareCompleter : uint8_t {
