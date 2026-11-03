@@ -6456,13 +6456,8 @@ void testIA64BreakMDecodeAndFaultDelivery() {
     require(decoded.HasImmediate() && decoded.GetImmediate() == immediate,
             "M37 break.m must preserve its dispersed 21-bit immediate");
 
-    auto makeBreakBundle = [](uint8_t predicate) {
+    auto encodeBundle = [](uint8_t templateType, const std::array<uint64_t, 3>& slots) {
         std::array<uint8_t, 16> bundle{};
-        const uint64_t slots[] = {
-            static_cast<uint64_t>(predicate & 0x3FU),
-            0x8000000ULL,
-            0x8000000ULL
-        };
         auto setBits = [&bundle](size_t firstBit, uint64_t value, size_t bitCount) {
             for (size_t bit = 0; bit < bitCount; ++bit) {
                 if (((value >> bit) & 1ULL) != 0) {
@@ -6471,22 +6466,44 @@ void testIA64BreakMDecodeAndFaultDelivery() {
                 }
             }
         };
-        setBits(0, 0x09, 5); // MMI stop template
+        setBits(0, templateType, 5);
         setBits(5, slots[0], 41);
         setBits(46, slots[1], 41);
         setBits(87, slots[2], 41);
         return bundle;
     };
+    auto makeBreakM = [](uint32_t breakImmediate, uint8_t predicate = 0) {
+        return (static_cast<uint64_t>(breakImmediate & 0xFFFFFU) << 6) |
+               (static_cast<uint64_t>((breakImmediate >> 20) & 1U) << 36) |
+               static_cast<uint64_t>(predicate & 0x3FU);
+    };
+    auto makeBreakX = [](uint32_t breakImmediate, uint8_t predicate = 0) {
+        return (static_cast<uint64_t>(breakImmediate & 0xFFFFFU) << 6) |
+               (static_cast<uint64_t>((breakImmediate >> 20) & 1U) << 36) |
+               static_cast<uint64_t>(predicate & 0x3FU);
+    };
+    constexpr uint64_t nopM = 1ULL << 27; // M-unit x4=1 form, distinct from break.m
+    constexpr uint64_t nopI = 0x4000000000ULL;
+    constexpr uint64_t kIipSentinel = 0xA000;
+    constexpr uint64_t kIpsrSentinel = 0x1122334455667788ULL;
+    constexpr uint64_t kIsrSentinel = 0x8877665544332211ULL;
+    constexpr uint64_t kIimSentinel = 0x123456ULL;
+    constexpr uint64_t kIfsSentinel = 0xA5A5A5A5A5A5A5A5ULL;
 
     SparseMemory memory;
     IA64ISAPlugin plugin(decoder);
     plugin.setInterruptVectorBase(0x3000);
     IA64ISAState& pluginState = dynamic_cast<IA64ISAState&>(plugin.getState());
     CPUState& cpu = pluginState.getCPUState();
-    const auto unqualifiedBundle = makeBreakBundle(0);
+    const auto unqualifiedBundle = encodeBundle(
+        0x09, {makeBreakM(0), nopM, nopI}); // MMI stop: break.m in slot 0
     memory.Write(0x1000, unqualifiedBundle.data(), unqualifiedBundle.size());
     cpu.SetIP(0x1000);
     cpu.SetPSR(IA64_PSR_IC);
+    cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+    cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+    cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+    cpu.SetCR(IA64_CR_IIM, kIimSentinel);
     cpu.SetCR(23, (1ULL << 63) | 0x55ULL);
 
     const ISAExecutionResult faultResult = plugin.step(memory);
@@ -6509,30 +6526,149 @@ void testIA64BreakMDecodeAndFaultDelivery() {
     require(pluginState.currentSlot_ == 0 && !pluginState.bundleValid_,
             "break instruction entry must restart at slot zero of the handler");
 
-    auto predicatedBundle = makeBreakBundle(1);
-    memory.Write(0x1100, predicatedBundle.data(), predicatedBundle.size());
+    constexpr uint32_t nonzeroBreakImmediate = 0x12A35U;
+    const auto slotOneBreakBundle = encodeBundle(
+        0x09, {nopM, makeBreakM(nonzeroBreakImmediate), nopI});
+    memory.Write(0x1100, slotOneBreakBundle.data(), slotOneBreakBundle.size());
     cpu.SetIP(0x1100);
+    cpu.SetPSR(IA64_PSR_IC);
+    pluginState.currentSlot_ = 0;
+    pluginState.bundleValid_ = false;
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE &&
+                pluginState.currentSlot_ == 1 && cpu.GetIP() == 0x1100,
+            "M-unit nop must retire before the slot-one break.m");
+    const ISAExecutionResult slotOneFaultResult = plugin.step(memory);
+    require(slotOneFaultResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x5C00,
+            "slot-one break.m must enter the break instruction vector");
+    require(cpu.GetCR(IA64_CR_IIP) == 0x1100 &&
+                ((cpu.GetCR(IA64_CR_IPSR) >> 41) & 0x3ULL) == 1,
+            "slot-one break.m must save the faulting bundle and IPSR.ri");
+    require(cpu.GetCR(IA64_CR_ISR) == (1ULL << 41),
+            "slot-one break.m must report ISR.ei one");
+    require(cpu.GetCR(IA64_CR_IIM) == nonzeroBreakImmediate,
+            "nonzero break.m must write its immediate to IIM");
+
+    const auto predicatedBundle = encodeBundle(
+        0x09, {makeBreakM(0x321U, 1), nopM, nopI});
+    memory.Write(0x1200, predicatedBundle.data(), predicatedBundle.size());
+    cpu.SetIP(0x1200);
     cpu.SetPSR(IA64_PSR_IC);
     cpu.SetPR(1, false);
     pluginState.currentSlot_ = 0;
     pluginState.bundleValid_ = false;
+    cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+    cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+    cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+    cpu.SetCR(IA64_CR_IIM, kIimSentinel);
+    cpu.SetCR(23, kIfsSentinel);
     const ISAExecutionResult predicatedResult = plugin.step(memory);
-    require(predicatedResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1100,
+    require(predicatedResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1200,
             "predicated-off break.m must retire without entering the fault vector");
     require(pluginState.currentSlot_ == 1 && cpu.GetPSR() == IA64_PSR_IC,
-            "predicated-off break.m must preserve handler state and advance one slot");
-    require(cpu.GetCR(IA64_CR_IIP) == 0x1000,
-            "predicated-off break.m must not overwrite the previous IIP");
+            "predicated-off break.m must preserve PSR and advance one slot");
+    require(cpu.GetCR(IA64_CR_IIP) == kIipSentinel &&
+                cpu.GetCR(IA64_CR_IPSR) == kIpsrSentinel &&
+                cpu.GetCR(IA64_CR_ISR) == kIsrSentinel &&
+                cpu.GetCR(IA64_CR_IIM) == kIimSentinel &&
+                cpu.GetCR(23) == kIfsSentinel,
+            "predicated-off break.m must preserve interruption state");
 
-    cpu.SetIP(0x1200);
+    cpu.SetIP(0x1300);
     cpu.SetPSR(0);
     pluginState.currentSlot_ = 0;
     pluginState.bundleValid_ = false;
+    memory.Write(0x1300, slotOneBreakBundle.data(), slotOneBreakBundle.size());
     const ISAExecutionResult collectionDisabledResult = plugin.step(memory);
-    require(collectionDisabledResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1200,
+    require(collectionDisabledResult == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1300,
             "break.m with PSR.ic clear must not take a break instruction fault");
-    require(pluginState.currentSlot_ == 1 && cpu.GetCR(IA64_CR_IIP) == 0x1000,
+    require(pluginState.currentSlot_ == 1 && cpu.GetCR(IA64_CR_IIP) == kIipSentinel &&
+                cpu.GetCR(IA64_CR_IPSR) == kIpsrSentinel &&
+                cpu.GetCR(IA64_CR_ISR) == kIsrSentinel &&
+                cpu.GetCR(IA64_CR_IIM) == kIimSentinel &&
+                cpu.GetCR(23) == kIfsSentinel,
             "break.m with PSR.ic clear must retire without changing interruption state");
+
+    const InstructionEx decodedNopM = decoder.DecodeInstruction(nopM, UnitType::M_UNIT);
+    require(decodedNopM.GetType() == InstructionType::NOP,
+            "M-unit x4=1 nop.m must not be misclassified as break.m");
+    const auto nopBundle = encodeBundle(0x09, {nopM, nopM, nopI});
+    memory.Write(0x1400, nopBundle.data(), nopBundle.size());
+    cpu.SetIP(0x1400);
+    cpu.SetPSR(IA64_PSR_IC);
+    pluginState.currentSlot_ = 0;
+    pluginState.bundleValid_ = false;
+    cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+    cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+    cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+    cpu.SetCR(IA64_CR_IIM, kIimSentinel);
+    cpu.SetCR(23, kIfsSentinel);
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE &&
+                pluginState.currentSlot_ == 1 && cpu.GetIP() == 0x1400 &&
+                cpu.GetCR(IA64_CR_IIP) == kIipSentinel &&
+                cpu.GetCR(IA64_CR_IPSR) == kIpsrSentinel &&
+                cpu.GetCR(IA64_CR_ISR) == kIsrSentinel &&
+                cpu.GetCR(IA64_CR_IIM) == kIimSentinel && cpu.GetCR(23) == kIfsSentinel,
+            "nop.m must retire without entering the break vector or changing CR state");
+
+    constexpr uint64_t authenticNopXBits = 0x08000000ULL;
+    const InstructionEx decodedNopX = decoder.DecodeInstruction(authenticNopXBits, UnitType::X_UNIT);
+    require(decodedNopX.GetType() == InstructionType::NOP,
+            "X-unit x3=0/x6=1 encoding must decode as nop.x, not break.x");
+    const auto nopXBundle = encodeBundle(0x04, {nopM, 0, authenticNopXBits});
+    memory.Write(0x1500, nopXBundle.data(), nopXBundle.size());
+    cpu.SetIP(0x1500);
+    cpu.SetPSR(IA64_PSR_IC);
+    pluginState.currentSlot_ = 0;
+    pluginState.bundleValid_ = false;
+    cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+    cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+    cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+    cpu.SetCR(IA64_CR_IIM, kIimSentinel);
+    cpu.SetCR(23, kIfsSentinel);
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 1,
+            "MLX M-unit slot must retire before the authentic nop.x encoding");
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 2,
+            "MLX L-unit slot must retire before the authentic nop.x encoding");
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x1510 &&
+                cpu.GetCR(IA64_CR_IIP) == kIipSentinel &&
+                cpu.GetCR(IA64_CR_IPSR) == kIpsrSentinel &&
+                cpu.GetCR(IA64_CR_ISR) == kIsrSentinel &&
+                cpu.GetCR(IA64_CR_IIM) == kIimSentinel && cpu.GetCR(23) == kIfsSentinel,
+            "authentic nop.x must retire without entering the break vector or changing CR state");
+
+    constexpr uint32_t xBreakImmediate = 0x54321U;
+    const uint64_t rawBreakX = makeBreakX(xBreakImmediate);
+    const InstructionEx decodedX = decoder.DecodeInstruction(rawBreakX, UnitType::X_UNIT);
+    require(decodedX.GetType() == InstructionType::BREAK &&
+                decodedX.HasImmediate() && decodedX.GetImmediate() == xBreakImmediate,
+            "X-unit break must decode as BREAK and preserve its immediate");
+    const auto xBreakBundle = encodeBundle(0x04, {nopM, 0, rawBreakX}); // MLX: break.x in slot 2
+    memory.Write(0x1600, xBreakBundle.data(), xBreakBundle.size());
+    const Bundle decodedXBundle = decoder.DecodeBundleAt(xBreakBundle.data(), 0x1600);
+    require(decodedXBundle.instructions.size() == 3 &&
+                decodedXBundle.instructions[2].GetUnit() == UnitType::X_UNIT &&
+                decodedXBundle.instructions[2].GetType() == InstructionType::BREAK,
+            "MLX slot 2 must retain the X-unit break identity");
+    cpu.SetIP(0x1600);
+    cpu.SetPSR(IA64_PSR_IC);
+    pluginState.currentSlot_ = 0;
+    pluginState.bundleValid_ = false;
+    cpu.SetCR(IA64_CR_IIP, kIipSentinel);
+    cpu.SetCR(IA64_CR_IPSR, kIpsrSentinel);
+    cpu.SetCR(IA64_CR_ISR, kIsrSentinel);
+    cpu.SetCR(IA64_CR_IIM, kIimSentinel);
+    cpu.SetCR(23, kIfsSentinel);
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 1,
+            "MLX slot 0 must retire before the X-unit break");
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE && pluginState.currentSlot_ == 2,
+            "MLX slot 1 must retire before the X-unit break");
+    require(plugin.step(memory) == ISAExecutionResult::CONTINUE && cpu.GetIP() == 0x5C00,
+            "X-unit break.x must enter the architectural break vector");
+    require(cpu.GetCR(IA64_CR_IIP) == 0x1600 &&
+                ((cpu.GetCR(IA64_CR_IPSR) >> 41) & 0x3ULL) == 2 &&
+                cpu.GetCR(IA64_CR_ISR) == (2ULL << 41) &&
+                cpu.GetCR(IA64_CR_IIM) == xBreakImmediate,
+            "slot-two break.x must save IIP, ri, ei, and its immediate");
 }
 
 int main(int argc, char** argv) {

@@ -35,6 +35,7 @@ struct Options {
     uint64_t postCheckpointCycles = 2'000'000;
     bool placementTelemetry = false;
     bool instructionTrace = false;
+    bool traceControlFlowOnly = false;
     std::string progressLogPath;
     uint64_t traceAfterCycles = std::numeric_limits<uint64_t>::max();
     uint64_t traceInstructionCount = 0;
@@ -166,6 +167,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             if (!parseUnsigned(argv[++i], options.traceAfterCycles)) return false;
         } else if (argument == "--trace-instructions" && i + 1 < argc) {
             if (!parseUnsigned(argv[++i], options.traceInstructionCount)) return false;
+        } else if (argument == "--trace-control-flow-only") {
+            options.traceControlFlowOnly = true;
         } else if (argument == "--verify-oracle" && i + 1 < argc) {
             options.oraclePath = argv[++i];
         } else if (argument == "--checkpoint-write" && i + 1 < argc) {
@@ -229,7 +232,7 @@ void printUsage() {
     std::cout << "Usage: ia64_iso_matrix <iso-path> [--cycles N] [--memory-mib N] "
                  "[--key NAME]... [--key-after-cycles N] [--placement-telemetry] "
                  "[--verify-oracle PATH] [--instruction-trace] [--progress-log PATH] "
-                 "[--trace-after-cycles N --trace-instructions N] "
+                 "[--trace-after-cycles N --trace-instructions N --trace-control-flow-only] "
                  "[--checkpoint-write PATH | --checkpoint-read PATH] "
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
@@ -351,10 +354,14 @@ struct ContinuationRecord {
         uint64_t raw = 0;
         uint64_t rawBundleLo = 0;
         uint64_t rawBundleHi = 0;
+        uint8_t templateType = 0xff;
+        uint8_t instructionUnit = 0xff;
         uint8_t instructionType = 0;
         uint8_t predicate = 0;
         bool predicateValue = false;
         uint8_t destination = 0;
+        uint64_t destinationValue = 0;
+        bool destinationNat = false;
         uint8_t source1 = 0;
         uint8_t source2 = 0;
         uint8_t source3 = 0;
@@ -395,6 +402,8 @@ struct ContinuationRecord {
         uint64_t iha = 0;
         uint64_t ifa = 0;
         uint64_t isr = 0;
+        uint64_t iim = 0;
+        uint64_t ifs = 0;
         uint64_t itir = 0;
         bool interruptPending = false;
         bool interruptInService = false;
@@ -730,7 +739,8 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    uint64_t r14TraceStartCycle = std::numeric_limits<uint64_t>::max(),
                                    uint64_t r14TraceEndCycle = 0,
                                    std::string r14TracePath = {},
-                                   std::vector<uint64_t> r14WatchMemoryPas = {}) {
+                                   std::vector<uint64_t> r14WatchMemoryPas = {},
+                                   bool traceControlFlowOnly = false) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     ContinuationRecord record;
@@ -1214,8 +1224,24 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             first.itc = vm.getCPUState(0).GetAR(44);
             record.firstInstructions.push_back(std::move(first));
         }
+        bool controlFlowInstruction = false;
+        if (traceControlFlowOnly && rawMemory != nullptr) {
+            const uint64_t physicalBundle = rawPhysicalBundleAddress(ip);
+            if (physicalBundle + 16 <= vm.getMemory().GetTotalSize()) {
+                const ia64::Bundle bundle = traceDecoder.DecodeBundleAt(
+                    rawMemory + physicalBundle, physicalBundle);
+                if (slot < bundle.instructions.size()) {
+                    const std::string disassembly = bundle.instructions[slot].GetDisassembly();
+                    controlFlowInstruction = disassembly.rfind("br", 0) == 0 ||
+                                             disassembly.rfind("cmp", 0) == 0 ||
+                                             disassembly.rfind("chk", 0) == 0 ||
+                                             disassembly.rfind("break", 0) == 0;
+                }
+            }
+        }
         if (record.traceWindow.size() < traceInstructionCount &&
-            globalCycle >= traceAfterCycles) {
+            globalCycle >= traceAfterCycles &&
+            (!traceControlFlowOnly || controlFlowInstruction)) {
             ContinuationRecord::Instruction traced;
             traced.cycle = globalCycle;
             traced.ip = ip;
@@ -1231,13 +1257,17 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 }
                 const ia64::Bundle bundle = traceDecoder.DecodeBundleAt(
                     rawMemory + physicalBundle, physicalBundle);
+                traced.templateType = static_cast<uint8_t>(bundle.templateType);
                 if (slot < bundle.instructions.size()) {
                     const ia64::InstructionEx& instruction = bundle.instructions[slot];
                     traced.raw = instruction.GetRawBits();
+                    traced.instructionUnit = static_cast<uint8_t>(instruction.GetUnit());
                     traced.instructionType = static_cast<uint8_t>(instruction.GetType());
                     traced.predicate = instruction.GetPredicate();
                     traced.predicateValue = traceCpu.GetPR(traced.predicate);
                     traced.destination = instruction.GetDst();
+                    traced.destinationValue = traceCpu.GetGR(traced.destination);
+                    traced.destinationNat = traceCpu.GetGRNaT(traced.destination);
                     traced.source1 = instruction.GetSrc1();
                     traced.source2 = instruction.GetSrc2();
                     traced.source3 = instruction.GetSrc3();
@@ -1295,6 +1325,8 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             traced.iha = traceCpu.GetCR(25);
             traced.ifa = traceCpu.GetCR(20);
             traced.isr = traceCpu.GetCR(17);
+            traced.iim = traceCpu.GetCR(24);
+            traced.ifs = traceCpu.GetCR(23);
             traced.itir = traceCpu.GetCR(21);
             if (plugin != nullptr) {
                 traced.interruptPending = plugin->hasPendingInterrupt();
@@ -1691,12 +1723,16 @@ void writeContinuationLog(const std::string& path,
                << " raw=0x" << instruction.raw
                << " raw_bundle_hi=0x" << instruction.rawBundleHi
                << " raw_bundle_lo=0x" << instruction.rawBundleLo
+               << " template=0x" << static_cast<unsigned>(instruction.templateType)
+               << " unit=0x" << static_cast<unsigned>(instruction.instructionUnit)
                << " predicate_mask=0x" << instruction.predicateMask
                << std::dec << " slot=" << instruction.slot
                << " instruction_type=" << static_cast<unsigned>(instruction.instructionType)
                << " predicate=" << static_cast<unsigned>(instruction.predicate)
                << " predicate_value=" << (instruction.predicateValue ? 1 : 0)
                << " dst=r" << static_cast<unsigned>(instruction.destination)
+               << " dst_value=0x" << std::hex << instruction.destinationValue
+               << (instruction.destinationNat ? "N" : "")
                << " src1=r" << static_cast<unsigned>(instruction.source1)
                << " src1_value=0x" << std::hex << instruction.source1Value
                << (instruction.source1Nat ? "N" : "")
@@ -1729,6 +1765,8 @@ void writeContinuationLog(const std::string& path,
                << " iha=0x" << instruction.iha
                << " ifa=0x" << instruction.ifa
                << " isr=0x" << instruction.isr
+               << " iim=0x" << instruction.iim
+               << " ifs=0x" << instruction.ifs
                << " itir=0x" << instruction.itir
                << " interrupt_pending=" << (instruction.interruptPending ? 1 : 0)
                << " interrupt_in_service=" << (instruction.interruptInService ? 1 : 0)
@@ -2033,7 +2071,8 @@ int main(int argc, char** argv) {
                                                                 options.r14TraceStartCycle,
                                                                 options.r14TraceEndCycle,
                                                                 options.r14TracePath,
-                                                                options.r14WatchMemoryPas);
+                                                                options.r14WatchMemoryPas,
+                                                                options.traceControlFlowOnly);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
@@ -2339,7 +2378,7 @@ int main(int argc, char** argv) {
                     options.lockTracePath, options.traceAfterCycles,
                     options.traceInstructionCount, options.r14TraceStartCycle,
                     options.r14TraceEndCycle, options.r14TracePath,
-                    options.r14WatchMemoryPas);
+                    options.r14WatchMemoryPas, options.traceControlFlowOnly);
                 executed = progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {
@@ -2387,7 +2426,8 @@ int main(int argc, char** argv) {
                     collectColdHotIps, options.probeIps, options.lockTracePath,
                     options.traceAfterCycles, options.traceInstructionCount,
                     options.r14TraceStartCycle, options.r14TraceEndCycle,
-                    options.r14TracePath, options.r14WatchMemoryPas);
+                    options.r14TracePath, options.r14WatchMemoryPas,
+                    options.traceControlFlowOnly);
                 executed += progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {

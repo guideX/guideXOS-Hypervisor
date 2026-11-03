@@ -100,18 +100,28 @@ InstructionEx XTypeDecoder::decode(uint64_t slot) {
     uint8_t qp = formats::extractBits(slot, 0, 6);
     inst.SetPredicate(qp);
     
-    // Extract opcode to determine instruction type
+    // X-unit miscellaneous instructions use x3/x6 opcode extensions within
+    // major opcode 0.  In particular, break.x is x3=0/x6=0 while nop.x and
+    // hint.x are x3=0/x6=1; looking only at bits 37:40 aliases nop.x to break.
     uint8_t opcode = formats::extractBits(slot, 37, 4);  // Major opcode (bits 37-40)
+    uint8_t x3 = formats::extractBits(slot, 33, 3);
+    uint8_t x6 = formats::extractBits(slot, 27, 6);
     
     formats::XFormat fmt;
     
     // Decode based on opcode
     switch (opcode) {
-        case 0x0:  // BREAK
+        case 0x0:  // Miscellaneous X-unit instructions
         {
-            if (decodeBreak(slot, fmt)) {
+            if (x3 == 0 && x6 == 0 && decodeBreak(slot, fmt)) {
                 inst.SetType(InstructionType::BREAK);
                 inst.SetImmediate(fmt.imm21);
+            } else if (x3 == 0 && x6 == 1) {
+                // x6=1 encodes nop.x (y=0) and hint.x (y=1).  Both have
+                // no architectural state effect in this emulator.
+                inst.SetType(InstructionType::NOP);
+            } else {
+                inst.SetType(InstructionType::UNKNOWN);
             }
             break;
         }
