@@ -1,0 +1,15 @@
+OpenSBI provenance: ../riscv_opensbi_fw_jump/binary-manifest.txt
+OpenSBI source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+Reused OpenSBI fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+DTC: Version: DTC 1.7.2
+Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+PLIC map: base=0x0C000000 size=0x00400000; sources=96; M/S contexts=0/1
+UART0: 0x10000000, non-FIFO single-byte RX, PLIC source 10
+UART1: 0x1000A000, independent non-FIFO single-byte RX, PLIC source 12
+Guest Sv39: identity-mapped low 1 GiB for both UARTs/PLIC and 0x80000000 RAM leaf
+Guest scenario log: 5 simultaneous-pending pairs; S-mode claims, reads, completions and SRETs
+
+1D508721FEA52F72BC751746C741EC381EAE73DDC435886382962739EB750CCE  supervisor.bin  1173 bytes
+197C6AED847D6275484E71A54935A6F979A93424D006596778A4CCA904BA3F99  supervisor.elf  11032 bytes
+35E52C7607AA9FCCEF68C35775E5A769C950195A5C2183B3BDF54BD4F4E93336  platform.dtb  2229 bytes

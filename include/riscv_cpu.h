@@ -470,21 +470,28 @@ public:
     uint64_t mtimecmp() const { return mtimecmp_; }
     const MachineTimerMapping& machineTimerMapping() const { return timerMapping_; }
     bool configureMachineTimer(const MachineTimerMapping& mapping);
-    const MachineUartMapping& machineUartMapping() const { return uartMapping_; }
+    const MachineUartMapping& machineUartMapping() const { return uartStates_[0].mapping; }
     bool configureMachineUart(const MachineUartMapping& mapping);
-    const std::string& machineUartOutput() const { return uartOutput_; }
+    const MachineUartMapping& machineUart1Mapping() const { return uartStates_[1].mapping; }
+    bool configureMachineUart1(const MachineUartMapping& mapping);
+    const std::string& machineUartOutput() const { return uartStates_[0].output; }
+    const std::string& machineUart1Output() const { return uartStates_[1].output; }
     const MachinePlicMapping& machinePlicMapping() const { return plicMapping_; }
     bool configureMachinePlic(const MachinePlicMapping& mapping);
     // Explicit host/test boundary for a serial receive event. The bounded
     // non-FIFO model holds one byte; a second byte before RBR is read is
     // rejected and sets the UART overrun indication.
     bool injectMachineUartReceiveByte(uint8_t byte);
+    bool injectMachineUart1ReceiveByte(uint8_t byte);
     // Device-pin injection for isolated PLIC arbitration tests. The end-to-end
     // firmware proof injects only through the UART receive boundary.
     bool setMachinePlicSourceInputForTest(uint32_t source, bool asserted);
-    bool machineUartReceiveDataReady() const { return uartReceiveDataReady_; }
-    bool machineUartReceiveOverrun() const { return uartReceiveOverrun_; }
+    bool machineUartReceiveDataReady() const { return uartStates_[0].receiveDataReady; }
+    bool machineUart1ReceiveDataReady() const { return uartStates_[1].receiveDataReady; }
+    bool machineUartReceiveOverrun() const { return uartStates_[0].receiveOverrun; }
+    bool machineUart1ReceiveOverrun() const { return uartStates_[1].receiveOverrun; }
     bool machineUartReceiveIrqAsserted() const;
+    bool machineUart1ReceiveIrqAsserted() const;
     bool machinePlicOutput(MachinePlicContext context) const;
     bool machinePlicSourcePending(uint32_t source) const;
     bool machinePlicSourceAsserted(uint32_t source) const;
@@ -610,7 +617,10 @@ private:
     void updateTimerPending();
     uint64_t interruptPendingBits() const;
     void resetPlicState();
-    void updateUartInterrupt() const;
+    void updateUartInterrupt(size_t uartIndex) const;
+    bool configureMachineUartInstance(size_t uartIndex, const MachineUartMapping& mapping);
+    bool injectMachineUartReceiveByte(size_t uartIndex, uint8_t byte);
+    bool uartReceiveIrqAsserted(size_t uartIndex) const;
     void setPlicSourceLevel(uint32_t source, bool asserted) const;
     bool plicMmioOverlaps(uint64_t paddr, size_t size) const;
     bool readPlicMmio(uint64_t paddr, uint8_t* dst, size_t size, bool& handled) const;
@@ -664,19 +674,23 @@ private:
     uint64_t satp_ = 0;
 
     // Interrupt source and deterministic MTIMER state.
+    struct MachineUartState {
+        MachineUartMapping mapping{};
+        uint8_t interruptEnable = 0;
+        uint8_t lineControl = 0;
+        uint8_t modemControl = 0;
+        uint8_t scratch = 0;
+        uint8_t divisorLow = 0;
+        uint8_t divisorHigh = 0;
+        mutable uint8_t receiveByte = 0;
+        mutable bool receiveDataReady = false;
+        mutable bool receiveOverrun = false;
+        std::string output;
+        uint32_t plicSource = 10;
+    };
     MachineTimerMapping timerMapping_{};
-    MachineUartMapping uartMapping_{};
+    std::array<MachineUartState, 2> uartStates_{};
     MachinePlicMapping plicMapping_{};
-    uint8_t uartInterruptEnable_ = 0;
-    uint8_t uartLineControl_ = 0;
-    uint8_t uartModemControl_ = 0;
-    uint8_t uartScratch_ = 0;
-    uint8_t uartDivisorLow_ = 0;
-    uint8_t uartDivisorHigh_ = 0;
-    mutable uint8_t uartReceiveByte_ = 0;
-    mutable bool uartReceiveDataReady_ = false;
-    mutable bool uartReceiveOverrun_ = false;
-    std::string uartOutput_;
     mutable uint64_t mmioReadCount_ = 0;
     uint64_t mmioWriteCount_ = 0;
     mutable std::array<uint32_t, kMachinePlicMaxSources + 1> plicPriority_{};

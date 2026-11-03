@@ -292,6 +292,8 @@ RV64CPU::~RV64CPU() {
 }
 
 RV64CPU::RV64CPU() : state_(), decoder_(), mmu_(new Sv39Mmu(this)) {
+    uartStates_[1].mapping.baseAddress = 0x1000A000ULL;
+    uartStates_[1].plicSource = 12;
     reset();
 }
 
@@ -324,16 +326,18 @@ void RV64CPU::reset() {
     supervisorTimerDeadline_ = UINT64_MAX;
     supervisorTimerArmed_ = false;
     wfiWaiting_ = false;
-    uartInterruptEnable_ = 0;
-    uartLineControl_ = 0;
-    uartModemControl_ = 0;
-    uartScratch_ = 0;
-    uartDivisorLow_ = 0;
-    uartDivisorHigh_ = 0;
-    uartReceiveByte_ = 0;
-    uartReceiveDataReady_ = false;
-    uartReceiveOverrun_ = false;
-    uartOutput_.clear();
+    for (auto& uart : uartStates_) {
+        uart.interruptEnable = 0;
+        uart.lineControl = 0;
+        uart.modemControl = 0;
+        uart.scratch = 0;
+        uart.divisorLow = 0;
+        uart.divisorHigh = 0;
+        uart.receiveByte = 0;
+        uart.receiveDataReady = false;
+        uart.receiveOverrun = false;
+        uart.output.clear();
+    }
     mmioReadCount_ = 0;
     mmioWriteCount_ = 0;
     resetPlicState();
@@ -416,14 +420,14 @@ bool RV64CPU::timerMmioOverlaps(uint64_t paddr, size_t size) const {
 }
 
 bool RV64CPU::uartMmioOverlaps(uint64_t paddr, size_t size) const {
-    if (!uartMapping_.enabled || size == 0 ||
-        static_cast<uint64_t>(size) > UINT64_MAX - paddr ||
-        uartMapping_.baseAddress > UINT64_MAX - 8ULL) {
-        return false;
-    }
+    if (size == 0 || static_cast<uint64_t>(size) > UINT64_MAX - paddr) return false;
     const uint64_t accessEnd = paddr + static_cast<uint64_t>(size);
-    const uint64_t uartEnd = uartMapping_.baseAddress + 8ULL;
-    return paddr < uartEnd && uartMapping_.baseAddress < accessEnd;
+    for (const auto& uart : uartStates_) {
+        if (!uart.mapping.enabled || uart.mapping.baseAddress > UINT64_MAX - 8ULL) continue;
+        const uint64_t uartEnd = uart.mapping.baseAddress + 8ULL;
+        if (paddr < uartEnd && uart.mapping.baseAddress < accessEnd) return true;
+    }
+    return false;
 }
 
 bool RV64CPU::plicMmioOverlaps(uint64_t paddr, size_t size) const {
@@ -441,42 +445,49 @@ bool RV64CPU::readUartMmio(uint64_t paddr, uint8_t* dst, size_t size,
                            bool& handled) const {
     handled = uartMmioOverlaps(paddr, size);
     if (!handled) return true;
-    if (dst == nullptr || size != 1 || paddr < uartMapping_.baseAddress ||
-        paddr - uartMapping_.baseAddress >= 8ULL) {
-        return false;
+    if (dst == nullptr || size != 1) return false;
+    size_t uartIndex = uartStates_.size();
+    for (size_t i = 0; i < uartStates_.size(); ++i) {
+        const auto& uart = uartStates_[i];
+        if (uart.mapping.enabled && paddr >= uart.mapping.baseAddress &&
+            paddr - uart.mapping.baseAddress < 8ULL) {
+            uartIndex = i;
+            break;
+        }
     }
-
-    const uint8_t offset = static_cast<uint8_t>(paddr - uartMapping_.baseAddress);
+    if (uartIndex == uartStates_.size()) return false;
+    const uint8_t offset = static_cast<uint8_t>(paddr - uartStates_[uartIndex].mapping.baseAddress);
+    auto& uart = uartStates_[uartIndex];
     uint8_t value = 0;
     switch (offset) {
         case 0:
-            if ((uartLineControl_ & 0x80U) != 0U) {
-                value = uartDivisorLow_;
+            if ((uart.lineControl & 0x80U) != 0U) {
+                value = uart.divisorLow;
             } else {
-                value = uartReceiveDataReady_ ? uartReceiveByte_ : 0U;
-                uartReceiveDataReady_ = false;
-                updateUartInterrupt();
+                value = uart.receiveDataReady ? uart.receiveByte : 0U;
+                uart.receiveDataReady = false;
+                updateUartInterrupt(uartIndex);
             }
             break;
         case 1:
-            value = (uartLineControl_ & 0x80U) != 0U ? uartDivisorHigh_
-                                                     : uartInterruptEnable_;
+            value = (uart.lineControl & 0x80U) != 0U ? uart.divisorHigh
+                                                     : uart.interruptEnable;
             break;
         case 2:
             // FIFO capability bits remain zero: only the non-FIFO receive
             // data-available interrupt is implemented.
-            value = machineUartReceiveIrqAsserted() ? 0x04U : 0x01U;
+            value = uartReceiveIrqAsserted(uartIndex) ? 0x04U : 0x01U;
             break;
-        case 3: value = uartLineControl_; break;
-        case 4: value = uartModemControl_; break;
+        case 3: value = uart.lineControl; break;
+        case 4: value = uart.modemControl; break;
         case 5:
             value = static_cast<uint8_t>(0x60U |
-                (uartReceiveDataReady_ ? 0x01U : 0U) |
-                (uartReceiveOverrun_ ? 0x02U : 0U));
-            uartReceiveOverrun_ = false;
+                (uart.receiveDataReady ? 0x01U : 0U) |
+                (uart.receiveOverrun ? 0x02U : 0U));
+            uart.receiveOverrun = false;
             break;
         case 6: value = 0; break;      // No modem inputs are connected.
-        case 7: value = uartScratch_; break;
+        case 7: value = uart.scratch; break;
         default: return false;
     }
     dst[0] = value;
@@ -489,42 +500,49 @@ bool RV64CPU::writeUartMmio(uint64_t paddr, const uint8_t* src, size_t size,
                             bool& handled) {
     handled = uartMmioOverlaps(paddr, size);
     if (!handled) return true;
-    if (src == nullptr || size != 1 || paddr < uartMapping_.baseAddress ||
-        paddr - uartMapping_.baseAddress >= 8ULL) {
-        return false;
+    if (src == nullptr || size != 1) return false;
+    size_t uartIndex = uartStates_.size();
+    for (size_t i = 0; i < uartStates_.size(); ++i) {
+        const auto& uart = uartStates_[i];
+        if (uart.mapping.enabled && paddr >= uart.mapping.baseAddress &&
+            paddr - uart.mapping.baseAddress < 8ULL) {
+            uartIndex = i;
+            break;
+        }
     }
-
-    const uint8_t offset = static_cast<uint8_t>(paddr - uartMapping_.baseAddress);
+    if (uartIndex == uartStates_.size()) return false;
+    const uint8_t offset = static_cast<uint8_t>(paddr - uartStates_[uartIndex].mapping.baseAddress);
+    auto& uart = uartStates_[uartIndex];
     const uint8_t value = src[0];
     switch (offset) {
         case 0:
-            if ((uartLineControl_ & 0x80U) != 0U) {
-                uartDivisorLow_ = value;
+            if ((uart.lineControl & 0x80U) != 0U) {
+                uart.divisorLow = value;
             } else {
-                uartOutput_.push_back(static_cast<char>(value));
+                uart.output.push_back(static_cast<char>(value));
             }
             break;
         case 1:
-            if ((uartLineControl_ & 0x80U) != 0U) uartDivisorHigh_ = value;
+            if ((uart.lineControl & 0x80U) != 0U) uart.divisorHigh = value;
             else {
                 // Receive-data-available is the only enabled interrupt mode.
-                uartInterruptEnable_ = value & 0x01U;
-                updateUartInterrupt();
+                uart.interruptEnable = value & 0x01U;
+                updateUartInterrupt(uartIndex);
             }
             break;
         case 2:  // FCR: non-FIFO profile supports receiver reset only.
             if ((value & 0x02U) != 0U) {
-                uartReceiveDataReady_ = false;
-                uartReceiveOverrun_ = false;
-                updateUartInterrupt();
+                uart.receiveDataReady = false;
+                uart.receiveOverrun = false;
+                updateUartInterrupt(uartIndex);
             }
             break;
-        case 3: uartLineControl_ = value; break;
-        case 4: uartModemControl_ = value & 0x1FU; break;
+        case 3: uart.lineControl = value; break;
+        case 4: uart.modemControl = value & 0x1FU; break;
         case 5:  // LSR is read-only.
         case 6:  // MSR is read-only.
             break;
-        case 7: uartScratch_ = value; break;
+        case 7: uart.scratch = value; break;
         default: return false;
     }
     recordMmioEvent(MachineMmioDevice::Uart, MachineMmioOperation::Write,
@@ -821,21 +839,18 @@ bool RV64CPU::configureMachineTimer(const MachineTimerMapping& mapping) {
     if (distance < 8ULL) {
         return false;
     }
-    if (uartMapping_.enabled) {
-        const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
-                                 uint64_t rhs, uint64_t rhsSize) {
-            return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
-        };
-        if (overlaps(mapping.mtimecmpAddress, 8, uartMapping_.baseAddress, 8) ||
-            overlaps(mapping.mtimeAddress, 8, uartMapping_.baseAddress, 8)) {
+    const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
+                             uint64_t rhs, uint64_t rhsSize) {
+        return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
+    };
+    for (const auto& uart : uartStates_) {
+        if (uart.mapping.enabled &&
+            (overlaps(mapping.mtimecmpAddress, 8, uart.mapping.baseAddress, 8) ||
+             overlaps(mapping.mtimeAddress, 8, uart.mapping.baseAddress, 8))) {
             return false;
         }
     }
     if (plicMapping_.enabled) {
-        const auto overlaps = [](uint64_t lhs, uint64_t lhsSize,
-                                 uint64_t rhs, uint64_t rhsSize) {
-            return lhs < rhs + rhsSize && rhs < lhs + lhsSize;
-        };
         if (overlaps(mapping.mtimecmpAddress, 8, plicMapping_.baseAddress,
                      kMachinePlicRegionSize) ||
             overlaps(mapping.mtimeAddress, 8, plicMapping_.baseAddress,
@@ -849,12 +864,30 @@ bool RV64CPU::configureMachineTimer(const MachineTimerMapping& mapping) {
 }
 
 bool RV64CPU::configureMachineUart(const MachineUartMapping& mapping) {
+    return configureMachineUartInstance(0, mapping);
+}
+
+bool RV64CPU::configureMachineUart1(const MachineUartMapping& mapping) {
+    return configureMachineUartInstance(1, mapping);
+}
+
+bool RV64CPU::configureMachineUartInstance(size_t uartIndex,
+                                          const MachineUartMapping& mapping) {
+    if (uartIndex >= uartStates_.size()) return false;
+    auto& uart = uartStates_[uartIndex];
     if (!mapping.enabled) {
-        setPlicSourceLevel(10, false);
-        uartMapping_ = mapping;
-        uartOutput_.clear();
-        uartReceiveDataReady_ = false;
-        uartReceiveOverrun_ = false;
+        setPlicSourceLevel(uart.plicSource, false);
+        uart.mapping = mapping;
+        uart.interruptEnable = 0;
+        uart.lineControl = 0;
+        uart.modemControl = 0;
+        uart.scratch = 0;
+        uart.divisorLow = 0;
+        uart.divisorHigh = 0;
+        uart.receiveByte = 0;
+        uart.receiveDataReady = false;
+        uart.receiveOverrun = false;
+        uart.output.clear();
         return true;
     }
     if ((mapping.baseAddress & 7ULL) != 0ULL ||
@@ -871,23 +904,29 @@ bool RV64CPU::configureMachineUart(const MachineUartMapping& mapping) {
         overlaps(mapping.baseAddress, 8, timerMapping_.mtimecmpAddress, 8)) {
         return false;
     }
+    for (size_t i = 0; i < uartStates_.size(); ++i) {
+        if (i != uartIndex && uartStates_[i].mapping.enabled &&
+            overlaps(mapping.baseAddress, 8, uartStates_[i].mapping.baseAddress, 8)) {
+            return false;
+        }
+    }
     if (plicMapping_.enabled &&
         overlaps(mapping.baseAddress, 8, plicMapping_.baseAddress,
                  kMachinePlicRegionSize)) {
         return false;
     }
-    uartMapping_ = mapping;
-    uartInterruptEnable_ = 0;
-    uartLineControl_ = 0;
-    uartModemControl_ = 0;
-    uartScratch_ = 0;
-    uartDivisorLow_ = 0;
-    uartDivisorHigh_ = 0;
-    uartReceiveByte_ = 0;
-    uartReceiveDataReady_ = false;
-    uartReceiveOverrun_ = false;
-    uartOutput_.clear();
-    setPlicSourceLevel(10, false);
+    uart.mapping = mapping;
+    uart.interruptEnable = 0;
+    uart.lineControl = 0;
+    uart.modemControl = 0;
+    uart.scratch = 0;
+    uart.divisorLow = 0;
+    uart.divisorHigh = 0;
+    uart.receiveByte = 0;
+    uart.receiveDataReady = false;
+    uart.receiveOverrun = false;
+    uart.output.clear();
+    setPlicSourceLevel(uart.plicSource, false);
     return true;
 }
 
@@ -912,32 +951,45 @@ bool RV64CPU::configureMachinePlic(const MachinePlicMapping& mapping) {
                  timerMapping_.mtimeAddress, 8) ||
         overlaps(mapping.baseAddress, kMachinePlicRegionSize,
                  timerMapping_.mtimecmpAddress, 8) ||
-        (uartMapping_.enabled && overlaps(mapping.baseAddress, kMachinePlicRegionSize,
-                                          uartMapping_.baseAddress, 8))) {
+        (uartStates_[0].mapping.enabled && overlaps(mapping.baseAddress, kMachinePlicRegionSize,
+                                                    uartStates_[0].mapping.baseAddress, 8)) ||
+        (uartStates_[1].mapping.enabled && overlaps(mapping.baseAddress, kMachinePlicRegionSize,
+                                                    uartStates_[1].mapping.baseAddress, 8))) {
         return false;
     }
     plicMapping_ = mapping;
     resetPlicState();
-    updateUartInterrupt();
+    updateUartInterrupt(0);
+    updateUartInterrupt(1);
     return true;
 }
 
 bool RV64CPU::injectMachineUartReceiveByte(uint8_t byte) {
-    if (!uartMapping_.enabled) return false;
+    return injectMachineUartReceiveByte(0, byte);
+}
+
+bool RV64CPU::injectMachineUart1ReceiveByte(uint8_t byte) {
+    return injectMachineUartReceiveByte(1, byte);
+}
+
+bool RV64CPU::injectMachineUartReceiveByte(size_t uartIndex, uint8_t byte) {
+    if (uartIndex >= uartStates_.size()) return false;
+    auto& uart = uartStates_[uartIndex];
+    if (!uart.mapping.enabled) return false;
     recordMmioEvent(MachineMmioDevice::Uart, MachineMmioOperation::Inject,
-                    uartMapping_.baseAddress, 1, byte);
-    if (uartReceiveDataReady_) {
-        uartReceiveOverrun_ = true;
+                    uart.mapping.baseAddress, 1, byte);
+    if (uart.receiveDataReady) {
+        uart.receiveOverrun = true;
         return false;
     }
-    uartReceiveByte_ = byte;
-    uartReceiveDataReady_ = true;
-    updateUartInterrupt();
+    uart.receiveByte = byte;
+    uart.receiveDataReady = true;
+    updateUartInterrupt(uartIndex);
     return true;
 }
 
 bool RV64CPU::setMachinePlicSourceInputForTest(uint32_t source, bool asserted) {
-    if (!plicMapping_.enabled || source == 0 || source == 10 ||
+    if (!plicMapping_.enabled || source == 0 || source == 10 || source == 12 ||
         source > plicMapping_.sourceCount) {
         return false;
     }
@@ -949,7 +1001,17 @@ bool RV64CPU::setMachinePlicSourceInputForTest(uint32_t source, bool asserted) {
 }
 
 bool RV64CPU::machineUartReceiveIrqAsserted() const {
-    return uartReceiveDataReady_ && (uartInterruptEnable_ & 0x01U) != 0U;
+    return uartReceiveIrqAsserted(0);
+}
+
+bool RV64CPU::machineUart1ReceiveIrqAsserted() const {
+    return uartReceiveIrqAsserted(1);
+}
+
+bool RV64CPU::uartReceiveIrqAsserted(size_t uartIndex) const {
+    if (uartIndex >= uartStates_.size()) return false;
+    const auto& uart = uartStates_[uartIndex];
+    return uart.receiveDataReady && (uart.interruptEnable & 0x01U) != 0U;
 }
 
 bool RV64CPU::machinePlicOutput(MachinePlicContext context) const {
@@ -1003,8 +1065,10 @@ void RV64CPU::setPlicSourceLevel(uint32_t source, bool asserted) const {
     if (asserted && plicClaimedBy_[source] < 0) plicPending_[word] |= bit;
 }
 
-void RV64CPU::updateUartInterrupt() const {
-    setPlicSourceLevel(10, machineUartReceiveIrqAsserted());
+void RV64CPU::updateUartInterrupt(size_t uartIndex) const {
+    if (uartIndex >= uartStates_.size()) return;
+    setPlicSourceLevel(uartStates_[uartIndex].plicSource,
+                       uartReceiveIrqAsserted(uartIndex));
 }
 
 bool RV64CPU::plicHasEligibleSource(uint32_t context) const {

@@ -535,8 +535,55 @@ Validation and next target:
   entry contract, adequate memory/reservations, and devices selected for the
   root filesystem, console, and interrupt model. This result makes no claim
   of complete QEMU virt compatibility.
-- Recommended RISCV-12 target: retain one hart and validate arbitration among
-  at least two independently pending guest device sources, including masking,
-  priority ordering, claim/complete, and level re-pending under Sv39. Use that
-  evidence to select the next platform/device contract before any Linux boot
-  work.
+- RISCV-12 adds a second independent non-FIFO UART instance at 0x1000A000 and
+  routes it to PLIC source 12. UART0 remains at 0x10000000/source 10 and stays
+  the OpenSBI `/chosen/stdout-path`. UART register, receive slot, overrun,
+  transmit output, enable and IRQ state are per device and per RV64CPU instance.
+- Both UARTs and the 96-source PLIC dispatch through guest physical MMIO. The
+  existing Sv39 walker still resolves guest accesses and permissions first.
+  The independent version-12 S-mode payload runs with Sv39 enabled and accesses
+  both UARTs and PLIC registers through translated guest loads/stores.
+- PLIC arbitration remains highest priority first; equal priorities select the
+  lower source ID. Priority zero, a disabled context-enable bit, and a source
+  priority at or below the context threshold each block eligibility while
+  retaining pending device data/controller state. Changing priority, enable,
+  or threshold recomputes the derived context output. Claims clear one pending
+  source and record the claiming context; valid completion releases only that
+  source, and an asserted level re-pends on completion.
+- The guest creates five source-10/source-12 simultaneous-pending pairs before
+  its first claim in each pair. The S-mode handler claims, reads the matching
+  UART RBR, stores source ID and byte in the guest event log, completes that
+  source, and returns with SRET. Priorities exercise source order 12/10, 10/12,
+  and lower-ID tie selection 10/12. A threshold of 2 services source 12 while
+  retaining UART0/source 10's original byte; lowering the threshold delivers
+  it without reinjection. A separate local SEIE mask is lifted after both
+  requests are pending. Four eligible events wake WFI with global SIE masked.
+- The guest records ten event-log entries in this order (source:byte):
+  12:0x61, 10:0x41, 10:0x42, 12:0x62, 10:0x43, 12:0x63, 12:0x64, 10:0x44,
+  12:0x65, 10:0x45. It takes ten cause-9 S-mode traps, performs ten claims and
+  completions, and executes ten SRETs. The event log and completion signature
+  are written by guest instructions; the host only injects the serial bytes.
+- The DTB keeps the same hart, RAM, ACLINT timer, PLIC phandle/source count and
+  OpenSBI FW_JUMP layout. UART1 uses the `ns16550a`/`ns16550` compatibles,
+  0x100-byte reg mapping, byte-wide IO, 3.6864 MHz clock, 115200 baud and PLIC
+  source 12. Firmware output remains on UART0. The guest emits
+  `Hello from dual UART IRQ on guideXOS` through UART0.
+- OpenSBI v1.8.1 remains unmodified and byte-identical to RISCV-9 through
+  RISCV-11 (source commit 74434f255873d74e56cc50aa762d1caf24c099f8). The
+  version-12 fixture records the independent assembly/link, DTC, payload and DTB
+  hashes in `tests/fixtures/riscv_opensbi_dual_uart/binary-manifest.txt`.
+- Validation on 2026-11-02: all 17 RISC-V CTest suites passed in Debug
+  (456.59 seconds). `RiscVDualUartPlicTests` passed in Release (187 explicit
+  runtime checks); its Debug run is included in the 17/17 result. EFI memory
+  map and IA-64 SAL suites passed 2/2 in both Debug and Release. Direct IA-64
+  ACPI and interrupt regressions are also part of this phase validation. No
+  IA-64 implementation source changed.
+- Linux remains out of scope. The platform still has one hart and lacks PMP,
+  APLIC/IMSIC, virtio, PCI, storage, networking and full NS16550 FIFO/modem
+  behavior. It is a narrow OpenSBI/PLIC/UART profile, not complete QEMU virt
+  compatibility.
+- Recommended RISCV-13 scope: define a guest-timer/interrupt interaction across
+  simultaneous supervisor timer and external requests, including priority at
+  the architectural interrupt boundary, WFI wake ordering and S-mode service.
+  Keep the single-hart scope and preserve the authentic OpenSBI FW_JUMP and
+  SBI TIME regressions before considering broader platform devices or Linux.
