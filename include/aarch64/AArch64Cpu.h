@@ -70,6 +70,7 @@
 #include <vector>
 
 #include "aarch64/AArch64MMU.h"
+#include "aarch64/AArch64TLB.h"
 
 namespace ia64 {
 class IMemory; // generic memory contract; no IA-64 specifics required
@@ -157,6 +158,11 @@ enum class Op {
     Dsb,      // DSB: ordered single-CPU memory operation
     Dmb,      // DMB: ordered single-CPU memory operation
     Isb,      // ISB: instruction context synchronization event
+    Tlbi,     // Supported EL1&0 stage-1 TLBI system instruction
+};
+
+enum class TlbiOperation : uint8_t {
+    Vmalle1, Vmalle1Is, Vae1, Vae1Is, Aside1, Aside1Is, Vaae1, Vaae1Is
 };
 
 // Result of decoding one 32-bit A64 instruction word.
@@ -200,6 +206,7 @@ struct Decoded {
     uint8_t sysCrn = 0;
     uint8_t sysCrm = 0;
     uint8_t sysOp2 = 0;
+    TlbiOperation tlbiOperation = TlbiOperation::Vmalle1;
     uint64_t address = 0;      // address the word was fetched from
     uint32_t word = 0;         // raw instruction word
     Fault fault = Fault::None;
@@ -289,6 +296,7 @@ public:
     uint64_t effectiveTtbr0El1() const { return effectiveTtbr0El1_; }
     uint64_t effectiveTtbr1El1() const { return effectiveTtbr1El1_; }
     uint64_t effectiveMairEl1() const { return effectiveMairEl1_; }
+    const AArch64TLB& tlb() const { return tlb_; }
     void setSctlrEl1(uint64_t value) { sctlrEl1_ = effectiveSctlrEl1_ = value; }
     void setTcrEl1(uint64_t value) { tcrEl1_ = effectiveTcrEl1_ = value; }
     void setTtbr0El1(uint64_t value) { ttbr0El1_ = effectiveTtbr0El1_ = value; }
@@ -332,6 +340,7 @@ public:
 private:
     friend class AArch64State;
     Fault executeSystemRegister(const Decoded& decoded);
+    Fault executeTlbi(const Decoded& decoded);
     Fault executePstateImmediate(const Decoded& decoded);
     void takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
                                   uint64_t preferredReturnAddress);
@@ -348,6 +357,9 @@ private:
                           uint8_t* status = nullptr,
                           bool* duringWalk = nullptr,
                           uint64_t* faultAddress = nullptr);
+    MMUResult translateGuestAddress(const ia64::IMemory& memory,
+                                    uint64_t virtualAddress,
+                                    MMUAccess access) const;
     Fault executeEret(const Decoded& decoded);
     uint64_t& activeSpRef();
     const uint64_t& activeSpRef() const;
@@ -376,6 +388,7 @@ private:
     // been fetched and dispatched. A failed fetch in this window is fatal,
     // preventing an unmapped vector from repeatedly aborting into itself.
     bool exceptionVectorPending_ = false;
+    mutable AArch64TLB tlb_;
     Fault lastFault_ = Fault::None;
     std::string lastError_;
 };

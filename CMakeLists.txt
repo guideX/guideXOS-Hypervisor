@@ -688,6 +688,7 @@ add_test(NAME AArch64PcStackTests COMMAND test_aarch64_pc_stack)
 add_test(NAME AArch64CompilerStackTests COMMAND test_aarch64_compiler_stack)
 add_test(NAME AArch64ExceptionLevelTests COMMAND test_aarch64_exception_levels)
 add_test(NAME AArch64MMUTests COMMAND test_aarch64_mmu)
+add_test(NAME AArch64TLBTests COMMAND test_aarch64_tlb)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -729,6 +730,7 @@ set(AARCH64_SOURCES
     src/aarch64/AArch64Cpu.cpp
     src/aarch64/AArch64ISAPlugin.cpp
     src/aarch64/AArch64MMU.cpp
+    src/aarch64/AArch64TLB.cpp
 )
 
 add_executable(test_aarch64_foundation
@@ -853,6 +855,25 @@ add_executable(test_aarch64_mmu
 
 if(WIN32)
     target_link_libraries(test_aarch64_mmu PRIVATE ws2_32)
+endif()
+
+# AARCH64-7: bounded translation caching, ASID/global matching, and real
+# guest SYS/TLBI execution through the production AArch64 CPU/plugin.
+add_executable(test_aarch64_tlb
+    tests/test_aarch64_tlb.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_aarch64_tlb PRIVATE ws2_32)
+endif()
+
+if(MSVC)
+    target_compile_options(test_aarch64_tlb PRIVATE /W4)
+else()
+    target_compile_options(test_aarch64_tlb PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

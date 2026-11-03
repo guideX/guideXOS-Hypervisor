@@ -306,7 +306,8 @@ void Cpu::reset(uint64_t entryPoint, ExceptionLevel initialLevel) {
     sctlrEl1_ = tcrEl1_ = ttbr0El1_ = ttbr1El1_ = mairEl1_ = 0;
     effectiveSctlrEl1_ = effectiveTcrEl1_ = effectiveTtbr0El1_ =
         effectiveTtbr1El1_ = effectiveMairEl1_ = 0;
-        exceptionVectorPending_ = false;
+    exceptionVectorPending_ = false;
+    tlb_.reset();
     lastFault_ = Fault::None;
     lastError_.clear();
 }
@@ -433,10 +434,7 @@ bool Cpu::readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
         const size_t pageRemaining = static_cast<size_t>(AArch64MMU::kPageSize -
             (va & (AArch64MMU::kPageSize - 1u)));
         const size_t count = (size - completed < pageRemaining) ? size - completed : pageRemaining;
-        const MMUResult translated = AArch64MMU::translate(
-            memory, va, static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2), access,
-            effectiveTcrEl1_, effectiveTtbr0El1_, effectiveTtbr1El1_,
-            effectiveMairEl1_, (effectiveSctlrEl1_ & (1u << 19)) != 0);
+        const MMUResult translated = translateGuestAddress(memory, va, access);
         if (!translated.success) return fail(translated.faultStatus, translated.duringTableWalk, va);
         const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
         if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
@@ -481,10 +479,7 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
         const size_t pageRemaining = static_cast<size_t>(AArch64MMU::kPageSize -
             (va & (AArch64MMU::kPageSize - 1u)));
         const size_t count = (size - completed < pageRemaining) ? size - completed : pageRemaining;
-        const MMUResult translated = AArch64MMU::translate(
-            memory, va, static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2), MMUAccess::Write,
-            effectiveTcrEl1_, effectiveTtbr0El1_, effectiveTtbr1El1_,
-            effectiveMairEl1_, (effectiveSctlrEl1_ & (1u << 19)) != 0);
+        const MMUResult translated = translateGuestAddress(memory, va, MMUAccess::Write);
         if (!translated.success) return fail(translated.faultStatus, translated.duringTableWalk, va);
         const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
         if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
@@ -505,6 +500,42 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
         }
     }
     return true;
+}
+
+MMUResult Cpu::translateGuestAddress(const ia64::IMemory& memory,
+                                     uint64_t virtualAddress,
+                                     MMUAccess access) const {
+    tlb_.noteTranslationRequest();
+    const uint8_t el = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    const MMUContext context = AArch64MMU::selectContext(
+        virtualAddress, el, effectiveTcrEl1_, effectiveTtbr0El1_,
+        effectiveTtbr1El1_);
+    if (!context.valid) {
+        MMUResult result;
+        result.fault = context.fault;
+        result.level = context.level;
+        result.faultStatus = context.faultStatus;
+        result.duringTableWalk = context.duringTableWalk;
+        result.detail = context.detail;
+        return result;
+    }
+
+    MMUResult::Attributes attributes;
+    if (tlb_.lookup(context, virtualAddress, effectiveMairEl1_, attributes)) {
+        return AArch64MMU::checkAccess(
+            attributes, virtualAddress, el, access,
+            (effectiveSctlrEl1_ & (1u << 19)) != 0);
+    }
+
+    tlb_.noteTableWalk();
+    MMUResult translated = AArch64MMU::translate(
+        memory, virtualAddress, el, access, effectiveTcrEl1_,
+        effectiveTtbr0El1_, effectiveTtbr1El1_, effectiveMairEl1_,
+        (effectiveSctlrEl1_ & (1u << 19)) != 0);
+    if (translated.success) {
+        tlb_.insert(context, effectiveMairEl1_, translated.attributes);
+    }
+    return translated;
 }
 
 Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
@@ -1036,6 +1067,57 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
             const uint8_t op2 = static_cast<uint8_t>((word >> 5) & 7u);
             const uint8_t rt = static_cast<uint8_t>(word & 31u);
 
+            // SYS encodings in the EL1&0 TLB-maintenance group. Decode only
+            // the eight explicitly supported operations; other CRm/op2
+            // combinations remain unsupported rather than becoming no-ops.
+            if (!isRead && op0 == 1u && crn == 8u) {
+                const bool hasOperation = op1 == 0u &&
+                    ((crm == 7u && op2 == 0u) ||
+                     (crm == 3u && op2 == 0u) ||
+                     ((crm == 7u || crm == 3u) && op2 >= 1u && op2 <= 3u));
+                if (!hasOperation) {
+                    return invalid(word, address, Fault::UnsupportedFeature,
+                                   "unsupported TLBI operation encoding");
+                }
+                TlbiOperation operation;
+                if (crm == 7u && op2 == 0u) operation = TlbiOperation::Vmalle1;
+                else if (crm == 3u && op2 == 0u) operation = TlbiOperation::Vmalle1Is;
+                else if (crm == 7u && op2 == 1u) operation = TlbiOperation::Vae1;
+                else if (crm == 3u && op2 == 1u) operation = TlbiOperation::Vae1Is;
+                else if (crm == 7u && op2 == 2u) operation = TlbiOperation::Aside1;
+                else if (crm == 3u && op2 == 2u) operation = TlbiOperation::Aside1Is;
+                else if (crm == 7u && op2 == 3u) operation = TlbiOperation::Vaae1;
+                else operation = TlbiOperation::Vaae1Is;
+
+                if ((operation == TlbiOperation::Vmalle1 ||
+                     operation == TlbiOperation::Vmalle1Is) && rt != 31u) {
+                    return invalid(word, address, Fault::UnallocatedEncoding,
+                                   "TLBI VMALLE1 requires the XZR operand encoding");
+                }
+                Decoded d;
+                d.op = Op::Tlbi;
+                d.valid = true;
+                d.word = word;
+                d.address = address;
+                d.rd = rt;
+                d.tlbiOperation = operation;
+                static const char* const names[] = {
+                    "vmalle1", "vmalle1is", "vae1", "vae1is",
+                    "aside1", "aside1is", "vaae1", "vaae1is"
+                };
+                const char* name = names[static_cast<unsigned>(operation)];
+                char buf[64];
+                if (operation == TlbiOperation::Vmalle1 ||
+                    operation == TlbiOperation::Vmalle1Is) {
+                    std::snprintf(buf, sizeof(buf), "tlbi %s", name);
+                } else {
+                    std::snprintf(buf, sizeof(buf), "tlbi %s, %s", name,
+                                  rt == 31u ? "xzr" : regName(true, rt).c_str());
+                }
+                d.disassembly = buf;
+                return d;
+            }
+
             if (!isRead && op0 == 0u && crn == 4u && rt == 31u) {
                 Decoded d;
                 d.op = Op::MsrPstateImm;
@@ -1209,6 +1291,64 @@ void Cpu::takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
               kPstateDAIF | 0x5u;
     pc_ = vbarEl1_ + vectorOffset;
     exceptionVectorPending_ = true;
+}
+
+Fault Cpu::executeTlbi(const Decoded& decoded) {
+    const uint8_t el = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    if (el == 0) {
+        takeSynchronousException(0x00, 0, pc_); // privileged TLBI is UNDEFINED at EL0
+        return Fault::None;
+    }
+    if (el != 1) {
+        lastError_ = "EL2/EL3 TLBI is outside the implemented translation regime";
+        return Fault::UnsupportedFeature;
+    }
+
+    const uint64_t operand = decoded.rd == 31u ? 0 : x_[decoded.rd];
+    constexpr uint64_t kVaFieldMask = 0x00000FFFFFFFFFFFULL;
+    constexpr uint64_t kVaeReservedMask = 0xFF00F00000000000ULL;
+    constexpr uint64_t kVaaeReservedMask = 0xFFFFF00000000000ULL;
+    constexpr uint64_t kAsideReservedMask = 0xFF00FFFFFFFFFFFFULL;
+
+    switch (decoded.tlbiOperation) {
+    case TlbiOperation::Vmalle1:
+    case TlbiOperation::Vmalle1Is:
+        tlb_.invalidateAll();
+        break;
+    case TlbiOperation::Aside1:
+    case TlbiOperation::Aside1Is:
+        if ((operand & kAsideReservedMask) != 0) {
+            lastError_ = "TLBI ASIDE1 operand sets bits outside the supported 8-bit ASID field";
+            return Fault::UnsupportedFeature;
+        }
+        tlb_.invalidateAsid(static_cast<uint8_t>((operand >> 48) & 0xFFu));
+        break;
+    case TlbiOperation::Vae1:
+    case TlbiOperation::Vae1Is:
+    case TlbiOperation::Vaae1:
+    case TlbiOperation::Vaae1Is: {
+        const bool allAsids = decoded.tlbiOperation == TlbiOperation::Vaae1 ||
+                              decoded.tlbiOperation == TlbiOperation::Vaae1Is;
+        const uint64_t reserved = allAsids ? kVaaeReservedMask : kVaeReservedMask;
+        if ((operand & reserved) != 0) {
+            lastError_ = "TLBI VA operand sets reserved bits for the 4 KiB, 8-bit-ASID profile";
+            return Fault::UnsupportedFeature;
+        }
+        const uint64_t va56 = (operand & kVaFieldMask) << 12;
+        const uint64_t va = (va56 & (1ULL << 55)) != 0
+            ? (va56 | 0xFF00000000000000ULL) : va56;
+        const uint8_t asid = allAsids ? 0 :
+            static_cast<uint8_t>((operand >> 48) & 0xFFu);
+        tlb_.invalidateVa(va, asid, allAsids);
+        break;
+    }
+    }
+
+    // This emulator applies a TLBI at the instruction itself. On the single
+    // in-order CPU, subsequent accesses observe it immediately; DSB completes
+    // it without a modeled broadcast queue, and ISB synchronizes execution.
+    pc_ += kInstructionSize;
+    return Fault::None;
 }
 
 Fault Cpu::executeSystemRegister(const Decoded& decoded) {
@@ -1525,6 +1665,14 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         synchronizeTranslationContext();
         pc_ += kInstructionSize;
         break;
+    case Op::Tlbi: {
+        const Fault result = executeTlbi(decoded);
+        if (result != Fault::None) {
+            lastFault_ = result;
+            return result;
+        }
+        break;
+    }
     case Op::Mrs:
     case Op::Msr: {
         const Fault result = executeSystemRegister(decoded);

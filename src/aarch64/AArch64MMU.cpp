@@ -18,8 +18,6 @@ constexpr uint64_t kTcrIpsMask = 7ULL << 32;
 constexpr uint64_t kTtbrAddressMask = 0x0000FFFFFFFFF000ULL;
 constexpr uint64_t kDescriptorAddressMask = 0x0000FFFFFFFFF000ULL;
 
-enum class Regime : uint8_t { Lower, Upper };
-
 MMUResult fault(MMUFaultKind kind, uint8_t level, uint8_t status,
                 const char* detail, bool duringWalk = false) {
     MMUResult result;
@@ -62,8 +60,8 @@ bool readDescriptor(const ia64::IMemory& memory, uint64_t address,
     return true;
 }
 
-bool isVaInRegion(uint64_t va, uint8_t bits, Regime regime) {
-    if (regime == Regime::Lower) {
+bool isVaInRegion(uint64_t va, uint8_t bits, MMURegion regime) {
+    if (regime == MMURegion::Lower) {
         return (va >> bits) == 0;
     }
     const uint64_t mask = (uint64_t{1} << (64u - bits)) - 1u;
@@ -75,12 +73,12 @@ bool isVaInRegion(uint64_t va, uint8_t bits, Regime regime) {
 bool AArch64MMU::validateTcr(uint64_t tcr, std::string* reason) {
     // Only fields that define this bounded regime are admitted. Walk cache
     // policy/shareability fields are accepted when architecturally valid;
-    // the emulator has no cache model. A1, TBI, HA/HD, DS and later features
-    // are deliberately not accepted.
+    // the emulator has no cache model. A1 selects the supported 8-bit ASID
+    // source. TBI, HA/HD, ASID16, DS and later features remain unsupported.
     constexpr uint64_t allowed =
         kTcrT0SzMask | kTcrEpd0 | (3ULL << 8) | (3ULL << 10) |
         (3ULL << 12) | kTcrTg0Mask | kTcrT1SzMask | kTcrEpd1 |
-        (3ULL << 24) | (3ULL << 26) | (3ULL << 28) | kTcrTg1Mask |
+        (1ULL << 22) | (3ULL << 24) | (3ULL << 26) | (3ULL << 28) | kTcrTg1Mask |
         kTcrIpsMask | (1ULL << 36);
     const auto reject = [reason](const char* text) {
         if (reason != nullptr) *reason = text;
@@ -96,7 +94,6 @@ bool AArch64MMU::validateTcr(uint64_t tcr, std::string* reason) {
     if (((tcr & kTcrTg1Mask) >> 30) != 2) {
         return reject("TCR_EL1.TG1 must encode a 4 KiB granule (10)");
     }
-    if (((tcr >> 22) & 1u) != 0) return reject("TCR_EL1.A1 is outside the supported ASID policy");
     if (((tcr >> 36) & 1u) != 0) return reject("16-bit ASIDs are outside the supported ASID policy");
     const uint8_t ips = static_cast<uint8_t>((tcr >> 32) & 7u);
     if (ips > 5) return reject("TCR_EL1.IPS must select an output size no larger than 48 bits");
@@ -105,6 +102,114 @@ bool AArch64MMU::validateTcr(uint64_t tcr, std::string* reason) {
     }
     if (reason != nullptr) reason->clear();
     return true;
+}
+
+MMUContext AArch64MMU::selectContext(uint64_t va, uint8_t el,
+                                    uint64_t tcr, uint64_t ttbr0,
+                                    uint64_t ttbr1) {
+    MMUContext context;
+    const auto reject = [&context](MMUFaultKind kind, uint8_t level,
+                                   uint8_t status, const char* detail) {
+        context.fault = kind;
+        context.level = level;
+        context.faultStatus = status;
+        context.detail = detail;
+        return context;
+    };
+    std::string configError;
+    if (!validateTcr(tcr, &configError)) {
+        return reject(MMUFaultKind::UnsupportedConfiguration, 0, 0x04,
+                      "unsupported TCR_EL1 translation configuration");
+    }
+    if (el > 1) {
+        return reject(MMUFaultKind::UnsupportedConfiguration, 0, 0x04,
+                      "stage-1 EL0/EL1 translation requested outside EL0/EL1");
+    }
+
+    const uint8_t t0sz = static_cast<uint8_t>(tcr & kTcrT0SzMask);
+    const uint8_t t1sz = static_cast<uint8_t>((tcr >> 16) & 0x3Fu);
+    const uint8_t t0bits = static_cast<uint8_t>(64u - t0sz);
+    const uint8_t t1bits = static_cast<uint8_t>(64u - t1sz);
+    uint64_t selectedTtbr = 0;
+    if (isVaInRegion(va, t0bits, MMURegion::Lower)) {
+        context.region = MMURegion::Lower;
+        context.vaBits = t0bits;
+        selectedTtbr = ((tcr >> 22) & 1u) != 0 ? ttbr1 : ttbr0;
+        if ((tcr & kTcrEpd0) != 0) {
+            return reject(MMUFaultKind::Translation, startLevel(t0bits),
+                          static_cast<uint8_t>(0x04u + startLevel(t0bits)),
+                          "translation-table walk is disabled for the selected region");
+        }
+    } else if (isVaInRegion(va, t1bits, MMURegion::Upper)) {
+        context.region = MMURegion::Upper;
+        context.vaBits = t1bits;
+        selectedTtbr = ((tcr >> 22) & 1u) != 0 ? ttbr1 : ttbr0;
+        if ((tcr & kTcrEpd1) != 0) {
+            return reject(MMUFaultKind::Translation, startLevel(t1bits),
+                          static_cast<uint8_t>(0x04u + startLevel(t1bits)),
+                          "translation-table walk is disabled for the selected region");
+        }
+    } else {
+        return reject(MMUFaultKind::AddressSize, 0, 0x00,
+                      "virtual address is outside both configured translation regions");
+    }
+
+    // FEAT_ASID16 is not implemented. With 8-bit ASIDs, TTBR[55:48] is the
+    // implemented ASID and TTBR[63:56] must remain RES0.
+    if ((selectedTtbr & 0xFF00000000000000ULL) != 0) {
+        return reject(MMUFaultKind::AddressSize, startLevel(context.vaBits),
+                      static_cast<uint8_t>(startLevel(context.vaBits)),
+                      "TTBR ASID bits [63:56] must be zero for the 8-bit ASID profile");
+    }
+    const uint64_t translationTtbr = context.region == MMURegion::Lower
+        ? ttbr0 : ttbr1;
+    if ((translationTtbr & 0xFF00000000000FFFULL) != 0) {
+        return reject(MMUFaultKind::AddressSize, startLevel(context.vaBits),
+                      static_cast<uint8_t>(startLevel(context.vaBits)),
+                      "translation TTBR has unsupported ASID bits, CnP, or a misaligned base");
+    }
+    context.asid = static_cast<uint8_t>((selectedTtbr >> 48) & 0xFFu);
+    context.configurationKey = tcr & ~(1ULL << 22);
+    context.valid = true;
+    return context;
+}
+
+MMUResult AArch64MMU::checkAccess(const MMUResult::Attributes& attributes,
+                                 uint64_t va, uint8_t el, MMUAccess access,
+                                 bool wxn) {
+    const uint8_t level = attributes.level;
+    if (!attributes.accessFlag) {
+        return fault(MMUFaultKind::AccessFlag, level,
+                     static_cast<uint8_t>(0x08u + level),
+                     "leaf descriptor Access Flag is clear");
+    }
+    if ((access == MMUAccess::Read || access == MMUAccess::Write) &&
+        el == 0 && !attributes.el0Allowed) {
+        return fault(MMUFaultKind::Permission, level,
+                     static_cast<uint8_t>(0x0Cu + level),
+                     "EL0 data access is prohibited by AP/APTable");
+    }
+    if (access == MMUAccess::Write && attributes.readOnly) {
+        return fault(MMUFaultKind::Permission, level,
+                     static_cast<uint8_t>(0x0Cu + level),
+                     "write access is prohibited by AP/APTable");
+    }
+    if (access == MMUAccess::Instruction) {
+        if ((el == 0 && (!attributes.el0Allowed || attributes.userExecuteNever)) ||
+            (el == 1 && (attributes.privilegedExecuteNever ||
+                         (wxn && !attributes.readOnly)))) {
+            return fault(MMUFaultKind::Permission, level,
+                         static_cast<uint8_t>(0x0Cu + level),
+                         "instruction execution is prohibited by AP/APTable/UXN/PXN/WXN");
+        }
+    }
+    MMUResult result;
+    result.success = true;
+    result.level = level;
+    result.attributes = attributes;
+    result.physicalAddress = attributes.physicalBase |
+        (va & (attributes.mappingSize - 1u));
+    return result;
 }
 
 MMUResult AArch64MMU::translate(const ia64::IMemory& memory,
@@ -116,53 +221,24 @@ MMUResult AArch64MMU::translate(const ia64::IMemory& memory,
                                uint64_t ttbr1,
                                uint64_t mair,
                                bool wxn) {
-    std::string configError;
-    if (!validateTcr(tcr, &configError)) {
-        return fault(MMUFaultKind::UnsupportedConfiguration, 0, 0x04,
-                     "unsupported TCR_EL1 translation configuration");
+    const MMUContext context = selectContext(va, el, tcr, ttbr0, ttbr1);
+    if (!context.valid) {
+        return fault(context.fault, context.level, context.faultStatus,
+                     context.detail.c_str(), context.duringTableWalk);
     }
-    if (el > 1) {
-        return fault(MMUFaultKind::UnsupportedConfiguration, 0, 0x04,
-                     "stage-1 EL0/EL1 translation requested outside EL0/EL1");
-    }
-
-    const uint8_t t0sz = static_cast<uint8_t>(tcr & kTcrT0SzMask);
-    const uint8_t t1sz = static_cast<uint8_t>((tcr >> 16) & 0x3Fu);
-    const uint8_t t0bits = static_cast<uint8_t>(64u - t0sz);
-    const uint8_t t1bits = static_cast<uint8_t>(64u - t1sz);
-    Regime regime;
-    uint8_t vaBits;
-    uint64_t ttbr;
-    bool disabled;
-    if (isVaInRegion(va, t0bits, Regime::Lower)) {
-        regime = Regime::Lower;
-        vaBits = t0bits;
-        ttbr = ttbr0;
-        disabled = (tcr & kTcrEpd0) != 0;
-    } else if (isVaInRegion(va, t1bits, Regime::Upper)) {
-        regime = Regime::Upper;
-        vaBits = t1bits;
-        ttbr = ttbr1;
-        disabled = (tcr & kTcrEpd1) != 0;
-    } else {
-        return fault(MMUFaultKind::AddressSize, 0, 0x00,
-                     "virtual address is outside both configured translation regions");
-    }
+    const uint8_t vaBits = context.vaBits;
+    const MMURegion regime = context.region;
+    const uint64_t ttbr = regime == MMURegion::Lower ? ttbr0 : ttbr1;
     const uint8_t firstLevel = startLevel(vaBits);
-    if (disabled) {
-        return fault(MMUFaultKind::Translation, firstLevel,
-                     static_cast<uint8_t>(0x04u + firstLevel),
-                     "translation-table walk is disabled for the selected region");
-    }
 
     const uint8_t ips = static_cast<uint8_t>((tcr >> 32) & 7u);
     const uint8_t paBits = ips == 0 ? 32 : ips == 1 ? 36 : ips == 2 ? 40 :
                            ips == 3 ? 42 : ips == 4 ? 44 : 48;
     const uint64_t paLimit = uint64_t{1} << paBits;
-    if ((ttbr & 0xFFFF000000000001ULL) != 0 || (ttbr & 0xFFEu) != 0) {
+    if ((ttbr & 0xFF00000000000FFFULL) != 0) {
         return fault(MMUFaultKind::AddressSize, firstLevel,
                      static_cast<uint8_t>(0x00u + firstLevel),
-                     "TTBR has a nonzero ASID, CnP bit, or misaligned base");
+                     "TTBR has unsupported ASID bits, CnP, or a misaligned base");
     }
     const uint64_t root = ttbr & kTtbrAddressMask;
     if (root >= paLimit) {
@@ -174,8 +250,6 @@ MMUResult AArch64MMU::translate(const ia64::IMemory& memory,
         return fault(MMUFaultKind::ExternalAbort, firstLevel, 0x14u + firstLevel,
                      "translation-table base is outside backed physical memory", true);
     }
-    (void)regime;
-
     bool tableNoEl0 = false;
     bool tableReadOnly = false;
     bool tableUxn = false;
@@ -291,33 +365,21 @@ MMUResult AArch64MMU::translate(const ia64::IMemory& memory,
         }
 
         const uint8_t ap = static_cast<uint8_t>((descriptor >> 6) & 3u);
-        const bool el0Allowed = (ap & 1u) != 0 && !tableNoEl0;
-        const bool readOnly = (ap & 2u) != 0 || tableReadOnly;
-        const bool uxn = ((descriptor >> 54) & 1u) != 0 || tableUxn;
-        const bool pxn = ((descriptor >> 53) & 1u) != 0 || tablePxn;
-        if ((access == MMUAccess::Read || access == MMUAccess::Write) && el == 0 && !el0Allowed) {
-            return fault(MMUFaultKind::Permission, level,
-                         static_cast<uint8_t>(0x0Cu + level),
-                         "EL0 data access is prohibited by AP/APTable");
-        }
-        if (access == MMUAccess::Write && readOnly) {
-            return fault(MMUFaultKind::Permission, level,
-                         static_cast<uint8_t>(0x0Cu + level),
-                         "write access is prohibited by AP/APTable");
-        }
-        if (access == MMUAccess::Instruction) {
-            if ((el == 0 && (!el0Allowed || uxn)) ||
-                (el == 1 && (pxn || (wxn && !readOnly)))) {
-                return fault(MMUFaultKind::Permission, level,
-                             static_cast<uint8_t>(0x0Cu + level),
-                             "instruction execution is prohibited by AP/APTable/UXN/PXN/WXN");
-            }
-        }
-        MMUResult result;
-        result.success = true;
-        result.level = level;
-        result.physicalAddress = outputBase | (va & alignmentMask);
-        return result;
+        MMUResult::Attributes attributes;
+        attributes.virtualBase = va & ~alignmentMask;
+        attributes.physicalBase = outputBase;
+        attributes.mappingSize = granuleSize;
+        attributes.level = level;
+        attributes.accessPermissions = ap;
+        attributes.attributeIndex = attrIndex;
+        attributes.memoryAttribute = attr;
+        attributes.accessFlag = true;
+        attributes.el0Allowed = (ap & 1u) != 0 && !tableNoEl0;
+        attributes.readOnly = (ap & 2u) != 0 || tableReadOnly;
+        attributes.userExecuteNever = ((descriptor >> 54) & 1u) != 0 || tableUxn;
+        attributes.privilegedExecuteNever = ((descriptor >> 53) & 1u) != 0 || tablePxn;
+        attributes.global = ((descriptor >> 11) & 1u) == 0;
+        return checkAccess(attributes, va, el, access, wxn);
     }
     return fault(MMUFaultKind::Translation, 3, 0x07,
                  "translation walk exceeded the supported maximum depth");

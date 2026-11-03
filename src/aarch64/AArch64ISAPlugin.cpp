@@ -301,6 +301,9 @@ void AArch64State::applyTo(Cpu& cpu) const {
     cpu.effectiveTtbr1El1_ = effectiveTtbr1El1_;
     cpu.effectiveMairEl1_ = effectiveMairEl1_;
     cpu.exceptionVectorPending_ = exceptionVectorPending_;
+    // The TLB is derived microarchitectural state. A CPU-state restore starts
+    // cold and reconstructs mappings from the separately restored guest RAM.
+    cpu.tlb_.reset();
 }
 
 uint64_t AArch64State::sp() const {
@@ -443,7 +446,8 @@ bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
             feature == "ERET" || feature == "DSB" || feature == "DMB" ||
             feature == "ISB" || feature == "SCTLR_EL1" || feature == "TCR_EL1" ||
             feature == "TTBR0_EL1" || feature == "TTBR1_EL1" || feature == "MAIR_EL1" ||
-            feature == "STAGE1_MMU" || feature == "EL0_EL1" || feature == "SP_BANKING";
+            feature == "STAGE1_MMU" || feature == "TLBI" ||
+            feature == "EL0_EL1" || feature == "SP_BANKING";
 }
 
 std::unique_ptr<ia64::IISA> createAArch64ISA(uint64_t entryPoint,

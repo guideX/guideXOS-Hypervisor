@@ -21,7 +21,7 @@ void check(bool value, const char* expression, unsigned line) {
     ++checks;
     if (!value) {
         ++failures;
-        std::cerr << "AARCH64-6 FAILED line " << line << ": " << expression << '\n';
+        std::cerr << "AARCH64-MMU FAILED line " << line << ": " << expression << '\n';
     }
 }
 
@@ -29,7 +29,7 @@ void checkEq(uint64_t expected, uint64_t actual, const char* expression, unsigne
     ++checks;
     if (expected != actual) {
         ++failures;
-        std::cerr << "AARCH64-6 FAILED line " << line << ": " << expression
+        std::cerr << "AARCH64-MMU FAILED line " << line << ": " << expression
                   << " expected=0x" << std::hex << expected << " actual=0x" << actual
                   << std::dec << '\n';
     }
@@ -365,6 +365,46 @@ void map39(FlatMemory& memory, uint64_t root, uint64_t l2, uint64_t l3,
     put64(memory, l3 + (((va >> 12) & 0x1FFu) * 8), pageDescriptor(pa) | descriptorFlags);
 }
 
+void executeGuestWords(Cpu& cpu, FlatMemory& memory,
+                       const std::vector<uint32_t>& words) {
+    // These direct-CPU regressions execute real guest maintenance words from
+    // the code page mapped at VA 0x1000 -> PA 0x4000.
+    std::vector<uint32_t> saved(words.size());
+    for (size_t i = 0; i < words.size(); ++i) {
+        uint8_t bytes[4] = {};
+        memory.Read(0x4000 + i * 4, bytes, sizeof(bytes));
+        saved[i] = static_cast<uint32_t>(bytes[0]) |
+                   (static_cast<uint32_t>(bytes[1]) << 8) |
+                   (static_cast<uint32_t>(bytes[2]) << 16) |
+                   (static_cast<uint32_t>(bytes[3]) << 24);
+        put32(memory, 0x4000 + i * 4, words[i]);
+    }
+    cpu.setPc(0x1000);
+    for (size_t i = 0; i < words.size(); ++i)
+        CHECK(cpu.step(memory) == Fault::None);
+    for (size_t i = 0; i < saved.size(); ++i)
+        put32(memory, 0x4000 + i * 4, saved[i]);
+}
+
+void executeGuestVae1Is(Cpu& cpu, FlatMemory& memory, uint64_t va,
+                        uint8_t asid = 0) {
+    const uint64_t savedX20 = cpu.readX(20);
+    const uint64_t operand = (static_cast<uint64_t>(asid) << 48) |
+                             ((va >> 12) & 0x00000FFFFFFFFFFFULL);
+    cpu.writeX(20, operand);
+    executeGuestWords(cpu, memory, {
+        0xD5033A9Fu, // DSB ISHST
+        encodeSys(false, 1, 0, 8, 3, 1, 20), // TLBI VAE1IS, X20
+        0xD5033B9Fu, // DSB ISH
+        0xD5033FDFu, // ISB
+    });
+    cpu.writeX(20, savedX20);
+}
+
+void executeGuestPostMake(Cpu& cpu, FlatMemory& memory) {
+    executeGuestWords(cpu, memory, {0xD5033A9Fu, 0xD5033FDFu});
+}
+
 void testConfigurationAnd39BitWalk() {
     CHECK(AArch64MMU::validateTcr(makeTcr()));
     CHECK(AArch64MMU::validateTcr(makeTcr(16, 16)));
@@ -651,6 +691,7 @@ void testProductionCpuCrossPageAndAbort() {
     // Remove the second page: a real EL1 Data Abort enters VBAR+0x200 and
     // reports the virtual address of the first byte in the missing page.
     put64(memory, 0x12000 + 5 * 8, 0);
+    executeGuestVae1Is(cpu, memory, 0x5000);
     cpu.setPc(0x1000);
     cpu.writeX(0, 0xDEADBEEF);
     CHECK(cpu.step(memory) == Fault::None);
@@ -664,6 +705,7 @@ void testProductionCpuCrossPageAndAbort() {
     uint8_t protectedBytes[4] = {};
     memory.Read(0x8FFC, protectedBytes, sizeof(protectedBytes));
     put64(memory, 0x12000 + 5 * 8, pageDescriptor(0xA000, 3, true, true, true));
+    executeGuestPostMake(cpu, memory);
     cpu.setPc(0x1004);
     cpu.writeX(0, 0x0102030405060708ULL);
     CHECK(cpu.step(memory) == Fault::None);
@@ -673,18 +715,45 @@ void testProductionCpuCrossPageAndAbort() {
     memory.Read(0x8FFC, afterProtected, sizeof(afterProtected));
     CHECK(std::memcmp(protectedBytes, afterProtected, sizeof(protectedBytes)) == 0);
 
-    // There is no TLB: a descriptor update is visible on the next access.
+    // Descriptor updates become visible only after guest TLBI maintenance.
+    put64(memory, 0x12000 + 4 * 8, 0);
+    executeGuestVae1Is(cpu, memory, 0x4000);
     put64(memory, 0x12000 + 4 * 8, pageDescriptor(0xC000, 0, true, true, true));
     put64(memory, 0xC000, 0xC0C0C0C0C0C0C0C0ULL);
+    executeGuestPostMake(cpu, memory);
     cpu.setPc(0x1000);
     cpu.writeX(1, 0x4000);
     CHECK(cpu.step(memory) == Fault::None);
     CHECK_EQ(0xC0C0C0C0C0C0C0C0ULL, cpu.readX(0));
+    put64(memory, 0x12000 + 4 * 8, 0);
+    executeGuestVae1Is(cpu, memory, 0x4000);
     put64(memory, 0x12000 + 4 * 8, pageDescriptor(0xD000, 0, true, true, true));
     put64(memory, 0xD000, 0xD0D0D0D0D0D0D0D0ULL);
+    executeGuestPostMake(cpu, memory);
     cpu.setPc(0x1000);
     CHECK(cpu.step(memory) == Fault::None);
     CHECK_EQ(0xD0D0D0D0D0D0D0D0ULL, cpu.readX(0));
+
+    // A valid translation can still fail the second segment's physical
+    // backing-range check. The earlier segment must not update the GPR.
+    put64(memory, 0x12000 + 5 * 8, 0);
+    executeGuestVae1Is(cpu, memory, 0x5000);
+    put64(memory, 0x12000 + 5 * 8, pageDescriptor(0x30000));
+    executeGuestPostMake(cpu, memory);
+    cpu.setPc(0x1000);
+    cpu.writeX(1, 0x4FFC);
+    cpu.writeX(0, 0xFEEDFACECAFEBEEFULL);
+    uint8_t finalInstruction[4] = {};
+    memory.Read(0x4000, finalInstruction, sizeof(finalInstruction));
+    CHECK_EQ(0xF9400020, static_cast<uint32_t>(finalInstruction[0]) |
+          (static_cast<uint32_t>(finalInstruction[1]) << 8) |
+          (static_cast<uint32_t>(finalInstruction[2]) << 16) |
+          (static_cast<uint32_t>(finalInstruction[3]) << 24));
+    CHECK(cpu.step(memory) == Fault::None);
+    CHECK_EQ(0x2200, cpu.pc());
+    CHECK_EQ(0x5000, cpu.farEl1());
+    CHECK_EQ(0x96000210, cpu.esrEl1()); // A64 IL + external abort on later read segment
+    CHECK_EQ(0xFEEDFACECAFEBEEFULL, cpu.readX(0));
 }
 
 void testTranslatedProductionAccessForms() {
@@ -704,8 +773,8 @@ void testTranslatedProductionAccessForms() {
         encodePair(true, 0, 0, 6, 7, 5),  // LDP x6,x7,[x5]
         encodeUnscaled(false, 8, 8, 9),    // STUR x8,[x9,#8]
         encodeUnscaled(true, 8, 10, 9),    // LDUR x10,[x9,#8]
-        encodeIndexed(false, true, 8, 11, 12), // STR x11,[x12,#8]!
-        encodeIndexed(true, false, 8, 13, 12), // LDR x13,[x12],#8
+        encodeIndexed(false, true, 8, 11, 12), // STR x11,[x12,#8]!, crosses VA 0x5fff
+        encodeIndexed(true, false, 8, 13, 12), // LDR x13,[x12],#8, same crossing
         encodeStoreX(14, 31),              // STR x14,[SP]
         encodeLoadX(15, 31),               // LDR x15,[SP]
         encodePair(false, 1, 16, 16, 17, 31), // STP x16,x17,[SP,#16]!
@@ -733,7 +802,7 @@ void testTranslatedProductionAccessForms() {
     cpu.writeX(8, 0x0808080808080808ULL);
     cpu.writeX(9, 0x5000);
     cpu.writeX(11, 0x1111222233334444ULL);
-    cpu.writeX(12, 0x5000);
+    cpu.writeX(12, 0x5FF4);
     cpu.writeX(14, 0x1414141414141414ULL);
     cpu.setSpEl1(0x6008);
     cpu.writeX(16, 0x1616161616161616ULL);
@@ -752,7 +821,7 @@ void testTranslatedProductionAccessForms() {
     CHECK_EQ(0x1414141414141414ULL, cpu.readX(15));
     CHECK_EQ(0x1616161616161616ULL, cpu.readX(18));
     CHECK_EQ(0x1717171717171717ULL, cpu.readX(19));
-    CHECK_EQ(0x5010, cpu.readX(12));
+    CHECK_EQ(0x6004, cpu.readX(12));
     CHECK_EQ(0x6008, cpu.spEl1());
     CHECK_EQ(0x6000, cpu.readX(5));
     CHECK_EQ(0x1616161616161616ULL, [&]() {
@@ -764,6 +833,7 @@ void testTranslatedProductionAccessForms() {
     // A page-crossing pair store prevalidates both translations before its
     // first write or pre-index base writeback.
     put64(memory, 0x12000 + 6 * 8, 0);
+    executeGuestVae1Is(cpu, memory, 0x6000);
     uint8_t beforeFailedPairStore[8] = {};
     memory.Read(0x8FF8, beforeFailedPairStore, sizeof(beforeFailedPairStore));
     cpu.writeX(3, 0xCAFEBABECAFEBABEULL);
@@ -792,7 +862,7 @@ void testTranslatedProductionAccessForms() {
     CHECK_EQ(0x96000007, cpu.esrEl1());
 }
 
-void testGuestDescriptorUpdatesVisibleWithoutTlb() {
+void testGuestDescriptorUpdatesRequireTlbi() {
     FlatMemory memory(0x20000);
     const uint64_t root = 0x10000, l2 = 0x11000, l3 = 0x12000;
     map39(memory, root, l2, l3, 0x1000, 0x4000);
@@ -804,9 +874,19 @@ void testGuestDescriptorUpdatesVisibleWithoutTlb() {
     put64(memory, 0xA000, 0x2222222222222222ULL);
 
     std::vector<uint32_t> code = {encodeLoadX(0, 1)};
-    appendConstant(code, 3, pageDescriptor(0xA000, 0, true, true, true));
+    appendConstant(code, 3, 0); // Break the old mapping through guest memory.
     appendConstant(code, 4, 0x7028); // VA mapping to physical L3[5]
     code.push_back(encodeStoreX(3, 4));
+    code.push_back(0xD5033A9Fu); // DSB ISHST
+    code.push_back(encodeLoadX(5, 1)); // deterministic stale hit before TLBI
+    appendConstant(code, 2, 5); // VAE1IS operand: VA[55:12]
+    code.push_back(encodeSys(false, 1, 0, 8, 3, 1, 2)); // TLBI VAE1IS, X2
+    code.push_back(0xD5033B9Fu); // DSB ISH
+    code.push_back(0xD5033FDFu); // ISB
+    appendConstant(code, 3, pageDescriptor(0xA000, 0, true, true, true));
+    code.push_back(encodeStoreX(3, 4));
+    code.push_back(0xD5033A9Fu); // DSB ISHST
+    code.push_back(0xD5033FDFu); // ISB
     code.push_back(encodeLoadX(0, 1));
     code.push_back(kNopEncoding);
     putWords(memory, 0x4000, code);
@@ -821,6 +901,7 @@ void testGuestDescriptorUpdatesVisibleWithoutTlb() {
     CHECK(pluginStep(guest, memory));
     CHECK_EQ(0x1111111111111111ULL, guest.cpu().readX(0));
     CHECK(runExactSteps(guest, memory, code.size() - 1));
+    CHECK_EQ(0x1111111111111111ULL, guest.cpu().readX(5));
     CHECK_EQ(0x2222222222222222ULL, guest.cpu().readX(0));
     CHECK_EQ(pageDescriptor(0xA000, 0, true, true, true), [&]() {
         uint8_t b[8] = {}; memory.Read(0x12028, b, sizeof(b));
@@ -1074,7 +1155,7 @@ int main() {
     testPermissionsAttributesAndFaults();
     testProductionCpuCrossPageAndAbort();
     testTranslatedProductionAccessForms();
-    testGuestDescriptorUpdatesVisibleWithoutTlb();
+    testGuestDescriptorUpdatesRequireTlbi();
     testIntegratedGuestProgramsAndCheckpointResume();
     testContextSynchronizationAndSerializedPendingState();
     testUnmappedExceptionVectorStopsDeterministically();
