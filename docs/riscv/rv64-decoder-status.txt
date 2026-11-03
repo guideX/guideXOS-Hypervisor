@@ -587,3 +587,29 @@ Validation and next target:
   the architectural interrupt boundary, WFI wake ordering and S-mode service.
   Keep the single-hart scope and preserve the authentic OpenSBI FW_JUMP and
   SBI TIME regressions before considering broader platform devices or Linux.
+- RISCV-13 completes the integrated proof with authentic unmodified OpenSBI
+  v1.8.1 FW_JUMP, guest SBI TIME calls, ACLINT MTIP-to-STIP forwarding, and
+  independent UART0/source-10 and UART1/source-12 PLIC delivery under Sv39.
+  At four retained arbitration boundaries, `sip=0x220` and `sie=0x220` show
+  STIP+SEIP simultaneously pending and locally enabled; the guest handles SEI
+  before STI without retiring the preempted instruction or losing the other
+  source. Scenario G also proves PLIC source-12/source-10 ordering while SEI
+  remains above STI.
+- The mixed guest verifies STIE, SEIE, global SIE, PLIC threshold, and UART IER
+  masking separately. Its masked WFI wakes on real UART and timer conditions;
+  MTIP first reaches M-mode/OpenSBI when due, then the guest takes eligible
+  S-mode interrupts. It records seven timer and eight external entries, eight
+  claims/completions, and 15 SRETs in guest RAM before writing the completion
+  marker last. The harness records 15 SBI TIME ECALLs and 16 actual mtimecmp
+  writes. `phase-riscv-13-report.txt` contains the CSR snapshots, expected
+  guest order, hashes, toolchain, full test results, and Linux limitations.
+- Validation: baseline 17/17 RISC-V suites passed in Debug; final suite passed
+  18/18 in Debug (442.27 seconds). The focused mixed test passed in Debug and
+  Release with 108/108 explicit runtime checks in each. EFI memory-map and
+  IA-64 SAL CTests passed in Debug and Release; direct ACPI, interrupt
+  controller, and processor interrupt block regressions passed in both
+  configurations. No IA-64 implementation source changed.
+- Recommended RISCV-14: add a narrow single-hart supervisor software-interrupt
+  source and prove the remaining SSI middle-priority case, clear semantics, and
+  WFI behavior, completing SEI > SSI > STI arbitration without expanding into
+  SMP or a general IPI subsystem.

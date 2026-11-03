@@ -1,0 +1,17 @@
+OpenSBI provenance: ../riscv_opensbi_fw_jump/binary-manifest.txt
+OpenSBI source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+Reused OpenSBI fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+Reused OpenSBI fw_jump.elf SHA-256: 255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+DTC: Version: DTC 1.7.2
+Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+Timer: ACLINT mtime=0x0200BFF8; mtimecmp=0x02004000; guest uses genuine OpenSBI TIME
+PLIC: base=0x0C000000 size=0x00400000; 96 sources; M/S contexts=0/1
+UART0: 0x10000000, non-FIFO receive, PLIC source 10; UART1: 0x1000A000, source 12
+Guest: independently assembled RV64IMA_Zicsr; Sv39; authentic unmodified OpenSBI v1.8.1
+Scenarios: simultaneous SEIP/STIP, STIE mask, SEIE mask, masked-WFI wake, PLIC threshold, UART IER, three-way PLIC arbitration
+Build output directory: E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv13-build
+
+1917F782B92FD747A7A0847D0B9BC8F66FDF04477B36F231E55A34FA353561FF  supervisor.bin  2210 bytes
+1F84AC29E43629825BD193C5E0CB4EC7D2207A622E4377BBDB2081C80A04716A  supervisor.elf  10984 bytes
+EBF74A7296438CEF437362E36614EDEF5ABDF54F7984BB8CD7FAC307F63560CE  platform.dtb  2245 bytes

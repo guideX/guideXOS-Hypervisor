@@ -728,6 +728,10 @@ bool RV64CPU::writeTimerMmio(uint64_t paddr, const uint8_t* src, size_t size,
     } else {
         *target = (*target & 0x00000000FFFFFFFFULL) | (part << 32);
     }
+    if (target == &mtimecmp_) {
+        recordMmioEvent(MachineMmioDevice::Timer, MachineMmioOperation::Write,
+                        paddr, size, static_cast<uint32_t>(part));
+    }
     updateTimerPending();
     return true;
 }

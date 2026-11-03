@@ -968,6 +968,37 @@ else()
     target_compile_options(test_riscv_dual_uart_plic PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-13 simultaneous OpenSBI TIME, PLIC and independent UART interrupts.
+set(RISCV_MIXED_INTERRUPT_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_mixed_interrupts)
+set(RISCV_MIXED_INTERRUPT_SUPERVISOR_ELF_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv13_mixed_interrupts_supervisor.elf)
+set(RISCV_MIXED_INTERRUPT_DTB_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv13_mixed_interrupts_platform.dtb)
+configure_file(${RISCV_MIXED_INTERRUPT_FIXTURE_DIR}/supervisor.elf
+               ${RISCV_MIXED_INTERRUPT_SUPERVISOR_ELF_COPY} COPYONLY)
+configure_file(${RISCV_MIXED_INTERRUPT_FIXTURE_DIR}/platform.dtb
+               ${RISCV_MIXED_INTERRUPT_DTB_COPY} COPYONLY)
+add_executable(test_riscv_mixed_interrupts
+    tests/test_riscv_mixed_interrupts.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_mixed_interrupts PRIVATE bcrypt)
+add_test(NAME RiscVMixedInterruptTests
+         COMMAND test_riscv_mixed_interrupts
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_MIXED_INTERRUPT_SUPERVISOR_ELF_COPY}
+                 ${RISCV_MIXED_INTERRUPT_DTB_COPY})
+if(MSVC)
+    target_compile_options(test_riscv_mixed_interrupts PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_mixed_interrupts PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

@@ -1,0 +1,172 @@
+guideXOS Hypervisor — RISCV-13 report
+====================================
+
+Outcome: A — authentic OpenSBI timer and external interrupts were exercised
+together under Sv39, with architectural priority, masking, pending state, WFI,
+guest handling, and bounded progress verified.
+
+Preflight and preservation
+--------------------------
+
+- Repository: D:\dev\guideXOS_Hypervisor_RISCV, branch RISCV.
+- Starting HEAD: b4861cb1909b9f402eae16a154bfc942c4aabb7f.
+- Starting upstream divergence: 3 local commits ahead of origin/RISCV, 0 behind.
+- Starting tracked worktree: clean. The existing untracked Testing/ and the
+  RISCV-11/12 fixture .build/ directories were preserved. No branch operation,
+  push, QEMU run, shared .phase edit, or IA-64 implementation edit occurred.
+- The RISCV-only marker identified RISCV-12 as complete. The baseline 17 RISC-V
+  CTest suites passed in Debug (17/17, 410.78 seconds).
+- The pre-existing CPU arbitration already selected SEI before SSI before STI.
+  No interrupt-selection, trap-state, delegation, or return behavior defect was
+  found, so those mechanisms were left unchanged.
+- Relocated build and trace output is under
+  E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv13-build. Existing firmware
+  binaries were reused; OpenSBI was not rebuilt or patched.
+
+Platform, firmware, and guest
+----------------------------
+
+- The one-hart platform retains ACLINT mtime at 0x0200BFF8 and mtimecmp at
+  0x02004000, the 96-source PLIC at 0x0C000000, UART0 at 0x10000000/source 10,
+  and UART1 at 0x1000A000/source 12. UART0 remains the OpenSBI console.
+- The reused OpenSBI v1.8.1 FW_JUMP firmware is unmodified, from source commit
+  74434f255873d74e56cc50aa762d1caf24c099f8. Its binary and ELF hashes match
+  the accepted prior fixture exactly.
+- The new guest is independently assembled and linked RV64IMA_Zicsr without
+  compressed or floating-point instructions, a C runtime, or host SBI service.
+  It validates hart 0 and FDT 0x82200000, discovers SBI TIME through the real
+  SBI Base interface, enters S-mode through OpenSBI, and runs with Sv39 enabled.
+- S-mode code configures PLIC priorities, enables both UART receive paths,
+  handles causes 9 and 5 in a real trap vector, performs PLIC claim/RBR read/
+  completion through translated guest MMIO, rearms timers through SBI TIME,
+  and returns with SRET. The guest itself writes its event log, console
+  message, versioned signature, and completion marker last.
+- A small production-code change records writes to mtimecmp in the existing
+  machine-MMIO diagnostic stream. It does not change timer or interrupt
+  behavior; it makes the required physical comparator writes observable with
+  PC, privilege, address, width, value, and virtual time.
+
+Interrupt arbitration and simultaneous-pending evidence
+-------------------------------------------------------
+
+- At the first simultaneous boundary (scenario A), the retained trace records
+  S-mode PC/sepc 0x802001E0, `mip=0x2A0`, `sip=0x220`, `sie=0x220`, and
+  `sstatus=0x2`. Thus `mip` contains MTIP+SEIP and `sip` contains STIP+SEIP;
+  both supervisor local enables and global SIE are set. PLIC source 10 is
+  pending, its S-context output is asserted, and
+  source priorities are 1/3 with threshold 0. Both supervisor requests are
+  eligible at that boundary.
+- Cause 9 is selected first at the same PC without retiring the interrupted
+  instruction. The S-mode external handler claims source 10 and reads byte
+  0x41. Cause 5 is then taken at the same saved EPC; the UART source and data
+  are not consumed by timer handling. The guest records SEI then STI.
+- Four explicit simultaneous-boundary checks all select cause 9: scenario A,
+  scenario D after M-mode timer forwarding, and both external claims in
+  scenario G. Each check verifies the selected target is S-mode, `sepc` equals
+  the preempted PC, and the instruction-retired counter did not advance.
+- In scenario G, both PLIC source 10 and source 12 are pending while STIP and
+  SEIP are enabled. PLIC priority selects source 12 (priority 3), then source
+  10 (priority 1). At both arbitration boundaries the CPU selects SEI before
+  the still-pending STI. After both PLIC claims/completions, the guest services
+  the timer. This distinguishes PLIC arbitration between external sources
+  from architectural arbitration between SEIP and STIP.
+- The privilege ordering is visible in scenario D: S-mode WFI waits with
+  global SIE masked; UART1 input and the bounded time advance make both MTIP
+  and PLIC/SEIP pending. MTIP first traps to M-mode (cause 7), as a higher
+  privilege interrupt. Authentic OpenSBI handles it and presents STIP. Once
+  S-mode delivery is enabled, SEI is selected before STI. The WFI wake is
+  recorded separately from the S-mode interrupt entries.
+
+Masking, WFI, and event log
+--------------------------
+
+- Scenario B keeps STIP pending with STIE clear while UART1/SEIP is serviced;
+  enabling STIE later delivers the original timer event.
+- Scenario C keeps UART0 pending with SEIE clear while STI is serviced. The
+  PLIC pending bit and UART byte remain available; enabling SEIE later delivers
+  the original external event.
+- Scenario E raises the PLIC threshold to 2, masking source 10 at priority 1
+  while the timer proceeds. The pending bit and UART byte survive. Lowering the
+  threshold delivers the source without reinjection.
+- Scenario F disables UART1 receive IER while a byte is present. Timer service
+  proceeds while UART data is retained; reenabling IER then asserts the PLIC
+  source and the guest reads the original byte.
+- Focused CPU checks distinguish WFI waiting, wake, and trap: masked pending
+  STIP does not fabricate a trap; MTIP wakes WFI and traps to M-mode; UART-only
+  SEIP wakes WFI but global SIE can defer S-mode delivery until enabled. The
+  mixed guest uses a bounded virtual-time jump while waiting and a finite
+  instruction budget plus repeated-PC guard.
+- Guest log order (interrupt causes shown as names):
+
+    A: SEI source 10 byte 0x41; STI
+    B: SEI source 12 byte 0x61; STI
+    C: STI; SEI source 10 byte 0x42
+    D: SEI source 12 byte 0x62; STI
+    E: STI; SEI source 10 byte 0x43
+    F: STI; SEI source 12 byte 0x63
+    G: SEI source 12 byte 0x64; SEI source 10 byte 0x44; STI
+
+- The guest completed 5,027,899 instructions. It logged 15 events: seven
+  supervisor timer entries and eight supervisor external entries. All 15
+  events returned through SRET. The PLIC recorded eight claims and eight
+  completions, with one guest log entry per interrupt. The UART0 console
+  contains `Hello from mixed IRQs on guideXOS`; UART1 output remains empty.
+- Aggregate trace counts: 15 SBI TIME ECALLs, 16 mtimecmp MMIO writes, seven
+  MTIP edges, seven M-mode timer traps, seven OpenSBI STIP presentations and
+  clears, seven SEIP assertions, one WFI entry/wakeup, four simultaneous
+  supervisor boundaries, 101 PLIC priority writes, nine enable writes, six
+  threshold writes, and 108 explicit runtime checks with zero failures in each
+  configuration.
+- The bounded trace prints firmware handoff, ECALL/firmware return, comparator
+  writes, timer and pending-bit edges, UART injection, CSR/device snapshots,
+  WFI, trap entries, PLIC claims/completions, guest log writes, SRET, and final
+  marker. The full Debug trace is retained at
+  E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv13-build\debug-mixed-interrupt-trace.log;
+  the Release trace is retained beside it.
+
+Artifacts
+---------
+
+- OpenSBI fw_jump.bin SHA-256:
+  CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+- OpenSBI fw_jump.elf SHA-256:
+  255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+- RISCV-13 supervisor.bin SHA-256:
+  1917F782B92FD747A7A0847D0B9BC8F66FDF04477B36F231E55A34FA353561FF
+- RISCV-13 supervisor.elf SHA-256:
+  1F84AC29E43629825BD193C5E0CB4EC7D2207A622E4377BBDB2081C80A04716A
+- RISCV-13 platform.dtb SHA-256:
+  EBF74A7296438CEF437362E36614EDEF5ABDF54F7984BB8CD7FAC307F63560CE
+- Fixture compiler, target, ISA, ABI, non-relaxed linker flags, DTC version,
+  firmware provenance, and file sizes are recorded in
+  tests/fixtures/riscv_opensbi_mixed_interrupts/binary-manifest.txt.
+
+Validation and regressions
+--------------------------
+
+- Baseline before changes: all 17 existing RISC-V CTest suites passed in
+  Debug, 17/17 in 410.78 seconds.
+- Final RISC-V Debug suite: all 18 suites passed, 18/18 in 442.27 seconds.
+- Focused RiscVMixedInterruptTests: Debug 1/1, 108 explicit checks, zero
+  failures (44.78 seconds); Release 1/1, 108 explicit checks, zero failures
+  (5.20 seconds).
+- Existing EFI memory map and IA-64 SAL CTest cases passed in Debug and Release
+  (2/2 in each configuration). Direct IA-64 ACPI, interrupt-controller, and
+  processor-interrupt-block tests passed in both configurations; the ACPI run
+  covered seven named cases. No IA-64 source changed.
+- The unrelated pre-existing `test_io_devices` and legacy `test_elf_validation`
+  limitations remain outside this phase. No QEMU test was run.
+
+Remaining scope and next phase
+------------------------------
+
+- Linux remains out of scope. The implementation still has one hart and lacks
+  PMP, SBI HSM/IPI/RFENCE, APLIC/IMSIC, virtio, PCI, storage, networking, and
+  full UART FIFO/modem behavior. Linux would also need a selected kernel/image
+  and root-filesystem boot contract, memory reservations, and devices for its
+  console and storage.
+- Recommended RISCV-14: exercise the remaining middle-priority SSI case using
+  a narrow single-hart software-interrupt source, including clear and WFI
+  behavior, then prove the complete SEI > SSI > STI three-way arbitration.
+  Keep authentic firmware boundaries where applicable and avoid SMP or a
+  general IPI subsystem unless that phase explicitly requires it.
