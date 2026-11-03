@@ -33,7 +33,7 @@ I've added the **X-Type decoder** and verified that M-Type, I-Type, and B-Type d
 - Used by operating systems for system calls
 - 21-bit immediate encodes break type/number
 
-**NOP/HINT (X0 Format)**
+**NOP/HINT (X-unit forms)**
 - `nop.x` - X-unit no-op selected by `x3=0`, `x6=1`, and `y=0`
 - `hint.x` - distinct performance-hint form selected by `x3=0`, `x6=1`, and `y=1`
 - Both have no modeled architectural state effect; `hint.x` retains its mnemonic in decode/disassembly
