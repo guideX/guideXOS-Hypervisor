@@ -4,7 +4,7 @@
 
 R23 reproduced the R22 frontier from a fresh restore of the same authentic guest checkpoint, then advanced through Linux's authentic `find_memory()` path. The firmware memory map was parsed, node 0's bootmem metadata and bitmap were initialized, and Linux issued the expected free and reserve calls. A complete comparison of the 32,768 PFN bitmap against those observed calls found zero mismatches. `find_initrd()` was reached, after which execution entered a PAL call for `PAL_BRAND_INFO` and faulted on a valid `break 0x0` instruction in the firmware-provided PAL procedure. Linux treated that break as fatal and panicked with `Attempted to kill the idle task!`.
 
-**Bootmem milestone: accepted (Outcome A).** **First later failure: classified as a platform EFI/SAL/PAL handoff defect (Outcome F).** The emulator correctly decoded and delivered the break. R23 makes no production CPU, bootmem, or firmware changes. Phase 9 remains open; scheduler qualification was not reached.
+**R23 acceptance: Outcome A — bootmem integrity verified and Linux advanced.** The new milestone beyond R22 is entry to `find_initrd()` at the tail of `find_memory()`, after the free callback sequence, per-node reservations, and per-node initialization. The later PAL obstruction maps to **acceptance Outcome E**: the emulator correctly handles the observed instruction, while a platform PAL prerequisite explains the stop. Under the separate failure-classification list, the immediate break/panic path is correct guest execution (G), and the independently proven EFI ownership/type mismatch is a platform handoff/map defect (F). Acceptance Outcome F means a later Linux scheduler milestone; it was not reached. R23 makes no production CPU, bootmem, or firmware changes. Phase 9 remains open.
 
 ## Scope and provenance
 
@@ -15,21 +15,21 @@ R23 reproduced the R22 frontier from a fresh restore of the same authentic guest
 - Guest initrd SHA-256: `D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B`.
 - ISO: `build-9r9/authentic-reconstructed.iso`, 4,695,296,000 bytes, SHA-256 `6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E`.
 - Starting checkpoint: `build-9r16/r16-authentic-ehandoff.gxcp`, cycle `778197459`, 574,309,111 bytes, SHA-256 `B6C258887359E4E6A5B0BCFE355B86FD6CFC7A410D735F575BE6688348564B4B`; its manifest SHA-256 is `3B030AEA30F29C1C3518F7401B49C95802521F6AB183ED753CED14848990ACE6`.
-- Diagnostic utility change: local commit `5511fea` (`feat(ia64): add repeatable bootmem probes`). It adds repeatable all-register IP probes and repeatable guest-memory-range dumps to `tools/ia64_iso_matrix.cpp`; it does not alter guest execution semantics.
+- Diagnostic utility change: local commit `5511fea0c92482feb178747f304769bb11522ea4` (`feat(ia64): add repeatable bootmem probes`). It adds repeatable all-register IP probes and repeatable guest-memory-range dumps to `tools/ia64_iso_matrix.cpp`; it does not alter guest execution semantics.
 
 The run harness is `build-9r23/evidence/r23-replay.ps1`. Each run restored the saved checkpoint into a fresh VM. Captures are in the separate `evidence-9r23/` directory; ignored build output is under `build-9r23/`. The checkpoint and earlier build/evidence directories were preserved. Guest-memory captures were read-only.
 
 ## Replay progression
 
-Cycle values below are the guest ITC values. “Steps” is the harness's attempted instruction-step budget; unique instruction and bundle counts are coverage cardinalities, not retired-instruction counts.
+Cycle values below are the guest ITC values. “Steps” is the harness's attempted instruction-step budget; unique instruction and bundle counts are coverage cardinalities, not retired-instruction counts. Retired instruction slots/bundles and aggregate interrupt/translation-fault counts were not collected by this replay harness.
 
 | Replay | Budget / cycle range | Result |
 | --- | --- | --- |
-| R22 baseline, 1.7M | 1,700,000 steps; `778197459` → `779897459` | 0 failed steps; 9,821 unique instruction addresses / 3,327 bundles; stopped in `__free`, running, no panic. This reproduces the R22 frontier. |
+| R22 baseline, 1.7M | 1,700,000 steps; `778197459` → `779897459` | 0 failed steps; 9,821 unique instruction addresses / 3,327 bundles; stopped in `__free`, running, no panic. Sample: CFM `0x30b`, PFS `0x40f`, RSC `3`, BSP `0xa000000100bc1100`, BSPSTORE `0xa000000100bc0eb0`; no interrupt pending/in service. This reproduces the R22 frontier. |
 | 2.5M frontier | 2,500,000 steps; ending at `780697459` | 0 failed steps; 9,848 unique instruction addresses / 3,336 bundles; still in the second free range, running. |
 | 3.2M PAL diagnostic | 3,200,000-step budget; PAL break at `781017839` | The break is entered at `ia64_bad_break` at ITC `781018013`; saved frame inspection identifies the firmware PAL target and call. |
 | 3.3M diagnostic | 3,300,000-step budget | At ITC `781374415`, `do_exit()` is entered for PID 0; Linux calls `panic("Attempted to kill the idle task!")`. |
-| 5M frontier | 5,000,000 steps; `778197459` → `783197459` | 0 failed emulator steps; 13,889 unique instruction addresses / 4,698 bundles. The VM reports `RUNNING` and emulator panic=false, but the guest Linux panic was already observed. Final sampled IP is `ia64_itc_udelay+0xa0`, in the panic delay loop. |
+| 5M frontier | 5,000,000 steps; `778197459` → `783197459` | 0 failed emulator steps; 13,889 unique instruction addresses / 4,698 bundles. The VM reports `RUNNING` and emulator panic=false, but the guest Linux panic was already observed. Final sampled IP is `ia64_itc_udelay+0xa0`, in the panic delay loop. Sample: CFM `1`, PFS `0x205`, RSC `3`, BSP `0xa000000100bc1178`, BSPSTORE/BSP-load `0xa000000100bc10d0`; no interrupt pending/in service. Saved IIP remains `0x1fdb2180`, the PAL break address. |
 
 `find_initrd()` was reached at ITC `780984689`. In Linux's `find_memory()` source order, this is after `reserve_pernode_space()`, `memory_less_nodes()`, and `initialize_pernode_data()`; therefore those operations returned. `free_all_bootmem()` and `free_all_bootmem_node()` were not reached. The guest panic and the emulator's VM terminal-state flag are distinct: the former is real Linux behavior, while the latter remained `RUNNING`.
 
@@ -95,7 +95,7 @@ The focused 3.2M run captured the complete call and fault path:
 
 The guest EFI-map bytes and a read-only physical dump establish that the active procedure lies in descriptor 18, type `EFI_BOOT_SERVICES_DATA`, with WB attributes. There is no type-13 `EFI_PAL_CODE` descriptor, no type-5/6 Runtime Services descriptor, and no `EFI_MEMORY_RUNTIME` attribute. Linux's `efi_get_pal_addr()` explicitly searches for `EFI_PAL_CODE` and maps it with an ITR for safe PAL calls in virtual mode. Separately, Linux's SAL entry-point parser initializes the PAL handler from the firmware SAL descriptor's `pal_proc` pointer; the captured pointer resolves to this same physical routine.
 
-This supports an EFI/SAL/PAL handoff defect: firmware supplies a PAL procedure that faults for `PAL_BRAND_INFO`, and its EFI map does not identify/protect the PAL code as `EFI_PAL_CODE`. The precise relationship between those two contract violations should be checked when the platform PAL implementation is repaired. There is no evidence for changing the IA-64 break decoder or bootmem implementation. Linux's HP simulator PAL implementation provides a reference behavior for unsupported calls: return `PAL_STATUS_UNIMPLEMENTED` through the normal PAL return path, not a guest break.
+This supports a platform PAL prerequisite defect: firmware supplies a PAL procedure that faults for `PAL_BRAND_INFO`. Separately, the EFI descriptor means Linux sees active PAL storage as reclaimable BootServicesData instead of `EFI_PAL_CODE`, which is the failure-classification F memory-map contract violation. The evidence does not prove the map mismatch caused the present `break 0`; keep the two findings distinct. The break vector and Linux panic are correctly delivered guest behavior (failure classification G / acceptance Outcome E), not an emulator defect. Linux's HP simulator PAL implementation provides a reference behavior for unsupported calls: return `PAL_STATUS_UNIMPLEMENTED` through the normal PAL return path, not a guest break.
 
 The earlier R14 finding that `RuntimeServices.SetVirtualAddressMap` returned `EFI_UNSUPPORTED` is separate evidence and is not treated as the cause of this R23 break.
 
@@ -119,9 +119,9 @@ Directly run and passed: processor interrupt block, interrupt controller, single
 
 ## Closeout and next gate
 
-No checkpoint was created. No production emulation fix was justified by the captured fault. The source change is diagnostic-only and committed as `5511fea`. The report is committed separately; final closeout records its SHA. No push was made. `.phase` remains at Phase 9, and Phase 9 is still open.
+No checkpoint was created. No production emulation fix was justified by the captured fault. The source change is diagnostic-only and committed as `5511fea0c92482feb178747f304769bb11522ea4`. The report was initially committed as `fbe0c832fae667a45cfce6db662afa720774b0ac` and then corrected in the final closeout commit. No push was made. `.phase` remains at Phase 9, and Phase 9 is still open.
 
-At closeout, tracked source/documentation changes are committed with a clean tracked worktree. The newly generated `evidence-9r23/` remains as untracked local evidence, and `build-9r23/` remains ignored build output; both are separate from the preserved historical artifacts. No in-scope source or documentation change is left uncommitted.
+At closeout, branch `IA64` contains the R23 tooling and report commits; tracked source/documentation changes are committed and the tracked worktree is clean. The newly generated `evidence-9r23/` remains as untracked local evidence, and `build-9r23/` remains ignored build output; both are separate from the preserved historical artifacts. No in-scope source or documentation change is left uncommitted. Push status: not pushed.
 
 R24 should first correct and qualify the firmware SAL/PAL/EFI contract: provide a valid PAL procedure with defined unsupported-service behavior, advertise and preserve the PAL region as `EFI_PAL_CODE`, and rerun the same checkpoint to confirm the break is gone. Then resume authentic Linux progression and scheduler qualification.
 
