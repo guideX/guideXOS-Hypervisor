@@ -689,6 +689,7 @@ add_test(NAME AArch64CompilerStackTests COMMAND test_aarch64_compiler_stack)
 add_test(NAME AArch64ExceptionLevelTests COMMAND test_aarch64_exception_levels)
 add_test(NAME AArch64MMUTests COMMAND test_aarch64_mmu)
 add_test(NAME AArch64TLBTests COMMAND test_aarch64_tlb)
+add_test(NAME AArch64SnapshotTests COMMAND test_aarch64_snapshot)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -866,6 +867,20 @@ add_executable(test_aarch64_tlb
     ${HEADERS}
 )
 
+# AARCH64-8: production CPU-plus-physical-RAM snapshot envelope, bounded
+# persistence, transactional restore, cold-TLB reconstruction, and replay.
+add_executable(test_aarch64_snapshot
+    tests/test_aarch64_snapshot.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+if(WIN32)
+    target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
+endif()
+
 if(WIN32)
     target_link_libraries(test_aarch64_tlb PRIVATE ws2_32)
 endif()
@@ -874,6 +889,12 @@ if(MSVC)
     target_compile_options(test_aarch64_tlb PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_tlb PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(MSVC)
+    target_compile_options(test_aarch64_snapshot PRIVATE /W4)
+else()
+    target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

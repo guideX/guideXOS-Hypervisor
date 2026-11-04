@@ -324,12 +324,16 @@ AArch64ISAPlugin::AArch64ISAPlugin(uint64_t entryPoint, ExceptionLevel entryLeve
 }
 
 void AArch64ISAPlugin::reset() {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     cpu_.reset(entryPoint_, entryLevel_);
     state_.capture(cpu_);
+    instructionDecodedPending_ = false;
 }
 
 ia64::ISADecodeResult AArch64ISAPlugin::decode(ia64::IMemory& memory) {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     lastDecoded_ = cpu_.fetchDecode(memory);
+    instructionDecodedPending_ = true;
     ia64::ISADecodeResult result;
     result.valid = lastDecoded_.valid;
     result.instructionAddress = cpu_.pc();
@@ -348,6 +352,9 @@ size_t AArch64ISAPlugin::getInstructionLength(ia64::IMemory& /*memory*/,
 
 ia64::ISAExecutionResult AArch64ISAPlugin::execute(
     ia64::IMemory& memory, const ia64::ISADecodeResult& decodeResult) {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (!instructionDecodedPending_) return ia64::ISAExecutionResult::EXCEPTION;
+    instructionDecodedPending_ = false;
     if (!decodeResult.valid || decodeResult.internalData == nullptr) {
         if (decodeResult.internalData == nullptr) return ia64::ISAExecutionResult::EXCEPTION;
         const Decoded* failed = static_cast<const Decoded*>(decodeResult.internalData);
@@ -365,33 +372,41 @@ ia64::ISAExecutionResult AArch64ISAPlugin::execute(
 }
 
 ia64::ISAState& AArch64ISAPlugin::getState() {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     state_.capture(cpu_);
     return state_;
 }
 
 const ia64::ISAState& AArch64ISAPlugin::getState() const {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     return state_;
 }
 
 void AArch64ISAPlugin::setState(const ia64::ISAState& state) {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     const auto* a64 = dynamic_cast<const AArch64State*>(&state);
     if (a64 == nullptr) {
         throw std::invalid_argument("AArch64ISAPlugin::setState: incompatible state type");
     }
     a64->applyTo(cpu_);
     state_ = *a64;
+    instructionDecodedPending_ = false;
 }
 
 uint64_t AArch64ISAPlugin::getPC() const {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     return cpu_.pc();
 }
 
 void AArch64ISAPlugin::setPC(uint64_t pc) {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     cpu_.setPc(pc);
     state_.capture(cpu_);
+    instructionDecodedPending_ = false;
 }
 
 std::vector<uint8_t> AArch64ISAPlugin::serialize_state() const {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     AArch64State snapshot(cpu_);
     std::vector<uint8_t> data(snapshot.getStateSize());
     snapshot.serialize(data.data());
@@ -399,6 +414,7 @@ std::vector<uint8_t> AArch64ISAPlugin::serialize_state() const {
 }
 
 bool AArch64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
+    std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
     if (data.size() != kSerializedStateSize && data.size() != kSerializedStateV2Size &&
         data.size() != kSerializedStateV1Size) {
         return false;
@@ -416,6 +432,7 @@ bool AArch64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
     }
     snapshot.applyTo(cpu_);
     state_ = snapshot;
+    instructionDecodedPending_ = false;
     return true;
 }
 

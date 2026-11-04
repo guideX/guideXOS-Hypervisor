@@ -141,11 +141,14 @@ public:
     const Cpu& cpu() const { return cpu_; }
 
 private:
+    friend class AArch64ExecutionSnapshot;
+
     Cpu cpu_;
     AArch64State state_;
     Decoded lastDecoded_;
     uint64_t entryPoint_;
     ExceptionLevel entryLevel_;
+    bool instructionDecodedPending_ = false;
 };
 
 // Create an AArch64 ISA instance. No IA-64 firmware, decoder or CPU state is

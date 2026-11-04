@@ -22,7 +22,24 @@ Memory::Memory(size_t size, bool enableMMU, size_t pageSize)
     }
 }
 
+Memory::Memory(Memory&& other) noexcept {
+    std::lock_guard<std::recursive_mutex> lock(other.accessMutex_);
+    data_ = std::move(other.data_);
+    mmu_ = std::move(other.mmu_);
+    devices_ = std::move(other.devices_);
+}
+
+Memory& Memory::operator=(Memory&& other) noexcept {
+    if (this == &other) return *this;
+    std::scoped_lock lock(accessMutex_, other.accessMutex_);
+    data_ = std::move(other.data_);
+    mmu_ = std::move(other.mmu_);
+    devices_ = std::move(other.devices_);
+    return *this;
+}
+
 void Memory::loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     if (size == 0) {
         return; // Nothing to load
     }
@@ -40,6 +57,7 @@ void Memory::loadBuffer(uint64_t address, const std::vector<uint8_t>& buffer) {
 }
 
 void Memory::Read(uint64_t address, uint8_t* dest, size_t size) const {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     if (size == 0) {
         return; // Nothing to read
     }
@@ -67,6 +85,7 @@ void Memory::Read(uint64_t address, uint8_t* dest, size_t size) const {
 }
 
 void Memory::Write(uint64_t address, const uint8_t* src, size_t size) {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     if (size == 0) {
         return; // Nothing to write
     }
@@ -94,6 +113,7 @@ void Memory::Write(uint64_t address, const uint8_t* src, size_t size) {
 }
 
 void Memory::RegisterDevice(IMemoryMappedDevice* device) {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     if (device == nullptr) {
         throw std::invalid_argument("Device pointer cannot be null");
     }
@@ -117,6 +137,7 @@ void Memory::RegisterDevice(IMemoryMappedDevice* device) {
 }
 
 bool Memory::UnregisterDevice(IMemoryMappedDevice* device) {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     const auto it = std::find(devices_.begin(), devices_.end(), device);
     if (it == devices_.end()) {
         return false;
@@ -127,10 +148,12 @@ bool Memory::UnregisterDevice(IMemoryMappedDevice* device) {
 }
 
 void Memory::Clear() {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     std::fill(data_.begin(), data_.end(), static_cast<uint8_t>(0));
 }
 
 MemorySnapshot Memory::CreateSnapshot() const {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     MemorySnapshot snapshot;
     snapshot.data = data_;
     snapshot.pageTable = mmu_->GetPageTable();
@@ -139,6 +162,7 @@ MemorySnapshot Memory::CreateSnapshot() const {
 }
 
 void Memory::RestoreSnapshot(const MemorySnapshot& snapshot) {
+    std::lock_guard<std::recursive_mutex> lock(accessMutex_);
     if (snapshot.data.size() != data_.size()) {
         throw std::invalid_argument("Memory snapshot size mismatch");
     }

@@ -47,9 +47,12 @@
 
 #include "IMemory.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <iterator>
 #include <stdexcept>
+#include <utility>
 
 namespace aarch64 {
 namespace {
@@ -212,6 +215,86 @@ uint32_t systemRegisterSyndrome(const Decoded& d, bool isRead) {
 
 } // namespace
 
+Cpu::Cpu(const Cpu& other) {
+    std::lock_guard<std::recursive_mutex> lock(other.executionMutex_);
+    std::copy(std::begin(other.x_), std::end(other.x_), std::begin(x_));
+    spEl0_ = other.spEl0_; spEl1_ = other.spEl1_; pc_ = other.pc_;
+    pstate_ = other.pstate_; elrEl1_ = other.elrEl1_; spsrEl1_ = other.spsrEl1_;
+    vbarEl1_ = other.vbarEl1_; esrEl1_ = other.esrEl1_; farEl1_ = other.farEl1_;
+    sctlrEl1_ = other.sctlrEl1_; tcrEl1_ = other.tcrEl1_;
+    ttbr0El1_ = other.ttbr0El1_; ttbr1El1_ = other.ttbr1El1_; mairEl1_ = other.mairEl1_;
+    effectiveSctlrEl1_ = other.effectiveSctlrEl1_;
+    effectiveTcrEl1_ = other.effectiveTcrEl1_;
+    effectiveTtbr0El1_ = other.effectiveTtbr0El1_;
+    effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
+    effectiveMairEl1_ = other.effectiveMairEl1_;
+    exceptionVectorPending_ = other.exceptionVectorPending_;
+    tlb_ = other.tlb_;
+    lastFault_ = other.lastFault_;
+    lastError_ = other.lastError_;
+}
+
+Cpu& Cpu::operator=(const Cpu& other) {
+    if (this == &other) return *this;
+    std::scoped_lock lock(executionMutex_, other.executionMutex_);
+    std::copy(std::begin(other.x_), std::end(other.x_), std::begin(x_));
+    spEl0_ = other.spEl0_; spEl1_ = other.spEl1_; pc_ = other.pc_;
+    pstate_ = other.pstate_; elrEl1_ = other.elrEl1_; spsrEl1_ = other.spsrEl1_;
+    vbarEl1_ = other.vbarEl1_; esrEl1_ = other.esrEl1_; farEl1_ = other.farEl1_;
+    sctlrEl1_ = other.sctlrEl1_; tcrEl1_ = other.tcrEl1_;
+    ttbr0El1_ = other.ttbr0El1_; ttbr1El1_ = other.ttbr1El1_; mairEl1_ = other.mairEl1_;
+    effectiveSctlrEl1_ = other.effectiveSctlrEl1_;
+    effectiveTcrEl1_ = other.effectiveTcrEl1_;
+    effectiveTtbr0El1_ = other.effectiveTtbr0El1_;
+    effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
+    effectiveMairEl1_ = other.effectiveMairEl1_;
+    exceptionVectorPending_ = other.exceptionVectorPending_;
+    tlb_ = other.tlb_;
+    lastFault_ = other.lastFault_;
+    lastError_ = other.lastError_;
+    return *this;
+}
+
+Cpu::Cpu(Cpu&& other) {
+    std::lock_guard<std::recursive_mutex> lock(other.executionMutex_);
+    std::copy(std::begin(other.x_), std::end(other.x_), std::begin(x_));
+    spEl0_ = other.spEl0_; spEl1_ = other.spEl1_; pc_ = other.pc_;
+    pstate_ = other.pstate_; elrEl1_ = other.elrEl1_; spsrEl1_ = other.spsrEl1_;
+    vbarEl1_ = other.vbarEl1_; esrEl1_ = other.esrEl1_; farEl1_ = other.farEl1_;
+    sctlrEl1_ = other.sctlrEl1_; tcrEl1_ = other.tcrEl1_;
+    ttbr0El1_ = other.ttbr0El1_; ttbr1El1_ = other.ttbr1El1_; mairEl1_ = other.mairEl1_;
+    effectiveSctlrEl1_ = other.effectiveSctlrEl1_;
+    effectiveTcrEl1_ = other.effectiveTcrEl1_;
+    effectiveTtbr0El1_ = other.effectiveTtbr0El1_;
+    effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
+    effectiveMairEl1_ = other.effectiveMairEl1_;
+    exceptionVectorPending_ = other.exceptionVectorPending_;
+    tlb_ = std::move(other.tlb_);
+    lastFault_ = other.lastFault_;
+    lastError_ = std::move(other.lastError_);
+}
+
+Cpu& Cpu::operator=(Cpu&& other) {
+    if (this == &other) return *this;
+    std::scoped_lock lock(executionMutex_, other.executionMutex_);
+    std::copy(std::begin(other.x_), std::end(other.x_), std::begin(x_));
+    spEl0_ = other.spEl0_; spEl1_ = other.spEl1_; pc_ = other.pc_;
+    pstate_ = other.pstate_; elrEl1_ = other.elrEl1_; spsrEl1_ = other.spsrEl1_;
+    vbarEl1_ = other.vbarEl1_; esrEl1_ = other.esrEl1_; farEl1_ = other.farEl1_;
+    sctlrEl1_ = other.sctlrEl1_; tcrEl1_ = other.tcrEl1_;
+    ttbr0El1_ = other.ttbr0El1_; ttbr1El1_ = other.ttbr1El1_; mairEl1_ = other.mairEl1_;
+    effectiveSctlrEl1_ = other.effectiveSctlrEl1_;
+    effectiveTcrEl1_ = other.effectiveTcrEl1_;
+    effectiveTtbr0El1_ = other.effectiveTtbr0El1_;
+    effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
+    effectiveMairEl1_ = other.effectiveMairEl1_;
+    exceptionVectorPending_ = other.exceptionVectorPending_;
+    tlb_ = std::move(other.tlb_);
+    lastFault_ = other.lastFault_;
+    lastError_ = std::move(other.lastError_);
+    return *this;
+}
+
 bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v) {
     // Verbatim implementation of the ARM ConditionHolds() pseudocode.
     bool result = true;
@@ -291,6 +374,7 @@ int64_t signExtend(uint32_t value, unsigned bits) {
 }
 
 void Cpu::reset(uint64_t entryPoint, ExceptionLevel initialLevel) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     for (uint64_t& r : x_) {
         r = 0;
     }
@@ -324,16 +408,13 @@ uint64_t Cpu::sp() const {
     return activeSpRef();
 }
 
-void Cpu::setSp(uint64_t value) {
-    activeSpRef() = value;
-}
-
 uint64_t Cpu::readX(unsigned index) const {
     requireXIndex(index);
     return x_[index];
 }
 
 void Cpu::writeX(unsigned index, uint64_t value) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     requireXIndex(index);
     x_[index] = value;
 }
@@ -343,6 +424,7 @@ uint32_t Cpu::readW(unsigned index) const {
 }
 
 void Cpu::writeW(unsigned index, uint32_t value) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     // W writes zero-extend into the full 64-bit register (ARM DDI 0487 B2.3).
     writeX(index, static_cast<uint64_t>(value));
 }
@@ -363,6 +445,7 @@ void Cpu::writeReg31(bool is64, bool withZero, uint64_t value) {
 }
 
 void Cpu::setNzcv(bool n, bool z, bool c, bool v) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     pstate_ &= ~(kPstateN | kPstateZ | kPstateC | kPstateV);
     if (n) pstate_ |= kPstateN;
     if (z) pstate_ |= kPstateZ;
@@ -1226,10 +1309,12 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
 }
 
 Decoded Cpu::fetchDecode(ia64::IMemory& memory) const {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     return fetchDecodeAt(memory, pc_);
 }
 
 Decoded Cpu::fetchDecodeAt(ia64::IMemory& memory, uint64_t address) const {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     if ((address & 3u) != 0) {
         return invalid(0, address, Fault::UnalignedPC,
                        "PC is not 4-byte aligned for A64 fetch");
@@ -1627,6 +1712,7 @@ Fault Cpu::executeEret(const Decoded& /*decoded*/) {
 }
 
 Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     if (!decoded.valid) {
         if (decoded.hasMemoryAbort) {
             if (decoded.memoryAbortInstruction && exceptionVectorPending_) {
@@ -2403,16 +2489,19 @@ public:
 } // namespace
 
 Fault Cpu::executeDecoded(const Decoded& decoded) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     DenyMemory deny;
     return executeDecoded(decoded, deny);
 }
 
 Fault Cpu::step(ia64::IMemory& memory) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     const Decoded decoded = fetchDecode(memory);
     return executeDecoded(decoded, memory);
 }
 
 RunOutcome Cpu::run(ia64::IMemory& memory, uint64_t maxSteps) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     RunOutcome outcome;
     for (uint64_t i = 0; i < maxSteps; ++i) {
         const Fault fault = step(memory);

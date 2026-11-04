@@ -8,11 +8,14 @@
 #include <stdexcept>
 #include <cassert>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <map>
 #include "IMemory.h"
 #include "IODevice.h"
 #include "mmu.h"
+
+namespace aarch64 { class AArch64ExecutionSnapshot; }
 
 namespace ia64 {
 
@@ -64,8 +67,8 @@ public:
     // Disable copy, allow move
     Memory(const Memory&) = delete;
     Memory& operator=(const Memory&) = delete;
-    Memory(Memory&&) = default;
-    Memory& operator=(Memory&&) = default;
+    Memory(Memory&& other) noexcept;
+    Memory& operator=(Memory&& other) noexcept;
 
     /**
      * Read a typed value from memory
@@ -83,6 +86,7 @@ public:
             "Memory::read<T> only supports uint8_t, uint32_t, uint64_t"
         );
         
+        std::lock_guard<std::recursive_mutex> lock(accessMutex_);
         checkBounds(address, sizeof(T));
         
         T value;
@@ -106,6 +110,7 @@ public:
             "Memory::write<T> only supports uint8_t, uint32_t, uint64_t"
         );
         
+        std::lock_guard<std::recursive_mutex> lock(accessMutex_);
         checkBounds(address, sizeof(T));
         
         std::memcpy(&data_[address], &value, sizeof(T));
@@ -138,17 +143,24 @@ public:
      * Enable or disable MMU
      * @param enabled true to enable, false to disable
      */
-    void SetMMUEnabled(bool enabled) { mmu_->SetEnabled(enabled); }
+    void SetMMUEnabled(bool enabled) {
+        std::lock_guard<std::recursive_mutex> lock(accessMutex_);
+        mmu_->SetEnabled(enabled);
+    }
 
     /**
      * Check if MMU is enabled
      * @return true if enabled, false otherwise
      */
-    bool IsMMUEnabled() const { return mmu_->IsEnabled(); }
+    bool IsMMUEnabled() const {
+        std::lock_guard<std::recursive_mutex> lock(accessMutex_);
+        return mmu_->IsEnabled();
+    }
     MemorySnapshot CreateSnapshot() const;
     void RestoreSnapshot(const MemorySnapshot& snapshot);
 
 private:
+    friend class aarch64::AArch64ExecutionSnapshot;
 /**
  * Check if memory access is within bounds
  * @param address Starting address
@@ -179,6 +191,10 @@ void mmuWrite(uint64_t address, const uint8_t* src, size_t size);
 std::vector<uint8_t> data_;      // Flat physical memory storage
 std::unique_ptr<MMU> mmu_;       // Memory Management Unit
  std::vector<IMemoryMappedDevice*> devices_;
+    // Serializes ordinary accesses with AArch64 snapshot capture/restore.
+    // Recursive behavior permits device callbacks and nested helpers to use
+    // the same Memory instance while one public operation is in progress.
+    mutable std::recursive_mutex accessMutex_;
 };
 
 // Legacy alias for compatibility

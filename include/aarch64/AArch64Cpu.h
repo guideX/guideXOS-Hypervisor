@@ -66,6 +66,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -77,6 +78,9 @@ class IMemory; // generic memory contract; no IA-64 specifics required
 }
 
 namespace aarch64 {
+
+class AArch64ExecutionSnapshot;
+class AArch64ISAPlugin;
 
 // Fixed A64 instruction size in bytes.
 inline constexpr std::size_t kInstructionSize = 4;
@@ -239,6 +243,10 @@ public:
                  ExceptionLevel initialLevel = ExceptionLevel::EL0) {
         reset(entryPoint, initialLevel);
     }
+    Cpu(const Cpu& other);
+    Cpu& operator=(const Cpu& other);
+    Cpu(Cpu&& other);
+    Cpu& operator=(Cpu&& other);
 
     // -- reset ------------------------------------------------------------
     void reset(uint64_t entryPoint = 0,
@@ -260,15 +268,30 @@ public:
 
     // -- SP / PC / PSTATE --------------------------------------------------
     uint64_t sp() const;
-    void setSp(uint64_t value);
+    void setSp(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        activeSpRef() = value;
+    }
     uint64_t spEl0() const { return spEl0_; }
     uint64_t spEl1() const { return spEl1_; }
-    void setSpEl0(uint64_t value) { spEl0_ = value; }
-    void setSpEl1(uint64_t value) { spEl1_ = value; }
+    void setSpEl0(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        spEl0_ = value;
+    }
+    void setSpEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        spEl1_ = value;
+    }
     uint64_t pc() const { return pc_; }
-    void setPc(uint64_t value) { pc_ = value; }
+    void setPc(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        pc_ = value;
+    }
     uint32_t pstate() const { return pstate_; }
-    void setPstate(uint32_t value) { pstate_ = value; }
+    void setPstate(uint32_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        pstate_ = value;
+    }
     ExceptionLevel exceptionLevel() const {
         return static_cast<ExceptionLevel>((pstate_ & kPstateElMask) >> 2);
     }
@@ -277,15 +300,30 @@ public:
                (pstate_ & kPstateSpsel) == 0;
     }
     uint64_t elrEl1() const { return elrEl1_; }
-    void setElrEl1(uint64_t value) { elrEl1_ = value; }
+    void setElrEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        elrEl1_ = value;
+    }
     uint32_t spsrEl1() const { return spsrEl1_; }
-    void setSpsrEl1(uint32_t value) { spsrEl1_ = value; }
+    void setSpsrEl1(uint32_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        spsrEl1_ = value;
+    }
     uint64_t vbarEl1() const { return vbarEl1_; }
-    void setVbarEl1(uint64_t value) { vbarEl1_ = value & ~uint64_t{0x7FF}; }
+    void setVbarEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        vbarEl1_ = value & ~uint64_t{0x7FF};
+    }
     uint32_t esrEl1() const { return esrEl1_; }
-    void setEsrEl1(uint32_t value) { esrEl1_ = value; }
+    void setEsrEl1(uint32_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        esrEl1_ = value;
+    }
     uint64_t farEl1() const { return farEl1_; }
-    void setFarEl1(uint64_t value) { farEl1_ = value; }
+    void setFarEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        farEl1_ = value;
+    }
     uint64_t sctlrEl1() const { return sctlrEl1_; }
     uint64_t tcrEl1() const { return tcrEl1_; }
     uint64_t ttbr0El1() const { return ttbr0El1_; }
@@ -297,11 +335,26 @@ public:
     uint64_t effectiveTtbr1El1() const { return effectiveTtbr1El1_; }
     uint64_t effectiveMairEl1() const { return effectiveMairEl1_; }
     const AArch64TLB& tlb() const { return tlb_; }
-    void setSctlrEl1(uint64_t value) { sctlrEl1_ = effectiveSctlrEl1_ = value; }
-    void setTcrEl1(uint64_t value) { tcrEl1_ = effectiveTcrEl1_ = value; }
-    void setTtbr0El1(uint64_t value) { ttbr0El1_ = effectiveTtbr0El1_ = value; }
-    void setTtbr1El1(uint64_t value) { ttbr1El1_ = effectiveTtbr1El1_ = value; }
-    void setMairEl1(uint64_t value) { mairEl1_ = effectiveMairEl1_ = value; }
+    void setSctlrEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        sctlrEl1_ = effectiveSctlrEl1_ = value;
+    }
+    void setTcrEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        tcrEl1_ = effectiveTcrEl1_ = value;
+    }
+    void setTtbr0El1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        ttbr0El1_ = effectiveTtbr0El1_ = value;
+    }
+    void setTtbr1El1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        ttbr1El1_ = effectiveTtbr1El1_ = value;
+    }
+    void setMairEl1(uint64_t value) {
+        std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        mairEl1_ = effectiveMairEl1_ = value;
+    }
     bool flagN() const { return (pstate_ & kPstateN) != 0; }
     bool flagZ() const { return (pstate_ & kPstateZ) != 0; }
     bool flagC() const { return (pstate_ & kPstateC) != 0; }
@@ -339,6 +392,8 @@ public:
 
 private:
     friend class AArch64State;
+    friend class AArch64ExecutionSnapshot;
+    friend class AArch64ISAPlugin;
     Fault executeSystemRegister(const Decoded& decoded);
     Fault executeTlbi(const Decoded& decoded);
     Fault executePstateImmediate(const Decoded& decoded);
@@ -389,6 +444,9 @@ private:
     // preventing an unmapped vector from repeatedly aborting into itself.
     bool exceptionVectorPending_ = false;
     mutable AArch64TLB tlb_;
+    // Serializes complete instruction execution with snapshot management.
+    // This mutex is host coordination state and is never serialized.
+    mutable std::recursive_mutex executionMutex_;
     Fault lastFault_ = Fault::None;
     std::string lastError_;
 };
