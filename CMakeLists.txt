@@ -41,6 +41,8 @@ set(ISA_SOURCES
       src/isa/ExampleISAPlugin.cpp
       src/mips64/Mips64Cpu.cpp
       src/mips64/MaltaBootstrapBoard.cpp
+      src/mips64/Mips64ElfLoader.cpp
+      src/mips64/Mips64MaltaProm.cpp
       src/isa/Mips64ISAPlugin.cpp
   )
 
@@ -167,6 +169,8 @@ set(HEADERS
     include/PhysicalAddressMap.h
     include/Ns16550Uart.h
     include/Mips64MaltaBootstrap.h
+    include/mips64/Mips64ElfLoader.h
+    include/mips64/Mips64MaltaProm.h
     include/loader.h
     include/bootstrap.h
     include/abi.h
@@ -1055,6 +1059,26 @@ add_test(NAME Mips64SnapshotDevicesTests COMMAND test_mips64_malta snapshot_devi
 add_test(NAME Mips64SnapshotRestoreTests COMMAND test_mips64_malta snapshot_restore)
 add_test(NAME Mips64SnapshotVmTests COMMAND test_mips64_malta snapshot_vm)
 add_test(NAME Mips64SnapshotCompatibilityTests COMMAND test_mips64_malta snapshot_compat)
+
+# MIPS64-12 static ELF validation, Malta PROM handoff, production guest boot,
+# and deterministic snapshot/replay from before and after the ELF entry.
+add_executable(test_mips64_elf_handoff
+    tests/test_mips64_elf_handoff.cpp
+    ${ALL_SOURCES}
+)
+target_compile_definitions(test_mips64_elf_handoff PRIVATE
+    MIPS64_ELF_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures/mips64_elf"
+)
+if(WIN32)
+    target_link_libraries(test_mips64_elf_handoff PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_elf_handoff PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_elf_handoff PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64ElfHandoffTests COMMAND test_mips64_elf_handoff
+    "${CMAKE_BINARY_DIR}/mips64-12-traces")
 
 # MIPS64-9 production-scheduler UART interrupt guest and RX/IRQ replay.
 add_executable(test_mips64_interrupt_guest

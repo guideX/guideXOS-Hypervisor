@@ -328,6 +328,11 @@ public:
     // only the documented ROM, FPGA subset, and existing CBUS UART.
     void configureMips64MaltaBootstrap(const MaltaBootstrapConfig& config);
     void configureMips64MaltaBootstrap();
+    // Validate, stage, and install a static MIPS64 ELF together with its Malta
+    // PROM tables and reset-ROM handoff as one stopped-VM operation.
+    bool configureMips64MaltaElfHandoff(const uint8_t* file, size_t fileSize,
+                                        MaltaBootstrapConfig config,
+                                        std::string* error = nullptr);
     MaltaBootstrapBoard* getMips64MaltaBootstrapBoard() noexcept {
         return maltaBootstrapBoard_.get();
     }
@@ -791,6 +796,8 @@ private:
      */
     bool isValidCPUIndex(int cpuIndex) const;
     bool applyMips64MaltaColdReset(bool preserveVmCycleCount);
+    void configureMips64MaltaBootstrapInternal(
+        const MaltaBootstrapConfig& config, bool allowElfHandoff);
     void synchronizeMips64UartInterrupt() noexcept;
 };
 

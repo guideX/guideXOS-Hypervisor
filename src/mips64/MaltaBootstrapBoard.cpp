@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -341,6 +342,69 @@ std::vector<uint8_t> MaltaBootstrapBoard::BuildDemoRamPayload(
     return encodeWords(makePayloadWords(), endianness, 256);
 }
 
+std::vector<uint8_t> MaltaBootstrapBoard::BuildElfHandoffBootRom(
+    mips64::Mips64Endianness endianness, uint64_t kernelEntryPoint,
+    uint64_t guestRamSize, bool kernelRequiresKx, uint32_t argumentCount,
+    uint32_t argumentTablePointer32, uint32_t environmentTablePointer32) {
+    if ((endianness != mips64::Mips64Endianness::Little &&
+         endianness != mips64::Mips64Endianness::Big) ||
+        kernelEntryPoint == 0 || (kernelEntryPoint & 3) != 0 ||
+        guestRamSize == 0 || guestRamSize >= kMaltaFlashBase ||
+        guestRamSize > std::numeric_limits<uint32_t>::max()) {
+        throw std::invalid_argument("invalid MIPS64 Malta ELF handoff state");
+    }
+
+    constexpr uint8_t t0 = 8;
+    constexpr uint8_t t9 = 25;
+    constexpr uint8_t a0 = 4;
+    constexpr uint8_t a1 = 5;
+    constexpr uint8_t a2 = 6;
+    constexpr uint8_t a3 = 7;
+    GuestWords words;
+    words.push_back(encI(0x09, 0, a0,
+                         static_cast<uint16_t>(argumentCount)));
+    const auto emitSignExtendedPointer = [&words](uint8_t target,
+                                                   uint32_t pointer) {
+        words.push_back(encI(0x0F, 0, target,
+                             static_cast<uint16_t>(pointer >> 16)));
+        words.push_back(encI(0x0D, target, target,
+                             static_cast<uint16_t>(pointer)));
+    };
+    emitSignExtendedPointer(a1, argumentTablePointer32);
+    emitSignExtendedPointer(a2, environmentTablePointer32);
+    words.push_back(encI(0x0D, 0, a3,
+                         static_cast<uint16_t>(guestRamSize >> 16)));
+    words.push_back(encR(0, a3, a3, 16, 0x38)); // dsll $a3,$a3,16
+    words.push_back(encI(0x0D, a3, a3,
+                         static_cast<uint16_t>(guestRamSize)));
+
+    // Build t9 from four unsigned halfwords so XKPHYS addresses are preserved
+    // without LUI's sign extension affecting the upper 32 bits.
+    words.push_back(encI(0x0D, 0, t9,
+                         static_cast<uint16_t>(kernelEntryPoint >> 48)));
+    words.push_back(encR(0, t9, t9, 16, 0x38));
+    words.push_back(encI(0x0D, t9, t9,
+                         static_cast<uint16_t>(kernelEntryPoint >> 32)));
+    words.push_back(encR(0, t9, t9, 16, 0x38));
+    words.push_back(encI(0x0D, t9, t9,
+                         static_cast<uint16_t>(kernelEntryPoint >> 16)));
+    words.push_back(encR(0, t9, t9, 16, 0x38));
+    words.push_back(encI(0x0D, t9, t9,
+                         static_cast<uint16_t>(kernelEntryPoint)));
+
+    if (kernelRequiresKx) {
+        words.push_back((0x10U << 26) | (t0 << 16) | (12U << 11)); // mfc0 $t0,$12
+        words.push_back(encI(0x0D, t0, t0, 0x0080)); // Status.KX
+        words.push_back((0x10U << 26) | (4U << 21) | (t0 << 16) |
+                        (12U << 11)); // mtc0 $t0,$12
+        words.push_back(0x000000C0U); // ehb (sll $zero,$zero,3)
+    }
+    words.push_back(encR(t9, 0, 0, 0, 0x08)); // jr $t9
+    words.push_back(0); // required branch-delay slot
+    return encodeWords(words, endianness,
+                       static_cast<size_t>(kMaltaBootImageWindow));
+}
+
 MaltaBootstrapBoard::MaltaBootstrapBoard(PhysicalAddressMap& bus,
                                          const MaltaBootstrapConfig& config)
     : config_(config), consoleSink_(std::make_shared<GuestConsoleSink>()),
@@ -349,7 +413,39 @@ MaltaBootstrapBoard::MaltaBootstrapBoard(PhysicalAddressMap& bus,
         config_.endianness != mips64::Mips64Endianness::Big) {
         throw std::invalid_argument("unsupported MIPS64 Malta endianness");
     }
-    if (config_.bootRom.empty()) {
+    if (config_.bootMode == MaltaBootMode::ElfKernelHandoff) {
+        const std::vector<PhysicalRegionInfo> regions = bus.Regions();
+        const auto ramRegion = std::find_if(regions.begin(), regions.end(),
+            [&config = config_](const PhysicalRegionInfo& region) {
+                return region.base == 0 && region.type == PhysicalRegionType::Ram &&
+                       region.size == config.guestRamSize;
+            });
+        if (!config_.bootRom.empty() || config_.useBuiltInDemoRom ||
+            config_.guestRamSize == 0 ||
+            config_.guestRamSize >= kMaltaFlashBase ||
+            ramRegion == regions.end() ||
+            config_.kernelEntryPoint == 0 ||
+            (config_.kernelEntryPoint & 3) != 0) {
+            throw std::invalid_argument("MIPS64 Malta ELF handoff configuration is inconsistent");
+        }
+        const auto prom = [&config = config_]() {
+            mips64::MaltaPromImage image;
+            std::string error;
+            if (!mips64::Mips64MaltaProm::BuildImage(
+                    config.prom, config.endianness, config.guestRamSize,
+                    image, &error)) {
+                throw std::invalid_argument(error);
+            }
+            return image;
+        }();
+        bootRom_ = BuildElfHandoffBootRom(
+            config_.endianness, config_.kernelEntryPoint,
+            config_.guestRamSize, config_.kernelRequiresKx,
+            prom.argumentCount, prom.argumentTablePointer32,
+            prom.environmentTablePointer32);
+    } else if (config_.bootMode != MaltaBootMode::SyntheticDemo) {
+        throw std::invalid_argument("unsupported MIPS64 Malta boot mode");
+    } else if (config_.bootRom.empty()) {
         if (!config_.useBuiltInDemoRom) {
             throw std::invalid_argument("MIPS64 Malta profile requires a non-empty boot ROM image");
         }

@@ -3,6 +3,7 @@
 #include "Ns16550Uart.h"
 #include "PhysicalAddressMap.h"
 #include "mips64/Mips64Cpu.h"
+#include "mips64/Mips64MaltaProm.h"
 
 #include <array>
 #include <atomic>
@@ -23,6 +24,11 @@ constexpr uint64_t kMaltaResetVector = 0xFFFFFFFFBFC00000ULL;
 constexpr uint64_t kMaltaRamPayloadVirtualAddress = 0xFFFFFFFF80001000ULL;
 constexpr uint64_t kMaltaRamPayloadPhysicalAddress = 0x00001000ULL;
 
+enum class MaltaBootMode : uint8_t {
+    SyntheticDemo = 0,
+    ElfKernelHandoff = 1
+};
+
 struct MaltaBootstrapConfig {
     mips64::Mips64Endianness endianness = mips64::Mips64Endianness::Little;
     uint8_t switches = 0;
@@ -30,6 +36,12 @@ struct MaltaBootstrapConfig {
     bool mapFlashMirror = true;
     bool useBuiltInDemoRom = true;
     std::vector<uint8_t> bootRom;
+    MaltaBootMode bootMode = MaltaBootMode::SyntheticDemo;
+    uint64_t guestRamSize = 0;
+    uint64_t kernelEntryPoint = 0;
+    bool kernelRequiresKx = false;
+    uint64_t kernelImageIdentity = 0;
+    mips64::MaltaPromConfig prom;
 };
 
 struct MaltaResetMailbox {
@@ -98,6 +110,12 @@ public:
 
     static std::vector<uint8_t> BuildDemoBootRom(mips64::Mips64Endianness endianness);
     static std::vector<uint8_t> BuildDemoRamPayload(mips64::Mips64Endianness endianness);
+    static std::vector<uint8_t> BuildElfHandoffBootRom(
+        mips64::Mips64Endianness endianness, uint64_t kernelEntryPoint,
+        uint64_t guestRamSize, bool kernelRequiresKx,
+        uint32_t argumentCount = 2,
+        uint32_t argumentTablePointer32 = 0x80002000,
+        uint32_t environmentTablePointer32 = 0x80002008);
 
     const MaltaBootstrapConfig& Config() const noexcept { return config_; }
     const std::vector<uint8_t>& BootRomImage() const noexcept { return bootRom_; }

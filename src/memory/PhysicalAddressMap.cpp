@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <limits>
 #include <sstream>
@@ -415,6 +416,127 @@ void PhysicalAddressMap::Write(uint64_t address, const uint8_t* source, size_t s
         throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
                                "physical target write failed");
     }
+}
+
+bool PhysicalAddressMap::PrepareRamWriteBatch(
+    const std::vector<PhysicalRamWrite>& writes,
+    PreparedPhysicalRamWriteBatch& prepared, std::string* error) const {
+    struct StagedRamBacking {
+        std::shared_ptr<IPhysicalRegionBackend> backend;
+        PhysicalRegionSnapshot image;
+        std::unique_ptr<IPhysicalRegionPreparedState> prepared;
+    };
+
+    try {
+        std::vector<std::pair<uint64_t, uint64_t>> ranges;
+        ranges.reserve(writes.size());
+        for (const PhysicalRamWrite& write : writes) {
+            if (write.data == nullptr || write.size == 0 ||
+                static_cast<uint64_t>(write.size) >
+                    std::numeric_limits<uint64_t>::max() - write.address) {
+                setSnapshotError(error, "invalid or overflowing RAM image write");
+                return false;
+            }
+            ranges.emplace_back(write.address,
+                                write.address + static_cast<uint64_t>(write.size));
+        }
+        std::sort(ranges.begin(), ranges.end());
+        for (size_t i = 1; i < ranges.size(); ++i) {
+            if (ranges[i].first < ranges[i - 1].second) {
+                setSnapshotError(error, "transactional RAM image writes overlap");
+                return false;
+            }
+        }
+
+        std::vector<StagedRamBacking> staged;
+        staged.reserve(writes.size());
+        for (const PhysicalRamWrite& write : writes) {
+            const Region& region = Resolve(write.address, write.size);
+            if (region.info.type != PhysicalRegionType::Ram || region.device ||
+                !region.info.writable ||
+                region.backend->BackendKind() !=
+                    static_cast<uint8_t>(PhysicalBackendKind::DenseRam)) {
+                setSnapshotError(error,
+                                 "image target is not writable dense guest RAM");
+                return false;
+            }
+
+            auto found = std::find_if(staged.begin(), staged.end(),
+                [&region](const StagedRamBacking& item) {
+                    return item.backend.get() == region.backend.get();
+                });
+            if (found == staged.end()) {
+                StagedRamBacking item;
+                item.backend = region.backend;
+                item.image.info = region.info;
+                item.image.backendKind = PhysicalBackendKind::DenseRam;
+                item.backend->CaptureState(item.image);
+                if (item.image.denseBytes.size() != region.info.size) {
+                    setSnapshotError(error,
+                                     "dense RAM staging image has an invalid size");
+                    return false;
+                }
+                staged.push_back(std::move(item));
+                found = std::prev(staged.end());
+            }
+
+            const uint64_t offset = write.address - region.info.base;
+            if (offset > found->image.denseBytes.size() ||
+                write.size > found->image.denseBytes.size() -
+                                 static_cast<size_t>(offset)) {
+                setSnapshotError(error,
+                                 "image target does not fit the staged RAM backing");
+                return false;
+            }
+            std::memcpy(found->image.denseBytes.data() +
+                            static_cast<size_t>(offset),
+                        write.data, write.size);
+        }
+
+        for (StagedRamBacking& item : staged) {
+            std::string prepareError;
+            if (!item.backend->PrepareRestore(item.image, item.prepared,
+                                              &prepareError) || !item.prepared) {
+                if (error) {
+                    *error = prepareError.empty()
+                        ? "dense RAM replacement state could not be prepared"
+                        : std::move(prepareError);
+                }
+                return false;
+            }
+        }
+
+        PreparedPhysicalRamWriteBatch stagedBatch;
+        for (StagedRamBacking& item : staged) {
+            stagedBatch.states_.push_back(
+                {std::move(item.backend), std::move(item.prepared)});
+        }
+        prepared = std::move(stagedBatch);
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+    } catch (...) {
+        setSnapshotError(error, "unknown failure while staging guest RAM writes");
+        return false;
+    }
+}
+
+void PhysicalAddressMap::CommitRamWriteBatch(
+    PreparedPhysicalRamWriteBatch&& prepared) noexcept {
+    for (PreparedPhysicalRamWriteBatch::State& state : prepared.states_) {
+        state.backend->CommitRestore(std::move(state.prepared));
+    }
+    prepared.states_.clear();
+}
+
+bool PhysicalAddressMap::WriteRamBatchTransactional(
+    const std::vector<PhysicalRamWrite>& writes, std::string* error) {
+    PreparedPhysicalRamWriteBatch prepared;
+    if (!PrepareRamWriteBatch(writes, prepared, error)) return false;
+    CommitRamWriteBatch(std::move(prepared));
+    return true;
 }
 
 void PhysicalAddressMap::ResetDevices() {

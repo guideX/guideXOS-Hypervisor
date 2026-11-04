@@ -13,10 +13,13 @@
 #include "ISAPluginRegistry.h"
 #include "IA64ISAPlugin.h"
 #include "Mips64ISAPlugin.h"
+#include "mips64/Mips64ElfLoader.h"
+#include "mips64/Mips64MaltaProm.h"
 #include "VMSnapshot.h"
 #include "VMSnapshotManager.h"
 #include "VMCheckpoint.h"
 #include <iostream>
+#include <iomanip>
 #include <stdexcept>
 #include <sstream>
 #include <algorithm>
@@ -47,6 +50,58 @@ bool allContextsIA64(const std::vector<CPUContext>& contexts) {
         }
     }
     return true;
+}
+
+uint64_t hashMips64ElfImage(const uint8_t* bytes, size_t size) noexcept {
+    constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
+    constexpr uint64_t kFnvPrime = 1099511628211ULL;
+    uint64_t hash = kFnvOffset;
+    for (unsigned index = 0; index < 8; ++index) {
+        hash ^= static_cast<uint8_t>(static_cast<uint64_t>(size) >> (index * 8));
+        hash *= kFnvPrime;
+    }
+    for (size_t index = 0; index < size; ++index) {
+        hash ^= bytes[index];
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+std::string maltaBoardProfileIdentity(const MaltaBootstrapConfig& config) {
+    if (config.bootMode == MaltaBootMode::SyntheticDemo) {
+        return "MaltaBootstrapSubset";
+    }
+    std::vector<uint8_t> identity;
+    const auto append64 = [&identity](uint64_t value) {
+        for (unsigned i = 0; i < 8; ++i) {
+            identity.push_back(static_cast<uint8_t>(value >> (8 * i)));
+        }
+    };
+    const auto appendString = [&identity, &append64](const std::string& value) {
+        append64(value.size());
+        identity.insert(identity.end(), value.begin(), value.end());
+    };
+    append64(static_cast<uint8_t>(config.bootMode));
+    append64(static_cast<uint8_t>(config.endianness));
+    append64(config.switches);
+    append64(config.jumpers);
+    append64(config.mapFlashMirror);
+    append64(config.guestRamSize);
+    append64(config.kernelEntryPoint);
+    append64(config.kernelRequiresKx);
+    append64(config.kernelImageIdentity);
+    append64(config.prom.physicalAddress);
+    appendString(config.prom.kernelImageName);
+    appendString(config.prom.kernelCommandLine);
+    append64(config.prom.includeMemsize);
+    append64(config.prom.includeEmemsize);
+    append64(config.prom.includeModetty0);
+    appendString(config.prom.serialConfiguration);
+
+    std::ostringstream result;
+    result << "MaltaBootstrapSubset:ElfHandoff:" << std::hex << std::setfill('0')
+           << std::setw(16) << Mips64FullSnapshotHashBytes(identity);
+    return result.str();
 }
 
 // Builds the panic record for a failed CPU step. IA-64 CPUs keep the IA-64
@@ -895,7 +950,16 @@ void VirtualMachine::configureMips64MaltaBootstrap() {
 
 void VirtualMachine::configureMips64MaltaBootstrap(
     const MaltaBootstrapConfig& config) {
+    configureMips64MaltaBootstrapInternal(config, false);
+}
+
+void VirtualMachine::configureMips64MaltaBootstrapInternal(
+    const MaltaBootstrapConfig& config, bool allowElfHandoff) {
     std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
+    if (config.bootMode == MaltaBootMode::ElfKernelHandoff && !allowElfHandoff) {
+        throw std::logic_error(
+            "ELF Malta mode requires configureMips64MaltaElfHandoff with a staged executable");
+    }
     if (state_ == VMState::RUNNING || state_ == VMState::PAUSED) {
         throw std::logic_error("Malta bootstrap profile must be configured while the VM is stopped");
     }
@@ -920,16 +984,20 @@ void VirtualMachine::configureMips64MaltaBootstrap(
 
     const bool mapAlreadyEnabled = memory_->GetPhysicalAddressMap() != nullptr;
     PhysicalAddressMap& bus = enableMips64PhysicalAddressMap();
+    MaltaBootstrapConfig boardConfig = config;
+    if (boardConfig.guestRamSize == 0) {
+        boardConfig.guestRamSize = memory_->GetTotalSize();
+    }
     std::unique_ptr<MaltaBootstrapBoard> board;
     try {
-        board = std::make_unique<MaltaBootstrapBoard>(bus, config);
+        board = std::make_unique<MaltaBootstrapBoard>(bus, boardConfig);
     } catch (...) {
         if (!mapAlreadyEnabled) memory_->DisableEmptyPhysicalAddressMap();
         throw;
     }
     for (CPUContext& context : cpus_) {
         auto* plugin = dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get());
-        plugin->configureEndianness(config.endianness == mips64::Mips64Endianness::Little);
+        plugin->configureEndianness(boardConfig.endianness == mips64::Mips64Endianness::Little);
     }
     maltaBootstrapBoard_ = std::move(board);
 
@@ -939,6 +1007,89 @@ void VirtualMachine::configureMips64MaltaBootstrap(
         maltaBootstrapBoard_.reset();
         throw std::runtime_error("failed to cold-reset configured Malta profile");
     }
+}
+
+bool VirtualMachine::configureMips64MaltaElfHandoff(
+    const uint8_t* file, size_t fileSize, MaltaBootstrapConfig config,
+    std::string* error) {
+    std::lock_guard<std::recursive_mutex> boundaryLock(mips64SnapshotBoundaryMutex_);
+    if (error) error->clear();
+    auto fail = [error](const std::string& message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (state_ == VMState::RUNNING || state_ == VMState::PAUSED ||
+        state_ == VMState::ERROR || maltaBootstrapBoard_ || cpus_.empty()) {
+        return fail("MIPS64 Malta ELF handoff requires a stopped MIPS64 VM without an existing board");
+    }
+    for (const CPUContext& context : cpus_) {
+        if (!dynamic_cast<mips64::Mips64ISAPlugin*>(context.isaPlugin.get())) {
+            return fail("MIPS64 Malta ELF handoff is only available to MIPS64 VMs");
+        }
+    }
+    const uint64_t ramSize = memory_->GetTotalSize();
+    if (ramSize == 0 || ramSize >= kMaltaFlashBase) {
+        return fail("Malta bootstrap RAM must fit below the 0x1E000000 flash window");
+    }
+
+    config.bootMode = MaltaBootMode::ElfKernelHandoff;
+    config.useBuiltInDemoRom = false;
+    config.bootRom.clear();
+    config.guestRamSize = ramSize;
+    mips64::Mips64ElfLoadOptions options;
+    options.guestEndianness = config.endianness;
+    options.guestRamSize = ramSize;
+    options.reservedPhysicalRanges = {
+        {config.prom.physicalAddress, mips64::kMaltaPromImageBytes},
+        {mips64::kMaltaElfCompletionPhysicalAddress, sizeof(uint32_t)}
+    };
+
+    mips64::Mips64ElfLoadPlan plan;
+    if (!mips64::Mips64ElfLoader::BuildPlan(file, fileSize, options, plan, error)) {
+        return false;
+    }
+    mips64::MaltaPromImage prom;
+    if (!mips64::Mips64MaltaProm::BuildImage(
+            config.prom, config.endianness, ramSize, prom, error)) {
+        return false;
+    }
+    const uint64_t promEnd = uint64_t(prom.physicalAddress) + prom.bytes.size();
+    const uint64_t completionEnd =
+        mips64::kMaltaElfCompletionPhysicalAddress + sizeof(uint32_t);
+    if (prom.physicalAddress < completionEnd &&
+        mips64::kMaltaElfCompletionPhysicalAddress < promEnd) {
+        return fail("Malta PROM table overlaps the reserved ELF guest completion word");
+    }
+    config.kernelEntryPoint = plan.entryPoint;
+    config.kernelRequiresKx = plan.requiresKernelKx;
+    config.kernelImageIdentity = hashMips64ElfImage(file, fileSize);
+
+    const bool mapAlreadyEnabled = memory_->GetPhysicalAddressMap() != nullptr;
+    PhysicalAddressMap& bus = enableMips64PhysicalAddressMap();
+    const std::vector<ia64::PhysicalRamWrite> extraWrites{{
+        prom.physicalAddress, prom.bytes.data(), prom.bytes.size()
+    }};
+    ia64::PreparedPhysicalRamWriteBatch prepared;
+    if (!mips64::Mips64ElfLoader::PreparePlan(
+            plan, bus, extraWrites, prepared, error)) {
+        if (!mapAlreadyEnabled) memory_->DisableEmptyPhysicalAddressMap();
+        return false;
+    }
+
+    try {
+        configureMips64MaltaBootstrapInternal(config, true);
+    } catch (const std::exception& ex) {
+        if (!mapAlreadyEnabled) memory_->DisableEmptyPhysicalAddressMap();
+        return fail(ex.what());
+    } catch (...) {
+        if (!mapAlreadyEnabled) memory_->DisableEmptyPhysicalAddressMap();
+        return fail("unknown failure while configuring the Malta ELF handoff");
+    }
+
+    // This commit is allocation-free and noexcept. All parsing, board checks,
+    // PROM image construction, and RAM replacement allocation happened above.
+    bus.CommitRamWriteBatch(std::move(prepared));
+    return true;
 }
 
 bool VirtualMachine::coldResetMips64Malta() {
@@ -1039,6 +1190,7 @@ Mips64FullVmSnapshot VirtualMachine::captureMips64FullSnapshot() const {
     Mips64FullVmSnapshot snapshot;
     const MaltaBootstrapConfig& config = maltaBootstrapBoard_->Config();
     snapshot.cpuCount = static_cast<uint32_t>(cpus_.size());
+    snapshot.boardProfileIdentity = maltaBoardProfileIdentity(config);
     snapshot.endianness = config.endianness;
     snapshot.ramSize = static_cast<uint64_t>(memory_->GetTotalSize());
     snapshot.romSize = static_cast<uint64_t>(maltaBootstrapBoard_->BootRomImage().size());
@@ -1116,8 +1268,7 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         if (!snapshot.ValidateIntegrity()) return fail("snapshot component lengths or integrity checksum are invalid");
         constexpr std::array<uint8_t, 8> expectedMagic{{'G', 'X', 'M', '6', '4', 'S', 'N', 'P'}};
         if (snapshot.magic != expectedMagic || snapshot.formatVersion != Mips64FullVmSnapshot::kFormatVersion ||
-            snapshot.isaIdentity != "MIPS64" ||
-            snapshot.boardProfileIdentity != "MaltaBootstrapSubset") {
+            snapshot.isaIdentity != "MIPS64") {
             return fail("unsupported MIPS64 full snapshot format or identity");
         }
         if (snapshot.cpuComponentVersion != Mips64FullVmSnapshot::kCpuSerializationVersion ||
@@ -1131,6 +1282,9 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
             return fail("unsupported MIPS64 UART snapshot component version; expected v4");
         }
         const MaltaBootstrapConfig& config = maltaBootstrapBoard_->Config();
+        if (snapshot.boardProfileIdentity != maltaBoardProfileIdentity(config)) {
+            return fail("snapshot Malta boot profile or PROM identity does not match");
+        }
         if (snapshot.byteOrderTag != 0x01020304 || snapshot.endianness != config.endianness ||
             snapshot.cpuCount != cpus_.size() || snapshot.cpus.size() != cpus_.size() ||
             snapshot.ramSize != memory_->GetTotalSize() ||

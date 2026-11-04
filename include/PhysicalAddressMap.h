@@ -82,6 +82,14 @@ struct PhysicalRegionInfo {
     std::vector<size_t> accessWidths;
 };
 
+// Host-side image-loading write. The source remains owned by the caller until
+// WriteRamBatchTransactional returns.
+struct PhysicalRamWrite {
+    uint64_t address = 0;
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+};
+
 enum class PhysicalBackendKind : uint8_t { DenseRam = 1, SparseRam = 2, Rom = 3, Mmio = 4 };
 
 // Backend-owned physical-map image. Non-RAM records carry only their
@@ -103,6 +111,23 @@ struct PhysicalAddressMapSnapshot {
 class IPhysicalRegionPreparedState {
 public:
     virtual ~IPhysicalRegionPreparedState() = default;
+};
+
+class PreparedPhysicalRamWriteBatch {
+    friend class PhysicalAddressMap;
+public:
+    PreparedPhysicalRamWriteBatch() = default;
+    PreparedPhysicalRamWriteBatch(const PreparedPhysicalRamWriteBatch&) = delete;
+    PreparedPhysicalRamWriteBatch& operator=(const PreparedPhysicalRamWriteBatch&) = delete;
+    PreparedPhysicalRamWriteBatch(PreparedPhysicalRamWriteBatch&&) noexcept = default;
+    PreparedPhysicalRamWriteBatch& operator=(PreparedPhysicalRamWriteBatch&&) noexcept = default;
+
+private:
+    struct State {
+        std::shared_ptr<IPhysicalRegionBackend> backend;
+        std::unique_ptr<IPhysicalRegionPreparedState> prepared;
+    };
+    std::vector<State> states_;
 };
 
 class PreparedPhysicalAddressMapRestore {
@@ -136,6 +161,15 @@ public:
 
     void Read(uint64_t address, uint8_t* destination, size_t size) const;
     void Write(uint64_t address, const uint8_t* source, size_t size);
+    // Stage writes to dense RAM backings and commit them together only after
+    // every target and replacement state has validated. ROM and MMIO targets
+    // are rejected without invoking any device.
+    bool WriteRamBatchTransactional(const std::vector<PhysicalRamWrite>& writes,
+                                   std::string* error = nullptr);
+    bool PrepareRamWriteBatch(const std::vector<PhysicalRamWrite>& writes,
+                              PreparedPhysicalRamWriteBatch& prepared,
+                              std::string* error = nullptr) const;
+    void CommitRamWriteBatch(PreparedPhysicalRamWriteBatch&& prepared) noexcept;
 
     void ResetDevices();
     std::vector<PhysicalRegionInfo> Regions() const;
