@@ -46,9 +46,12 @@ struct Options {
         "artifact-c:size=13035024;sha256=81B843ACDD1F69456D5D1BF2C6FE7059ECB8730BAAD1405BFFA109872EF23B45;iso-size=4695296000;gzip-sha256=4C62D04431645C8F5F4CC30861DE30A153C47D5B487549B5CFCCF2DE03B8B94";
     std::string equivalenceLogPath;
     std::string dumpRamPath;
-    uint64_t dumpMemoryRangeAddress = 0;
-    uint64_t dumpMemoryRangeSize = 0;
-    std::string dumpMemoryRangePath;
+    struct MemoryRangeDump {
+        uint64_t address = 0;
+        uint64_t size = 0;
+        std::string path;
+    };
+    std::vector<MemoryRangeDump> dumpMemoryRanges;
     std::string efiFileReadCapturePath;
     std::string hotIpsPath;
     std::string lockTracePath;
@@ -57,6 +60,7 @@ struct Options {
     std::string r14TracePath;
     std::vector<uint64_t> r14WatchMemoryPas;
     std::vector<uint64_t> probeIps;
+    std::vector<uint64_t> probeAllIps;
     struct InputKey {
         uint16_t scanCode = 0;
         uint16_t unicodeChar = 0;
@@ -182,11 +186,13 @@ bool parseOptions(int argc, char** argv, Options& options) {
         } else if (argument == "--dump-ram" && i + 1 < argc) {
             options.dumpRamPath = argv[++i];
         } else if (argument == "--dump-memory-range" && i + 3 < argc) {
-            if (!parseUnsigned(argv[++i], options.dumpMemoryRangeAddress) ||
-                !parseUnsigned(argv[++i], options.dumpMemoryRangeSize)) {
+            Options::MemoryRangeDump dump;
+            if (!parseUnsigned(argv[++i], dump.address) ||
+                !parseUnsigned(argv[++i], dump.size)) {
                 return false;
             }
-            options.dumpMemoryRangePath = argv[++i];
+            dump.path = argv[++i];
+            options.dumpMemoryRanges.push_back(std::move(dump));
         } else if (argument == "--capture-efi-file-reads" && i + 1 < argc) {
             options.efiFileReadCapturePath = argv[++i];
         } else if (argument == "--hot-ips" && i + 1 < argc) {
@@ -207,6 +213,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             uint64_t probe = 0;
             if (!parseUnsigned(argv[++i], probe)) return false;
             options.probeIps.push_back(probe);
+        } else if (argument == "--probe-ip-all" && i + 1 < argc) {
+            uint64_t probe = 0;
+            if (!parseUnsigned(argv[++i], probe)) return false;
+            options.probeAllIps.push_back(probe);
         } else if (argument == "--help" || argument == "-h") {
             return false;
         } else {
@@ -215,7 +225,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
     }
     return !options.isoPath.empty() && options.cycles > 0 && options.memoryMiB >= 1 &&
            options.handoffCycles > 0 && options.postCheckpointCycles > 0 &&
-           (options.dumpMemoryRangePath.empty() == (options.dumpMemoryRangeSize == 0)) &&
+           std::all_of(options.dumpMemoryRanges.begin(), options.dumpMemoryRanges.end(),
+                       [](const Options::MemoryRangeDump& dump) {
+                           return dump.size != 0 && !dump.path.empty();
+                       }) &&
            options.traceInstructionCount <= 1'000'000 &&
            (options.traceInstructionCount == 0 ||
             options.traceAfterCycles != std::numeric_limits<uint64_t>::max()) &&
@@ -237,6 +250,7 @@ void printUsage() {
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
                  "[--dump-memory-range BASE SIZE PATH] [--hot-ips PATH] [--lock-trace PATH] "
+                 "[--probe-ip-all IP]... "
                  "[--r14-provenance START END PATH] [--r14-watch-memory-pa PA] "
                  "[--capture-efi-file-reads BASE]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
@@ -740,7 +754,8 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    uint64_t r14TraceEndCycle = 0,
                                    std::string r14TracePath = {},
                                    std::vector<uint64_t> r14WatchMemoryPas = {},
-                                   bool traceControlFlowOnly = false) {
+                                   bool traceControlFlowOnly = false,
+                                   const std::vector<uint64_t>& probeAllIps = {}) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     ContinuationRecord record;
@@ -1211,6 +1226,20 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 } else {
                     record.probeLines[it->second] = probeLine.str();
                 }
+            }
+        }
+        for (const uint64_t probe : probeAllIps) {
+            if (canonicalIp == probe) {
+                const ia64::CPUState& cpu = vm.getCPUState(0);
+                std::ostringstream probeLine;
+                probeLine << "[IA64-PROBE-ALL] ip=0x" << std::hex << probe
+                          << " slot=" << std::dec << slot
+                          << " itc=0x" << std::hex << cpu.GetAR(44);
+                for (size_t reg = 1; reg < 64; ++reg) {
+                    probeLine << " r" << std::dec << reg << "=0x" << std::hex
+                              << cpu.GetGR(reg);
+                }
+                record.probeLines.push_back(probeLine.str());
             }
         }
         if (collectHotIps) {
@@ -2072,7 +2101,8 @@ int main(int argc, char** argv) {
                                                                 options.r14TraceEndCycle,
                                                                 options.r14TracePath,
                                                                 options.r14WatchMemoryPas,
-                                                                options.traceControlFlowOnly);
+                                                                options.traceControlFlowOnly,
+                                                                options.probeAllIps);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
@@ -2185,11 +2215,10 @@ int main(int argc, char** argv) {
             printProcessorInterruptTelemetry(*vm, "restore");
             printConsoleTelemetry(*vm, "restore", consoleBytesBefore);
             dumpGuestRam(*vm, options.dumpRamPath);
-            if (!dumpGuestMemoryRange(*vm,
-                                      options.dumpMemoryRangeAddress,
-                                      options.dumpMemoryRangeSize,
-                                      options.dumpMemoryRangePath)) {
-                return 1;
+            for (const Options::MemoryRangeDump& dump : options.dumpMemoryRanges) {
+                if (!dumpGuestMemoryRange(*vm, dump.address, dump.size, dump.path)) {
+                    return 1;
+                }
             }
             return 0;
         }
@@ -2343,6 +2372,7 @@ int main(int argc, char** argv) {
         uint64_t executed = 0;
         const bool monitorColdRun = !options.progressLogPath.empty() ||
             !options.hotIpsPath.empty() || !options.probeIps.empty() ||
+            !options.probeAllIps.empty() ||
             !options.lockTracePath.empty() || options.traceInstructionCount != 0 ||
             !options.r14TracePath.empty();
         const bool collectColdHotIps = !options.hotIpsPath.empty();
@@ -2378,7 +2408,8 @@ int main(int argc, char** argv) {
                     options.lockTracePath, options.traceAfterCycles,
                     options.traceInstructionCount, options.r14TraceStartCycle,
                     options.r14TraceEndCycle, options.r14TracePath,
-                    options.r14WatchMemoryPas, options.traceControlFlowOnly);
+                    options.r14WatchMemoryPas, options.traceControlFlowOnly,
+                    options.probeAllIps);
                 executed = progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {
@@ -2427,7 +2458,7 @@ int main(int argc, char** argv) {
                     options.traceAfterCycles, options.traceInstructionCount,
                     options.r14TraceStartCycle, options.r14TraceEndCycle,
                     options.r14TracePath, options.r14WatchMemoryPas,
-                    options.traceControlFlowOnly);
+                    options.traceControlFlowOnly, options.probeAllIps);
                 executed += progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {
@@ -2548,11 +2579,10 @@ int main(int argc, char** argv) {
         }
         if (ia64::VirtualMachine* dumpVm = manager.getVMDirect(vmId)) {
             dumpGuestRam(*dumpVm, options.dumpRamPath);
-            if (!dumpGuestMemoryRange(*dumpVm,
-                                      options.dumpMemoryRangeAddress,
-                                      options.dumpMemoryRangeSize,
-                                      options.dumpMemoryRangePath)) {
-                return 1;
+            for (const Options::MemoryRangeDump& dump : options.dumpMemoryRanges) {
+                if (!dumpGuestMemoryRange(*dumpVm, dump.address, dump.size, dump.path)) {
+                    return 1;
+                }
             }
         }
         return 0;
