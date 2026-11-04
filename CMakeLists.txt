@@ -1179,6 +1179,26 @@ endif()
 add_test(NAME PPC64Phase26Tests COMMAND test_ppc64_phase26)
 set_tests_properties(PPC64Phase26Tests PROPERTIES TIMEOUT 600)
 
+# Authenticated Linux continuation beyond the Phase 26 128-instruction budget.
+add_executable(test_ppc64_phase27
+    tests/test_ppc64_phase27.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase27 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase27 PRIVATE
+    PPC64_PHASE27_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase27 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase27 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase27Tests COMMAND test_ppc64_phase27)
+set_tests_properties(PPC64Phase27Tests PROPERTIES TIMEOUT 600)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp
