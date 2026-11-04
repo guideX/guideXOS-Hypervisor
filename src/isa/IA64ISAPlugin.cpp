@@ -37,6 +37,15 @@ struct CountedLoopTraceState {
 
 CountedLoopTraceState g_countedLoopTrace;
 
+bool isStaticRegisterPalProcedure(uint64_t index) {
+    return index <= 255 || (index >= 512 && index <= 767) || index >= 1024;
+}
+
+bool isStackedRegisterPalProcedure(uint64_t index) {
+    return (index >= 256 && index <= 511) ||
+           (index >= 768 && index <= 1023);
+}
+
 bool environmentFlagEnabled(const char* name) {
     const char* raw = nullptr;
 #ifdef _MSC_VER
@@ -4086,7 +4095,9 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                     branchTarget = cachedInstruction_.HasBranchTarget()
                         ? cachedInstruction_.GetBranchTarget()
                         : branchRegisterValue;
-                    if (normalizeBranchEntryIP(branchTarget) == EFI_PAL_PROCEDURE_CODE_ADDR) {
+                    if (normalizeBranchEntryIP(branchTarget) == EFI_PAL_PROCEDURE_CODE_ADDR &&
+                        isStaticRegisterPalProcedure(
+                            state_.getCPUState().GetGR(28))) {
                         CPUState& cpu = state_.getCPUState();
                         const uint64_t b0AtEntry = cpu.GetBR(0);
                         const uint64_t function = cpu.GetGR(28);
@@ -4172,7 +4183,10 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         ? cachedInstruction_.GetBranchTarget()
                         : branchRegisterValue;
                     const uint64_t originalBranchTarget = branchTarget;
-                    if (!cachedInstruction_.HasBranchTarget()) {
+                    const bool targetIsPalEntry =
+                        normalizeBranchEntryIP(branchTarget) ==
+                        EFI_PAL_PROCEDURE_CODE_ADDR;
+                    if (!cachedInstruction_.HasBranchTarget() && !targetIsPalEntry) {
                         ++descriptorCallCount_;
                         const CPUState& cpu = state_.getCPUState();
                         const uint64_t oldGp = cpu.GetGR(1);
@@ -4338,7 +4352,78 @@ ISAExecutionResult IA64ISAPlugin::execute(IMemory& memory, const ISADecodeResult
                         !areEfiBootServicesAvailable(efiExitBootServicesCalls_ != 0) &&
                         (isBootServiceOrBootProtocolStubCode(branchTarget) ||
                          genericBootServiceStub);
-                    if (!cachedInstruction_.HasBranchTarget() &&
+                    if (targetIsPalEntry) {
+                        CPUState& cpu = state_.getCPUState();
+                        const uint64_t function = cpu.GetGR(28);
+                        const uint64_t stackedIndex =
+                            readCallerOutputRegister(cpu, 0);
+                        const bool stackedProcedure =
+                            isStackedRegisterPalProcedure(function);
+                        if (stackedProcedure) {
+                            ++gPalDispatchCount;
+                            const uint64_t arg1 =
+                                readCallerOutputRegister(cpu, 1);
+                            const uint64_t arg2 =
+                                readCallerOutputRegister(cpu, 2);
+                            const uint64_t arg3 =
+                                readCallerOutputRegister(cpu, 3);
+                            const sal::SalCallResult result =
+                                function == stackedIndex
+                                    ? sal::dispatchPalCall(function, arg1, arg2, arg3)
+                                    : sal::SalCallResult{
+                                          sal::kPalStatusInvalidArgument, 0, 0, 0};
+                            const uint64_t returnAddress = currentIP + 16;
+                            cpu.SetGR(8, static_cast<uint64_t>(result.status));
+                            cpu.SetGR(9, result.v0);
+                            cpu.SetGR(10, result.v1);
+                            cpu.SetGR(11, result.v2);
+                            cpu.SetBR(cachedInstruction_.GetDst(), returnAddress);
+                            branchTarget = returnAddress;
+                            handledFirmwareCallStub = true;
+                            isBranch = true;
+
+                            std::cout << "[IA64-PAL] convention=stacked function=0x"
+                                      << std::hex << function
+                                      << " stackedIndex=0x" << stackedIndex
+                                      << " args=[0x" << arg1 << ",0x" << arg2
+                                      << ",0x" << arg3 << "] status=" << std::dec
+                                      << result.status << " v0=0x" << std::hex
+                                      << result.v0 << " v1=0x" << result.v1
+                                      << " v2=0x" << result.v2
+                                      << " target=0x" << originalBranchTarget
+                                      << " return=0x" << returnAddress << std::dec
+                                      << std::endl;
+
+                            std::ostringstream palTrace;
+                            palTrace << "convention=stacked"
+                                     << " callsiteIP=" << BootStageTrace::Hex(currentIP)
+                                     << " slot=" << state_.currentSlot_
+                                     << " raw41=" << BootStageTrace::Hex(cachedInstruction_.GetRawBits())
+                                     << " disasm=\"" << decodeResult.disassembly << "\""
+                                     << " target=" << BootStageTrace::Hex(originalBranchTarget)
+                                     << " normalizedTarget="
+                                     << BootStageTrace::Hex(normalizeBranchEntryIP(originalBranchTarget))
+                                     << " return=" << BootStageTrace::Hex(returnAddress)
+                                     << " gp=" << BootStageTrace::Hex(cpu.GetGR(1))
+                                     << " psr=" << BootStageTrace::Hex(cpu.GetPSR())
+                                     << " cfm=" << BootStageTrace::Hex(cpu.GetCFM())
+                                     << " pfs=" << BootStageTrace::Hex(cpu.GetPFS())
+                                     << " bsp=" << BootStageTrace::Hex(cpu.GetBSP())
+                                     << " bspstore=" << BootStageTrace::Hex(cpu.GetBSPSTORE())
+                                     << " rnat=" << BootStageTrace::Hex(cpu.GetRNAT())
+                                     << " function=" << BootStageTrace::Hex(function)
+                                     << " stackedIndex=" << BootStageTrace::Hex(stackedIndex)
+                                     << " args=[" << BootStageTrace::Hex(arg1) << ","
+                                     << BootStageTrace::Hex(arg2) << ","
+                                     << BootStageTrace::Hex(arg3) << "] status="
+                                     << result.status
+                                     << " v0=" << BootStageTrace::Hex(result.v0)
+                                     << " v1=" << BootStageTrace::Hex(result.v1)
+                                     << " v2=" << BootStageTrace::Hex(result.v2);
+                            BootStageTrace::Event("IA64_PAL_CALL", palTrace.str());
+                        }
+                    }
+                    if (!handledFirmwareCallStub && !cachedInstruction_.HasBranchTarget() &&
                         normalizeBranchEntryIP(branchTarget) == EFI_SAL_PROCEDURE_CODE_ADDR) {
                         handledFirmwareCallStub = true;
                         const uint64_t function = readCallerOutputRegister(state_.getCPUState(), 0);
@@ -9116,6 +9201,24 @@ bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
     // remaining conventional-memory descriptors below this region.
     markRange(EFI_HANDOFF_REGION_BASE, EFI_HANDOFF_REGION_END,
               EFI_MEMORY_BOOT_SERVICES_DATA);
+
+    ia64::EfiMemoryDescriptor palCodeDescriptor{};
+    if (!ia64::makeEfiPalCodeDescriptor(
+            EFI_PAL_PROCEDURE_CODE_ADDR,
+            EFI_HANDOFF_REGION_BASE,
+            EFI_HANDOFF_REGION_END,
+            ia64::kEfiMemoryWriteBack,
+            palCodeDescriptor) ||
+        palCodeDescriptor.physicalStart >
+            UINT64_MAX - ia64::kEfiPalMemoryPageSize ||
+        !ia64::overlayEfiMemoryMapRange(
+            efiMemoryMap_, physicalEnd,
+            palCodeDescriptor.physicalStart,
+            palCodeDescriptor.physicalStart + ia64::kEfiPalMemoryPageSize,
+            palCodeDescriptor.type,
+            palCodeDescriptor.attributes)) {
+        return false;
+    }
 
     const uint64_t stackTop = efiAlignDown(
         memorySize > kEfiStackGuard ? memorySize - kEfiStackGuard : 0,

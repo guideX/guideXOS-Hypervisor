@@ -1391,7 +1391,8 @@ bool VMManager::startVM(const std::string& vmId) {
             constexpr uint64_t runtimeServicesSignature = 0x56524553544E5552ULL;
             constexpr uint64_t addR8MinusOne = 0x13fffcfe200ULL;
             constexpr uint64_t addR8Zero = 0x12000000200ULL;
-            constexpr uint64_t nopI = 0x0ULL;
+            constexpr uint64_t nopM = 1ULL << 27;
+            constexpr uint64_t nopI = 0x4000000000ULL;
             constexpr uint64_t brRetB0 = 0x108000100ULL;
             const uint64_t descriptorGp = globalPointer != 0 ? globalPointer : layout.base;
 
@@ -1449,9 +1450,9 @@ bool VMManager::startVM(const std::string& vmId) {
             memory.Write(layout.configurationTableAddr + 24,
                          acpiEntry.data(), acpiEntry.size());
             WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
-                            nopI, nopI, brRetB0);
+                            nopM, nopI, brRetB0);
             WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
-                            nopI, nopI, brRetB0);
+                            nopM, nopI, brRetB0);
 
             write64(layout.runtimeServicesAddr + 0x00, runtimeServicesSignature);
             write32(layout.runtimeServicesAddr + 0x08, 0x00010010U);
@@ -2311,10 +2312,13 @@ bool VMManager::startVM(const std::string& vmId) {
             instance->vm->getMemory().Write(layout.configurationTableAddr + 24,
                                             acpiEntry.data(), acpiEntry.size());
 
+            constexpr uint64_t NOP_M = 1ULL << 27;
+            constexpr uint64_t NOP_I = 0x4000000000ULL;
+            constexpr uint64_t BR_RET_B0 = 0x108000100ULL;
             WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
-                                                                                    0x0ULL, 0x0ULL, 0x108000100ULL);
-                                                                    WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
-                                                                                    0x0ULL, 0x0ULL, 0x108000100ULL);
+                            NOP_M, NOP_I, BR_RET_B0);
+            WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
+                            NOP_M, NOP_I, BR_RET_B0);
 
                                                                     write64(EFI_RUNTIME_SERVICES_ADDR + 0x00, EFI_RUNTIME_SERVICES_SIGNATURE);
                                                                     write32(EFI_RUNTIME_SERVICES_ADDR + 0x08, 0x00010010U);
@@ -2330,8 +2334,6 @@ bool VMManager::startVM(const std::string& vmId) {
                                                                     // the loaded PE header.
                                                                     constexpr uint64_t ADD_R8_R0_MINUS_1 = 0x13fffcfe200ULL;
                                                                     constexpr uint64_t ADD_R8_R0_ZERO = 0x12000000200ULL;
-                                                                    constexpr uint64_t NOP_I = 0x0ULL;
-                                                                    constexpr uint64_t BR_RET_B0 = 0x108000100ULL;
                                                                     WriteIa64Bundle(instance,
                                                                                    EFI_UNSUPPORTED_STUB_CODE_ADDR,
                                                                                    0x10,

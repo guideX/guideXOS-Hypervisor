@@ -126,21 +126,21 @@ SalCallResult dispatchPalCall(uint64_t function,
     SalCallResult result{};
     if (function == kPalFreqRatios) {
         constexpr uint64_t identityRatio = (1ULL << 32) | 1ULL;
-        result.status = kSalSuccess;
+        result.status = kPalStatusSuccess;
         result.v0 = identityRatio;
         result.v1 = identityRatio;
         result.v2 = identityRatio;
     } else if (function == kPalFreqBase) {
-        result.status = kSalSuccess;
+        result.status = kPalStatusSuccess;
         result.v0 = 1;
     } else if (function == kPalCacheSummary) {
         if (arg1 != 0 || arg2 != 0 || arg3 != 0) {
-            result.status = kSalInvalidArgument;
+            result.status = kPalStatusInvalidArgument;
         } else {
             // guideXOS presents one deliberately simple processor-controlled
             // cache: a single unified L0 cache.  The summary values are the
             // number of levels and the number of unique caches, respectively.
-            result.status = kSalSuccess;
+            result.status = kPalStatusSuccess;
             result.v0 = 1;
             result.v1 = 1;
             result.v2 = 0;
@@ -148,7 +148,7 @@ SalCallResult dispatchPalCall(uint64_t function,
     } else if (function == kPalCacheInfo) {
         if (arg1 != kPalCacheLevelL0 || arg2 != kPalCacheTypeData ||
             arg3 != 0) {
-            result.status = kSalInvalidArgument;
+            result.status = kPalStatusInvalidArgument;
         } else {
             // PAL_CACHE_INFO returns two architected 64-bit words.  Encode
             // the IA-64 PAL fields by position instead of using C++
@@ -175,11 +175,16 @@ SalCallResult dispatchPalCall(uint64_t function,
                 (tagLeastSignificantBit << 40) |
                 (tagMostSignificantBit << 48);
 
-            result.status = kSalSuccess;
+            result.status = kPalStatusSuccess;
             result.v0 = pcci1;
             result.v1 = pcci2;
             result.v2 = 0;
         }
+    } else if (function == kPalBrandInfo) {
+        // PAL_BRAND_INFO is valid but not implemented by this virtual CPU.
+        // The architected disposition is PAL_STATUS_UNIMPLEMENTED (-1); do
+        // not write a fabricated brand string to the guest's 128-byte buffer.
+        result.status = kPalStatusUnimplemented;
     }
     return result;
 }

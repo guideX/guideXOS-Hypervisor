@@ -87,6 +87,11 @@ int main() {
             "PAL_FREQ_RATIOS reports identity ratios for the virtual ITC");
     require(dispatchPalCall(0xDEAD).status == kSalNotImplemented,
             "unknown PAL calls return an unsupported status");
+    const SalCallResult brandInfo =
+        dispatchPalCall(kPalBrandInfo, 0, 0x7000, 0);
+    require(brandInfo.status == kPalStatusUnimplemented &&
+                brandInfo.v0 == 0 && brandInfo.v1 == 0 && brandInfo.v2 == 0,
+            "unsupported PAL_BRAND_INFO returns -1 without inventing result data");
 
     const SalCallResult cacheSummary =
         dispatchPalCall(kPalCacheSummary, 0, 0, 0);

@@ -171,6 +171,7 @@ set(HEADERS
     include/IISA.h
     include/IA64ISAPlugin.h
     include/IA64EfiHandoffLayout.h
+    include/IA64EfiMemoryMap.h
     include/IA64SalFirmware.h
     include/IA64AcpiFirmware.h
     include/ISAPluginRegistry.h

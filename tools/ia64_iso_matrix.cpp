@@ -1239,6 +1239,24 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                     probeLine << " r" << std::dec << reg << "=0x" << std::hex
                               << cpu.GetGR(reg);
                 }
+                for (size_t index = 0; index < ia64::NUM_TRANSLATION_REGISTERS; ++index) {
+                    const ia64::TranslationRegisterState& entry = cpu.GetITR(index);
+                    if (entry.valid) {
+                        probeLine << " itr" << std::dec << index << "={pa:0x" << std::hex
+                                  << entry.physicalAddress << ",va:0x" << entry.virtualAddress
+                                  << ",itir:0x" << entry.itir << ",rr:0x" << entry.regionValue
+                                  << '}';
+                    }
+                }
+                for (size_t index = 0; index < ia64::NUM_INSTRUCTION_TLB_ENTRIES; ++index) {
+                    const ia64::TranslationRegisterState& entry = cpu.GetITLB(index);
+                    if (entry.valid) {
+                        probeLine << " itlb" << std::dec << index << "={pa:0x" << std::hex
+                                  << entry.physicalAddress << ",va:0x" << entry.virtualAddress
+                                  << ",itir:0x" << entry.itir << ",rr:0x" << entry.regionValue
+                                  << '}';
+                    }
+                }
                 record.probeLines.push_back(probeLine.str());
             }
         }

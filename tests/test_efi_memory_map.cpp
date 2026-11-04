@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "IA64EfiHandoffLayout.h"
+#include "IA64EfiMemoryMap.h"
 #include "IA64EfiBootLifecycle.h"
 
 namespace {
@@ -202,6 +203,129 @@ void testTextOutputQueryModeLayout() {
             "QueryMode stub must remain inside the EFI handoff region");
 }
 
+void testPalCodeDescriptorOwnershipAndLinuxDiscovery() {
+    constexpr uint64_t memorySize = 512ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t linuxPageSize = 16ULL * 1024ULL;
+    constexpr uint64_t kernelStart = 0x04000000ULL;
+    constexpr uint64_t kernelEnd = 0x04d76000ULL;
+    constexpr uint64_t initrdStart = 0x1f44c000ULL;
+    constexpr uint64_t initrdEnd = 0x1fcf6000ULL;
+
+    ia64::EfiHandoffLayout layout{};
+    require(ia64::tryComputeEfiHandoffLayout(memorySize, layout),
+            "512 MiB EFI PAL layout must be computable");
+
+    ia64::EfiMemoryDescriptor palCode{};
+    require(ia64::makeEfiPalCodeDescriptor(
+                layout.palProcedureCodeAddr, layout.base, layout.end,
+                ia64::kEfiMemoryWriteBack, palCode),
+            "the aligned PAL entry must produce a PAL-code page descriptor");
+    require(palCode.type == ia64::kEfiPalCodeMemoryType &&
+                palCode.physicalStart ==
+                    (layout.palProcedureCodeAddr & ~(ia64::kEfiPalMemoryPageSize - 1ULL)) &&
+                palCode.numberOfPages == 1 &&
+                palCode.attributes == ia64::kEfiMemoryWriteBack,
+            "PAL code must own exactly its aligned 4 KiB write-back page");
+    require(layout.palProcedureCodeAddr + 16 <=
+                palCode.physicalStart + ia64::kEfiPalMemoryPageSize,
+            "the complete PAL entry bundle must fit in the descriptor page");
+    require(layout.salSystemTableAddr >= palCode.physicalStart &&
+                layout.salSystemTableAddr <
+                    palCode.physicalStart + ia64::kEfiPalMemoryPageSize,
+            "the shared handoff page is firmware-owned because it contains the PAL bundle");
+    require(!(palCode.physicalStart < kernelEnd && kernelStart <
+                  palCode.physicalStart + ia64::kEfiPalMemoryPageSize) &&
+                !(palCode.physicalStart < initrdEnd && initrdStart <
+                  palCode.physicalStart + ia64::kEfiPalMemoryPageSize),
+            "the PAL-code page must not overlap the R23 kernel or initrd ranges");
+    require((palCode.physicalStart % linuxPageSize) != 0,
+            "the PAL page lies within a Linux 16 KiB frame, so adjacent free ranges must not free it");
+
+    std::vector<ia64::EfiMemoryDescriptor> map = {
+        {7, 0, memorySize / ia64::kEfiPalMemoryPageSize,
+         ia64::kEfiMemoryWriteBack}
+    };
+    require(ia64::overlayEfiMemoryMapRange(
+                map, memorySize, layout.base, layout.end, 4, 0xFULL),
+            "the full synthetic handoff must first be marked firmware-owned data");
+    require(ia64::overlayEfiMemoryMapRange(
+                map, memorySize, palCode.physicalStart,
+                palCode.physicalStart + ia64::kEfiPalMemoryPageSize,
+                palCode.type, palCode.attributes),
+            "the actual PAL entry page must override the broader handoff descriptor");
+
+    uint64_t previousEnd = 0;
+    for (size_t index = 0; index < map.size(); ++index) {
+        const auto& descriptor = map[index];
+        const uint64_t end = descriptor.physicalStart +
+                             descriptor.numberOfPages * ia64::kEfiPalMemoryPageSize;
+        require(descriptor.numberOfPages != 0 &&
+                    (index == 0 || descriptor.physicalStart >= previousEnd),
+                "PAL descriptor splitting must leave an ordered non-overlapping map");
+        previousEnd = end;
+    }
+
+    ia64::EfiMemoryDescriptor discovered{};
+    require(ia64::findUniqueEfiPalCodeDescriptor(map, &discovered) ==
+                ia64::EfiPalDescriptorScan::Found &&
+                discovered.physicalStart == palCode.physicalStart &&
+                discovered.numberOfPages == 1,
+            "Linux-compatible PAL discovery must find the exact firmware page");
+    require(!ia64::isLinuxIa64AvailableEfiMemory(discovered),
+            "EFI_PAL_CODE must remain excluded from Linux's available-memory set");
+
+    auto wrongType = map;
+    for (auto& descriptor : wrongType) {
+        if (descriptor.physicalStart == palCode.physicalStart) {
+            descriptor.type = 4;
+        }
+    }
+    require(ia64::findUniqueEfiPalCodeDescriptor(wrongType) ==
+                ia64::EfiPalDescriptorScan::Missing,
+            "BootServicesData must not be falsely accepted as PAL code");
+    require(ia64::isLinuxIa64AvailableEfiMemory({4, palCode.physicalStart, 1, 0xFULL}),
+            "the original WB BootServicesData classification is reclaimable to Linux");
+
+    auto duplicate = map;
+    duplicate.push_back(palCode);
+    require(ia64::findUniqueEfiPalCodeDescriptor(duplicate) ==
+                ia64::EfiPalDescriptorScan::Duplicate,
+            "duplicate PAL-code descriptors must be rejected");
+
+    require(ia64::findUniqueEfiPalCodeDescriptor(
+                std::vector<ia64::EfiMemoryDescriptor>{
+                    {ia64::kEfiPalCodeMemoryType, palCode.physicalStart + 1,
+                     1, ia64::kEfiMemoryWriteBack}}) ==
+                ia64::EfiPalDescriptorScan::Malformed,
+            "unaligned PAL descriptors must be rejected");
+    require(ia64::findUniqueEfiPalCodeDescriptor(
+                std::vector<ia64::EfiMemoryDescriptor>{
+                    {ia64::kEfiPalCodeMemoryType, palCode.physicalStart,
+                     1, 0}}) == ia64::EfiPalDescriptorScan::Malformed,
+            "PAL descriptors without write-back memory must be rejected");
+    require(ia64::findUniqueEfiPalCodeDescriptor(
+                std::vector<ia64::EfiMemoryDescriptor>{
+                    {ia64::kEfiPalCodeMemoryType, 0xFFFFFFFFFFFFF000ULL,
+                     2, ia64::kEfiMemoryWriteBack}}) ==
+                ia64::EfiPalDescriptorScan::Malformed,
+            "PAL descriptor extents that overflow physical address space must be rejected");
+
+    auto hole = map;
+    hole.erase(std::remove_if(hole.begin(), hole.end(), [&](const auto& descriptor) {
+        return descriptor.physicalStart == palCode.physicalStart;
+    }), hole.end());
+    const auto beforeHole = hole;
+    require(!ia64::overlayEfiMemoryMapRange(
+                hole, memorySize, palCode.physicalStart,
+                palCode.physicalStart + ia64::kEfiPalMemoryPageSize,
+                palCode.type, palCode.attributes) && hole.size() == beforeHole.size(),
+            "PAL descriptor creation must fail atomically across an unmapped gap");
+    require(!ia64::overlayEfiMemoryMapRange(
+                map, memorySize, memorySize, memorySize + ia64::kEfiPalMemoryPageSize,
+                palCode.type, palCode.attributes),
+            "PAL descriptor creation must reject memory outside reported RAM");
+}
+
 void testExitBootServicesLifecycleValidation() {
     constexpr uint64_t imageHandle = 1;
     constexpr uint64_t liveMapKey = 0x80CF;
@@ -289,6 +413,7 @@ int main() {
         testHistoricalDescriptorAbiAndStride();
         testGenericEliloSearchAndMapInvariants();
         testTextOutputQueryModeLayout();
+        testPalCodeDescriptorOwnershipAndLinuxDiscovery();
         testExitBootServicesLifecycleValidation();
         testSystemTableExitTransitionAndCrc();
         std::cout << "EFI memory-map tests passed" << std::endl;

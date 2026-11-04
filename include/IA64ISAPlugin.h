@@ -6,6 +6,7 @@
 #include "IMemory.h"
 #include "IDecoder.h"
 #include "FATParser.h"
+#include "IA64EfiMemoryMap.h"
 #include <memory>
 #include <cstring>
 #include <array>
@@ -648,12 +649,7 @@ private:
     };
     std::deque<EfiInputKey> efiInputQueue_;
 
-    struct EfiMemoryDescriptor {
-        uint32_t type = 0;
-        uint64_t physicalStart = 0;
-        uint64_t numberOfPages = 0;
-        uint64_t attributes = 0;
-    };
+    using EfiMemoryDescriptor = ia64::EfiMemoryDescriptor;
     struct EfiMemoryReservation {
         uint32_t type = 0;
         uint64_t physicalStart = 0;

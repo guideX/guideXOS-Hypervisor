@@ -34,6 +34,7 @@ constexpr uint64_t kPalFreqRatios = 14;
 constexpr uint64_t kPalCacheInfo = 2;
 constexpr uint64_t kPalCacheSummary = 4;
 constexpr uint64_t kPalLogicalToPhysical = 42;
+constexpr uint64_t kPalBrandInfo = 274;
 
 constexpr uint64_t kPalCacheLevelL0 = 0;
 constexpr uint64_t kPalCacheTypeInstruction = 1;
@@ -43,6 +44,9 @@ constexpr uint64_t kPalCacheTypeInstructionData = 3;
 constexpr int64_t kSalSuccess = 0;
 constexpr int64_t kSalNotImplemented = -1;
 constexpr int64_t kSalInvalidArgument = -2;
+constexpr int64_t kPalStatusSuccess = 0;
+constexpr int64_t kPalStatusUnimplemented = -1;
+constexpr int64_t kPalStatusInvalidArgument = -2;
 
 constexpr std::array<uint8_t, 16> kSalSystemTableGuid = {
     0x32, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11,

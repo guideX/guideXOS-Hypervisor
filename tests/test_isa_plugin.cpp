@@ -1,6 +1,7 @@
 #include "IISA.h"
 #include "IA64ISAPlugin.h"
 #include "IA64EfiHandoffLayout.h"
+#include "IA64SalFirmware.h"
 #include "ExampleISAPlugin.h"
 #include "ISAPluginRegistry.h"
 #include "FATParser.h"
@@ -3417,6 +3418,91 @@ void testIA64PluginIndirectCallExecution() {
     std::cout << "  ? plugin br.call b0 = b6 links b0 and enters at the target bundle boundary\n";
 }
 
+void testIA64PluginStackedPalBrandInfoDispatch() {
+    std::cout << "Testing IA-64 stacked PAL_BRAND_INFO dispatch and state preservation...\n";
+
+    ReportedEfiSparseMemory memory;
+    ia64::EfiHandoffLayout layout{};
+    assert(ia64::tryComputeEfiHandoffLayout(memory.GetTotalSize(), layout));
+    const uint64_t palTarget = 0xE000000000000000ULL + layout.palProcedureCodeAddr;
+
+    uint8_t callerBundle[16] = {};
+    memory.Write(0x1000, callerBundle, sizeof(callerBundle));
+    std::array<uint8_t, 128> brandBuffer{};
+    for (size_t index = 0; index < brandBuffer.size(); ++index) {
+        brandBuffer[index] = static_cast<uint8_t>(index ^ 0xA5U);
+    }
+    memory.Write(0x7000, brandBuffer.data(), brandBuffer.size());
+
+    FakeIndirectCallDecoder decoder;
+    IA64ISAPlugin plugin(decoder);
+    CPUState& cpu = plugin.getCPUState();
+    cpu.SetIP(0x1000);
+    cpu.SetBR(6, palTarget);
+    cpu.SetBR(0, 0xDEAD0000ULL);
+    cpu.SetCFM(0x40C); // Linux ia64_pal_call_stacked() frame: SOF 12, SOL 8.
+    cpu.SetPFS(0x13579BDFULL);
+    cpu.SetBSP(0x18000ULL);
+    cpu.SetBSPSTORE(0x17FF0ULL);
+    cpu.SetRNAT(0x2468ACE0ULL);
+    cpu.SetPSR(0x1010084A2008ULL);
+    cpu.SetGR(1, 0xA000000000001000ULL);
+    cpu.SetGR(28, ia64::sal::kPalBrandInfo);
+    // Before br.call, Linux's stacked arguments are the caller's output
+    // registers beginning at r32 + SOL (r40 for this frame).
+    cpu.SetGR(40, ia64::sal::kPalBrandInfo);
+    cpu.SetGR(41, 0);
+    cpu.SetGR(42, 0x7000);
+    cpu.SetGR(43, 0);
+    cpu.SetGR(8, 0x1111111111111111ULL);
+    cpu.SetGR(9, 0x2222222222222222ULL);
+    cpu.SetGR(10, 0x3333333333333333ULL);
+    cpu.SetGR(11, 0x4444444444444444ULL);
+    cpu.SetGR(38, 0x5555555555555555ULL);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(cpu.GetIP() == 0x1010);
+    assert(cpu.GetBR(0) == 0x1010);
+    assert(cpu.GetGR(8) == static_cast<uint64_t>(ia64::sal::kPalStatusUnimplemented));
+    assert(cpu.GetGR(9) == 0 && cpu.GetGR(10) == 0 && cpu.GetGR(11) == 0);
+    assert(cpu.GetGR(1) == 0xA000000000001000ULL);
+    assert(cpu.GetGR(38) == 0x5555555555555555ULL);
+    assert(cpu.GetCFM() == 0x40C);
+    assert(cpu.GetPFS() == 0x13579BDFULL);
+    assert(cpu.GetBSP() == 0x18000ULL);
+    assert(cpu.GetBSPSTORE() == 0x17FF0ULL);
+    assert(cpu.GetRNAT() == 0x2468ACE0ULL);
+    assert(cpu.GetPSR() == 0x1010084A2008ULL);
+    std::array<uint8_t, 128> afterBrandBuffer{};
+    memory.Read(0x7000, afterBrandBuffer.data(), afterBrandBuffer.size());
+    assert(afterBrandBuffer == brandBuffer);
+
+    std::cout << "  ? stacked PAL call returns -1, preserves its frame, and leaves the guest buffer untouched\n";
+}
+
+void testIA64PluginStackedPalIsNotAStaticConditionalCall() {
+    std::cout << "Testing stacked PAL entry through br.cond retains genuine guest control flow...\n";
+
+    ReportedEfiSparseMemory memory;
+    ia64::EfiHandoffLayout layout{};
+    assert(ia64::tryComputeEfiHandoffLayout(memory.GetTotalSize(), layout));
+    const uint64_t palTarget = 0xE000000000000000ULL + layout.palProcedureCodeAddr;
+    uint8_t callerBundle[16] = {};
+    memory.Write(0x1000, callerBundle, sizeof(callerBundle));
+
+    FakeIndirectBranchDecoder decoder(palTarget);
+    IA64ISAPlugin plugin(decoder);
+    plugin.getCPUState().SetIP(0x1000);
+    plugin.getCPUState().SetGR(28, ia64::sal::kPalBrandInfo);
+    plugin.getCPUState().SetGR(8, 0xABCDEF);
+
+    assert(plugin.step(memory) == ISAExecutionResult::CONTINUE);
+    assert(plugin.getCPUState().GetIP() == layout.palProcedureCodeAddr);
+    assert(plugin.getCPUState().GetGR(8) == 0xABCDEF);
+
+    std::cout << "  ? stacked PAL indices are dispatched only by the stacked br.call convention\n";
+}
+
 void testIA64PluginDirectCallWritesReturnBranchRegister() {
     std::cout << "Testing IA-64 plugin direct br.call return branch selection...\n";
 
@@ -3877,20 +3963,31 @@ void testIA64PluginFetchBundlePreservesSyntheticFirmwareBundle() {
 
     constexpr uint64_t handoffBase = 0x1FE00000ULL;
     constexpr uint64_t palProcedure = handoffBase + kEfiPalProcedureCodeOffset;
-    // This is the same compact template-0x10 PAL return bundle emitted by
-    // VMManager: nop.m, nop.i, br.ret b0.  Its first little-endian word is
-    // 0x10, which is not a function-descriptor code pointer.
-    constexpr uint64_t bundleWord0 = 0x10ULL;
-    constexpr uint64_t bundleWord1 = 0x0084000080000000ULL;
+    // Mirror VMManager's template-0x10 PAL bundle: M-unit nop.m, I-unit nop.i,
+    // then br.ret b0.  In particular, an all-zero M slot would decode as the
+    // genuine break 0 that stopped R23.
+    constexpr uint64_t nopM = 1ULL << 27;
+    constexpr uint64_t nopI = 0x4000000000ULL;
+    constexpr uint64_t brRetB0 = 0x108000100ULL;
+    constexpr uint64_t bundleWord0 =
+        0x10ULL | (nopM << 5) | ((nopI & 0x3FFFFULL) << 46);
+    constexpr uint64_t bundleWord1 =
+        ((nopI >> 18) & 0x7FFFFFULL) | (brRetB0 << 23);
 
     ReportedEfiSparseMemory memory;
-    memory.Write(palProcedure, reinterpret_cast<const uint8_t*>(&bundleWord0),
-                 sizeof(bundleWord0));
-    memory.Write(palProcedure + 8,
-                 reinterpret_cast<const uint8_t*>(&bundleWord1),
-                 sizeof(bundleWord1));
+    std::array<uint8_t, 16> encodedBundle{};
+    std::memcpy(encodedBundle.data(), &bundleWord0, sizeof(bundleWord0));
+    std::memcpy(encodedBundle.data() + sizeof(bundleWord0), &bundleWord1,
+                sizeof(bundleWord1));
+    memory.Write(palProcedure, encodedBundle.data(), encodedBundle.size());
 
     InstructionDecoder decoder;
+    const auto decodedBundle = decoder.DecodeBundleAt(encodedBundle.data(), palProcedure);
+    assert(decodedBundle.instructions.size() == 3);
+    assert(decodedBundle.instructions[0].GetType() == InstructionType::NOP);
+    assert(decodedBundle.instructions[1].GetType() == InstructionType::NOP);
+    assert(decodedBundle.instructions[2].GetType() == InstructionType::BR_RET);
+
     IA64ISAPlugin plugin(decoder);
     plugin.getCPUState().SetIP(palProcedure);
     plugin.getCPUState().SetBR(0, 0x1000);
@@ -7275,6 +7372,12 @@ int main(int argc, char** argv) {
         std::cout << "\n";
 
         testIA64PluginIndirectCallExecution();
+        std::cout << "\n";
+
+        testIA64PluginStackedPalBrandInfoDispatch();
+        std::cout << "\n";
+
+        testIA64PluginStackedPalIsNotAStaticConditionalCall();
         std::cout << "\n";
 
         testIA64PluginDirectCallWritesReturnBranchRegister();
