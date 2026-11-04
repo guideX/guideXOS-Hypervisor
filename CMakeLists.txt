@@ -1096,6 +1096,22 @@ else()
 endif()
 add_test(NAME Mips64Dsrl32Tests COMMAND test_mips64_dsrl32)
 
+# MIPS64-14 architectural qualification for SLTIU: signed immediate
+# extension, full-width unsigned comparison, both endian modes and snapshots.
+add_executable(test_mips64_sltiu
+    tests/test_mips64_sltiu.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_sltiu PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_sltiu PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_sltiu PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64SltiuTests COMMAND test_mips64_sltiu)
+
 # MIPS64-9 production-scheduler UART interrupt guest and RX/IRQ replay.
 add_executable(test_mips64_interrupt_guest
     tests/test_mips64_irq_vm.cpp

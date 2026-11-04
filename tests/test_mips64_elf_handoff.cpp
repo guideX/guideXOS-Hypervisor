@@ -695,6 +695,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     constexpr unsigned continuationTraceLimit = 512;
     constexpr uint64_t formerFrontierPc = 0xFFFFFFFF80917700ULL;
     constexpr uint32_t formerFrontierWord = 0x000C643EU;
+    constexpr uint64_t sltiuFrontierPc = 0xFFFFFFFF80B4F0B4ULL;
+    constexpr uint32_t sltiuFrontierWord = 0x2C420021U;
     const auto startTime = std::chrono::steady_clock::now();
     const auto image = readFile(imagePath);
     if (image.empty()) throw std::runtime_error("kernel image is empty or unreadable");
@@ -737,10 +739,13 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     bool entryReached = false;
     unsigned retiredBeforeEntry = 0;
     bool formerFrontierVerified = false;
+    bool sltiuFrontierVerified = false;
     std::string formerFrontierRecord;
+    std::string sltiuFrontierRecord;
     std::ostringstream frontierInstructionTrace;
-    std::ostringstream afterFrontierTrace;
-    unsigned afterFrontierTraceRecords = 0;
+    std::ostringstream preSltiuContinuationTrace;
+    std::ostringstream postSltiuContinuationTrace;
+    unsigned continuationTraceRecords = 0;
     std::string stopReason = "instruction_budget_exhausted";
     uint64_t stopPc = cpu->core().pc();
     uint64_t stopPhysical = 0;
@@ -870,12 +875,136 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                   << "}";
             formerFrontierRecord = event.str();
             formerFrontierVerified = true;
+        } else if (continuePastDsrl32Frontier && formerFrontierVerified &&
+                   stopPc == sltiuFrontierPc) {
+            if (!stopFetchOk || stopPhysical != 0x00B4F0B4ULL ||
+                stopWord != sltiuFrontierWord || retired != 150287U ||
+                vm.getCyclesExecuted() != 150287U || cpu->core().readGpr(2) != 6ULL ||
+                cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("authentic Phase 13 SLTIU frontier did not reproduce");
+            }
+            const Mips64Decoded decoded = decodeInstruction(stopWord);
+            if (!decoded.valid || decoded.op != Mips64Op::Sltiu || decoded.rs != 2 ||
+                decoded.rt != 2 || decoded.imm != 33) {
+                throw std::runtime_error("authentic Linux instruction did not decode as SLTIU $2,$2,33");
+            }
+            const uint64_t source = cpu->core().readGpr(decoded.rs);
+            const uint64_t immediate = static_cast<uint64_t>(
+                static_cast<int64_t>(static_cast<int16_t>(decoded.imm)));
+            const uint64_t expectedResult = source < immediate ? 1ULL : 0ULL;
+            const uint64_t beforeStatus = cpu->core().cp0Status();
+            const uint64_t beforeCause = cpu->core().cp0Cause();
+            const uint64_t beforeEpc = cpu->core().cp0Epc();
+            const uint64_t beforeBadVAddr = cpu->core().cp0BadVAddr();
+            const uint64_t beforeCount = cpu->core().cp0Count();
+            const uint64_t beforeHi = cpu->core().hi();
+            const uint64_t beforeLo = cpu->core().lo();
+            const uint64_t beforeDest = cpu->core().readGpr(decoded.rt);
+            if (source != 6ULL || immediate != 33ULL || expectedResult != 1ULL ||
+                beforeDest != 6ULL || beforeCount != 150287U ||
+                beforeStatus != 0x00400080ULL || beforeCause != 0 || beforeEpc != 0 ||
+                beforeBadVAddr != 0) {
+                throw std::runtime_error("architectural state before authentic SLTIU differs from Phase 13");
+            }
+
+            const Mips64FullVmSnapshot snapshot = vm.captureMips64FullSnapshot();
+            if (!snapshot.ValidateIntegrity() || snapshot.formatVersion != 2 ||
+                snapshot.uartComponentVersion != 4 || snapshot.irqRoutingComponentVersion != 1 ||
+                snapshot.cpuComponentVersion != 5) {
+                throw std::runtime_error("authentic SLTIU snapshot failed integrity/version checks");
+            }
+            CPUContext* context = vm.getCPUContext(0);
+            const auto* board = vm.getMips64MaltaBootstrapBoard();
+            if (!context || !board || !board->ConsoleSink() || !board->Uart()) {
+                throw std::runtime_error("authentic SLTIU snapshot lost Malta CPU/device state");
+            }
+            const uint64_t beforeCycles = vm.getCyclesExecuted();
+            const uint64_t beforeRetired = context->instructionsExecuted;
+            const std::vector<uint8_t> beforeConsole = board->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot beforeUart = board->Uart()->CaptureSnapshot();
+            didRetire = executeOneAndTrace(vm, *cpu, &preSltiuContinuationTrace);
+            ++continuationTraceRecords;
+            if (!didRetire || cpu->core().pc() != sltiuFrontierPc + 4 ||
+                cpu->core().readGpr(decoded.rt) != expectedResult ||
+                cpu->core().cp0Status() != beforeStatus || cpu->core().cp0Cause() != beforeCause ||
+                cpu->core().cp0Epc() != beforeEpc || cpu->core().cp0BadVAddr() != beforeBadVAddr ||
+                cpu->core().cp0Count() != beforeCount + 1 || cpu->core().hi() != beforeHi ||
+                cpu->core().lo() != beforeLo || cpu->core().fault() != Mips64Fault::None ||
+                vm.getState() == VMState::ERROR || context->instructionsExecuted != beforeRetired + 1 ||
+                vm.getCyclesExecuted() != beforeCycles + 1) {
+                throw std::runtime_error("production VM did not retire authentic SLTIU with the expected state");
+            }
+            const std::vector<uint8_t> firstCpu = cpu->core().serialize();
+            const std::vector<uint8_t> firstConsole = board->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot firstUart = board->Uart()->CaptureSnapshot();
+            const uint64_t firstCycles = vm.getCyclesExecuted();
+            const uint64_t firstRetired = context->instructionsExecuted;
+            std::string restoreError;
+            if (!vm.restoreMips64FullSnapshot(snapshot, &restoreError) || !restoreError.empty()) {
+                throw std::runtime_error("authentic SLTIU snapshot restore failed: " + restoreError);
+            }
+            uint8_t restoredWordBytes[4]{};
+            vm.getMemory().Read(stopPhysical, restoredWordBytes, sizeof(restoredWordBytes));
+            const Ns16550Uart::Snapshot restoredUart = board->Uart()->CaptureSnapshot();
+            if (cpu->core().pc() != sltiuFrontierPc ||
+                cpu->core().serialize() != snapshot.cpus[0].architecturalState ||
+                context->instructionsExecuted != beforeRetired ||
+                vm.getCyclesExecuted() != beforeCycles || board->ConsoleSink()->Bytes() != beforeConsole ||
+                restoredUart.transmitCount != beforeUart.transmitCount ||
+                restoredUart.virtualTimeCycle != beforeUart.virtualTimeCycle ||
+                read32(restoredWordBytes, false) != sltiuFrontierWord) {
+                throw std::runtime_error("authentic SLTIU restore changed CPU, RAM or UART before reexecution");
+            }
+            const bool replayRetired = executeOneAndTrace(vm, *cpu, nullptr);
+            const Ns16550Uart::Snapshot replayUart = board->Uart()->CaptureSnapshot();
+            if (!replayRetired || cpu->core().serialize() != firstCpu ||
+                context->instructionsExecuted != firstRetired || vm.getCyclesExecuted() != firstCycles ||
+                board->ConsoleSink()->Bytes() != firstConsole ||
+                replayUart.transmitCount != firstUart.transmitCount ||
+                replayUart.virtualTimeCycle != firstUart.virtualTimeCycle ||
+                cpu->core().readGpr(decoded.rt) != expectedResult ||
+                cpu->core().pc() != sltiuFrontierPc + 4) {
+                throw std::runtime_error("authentic SLTIU snapshot replay diverged");
+            }
+            std::ostringstream event;
+            event << "{\"type\":\"sltiu_frontier\",\"pc_va\":\"0x"
+                  << std::hex << std::setw(16) << std::setfill('0') << sltiuFrontierPc
+                  << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
+                  << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                  << "\",\"opcode\":" << std::dec << unsigned((stopWord >> 26) & 0x3FU)
+                  << ",\"rs\":" << unsigned(decoded.rs) << ",\"rt\":" << unsigned(decoded.rt)
+                  << ",\"immediate\":" << static_cast<int>(static_cast<int16_t>(decoded.imm))
+                  << ",\"source\":\"0x" << std::hex << std::setw(16) << source
+                  << "\",\"sign_extended_immediate\":\"0x" << std::setw(16) << immediate
+                  << "\",\"destination_before\":\"0x" << std::setw(16) << beforeDest
+                  << "\",\"expected\":\"0x" << std::setw(16) << expectedResult
+                  << "\",\"destination_after\":\"0x" << std::setw(16)
+                  << cpu->core().readGpr(decoded.rt)
+                  << "\",\"pc_after\":\"0x" << std::setw(16) << cpu->core().pc()
+                  << "\",\"status_before\":\"0x" << std::setw(16) << beforeStatus
+                  << "\",\"cause_before\":\"0x" << std::setw(16) << beforeCause
+                  << "\",\"epc_before\":\"0x" << std::setw(16) << beforeEpc
+                  << "\",\"badvaddr_before\":\"0x" << std::setw(16) << beforeBadVAddr
+                  << "\",\"count_before\":" << std::dec << beforeCount
+                  << ",\"count_after\":" << cpu->core().cp0Count()
+                  << ",\"retired_before\":" << beforeRetired
+                  << ",\"retired_after\":" << context->instructionsExecuted
+                  << ",\"vm_cycles_before\":" << beforeCycles
+                  << ",\"vm_cycles_after\":" << vm.getCyclesExecuted()
+                  << ",\"snapshot_replay_verified\":true,\"snapshot_format_version\":"
+                  << snapshot.formatVersion << ",\"snapshot_uart_version\":" << snapshot.uartComponentVersion
+                  << ",\"snapshot_irq_version\":" << snapshot.irqRoutingComponentVersion
+                  << ",\"snapshot_cpu_version\":" << snapshot.cpuComponentVersion << "}";
+            sltiuFrontierRecord = event.str();
+            sltiuFrontierVerified = true;
         } else {
             std::ostream* stepTrace = recordingPrefix ? &trace : nullptr;
             if (continuePastDsrl32Frontier && formerFrontierVerified &&
-                afterFrontierTraceRecords < continuationTraceLimit) {
-                stepTrace = &afterFrontierTrace;
-                ++afterFrontierTraceRecords;
+                continuationTraceRecords < continuationTraceLimit) {
+                stepTrace = sltiuFrontierVerified
+                    ? static_cast<std::ostream*>(&postSltiuContinuationTrace)
+                    : static_cast<std::ostream*>(&preSltiuContinuationTrace);
+                ++continuationTraceRecords;
             }
             didRetire = executeOneAndTrace(
                 vm, *cpu, stepTrace);
@@ -922,12 +1051,14 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     }
     trace << frontierInstructionTrace.str();
     if (!formerFrontierRecord.empty()) trace << formerFrontierRecord << "\n";
-    trace << afterFrontierTrace.str();
+    trace << preSltiuContinuationTrace.str();
+    if (!sltiuFrontierRecord.empty()) trace << sltiuFrontierRecord << "\n";
+    trace << postSltiuContinuationTrace.str();
     if (continuePastDsrl32Frontier && formerFrontierVerified && attempts > 150042U) {
         const unsigned attemptedAfterFrontier = attempts - 150042U;
-        if (attemptedAfterFrontier > afterFrontierTraceRecords) {
+        if (attemptedAfterFrontier > continuationTraceRecords) {
             trace << "{\"type\":\"continuation_gap\",\"skipped_attempts\":"
-                  << (attemptedAfterFrontier - afterFrontierTraceRecords) << "}\n";
+                  << (attemptedAfterFrontier - continuationTraceRecords) << "}\n";
         }
     }
     unsigned validTlbEntries = 0;
@@ -968,6 +1099,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
           << (entryReached && retired >= retiredBeforeEntry ? retired - retiredBeforeEntry : 0)
           << ",\"retired_beyond_old_frontier\":"
           << (formerFrontierVerified && retired >= 150041 ? retired - 150041 : 0)
+          << ",\"sltiu_frontier_verified\":" << (sltiuFrontierVerified ? "true" : "false")
+          << ",\"retired_beyond_sltiu_frontier\":"
+          << (sltiuFrontierVerified && retired >= 150287 ? retired - 150287 : 0)
           << ",\"frontier_verified\":" << (formerFrontierVerified ? "true" : "false")
           << ",\"entry_retired_before_linux\":" << retiredBeforeEntry
           << ",\"unique_guest_pcs\":" << distinctPcs.size()
@@ -977,6 +1111,27 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                   ? vm.getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes().size() : 0)
           << ",\"vm_state\":" << static_cast<unsigned>(vm.getState())
           << "}\n";
+    if (sltiuFrontierVerified && stopReason == "unsupported_instruction") {
+        const Mips64Decoded next = decodeInstruction(stopWord);
+        trace << "{\"type\":\"next_frontier\",\"pc_va\":\"0x"
+              << std::hex << std::setw(16) << std::setfill('0') << stopPc
+              << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
+              << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+              << "\",\"opcode\":" << std::dec << unsigned((stopWord >> 26) & 0x3FU)
+              << ",\"rs\":" << unsigned(next.rs) << ",\"rt\":" << unsigned(next.rt)
+              << ",\"rd\":" << unsigned(next.rd) << ",\"sa\":" << unsigned(next.sa)
+              << ",\"immediate\":" << static_cast<int>(static_cast<int16_t>(next.imm))
+              << ",\"decoded_valid\":" << (next.valid ? "true" : "false")
+              << ",\"decode_fault\":\"" << Mips64Cpu::faultName(next.fault) << "\""
+              << ",\"gpr_rs\":\"0x" << std::hex << std::setw(16)
+              << cpu->core().readGpr(next.rs) << "\",\"gpr_rt\":\"0x" << std::setw(16)
+              << cpu->core().readGpr(next.rt) << "\",\"status\":\"0x"
+              << std::setw(16) << cpu->core().cp0Status()
+              << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+              << "\",\"epc\":\"0x" << std::setw(16) << cpu->core().cp0Epc()
+              << "\",\"badvaddr\":\"0x" << std::setw(16) << cpu->core().cp0BadVAddr()
+              << "\",\"valid_tlb_entries\":" << std::dec << validTlbEntries << "}\n";
+    }
     trace.close();
 
     const auto* board = vm.getMips64MaltaBootstrapBoard();
@@ -1004,6 +1159,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
               << (entryReached && retired >= retiredBeforeEntry ? retired - retiredBeforeEntry : 0)
               << " retired_beyond_old_frontier="
               << (formerFrontierVerified && retired >= 150041 ? retired - 150041 : 0)
+              << " sltiu_frontier_verified=" << (sltiuFrontierVerified ? "true" : "false")
+              << " retired_beyond_sltiu_frontier="
+              << (sltiuFrontierVerified && retired >= 150287 ? retired - 150287 : 0)
               << " frontier_verified=" << (formerFrontierVerified ? "true" : "false")
               << " stop_reason=" << stopReason
               << " stop_pc=0x" << std::hex << stopPc
@@ -1043,6 +1201,10 @@ int main(int argc, char** argv) {
         }
         if (argc == 4 && std::string(argv[1]) == "--continue-kernel") {
             constexpr unsigned totalAttemptBudget = 1150041;
+            return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget, true);
+        }
+        if (argc == 4 && std::string(argv[1]) == "--continue-sltiu-kernel") {
+            constexpr unsigned totalAttemptBudget = 1150288;
             return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget, true);
         }
         testElfValidationBothEndians();

@@ -29,6 +29,7 @@ constexpr uint8_t kOpBlez = 0x06;
 constexpr uint8_t kOpBgtz = 0x07;
 constexpr uint8_t kOpAddi = 0x08;
 constexpr uint8_t kOpAddiu = 0x09;
+constexpr uint8_t kOpSltiu = 0x0B;
 constexpr uint8_t kOpAndi = 0x0C;
 constexpr uint8_t kOpOri = 0x0D;
 constexpr uint8_t kOpXori = 0x0E;
@@ -409,6 +410,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
             break;
         case kOpAddi: decoded.op = Mips64Op::Addi; break;
         case kOpAddiu: decoded.op = Mips64Op::Addiu; break;
+        case kOpSltiu: decoded.op = Mips64Op::Sltiu; break;
         case kOpAndi: decoded.op = Mips64Op::Andi; break;
         case kOpOri: decoded.op = Mips64Op::Ori; break;
         case kOpXori: decoded.op = Mips64Op::Xori; break;
@@ -1247,6 +1249,15 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             // 64-bit doubleword result (modular arithmetic, no trap).
             writeGpr(decoded.rt, readGpr(decoded.rs) + signExtend16(decoded.imm));
             break;
+        case Mips64Op::Sltiu: {
+            // SLTIU sign-extends its 16-bit immediate, then compares both
+            // full-width operands as unsigned 64-bit values. Read first so
+            // rs == rt is well-defined; writeGpr preserves $zero behavior.
+            const uint64_t source = readGpr(decoded.rs);
+            const uint64_t immediate = signExtend16(decoded.imm);
+            writeGpr(decoded.rt, source < immediate ? 1ULL : 0ULL);
+            break;
+        }
         case Mips64Op::Addu:
             writeGpr(decoded.rd,
                      signExtend32(low32(readGpr(decoded.rs)) + low32(readGpr(decoded.rt))));
@@ -2052,6 +2063,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
             std::snprintf(buffer, sizeof(buffer), "%s $%u, %d($%u)", name, decoded.rt,
                           static_cast<int>(static_cast<int16_t>(decoded.imm)), decoded.rs);
             break;
+        case Mips64Op::Sltiu:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %d", name,
+                          decoded.rt, decoded.rs,
+                          static_cast<int>(static_cast<int16_t>(decoded.imm)));
+            break;
         case Mips64Op::Addu:
         case Mips64Op::Add:
         case Mips64Op::DaddU:
@@ -2616,6 +2632,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Nor: return "nor";
         case Mips64Op::Slt: return "slt";
         case Mips64Op::Sltu: return "sltu";
+        case Mips64Op::Sltiu: return "sltiu";
         case Mips64Op::Sll: return "sll";
         case Mips64Op::Srl: return "srl";
         case Mips64Op::Sra: return "sra";

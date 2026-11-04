@@ -425,6 +425,8 @@ enum class Mips64Op : uint8_t {
     Tlbp, Tlbr, Tlbwi, Tlbwr,
     // Additional fixed shift encoding qualified in MIPS64-13.
     Dsrl32,
+    // MIPS64r2 unsigned comparison with a sign-extended immediate.
+    Sltiu,
 };
 
 struct Mips64Decoded {
