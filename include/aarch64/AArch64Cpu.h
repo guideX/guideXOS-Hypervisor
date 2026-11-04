@@ -80,6 +80,7 @@ class IMemory; // generic memory contract; no IA-64 specifics required
 namespace aarch64 {
 
 class AArch64ExecutionSnapshot;
+class AArch64DeviceSnapshot;
 class AArch64ISAPlugin;
 
 // Fixed A64 instruction size in bytes.
@@ -393,6 +394,7 @@ public:
 private:
     friend class AArch64State;
     friend class AArch64ExecutionSnapshot;
+    friend class AArch64DeviceSnapshot;
     friend class AArch64ISAPlugin;
     Fault executeSystemRegister(const Decoded& decoded);
     Fault executeTlbi(const Decoded& decoded);

@@ -25,6 +25,8 @@
 
 namespace aarch64 {
 
+class AArch64DeviceSnapshot;
+
 // Canonical architecture name used for registry integration.
 inline constexpr const char* kArchName = "AArch64";
 
@@ -142,6 +144,7 @@ public:
 
 private:
     friend class AArch64ExecutionSnapshot;
+    friend class AArch64DeviceSnapshot;
 
     Cpu cpu_;
     AArch64State state_;
