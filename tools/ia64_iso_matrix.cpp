@@ -398,6 +398,8 @@ struct ContinuationRecord {
         uint64_t cfm = 0;
         uint64_t pfs = 0;
         uint64_t rsc = 0;
+        uint64_t arLc = 0;
+        uint64_t arEc = 0;
         uint64_t bsp = 0;
         uint64_t bspstore = 0;
         uint64_t bspLoad = 0;
@@ -1235,6 +1237,22 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 probeLine << "[IA64-PROBE-ALL] ip=0x" << std::hex << probe
                           << " slot=" << std::dec << slot
                           << " itc=0x" << std::hex << cpu.GetAR(44);
+                uint64_t predicateMask = 0;
+                for (size_t predicate = 0; predicate < 64; ++predicate) {
+                    if (cpu.GetPR(predicate)) {
+                        predicateMask |= uint64_t{1} << predicate;
+                    }
+                }
+                probeLine << " cfm=0x" << cpu.GetCFM()
+                          << " pfs=0x" << cpu.GetPFS()
+                          << " rsc=0x" << cpu.GetRSC()
+                          << " bsp=0x" << cpu.GetBSP()
+                          << " bspstore=0x" << cpu.GetBSPSTORE()
+                          << " rnat=0x" << cpu.GetRNAT()
+                          << " ar_lc=0x" << cpu.GetAR(65)
+                          << " ar_ec=0x" << cpu.GetAR(66)
+                          << " predicate_mask=0x" << predicateMask
+                          << " b0=0x" << cpu.GetBR(0);
                 for (size_t reg = 1; reg < 64; ++reg) {
                     probeLine << " r" << std::dec << reg << "=0x" << std::hex
                               << cpu.GetGR(reg);
@@ -1352,6 +1370,8 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             traced.cfm = traceCpu.GetCFM();
             traced.pfs = traceCpu.GetPFS();
             traced.rsc = traceCpu.GetRSC();
+            traced.arLc = traceCpu.GetAR(65);
+            traced.arEc = traceCpu.GetAR(66);
             traced.bsp = traceCpu.GetBSP();
             traced.bspstore = traceCpu.GetBSPSTORE();
             traced.bspLoad = traceCpu.GetRSELoadPointer();
@@ -1795,6 +1815,8 @@ void writeContinuationLog(const std::string& path,
                << " cfm=0x" << instruction.cfm
                << " pfs=0x" << instruction.pfs
                << " rsc=0x" << instruction.rsc
+               << " ar_lc=0x" << instruction.arLc
+               << " ar_ec=0x" << instruction.arEc
                << " bsp=0x" << instruction.bsp
                << " bspstore=0x" << instruction.bspstore
                << " bspLoad=0x" << instruction.bspLoad
