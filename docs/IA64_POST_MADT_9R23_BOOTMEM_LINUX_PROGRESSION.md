@@ -15,7 +15,7 @@ R23 reproduced the R22 frontier from a fresh restore of the same authentic guest
 - Guest initrd SHA-256: `D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B`.
 - ISO: `build-9r9/authentic-reconstructed.iso`, 4,695,296,000 bytes, SHA-256 `6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E`.
 - Starting checkpoint: `build-9r16/r16-authentic-ehandoff.gxcp`, cycle `778197459`, 574,309,111 bytes, SHA-256 `B6C258887359E4E6A5B0BCFE355B86FD6CFC7A410D735F575BE6688348564B4B`; its manifest SHA-256 is `3B030AEA30F29C1C3518F7401B49C95802521F6AB183ED753CED14848990ACE6`.
-- Diagnostic utility change: local commit `5511fea0c92482feb178747f304769bb11522ea4` (`feat(ia64): add repeatable bootmem probes`). It adds repeatable all-register IP probes and repeatable guest-memory-range dumps to `tools/ia64_iso_matrix.cpp`; it does not alter guest execution semantics.
+- Diagnostic utility change: local commit `5511feac3f10e2169d156cda5f9e9255beeffbbd` (`feat(ia64): add repeatable bootmem probes`). It adds repeatable all-register IP probes and repeatable guest-memory-range dumps to `tools/ia64_iso_matrix.cpp`; it does not alter guest execution semantics.
 
 The run harness is `build-9r23/evidence/r23-replay.ps1`. Each run restored the saved checkpoint into a fresh VM. Captures are in the separate `evidence-9r23/` directory; ignored build output is under `build-9r23/`. The checkpoint and earlier build/evidence directories were preserved. Guest-memory captures were read-only.
 
@@ -119,7 +119,7 @@ Directly run and passed: processor interrupt block, interrupt controller, single
 
 ## Closeout and next gate
 
-No checkpoint was created. No production emulation fix was justified by the captured fault. The source change is diagnostic-only and committed as `5511fea0c92482feb178747f304769bb11522ea4`. The report was initially committed as `fbe0c832fae667a45cfce6db662afa720774b0ac` and then corrected in the final closeout commit. No push was made. `.phase` remains at Phase 9, and Phase 9 is still open.
+No checkpoint was created. No production emulation fix was justified by the captured fault. The source change is diagnostic-only and committed as `5511feac3f10e2169d156cda5f9e9255beeffbbd`. The report was initially committed as `fbe0c832fae667a45cfce6db662afa720774b0ac` and then corrected in subsequent closeout commits. No push was made. `.phase` remains at Phase 9, and Phase 9 is still open.
 
 At closeout, branch `IA64` contains the R23 tooling and report commits; tracked source/documentation changes are committed and the tracked worktree is clean. The newly generated `evidence-9r23/` remains as untracked local evidence, and `build-9r23/` remains ignored build output; both are separate from the preserved historical artifacts. No in-scope source or documentation change is left uncommitted. Push status: not pushed.
 
