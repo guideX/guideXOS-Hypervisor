@@ -1219,6 +1219,26 @@ endif()
 add_test(NAME PPC64Phase28Tests COMMAND test_ppc64_phase28)
 set_tests_properties(PPC64Phase28Tests PROPERTIES TIMEOUT 600)
 
+# PPC64 authenticated Linux dynamic-relocation walk attribution and continuation.
+add_executable(test_ppc64_phase29
+    tests/test_ppc64_phase29.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase29 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase29 PRIVATE
+    PPC64_PHASE29_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase29 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase29 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase29Tests COMMAND test_ppc64_phase29)
+set_tests_properties(PPC64Phase29Tests PROPERTIES TIMEOUT 1800)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp
