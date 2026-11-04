@@ -161,6 +161,38 @@ constexpr uint32_t kSfenceVmaOpcode = 0x12000073U; // sfence.vma x0,x0.
 
 enum class AccessType : uint8_t { Fetch, Load, Store };
 
+// A no-PMP profile keeps earlier machine fixtures compatible. The standard
+// profile exposes exactly sixteen RV64 PMP entries with 4-byte grain and a
+// 56-bit physical address space, as required by Sv39.
+enum class PmpMachineProfile : uint8_t { LegacyNoPmp, StandardPmp16 };
+
+struct PmpEntryView {
+    uint8_t config = 0;
+    uint64_t encodedAddress = 0;
+    bool active = false;
+    uint64_t lowerBound = 0;
+    uint64_t upperBound = 0; // exclusive
+};
+
+enum class PmpTraceKind : uint8_t { CsrRead, CsrWrite, PhysicalAccess };
+
+// Fixed-shape diagnostics; the CPU retains only the most recent 512 events.
+struct PmpTraceEvent {
+    PmpTraceKind kind = PmpTraceKind::PhysicalAccess;
+    AccessType access = AccessType::Load;
+    PrivilegeMode privilege = PrivilegeMode::Machine;
+    uint16_t csr = 0;
+    int8_t matchingEntry = -1;
+    uint8_t config = 0;
+    uint64_t csrValue = 0;
+    uint64_t pc = 0;
+    uint64_t virtualAddress = 0;
+    uint64_t physicalAddress = 0;
+    uint64_t size = 0;
+    bool hasVirtualAddress = false;
+    bool allowed = false;
+};
+
 struct Sv39Translation {
     bool ok = false;
     uint64_t paddr = 0;
@@ -434,20 +466,21 @@ public:
  * - Reset state: privilege Machine, PC = guest base (or 0 with no image),
  *   GPRs zero, CSRs to their reset values (mtvec/stvec 0 Direct, mstatus 0,
  *   medeleg/mideleg 0, mie/mip/sie/sip 0, mepc/sepc/mcause/scause/mtval/stval/
- *   mscratch/sscratch 0, misa fixed, mhartid 0, satp Bare 0).
+ *   mscratch/sscratch 0, misa fixed, mhartid 0, satp Bare 0. StandardPmp16
+ *   additionally resets pmpcfg0/pmpcfg2 and pmpaddr0-15 to zero (all OFF).
  * - Guest proof programs enter lower privilege architecturally (mstatus.MPP
  *   + mepc + MRET, or SPP + sepc + SRET); the production API exposes no
  *   privilege setter. Focused unit tests may use the friend-only test helper.
  * - satp supports Bare (MODE 0) and Sv39 (MODE 8), with ASIDLEN=0; other
- *   MODE writes are WARL-ignored. Bare mode is a direct byte-region mapping,
- *   not paging or PMP isolation.
+ *   MODE writes are WARL-ignored. Bare mode is a direct byte-region mapping;
+ *   PMP is independently selected by the constructor profile.
  */
 class RV64CPU {
     friend class Sv39Mmu;
     friend class Sv39TestHelper;
     friend class RiscvInterruptTestHelper;
 public:
-    RV64CPU();
+    explicit RV64CPU(PmpMachineProfile profile = PmpMachineProfile::LegacyNoPmp);
     ~RV64CPU();
 
     // Deterministic reset: registers/PC zeroed, privilege Machine, CSRs to
@@ -567,6 +600,13 @@ public:
     // masks but not privilege checks. Prefer guest CSR instructions.
     void debugWriteCsr(uint32_t csr, uint64_t value);
 
+    PmpMachineProfile pmpMachineProfile() const { return pmpProfile_; }
+    size_t pmpImplementedEntries() const;
+    bool pmpEntry(size_t index, PmpEntryView& view) const;
+    const std::vector<PmpTraceEvent>& pmpTrace() const { return pmpTrace_; }
+    const std::vector<PmpTraceEvent>& pmpCsrTrace() const { return pmpCsrTrace_; }
+    const std::vector<PmpTraceEvent>& pmpDeniedTrace() const { return pmpDeniedTrace_; }
+
     // Breakpoint-halt interception (default true for RISCV-1 compatibility).
     // When true, EBREAK/C.EBREAK report Halt. When false, they deliver a
     // breakpoint trap (cause 3) architecturally.
@@ -597,6 +637,24 @@ private:
     bool loadU64Internal(uint64_t addr, uint64_t& value) const;
     bool storeU64(uint64_t addr, uint64_t value);
     bool rangeInGuest(uint64_t addr, size_t size) const;
+    PrivilegeMode effectiveDataPrivilege() const;
+    bool checkPhysicalAccess(uint64_t paddr, size_t size, AccessType access,
+                             PrivilegeMode privilege, uint64_t virtualAddress,
+                             bool hasVirtualAddress) const;
+    bool readPhysicalAccess(uint64_t paddr, uint8_t* dst, size_t size,
+                            AccessType access, PrivilegeMode privilege,
+                            uint64_t virtualAddress = 0,
+                            bool hasVirtualAddress = false) const;
+    bool writePhysicalAccess(uint64_t paddr, const uint8_t* src, size_t size,
+                             PrivilegeMode privilege, uint64_t virtualAddress = 0,
+                             bool hasVirtualAddress = false);
+    bool readPhysicalRaw(uint64_t paddr, uint8_t* dst, size_t size) const;
+    bool writePhysicalRaw(uint64_t paddr, const uint8_t* src, size_t size);
+    bool pmpEntryLocked(size_t index) const;
+    uint8_t pmpConfig(size_t index) const;
+    uint64_t pmpAddress(size_t index) const;
+    PmpEntryView decodePmpEntry(size_t index) const;
+    void recordPmpEvent(const PmpTraceEvent& event) const;
     void clearReservation();
     void invalidateReservation(uint64_t paddr, size_t size);
 
@@ -646,6 +704,13 @@ private:
     uint64_t stepsTaken_ = 0;
     uint64_t instructionsRetired_ = 0;
     ReservationState reservation_{};
+
+    PmpMachineProfile pmpProfile_ = PmpMachineProfile::LegacyNoPmp;
+    std::array<uint8_t, 16> pmpConfig_{};
+    std::array<uint64_t, 16> pmpAddress_{};
+    mutable std::vector<PmpTraceEvent> pmpTrace_;
+    mutable std::vector<PmpTraceEvent> pmpCsrTrace_;
+    mutable std::vector<PmpTraceEvent> pmpDeniedTrace_;
 
     PrivilegeMode priv_ = PrivilegeMode::Machine;
     bool breakpointHalt_ = true;

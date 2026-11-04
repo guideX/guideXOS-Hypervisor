@@ -17,7 +17,10 @@ uint64_t Sv39Mmu::vpn(uint64_t vaddr, unsigned level) {
 
 bool Sv39Mmu::readPte(uint64_t paddr, uint64_t& pte) const {
     uint8_t bytes[8] = {0};
-    if (!cpu_->readMemory(paddr, bytes, sizeof(bytes))) {
+    // Implicit PTE reads are PMP-checked as S-mode physical loads regardless
+    // of the privilege of the explicit operation that triggered the walk.
+    if (!cpu_->readPhysicalAccess(paddr, bytes, sizeof(bytes), AccessType::Load,
+                                  PrivilegeMode::Supervisor)) {
         return false;
     }
     pte = static_cast<uint64_t>(bytes[0]) |
@@ -41,7 +44,10 @@ bool Sv39Mmu::writePte(uint64_t paddr, uint64_t pte) const {
     bytes[5] = static_cast<uint8_t>((pte >> 40) & 0xFFU);
     bytes[6] = static_cast<uint8_t>((pte >> 48) & 0xFFU);
     bytes[7] = static_cast<uint8_t>((pte >> 56) & 0xFFU);
-    return cpu_->storeBytes(paddr, bytes, sizeof(bytes));
+    // Hardware A/D-bit updates are implicit S-mode physical stores and must
+    // obey PMP before the PTE is changed.
+    return cpu_->writePhysicalAccess(paddr, bytes, sizeof(bytes),
+                                     PrivilegeMode::Supervisor);
 }
 
 bool Sv39Mmu::validatePte(uint64_t pte, bool atFinalLevel, TrapCause& cause) const {

@@ -1,0 +1,622 @@
+
+File: D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_opensbi_pmp\.build\supervisor.elf
+Format: elf64-littleriscv
+Arch: riscv64
+AddressSize: 64bit
+LoadName: <Not found>
+ElfHeader {
+  Ident {
+    Magic: (7F 45 4C 46)
+    Class: 64-bit (0x2)
+    DataEncoding: LittleEndian (0x1)
+    FileVersion: 1
+    OS/ABI: SystemV (0x0)
+    ABIVersion: 0
+    Unused: (00 00 00 00 00 00 00)
+  }
+  Type: Executable (0x2)
+  Machine: EM_RISCV (0xF3)
+  Version: 1
+  Entry: 0x80200000
+  ProgramHeaderOffset: 0x40
+  SectionHeaderOffset: 0x2718
+  Flags [ (0x0)
+  ]
+  HeaderSize: 64
+  ProgramHeaderEntrySize: 56
+  ProgramHeaderCount: 5
+  SectionHeaderEntrySize: 64
+  SectionHeaderCount: 8
+  StringTableSectionIndex: 6
+}
+Sections [
+  Section {
+    Index: 0
+    Name:  (0)
+    Type: SHT_NULL (0x0)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x0
+    Size: 0
+    Link: 0
+    Info: 0
+    AddressAlignment: 0
+    EntrySize: 0
+  }
+  Section {
+    Index: 1
+    Name: .text (1)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x6)
+      SHF_ALLOC (0x2)
+      SHF_EXECINSTR (0x4)
+    ]
+    Address: 0x80200000
+    Offset: 0x1000
+    Size: 1232
+    Link: 0
+    Info: 0
+    AddressAlignment: 4
+    EntrySize: 0
+  }
+  Section {
+    Index: 2
+    Name: .rodata (7)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x802004D0
+    Offset: 0x14D0
+    Size: 139
+    Link: 0
+    Info: 0
+    AddressAlignment: 16
+    EntrySize: 0
+  }
+  Section {
+    Index: 3
+    Name: .data (15)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x80210000
+    Offset: 0x2000
+    Size: 16
+    Link: 0
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 0
+  }
+  Section {
+    Index: 4
+    Name: .riscv.attributes (21)
+    Type: SHT_RISCV_ATTRIBUTES (0x70000003)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2010
+    Size: 73
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 5
+    Name: .symtab (39)
+    Type: SHT_SYMTAB (0x2)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2060
+    Size: 1080
+    Link: 7
+    Info: 43
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 6
+    Name: .shstrtab (47)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x2498
+    Size: 65
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 7
+    Name: .strtab (57)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x24D9
+    Size: 568
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+]
+ProgramHeaders [
+  ProgramHeader {
+    Type: PT_LOAD (0x1)
+    Offset: 0x1000
+    VirtualAddress: 0x80200000
+    PhysicalAddress: 0x80200000
+    FileSize: 1232
+    MemSize: 1232
+    Flags [ (0x5)
+      PF_R (0x4)
+      PF_X (0x1)
+    ]
+    Alignment: 4096
+  }
+  ProgramHeader {
+    Type: PT_LOAD (0x1)
+    Offset: 0x14D0
+    VirtualAddress: 0x802004D0
+    PhysicalAddress: 0x802004D0
+    FileSize: 139
+    MemSize: 139
+    Flags [ (0x4)
+      PF_R (0x4)
+    ]
+    Alignment: 4096
+  }
+  ProgramHeader {
+    Type: PT_LOAD (0x1)
+    Offset: 0x2000
+    VirtualAddress: 0x80210000
+    PhysicalAddress: 0x80210000
+    FileSize: 16
+    MemSize: 16
+    Flags [ (0x6)
+      PF_R (0x4)
+      PF_W (0x2)
+    ]
+    Alignment: 4096
+  }
+  ProgramHeader {
+    Type: PT_GNU_STACK (0x6474E551)
+    Offset: 0x0
+    VirtualAddress: 0x0
+    PhysicalAddress: 0x0
+    FileSize: 0
+    MemSize: 0
+    Flags [ (0x6)
+      PF_R (0x4)
+      PF_W (0x2)
+    ]
+    Alignment: 0
+  }
+  ProgramHeader {
+    Type: PT_RISCV_ATTRIBUTES (0x70000003)
+    Offset: 0x2010
+    VirtualAddress: 0x0
+    PhysicalAddress: 0x0
+    FileSize: 73
+    MemSize: 73
+    Flags [ (0x4)
+      PF_R (0x4)
+    ]
+    Alignment: 1
+  }
+]
+Symbols [
+  Symbol {
+    Name:  (0)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Undefined (0x0)
+  }
+  Symbol {
+    Name: RESULT_BASE (1)
+    Value: 0x83E00000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: SIGNATURE_BASE (13)
+    Value: 0x83E00100
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: FAULT_LOG (28)
+    Value: 0x83E00200
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: GUEST_STACK_TOP (38)
+    Value: 0x83FFFFF0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: EXPECTED_FDT (54)
+    Value: 0x82200000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: FIRMWARE_BASE (67)
+    Value: 0x80000000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: UART0_BASE (81)
+    Value: 0x10000000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: ROOT_TABLE (92)
+    Value: 0x83C00000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: L1_CODE_TABLE (103)
+    Value: 0x83C01000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: L1_ALIAS_TABLE (117)
+    Value: 0x83C02000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: L0_ALIAS_TABLE (132)
+    Value: 0x83C03000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: VA_FIRMWARE (147)
+    Value: 0x40000000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: VA_FIRMWARE_ALIAS (159)
+    Value: 0x40001000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: VA_PAGE_FAULT (177)
+    Value: 0x40002000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: COMPLETE_WORD (191)
+    Value: 0x434F4D504C455445
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: SIGNATURE_MAGIC (205)
+    Value: 0x47584F5352495356
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: $x (221)
+    Value: 0x80200000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail (224)
+    Value: 0x802003E0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: initialized_word (229)
+    Value: 0x80210000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .data (0x3)
+  }
+  Symbol {
+    Name: work_slot (246)
+    Value: 0x80210008
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .data (0x3)
+  }
+  Symbol {
+    Name: resume_bare_load (256)
+    Value: 0x802000EC
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: resume_bare_store (273)
+    Value: 0x80200110
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: resume_bare_fetch (291)
+    Value: 0x8020012C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: guest_message (309)
+    Value: 0x80200540
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: uart_write_loop (323)
+    Value: 0x80200138
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: uart_write_done (339)
+    Value: 0x8020014C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: clear_tables (355)
+    Value: 0x8020015C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: resume_sv39_load (368)
+    Value: 0x80200280
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: resume_sv39_alias (385)
+    Value: 0x80200298
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: resume_sv39_fetch (403)
+    Value: 0x802002B0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: resume_page_fault (421)
+    Value: 0x802002C8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: copy_message (439)
+    Value: 0x80200318
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: message_done (452)
+    Value: 0x80200330
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: guest_done (465)
+    Value: 0x802003D8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: fail_wait (476)
+    Value: 0x80200420
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: trap_unexpected (486)
+    Value: 0x802004AC
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: expected_causes (502)
+    Value: 0x802004D0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: expected_tvals (518)
+    Value: 0x80200508
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: $d (533)
+    Value: 0x802004D0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: $d (536)
+    Value: 0x80200540
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .rodata (0x2)
+  }
+  Symbol {
+    Name: $d (539)
+    Value: 0x80210000
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .data (0x3)
+  }
+  Symbol {
+    Name: $d (542)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: _start (545)
+    Value: 0x80200000
+    Size: 1232
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x1)
+  }
+  Symbol {
+    Name: supervisor_trap (552)
+    Value: 0x80200428
+    Size: 0
+    Binding: Global (0x1)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x1)
+  }
+]

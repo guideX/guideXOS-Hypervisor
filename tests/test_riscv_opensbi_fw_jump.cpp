@@ -729,6 +729,7 @@ void TestNegativeContracts(const std::vector<uint8_t>& fwBin,
 
 } // namespace
 
+#ifndef RISCV_OPENSBI_FWJUMP_HELPERS_ONLY
 int main(int argc, char** argv) {
     if (argc != 5) {
         std::cerr << "usage: test_riscv_opensbi_fw_jump fw_jump.bin fw_jump.elf supervisor.elf platform.dtb\n";
@@ -821,3 +822,4 @@ int main(int argc, char** argv) {
     std::cout << "RISCV-9 OpenSBI checks=" << g_checks << " failures=" << g_failures << '\n';
     return g_failures == 0 ? 0 : 1;
 }
+#endif

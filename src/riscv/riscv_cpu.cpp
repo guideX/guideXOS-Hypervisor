@@ -2,6 +2,7 @@
 
 #include "riscv/riscv_mmu.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -32,6 +33,9 @@ constexpr uint32_t kCsrMepc = 0x341U;
 constexpr uint32_t kCsrMcause = 0x342U;
 constexpr uint32_t kCsrMtval = 0x343U;
 constexpr uint32_t kCsrMip = 0x344U;
+constexpr uint32_t kCsrPmpcfg0 = 0x3A0U;
+constexpr uint32_t kCsrPmpcfg2 = 0x3A2U;
+constexpr uint32_t kCsrPmpaddr0 = 0x3B0U;
 constexpr uint32_t kCsrMvendorid = 0xF11U;
 constexpr uint32_t kCsrMarchid = 0xF12U;
 constexpr uint32_t kCsrMimpid = 0xF13U;
@@ -55,6 +59,17 @@ constexpr uint64_t kMipSoftwareWritableMask =
 uint64_t SignExtendTo64(int32_t value) { return static_cast<uint64_t>(static_cast<int64_t>(value)); }
 
 constexpr size_t kReservationGranuleSize = 16;
+constexpr size_t kPmpEntries = 16;
+constexpr unsigned kPmpPhysicalAddressBits = 56;
+constexpr unsigned kPmpAddressRegisterBits = kPmpPhysicalAddressBits - 2;
+constexpr uint64_t kPmpAddressMask = (1ULL << kPmpAddressRegisterBits) - 1ULL;
+constexpr uint8_t kPmpRead = 1U << 0;
+constexpr uint8_t kPmpWrite = 1U << 1;
+constexpr uint8_t kPmpExecute = 1U << 2;
+constexpr uint8_t kPmpAddressModeMask = 3U << 3;
+constexpr uint8_t kPmpLock = 1U << 7;
+constexpr size_t kPmpTraceCapacity = 512;
+constexpr size_t kPmpDeniedTraceCapacity = 128;
 
 uint64_t SignExtendWord(uint32_t value) {
     return ((value & 0x80000000U) != 0U ? 0xFFFFFFFF00000000ULL : 0ULL) |
@@ -291,7 +306,8 @@ RV64CPU::~RV64CPU() {
     delete mmu_;
 }
 
-RV64CPU::RV64CPU() : state_(), decoder_(), mmu_(new Sv39Mmu(this)) {
+RV64CPU::RV64CPU(PmpMachineProfile profile)
+    : state_(), decoder_(), pmpProfile_(profile), mmu_(new Sv39Mmu(this)) {
     uartStates_[1].mapping.baseAddress = 0x1000A000ULL;
     uartStates_[1].plicSource = 12;
     reset();
@@ -314,6 +330,11 @@ void RV64CPU::reset() {
     mcause_ = 0;
     mtval_ = 0;
     mcounteren_ = 0;
+    pmpConfig_.fill(0);
+    pmpAddress_.fill(0);
+    pmpTrace_.clear();
+    pmpCsrTrace_.clear();
+    pmpDeniedTrace_.clear();
     stvec_ = 0;
     sscratch_ = 0;
     sepc_ = 0;
@@ -385,6 +406,172 @@ bool RV64CPU::rangeInGuest(uint64_t addr, size_t size) const {
     }
     const uint64_t remaining = static_cast<uint64_t>(mem_.size()) - offset;
     return static_cast<uint64_t>(size) <= remaining;
+}
+
+size_t RV64CPU::pmpImplementedEntries() const {
+    return pmpProfile_ == PmpMachineProfile::StandardPmp16 ? kPmpEntries : 0;
+}
+
+bool RV64CPU::pmpEntryLocked(size_t index) const {
+    return index < pmpImplementedEntries() && (pmpConfig_[index] & kPmpLock) != 0;
+}
+
+uint8_t RV64CPU::pmpConfig(size_t index) const {
+    return index < pmpImplementedEntries() ? pmpConfig_[index] : 0;
+}
+
+uint64_t RV64CPU::pmpAddress(size_t index) const {
+    return index < pmpImplementedEntries() ? pmpAddress_[index] & kPmpAddressMask : 0;
+}
+
+PmpEntryView RV64CPU::decodePmpEntry(size_t index) const {
+    PmpEntryView view;
+    if (index >= pmpImplementedEntries()) return view;
+    view.config = pmpConfig_[index];
+    view.encodedAddress = pmpAddress_[index] & kPmpAddressMask;
+    const uint8_t mode = static_cast<uint8_t>((view.config & kPmpAddressModeMask) >> 3);
+    if (mode == 0) return view;
+
+    if (mode == 1) { // TOR
+        view.lowerBound = index == 0 ? 0ULL : pmpAddress_[index - 1] << 2;
+        view.upperBound = pmpAddress_[index] << 2;
+        view.active = view.upperBound > view.lowerBound;
+        return view;
+    }
+    if (mode == 2) { // NA4 (the selected profile has G=0)
+        view.lowerBound = view.encodedAddress << 2;
+        view.upperBound = view.lowerBound + 4ULL;
+        view.active = true;
+        return view;
+    }
+
+    // NAPOT: the number of trailing ones selects the region order. The
+    // largest implemented entry spans 2^57 bytes, safely representable in
+    // uint64_t and wider than the implemented 56-bit PA space.
+    unsigned trailingOnes = 0;
+    uint64_t encoded = view.encodedAddress;
+    while (trailingOnes < kPmpAddressRegisterBits && (encoded & 1ULL) != 0ULL) {
+        ++trailingOnes;
+        encoded >>= 1;
+    }
+    const unsigned sizeShift = trailingOnes + 3U;
+    const uint64_t regionSize = 1ULL << sizeShift;
+    const uint64_t physicalBase = view.encodedAddress << 2;
+    view.lowerBound = physicalBase & ~(regionSize - 1ULL);
+    view.upperBound = view.lowerBound + regionSize;
+    view.active = true;
+    return view;
+}
+
+bool RV64CPU::pmpEntry(size_t index, PmpEntryView& view) const {
+    if (index >= pmpImplementedEntries()) return false;
+    view = decodePmpEntry(index);
+    return true;
+}
+
+PrivilegeMode RV64CPU::effectiveDataPrivilege() const {
+    if (priv_ != PrivilegeMode::Machine || (mstatus_ & kMstatusMprv) == 0ULL) {
+        return priv_;
+    }
+    const uint64_t mpp = (mstatus_ & kMstatusMppMask) >> 11;
+    if (mpp == 3ULL) return PrivilegeMode::Machine;
+    if (mpp == 1ULL) return PrivilegeMode::Supervisor;
+    return PrivilegeMode::User;
+}
+
+void RV64CPU::recordPmpEvent(const PmpTraceEvent& event) const {
+    auto& trace = event.kind == PmpTraceKind::PhysicalAccess ? pmpTrace_ : pmpCsrTrace_;
+    if (trace.size() == kPmpTraceCapacity) {
+        trace.erase(trace.begin());
+    }
+    trace.push_back(event);
+}
+
+bool RV64CPU::checkPhysicalAccess(uint64_t paddr, size_t size, AccessType access,
+                                  PrivilegeMode privilege, uint64_t virtualAddress,
+                                  bool hasVirtualAddress) const {
+    if (size == 0) return true;
+    if (pmpImplementedEntries() == 0) return true;
+
+    bool allowed = false;
+    int8_t matchingEntry = -1;
+    uint8_t matchingConfig = 0;
+    if (static_cast<uint64_t>(size) <= UINT64_MAX - paddr) {
+        const uint64_t accessEnd = paddr + static_cast<uint64_t>(size);
+        for (size_t index = 0; index < pmpImplementedEntries(); ++index) {
+            const PmpEntryView entry = decodePmpEntry(index);
+            if (!entry.active || paddr >= entry.upperBound || entry.lowerBound >= accessEnd) {
+                continue;
+            }
+            matchingEntry = static_cast<int8_t>(index);
+            matchingConfig = entry.config;
+            const bool allBytesMatch = paddr >= entry.lowerBound && accessEnd <= entry.upperBound;
+            if (!allBytesMatch) {
+                allowed = false;
+            } else if (privilege == PrivilegeMode::Machine &&
+                       (entry.config & kPmpLock) == 0) {
+                // Unlocked PMP regions grant M-mode access regardless of the
+                // R/W/X bits; the architectural whole-access match rule still
+                // applies before this permission shortcut.
+                allowed = true;
+            } else {
+                const uint8_t required = access == AccessType::Fetch ? kPmpExecute
+                    : access == AccessType::Load ? kPmpRead : kPmpWrite;
+                allowed = (entry.config & required) != 0;
+            }
+            break; // static priority: lowest numbered matching entry wins
+        }
+        if (matchingEntry < 0) {
+            allowed = privilege == PrivilegeMode::Machine;
+        }
+    }
+
+    PmpTraceEvent event;
+    event.kind = PmpTraceKind::PhysicalAccess;
+    event.access = access;
+    event.privilege = privilege;
+    event.matchingEntry = matchingEntry;
+    event.config = matchingConfig;
+    event.pc = getPC();
+    event.virtualAddress = virtualAddress;
+    event.physicalAddress = paddr;
+    event.size = static_cast<uint64_t>(size);
+    event.hasVirtualAddress = hasVirtualAddress;
+    event.allowed = allowed;
+    recordPmpEvent(event);
+    if (!allowed) {
+        const auto duplicate = std::find_if(pmpDeniedTrace_.begin(), pmpDeniedTrace_.end(),
+            [&event](const PmpTraceEvent& prior) {
+                return prior.pc == event.pc && prior.access == event.access &&
+                       prior.privilege == event.privilege &&
+                       prior.virtualAddress == event.virtualAddress &&
+                       prior.physicalAddress == event.physicalAddress &&
+                       prior.matchingEntry == event.matchingEntry;
+            });
+        if (duplicate == pmpDeniedTrace_.end()) {
+            if (pmpDeniedTrace_.size() == kPmpDeniedTraceCapacity) {
+                pmpDeniedTrace_.erase(pmpDeniedTrace_.begin());
+            }
+            pmpDeniedTrace_.push_back(event);
+        }
+    }
+    return allowed;
+}
+
+bool RV64CPU::readPhysicalAccess(uint64_t paddr, uint8_t* dst, size_t size,
+                                 AccessType access, PrivilegeMode privilege,
+                                 uint64_t virtualAddress, bool hasVirtualAddress) const {
+    if (!checkPhysicalAccess(paddr, size, access, privilege, virtualAddress,
+                             hasVirtualAddress)) return false;
+    return readPhysicalRaw(paddr, dst, size);
+}
+
+bool RV64CPU::writePhysicalAccess(uint64_t paddr, const uint8_t* src, size_t size,
+                                  PrivilegeMode privilege, uint64_t virtualAddress,
+                                  bool hasVirtualAddress) {
+    if (!checkPhysicalAccess(paddr, size, AccessType::Store, privilege,
+                             virtualAddress, hasVirtualAddress)) return false;
+    return writePhysicalRaw(paddr, src, size);
 }
 
 void RV64CPU::clearReservation() {
@@ -737,6 +924,11 @@ bool RV64CPU::writeTimerMmio(uint64_t paddr, const uint8_t* src, size_t size,
 }
 
 bool RV64CPU::readPhysical(uint64_t paddr, uint8_t* dst, size_t size) const {
+    return readPhysicalAccess(paddr, dst, size, AccessType::Load,
+                              effectiveDataPrivilege());
+}
+
+bool RV64CPU::readPhysicalRaw(uint64_t paddr, uint8_t* dst, size_t size) const {
     if (dst == nullptr) {
         return false;
     }
@@ -796,6 +988,10 @@ bool RV64CPU::readU64(uint64_t addr, uint64_t& value) const {
 }
 
 bool RV64CPU::writePhysical(uint64_t paddr, const uint8_t* src, size_t size) {
+    return writePhysicalAccess(paddr, src, size, effectiveDataPrivilege());
+}
+
+bool RV64CPU::writePhysicalRaw(uint64_t paddr, const uint8_t* src, size_t size) {
     if (src == nullptr) {
         return false;
     }
@@ -1218,7 +1414,7 @@ bool RV64CPU::fetchBytes(uint64_t vaddr, uint8_t* dst, size_t size) {
         paddr = xlt.paddr;
     }
     if (timerMmioOverlaps(paddr, size)) return false;
-    return readPhysical(paddr, dst, size);
+    return readPhysicalAccess(paddr, dst, size, AccessType::Fetch, priv_, vaddr, true);
 }
 
 // Sv39-translated store. M-mode stores bypass translation unless MPRV=1.
@@ -1265,6 +1461,10 @@ bool RV64CPU::csrIsReadOnly(uint32_t csr) {
 }
 
 bool RV64CPU::csrSupported(uint32_t csr) const {
+    if (pmpImplementedEntries() != 0) {
+        if (csr == kCsrPmpcfg0 || csr == kCsrPmpcfg2) return true;
+        if (csr >= kCsrPmpaddr0 && csr < kCsrPmpaddr0 + kPmpEntries) return true;
+    }
     switch (csr) {
         case kCsrSstatus:
         case kCsrSie:
@@ -1300,6 +1500,27 @@ bool RV64CPU::csrSupported(uint32_t csr) const {
 }
 
 bool RV64CPU::csrRead(uint32_t csr, uint64_t& value) const {
+    if (pmpImplementedEntries() != 0) {
+        if (csr == kCsrPmpcfg0 || csr == kCsrPmpcfg2) {
+            const size_t first = csr == kCsrPmpcfg0 ? 0U : 8U;
+            value = 0;
+            for (size_t field = 0; field < 8; ++field) {
+                value |= static_cast<uint64_t>(pmpConfig_[first + field]) << (field * 8U);
+            }
+        } else if (csr >= kCsrPmpaddr0 && csr < kCsrPmpaddr0 + kPmpEntries) {
+            value = pmpAddress_[csr - kCsrPmpaddr0] & kPmpAddressMask;
+        } else {
+            goto ordinary_csr_read;
+        }
+        PmpTraceEvent event;
+        event.kind = PmpTraceKind::CsrRead;
+        event.csr = static_cast<uint16_t>(csr);
+        event.csrValue = value;
+        event.pc = getPC();
+        recordPmpEvent(event);
+        return true;
+    }
+ordinary_csr_read:
     switch (csr) {
         case kCsrMstatus: value = mstatus_; return true;
         case kCsrSstatus: value = mstatus_ & kSstatusMask; return true;
@@ -1336,6 +1557,46 @@ bool RV64CPU::csrRead(uint32_t csr, uint64_t& value) const {
 }
 
 bool RV64CPU::csrWrite(uint32_t csr, uint64_t value) {
+    if (pmpImplementedEntries() != 0) {
+        if (csr == kCsrPmpcfg0 || csr == kCsrPmpcfg2) {
+            const size_t first = csr == kCsrPmpcfg0 ? 0U : 8U;
+            for (size_t field = 0; field < 8; ++field) {
+                const size_t index = first + field;
+                if (pmpEntryLocked(index)) continue;
+                uint8_t config = static_cast<uint8_t>((value >> (field * 8U)) & 0xFFULL);
+                config &= static_cast<uint8_t>(kPmpRead | kPmpWrite | kPmpExecute |
+                                               kPmpAddressModeMask | kPmpLock);
+                // The reserved R=0,W=1 encoding is WARL-mapped to R=0,W=0.
+                if ((config & kPmpRead) == 0 && (config & kPmpWrite) != 0) {
+                    config &= static_cast<uint8_t>(~kPmpWrite);
+                }
+                pmpConfig_[index] = config;
+            }
+            value = 0;
+            for (size_t field = 0; field < 8; ++field) {
+                value |= static_cast<uint64_t>(pmpConfig_[first + field]) << (field * 8U);
+            }
+        } else if (csr >= kCsrPmpaddr0 && csr < kCsrPmpaddr0 + kPmpEntries) {
+            const size_t index = csr - kCsrPmpaddr0;
+            const bool lockedTorSuccessor = index + 1U < pmpImplementedEntries() &&
+                pmpEntryLocked(index + 1U) &&
+                (pmpConfig_[index + 1U] & kPmpAddressModeMask) == (1U << 3);
+            if (!pmpEntryLocked(index) && !lockedTorSuccessor) {
+                pmpAddress_[index] = value & kPmpAddressMask;
+            }
+            value = pmpAddress_[index] & kPmpAddressMask;
+        } else {
+            goto ordinary_csr_write;
+        }
+        PmpTraceEvent event;
+        event.kind = PmpTraceKind::CsrWrite;
+        event.csr = static_cast<uint16_t>(csr);
+        event.csrValue = value;
+        event.pc = getPC();
+        recordPmpEvent(event);
+        return true;
+    }
+ordinary_csr_write:
     switch (csr) {
         case kCsrMstatus: {
             uint64_t masked = value & kMstatusWritableMask;
@@ -1653,7 +1914,8 @@ StepResult RV64CPU::step() {
         fetchPaddr = xlt.paddr;
     }
     if (timerMmioOverlaps(fetchPaddr, sizeof(half)) ||
-        !readPhysical(fetchPaddr, half, sizeof(half))) {
+        !readPhysicalAccess(fetchPaddr, half, sizeof(half), AccessType::Fetch,
+                            priv_, pc, true)) {
         result.insn = DecodedInstruction();
         deliverTrap(TrapCause::InstructionAccessFault, pc, pc, result);
         return result;
@@ -1707,7 +1969,8 @@ StepResult RV64CPU::step() {
         wordPaddr = xlt.paddr;
     }
     if (timerMmioOverlaps(wordPaddr, sizeof(word)) ||
-        !readPhysical(wordPaddr, word, sizeof(word))) {
+        !readPhysicalAccess(wordPaddr, word, sizeof(word), AccessType::Fetch,
+                            priv_, pc, true)) {
         result.insn = DecodedInstruction();
         deliverTrap(TrapCause::InstructionAccessFault, pc, pc, result);
         return result;
@@ -2017,6 +2280,25 @@ StepResult RV64CPU::step() {
                 return result;
             }
 
+            // Perform every permission check before the first atomic memory
+            // operation. SC checks write permission even when its reservation
+            // will fail; AMOs require both read and write permission.
+            const PrivilegeMode dataPrivilege = effectiveDataPrivilege();
+            if (!isStoreConditional &&
+                !checkPhysicalAccess(loadPaddr, width, AccessType::Load,
+                                     dataPrivilege, address, true)) {
+                deliverTrap(isLoadReserved ? TrapCause::LoadAccessFault
+                                           : TrapCause::StoreAccessFault,
+                            address, pc, result);
+                return result;
+            }
+            if (!isLoadReserved &&
+                !checkPhysicalAccess(storePaddr, width, AccessType::Store,
+                                     dataPrivilege, address, true)) {
+                deliverTrap(TrapCause::StoreAccessFault, address, pc, result);
+                return result;
+            }
+
             // Keep a candidate reservation live through translation so an
             // A/D-bit write through the normal physical write path can
             // invalidate an overlapping reservation. Every nontrapping SC
@@ -2036,7 +2318,7 @@ StepResult RV64CPU::step() {
                     for (size_t i = 0; i < width; ++i) {
                         bytes[i] = static_cast<uint8_t>((source >> (8U * i)) & 0xFFU);
                     }
-                    if (!writePhysical(storePaddr, bytes, width)) {
+                    if (!writePhysicalRaw(storePaddr, bytes, width)) {
                         deliverTrap(TrapCause::StoreAccessFault, address, pc, result);
                         return result;
                     }
@@ -2044,7 +2326,7 @@ StepResult RV64CPU::step() {
                 }
             } else {
                 uint8_t bytes[8] = {0};
-                if (!readPhysical(loadPaddr, bytes, width)) {
+                if (!readPhysicalRaw(loadPaddr, bytes, width)) {
                     deliverTrap(TrapCause::LoadAccessFault, address, pc, result);
                     return result;
                 }
@@ -2105,7 +2387,7 @@ StepResult RV64CPU::step() {
                             bytes[i] = static_cast<uint8_t>((newValue >> (8U * i)) & 0xFFU);
                         }
                     }
-                    if (!writePhysical(storePaddr, bytes, width)) {
+                    if (!writePhysicalRaw(storePaddr, bytes, width)) {
                         deliverTrap(TrapCause::StoreAccessFault, address, pc, result);
                         return result;
                     }
@@ -2258,7 +2540,8 @@ StepResult RV64CPU::step() {
                 }
             }
             uint8_t bytes[8] = {0};
-            if (!readPhysical(loadPaddr, bytes, accessSize)) {
+            if (!readPhysicalAccess(loadPaddr, bytes, accessSize, AccessType::Load,
+                                    effectiveDataPrivilege(), eff, true)) {
                 deliverTrap(TrapCause::LoadAccessFault, eff, pc, result);
                 return result;
             }
@@ -2325,7 +2608,8 @@ StepResult RV64CPU::step() {
             for (size_t i = 0; i < accessSize; ++i) {
                 bytes[i] = static_cast<uint8_t>((value >> (8U * i)) & 0xFFU);
             }
-            if (!writePhysical(storePaddr, bytes, accessSize)) {
+            if (!writePhysicalAccess(storePaddr, bytes, accessSize,
+                                     effectiveDataPrivilege(), eff, true)) {
                 deliverTrap(TrapCause::StoreAccessFault, eff, pc, result);
                 return result;
             }

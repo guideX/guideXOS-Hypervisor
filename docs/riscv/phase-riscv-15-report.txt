@@ -1,0 +1,186 @@
+guideXOS Hypervisor — Phase RISCV-15 Report
+RISC-V Physical Memory Protection and OpenSBI Integration
+Date: 2026-11-04
+Outcome: A — accepted scope demonstrated
+
+Scope and starting state
+------------------------
+Implemented standard RV64 PMP in the production CPU and verified it with
+architectural CSR/matching tests plus unchanged OpenSBI v1.8.1 FW_JUMP and an
+independently assembled S-mode guest. No Linux or QEMU boot was attempted.
+
+Starting branch: RISCV
+Starting HEAD: c13cfab698c9511a7c410b619e7dc6048efc52bd
+Starting upstream divergence: ahead 1, behind 0
+
+The pre-existing untracked Testing/ directory and dual-UART and PLIC/UART
+fixture .build/ directories were preserved. No IA-64 implementation source or
+OpenSBI firmware was changed. The shared .phase marker was not changed. PMP
+is opt-in; earlier fixtures retain their no-PMP default.
+
+PMP profile and implementation
+------------------------------
+PmpMachineProfile::StandardPmp16 implements 16 entries, G=0 / four-byte
+granularity, 54 encoded pmpaddr bits, and a 56-bit physical address space.
+LegacyNoPmp implements no PMP entries. Reset leaves implemented entries OFF,
+unlocked, with zero pmpaddr values while preserving the selected profile.
+
+The RV64 CSR interface implements pmpcfg0, pmpcfg2, and pmpaddr0 through
+pmpaddr15. Odd pmpcfg banks and unimplemented PMP CSR addresses trap as
+illegal. Standard CSR instruction semantics and M-mode-only privilege checks
+apply. Reserved config bits read zero; reserved R=0,W=1 is WARL-mapped to
+R=0,W=0. L locks configuration and address; a locked TOR entry also prevents
+writes to its predecessor address. Reset clears locks. Smepmp/ePMP and
+mseccfg are not implemented or advertised.
+
+OFF, TOR, NA4, and NAPOT decode use bounded shifts and overflow-safe range
+arithmetic. Entries are checked in priority order; the first entry matching
+any byte decides the result, and partial range matches deny the whole access.
+S/U accesses use R/W/X permissions; unmatched S/U accesses fail when PMP
+exists. Unmatched M-mode accesses pass, and unlocked entries do not constrain
+M-mode. Locked permissions apply to M-mode. MPRV selects effective privilege
+for data accesses; instruction fetch retains current privilege.
+
+PMP checks cover instruction fetch, integer loads/stores, LR/SC/AMOs, MMIO,
+Sv39 final accesses, and implicit S-mode page-table reads and A/D writes.
+Denied device operations are checked before MMIO dispatch. Per-CPU PMP state
+and bounded traces are implemented: 512 CSR events, 512 physical-access
+events, and 128 unique denied events.
+
+Dedicated PMP tests
+-------------------
+test_riscv_pmp executes 137 explicit runtime checks in Debug and Release.
+Coverage includes no-PMP compatibility, CSR banks/privilege/WARL/reset/locking,
+OFF/TOR/NA4/NAPOT boundaries, overlap and priority, partial access denial,
+M-mode and MPRV rules, fetch/load/store fault precision, Sv39 page-table and
+final physical accesses, translated atomic accesses, LR.W/D, SC.W/D, AMO.W/D,
+CPU-instance isolation, guest-executed M-mode PMP permission recovery, and
+MMIO side effects.
+
+The denied UART RBR read leaves the queued byte available; an allowed read then
+consumes it. A denied PLIC claim leaves the source pending, does not increment
+claim-read diagnostics, and leaves the S-context output asserted; an allowed
+claim later consumes it. A denied S-mode mtimecmp write leaves the deadline at
+1000 and adds no Timer write to the MMIO trace. Denied atomics leave the
+original 64-bit RAM value unchanged.
+
+Sv39 and precise faults
+----------------------
+A valid Sv39 mapping to a PMP-denied physical address raises an access fault.
+Two virtual aliases to the same firmware page are both denied. An execute-only
+PTE used for a load raises a load page fault. A PMP-denied implicit page-table
+read is tested through the production walker and by a real S-mode load:
+delegated scause=5, stval=0x40000000, and sepc equal to the guest fault PC.
+A denied A/D update is classified as an access fault for the original
+operation.
+
+The independent guest trap handler checks and recovers from these seven traps
+in order:
+
+  cause 5, tval 0x80000000 — bare firmware load
+  cause 7, tval 0x80000000 — bare firmware store
+  cause 1, tval 0x80000000 — bare firmware instruction fetch
+  cause 5, tval 0x40000000 — Sv39-translated firmware load
+  cause 5, tval 0x40001000 — second virtual alias load
+  cause 1, tval 0x40000000 — Sv39-translated firmware fetch
+  cause 13, tval 0x40002000 — Sv39 page-level load permission fault
+
+The integration trace retains six unique denied physical checks (the page
+permission failure happens before a final PMP access) with access type,
+effective S privilege, guest VA when applicable, translated PA, selected PMP
+entry/config, and guest PC. The C++ harness does not suppress guest faults.
+
+Authentic OpenSBI evidence
+--------------------------
+The integration reuses the byte-identical OpenSBI v1.8.1 FW_JUMP image from
+source commit 74434f255873d74e56cc50aa762d1caf24c099f8 and the unchanged
+RISCV-9 platform FDT. Guest-executed PMP probes produce this firmware report:
+
+  PMP Count: 16
+  PMP Granularity: 2 bits (four bytes)
+  PMP Address Bits: 54
+
+The bounded CSR trace includes the all-ones pmpaddr0 probe/readback
+0x003fffffffffffff, accesses to pmpaddr0–15, configuration readbacks, and
+OpenSBI domain programming. Effective entries match OpenSBI's printed map:
+
+  entry 1, cfg 0x18: [0x80000000, 0x80080000), no S/U permissions
+  entry 0, cfg 0x18: [0x80080000, 0x800a0000), no S/U permissions
+  entry 2, cfg 0x1b: [0x10000000, 0x10001000), S/U read/write UART0
+  entry 3, cfg 0x1f: [0, 2^57), S/U read/write/execute catch-all
+
+The firmware ELF load range is [0x80000000,0x80084e50). The first two
+entries are contiguous and deny S-mode across that full ELF range. Bare and
+translated guest load/store/fetch attempts at 0x80000000 are denied by entry 1.
+OpenSBI hands off to S-mode at 0x80200000 with the rules active. Its domain
+report grants UART0 and a broad catch-all for remaining physical addresses.
+Therefore this phase proves protection of the selected firmware range, not
+complete separation of every device or all physical memory. In particular,
+the PLIC and timer sit within OpenSBI's catch-all policy; standalone tests
+separately verify PMP's unmatched-region denial and side-effect prevention.
+
+The guest checks permitted code, stack, and data under Sv39; writes
+Hello from PMP on guideXOS through authorized UART0; and then makes a genuine
+SBI Base Get Spec Version call through OpenSBI. There is no host-side SBI
+provider. Firmware and guest retire about 3.46 million instructions. The guest
+reaches its completion marker after seven trap recoveries and one SBI call.
+
+The guest-authored version-2 result signature includes magic
+0x47584f5352495356, status zero, seven traps, SBI version 0x03000000,
+arithmetic value 42, stack sentinel 0x6a09e667f3bcc909, initialized-data
+sentinel 0x1122334455667788, physical/virtual test addresses, and completion
+word 0x434f4d504c455445. The guest writes the completion word last. The host
+validates the signature and each trap cause/address/PC.
+
+Validation
+----------
+  RISC-V Debug: all 21 CTest suites passed, 634.89 seconds.
+  Focused PMP Debug: unit and integration targets both passed; the unit target
+  was rerun after final coverage additions. Runtime checks: 137 and 45.
+  Focused PMP Release: unit and integration targets both passed; the unit
+  target was rerun after final coverage additions. Runtime checks: 137 and 45.
+  EFI memory-map and IA-64 SAL CTests: 2/2 passed in Debug and Release.
+  Direct IA-64 ACPI, interrupt-controller, and processor interrupt block
+  regressions: all three passed in Debug and Release.
+  git diff --check: passed.
+
+The full RISC-V Debug run includes RISCV-9 through RISCV-14 authentic firmware,
+Sv39, RV64A, SBI Base/TIME, PLIC/UART, dual-UART, mixed-interrupt, and
+supervisor-software-interrupt regressions. No IA-64 implementation changed.
+Known unrelated test_io_devices and legacy test_elf_validation issues were
+left untouched.
+
+Artifact provenance
+-------------------
+  OpenSBI commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+  fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+  fw_jump.elf SHA-256: 255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+  platform.dtb SHA-256: B2CBFE6E2A6C4D21616BEC6EEF216A9A42F7068B9853505C700751FA7C92E093
+  supervisor.bin SHA-256: D3F31770C2F6CB7A62546AD34410200E52CE972791C79AED9474C2F93650075F
+  supervisor.elf SHA-256: 69F76196419A66F00EDCDD473F7E314E9AEFAE1595E79E444CFE8523516804EA
+  Payload toolchain: clang 22.1.8, riscv64-unknown-elf, rv64ima_zicsr/lp64,
+  no relaxation, freestanding/no runtime. The fixture manifest records the
+  complete flags and sizes.
+
+Linux prerequisites and next phase
+----------------------------------
+Linux was not attempted. Remaining platform work includes tighter explicit
+OpenSBI rules for guest RAM, ACLINT, PLIC, and each UART; guest checks for
+authorized and denied accesses under those exact rules; additional device
+coverage; and a documented bootable platform/device tree. The machine remains
+single-hart, has no storage/virtio/PCI path, and is not full QEMU virt
+compatible. This report does not claim a secure virtualization boundary or
+isolation of all machine firmware/resources.
+
+Recommended RISCV-16: define a narrow OpenSBI domain policy for guest RAM and
+each platform MMIO window, test authorized/denied PLIC, timer, and UART accesses
+under the authentic handoff, and demonstrate safe M-mode PMP permission
+recovery plus the required translation synchronization. Keep Linux boot and
+broader platform devices as separately scoped follow-on work.
+
+References
+----------
+RISC-V Privileged Architecture, Machine-Level ISA, PMP sections:
+https://docs.riscv.org/reference/isa/priv/machine.html
+Pinned OpenSBI v1.8.1 source commit:
+https://github.com/riscv-software-src/opensbi/tree/74434f255873d74e56cc50aa762d1caf24c099f8

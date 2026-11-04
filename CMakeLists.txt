@@ -1031,6 +1031,47 @@ else()
     target_compile_options(test_riscv_supervisor_software_interrupts PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-15 architectural PMP CSR, matching, privilege, Sv39, atomic, and MMIO tests.
+add_executable(test_riscv_pmp
+    tests/test_riscv_pmp.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+add_test(NAME RiscVPmpTests COMMAND test_riscv_pmp)
+if(MSVC)
+    target_compile_options(test_riscv_pmp PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_pmp PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# RISCV-15 authentic OpenSBI PMP discovery, firmware isolation, and Sv39 faults.
+set(RISCV_OPENSBI_PMP_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_pmp)
+set(RISCV_OPENSBI_PMP_SUPERVISOR_ELF_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv15_pmp_supervisor.elf)
+configure_file(${RISCV_OPENSBI_PMP_FIXTURE_DIR}/supervisor.elf
+               ${RISCV_OPENSBI_PMP_SUPERVISOR_ELF_COPY} COPYONLY)
+add_executable(test_riscv_opensbi_pmp
+    tests/test_riscv_opensbi_pmp.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_opensbi_pmp PRIVATE bcrypt)
+add_test(NAME RiscVOpenSbiPmpTests
+         COMMAND test_riscv_opensbi_pmp
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_OPENSBI_PMP_SUPERVISOR_ELF_COPY}
+                 ${RISCV_OPENSBI_DTB_COPY})
+if(MSVC)
+    target_compile_options(test_riscv_opensbi_pmp PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_opensbi_pmp PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

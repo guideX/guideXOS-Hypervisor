@@ -1,0 +1,11 @@
+OpenSBI source commit: 74434f255873d74e56cc50aa762d1caf24c099f8 (unchanged)
+OpenSBI fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+OpenSBI fw_jump.elf SHA-256: 255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+Platform FDT SHA-256: B2CBFE6E2A6C4D21616BEC6EEF216A9A42F7068B9853505C700751FA7C92E093
+Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+Linker script: supervisor.ld; entry=0x80200000; independent freestanding ELF
+The build reads the firmware/FDT inputs and does not rebuild them.
+
+D3F31770C2F6CB7A62546AD34410200E52CE972791C79AED9474C2F93650075F  supervisor.bin  65552 bytes
+69F76196419A66F00EDCDD473F7E314E9AEFAE1595E79E444CFE8523516804EA  supervisor.elf  10520 bytes

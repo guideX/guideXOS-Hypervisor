@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-14)
+RISC-V Decoder and Execution Status (updated Phase RISCV-15)
 
 Current decoded instruction families:
 - RV64I
@@ -649,3 +649,41 @@ Validation and next target:
 - Recommended RISCV-15: define and validate PMP access permissions over the
   firmware, guest RAM, and MMIO regions together with Sv39 access-fault
   handling. Keep multi-hart and SBI IPI work in a separately authorized phase.
+
+--- Phase RISCV-15: standard RV64 physical memory protection ---
+
+- The CPU exposes PMP only when constructed with the explicit
+  `PmpMachineProfile::StandardPmp16` profile. It implements 16 entries, a
+  four-byte grain (G=0), and 54 pmpaddr bits encoding a 56-bit physical
+  address. Historical fixtures retain the default `LegacyNoPmp` profile.
+- RV64 `pmpcfg0` and `pmpcfg2`, plus `pmpaddr0` through `pmpaddr15`, use
+  M-mode CSR access checks and instruction-level CSR read/write/suppression
+  rules. Odd config banks and unavailable PMP registers are illegal. Reset
+  leaves every entry OFF and unlocked. Reserved R=0/W=1 is WARL-mapped to
+  read-only no-permission; reserved config bits read zero. Standard L-bit and
+  locked-TOR predecessor address restrictions are implemented. Smepmp and
+  `mseccfg` are not implemented or advertised.
+- PMP matching supports OFF, TOR, NA4, and NAPOT with overflow-safe range
+  decoding. Lowest-numbered partial matches deny the whole access. S/U
+  unmatched accesses are denied when PMP exists; unmatched M-mode accesses
+  pass, and unlocked entries do not restrict M-mode. MPRV selects effective
+  data privilege. Instruction fetch uses the current privilege. PMP checks
+  run after Sv39 translation and cover implicit supervisor PTE reads and A/D
+  writes as well as guest data, atomics, and MMIO.
+- The dedicated PMP suite covers CSR banks and privilege, reset/profile
+  isolation, WARL handling, matching/priority, access traps, MPRV, Sv39 page
+  table and final physical accesses, translated LR/SC/AMO atomicity, and
+  denied UART, PLIC, and timer side effects. A guest-executed M-mode trap
+  handler changes an unlocked PMP entry and MRETs to a previously denied S-mode
+  load, which then succeeds. The OpenSBI guest validates actual S-mode
+  firmware read/write/fetch denials, translated aliases, a page fault, and
+  subsequent successful SBI Base and UART operations.
+- The authentic OpenSBI v1.8.1 FW_JUMP image remains unchanged. Its own UART
+  report identifies 16 PMP entries, 2-bit/four-byte granularity, and 54
+  address bits. The S-mode domain denies access to adjacent firmware text and
+  read/write regions through separate contiguous PMP entries; UART0 is
+  explicitly granted to S-mode. See `phase-riscv-15-report.txt` for the exact
+  ranges, trace, image hashes, validation results, and remaining platform work.
+- Standard PMP is a physical-access control feature. It does not add the RISC-V
+  hypervisor extension or establish isolation beyond the ranges and access
+  modes measured in the RISCV-15 tests.
