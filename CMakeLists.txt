@@ -999,6 +999,38 @@ else()
     target_compile_options(test_riscv_mixed_interrupts PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-14 authentic OpenSBI SSI, three-way supervisor priority, and WFI proof.
+set(RISCV_SUPERVISOR_SOFTWARE_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_supervisor_software)
+set(RISCV_SUPERVISOR_SOFTWARE_ELF_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv14_supervisor_software.elf)
+set(RISCV_SUPERVISOR_SOFTWARE_DTB_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv14_supervisor_software_platform.dtb)
+configure_file(${RISCV_SUPERVISOR_SOFTWARE_FIXTURE_DIR}/supervisor.elf
+               ${RISCV_SUPERVISOR_SOFTWARE_ELF_COPY} COPYONLY)
+configure_file(${RISCV_SUPERVISOR_SOFTWARE_FIXTURE_DIR}/platform.dtb
+               ${RISCV_SUPERVISOR_SOFTWARE_DTB_COPY} COPYONLY)
+add_executable(test_riscv_supervisor_software_interrupts
+    tests/test_riscv_supervisor_software_interrupts.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_supervisor_software_interrupts PRIVATE bcrypt)
+add_test(NAME RiscVSupervisorSoftwareInterruptTests
+         COMMAND test_riscv_supervisor_software_interrupts
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_SUPERVISOR_SOFTWARE_ELF_COPY}
+                 ${RISCV_SUPERVISOR_SOFTWARE_DTB_COPY}
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv14-$<CONFIG>-supervisor-software.trace.log)
+if(MSVC)
+    target_compile_options(test_riscv_supervisor_software_interrupts PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_supervisor_software_interrupts PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

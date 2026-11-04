@@ -1,0 +1,173 @@
+guideXOS Hypervisor — RISCV-14 report
+====================================
+
+Outcome: A — the complete single-hart supervisor priority order SEI > SSI >
+STI was exercised by a freestanding S-mode guest under Sv39, through the
+production RV64CPU::step() implementation, authentic OpenSBI v1.8.1 FW_JUMP,
+the authentic SBI TIME path, and real UART/PLIC external requests.
+
+Preflight and preservation
+--------------------------
+
+- Repository: D:\dev\guideXOS_Hypervisor_RISCV, branch RISCV.
+- Starting HEAD: 0b8f6c5a7c87d4cf50a7eb989139bb8acc8a7d77.
+- Starting upstream divergence: 0 behind, 4 ahead of origin/RISCV.
+- The tracked worktree was clean before this phase. Existing untracked
+  Testing/ and the RISCV-11/12 fixture .build/ directories were preserved.
+  No branch operation, push, QEMU run, shared .phase edit, or IA-64 source edit
+  occurred.
+- RISCV-13 was complete and .phase-riscv expected RISCV-14. All 18 existing
+  RISC-V CTest suites passed in Debug before implementation (18/18,
+  464.03 seconds).
+- The preflight found sip.SSIP, delegated sip/sie views, independent MSIP and
+  SSIP pending bits, and SEI > SSI > STI ordering already implemented in the
+  production CPU. The selector and CSR implementation required no changes.
+- In-scope tracked changes are the RISCV-14 CMake test registration, the new
+  independent supervisor-software fixture and its binaries/provenance files,
+  the focused C++ test, this report, the decoder-status update, and the
+  RISCV-only phase marker. No CPU or IA-64 implementation source changed.
+
+SSI ownership and architectural behavior
+----------------------------------------
+
+- In the existing RV64CPU implementation, S-mode sip writes are limited to
+  SSIP when MIDELEG delegates it. sie.SSIE is independently gated by MIDELEG;
+  sstatus.SIE controls same-privilege S-mode delivery. SIP/STIP and SIP/SEIP
+  remain device/M-mode owned. Trap entry does not clear SSIP.
+- The fixture guest sets SSIP with an S-mode CSRRS sip instruction, reads the
+  bit back, and clears it with CSRRC sip in the SSI handler. Guest records and
+  test checks prove the clear removes SSIP while preserving other supervisor
+  pending bits. Focused CPU checks also prove SSIP and machine MSIP are
+  independent and that MSIP remains nondelegable.
+- MIDELEG exposed the supported supervisor mask 0x222 for causes 1, 5, and 9.
+  A focused nondelegated-SSIP case confirmed an S-mode sip write cannot assert
+  the bit. S-mode access to MIDELEG and an unimplemented CSR trapped as illegal
+  instructions. An enabled machine MSIP preempted S-mode into M-mode.
+- No host-side SSI source, SBI interception, ACLINT MSWI, SBI IPI, remote-hart
+  signaling, or SMP support was added. Local SSIP CSR testing does not
+  demonstrate SBI IPI or inter-hart messaging.
+
+Three-way and four-source arbitration evidence
+----------------------------------------------
+
+- The guest log contains 20 real S-mode handler entries and records sequence,
+  scause, sepc, sip, sie, sstatus, device/acknowledgment evidence, and timer
+  deadline/rearm evidence. The test reads the log from guest RAM and compares
+  every cause and service item with the expected sequence.
+- Three guest-owned pre-enable snapshots recorded sip=sie=0x222 with global
+  SIE clear. Four live preselection observations captured actual CPU CSR and
+  device state. Representative values:
+
+    phase 1 first claim: mip=0x2a2 sip=0x222 sie=0x222 sstatus=0x2
+      PLIC pending=0x1400; source 10 priority=1, source 12 priority=3
+    phase 1 second claim: mip=0x2a2 sip=0x222 sie=0x222 sstatus=0x22
+      PLIC pending=0x0400 after source 12 was claimed/completed
+    phase 2: mip=0x2a2 sip=0x222 sie=0x222 sstatus=0x22 PLIC=0x0400
+    phase 3: mip=0x2a2 sip=0x222 sie=0x222 sstatus=0x22 PLIC=0x1000
+
+- At each simultaneous boundary the next CPU step selected cause 9 and left
+  the interrupted instruction unretired. The handler order was:
+
+    four-source: SEI/source 12, SEI/source 10, SSI, STI
+    three-way 2: SEI/source 10, SSI, STI
+    three-way 3: SEI/source 12, SSI, STI
+
+- The four-source case distinguishes PLIC source priority (12 before 10) from
+  architectural cause priority (SEI before SSI before STI). The still-pending
+  PLIC source kept SEIP asserted after the first claim. The three-way runs
+  preserved the same interrupted PC across consecutive entries until all
+  three causes were serviced. Numeric cause order was not used as a priority
+  substitute; production priority code was left unchanged.
+- The bounded event order across the full guest is:
+
+    9,9,1,5, 9,1,5, 9,1,5, 9,5,1, 9,1,5, 1,5,9, 5
+
+  The cause values in guest RAM include the architectural interrupt flag.
+  Counts are seven SEI, six SSI, seven STI, seven PLIC claims/completions, and
+  20 SRETs. Both UART sources supplied guest-read bytes.
+
+Masking, WFI, acknowledgment, and timer service
+-----------------------------------------------
+
+- SSIE masking: guest SSIP remained visible while SSIE was clear. SEI and STI
+  ran first; the original SSI was delivered after SSIE was restored.
+- STIE masking: SEI and SSI ran while STIP remained pending. Re-enabling STIE
+  delivered the original timer request.
+- SEIE masking: SSI and STI ran while UART0 data and its PLIC request remained
+  pending. Re-enabling SEIE delivered it without reinjecting the byte.
+- Global SIE masking: all three pending identities remained set while S-mode
+  trap delivery was deferred. WFI with those pending sources returned without
+  a mandatory trap; the later eligible boundary selected SEI first.
+- WFI executed three times and woke twice. The first wait began with SSIP
+  pending but all local supervisor enables clear. UART0/source 10,
+  UART1/source 12, and MTIP were made available before the wake. MTIP entered
+  M-mode/OpenSBI first; the supervisor snapshot was taken only after OpenSBI
+  presented STIP. The second wait had no locally enabled S interrupt and woke
+  through the authentic timer path.
+- The guest serviced timers only after authentic SBI TIME calls. The integrated
+  run recorded 14 SBI TIME calls, 15 mtimecmp writes, seven MTIP edges, seven
+  OpenSBI STIP presentations, and seven STIP clears/rearms. No host-side SBI
+  provider was used.
+- UART data was injected through the existing deterministic receive interface.
+  The guest performed all PLIC claims/completions and UART RBR reads using
+  translated S-mode MMIO. SSI handling did not consume UART data or complete a
+  PLIC source.
+
+Sv39 guest and artifacts
+------------------------
+
+- The guest received hart 0 and FDT 0x82200000 from the authentic FW_JUMP
+  handoff, enabled Sv39, used a translated stack/event log/trap vector, and
+  accessed UART/PLIC MMIO through the MMU. It completed with 20 valid SRETs and
+  no unexpected page fault.
+- The guest wrote `Hello from SEI SSI STI on guideXOS` to UART0 and guest RAM.
+  Its version-14 signature records counts and Sv39 state, and the completion
+  marker is the final guest store. The host did not fabricate event entries or
+  signature results.
+- OpenSBI v1.8.1 source remains pinned to
+  74434f255873d74e56cc50aa762d1caf24c099f8. The existing FW_JUMP firmware was
+  reused unchanged; the FDT, RAM, ACLINT, PLIC, UART0, and UART1 topology was
+  retained.
+- SHA-256:
+
+    fw_jump.bin       CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+    fw_jump.elf       255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+    supervisor.bin    C2CE1AC683531170E46832220E7CF96D20FDF61F48A3F7FE477201A63B88071C
+    supervisor.elf    9F70E7CEEF493074043855798D38DDC711FC342C35EEB260EA4764B35E76D861
+    platform.dtb      C91468CC722AE37A56AF077B52131467F91FFA957C0BC1E8C751C5089603A7B2
+
+- The independently assembled RV64IMA_Zicsr ELF, binary, DTC output, map,
+  disassembly, and instruction inventory are checked in under
+  tests/fixtures/riscv_opensbi_supervisor_software. The manifest records LLVM
+  clang 22.1.8, DTC 1.7.2, target/ISA/ABI, non-relaxed flags, and firmware
+  provenance. Debug and Release traces are retained under
+  E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv14-build.
+
+Validation and regressions
+--------------------------
+
+- Final RISC-V Debug CTest: 19/19 passed (497.44 seconds).
+- Focused RISCV-14 CTest: Debug and Release passed. Each configuration ran 169
+  explicit runtime checks with zero failures; assertions remain active in
+  Release. The integrated guest completed 5,024,376 instructions.
+- IA64 EfiMemoryMapTests and IA64SalTests passed in Debug and Release (2/2 in
+  each configuration). Direct ACPI (seven cases), interrupt-controller, and
+  processor-interrupt-block tests passed in both configurations. No IA-64
+  implementation source changed.
+- Existing unrelated `test_io_devices` assertion and legacy
+  `test_elf_validation` link limitations remain separate issues. No QEMU run
+  was performed.
+
+Remaining Linux prerequisites and RISCV-15 recommendation
+--------------------------------------------------------
+
+- Linux and U-Boot remain out of scope. The platform is single-hart and still
+  lacks PMP, SBI HSM/IPI/RFENCE, full interrupt-controller compatibility,
+  virtio, PCI, storage, networking, and a full UART FIFO/modem implementation.
+  A Linux boot target also needs an explicit kernel/Image entry contract,
+  memory reservations, root-filesystem storage, and a selected console/device
+  configuration.
+- Recommended RISCV-15: define and validate the next single-hart protection
+  boundary, including PMP permissions over the firmware, guest RAM, and MMIO
+  regions and their interaction with Sv39 access faults. Keep SBI IPI and
+  multicore work deferred until a separate multi-hart phase authorizes it.

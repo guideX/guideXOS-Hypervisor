@@ -1,0 +1,18 @@
+Phase: RISCV-14 supervisor software interrupts and three-way priority
+OpenSBI provenance: ../riscv_opensbi_fw_jump/binary-manifest.txt
+OpenSBI source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+Reused OpenSBI fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+Reused OpenSBI fw_jump.elf SHA-256: 255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+DTC: Version: DTC 1.7.2
+Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+Guest: freestanding RV64IMA_Zicsr, no libc/runtime/compressed/floating-point/vector instructions
+Timer: ACLINT mtime=0x0200BFF8; mtimecmp=0x02004000; authentic OpenSBI TIME and M-mode MTIP forwarding
+PLIC: base=0x0C000000; 96 sources; M/S contexts=0/1; UART0 source 10; UART1 source 12
+Guest-controlled SSIP: S-mode CSRRS/CSRRC on sip; SSIE independently controlled
+Scenarios: SEI>SSI>STI repeated snapshots; four-source PLIC priority; six masking dimensions; two WFI wakes; Sv39
+Build output directory: E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv14-build\guest
+
+C2CE1AC683531170E46832220E7CF96D20FDF61F48A3F7FE477201A63B88071C  supervisor.bin  2307 bytes
+9F70E7CEEF493074043855798D38DDC711FC342C35EEB260EA4764B35E76D861  supervisor.elf  11248 bytes
+C91468CC722AE37A56AF077B52131467F91FFA957C0BC1E8C751C5089603A7B2  platform.dtb  2249 bytes

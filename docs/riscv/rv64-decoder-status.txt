@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-11)
+RISC-V Decoder and Execution Status (updated Phase RISCV-14)
 
 Current decoded instruction families:
 - RV64I
@@ -613,3 +613,39 @@ Validation and next target:
   source and prove the remaining SSI middle-priority case, clear semantics, and
   WFI behavior, completing SEI > SSI > STI arbitration without expanding into
   SMP or a general IPI subsystem.
+
+--- Phase RISCV-14: supervisor software interrupt and full supervisor priority ---
+
+- The existing production implementation already supports delegated,
+  supervisor-writable sip.SSIP. S-mode sip writes change SSIP only when cause
+  1 is delegated; sie.SSIE is independently controlled. SSIP remains pending
+  through trap entry and requires guest acknowledgment. MSIP remains a
+  separate, machine-owned, nondelegable cause 3. The RISCV-14 source audit
+  found no CPU implementation defect, so selector and CSR code were not
+  changed.
+- A separate freestanding RV64IMA_Zicsr guest uses CSRRS/CSRRC to assert,
+  inspect, and acknowledge SSIP under authentic OpenSBI FW_JUMP and Sv39. The
+  production interrupt selector continues to order MEI, MSI, MTI, SEI, SSI,
+  STI. Four actual preselection snapshots show the three delegated pending
+  bits and enables at 0x222, with SEI selected first and the interrupted
+  instruction unretired. Three guest snapshots cover distinct three-way
+  phases; a four-source case records PLIC source 12 before 10, then SSI, then
+  STI.
+- The guest log records cause/EPC/pending/enable/status plus PLIC and UART
+  service or SSI acknowledgment and timer deadline evidence. It completes 20
+  events (7 SEI, 6 SSI, 7 STI), seven PLIC claims/completions, 20 SRETs, and
+  writes the version-14 completion marker last. The workload exercises SSIE,
+  STIE, SEIE and global SIE masking, pending preservation, three WFI entries
+  and two wakes, SBI TIME rearming, Sv39 guest memory, and translated device
+  MMIO. This single-hart local SSIP proof does not claim SBI IPI, remote-hart
+  delivery, or SMP support.
+- Final RISCV-14 validation: all 19 RISC-V CTest suites passed in Debug
+  (497.44 seconds); the new focused target passed in Debug and Release with
+  169/169 explicit runtime checks in each. EFI memory-map and IA-64 SAL suites
+  passed in Debug and Release. Direct ACPI, interrupt-controller, and
+  processor-interrupt-block regressions passed in both configurations. No
+  IA-64 implementation source changed. Full evidence, traces, hashes, and
+  remaining Linux prerequisites are recorded in phase-riscv-14-report.txt.
+- Recommended RISCV-15: define and validate PMP access permissions over the
+  firmware, guest RAM, and MMIO regions together with Sv39 access-fault
+  handling. Keep multi-hart and SBI IPI work in a separately authorized phase.
