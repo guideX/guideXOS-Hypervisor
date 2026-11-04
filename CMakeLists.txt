@@ -1199,6 +1199,26 @@ endif()
 add_test(NAME PPC64Phase27Tests COMMAND test_ppc64_phase27)
 set_tests_properties(PPC64Phase27Tests PROPERTIES TIMEOUT 600)
 
+# PPC64 signed doubleword divide semantics and authenticated Linux continuation.
+add_executable(test_ppc64_phase28
+    tests/test_ppc64_phase28.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase28 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase28 PRIVATE
+    PPC64_PHASE28_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase28 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase28 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase28Tests COMMAND test_ppc64_phase28)
+set_tests_properties(PPC64Phase28Tests PROPERTIES TIMEOUT 600)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

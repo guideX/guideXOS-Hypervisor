@@ -441,6 +441,17 @@ std::string decodeFrontierIndependent(uint32_t word, uint64_t nip = 0) {
              << " r" << rt << ",r" << ra << ",r" << rb;
         return text.str();
     }
+    if (opcode == 31U && ((word >> 1) & 0x3FFU) == 266U) {
+        const unsigned rt = (word >> 21) & 31U;
+        const unsigned ra = (word >> 16) & 31U;
+        const unsigned rb = (word >> 11) & 31U;
+        const bool oe = ((word >> 10) & 1U) != 0;
+        const bool rc = (word & 1U) != 0;
+        std::ostringstream text;
+        text << "add" << (oe ? "o" : "") << (rc ? "." : "")
+             << " r" << rt << ",r" << ra << ",r" << rb;
+        return text.str();
+    }
     std::ostringstream text;
     text << "unknown primary=" << opcode << " raw=0x" << std::hex << word;
     return text.str();
@@ -2169,11 +2180,16 @@ void testAuthenticLinuxReplay() {
     CHECK(first.reachedBudgets == second.reachedBudgets);
     CHECK(first.fetched <= first.attempted &&
           first.decodedCount <= first.fetched && first.retired <= first.attempted);
-    CHECK(first.retired == 246 && first.attempted == 247);
-    CHECK(first.stopNip == 0xC0000000000538A4ULL);
-    CHECK(first.frontierWordFetched && first.frontierWord == 0x7D0863D2U);
-    CHECK(first.frontierDecode == "divd r8,r8,r12");
-    CHECK(first.stopClassification == "unsupported-or-invalid-instruction");
+    CHECK(first.retired == kLinuxInstructionBudget &&
+          first.attempted == kLinuxInstructionBudget);
+    CHECK(first.trace.find(
+        "nip=0xc0000000000538a4 raw=0x7d0863d2 decoded=divd r8,r8,r12 retired=1 next_nip=0xc0000000000538a8")
+        != std::string::npos);
+    CHECK(first.stopNip == 0xC0000000000538ECULL);
+    CHECK(first.frontierWordFetched && first.frontierDecoded &&
+          first.frontierWord == 0x7C001A14U);
+    CHECK(first.frontierDecode == "add r0,r0,r3");
+    CHECK(first.stopClassification == "execution-budget-endpoint");
     CHECK(first.stopNip == second.stopNip &&
           first.stopClassification == second.stopClassification);
 
@@ -2528,12 +2544,12 @@ void testAuthenticLinuxReplay() {
         << "G Privilege and fault integrity: PASS (previous guest exception/protection suites retained)\n"
         << "H Instruction-budget accounting: PASS (attempted/fetched/decoded/retired/lookahead separated)\n"
         << "I Progressive continuation: PASS through " << first.retired
-        << " retirements; frontier controls later stages\n"
+        << " retirements; DIVD retired and the 16,384-step budget endpoint was captured\n"
         << "J Diagnostic output integrity: PASS (bounded trace, classified stop, deterministic summary)\n"
         << "K Two-VM isolation: PASS (full Linux VM ran while a second loaded/configured Linux VM remained unchanged)\n"
         << "L Checkpoint regression: PASS (existing checkpoint tests retained; no Linux checkpoint needed)\n"
         << "M Two-run replay: PASS (trace, frontier, FDT, registers, CMPDI agree)\n"
-        << "N Regression and handoff: PASS; unsupported DIVD evidence defines PPC64-28 scope\n";
+        << "N Regression and handoff: PASS; historical DIVD frontier crossed, bounded repeating loop documented for PPC64-29\n";
     CHECK(writeText(runDirectory / "programs-A-N.txt", programs.str()));
     std::printf("Phase27 Linux artifacts: %s\n", runDirectory.string().c_str());
     std::printf("Phase27 Linux replay: retired=%llu attempted=%llu cmpdi_cr=0x%llx stop=0x%llx (%s)\n",

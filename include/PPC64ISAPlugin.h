@@ -235,6 +235,7 @@ constexpr uint16_t XO_ADDC = 10;
 constexpr uint16_t XO_ADDE = 138;
 constexpr uint16_t XO_SUBF = 40;
 constexpr uint16_t XO_SUBFC = 8;
+constexpr uint16_t XO_DIVD = 489;   // signed doubleword divide, OE-capable
 constexpr uint16_t XO_AND = 28;    // no OE form
 constexpr uint16_t XO_OR = 444;    // no OE form
 constexpr uint16_t XO_XOR = 316;   // no OE form
@@ -409,6 +410,7 @@ enum class DecodedKind {
     ADDC,       // addc[.]    (X-form, XO9 5; CA update; OE=1 rejected)
     ADDE,       // adde[.]    (X-form, XO9 69; CA in/out; OE=1 rejected)
     SUBFC,      // subfc[.]   (X-form, XO9 4; CA update; OE=1 rejected)
+    DIVD,       // divd[o][.] (XO-form, opcode 31 XO9 489; signed 64-bit)
     AND,        // and[.]     (X-form, XO 28)
     OR,         // or[.]      (X-form, XO 444)
     XOR,        // xor[.]     (X-form, XO 316)

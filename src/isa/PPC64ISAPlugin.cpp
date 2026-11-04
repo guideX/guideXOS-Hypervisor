@@ -1518,6 +1518,13 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             } else if (base == XO_SUBF) {
                 instr.kind = DecodedKind::SUBF;
                 instr.supported = true;
+            } else if (base == XO_DIVD) {
+                // DIVD's OE bit is the high bit of the combined 10-bit
+                // field; keep the nine-bit XO separate, like the other
+                // overflow-enabled XO forms. Its signed doubleword
+                // operation is available in both modes of this PPC64 CPU.
+                instr.kind = DecodedKind::DIVD;
+                instr.supported = true;
             } else if (base == XO_ADDC && !oe) {
                 instr.kind = DecodedKind::ADDC;
                 instr.supported = true;
@@ -1751,6 +1758,15 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             break;
         case DecodedKind::SUBF:
             out << (instr.oe ? "subfo" : "subf");
+            if (instr.rc) {
+                out << ".";
+            }
+            out << " r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            break;
+        case DecodedKind::DIVD:
+            out << (instr.oe ? "divdo" : "divd");
             if (instr.rc) {
                 out << ".";
             }
@@ -3277,6 +3293,49 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             }
             if (instr.rc) {
                 updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::DIVD: {
+            // Capture both full-width source bit patterns before writing RT;
+            // all RT/RA/RB alias combinations then use the original operands.
+            const uint64_t dividend = state_.gpr[instr.ra];
+            const uint64_t divisor = state_.gpr[instr.rb];
+            const bool exceptional = divisor == 0 ||
+                (dividend == 0x8000000000000000ULL &&
+                 divisor == 0xFFFFFFFFFFFFFFFFULL);
+
+            // The ISA leaves RT undefined for divisor zero and INT64_MIN/-1.
+            // This interpreter chooses zero deterministically for those cases.
+            // Convert signed operands to unsigned magnitudes and divide only
+            // after the exceptional pairs have been rejected, avoiding both
+            // host divide-by-zero and signed-overflow undefined behavior.
+            uint64_t quotient = 0;
+            if (!exceptional) {
+                const bool negative = ((dividend ^ divisor) >> 63) != 0;
+                const uint64_t dividendMagnitude = (dividend >> 63) != 0
+                    ? uint64_t{0} - dividend : dividend;
+                const uint64_t divisorMagnitude = (divisor >> 63) != 0
+                    ? uint64_t{0} - divisor : divisor;
+                const uint64_t quotientMagnitude =
+                    dividendMagnitude / divisorMagnitude;
+                quotient = negative ? uint64_t{0} - quotientMagnitude
+                                    : quotientMagnitude;
+            }
+
+            state_.gpr[instr.rt] = quotient;
+            // OE updates OV and sticky SO on every DIVD. The current CPU state
+            // models the legacy SO/OV/CA XER fields; it has no separate OV32
+            // storage, so there is no additional state to update here.
+            if (instr.oe) {
+                setXEROverflow(state_, exceptional);
+            }
+            if (instr.rc) {
+                // For exceptional operands LT/GT/EQ are architecturally
+                // undefined. updateCR0 records the chosen zero quotient while
+                // still copying the architecturally current XER.SO value.
+                updateCR0(state_, quotient);
             }
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
