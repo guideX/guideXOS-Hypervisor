@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <iterator>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -406,7 +408,7 @@ void readPhysicalBytes(VirtualMachine& vm, uint64_t address,
 }
 
 bool executeOneAndTrace(VirtualMachine& vm, Mips64ISAPlugin& cpu,
-                        std::ofstream* trace) {
+                        std::ostream* trace) {
     const uint64_t pc = cpu.core().pc();
     const uint64_t cycle = vm.getCyclesExecuted();
     const Mips64Probe probe = cpu.core().probeAddress(pc, Mips64Access::Fetch);
@@ -416,7 +418,12 @@ bool executeOneAndTrace(VirtualMachine& vm, Mips64ISAPlugin& cpu,
         vm.getMemory().Read(probe.phys, bytes, sizeof(bytes));
         word = read32(bytes, cpu.core().isLittleEndian());
     }
-    const bool retired = vm.run(1) == 1;
+    CPUContext* context = vm.getCPUContext(0);
+    if (!context) throw std::runtime_error("MIPS64 probe lost CPU context 0");
+    const uint64_t instructionsBefore = context->instructionsExecuted;
+    const uint64_t cyclesRun = vm.run(1);
+    const bool vmStepSucceeded = cyclesRun == 1;
+    const bool retired = context->instructionsExecuted == instructionsBefore + 1;
     if (trace && *trace) {
         *trace << "{\"type\":\"instruction\",\"cycle\":" << cycle
                << ",\"pc_va\":\"0x" << std::hex << std::setw(16)
@@ -434,7 +441,7 @@ bool executeOneAndTrace(VirtualMachine& vm, Mips64ISAPlugin& cpu,
                << ",\"mips_fault_name\":\""
                << Mips64Cpu::faultName(cpu.core().fault()) << "\"}\n";
     }
-    return retired;
+    return vmStepSucceeded && retired;
 }
 
 void runToEntry(VirtualMachine& vm, Mips64ISAPlugin& cpu, uint64_t entry,
@@ -680,10 +687,15 @@ void testMismatchedElfPromSnapshotRejected() {
 }
 
 int runBoundedKernelProbe(const std::filesystem::path& imagePath,
-                          const std::filesystem::path& tracePath) {
+                          const std::filesystem::path& tracePath,
+                          unsigned instructionBudget = 200000,
+                          bool continuePastDsrl32Frontier = false) {
     constexpr uint64_t probeRamBytes = 256ULL * 1024 * 1024;
-    constexpr unsigned instructionBudget = 200000;
     constexpr unsigned traceInstructionLimit = 256;
+    constexpr unsigned continuationTraceLimit = 512;
+    constexpr uint64_t formerFrontierPc = 0xFFFFFFFF80917700ULL;
+    constexpr uint32_t formerFrontierWord = 0x000C643EU;
+    const auto startTime = std::chrono::steady_clock::now();
     const auto image = readFile(imagePath);
     if (image.empty()) throw std::runtime_error("kernel image is empty or unreadable");
 
@@ -723,6 +735,12 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     unsigned attempts = 0;
     unsigned retired = 0;
     bool entryReached = false;
+    unsigned retiredBeforeEntry = 0;
+    bool formerFrontierVerified = false;
+    std::string formerFrontierRecord;
+    std::ostringstream frontierInstructionTrace;
+    std::ostringstream afterFrontierTrace;
+    unsigned afterFrontierTraceRecords = 0;
     std::string stopReason = "instruction_budget_exhausted";
     uint64_t stopPc = cpu->core().pc();
     uint64_t stopPhysical = 0;
@@ -731,7 +749,10 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     for (; attempts < instructionBudget; ++attempts) {
         stopPc = cpu->core().pc();
         distinctPcs.insert(stopPc);
-        if (stopPc == plan.entryPoint) entryReached = true;
+        if (stopPc == plan.entryPoint && !entryReached) {
+            entryReached = true;
+            retiredBeforeEntry = retired;
+        }
         const Mips64Probe fetch = cpu->core().probeAddress(stopPc, Mips64Access::Fetch);
         stopFetchOk = fetch.ok;
         stopPhysical = fetch.ok ? fetch.phys : 0;
@@ -741,23 +762,173 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
             vm.getMemory().Read(fetch.phys, bytes, sizeof(bytes));
             stopWord = read32(bytes, false);
         }
-        const bool didRetire = executeOneAndTrace(
-            vm, *cpu, attempts < traceInstructionLimit ? &trace : nullptr);
+        const bool recordingPrefix = attempts < traceInstructionLimit;
+        bool didRetire = false;
+        if (continuePastDsrl32Frontier && stopPc == formerFrontierPc) {
+            if (retired != 150041 || vm.getCyclesExecuted() != 150041 ||
+                !stopFetchOk || stopWord != formerFrontierWord) {
+                throw std::runtime_error("authentic Phase 12 prefix/frontier did not reproduce");
+            }
+            const Mips64Decoded decoded = decodeInstruction(stopWord);
+            if (!decoded.valid || decoded.op != Mips64Op::Dsrl32 ||
+                decoded.rs != 0 || decoded.rt != 12 || decoded.rd != 12 || decoded.sa != 16) {
+                throw std::runtime_error("former Linux frontier did not decode as the recorded DSRL32");
+            }
+            const uint64_t source = cpu->core().readGpr(decoded.rt);
+            const uint64_t expectedResult = source >> (static_cast<unsigned>(decoded.sa) + 32U);
+            const uint64_t beforeStatus = cpu->core().cp0Status();
+            const uint64_t beforeCause = cpu->core().cp0Cause();
+            const uint64_t beforeEpc = cpu->core().cp0Epc();
+            const uint64_t beforeBadVAddr = cpu->core().cp0BadVAddr();
+            const uint64_t beforeCount = cpu->core().cp0Count();
+            const uint64_t beforeHi = cpu->core().hi();
+            const uint64_t beforeLo = cpu->core().lo();
+            const uint64_t beforeDest = cpu->core().readGpr(decoded.rd);
+            if (source != 0 || expectedResult != 0 || beforeCount != 150041 ||
+                beforeStatus != 0x00400080ULL || beforeCause != 0 || beforeEpc != 0 ||
+                beforeBadVAddr != 0 || cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("architectural state before the old frontier differs from Phase 12");
+            }
+            const Mips64FullVmSnapshot frontierSnapshot = vm.captureMips64FullSnapshot();
+            if (!frontierSnapshot.ValidateIntegrity() || frontierSnapshot.formatVersion != 2 ||
+                frontierSnapshot.uartComponentVersion != 4 ||
+                frontierSnapshot.irqRoutingComponentVersion != 1 ||
+                frontierSnapshot.cpuComponentVersion != 5) {
+                throw std::runtime_error("authentic frontier snapshot failed integrity/version checks");
+            }
+            CPUContext* frontierContext = vm.getCPUContext(0);
+            const auto* frontierBoard = vm.getMips64MaltaBootstrapBoard();
+            if (!frontierContext || !frontierBoard || !frontierBoard->ConsoleSink() ||
+                !frontierBoard->Uart()) {
+                throw std::runtime_error("authentic frontier snapshot lost Malta CPU/device state");
+            }
+            didRetire = executeOneAndTrace(vm, *cpu, &frontierInstructionTrace);
+            if (!didRetire || cpu->core().pc() != formerFrontierPc + 4 ||
+                cpu->core().readGpr(decoded.rd) != expectedResult ||
+                cpu->core().cp0Status() != beforeStatus || cpu->core().cp0Cause() != beforeCause ||
+                cpu->core().cp0Epc() != beforeEpc || cpu->core().cp0BadVAddr() != beforeBadVAddr ||
+                cpu->core().cp0Count() != beforeCount + 1 || cpu->core().hi() != beforeHi ||
+                cpu->core().lo() != beforeLo || cpu->core().fault() != Mips64Fault::None ||
+                vm.getState() == VMState::ERROR) {
+                throw std::runtime_error("production VM did not retire DSRL32 with the expected state");
+            }
+            const std::vector<uint8_t> firstCpuState = cpu->core().serialize();
+            const std::vector<uint8_t> firstConsoleBytes = frontierBoard->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot firstUartState = frontierBoard->Uart()->CaptureSnapshot();
+            const uint64_t firstVmCycles = vm.getCyclesExecuted();
+            const uint64_t firstRetiredCount = frontierContext->instructionsExecuted;
+            std::string restoreError;
+            if (!vm.restoreMips64FullSnapshot(frontierSnapshot, &restoreError) ||
+                !restoreError.empty()) {
+                throw std::runtime_error("authentic frontier snapshot restore failed: " + restoreError);
+            }
+            const bool replayRetired = executeOneAndTrace(vm, *cpu, nullptr);
+            const Ns16550Uart::Snapshot replayUartState = frontierBoard->Uart()->CaptureSnapshot();
+            uint8_t replayInstructionBytes[4]{};
+            vm.getMemory().Read(stopPhysical, replayInstructionBytes,
+                                sizeof(replayInstructionBytes));
+            if (!replayRetired || cpu->core().serialize() != firstCpuState ||
+                frontierContext->instructionsExecuted != firstRetiredCount ||
+                vm.getCyclesExecuted() != firstVmCycles ||
+                frontierBoard->ConsoleSink()->Bytes() != firstConsoleBytes ||
+                replayUartState.transmitCount != firstUartState.transmitCount ||
+                replayUartState.virtualTimeCycle != firstUartState.virtualTimeCycle ||
+                read32(replayInstructionBytes, false) != formerFrontierWord) {
+                throw std::runtime_error("authentic frontier snapshot replay diverged after DSRL32");
+            }
+            std::ostringstream event;
+            event << "{\"type\":\"dsrl32_frontier\",\"pc_va\":\"0x"
+                  << std::hex << std::setw(16) << std::setfill('0') << formerFrontierPc
+                  << "\",\"instruction\":\"0x" << std::setw(8) << formerFrontierWord
+                  << "\",\"rs\":" << std::dec << unsigned(decoded.rs)
+                  << ",\"rt\":" << unsigned(decoded.rt)
+                  << ",\"rd\":" << unsigned(decoded.rd)
+                  << ",\"sa\":" << unsigned(decoded.sa)
+                  << ",\"shift\":" << (unsigned(decoded.sa) + 32U)
+                  << ",\"source\":\"0x" << std::hex << std::setw(16) << source
+                  << "\",\"destination_before\":\"0x" << std::setw(16) << beforeDest
+                  << "\",\"expected\":\"0x" << std::setw(16) << expectedResult
+                  << "\",\"destination_after\":\"0x" << std::setw(16)
+                  << cpu->core().readGpr(decoded.rd)
+                  << "\",\"pc_after\":\"0x" << std::setw(16) << cpu->core().pc()
+                  << "\",\"status_before\":\"0x" << std::setw(16) << beforeStatus
+                  << "\",\"status_after\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+                  << "\",\"cause_before\":\"0x" << std::setw(16) << beforeCause
+                  << "\",\"cause_after\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+                  << "\",\"count_before\":" << std::dec << beforeCount
+                  << ",\"count_after\":" << cpu->core().cp0Count()
+                  << ",\"hi_before\":\"0x" << std::hex << std::setw(16) << beforeHi
+                  << "\",\"hi_after\":\"0x" << std::setw(16) << cpu->core().hi()
+                  << "\",\"lo_before\":\"0x" << std::setw(16) << beforeLo
+                  << "\",\"lo_after\":\"0x" << std::setw(16) << cpu->core().lo()
+                  << "\",\"vm_cycle_after\":" << std::dec << vm.getCyclesExecuted()
+                  << ",\"snapshot_replay_verified\":true,\"snapshot_format_version\":"
+                  << frontierSnapshot.formatVersion
+                  << ",\"snapshot_uart_version\":" << frontierSnapshot.uartComponentVersion
+                  << ",\"snapshot_irq_version\":" << frontierSnapshot.irqRoutingComponentVersion
+                  << ",\"snapshot_cpu_version\":" << frontierSnapshot.cpuComponentVersion
+                  << "}";
+            formerFrontierRecord = event.str();
+            formerFrontierVerified = true;
+        } else {
+            std::ostream* stepTrace = recordingPrefix ? &trace : nullptr;
+            if (continuePastDsrl32Frontier && formerFrontierVerified &&
+                afterFrontierTraceRecords < continuationTraceLimit) {
+                stepTrace = &afterFrontierTrace;
+                ++afterFrontierTraceRecords;
+            }
+            didRetire = executeOneAndTrace(
+                vm, *cpu, stepTrace);
+        }
         if (didRetire) {
             ++retired;
         } else {
             const Mips64Fault fault = cpu->core().fault();
             stopReason = fault == Mips64Fault::UnsupportedInstruction
                 ? "unsupported_instruction"
-                : fault == Mips64Fault::None ? "vm_run_returned_zero" : "mips_fault";
+                : fault == Mips64Fault::None ? "vm_run_returned_zero"
+                : Mips64Cpu::faultEntersException(fault) ? "architectural_exception"
+                : "mips_fault";
             ++attempts;
             break;
         }
     }
 
-    if (attempts > traceInstructionLimit) {
+    if (stopReason == "instruction_budget_exhausted") {
+        // The budget ended after a successful final step; this is the next
+        // PC that would have been attempted if the deterministic budget grew.
+        stopPc = cpu->core().pc();
+        const Mips64Probe nextFetch = cpu->core().probeAddress(stopPc, Mips64Access::Fetch);
+        stopFetchOk = nextFetch.ok;
+        stopPhysical = nextFetch.ok ? nextFetch.phys : 0;
+        stopWord = 0;
+        if (nextFetch.ok) {
+            uint8_t bytes[4]{};
+            vm.getMemory().Read(nextFetch.phys, bytes, sizeof(bytes));
+            stopWord = read32(bytes, false);
+        }
+    }
+
+    if (continuePastDsrl32Frontier && formerFrontierVerified) {
+        const unsigned skippedBeforeFrontier = 150041U > traceInstructionLimit
+            ? 150041U - traceInstructionLimit : 0;
+        if (skippedBeforeFrontier != 0) {
+            trace << "{\"type\":\"gap\",\"region\":\"pre_dsrl32_frontier\",\"skipped_instructions\":"
+                  << skippedBeforeFrontier << "}\n";
+        }
+    } else if (attempts > traceInstructionLimit) {
         trace << "{\"type\":\"gap\",\"skipped_instructions\":"
               << (attempts - traceInstructionLimit) << "}\n";
+    }
+    trace << frontierInstructionTrace.str();
+    if (!formerFrontierRecord.empty()) trace << formerFrontierRecord << "\n";
+    trace << afterFrontierTrace.str();
+    if (continuePastDsrl32Frontier && formerFrontierVerified && attempts > 150042U) {
+        const unsigned attemptedAfterFrontier = attempts - 150042U;
+        if (attemptedAfterFrontier > afterFrontierTraceRecords) {
+            trace << "{\"type\":\"continuation_gap\",\"skipped_attempts\":"
+                  << (attemptedAfterFrontier - afterFrontierTraceRecords) << "}\n";
+        }
     }
     unsigned validTlbEntries = 0;
     for (unsigned index = 0; index < Mips64Cpu::tlbSize(); ++index) {
@@ -782,18 +953,45 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
           << std::dec << static_cast<uint32_t>(cpu->core().fault())
           << ",\"mips_fault_name\":\""
           << Mips64Cpu::faultName(cpu->core().fault()) << "\",\"cycles\":"
-          << std::dec << vm.getCyclesExecuted() << ",\"entryhi\":\"0x"
+          << std::dec << vm.getCyclesExecuted() << ",\"cp0_count\":"
+          << cpu->core().cp0Count() << ",\"entryhi\":\"0x"
           << std::hex << std::setw(16) << cpu->core().cp0EntryHi()
           << "\",\"entrylo0\":\"0x" << std::setw(16)
           << cpu->core().cp0EntryLo0() << "\",\"entrylo1\":\"0x"
           << std::setw(16) << cpu->core().cp0EntryLo1()
+          << "\",\"gpr2\":\"0x" << std::setw(16) << cpu->core().readGpr(2)
+          << "\",\"gpr12\":\"0x" << std::setw(16) << cpu->core().readGpr(12)
           << "\",\"valid_tlb_entries\":" << std::dec << validTlbEntries
+          << ",\"attempted_steps\":" << attempts
+          << ",\"retired_from_reset\":" << retired
+          << ",\"retired_from_linux_entry\":"
+          << (entryReached && retired >= retiredBeforeEntry ? retired - retiredBeforeEntry : 0)
+          << ",\"retired_beyond_old_frontier\":"
+          << (formerFrontierVerified && retired >= 150041 ? retired - 150041 : 0)
+          << ",\"frontier_verified\":" << (formerFrontierVerified ? "true" : "false")
+          << ",\"entry_retired_before_linux\":" << retiredBeforeEntry
+          << ",\"unique_guest_pcs\":" << distinctPcs.size()
+          << ",\"uart_bytes\":"
+          << (vm.getMips64MaltaBootstrapBoard() &&
+              vm.getMips64MaltaBootstrapBoard()->ConsoleSink()
+                  ? vm.getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes().size() : 0)
+          << ",\"vm_state\":" << static_cast<unsigned>(vm.getState())
           << "}\n";
     trace.close();
 
     const auto* board = vm.getMips64MaltaBootstrapBoard();
     const size_t uartBytes = board && board->ConsoleSink()
         ? board->ConsoleSink()->Bytes().size() : 0;
+    std::string uartHex;
+    if (board && board->ConsoleSink()) {
+        static constexpr char digits[] = "0123456789abcdef";
+        for (uint8_t byte : board->ConsoleSink()->Bytes()) {
+            uartHex.push_back(digits[byte >> 4]);
+            uartHex.push_back(digits[byte & 0x0FU]);
+        }
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startTime).count();
     const Mips64Fault fault = cpu->core().fault();
     std::cout << "MIPS64_KERNEL_PROBE image=" << imagePath.string()
               << " endian=big entry=0x" << std::hex << plan.entryPoint
@@ -802,6 +1000,11 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
               << " instructions=" << attempts << " retired=" << retired
               << " distinct_pcs=" << distinctPcs.size()
               << " entry_reached=" << (entryReached ? "true" : "false")
+              << " linux_instructions="
+              << (entryReached && retired >= retiredBeforeEntry ? retired - retiredBeforeEntry : 0)
+              << " retired_beyond_old_frontier="
+              << (formerFrontierVerified && retired >= 150041 ? retired - 150041 : 0)
+              << " frontier_verified=" << (formerFrontierVerified ? "true" : "false")
               << " stop_reason=" << stopReason
               << " stop_pc=0x" << std::hex << stopPc
               << " stop_pa=0x" << stopPhysical
@@ -817,9 +1020,15 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
               << " entryhi=0x" << cpu->core().cp0EntryHi()
               << " entrylo0=0x" << cpu->core().cp0EntryLo0()
               << " entrylo1=0x" << cpu->core().cp0EntryLo1()
+              << " gpr2=0x" << cpu->core().readGpr(2)
+              << " gpr12=0x" << cpu->core().readGpr(12)
+              << " cp0_count=" << std::dec << cpu->core().cp0Count()
               << " valid_tlb_entries=" << std::dec << validTlbEntries
               << " cycles=" << std::dec << vm.getCyclesExecuted()
               << " uart_bytes=" << uartBytes
+              << " uart_hex=" << uartHex
+              << " elapsed_ms=" << elapsedMs
+              << " instruction_budget=" << instructionBudget
               << " vm_state=" << static_cast<unsigned>(vm.getState())
               << " trace=" << tracePath.string() << "\n";
     return 0;
@@ -831,6 +1040,10 @@ int main(int argc, char** argv) {
     try {
         if (argc == 4 && std::string(argv[1]) == "--probe-kernel") {
             return runBoundedKernelProbe(argv[2], argv[3]);
+        }
+        if (argc == 4 && std::string(argv[1]) == "--continue-kernel") {
+            constexpr unsigned totalAttemptBudget = 1150041;
+            return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget, true);
         }
         testElfValidationBothEndians();
         testLoadPlanRejectsRomAndMmioWithoutPartialRamWrites();

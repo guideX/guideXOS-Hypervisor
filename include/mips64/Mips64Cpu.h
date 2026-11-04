@@ -423,6 +423,8 @@ enum class Mips64Op : uint8_t {
     Mfc0, Mtc0, Dmfc0, Dmtc0, Eret, Syscall, Break,
     // TLB management (MIPS64-3; privileged, kernel-only)
     Tlbp, Tlbr, Tlbwi, Tlbwr,
+    // Additional fixed shift encoding qualified in MIPS64-13.
+    Dsrl32,
 };
 
 struct Mips64Decoded {

@@ -87,6 +87,7 @@ constexpr uint8_t kFnDsubu = 0x2F;
 constexpr uint8_t kFnDsll = 0x38;
 constexpr uint8_t kFnDsrl = 0x3A;
 constexpr uint8_t kFnDsra = 0x3B;
+constexpr uint8_t kFnDsrl32 = 0x3E;
 
 // -- REGIMM rt field ------------------------------------------------------------
 constexpr uint8_t kRiBltz = 0x00;
@@ -258,6 +259,19 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                 case kFnDsll: mapped = Mips64Op::Dsll; break;
                 case kFnDsrl: mapped = Mips64Op::Dsrl; break;
                 case kFnDsra: mapped = Mips64Op::Dsra; break;
+                case kFnDsrl32:
+                    // MIPS64r2 overloads SPECIAL/0x3E: rs=0 is DSRL32,
+                    // rs=1 is DROTR32, and rs[4:1] must be zero.
+                    if (decoded.rs == 0) {
+                        mapped = Mips64Op::Dsrl32;
+                    } else if (decoded.rs == 1) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                    "valid DROTR32 encoding outside the implemented subset");
+                    } else {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved SPECIAL shift/rotate rs encoding");
+                    }
+                    break;
                 default: break;
             }
             if (mapped != Mips64Op::Invalid) {
@@ -1368,6 +1382,14 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Dsrl:
             writeGpr(decoded.rd, readGpr(decoded.rt) >> decoded.sa);
             break;
+        case Mips64Op::Dsrl32: {
+            // sa is five bits, making the architectural 32..63-bit shift
+            // defined for uint64_t. Read before write to preserve rd == rt.
+            const uint64_t source = readGpr(decoded.rt);
+            const unsigned shift = static_cast<unsigned>(decoded.sa) + 32U;
+            writeGpr(decoded.rd, source >> shift);
+            break;
+        }
         case Mips64Op::Dsra: {
             const int64_t value = static_cast<int64_t>(readGpr(decoded.rt));
             writeGpr(decoded.rd, static_cast<uint64_t>(value >> decoded.sa));
@@ -1867,11 +1889,13 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
             break;
         }
         case Mips64Op::J:
-            target = ((address + kInstructionSize) & 0xF000000000000000ULL) |
+            // MIPS64 pseudo-direct jumps preserve PC+4[63:28]. The 26-bit
+            // instruction index supplies the low 28 target bits.
+            target = ((address + kInstructionSize) & 0xFFFFFFFFF0000000ULL) |
                      (static_cast<uint64_t>(decoded.index) << 2);
             break;
         case Mips64Op::Jal:
-            target = ((address + kInstructionSize) & 0xF000000000000000ULL) |
+            target = ((address + kInstructionSize) & 0xFFFFFFFFF0000000ULL) |
                      (static_cast<uint64_t>(decoded.index) << 2);
             writesLink = true;
             break;
@@ -2070,6 +2094,7 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Dsll:
         case Mips64Op::Dsrl:
         case Mips64Op::Dsra:
+        case Mips64Op::Dsrl32:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u", name, decoded.rd,
                           decoded.rt, decoded.sa);
             break;
@@ -2649,6 +2674,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Tlbr: return "tlbr";
         case Mips64Op::Tlbwi: return "tlbwi";
         case Mips64Op::Tlbwr: return "tlbwr";
+        case Mips64Op::Dsrl32: return "dsrl32";
         default: return "invalid";
     }
 }
