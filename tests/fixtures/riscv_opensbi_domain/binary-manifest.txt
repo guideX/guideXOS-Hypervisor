@@ -5,7 +5,9 @@ Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7
 Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
 FDT compiler: Version: DTC 1.7.2
 Payload entry=0x80200000; page tables at 0x83c00000; independently assembled S-mode ELF
+CPU node uses the standard mmu-type property required by OpenSBI v1.8.1 FDT fixup.
+Input FDT reserves only the unused firmware slot tail; OpenSBI publishes exact protected runtime ranges.
 The build reads the pinned firmware and does not rebuild or alter OpenSBI.
 
-7D34AA21C380F403525867A0AF493F7F730468517A902C029CC952DD72B0870E  platform.dtb  4191 bytes
+AA83E5A3B42046DCC00D9FC90E04334A2B7ED713843A5164EFFBBF137D5D72B7  platform.dtb  4193 bytes
 2F90EBB20D7080321A7FF2DEDB088CCFA8251FDD68F64F0D47B943B6350B709D  supervisor.elf  28704 bytes

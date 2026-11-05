@@ -705,3 +705,31 @@ Validation and next target:
   guest trap recovery, UART0/UART1 and PLIC operations, and authentic SBI Base
   and TIME services. See `phase-riscv-16-report.txt` for the measured PMP table,
   FDT fixup behavior, artifact hashes, test results, and limits.
+
+--- Phase RISCV-17: single-hart boot and memory contract ---
+
+- A shared version-1 contract records the single boot hart, RV64IMA_Zicsr
+  profile, 64 MiB RAM, physical address width, OpenSBI and supervisor entry
+  ranges, FDT capacity, device apertures, fixture reservations, and PMP windows.
+  Runtime evidence comes from the actual OpenSBI handoff and StandardPmp16 CPU.
+- The corrected domain FDT uses standard mmu-type = "riscv,sv39". With
+  unchanged OpenSBI v1.8.1, the final S-mode FDT exposes one enabled hart 0,
+  removes opensbi-domain, and matches RAM, timer frequency, UARTs, PLIC
+  contexts, console, ACLINT ownership, and firmware reservations.
+- The supervisor guest enters in S-mode with a0=0, a1=0x82200000, and
+  satp=0, then deliberately switches into Sv39. Separate PT_LOAD segments are
+  checked against their payload and page-table reservations; their address
+  envelope is not treated as a contiguous loaded image.
+- Structured reports validate all reservations, list all 16 effective PMP
+  entries (15 active, one OFF, zero differences), preserve duplicate inherited
+  ACLINT entries, and record the actual handoff and final FDT. Unmatched S/U
+  physical accesses remain denied.
+- A separately assembled M/S guest proves locked NAPOT and locked TOR
+  predecessor write rejection, two S-mode load faults, production reset
+  clearing all PMP entries, post-reset guest reconfiguration, and two actual
+  SFENCE.VMA instructions. The MMU has no translation cache.
+- RISCV-17 Debug acceptance: 25/25 RISC-V suites. Release acceptance: 25/25
+  RISC-V suites. The full Release suite separately reports the existing
+  DebuggerTests failure and the legacy ELFValidationTests link failure.
+  EFI/SAL CTests and direct IA-64 ACPI/interrupt regressions passed in both
+  configurations. Linux, QEMU, SMP, and new hardware remain out of scope.

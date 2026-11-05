@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "riscv/riscv_boot_contract.h"
 #include "riscv/riscv_elf64_loader.h"
 #include "riscv_cpu.h"
 #include "riscv_decoder.h"
@@ -24,16 +25,16 @@ using namespace riscv;
 
 namespace {
 
-constexpr uint64_t kRamBase = 0x80000000ULL;
-constexpr uint64_t kRamSize = 0x04000000ULL;
-constexpr uint64_t kFirmwareEntry = 0x80000000ULL;
-constexpr uint64_t kFirmwareSlotEnd = 0x80200000ULL;
-constexpr uint64_t kPayloadEntry = 0x80200000ULL;
-constexpr uint64_t kPayloadReservationEnd = 0x80220000ULL;
-constexpr uint64_t kFdtAddress = 0x82200000ULL;
+constexpr uint64_t kRamBase = boot_contract::kRamBase;
+constexpr uint64_t kRamSize = boot_contract::kRamSize;
+constexpr uint64_t kFirmwareEntry = boot_contract::kFirmwareEntry;
+constexpr uint64_t kFirmwareSlotEnd = boot_contract::kFirmwareSlotEnd;
+constexpr uint64_t kPayloadEntry = boot_contract::kSupervisorEntry;
+constexpr uint64_t kPayloadReservationEnd = boot_contract::kSupervisorReservationEnd;
+constexpr uint64_t kFdtAddress = boot_contract::kFdtAddress;
 constexpr uint64_t kFdtReservationEnd = 0x82202000ULL;
-constexpr uint64_t kResultAddress = 0x83E00000ULL;
-constexpr uint64_t kStackAddress = 0x83FF0000ULL;
+constexpr uint64_t kResultAddress = boot_contract::kResultAddress;
+constexpr uint64_t kStackAddress = boot_contract::kSupervisorStackAddress;
 constexpr uint64_t kRamEnd = kRamBase + kRamSize;
 constexpr uint64_t kComplete = 0x434F4D504C455445ULL;
 constexpr uint64_t kSignatureMagic = 0x47584F5352495356ULL;
@@ -384,6 +385,12 @@ struct RunEvidence {
     uint64_t mmioReads = 0;
     uint64_t mmioWrites = 0;
     bool handedOff = false;
+    bool handoffObserved = false;
+    uint64_t handoffHartId = 0;
+    uint64_t handoffFdt = 0;
+    uint64_t handoffSatp = 0;
+    uint64_t handoffPc = 0;
+    PrivilegeMode handoffPrivilege = PrivilegeMode::Machine;
     bool sawSbiTrapInM = false;
     bool sawSbiReturnToS = false;
     bool complete = false;
@@ -532,6 +539,14 @@ RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget,
             }
             if (cpu.privilege() == PrivilegeMode::Supervisor && cpu.getPC() == kPayloadEntry) {
                 evidence.handedOff = true;
+                if (!evidence.handoffObserved) {
+                    evidence.handoffObserved = true;
+                    evidence.handoffHartId = cpu.readGR(10);
+                    evidence.handoffFdt = cpu.readGR(11);
+                    evidence.handoffSatp = CsrOrZero(cpu, 0x180);
+                    evidence.handoffPc = cpu.getPC();
+                    evidence.handoffPrivilege = cpu.privilege();
+                }
             }
         } else if (step.outcome == StepOutcome::Trap) {
             ++evidence.traps;

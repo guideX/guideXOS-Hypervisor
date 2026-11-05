@@ -1,0 +1,7 @@
+Guest compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+Guest flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+Guest uses M-mode pmpaddr/pmpcfg CSR instructions to test locked NAPOT and locked TOR predecessor writes.
+A production CPU reset clears the locks; the preserved guest phase marker then reconfigures and changes the same region.
+
+4B09751866C3093BCC564D806593B21A76E7301ADE6189005466ECAA666629AA  locked_transition.bin  900 bytes
+B589E8A04775CADD6CFE004CFBD62AA4C1824ED9D418E0B184E858D4D9A31040  locked_transition.elf  7032 bytes

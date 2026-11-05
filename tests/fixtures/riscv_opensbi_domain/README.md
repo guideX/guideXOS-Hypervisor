@@ -15,6 +15,13 @@ requests SBI Base and TIME services, and recovers from expected traps in its
 own S-mode handler. Its page tables are preloaded into the read-only S-mode
 window so page-table reads succeed while A-bit writes fail through PMP.
 
+The CPU node uses the standard `mmu-type = "riscv,sv39"` property consumed by
+OpenSBI v1.8.1's CPU fixup. The guest-visible FDT therefore retains an enabled
+hart 0 node, and OpenSBI's domain fixup removes the private `opensbi-domain`
+property. OpenSBI adds exact protected firmware text and data reservations;
+the input FDT separately reserves the unused tail of the 2 MiB firmware slot
+so S-mode memory allocators cannot select a PMP-unmatched hole.
+
 Build the fixture from the repository root with:
 
 ```powershell
@@ -22,5 +29,5 @@ Build the fixture from the repository root with:
 ```
 
 The script verifies the pinned firmware hashes before compiling the new DTB
-and guest. It writes compiler intermediates to this fixture's `.build` folder
+and guest. It writes compiler intermediates to the relocated artifact directory
 and does not rebuild or modify the accepted OpenSBI firmware.

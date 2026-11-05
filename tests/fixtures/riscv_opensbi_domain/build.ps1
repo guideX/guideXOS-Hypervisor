@@ -1,6 +1,7 @@
 param(
     [string]$LlvmBin = "C:\Program Files\LLVM\bin",
-    [string]$Dtc = "C:\msys64\usr\bin\dtc.exe"
+    [string]$Dtc = "C:\msys64\usr\bin\dtc.exe",
+    [string]$BuildRoot = "E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv17-build\domain"
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,7 +9,7 @@ Set-StrictMode -Version Latest
 
 $fixture = $PSScriptRoot
 $repo = (Resolve-Path (Join-Path $fixture "..\..\..")).Path
-$buildRoot = Join-Path $fixture ".build"
+$buildRoot = $BuildRoot
 $llvmClang = Join-Path $LlvmBin "clang.exe"
 $readobj = Join-Path $LlvmBin "llvm-readobj.exe"
 $objdump = Join-Path $LlvmBin "llvm-objdump.exe"
@@ -44,9 +45,9 @@ Copy-Item -LiteralPath $dtbBuild -Destination (Join-Path $fixture "platform.dtb"
 Copy-Item -LiteralPath $elfBuild -Destination (Join-Path $fixture "supervisor.elf") -Force
 $elfInfo = & $readobj --file-headers --program-headers --sections --symbols $elfBuild | Out-String
 $disassembly = & $objdump --disassemble $elfBuild | Out-String
-[IO.File]::WriteAllText((Join-Path $fixture "supervisor-elf-info.txt"), $elfInfo,
+[IO.File]::WriteAllText((Join-Path $buildRoot "supervisor-elf-info.txt"), $elfInfo,
     [Text.UTF8Encoding]::new($false))
-[IO.File]::WriteAllText((Join-Path $fixture "supervisor-disassembly.txt"), $disassembly,
+[IO.File]::WriteAllText((Join-Path $buildRoot "supervisor-disassembly.txt"), $disassembly,
     [Text.UTF8Encoding]::new($false))
 
 $compilerVersion = (& $llvmClang --version | Select-Object -First 1).Trim()
@@ -63,6 +64,8 @@ $manifestLines = @(
     "Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib",
     "FDT compiler: $(& $Dtc --version)",
     "Payload entry=0x80200000; page tables at 0x83c00000; independently assembled S-mode ELF",
+    "CPU node uses the standard mmu-type property required by OpenSBI v1.8.1 FDT fixup.",
+    "Only the unused firmware slot tail is reserved by input FDT; OpenSBI publishes exact protected firmware ranges.",
     "The build reads the pinned firmware and does not rebuild or alter OpenSBI.",
     ""
 ) + @($hashLines)

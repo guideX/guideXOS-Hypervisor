@@ -1,0 +1,236 @@
+guideXOS Hypervisor — Phase RISCV-17 Report
+Single-Hart Boot Contract, Memory Reservations, Effective PMP, and Locked-Entry Recovery
+Date: 2026-11-04
+Outcome: A — RISCV-17 acceptance criteria passed; unrelated Release-suite issues are recorded separately
+
+Preflight and scope
+-------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV (upstream origin/RISCV, divergence 0/0)
+Starting HEAD: 6866d65036675cb9a53e2717871fd0b7b22f939c
+RISCV-16 was the last completed phase; .phase-riscv selected RISCV-17.
+Pre-edit baseline: 23/23 existing RISC-V CTest suites passed in Debug
+(1,311.12 seconds). The expected 25 RISC-V suites include two new targets.
+
+The pre-existing untracked Testing/ directory and fixture .build/ folders for
+dual-UART, PLIC/UART, and OpenSBI PMP were retained. All phase build trees,
+traces, and machine-readable evidence are under
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv17-final-{debug,release}.
+No branch switch, reset, rebase, clean, stash, or push occurred. No IA-64
+implementation source, shared .phase, pinned OpenSBI image, or accepted
+supervisor.elf was changed. QEMU and Linux were not run.
+
+Machine profile and firmware provenance
+---------------------------------------
+Contract schema: riscv-boot-contract v1
+Profile: guideXOS-RV64IMA_Zicsr-single-hart-restricted-domain
+Hart count: 1; boot hart: 0
+ISA: RV64I, M, A, Zicsr
+RAM: 0x80000000 through 0x84000000 (64 MiB)
+Physical address width: 56 bits
+PMP: StandardPmp16, 16 implemented entries
+OpenSBI: v1.8.1 FW_JUMP, upstream commit 74434f255873d74e56cc50aa762d1caf24c099f8
+FW_JUMP binary SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+FW_JUMP ELF SHA-256: 255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+
+The machine inventory is defined once in include/riscv/riscv_boot_contract.h.
+CheckedEnd, IsContained, and Overlaps use checked half-open boundaries.
+Report generation is tied to the configured setup and the actual OpenSBI,
+FDT, loaded ELF segments, CPU handoff, PMP entries, and physical device maps.
+
+Firmware-to-supervisor handoff
+------------------------------
+OpenSBI starts at 0x80000000 in M-mode. The observed handoff enters S-mode at
+0x80200000 with a0=0, a1=0x82200000, and satp=0 (Bare). The guest deliberately
+enables Sv39 later; the later observed satp is 0x8000000000083c00 (MODE=8).
+The supervisor entry is 2 MiB aligned. The accepted standalone supervisor ELF
+is a fixture, not a Linux Image.
+
+FDT audit and resolution of the RISCV-16 discrepancy
+----------------------------------------------------
+RISCV-16 used the nonstandard property name riscv,mmu-type. OpenSBI v1.8.1
+looks for the standard mmu-type property during CPU fixup; when it is absent,
+the CPU node is disabled. Its domain fixup removes opensbi-domain only from
+enabled CPU nodes. This explains the earlier disabled node and retained
+assignment property; it was not required by the restricted-domain policy.
+
+The fixture now declares mmu-type = "riscv,sv39". With unchanged upstream
+OpenSBI and an authentic guest-executed boot, the post-fixup FDT contains
+exactly one enabled hart 0 node, advertises RV64IMA_Zicsr and Sv39, and has no
+opensbi-domain property. The observed CPU description is suitable for
+single-hart supervisor discovery. OpenSBI source references:
+https://raw.githubusercontent.com/riscv-software-src/opensbi/74434f255873d74e56cc50aa762d1caf24c099f8/lib/utils/fdt/fdt_fixup.c
+https://raw.githubusercontent.com/riscv-software-src/opensbi/74434f255873d74e56cc50aa762d1caf24c099f8/lib/utils/fdt/fdt_domain.c
+
+Final FDT validation also matches:
+- RAM 0x80000000-0x84000000 and 10 MHz timer frequency.
+- UART0 0x10000000-0x10000100, PLIC source 10.
+- UART1 0x1000a000-0x1000a100, PLIC source 12.
+- PLIC 0x0c000000-0x0c400000, 96 sources, exposed S context
+  [1, 0xffffffff, 1, 9].
+- Chosen console /soc/serial@10000000.
+- ACLINT mtime 0x0200bff8-0x0200c000 and mtimecmp
+  0x02004000-0x02004008 disabled in the supervisor FDT. The initialized
+  timer remains M-mode owned and supervisor timer service is via SBI TIME.
+- Source FDT 4,193 bytes; final OpenSBI FDT 8,437 bytes; reserved capacity
+  12,288 bytes.
+
+Memory inventory and reservations
+---------------------------------
+Physical RAM is 0x80000000-0x84000000. OpenSBI reserves its protected text
+0x80000000-0x80080000 and data/scratch 0x80080000-0x800a0000 as no-map.
+The fixture reserves the unused tail of the 2 MiB firmware slot,
+0x800a0000-0x80200000, to keep a supervisor memory allocator away from an
+unmatched S/U PMP hole.
+
+The remaining explicit no-map reservations are:
+- Supervisor test payload: 0x80200000-0x80220000.
+- Firmware FDT and post-fixup allocation: 0x82200000-0x82203000.
+- Guest page tables: 0x83c00000-0x83c04000.
+- Guest result records: 0x83e00000-0x83e01000.
+- Guest stack: 0x83ff0000-0x84000000.
+
+The supervisor ELF has separate PT_LOAD segments at
+0x80200000-0x802006ec (RX), 0x802006f0-0x80200825 (R), and
+0x83c00000-0x83c04000 (R). Its 0x80200000-0x83c04000 address envelope is
+not a contiguous image; validation checks each real segment against its own
+reservation and against the FDT, result, and stack. Every reservation is
+nonzero, overflow-safe, within RAM, and pairwise disjoint except for declared
+containment by RAM/PMP permission windows. The 12 KiB FDT capacity contains
+the actual 8,437-byte fixed-up FDT.
+
+Reservations for payload, page tables, result data, and stack are specific to
+this focused guest. They are not proposed as the long-term reservation policy
+for a Linux executable image. The firmware slot tail remains no-map because
+it is outside the domain's S/U grants.
+
+Effective PMP comparison
+------------------------
+The comparison reads actual post-OpenSBI CPU state and checks all 16 entries.
+Result: 15 active, one OFF, zero differences, and no catch-all grant. Exact
+boundaries and configuration bytes:
+
+  0 OpenSBI data/scratch 0x80080000-0x800a0000 cfg 0x18, S/U denied
+  1 OpenSBI text         0x80000000-0x80080000 cfg 0x18, S/U denied
+  2 ACLINT mtimecmp      0x02004000-0x02004008 cfg 0x18, S/U denied
+  3 inherited duplicate  0x02004000-0x02004008 cfg 0x18, S/U denied
+  4 ACLINT mtime         0x0200bff8-0x0200c000 cfg 0x18, S/U denied
+  5 inherited duplicate  0x0200bff8-0x0200c000 cfg 0x18, S/U denied
+  6 UART0                0x10000000-0x10000100 cfg 0x1b, S/U RW, no X
+  7 UART1                0x1000a000-0x1000a100 cfg 0x1b, S/U RW, no X
+  8 guest page tables    0x83c00000-0x83c04000 cfg 0x19, S/U R only
+  9 guest RAM            0x80200000-0x80400000 cfg 0x1f, S/U RWX
+ 10 PLIC                 0x0c000000-0x0c400000 cfg 0x1b, S/U RW, no X
+ 11 guest RAM            0x80400000-0x80800000 cfg 0x1f, S/U RWX
+ 12 guest RAM            0x80800000-0x81000000 cfg 0x1f, S/U RWX
+ 13 guest RAM            0x81000000-0x82000000 cfg 0x1f, S/U RWX
+ 14 guest RAM            0x82000000-0x84000000 cfg 0x1f, S/U RWX
+ 15 OFF                  cfg 0x00
+
+The two inherited ACLINT duplicate entries are reported explicitly. The smaller
+page-table range takes priority over its containing guest RAM PMP window.
+Unmatched S/U access to 0x40000000 and 0x84000000 is denied. The restricted
+domain uses 15 of 16 entries, leaving one entry available.
+
+Boot profiles and negative validation
+-------------------------------------
+A: historical LegacyNoPmp profile exposes zero PMP entries and remains
+   separately constructible; its earlier tests remain intact.
+B: StandardPmp16 root behavior remains covered by the OpenSBI PMP regression.
+C: restricted supervisor domain is validated against the actual domain FDT,
+   OpenSBI handoff, and all 16 effective PMP entries.
+D: a deliberately conflicting supervisor reservation is rejected by the
+   ELF placement planner before guest execution.
+
+Locked PMP transitions and reset recovery
+------------------------------------------
+The independent RV64IMA_Zicsr guest uses M-mode CSR instructions; no host-side
+PMP mutation substitutes for the guest writes. The existing unlocked policy
+test retains deny -> grant -> allowed -> revoke -> deny behavior.
+
+In the locked run, entry 1 is locked NAPOT for 0x80010000-0x80010008. M-mode
+attempts to change pmpaddr1 and pmpcfg0; readback and the actual PMP trace show
+the values are retained. Entry 4 is locked TOR for 0x80011000-0x80011008.
+Its OFF predecessor entry 3 retains pmpaddr3 because entry 4 is locked.
+Two real S-mode loads fault with cause 5 at those exact ranges. Unrelated PMP
+entries remain unchanged and the CPU records no MMIO side effects.
+
+The production CPU reset path clears all 16 entries and their addresses while
+preserving guest RAM and the phase word. The same guest restarts, configures
+the same NAPOT region unlocked, changes its address and permission through
+actual M-mode CSR writes, executes S-mode access successfully, and records the
+expected value. Evidence: locked run 146 steps / two traps; reset recovery
+82 steps / zero traps; two genuine M-mode SFENCE.VMA instructions. The MMU
+does not cache translations; no TLB invalidation effect is claimed.
+
+Authentic OpenSBI guest evidence
+-------------------------------
+The full integration runs unchanged OpenSBI on the production RV64CPU without
+a host SBI provider. It records domain selection, OpenSBI PMP CSR activity,
+the real M-to-S handoff, and the actual final FDT. SBI Base and TIME calls
+complete through OpenSBI. UART0/UART1, PLIC source 12 claim/complete, the
+external interrupt, and the timer interrupt remain functional. The guest
+records both UART bytes, one external interrupt, one timer interrupt, 15
+effective PMP regions, its Sv39 root, identity and nonidentity mappings, and
+the final completion marker through guest instructions.
+
+Machine-readable artifacts
+--------------------------
+Generated under
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv17-final-release:
+- riscv-boot-contract-v1.json
+- riscv-memory-inventory-v1.json
+- riscv-reservations-v1.json
+- riscv-final-fdt-summary-v1.json
+- riscv-effective-pmp-v1.json
+- riscv-pmp-comparison-v1.json
+- riscv-contract-validation-failures-v1.json
+- riscv-handoff-v1.json
+- riscv-pmp-locked-transitions-v1.json
+- riscv17-boot-profile-matrix-v1.json
+All ten JSON artifacts parse successfully. Contract validation failures are
+empty; FDT, reservation, handoff, and PMP comparisons are all valid.
+
+Key SHA-256 provenance:
+- Domain platform.dtb: AA83E5A3B42046DCC00D9FC90E04334A2B7ED713843A5164EFFBBF137D5D72B7
+- Domain platform.dts: 396FEFFEFE4C3B9A0B3CE2A799437D15CDAE39FB16BBC47337F489762AC83ACF
+- Accepted supervisor.elf (unchanged): 2F90EBB20D7080321A7FF2DEDB088CCFA8251FDD68F64F0D47B943B6350B709D
+- Locked transition guest.bin: 4B09751866C3093BCC564D806593B21A76E7301ADE6189005466ECAA666629AA
+- Locked transition guest.elf: B589E8A04775CADD6CFE004CFBD62AA4C1824ED9D418E0B184E858D4D9A31040
+- riscv-boot-contract-v1.json: C8B094A21E0A061AB95055527E9E119723D7E492E04F41F851506833AF5C4ABD
+- riscv-pmp-comparison-v1.json: FA4DB17BA40EF66D834F26AD42F1B5C6291F2069763A0A554C3E3E17E90DB5D4
+
+Validation results
+------------------
+Pre-edit baseline: 23/23 RISC-V suites passed in Debug (1,311.12 seconds).
+Final Debug: 25/25 RISC-V suites passed (1,411.29 seconds); domain integration
+575 seconds. Focused Debug contract and transition rerun: 2/2, 65 and 20 checks.
+Final Release: all 25/25 RISC-V CTests passed in the full suite; domain
+integration 79.30 seconds. The new boot contract reports 65 checks and the
+locked-transition target 20 checks, all passing. Full Release CTest reported
+34/36 tests passing: unchanged DebuggerTests fails with "No active CPU", and
+ELFValidationTests could not run because test_elf_validation fails to link
+with 27 unresolved symbols in unchanged IA-64/general sources. An optional
+DebuggerTests Debug cross-check remained idle at near-zero CPU for roughly 90
+seconds and was interrupted. These general Release-suite issues are unrelated
+to the RISCV-17 changes and were kept separate; no IA-64 code was changed.
+
+EFI memory-map and IA-64 SAL CTests passed in Debug (2/2) and Release (2/2).
+Direct ACPI, interrupt-controller, and processor-interrupt-block tests passed
+in both configurations. git diff --check passed before commit.
+No QEMU or Linux execution occurred.
+
+Limits and RISCV-18 recommendation
+---------------------------------
+This phase establishes a single-hart, physical-access and boot-description
+contract; it does not establish a complete hypervisor or secure virtualization
+boundary. The PLIC window is the full 4 MiB aperture; standard PMP leaves
+unlocked M-mode access intact; there is no TLB; and the no-map payload, result,
+stack, and page-table reservations are test-fixture allocations.
+
+Recommended RISCV-18: add a pinned non-UEFI Linux Image placement/entry
+contract using the existing single-hart memory/device profile. Validate the
+Image's real extents, reserved-memory interaction, a0/a1, Bare satp, and S-mode
+entry first; keep SMP, SBI IPI/HSM/RFENCE, new hardware, and Linux peripheral
+enablement out until the existing UART, PLIC, timer, and domain contract has
+been extended deliberately.

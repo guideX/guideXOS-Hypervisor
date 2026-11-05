@@ -114,7 +114,7 @@
 			reg = <0>;
 			status = "okay";
 			riscv,isa = "rv64ima_zicsr";
-			riscv,mmu-type = "riscv,sv39";
+			mmu-type = "riscv,sv39";
 			opensbi-domain = <&supervisor_domain>;
 
 			cpu0_intc: interrupt-controller {
@@ -131,8 +131,8 @@
 		#size-cells = <2>;
 		ranges;
 
-		opensbi@80000000 {
-			reg = <0x0 0x80000000 0x0 0x00200000>;
+		opensbi-slot-gap@800a0000 {
+			reg = <0x0 0x800a0000 0x0 0x00160000>;
 			no-map;
 		};
 		supervisor-payload@80200000 {

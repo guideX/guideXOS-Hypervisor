@@ -179,6 +179,7 @@ set(HEADERS
     include/riscv_decoder.h
     include/riscv_cpu.h
     include/riscv/riscv_elf64_loader.h
+    include/riscv/riscv_boot_contract.h
     include/SyscallDispatcher.h
     include/CPUContext.h
     include/IVirtualMachine.h
@@ -1117,13 +1118,57 @@ add_test(NAME RiscVOpenSbiDomainTests
                  ${RISCV_OPENSBI_FW_ELF_COPY}
                  ${RISCV_DOMAIN_SUPERVISOR_ELF_COPY}
                  ${RISCV_DOMAIN_DTB_COPY}
-                 ${CMAKE_CURRENT_BINARY_DIR}/riscv16-$<CONFIG>-opensbi-domain.trace.log)
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv17-$<CONFIG>-opensbi-domain.trace.log)
 
 foreach(riscv16_target IN ITEMS test_riscv_pmp_domain_policy test_riscv_opensbi_domain)
     if(MSVC)
         target_compile_options(${riscv16_target} PRIVATE /W4)
     else()
         target_compile_options(${riscv16_target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
+
+# RISCV-17 verifies the shared memory inventory against actual OpenSBI reports.
+# It follows RiscVOpenSbiDomainTests so it reads that run's final FDT/PMP evidence.
+add_executable(test_riscv_boot_contract
+    tests/test_riscv_boot_contract.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_boot_contract PRIVATE bcrypt)
+add_test(NAME RiscVBootContractTests
+         COMMAND test_riscv_boot_contract
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_DOMAIN_SUPERVISOR_ELF_COPY}
+                 ${RISCV_DOMAIN_DTB_COPY}
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv17-$<CONFIG>-opensbi-domain.trace.log)
+
+set(RISCV_PMP_LOCKED_TRANSITION_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_pmp_locked_transition)
+set(RISCV_PMP_LOCKED_TRANSITION_BIN_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv17_locked_transition.bin)
+configure_file(${RISCV_PMP_LOCKED_TRANSITION_FIXTURE_DIR}/locked_transition.bin
+               ${RISCV_PMP_LOCKED_TRANSITION_BIN_COPY} COPYONLY)
+add_executable(test_riscv_pmp_contract_transitions
+    tests/test_riscv_pmp_contract_transitions.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+add_test(NAME RiscVPmpContractTransitionTests
+         COMMAND test_riscv_pmp_contract_transitions
+                 ${RISCV_PMP_LOCKED_TRANSITION_BIN_COPY}
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv-pmp-locked-transitions-v1.json)
+
+foreach(riscv17_target IN ITEMS test_riscv_boot_contract
+                                test_riscv_pmp_contract_transitions)
+    if(MSVC)
+        target_compile_options(${riscv17_target} PRIVATE /W4)
+    else()
+        target_compile_options(${riscv17_target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endforeach()
 
