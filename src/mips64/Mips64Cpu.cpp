@@ -74,6 +74,7 @@ constexpr uint8_t kFnJr = 0x08;
 constexpr uint8_t kFnJalr = 0x09;
 constexpr uint8_t kFnSyscall = 0x0C;
 constexpr uint8_t kFnBreak = 0x0D;
+constexpr uint8_t kFnTne = 0x36;
 constexpr uint8_t kFnMfhi = 0x10;
 constexpr uint8_t kFnMthi = 0x11;
 constexpr uint8_t kFnMflo = 0x12;
@@ -223,6 +224,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
     decoded.rd = static_cast<uint8_t>((word >> 11) & 0x1F);
     decoded.sa = static_cast<uint8_t>((word >> 6) & 0x1F);
     decoded.sel = static_cast<uint8_t>(word & 0x7U);
+    decoded.code = static_cast<uint16_t>((word >> 6) & 0x3FFU);
     decoded.imm = static_cast<uint16_t>(word & 0xFFFF);
     decoded.index = word & 0x03FFFFFFU;
 
@@ -246,6 +248,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                 case kFnJalr: mapped = Mips64Op::Jalr; break;
                 case kFnSyscall: mapped = Mips64Op::Syscall; break;
                 case kFnBreak: mapped = Mips64Op::Break; break;
+                case kFnTne: mapped = Mips64Op::Tne; break;
                 case kFnMfhi: mapped = Mips64Op::Mfhi; break;
                 case kFnMthi: mapped = Mips64Op::Mthi; break;
                 case kFnMflo: mapped = Mips64Op::Mflo; break;
@@ -482,6 +485,7 @@ bool Mips64Cpu::faultEntersException(Mips64Fault fault) {
         case Mips64Fault::MemoryFaultStore:
         case Mips64Fault::SyscallTrap:
         case Mips64Fault::BreakTrap:
+        case Mips64Fault::TrapException:
         case Mips64Fault::OverflowTrap:
         case Mips64Fault::PrivilegeViolation:
         case Mips64Fault::AddressErrorFetch:
@@ -1591,6 +1595,12 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Break:
             return trap(Mips64ExcCode::Bp, Mips64Fault::BreakTrap,
                         "BREAK exception");
+        case Mips64Op::Tne:
+            if (readGpr(decoded.rs) != readGpr(decoded.rt)) {
+                return trap(Mips64ExcCode::Trap, Mips64Fault::TrapException,
+                            "TNE conditional Trap");
+            }
+            break;
         case Mips64Op::Tlbp:
         case Mips64Op::Tlbr:
         case Mips64Op::Tlbwi:
@@ -2268,6 +2278,10 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Tlbwr:
             std::snprintf(buffer, sizeof(buffer), "%s", name);
             break;
+        case Mips64Op::Tne:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, 0x%x", name,
+                          decoded.rs, decoded.rt, decoded.code);
+            break;
         default:
             std::snprintf(buffer, sizeof(buffer), "%s", name);
             break;
@@ -2746,6 +2760,7 @@ const char* Mips64Cpu::faultName(Mips64Fault fault) {
         case Mips64Fault::Cp0Violation: return "Cp0Violation";
         case Mips64Fault::SyscallTrap: return "SyscallTrap";
         case Mips64Fault::BreakTrap: return "BreakTrap";
+        case Mips64Fault::TrapException: return "TrapException";
         case Mips64Fault::OverflowTrap: return "OverflowTrap";
         case Mips64Fault::PrivilegeViolation: return "PrivilegeViolation";
         case Mips64Fault::AddressErrorFetch: return "AddressErrorFetch";
@@ -2843,6 +2858,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Eret: return "eret";
         case Mips64Op::Syscall: return "syscall";
         case Mips64Op::Break: return "break";
+        case Mips64Op::Tne: return "tne";
         case Mips64Op::Tlbp: return "tlbp";
         case Mips64Op::Tlbr: return "tlbr";
         case Mips64Op::Tlbwi: return "tlbwi";

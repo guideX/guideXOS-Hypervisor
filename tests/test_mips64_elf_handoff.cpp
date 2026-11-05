@@ -690,7 +690,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                           const std::filesystem::path& tracePath,
                           unsigned instructionBudget = 200000,
                           bool continuePastDsrl32Frontier = false,
-                          bool continuePastLldFrontier = false) {
+                          bool continuePastLldFrontier = false,
+                          bool continuePastTneFrontier = false) {
     constexpr uint64_t probeRamBytes = 256ULL * 1024 * 1024;
     constexpr unsigned traceInstructionLimit = 256;
     constexpr unsigned continuationTraceLimit = 512;
@@ -700,6 +701,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     constexpr uint32_t sltiuFrontierWord = 0x2C420021U;
     constexpr uint64_t lldFrontierPc = 0xFFFFFFFF8091A338ULL;
     constexpr uint32_t lldFrontierWord = 0xD0850000U;
+    constexpr uint64_t tneFrontierPc = 0xFFFFFFFF801CAF50ULL;
+    constexpr uint32_t tneFrontierWord = 0x00040336U;
     const auto startTime = std::chrono::steady_clock::now();
     const auto image = readFile(imagePath);
     if (image.empty()) throw std::runtime_error("kernel image is empty or unreadable");
@@ -745,13 +748,17 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     bool sltiuFrontierVerified = false;
     bool lldFrontierVerified = false;
     bool lldReplayVerified = false;
+    bool tneFrontierVerified = false;
     unsigned retiredAfterLld = 0;
+    unsigned successfulStepsAfterLld = 0;
     Mips64FullVmSnapshot lldActiveSnapshot;
     std::string formerFrontierRecord;
     std::string sltiuFrontierRecord;
     std::string lldFrontierRecord;
     std::string lldScdRecord;
     std::string lldReplayRecord;
+    std::string tneFrontierRecord;
+    std::string tneExecutionRecord;
     std::string lldPreInstructionRecord;
     std::ostringstream frontierInstructionTrace;
     std::ostringstream preSltiuContinuationTrace;
@@ -822,7 +829,124 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         }
         const bool recordingPrefix = attempts < traceInstructionLimit;
         bool didRetire = false;
-        if (continuePastDsrl32Frontier && stopPc == formerFrontierPc) {
+        bool architecturalStepHandled = false;
+        if (continuePastTneFrontier && stopPc == tneFrontierPc) {
+            const Mips64Decoded decoded = decodeInstruction(stopWord);
+            CPUContext* context = vm.getCPUContext(0);
+            const uint64_t a0 = cpu->core().readGpr(4);
+            if (!context || !stopFetchOk || stopPhysical != 0x0001CAF50ULL ||
+                stopWord != tneFrontierWord || retired != 150350U ||
+                vm.getCyclesExecuted() != 150350U || cpu->core().cp0Count() != 150350U ||
+                !decoded.valid || decoded.op != Mips64Op::Tne || decoded.rs != 0 ||
+                decoded.rt != 4 || decoded.code != 12 || a0 != 0 ||
+                cpu->core().readGpr(0) != 0 || cpu->core().cp0Status() != 0x00400080ULL ||
+                cpu->core().cp0Cause() != 0 || cpu->core().cp0Epc() != 0 ||
+                cpu->core().cp0BadVAddr() != 0 || cpu->core().delayArmed() ||
+                cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("authentic Phase 16 TNE prestate did not reproduce");
+            }
+            const Mips64FullVmSnapshot beforeTne = vm.captureMips64FullSnapshot();
+            if (!beforeTne.ValidateIntegrity() || beforeTne.formatVersion != 3 ||
+                beforeTne.cpuComponentVersion != 6 || beforeTne.memoryComponentVersion != 2 ||
+                beforeTne.uartComponentVersion != 4 ||
+                beforeTne.irqRoutingComponentVersion != 1 ||
+                beforeTne.cpus.size() != 1 ||
+                beforeTne.cpus[0].architecturalState.size() != 1001 ||
+                beforeTne.cpus[0].architecturalState[4] != 6 ||
+                beforeTne.cpus[0].architecturalState != cpu->core().serialize()) {
+                throw std::runtime_error("authentic pre-TNE full-VM snapshot failed qualification");
+            }
+            uint8_t tneBytes[4]{};
+            vm.getMemory().Read(stopPhysical, tneBytes, sizeof(tneBytes));
+            std::ostringstream preEvent;
+            preEvent << "{\"type\":\"tne_frontier_before\",\"retired\":" << retired
+                     << ",\"attempts\":" << attempts << ",\"pc_va\":\"0x"
+                     << std::hex << std::setw(16) << std::setfill('0') << stopPc
+                     << "\",\"fetch_pa\":\"0x" << std::setw(9) << stopPhysical
+                     << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                     << "\",\"disassembly\":\"" << cpu->core().disassemble(decoded)
+                     << "\",\"instruction_bytes_be\":\"" << std::hex
+                     << std::setw(2) << unsigned(tneBytes[0]) << std::setw(2) << unsigned(tneBytes[1])
+                     << std::setw(2) << unsigned(tneBytes[2]) << std::setw(2) << unsigned(tneBytes[3])
+                     << "\",\"v0\":\"0x" << std::setw(16) << cpu->core().readGpr(2)
+                     << "\",\"rs\":" << std::dec << unsigned(decoded.rs)
+                     << ",\"rt\":" << unsigned(decoded.rt)
+                     << ",\"code\":" << decoded.code
+                     << ",\"gpr_zero\":\"0x" << std::hex << std::setw(16)
+                     << cpu->core().readGpr(0) << "\",\"a0\":\"0x" << std::setw(16) << a0
+                     << "\",\"ra\":\"0x" << std::setw(16) << cpu->core().readGpr(31)
+                     << "\",\"status\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+                     << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+                     << "\",\"epc\":\"0x" << std::setw(16) << cpu->core().cp0Epc()
+                     << "\",\"count\":" << std::dec << cpu->core().cp0Count()
+                     << ",\"vm_cycles\":" << vm.getCyclesExecuted()
+                     << ",\"delay_armed\":false,\"snapshot_replay_checkpoint\":true}";
+            tneFrontierRecord = preEvent.str();
+
+            const uint64_t firstCyclesRun = vm.run(1);
+            const bool firstRetired = context->instructionsExecuted == retired + 1;
+            const bool trapTaken = a0 != 0;
+            const bool firstStateValid = firstCyclesRun == 1 &&
+                vm.getCyclesExecuted() == 150351U &&
+                cpu->core().cp0Count() == 150351U &&
+                cpu->core().pc() == (trapTaken ? cpu->core().exceptionVector() : tneFrontierPc + 4) &&
+                (trapTaken
+                    ? (!firstRetired && cpu->core().causeExcCode() == 13 &&
+                       cpu->core().cp0Epc() == tneFrontierPc && cpu->core().statusExl())
+                    : (firstRetired && cpu->core().causeExcCode() == 0 &&
+                       cpu->core().cp0Epc() == 0 && cpu->core().fault() == Mips64Fault::None));
+            if (!firstStateValid) {
+                throw std::runtime_error("authentic TNE did not produce its operand-determined result");
+            }
+            const std::vector<uint8_t> firstTneCpu = cpu->core().serialize();
+            const uint64_t firstTneRetired = context->instructionsExecuted;
+            const uint64_t firstTneCycles = vm.getCyclesExecuted();
+            const std::vector<uint8_t> firstTneConsole =
+                vm.getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot firstTneUart =
+                vm.getMips64MaltaBootstrapBoard()->Uart()->CaptureSnapshot();
+            std::string restoreError;
+            if (!vm.restoreMips64FullSnapshot(beforeTne, &restoreError) || !restoreError.empty() ||
+                cpu->core().serialize() != beforeTne.cpus[0].architecturalState ||
+                context->instructionsExecuted != retired || vm.getCyclesExecuted() != 150350U) {
+                throw std::runtime_error("pre-TNE VM snapshot restore changed the authentic state: " + restoreError);
+            }
+            const uint64_t replayCyclesRun = vm.run(1);
+            const bool replayRetired = context->instructionsExecuted == retired + 1;
+            const Ns16550Uart::Snapshot replayTneUart =
+                vm.getMips64MaltaBootstrapBoard()->Uart()->CaptureSnapshot();
+            if (replayCyclesRun != firstCyclesRun || cpu->core().serialize() != firstTneCpu ||
+                context->instructionsExecuted != firstTneRetired || vm.getCyclesExecuted() != firstTneCycles ||
+                replayRetired != firstRetired ||
+                vm.getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes() != firstTneConsole ||
+                replayTneUart.transmitCount != firstTneUart.transmitCount ||
+                replayTneUart.virtualTimeCycle != firstTneUart.virtualTimeCycle) {
+                throw std::runtime_error("authentic TNE snapshot replay diverged");
+            }
+            std::ostringstream execution;
+            execution << "{\"type\":\"tne_execution\",\"comparison_unequal\":"
+                      << (trapTaken ? "true" : "false") << ",\"trap_taken\":"
+                      << (trapTaken ? "true" : "false") << ",\"a0\":\"0x"
+                      << std::hex << std::setw(16) << std::setfill('0') << a0
+                      << "\",\"pc_after\":\"0x" << std::setw(16) << cpu->core().pc()
+                      << "\",\"cause_after\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+                      << "\",\"exc_code_after\":" << std::dec << cpu->core().causeExcCode()
+                      << ",\"epc_after\":\"0x" << std::hex << std::setw(16)
+                      << cpu->core().cp0Epc() << "\",\"status_after\":\"0x"
+                      << std::setw(16) << cpu->core().cp0Status()
+                      << "\",\"retired_before\":" << std::dec << retired
+                      << ",\"retired_after\":" << context->instructionsExecuted
+                      << ",\"count_after\":" << cpu->core().cp0Count()
+                      << ",\"vm_cycles_after\":" << vm.getCyclesExecuted()
+                      << ",\"snapshot_replay_verified\":true,\"snapshot_format_version\":3"
+                      << ",\"snapshot_cpu_version\":6,\"snapshot_cpu_bytes\":1001"
+                      << ",\"snapshot_memory_version\":2,\"snapshot_uart_version\":4"
+                      << ",\"snapshot_irq_version\":1}";
+            tneExecutionRecord = execution.str();
+            tneFrontierVerified = true;
+            didRetire = firstRetired;
+            architecturalStepHandled = trapTaken;
+        } else if (continuePastDsrl32Frontier && stopPc == formerFrontierPc) {
             if (retired != 150041 || vm.getCyclesExecuted() != 150041 ||
                 !stopFetchOk || stopWord != formerFrontierWord) {
                 throw std::runtime_error("authentic Phase 12 prefix/frontier did not reproduce");
@@ -1253,7 +1377,12 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         }
         if (didRetire) {
             ++retired;
-            if (lldFrontierVerified && stopPc != lldFrontierPc) ++retiredAfterLld;
+            if (lldFrontierVerified && stopPc != lldFrontierPc) {
+                ++retiredAfterLld;
+                ++successfulStepsAfterLld;
+            }
+        } else if (architecturalStepHandled) {
+            if (lldFrontierVerified && stopPc != lldFrontierPc) ++successfulStepsAfterLld;
         } else {
             const Mips64Fault fault = cpu->core().fault();
             stopReason = fault == Mips64Fault::UnsupportedInstruction
@@ -1264,6 +1393,10 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
             ++attempts;
             break;
         }
+    }
+
+    if (continuePastTneFrontier && !tneFrontierVerified) {
+        throw std::runtime_error("authentic Phase 16 TNE frontier was not reached");
     }
 
     if (continuePastLldFrontier && lldFrontierVerified &&
@@ -1287,8 +1420,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
             !restoreError.empty()) {
             throw std::runtime_error("active LLD reservation snapshot restore failed: " + restoreError);
         }
-        for (unsigned index = 0; index < retiredAfterLld; ++index) {
-            if (!executeOneAndTrace(vm, *cpu, nullptr)) {
+        for (unsigned index = 0; index < successfulStepsAfterLld; ++index) {
+            if (vm.run(1) != 1) {
                 throw std::runtime_error("active LLD replay stopped before the recorded next frontier");
             }
         }
@@ -1364,6 +1497,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     trace << preSltiuContinuationTrace.str();
     if (!sltiuFrontierRecord.empty()) trace << sltiuFrontierRecord << "\n";
     if (!lldFrontierRecord.empty()) trace << lldFrontierRecord << "\n";
+    if (!tneFrontierRecord.empty()) trace << tneFrontierRecord << "\n";
+    if (!tneExecutionRecord.empty()) trace << tneExecutionRecord << "\n";
     trace << postSltiuContinuationTrace.str();
     if (!lldScdRecord.empty()) trace << lldScdRecord << "\n";
     if (!lldReplayRecord.empty()) trace << lldReplayRecord << "\n";
@@ -1530,6 +1665,10 @@ int main(int argc, char** argv) {
         if (argc == 4 && std::string(argv[1]) == "--continue-lld-kernel") {
             constexpr unsigned totalAttemptBudget = 350000;
             return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget, true, true);
+        }
+        if (argc == 4 && std::string(argv[1]) == "--continue-tne-kernel") {
+            constexpr unsigned totalAttemptBudget = 350000;
+            return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget, true, true, true);
         }
         testElfValidationBothEndians();
         testLoadPlanRejectsRomAndMmioWithoutPartialRamWrites();

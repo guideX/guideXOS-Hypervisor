@@ -114,6 +114,7 @@ enum class Mips64Fault : uint32_t {
     TlbInvalidLoad = 23,        // matched TLB entry invalid on load (-> TLBL, general vector)
     TlbInvalidStore = 24,       // matched TLB entry invalid on store (-> TLBS, general vector)
     TlbModified = 25,           // store to valid non-dirty mapping (-> Mod, general vector)
+    TrapException = 26,         // TNE Trap exception (-> Trap entry)
 };
 
 // Step outcome. Returning Fault always coincides with fault() !=
@@ -143,6 +144,7 @@ enum class Mips64ExcCode : uint32_t {
     Bp = 9,     // BREAK
     RI = 10,    // reserved instruction (incl. privileged ops in S/U mode)
     Ov = 12,    // arithmetic overflow (trapping ADD/ADDI/SUB/DADD/DADDI/DSUB)
+    Trap = 13,  // conditional Trap (TNE)
 };
 
 // ============================================================================
@@ -428,7 +430,7 @@ enum class Mips64Op : uint8_t {
     // MIPS64r2 unsigned comparison with a sign-extended immediate.
     Sltiu,
     // Atomic reservation operations. Appended to preserve existing enum values.
-    Lld, Scd,
+    Lld, Scd, Tne,
 };
 
 struct Mips64ReservationState {
@@ -450,6 +452,7 @@ struct Mips64Decoded {
     uint8_t rd = 0;
     uint8_t sa = 0;
     uint8_t sel = 0;     // COP0 selector (bits 2:0) for MFC0/MTC0 family
+    uint16_t code = 0;   // SPECIAL Trap software code (bits 15:6)
     uint16_t imm = 0;
     uint32_t index = 0;  // J/JAL 26-bit target index
     bool valid = false;

@@ -920,6 +920,22 @@ else()
 endif()
 add_test(NAME Mips64LldScdTests COMMAND test_mips64_lld_scd)
 
+# MIPS64-16 conditional Trap (TNE), including precise exception entry,
+# delay-slot attribution, both fetch endiannesses and production-VM replay.
+add_executable(test_mips64_tne
+    tests/test_mips64_tne.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_tne PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_tne PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_tne PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64TneTests COMMAND test_mips64_tne)
+
 # Link a real MIPS64 VM test to the same production implementation units as
 # ia64emu. This verifies registry auto-registration in the production-linked
 # path, scheduler stepping, panic handling and guest timer-handler execution.
