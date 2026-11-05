@@ -1,4 +1,4 @@
-// MIPS64-5 qualification of version 5 and historical v3/v4 migration.
+// MIPS64-15 qualification of version 6 and historical v3-v5 migration.
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -64,6 +64,7 @@ static std::vector<uint8_t> makeLegacyV4AddressState(
     CHECK(((source.cp0XContext() >> 31) & 3) == 3);
 
     std::vector<uint8_t> legacy = source.serialize();
+    legacy.resize(mips64::Mips64Cpu::kSerializedSizeV5);
     legacy[4] = mips64::Mips64Cpu::kSerializationVersionV4;
 
     constexpr size_t entryHiOffset = 373 + 16;
@@ -101,7 +102,7 @@ static void testRoundTripBeforeCompareMatch() {
     const std::vector<uint8_t> blob = source.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob[4] == Mips64Cpu::kSerializationVersion);
-    CHECK(blob[4] == 5);
+    CHECK(blob[4] == 6);
     CHECK(load64le(blob, kCountOffset) == 103);
     CHECK(load64le(blob, kCompareOffset) == 200);
 
@@ -234,20 +235,30 @@ static void testVersionMigrationAndRejectedRestoresAreAtomic() {
                             30, 100, nextPc));
     target.setPc(nextPc + 0x80);
     const std::vector<uint8_t> valid = target.serialize();
-    CHECK(valid[4] == 5);
+    CHECK(valid[4] == Mips64Cpu::kSerializationVersion);
+
+    std::vector<uint8_t> historicalV5 = valid;
+    historicalV5.resize(Mips64Cpu::kSerializedSizeV5);
+    historicalV5[4] = Mips64Cpu::kSerializationVersionV5;
+    Mips64Cpu migratedV5;
+    CHECK(migratedV5.deserialize(historicalV5.data(), historicalV5.size()));
+    CHECK(migratedV5.serialize()[4] == Mips64Cpu::kSerializationVersion);
+    CHECK(migratedV5.pc() == target.pc());
 
     std::vector<uint8_t> historicalV4 = valid;
+    historicalV4.resize(Mips64Cpu::kSerializedSizeV5);
     historicalV4[4] = 4; // MIPS64-4R1 compatibility-only VPN2/XContext layout.
     Mips64Cpu migratedV4;
     CHECK(migratedV4.deserialize(historicalV4.data(), historicalV4.size()));
-    CHECK(migratedV4.serialize()[4] == 5);
+    CHECK(migratedV4.serialize()[4] == Mips64Cpu::kSerializationVersion);
     CHECK(migratedV4.pc() == target.pc());
 
     std::vector<uint8_t> historicalV3 = valid;
+    historicalV3.resize(Mips64Cpu::kSerializedSizeV5);
     historicalV3[4] = 3; // MIPS64-3/MIPS64-4 layout, unambiguous Cause bits.
     Mips64Cpu migrated;
     CHECK(migrated.deserialize(historicalV3.data(), historicalV3.size()));
-    CHECK(migrated.serialize()[4] == 5);
+    CHECK(migrated.serialize()[4] == Mips64Cpu::kSerializationVersion);
     CHECK(migrated.pc() == target.pc());
 
     const std::vector<uint8_t> before = target.serialize();
@@ -272,14 +283,17 @@ static void testVersionMigrationAndRejectedRestoresAreAtomic() {
     bad.pop_back();
     rejectWithoutMutation(bad);
     bad = valid;
+    bad.resize(Mips64Cpu::kSerializedSizeV5);
     bad[4] = 3;
     store64le(bad, kCauseOffset, load64le(bad, kCauseOffset) | kCauseBitIv);
     rejectWithoutMutation(bad);
     bad = valid;
+    bad.resize(Mips64Cpu::kSerializedSizeV5);
     bad[4] = 3;
     store64le(bad, kCauseOffset, load64le(bad, kCauseOffset) | kCauseBitDc);
     rejectWithoutMutation(bad);
     bad = valid;
+    bad.resize(Mips64Cpu::kSerializedSizeV5);
     bad[4] = 3;
     store64le(bad, kCauseOffset, load64le(bad, kCauseOffset) | (1ULL << 24));
     rejectWithoutMutation(bad);
@@ -291,7 +305,7 @@ static void testLegacyV3V4MigrationPreservesCanonicalKernelAddressState() {
     const std::vector<uint8_t> legacyV4 = makeLegacyV4AddressState(source, memory);
     Mips64Cpu migratedV4;
     CHECK(migratedV4.deserialize(legacyV4.data(), legacyV4.size()));
-    CHECK(migratedV4.serialize()[4] == 5);
+    CHECK(migratedV4.serialize()[4] == Mips64Cpu::kSerializationVersion);
     CHECK(migratedV4.cp0EntryHi() == source.cp0EntryHi());
     CHECK(migratedV4.cp0XContext() == source.cp0XContext());
     Mips64TlbEntry expected;
@@ -304,7 +318,7 @@ static void testLegacyV3V4MigrationPreservesCanonicalKernelAddressState() {
     legacyV3[4] = 3; // Cause bits are unambiguous in this state.
     Mips64Cpu migratedV3;
     CHECK(migratedV3.deserialize(legacyV3.data(), legacyV3.size()));
-    CHECK(migratedV3.serialize()[4] == 5);
+    CHECK(migratedV3.serialize()[4] == Mips64Cpu::kSerializationVersion);
     CHECK(migratedV3.cp0EntryHi() == source.cp0EntryHi());
     CHECK(migratedV3.cp0XContext() == source.cp0XContext());
     CHECK(migratedV3.tlbEntry(2, restored) && restored.vpn2 == expected.vpn2);

@@ -317,13 +317,13 @@ static void testExternalHardwareInt2MapsToIp4AndHonorsMasks() {
     storeWord(memory, nextPc, 0);
     storeWord(memory, kGeneralVectorBev0, 0x42000018U); // eret
 
-    const std::vector<uint8_t> cpuV5BeforePin = cpu.serialize();
+    const std::vector<uint8_t> cpuV6BeforePin = cpu.serialize();
     cpu.setHardwareInterruptLine(2, true); // Malta INT2 is Cause.IP4.
     CHECK(cpu.hardwareInterruptLine(2));
     CHECK((cpu.cp0Cause() & kCauseIp4Bit) != 0);
-    CHECK(cpuV5BeforePin.size() == Mips64Cpu::kSerializedSize &&
-          Mips64Cpu::kSerializedSize == 957);
-    CHECK(cpu.serialize() == cpuV5BeforePin); // Board pins stay outside CPU v5.
+    CHECK(cpuV6BeforePin.size() == Mips64Cpu::kSerializedSize &&
+          Mips64Cpu::kSerializedSize == 1001);
+    CHECK(cpu.serialize() == cpuV6BeforePin); // Board pins stay outside CPU state.
     CHECK(cpu.step(memory) == Mips64StepResult::Continue); // IM4/IE are clear.
     CHECK((cpu.cp0Cause() & kCauseIp4Bit) != 0); // Masking retains the line.
 

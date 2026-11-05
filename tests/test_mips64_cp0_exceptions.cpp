@@ -1084,9 +1084,9 @@ static void testSerializationV2() {
     CHECK(cpu.delayArmed());
     const std::vector<uint8_t> blob = cpu.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
-    CHECK(blob.size() == 957);
+    CHECK(blob.size() == Mips64Cpu::kSerializedSize);
     CHECK(blob[0] == 'M' && blob[1] == 'P' && blob[2] == '6' && blob[3] == '2');
-    CHECK(blob[4] == 5);  // v5: extended EntryHi, TLB VPN2 and XContext layout
+    CHECK(blob[4] == Mips64Cpu::kSerializationVersion);
 
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));

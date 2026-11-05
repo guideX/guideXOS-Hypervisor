@@ -48,6 +48,11 @@ void Memory::loadBuffer(uint64_t address, const uint8_t* buffer, size_t size) {
     if (buffer == nullptr) {
         throw std::invalid_argument("Buffer pointer cannot be null");
     }
+
+    if (physicalMap_) {
+        physicalMap_->WriteHostRam(address, buffer, size);
+        return;
+    }
     
     checkBounds(address, size);
     std::memcpy(data_->data() + address, buffer, size);
@@ -155,6 +160,11 @@ bool Memory::UnregisterDevice(IMemoryMappedDevice* device) {
 }
 
 void Memory::Clear() {
+    if (physicalMap_) {
+        const std::vector<uint8_t> zeroes(data_->size(), uint8_t{0});
+        if (!zeroes.empty()) physicalMap_->WriteHostRam(0, zeroes.data(), zeroes.size());
+        return;
+    }
     std::fill(data_->begin(), data_->end(), static_cast<uint8_t>(0));
 }
 
@@ -171,7 +181,13 @@ void Memory::RestoreSnapshot(const MemorySnapshot& snapshot) {
         throw std::invalid_argument("Memory snapshot size mismatch");
     }
 
-    *data_ = snapshot.data;
+    if (physicalMap_) {
+        if (!snapshot.data.empty()) {
+            physicalMap_->WriteHostRam(0, snapshot.data.data(), snapshot.data.size());
+        }
+    } else {
+        *data_ = snapshot.data;
+    }
     mmu_->RestorePageTable(snapshot.pageTable);
     mmu_->SetEnabled(snapshot.mmuEnabled);
 }

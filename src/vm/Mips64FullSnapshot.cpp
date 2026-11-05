@@ -50,6 +50,18 @@ bool computeLengths(const Mips64FullVmSnapshot& snapshot,
                     uint64_t& cpuLength, uint64_t& memoryLength,
                     uint64_t& deviceLength, uint64_t& vmLength,
                     uint64_t& totalSize) noexcept {
+    const bool legacyComponents =
+        snapshot.cpuComponentVersion == Mips64FullVmSnapshot::kCpuSerializationVersionV5 &&
+        snapshot.memoryComponentVersion == 1 &&
+        snapshot.physicalMemory.reservationTrackingVersion == 0 &&
+        snapshot.physicalMemory.nextReservationGeneration == 0 &&
+        snapshot.physicalMemory.reservationGenerations.empty();
+    const bool currentComponents =
+        snapshot.cpuComponentVersion == Mips64FullVmSnapshot::kCpuSerializationVersion &&
+        snapshot.memoryComponentVersion == 2 &&
+        snapshot.physicalMemory.reservationTrackingVersion == 1 &&
+        snapshot.physicalMemory.nextReservationGeneration != 0;
+    if (!legacyComponents && !currentComponents) return false;
     if (snapshot.isaIdentity.size() > 64 || snapshot.boardProfileIdentity.size() > 128 ||
         snapshot.cpus.size() > 64 || snapshot.physicalMemory.regions.size() > 64 ||
         snapshot.scheduler.cpuBundleCounters.size() > 64 ||
@@ -64,6 +76,13 @@ bool computeLengths(const Mips64FullVmSnapshot& snapshot,
     if (cpuLength > kMaximumComponentSize) return false;
 
     memoryLength = 16;  // payload length and region count
+    if (currentComponents) {
+        if (!addLength(memoryLength, 17)) return false;  // reservation monitor header
+        const uint64_t generationCount = static_cast<uint64_t>(
+            snapshot.physicalMemory.reservationGenerations.size());
+        if (generationCount > kMaximumComponentSize / 24 ||
+            !addLength(memoryLength, generationCount * 24)) return false;
+    }
     uint64_t observedPayloadBytes = 0;
     for (const PhysicalRegionSnapshot& region : snapshot.physicalMemory.regions) {
         const uint64_t widthBytes = static_cast<uint64_t>(region.info.accessWidths.size());
@@ -183,6 +202,18 @@ uint64_t calculateChecksum(const Mips64FullVmSnapshot& snapshot) noexcept {
     hash.u64(static_cast<uint64_t>(snapshot.physicalMemory.regions.size()));
     for (const PhysicalRegionSnapshot& region : snapshot.physicalMemory.regions) {
         hashPhysicalRegion(hash, region);
+    }
+    if (snapshot.memoryComponentVersion >= 2) {
+        hash.byte(snapshot.physicalMemory.reservationTrackingVersion);
+        hash.u64(snapshot.physicalMemory.nextReservationGeneration);
+        hash.u64(static_cast<uint64_t>(
+            snapshot.physicalMemory.reservationGenerations.size()));
+        for (const Mips64ReservationGeneration& generation :
+             snapshot.physicalMemory.reservationGenerations) {
+            hash.u64(generation.backingId);
+            hash.u64(generation.granuleOffset);
+            hash.u64(generation.generation);
+        }
     }
 
     hash.u32(snapshot.fpga.version);

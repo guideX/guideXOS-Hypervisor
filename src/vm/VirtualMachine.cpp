@@ -1267,12 +1267,19 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         }
         if (!snapshot.ValidateIntegrity()) return fail("snapshot component lengths or integrity checksum are invalid");
         constexpr std::array<uint8_t, 8> expectedMagic{{'G', 'X', 'M', '6', '4', 'S', 'N', 'P'}};
-        if (snapshot.magic != expectedMagic || snapshot.formatVersion != Mips64FullVmSnapshot::kFormatVersion ||
+        if (snapshot.magic != expectedMagic ||
+            (snapshot.formatVersion != Mips64FullVmSnapshot::kFormatVersion &&
+             snapshot.formatVersion != Mips64FullVmSnapshot::kFormatVersionV2) ||
             snapshot.isaIdentity != "MIPS64") {
             return fail("unsupported MIPS64 full snapshot format or identity");
         }
-        if (snapshot.cpuComponentVersion != Mips64FullVmSnapshot::kCpuSerializationVersion ||
-            snapshot.memoryComponentVersion != 1 || snapshot.fpgaComponentVersion != 1 ||
+        const bool legacySnapshot =
+            snapshot.formatVersion == Mips64FullVmSnapshot::kFormatVersionV2;
+        if (snapshot.cpuComponentVersion != (legacySnapshot
+                ? Mips64FullVmSnapshot::kCpuSerializationVersionV5
+                : Mips64FullVmSnapshot::kCpuSerializationVersion) ||
+            snapshot.memoryComponentVersion != (legacySnapshot ? 1U : 2U) ||
+            snapshot.fpgaComponentVersion != 1 ||
             snapshot.irqRoutingComponentVersion != 1 ||
             snapshot.consoleComponentVersion != 1 ||
             snapshot.schedulerComponentVersion != 1 || snapshot.vmComponentVersion != 1) {
@@ -1403,13 +1410,19 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
         }
         for (size_t index = 0; index < snapshot.cpus.size(); ++index) {
             const Mips64FullSnapshotCpu& record = snapshot.cpus[index];
-            if (record.cpuId != index || record.architecturalState.size() != mips64::Mips64Cpu::kSerializedSize ||
-                record.architecturalState[4] != mips64::Mips64Cpu::kSerializationVersion ||
+            const std::size_t expectedCpuStateSize = legacySnapshot
+                ? mips64::Mips64Cpu::kSerializedSizeV5
+                : mips64::Mips64Cpu::kSerializedSize;
+            const uint8_t expectedCpuStateVersion = legacySnapshot
+                ? mips64::Mips64Cpu::kSerializationVersionV5
+                : mips64::Mips64Cpu::kSerializationVersion;
+            if (record.cpuId != index || record.architecturalState.size() != expectedCpuStateSize ||
+                record.architecturalState[4] != expectedCpuStateVersion ||
                 record.architecturalState[5] != static_cast<uint8_t>(snapshot.endianness) ||
                 std::any_of(record.architecturalState.begin() + 8,
                             record.architecturalState.begin() + 16,
                             [](uint8_t value) { return value != 0; })) {
-                return fail("snapshot MIPS64 CPU record identity or v5 state is invalid");
+                return fail("snapshot MIPS64 CPU record identity or architectural state is invalid");
             }
             switch (record.executionState) {
                 case CPUExecutionState::IDLE:
@@ -1422,8 +1435,8 @@ bool VirtualMachine::restoreMips64FullSnapshot(const Mips64FullVmSnapshot& snaps
             stagedCpus.emplace_back(snapshot.endianness);
             mips64::Mips64Cpu& staged = stagedCpus.back();
             if (!staged.deserialize(record.architecturalState.data(), record.architecturalState.size()) ||
-                staged.serialize() != record.architecturalState) {
-                return fail("snapshot MIPS64 CPU v5 architectural state failed validation");
+                (!legacySnapshot && staged.serialize() != record.architecturalState)) {
+                return fail("snapshot MIPS64 CPU architectural state failed validation");
             }
         }
 

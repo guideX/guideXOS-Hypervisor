@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -103,9 +104,35 @@ struct PhysicalRegionSnapshot {
     std::vector<std::pair<uint64_t, uint8_t>> sparseBytes;
 };
 
+// CPU-local linked-load token. backingId and granuleOffset identify the
+// physical backing location independently of guest virtual aliases.
+struct Mips64ReservationToken {
+    uint64_t backingId = 0;
+    uint64_t granuleOffset = 0;
+    uint64_t generation = 0;
+};
+
+struct Mips64ReservationGeneration {
+    uint64_t backingId = 0;
+    uint64_t granuleOffset = 0;
+    uint64_t generation = 0;
+    bool operator==(const Mips64ReservationGeneration&) const = default;
+};
+
 struct PhysicalAddressMapSnapshot {
     std::vector<PhysicalRegionSnapshot> regions;
     uint64_t payloadBytes = 0;
+    // Versioned software reservation monitor state. Version zero is the
+    // historical format, which predates MIPS64 LL/SC execution.
+    uint8_t reservationTrackingVersion = 0;
+    uint64_t nextReservationGeneration = 0;
+    std::vector<Mips64ReservationGeneration> reservationGenerations;
+};
+
+enum class Mips64ConditionalStoreResult : uint8_t {
+    Stored = 0,
+    ReservationFailed = 1,
+    UnsupportedTarget = 2
 };
 
 class IPhysicalRegionPreparedState {
@@ -128,12 +155,15 @@ private:
         std::unique_ptr<IPhysicalRegionPreparedState> prepared;
     };
     std::vector<State> states_;
+    std::vector<std::pair<uint64_t, uint64_t>> writeRanges_;
 };
 
 class PreparedPhysicalAddressMapRestore {
     friend class PhysicalAddressMap;
     std::vector<std::pair<std::shared_ptr<IPhysicalRegionBackend>,
                           std::unique_ptr<IPhysicalRegionPreparedState>>> states_;
+    std::map<std::pair<uint64_t, uint64_t>, uint64_t> reservationGenerations_;
+    uint64_t nextReservationGeneration_ = 1;
 };
 
 class PhysicalAddressMap {
@@ -161,6 +191,15 @@ public:
 
     void Read(uint64_t address, uint8_t* destination, size_t size) const;
     void Write(uint64_t address, const uint8_t* source, size_t size);
+    // MIPS64 linked-load/store-conditional support. The monitor covers only
+    // dense guest RAM and uses a 16-byte backing-relative granule. The check
+    // and the conditional store share the bus reservation lock with ordinary
+    // writes, making the store commit indivisible to supported bus writers.
+    void ReadLinked(uint64_t address, uint8_t* destination, size_t size,
+                    Mips64ReservationToken& token);
+    Mips64ConditionalStoreResult StoreConditional(
+        uint64_t address, const uint8_t* source, size_t size,
+        const Mips64ReservationToken& token);
     // Stage writes to dense RAM backings and commit them together only after
     // every target and replacement state has validated. ROM and MMIO targets
     // are rejected without invoking any device.
@@ -183,6 +222,9 @@ public:
 
 private:
     friend class Memory;
+    // Host-side bulk RAM mutations used by Memory::loadBuffer/Clear/RestoreSnapshot.
+    // These accept arbitrary buffer lengths without imposing guest bus widths.
+    void WriteHostRam(uint64_t address, const uint8_t* source, size_t size);
     void RegisterSharedRam(uint64_t base,
                           const std::shared_ptr<std::vector<uint8_t>>& backing);
 
@@ -198,8 +240,14 @@ private:
     const Region& Resolve(uint64_t address, size_t size) const;
     static void ValidateRegion(const PhysicalRegionInfo& info);
     static void ValidateWidths(const std::vector<size_t>& widths);
+    uint64_t BackingId(const Region& region) const noexcept;
+    void AdvanceTrackedGenerations(uint64_t backingId, uint64_t offset,
+                                   size_t size) noexcept;
 
     std::vector<Region> regions_;
+    mutable std::mutex reservationMutex_;
+    std::map<std::pair<uint64_t, uint64_t>, uint64_t> reservationGenerations_;
+    uint64_t nextReservationGeneration_ = 1;
 };
 
 }  // namespace ia64

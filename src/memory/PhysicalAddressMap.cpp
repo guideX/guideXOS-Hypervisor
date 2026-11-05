@@ -13,6 +13,8 @@ namespace {
 constexpr size_t kMaximumRegionCount = 64;
 constexpr uint64_t kMaximumDenseRamBytes = 512ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kMaximumSnapshotRamBytes = 512ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kMips64ReservationGranuleBytes = 16;
+constexpr uint64_t kInvalidReservationGeneration = UINT64_MAX;
 
 struct DenseRamPreparedState final : IPhysicalRegionPreparedState {
     std::vector<uint8_t> bytes;
@@ -403,10 +405,20 @@ void PhysicalAddressMap::Write(uint64_t address, const uint8_t* source, size_t s
         throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
                                "physical region rejects this access width");
     }
+    const bool trackReservationWrite = region.info.type == PhysicalRegionType::Ram &&
+        region.backend->BackendKind() == static_cast<uint8_t>(PhysicalBackendKind::DenseRam);
     try {
-        // All bus checks complete before the single target call. MMIO targets
-        // are therefore invoked at most once for a guest transaction.
-        region.backend->Write(address - region.info.base, source, size);
+        if (trackReservationWrite) {
+            std::lock_guard<std::mutex> lock(reservationMutex_);
+            // All bus checks complete before the single target call. Dense RAM
+            // writes cannot fail after validation, so generation updates below
+            // are committed with the same bus transaction.
+            region.backend->Write(address - region.info.base, source, size);
+            AdvanceTrackedGenerations(BackingId(region), address - region.info.base, size);
+        } else {
+            // MMIO targets are invoked at most once for a guest transaction.
+            region.backend->Write(address - region.info.base, source, size);
+        }
     } catch (const PhysicalBusError&) {
         throw;
     } catch (const std::exception& ex) {
@@ -415,6 +427,190 @@ void PhysicalAddressMap::Write(uint64_t address, const uint8_t* source, size_t s
     } catch (...) {
         throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
                                "physical target write failed");
+    }
+}
+
+void PhysicalAddressMap::WriteHostRam(uint64_t address, const uint8_t* source,
+                                      size_t size) {
+    if (source == nullptr || size == 0) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "invalid host RAM write buffer");
+    }
+    const Region& region = Resolve(address, size);
+    if (region.info.type != PhysicalRegionType::Ram || region.device ||
+        !region.info.writable) {
+        throw PhysicalBusError(PhysicalBusErrorCode::PermissionDenied,
+                               "host bulk write target is not writable RAM");
+    }
+    const uint64_t offset = address - region.info.base;
+    const bool trackReservationWrite = region.backend->BackendKind() ==
+        static_cast<uint8_t>(PhysicalBackendKind::DenseRam);
+    try {
+        if (trackReservationWrite) {
+            std::lock_guard<std::mutex> lock(reservationMutex_);
+            region.backend->Write(offset, source, size);
+            AdvanceTrackedGenerations(BackingId(region), offset, size);
+        } else {
+            region.backend->Write(offset, source, size);
+        }
+    } catch (const PhysicalBusError&) {
+        throw;
+    } catch (const std::exception& ex) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               std::string("host RAM write failed: ") + ex.what());
+    } catch (...) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "host RAM write failed");
+    }
+}
+
+void PhysicalAddressMap::ReadLinked(uint64_t address, uint8_t* destination,
+                                    size_t size, Mips64ReservationToken& token) {
+    if (destination == nullptr) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "null linked-load destination");
+    }
+    if (size != sizeof(uint64_t)) {
+        throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
+                               "MIPS64 LLD requires an eight-byte access");
+    }
+    std::lock_guard<std::mutex> lock(reservationMutex_);
+    const Region& region = Resolve(address, size);
+    if (region.info.type != PhysicalRegionType::Ram || region.device ||
+        region.backend->BackendKind() !=
+            static_cast<uint8_t>(PhysicalBackendKind::DenseRam)) {
+        throw PhysicalBusError(PhysicalBusErrorCode::PermissionDenied,
+                               "MIPS64 LLD requires supported dense guest RAM");
+    }
+    if (!region.info.readable) {
+        throw PhysicalBusError(PhysicalBusErrorCode::PermissionDenied,
+                               "physical RAM region does not allow linked loads");
+    }
+    if (!widthsContain(region.info.accessWidths, size)) {
+        throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
+                               "physical RAM region rejects this linked-load width");
+    }
+
+    const uint64_t backingId = BackingId(region);
+    const uint64_t offset = address - region.info.base;
+    const uint64_t granuleOffset = offset & ~(kMips64ReservationGranuleBytes - 1);
+    const auto key = std::make_pair(backingId, granuleOffset);
+    auto generation = reservationGenerations_.find(key);
+    if (generation == reservationGenerations_.end()) {
+        generation = reservationGenerations_.emplace(key, 0).first;
+    }
+    if (generation->second == kInvalidReservationGeneration) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "MIPS64 reservation generation is exhausted for this granule");
+    }
+    try {
+        region.backend->Read(offset, destination, size);
+    } catch (const PhysicalBusError&) {
+        throw;
+    } catch (const std::exception& ex) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               std::string("linked-load target read failed: ") + ex.what());
+    } catch (...) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "linked-load target read failed");
+    }
+    token.backingId = backingId;
+    token.granuleOffset = granuleOffset;
+    token.generation = generation->second;
+}
+
+Mips64ConditionalStoreResult PhysicalAddressMap::StoreConditional(
+    uint64_t address, const uint8_t* source, size_t size,
+    const Mips64ReservationToken& token) {
+    if (source == nullptr) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "null conditional-store source");
+    }
+    if (size != sizeof(uint64_t)) {
+        throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
+                               "MIPS64 SCD requires an eight-byte access");
+    }
+    std::lock_guard<std::mutex> lock(reservationMutex_);
+    const Region& region = Resolve(address, size);
+    if (region.info.type != PhysicalRegionType::Ram || region.device ||
+        region.backend->BackendKind() !=
+            static_cast<uint8_t>(PhysicalBackendKind::DenseRam) ||
+        !region.info.writable) {
+        return Mips64ConditionalStoreResult::UnsupportedTarget;
+    }
+    if (!widthsContain(region.info.accessWidths, size)) {
+        throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
+                               "physical RAM region rejects this conditional-store width");
+    }
+
+    const uint64_t backingId = BackingId(region);
+    const uint64_t offset = address - region.info.base;
+    const uint64_t granuleOffset = offset & ~(kMips64ReservationGranuleBytes - 1);
+    if (token.backingId != backingId || token.granuleOffset != granuleOffset) {
+        return Mips64ConditionalStoreResult::ReservationFailed;
+    }
+    const auto key = std::make_pair(backingId, granuleOffset);
+    const auto generation = reservationGenerations_.find(key);
+    if (generation == reservationGenerations_.end() ||
+        generation->second == kInvalidReservationGeneration ||
+        generation->second != token.generation) {
+        return Mips64ConditionalStoreResult::ReservationFailed;
+    }
+
+    try {
+        region.backend->Write(offset, source, size);
+    } catch (const PhysicalBusError&) {
+        throw;
+    } catch (const std::exception& ex) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               std::string("conditional-store target write failed: ") + ex.what());
+    } catch (...) {
+        throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
+                               "conditional-store target write failed");
+    }
+    AdvanceTrackedGenerations(backingId, offset, size);
+    return Mips64ConditionalStoreResult::Stored;
+}
+
+uint64_t PhysicalAddressMap::BackingId(const Region& region) const noexcept {
+    if (region.info.type != PhysicalRegionType::Ram) return 0;
+    uint64_t nextId = 1;
+    for (size_t index = 0; index < regions_.size(); ++index) {
+        const Region& candidate = regions_[index];
+        if (candidate.info.type != PhysicalRegionType::Ram) continue;
+        bool seen = false;
+        for (size_t previous = 0; previous < index; ++previous) {
+            if (regions_[previous].info.type == PhysicalRegionType::Ram &&
+                regions_[previous].backend->BackingIdentity() ==
+                    candidate.backend->BackingIdentity()) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        if (candidate.backend->BackingIdentity() == region.backend->BackingIdentity()) {
+            return nextId;
+        }
+        ++nextId;
+    }
+    return 0;
+}
+
+void PhysicalAddressMap::AdvanceTrackedGenerations(uint64_t backingId,
+                                                    uint64_t offset,
+                                                    size_t size) noexcept {
+    if (backingId == 0 || size == 0) return;
+    const uint64_t first = offset & ~(kMips64ReservationGranuleBytes - 1);
+    const uint64_t end = offset + static_cast<uint64_t>(size);
+    const uint64_t last = (end - 1) & ~(kMips64ReservationGranuleBytes - 1);
+    for (auto& entry : reservationGenerations_) {
+        if (entry.first.first != backingId || entry.first.second < first ||
+            entry.first.second > last) continue;
+        if (nextReservationGeneration_ == kInvalidReservationGeneration) {
+            entry.second = kInvalidReservationGeneration;
+        } else {
+            entry.second = nextReservationGeneration_++;
+        }
     }
 }
 
@@ -511,6 +707,11 @@ bool PhysicalAddressMap::PrepareRamWriteBatch(
             stagedBatch.states_.push_back(
                 {std::move(item.backend), std::move(item.prepared)});
         }
+        stagedBatch.writeRanges_.reserve(writes.size());
+        for (const PhysicalRamWrite& write : writes) {
+            stagedBatch.writeRanges_.emplace_back(
+                write.address, write.address + static_cast<uint64_t>(write.size));
+        }
         prepared = std::move(stagedBatch);
         if (error) error->clear();
         return true;
@@ -525,10 +726,29 @@ bool PhysicalAddressMap::PrepareRamWriteBatch(
 
 void PhysicalAddressMap::CommitRamWriteBatch(
     PreparedPhysicalRamWriteBatch&& prepared) noexcept {
+    std::lock_guard<std::mutex> lock(reservationMutex_);
     for (PreparedPhysicalRamWriteBatch::State& state : prepared.states_) {
         state.backend->CommitRestore(std::move(state.prepared));
     }
     prepared.states_.clear();
+    for (const auto& range : prepared.writeRanges_) {
+        const uint64_t address = range.first;
+        const uint64_t end = range.second;
+        const Region* target = nullptr;
+        for (const Region& region : regions_) {
+            if (address >= region.info.base && end <= region.info.base + region.info.size) {
+                target = &region;
+                break;
+            }
+        }
+        if (target && target->info.type == PhysicalRegionType::Ram &&
+            target->backend->BackendKind() ==
+                static_cast<uint8_t>(PhysicalBackendKind::DenseRam)) {
+            AdvanceTrackedGenerations(BackingId(*target), address - target->info.base,
+                                      static_cast<size_t>(end - address));
+        }
+    }
+    prepared.writeRanges_.clear();
 }
 
 bool PhysicalAddressMap::WriteRamBatchTransactional(
@@ -577,6 +797,7 @@ void IMmioDevice::CommitRestore(
     std::unique_ptr<IPhysicalRegionPreparedState>) noexcept {}
 
 PhysicalAddressMapSnapshot PhysicalAddressMap::CaptureSnapshot() const {
+    std::lock_guard<std::mutex> lock(reservationMutex_);
     PhysicalAddressMapSnapshot snapshot;
     snapshot.regions.reserve(regions_.size());
     std::map<const void*, uint64_t> backingIds;
@@ -612,6 +833,13 @@ PhysicalAddressMapSnapshot PhysicalAddressMap::CaptureSnapshot() const {
         snapshot.regions.push_back(std::move(record));
     }
     snapshot.payloadBytes = payloadBytes;
+    snapshot.reservationTrackingVersion = 1;
+    snapshot.nextReservationGeneration = nextReservationGeneration_;
+    snapshot.reservationGenerations.reserve(reservationGenerations_.size());
+    for (const auto& entry : reservationGenerations_) {
+        snapshot.reservationGenerations.push_back(
+            {entry.first.first, entry.first.second, entry.second});
+    }
     return snapshot;
 }
 
@@ -699,16 +927,75 @@ bool PhysicalAddressMap::PrepareRestore(
         setSnapshotError(error, "physical memory component length mismatch");
         return false;
     }
+    if (snapshot.reservationTrackingVersion == 0) {
+        if (snapshot.nextReservationGeneration != 0 ||
+            !snapshot.reservationGenerations.empty()) {
+            setSnapshotError(error, "legacy physical snapshot contains reservation state");
+            return false;
+        }
+        staged.nextReservationGeneration_ = 1;
+    } else if (snapshot.reservationTrackingVersion == 1 &&
+               snapshot.nextReservationGeneration != 0) {
+        std::vector<uint64_t> ramBackingSizes(1, 0);
+        std::map<const void*, uint64_t> ramIds;
+        uint64_t nextRamId = 1;
+        for (const Region& region : regions_) {
+            if (region.info.type != PhysicalRegionType::Ram) continue;
+            auto [it, inserted] = ramIds.emplace(region.backend->BackingIdentity(), nextRamId);
+            if (inserted) {
+                const bool dense = region.backend->BackendKind() ==
+                    static_cast<uint8_t>(PhysicalBackendKind::DenseRam);
+                ramBackingSizes.push_back(dense ? region.info.size : 0);
+                ++nextRamId;
+            }
+        }
+        uint64_t previousBacking = 0;
+        uint64_t previousOffset = 0;
+        bool firstGeneration = true;
+        for (const Mips64ReservationGeneration& generation : snapshot.reservationGenerations) {
+            if (generation.backingId == 0 || generation.backingId >= ramBackingSizes.size() ||
+                ramBackingSizes[static_cast<size_t>(generation.backingId)] == 0 ||
+                (generation.granuleOffset & (kMips64ReservationGranuleBytes - 1)) != 0 ||
+                generation.granuleOffset >= ramBackingSizes[static_cast<size_t>(generation.backingId)] ||
+                (generation.generation != kInvalidReservationGeneration &&
+                 generation.generation >= snapshot.nextReservationGeneration) ||
+                (!firstGeneration &&
+                 (generation.backingId < previousBacking ||
+                  (generation.backingId == previousBacking &&
+                   generation.granuleOffset <= previousOffset)))) {
+                setSnapshotError(error, "invalid MIPS64 reservation generation record");
+                return false;
+            }
+            if (!staged.reservationGenerations_.emplace(
+                    std::make_pair(generation.backingId, generation.granuleOffset),
+                    generation.generation).second) {
+                setSnapshotError(error, "duplicate MIPS64 reservation generation record");
+                return false;
+            }
+            previousBacking = generation.backingId;
+            previousOffset = generation.granuleOffset;
+            firstGeneration = false;
+        }
+        staged.nextReservationGeneration_ = snapshot.nextReservationGeneration;
+    } else {
+        setSnapshotError(error, "unsupported physical reservation tracking version");
+        return false;
+    }
     prepared.states_ = std::move(staged.states_);
+    prepared.reservationGenerations_ = std::move(staged.reservationGenerations_);
+    prepared.nextReservationGeneration_ = staged.nextReservationGeneration_;
     return true;
 }
 
 void PhysicalAddressMap::CommitRestore(
     PreparedPhysicalAddressMapRestore&& prepared) noexcept {
+    std::lock_guard<std::mutex> lock(reservationMutex_);
     for (auto& entry : prepared.states_) {
         entry.first->CommitRestore(std::move(entry.second));
     }
     prepared.states_.clear();
+    reservationGenerations_.swap(prepared.reservationGenerations_);
+    nextReservationGeneration_ = prepared.nextReservationGeneration_;
 }
 
 bool PhysicalAddressMap::IsMappedDeviceAt(uint64_t base,

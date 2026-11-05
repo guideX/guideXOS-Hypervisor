@@ -620,8 +620,8 @@ static void testSerializationRoundTrip() {
     CHECK(runCkSeg0(cpu, mem, 0x1A000, setup));
     const std::vector<uint8_t> blob = cpu.serialize();
     CHECK(blob.size() == Mips64Cpu::kSerializedSize);
-    CHECK(blob.size() == 957);
-    CHECK(blob[4] == 5);  // v5 (MIPS64-5 address field layout)
+    CHECK(blob.size() == Mips64Cpu::kSerializedSize);
+    CHECK(blob[4] == Mips64Cpu::kSerializationVersion);  // v6 adds LL reservation state.
     Mips64Cpu restored;
     CHECK(restored.deserialize(blob.data(), blob.size()));
     CHECK(restored.cp0EntryHi() == cpu.cp0EntryHi());

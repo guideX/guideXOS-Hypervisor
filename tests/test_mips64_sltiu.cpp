@@ -237,7 +237,7 @@ void testCpuSerializationRoundTripAfterSltiu() {
     CHECK(original.step(memory) == Mips64StepResult::Continue);
     CHECK(original.readGpr(9) == 1);
     const std::vector<uint8_t> afterSltiu = original.serialize();
-    CHECK(afterSltiu.size() == 957);
+    CHECK(afterSltiu.size() == Mips64Cpu::kSerializedSize);
 
     Mips64Cpu restored;
     CHECK(restored.deserialize(afterSltiu.data(), afterSltiu.size()));
@@ -281,10 +281,10 @@ void testFullVmSnapshotReplayAtSltiuBoundary() {
     if (!board || !board->ConsoleSink() || !board->Uart()) return;
     const Mips64FullVmSnapshot before = vm.captureMips64FullSnapshot();
     CHECK(before.ValidateIntegrity());
-    CHECK(before.formatVersion == 2);
+    CHECK(before.formatVersion == 3);
     CHECK(before.uartComponentVersion == 4);
     CHECK(before.irqRoutingComponentVersion == 1);
-    CHECK(before.cpuComponentVersion == 5);
+    CHECK(before.cpuComponentVersion == 6);
     const std::vector<uint8_t> beforeConsole = board->ConsoleSink()->Bytes();
     const Ns16550Uart::Snapshot beforeUart = board->Uart()->CaptureSnapshot();
 

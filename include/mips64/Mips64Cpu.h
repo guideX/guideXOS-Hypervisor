@@ -427,6 +427,19 @@ enum class Mips64Op : uint8_t {
     Dsrl32,
     // MIPS64r2 unsigned comparison with a sign-extended immediate.
     Sltiu,
+    // Atomic reservation operations. Appended to preserve existing enum values.
+    Lld, Scd,
+};
+
+struct Mips64ReservationState {
+    bool valid = false;
+    uint8_t size = 0;
+    uint8_t cacheAttribute = 0;
+    uint64_t virtualAddress = 0;
+    uint64_t physicalAddress = 0;
+    uint64_t backingId = 0;
+    uint64_t granuleOffset = 0;
+    uint64_t generation = 0;
 };
 
 struct Mips64Decoded {
@@ -474,6 +487,7 @@ public:
 
     uint64_t pc() const { return pc_; }
     void setPc(uint64_t value) { pc_ = value; }
+    const Mips64ReservationState& reservationState() const noexcept { return reservation_; }
 
     uint64_t hi() const { return hi_; }
     uint64_t lo() const { return lo_; }
@@ -641,8 +655,10 @@ public:
     //      rejected.
     // Truncation, bad magic/version, null data and out-of-range fields fail
     // safely with live state untouched.
-    static constexpr std::size_t kSerializedSize = 957;
-    static constexpr uint8_t kSerializationVersion = 5;
+    static constexpr std::size_t kSerializedSizeV5 = 957;
+    static constexpr std::size_t kSerializedSize = 1001;
+    static constexpr uint8_t kSerializationVersion = 6;
+    static constexpr uint8_t kSerializationVersionV5 = 5;
     static constexpr uint8_t kSerializationVersionV4 = 4;
     static constexpr uint8_t kSerializationVersionV3 = 3;
     std::vector<uint8_t> serialize() const;
@@ -748,6 +764,7 @@ private:
     uint32_t context_ = 0;    // BadVPN2 in bits 31:23, PTEBase in bits 22:4
     uint64_t xcontext_ = 0;   // SEGBITS=40: PTEBase[63:33], R[32:31], BadVPN2[30:4]
     std::array<Mips64TlbEntry, kTlbEntries> tlb_{};
+    Mips64ReservationState reservation_{};
     Mips64Fault fault_ = Mips64Fault::None;
     std::string lastError_;
     Mips64Endianness endianness_ = Mips64Endianness::Little;

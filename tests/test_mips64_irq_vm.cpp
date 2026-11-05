@@ -1027,7 +1027,7 @@ void testTransactionalReceiverErrorSnapshotReplay() {
     CHECK(masked->enqueueMips64UartReceiverInput({{'M', Ns16550Uart::kLsrParityError}}));
     CHECK(readUartRegister(*masked, 2) == 0xC1);
     const Mips64FullVmSnapshot maskedPending = masked->captureMips64FullSnapshot();
-    CHECK(maskedPending.formatVersion == 2 && maskedPending.uartComponentVersion == 4);
+    CHECK(maskedPending.formatVersion == 3 && maskedPending.uartComponentVersion == 4);
     CHECK(maskedPending.uart.receiveFifo.size() == 1);
     CHECK(maskedPending.uart.receiveFifo[0].errorFlags == Ns16550Uart::kLsrParityError);
     CHECK(!maskedPending.routedUartInterruptLevel);

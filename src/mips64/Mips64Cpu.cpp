@@ -9,10 +9,12 @@
 #include "mips64/Mips64Cpu.h"
 
 #include "IMemory.h"
+#include "memory.h"
 
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <sstream>
 
 namespace mips64 {
@@ -48,8 +50,21 @@ constexpr uint8_t kOpLwu = 0x27;
 constexpr uint8_t kOpSb = 0x28;
 constexpr uint8_t kOpSh = 0x29;
 constexpr uint8_t kOpSw = 0x2B;
+constexpr uint8_t kOpLld = 0x34;
+constexpr uint8_t kOpScd = 0x3C;
 constexpr uint8_t kOpLd = 0x37;
 constexpr uint8_t kOpSd = 0x3F;
+
+// The modeled Malta CPU profile uses Config.K0=3: cached noncoherent KSEG0.
+// KSEG1 remains uncached (CCA=2). The physical-map reservation monitor
+// supplies the guest-visible ordering/invalidation behavior for this profile.
+constexpr uint8_t kMaltaKseg0CacheAttribute = 3;
+
+bool supportsMips64LlScCacheAttribute(uint8_t cca) {
+    // Release 2 defines LL/SC behavior for cached access types. The VM has no
+    // cache arrays; its backing-store monitor models the supported operation.
+    return cca == 3 || cca == 5;
+}
 
 // -- SPECIAL funct field -------------------------------------------------------
 constexpr uint8_t kFnSll = 0x00;
@@ -426,7 +441,9 @@ Mips64Decoded decodeInstruction(uint32_t word) {
         case kOpSb: decoded.op = Mips64Op::Sb; break;
         case kOpSh: decoded.op = Mips64Op::Sh; break;
         case kOpSw: decoded.op = Mips64Op::Sw; break;
+        case kOpLld: decoded.op = Mips64Op::Lld; break;
         case kOpLd: decoded.op = Mips64Op::Ld; break;
+        case kOpScd: decoded.op = Mips64Op::Scd; break;
         case kOpSd: decoded.op = Mips64Op::Sd; break;
         default:
             if (isReservedPrimaryOpcode(op)) {
@@ -519,6 +536,7 @@ void Mips64Cpu::reset() {
     context_ = 0;
     xcontext_ = 0;
     tlb_.fill(Mips64TlbEntry{});
+    reservation_ = Mips64ReservationState{};
     clearFault();
 }
 
@@ -1010,7 +1028,8 @@ Mips64Probe Mips64Cpu::probeAddress(uint64_t va, Mips64Access access) const {
     if (segment == Mips64Segment::Ckseg0 || segment == Mips64Segment::Ckseg1) {
         result.ok = true;
         result.phys = va & kDirectMapMask;
-        result.cacheAttribute = segment == Mips64Segment::Ckseg1 ? 2 : 0;
+        result.cacheAttribute = segment == Mips64Segment::Ckseg1
+            ? 2 : kMaltaKseg0CacheAttribute;
         return result;
     }
 
@@ -1584,10 +1603,12 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Lw:
         case Mips64Op::Lwu:
         case Mips64Op::Ld:
+        case Mips64Op::Lld:
         case Mips64Op::Sb:
         case Mips64Op::Sh:
         case Mips64Op::Sw:
         case Mips64Op::Sd:
+        case Mips64Op::Scd:
             if (executeMemory(memory, decoded, address, wasDelaySlot, branchPc) !=
                 Mips64StepResult::Continue) {
                 return Mips64StepResult::Fault;
@@ -1618,6 +1639,13 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
     const uint64_t base = readGpr(decoded.rs);
     const uint64_t originalEffective = base + signExtend16(decoded.imm);
 
+    const bool isLinked = decoded.op == Mips64Op::Lld;
+    const bool isConditionalStore = decoded.op == Mips64Op::Scd;
+    const Mips64ReservationState priorReservation = reservation_;
+    // An LL replaces the CPU's previous reservation, and an SC consumes it
+    // even when alignment, translation, or the physical transaction faults.
+    if (isLinked || isConditionalStore) reservation_ = Mips64ReservationState{};
+
     std::size_t accessSize = 0;
     bool isLoad = true;
     bool signExtend = false;
@@ -1629,10 +1657,12 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
         case Mips64Op::Lw: accessSize = 4; signExtend = true; break;
         case Mips64Op::Lwu: accessSize = 4; break;
         case Mips64Op::Ld: accessSize = 8; break;
+        case Mips64Op::Lld: accessSize = 8; break;
         case Mips64Op::Sb: accessSize = 1; isLoad = false; break;
         case Mips64Op::Sh: accessSize = 2; isLoad = false; break;
         case Mips64Op::Sw: accessSize = 4; isLoad = false; break;
         case Mips64Op::Sd: accessSize = 8; isLoad = false; break;
+        case Mips64Op::Scd: accessSize = 8; isLoad = false; break;
         default:
             setFault(Mips64Fault::UnsupportedInstruction, "not a memory operation");
             return Mips64StepResult::Fault;
@@ -1668,12 +1698,41 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
         return Mips64StepResult::Fault;
     }
 
+    if (isLinked && !supportsMips64LlScCacheAttribute(probe.cacheAttribute)) {
+        raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
+                       "LLD target uses an unsupported noncached memory access type",
+                       address, inDelaySlot, branchPc, false, 0);
+        return Mips64StepResult::Fault;
+    }
+
     if (isLoad) {
         uint8_t bytes[8] = {0, 0, 0, 0, 0, 0, 0, 0};
         std::string error;
-        if (!readPhysical(memory, probe.phys, bytes, accessSize, error)) {
+        ia64::Mips64ReservationToken token;
+        bool linked = false;
+        if (isLinked) {
+            auto* physicalMemory = dynamic_cast<ia64::Memory*>(&memory);
+            ia64::PhysicalAddressMap* physicalMap =
+                physicalMemory ? physicalMemory->GetPhysicalAddressMap() : nullptr;
+            try {
+                if (!physicalMap) throw std::runtime_error("LLD requires an enabled physical RAM map");
+                physicalMap->ReadLinked(probe.phys, bytes, accessSize, token);
+                linked = true;
+            } catch (const std::exception& ex) {
+                error = ex.what();
+            }
+        } else if (!readPhysical(memory, probe.phys, bytes, accessSize, error)) {
+            // The exception path below is shared with linked loads.
+        }
+        if (!isLinked && !error.empty()) {
             raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
                            std::string("load rejected by memory: ") + error, address,
+                           inDelaySlot, branchPc, false, 0);
+            return Mips64StepResult::Fault;
+        }
+        if (isLinked && !linked) {
+            raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
+                           std::string("linked load rejected by memory: ") + error, address,
                            inDelaySlot, branchPc, false, 0);
             return Mips64StepResult::Fault;
         }
@@ -1689,6 +1748,52 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
             }
         }
         writeGpr(decoded.rt, result);
+        if (isLinked) {
+            reservation_.valid = true;
+            reservation_.size = static_cast<uint8_t>(accessSize);
+            reservation_.cacheAttribute = probe.cacheAttribute;
+            reservation_.virtualAddress = effective;
+            reservation_.physicalAddress = probe.phys;
+            reservation_.backingId = token.backingId;
+            reservation_.granuleOffset = token.granuleOffset;
+            reservation_.generation = token.generation;
+        }
+        return Mips64StepResult::Continue;
+    }
+
+    if (isConditionalStore) {
+        auto* physicalMemory = dynamic_cast<ia64::Memory*>(&memory);
+        ia64::PhysicalAddressMap* physicalMap =
+            physicalMemory ? physicalMemory->GetPhysicalAddressMap() : nullptr;
+        if (!physicalMap) {
+            raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultStore,
+                           "conditional store requires an enabled physical RAM map", address,
+                           inDelaySlot, branchPc, false, 0);
+            return Mips64StepResult::Fault;
+        }
+        uint8_t bytes[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        const uint64_t source = readGpr(decoded.rt);
+        disassembleBytes(source, bytes, accessSize, isLittleEndian());
+        ia64::Mips64ReservationToken token;
+        token.backingId = priorReservation.backingId;
+        token.granuleOffset = priorReservation.granuleOffset;
+        token.generation = priorReservation.generation;
+        try {
+            const bool matches = priorReservation.valid && priorReservation.size == accessSize &&
+                priorReservation.virtualAddress == effective &&
+                priorReservation.physicalAddress == probe.phys &&
+                priorReservation.cacheAttribute == probe.cacheAttribute &&
+                supportsMips64LlScCacheAttribute(probe.cacheAttribute);
+            if (!matches) token = ia64::Mips64ReservationToken{};
+            const ia64::Mips64ConditionalStoreResult result =
+                physicalMap->StoreConditional(probe.phys, bytes, accessSize, token);
+            writeGpr(decoded.rt, result == ia64::Mips64ConditionalStoreResult::Stored ? 1 : 0);
+        } catch (const std::exception& ex) {
+            raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultStore,
+                           std::string("conditional store rejected by memory: ") + ex.what(),
+                           address, inDelaySlot, branchPc, false, 0);
+            return Mips64StepResult::Fault;
+        }
         return Mips64StepResult::Continue;
     }
 
@@ -1829,6 +1934,7 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
         if (!requireKernel(address, false, 0, "ERET")) {
             return Mips64StepResult::Fault;
         }
+        reservation_ = Mips64ReservationState{};
         if ((status_ & kStatusBitErl) != 0) {
             pc_ = errorEpc_;
             status_ &= ~kStatusBitErl;
@@ -2056,10 +2162,12 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Lw:
         case Mips64Op::Lwu:
         case Mips64Op::Ld:
+        case Mips64Op::Lld:
         case Mips64Op::Sb:
         case Mips64Op::Sh:
         case Mips64Op::Sw:
         case Mips64Op::Sd:
+        case Mips64Op::Scd:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, %d($%u)", name, decoded.rt,
                           static_cast<int>(static_cast<int16_t>(decoded.imm)), decoded.rs);
             break;
@@ -2173,7 +2281,7 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
     blob[1] = 'P';
     blob[2] = '6';
     blob[3] = '2';
-    blob[4] = kSerializationVersion;  // v5: SEGBITS=40 EntryHi/TLB/XContext layout
+    blob[4] = kSerializationVersion;  // v6: appends the CPU-local LL reservation
     blob[5] = static_cast<uint8_t>(endianness_);
     // bytes 6..7 reserved (zero)
 
@@ -2245,13 +2353,23 @@ std::vector<uint8_t> Mips64Cpu::serialize() const {
         // bytes 22..31 reserved (zero)
         entryOffset += 32;
     }
+    const std::size_t reservationOffset = kSerializedSizeV5;
+    blob[reservationOffset] = reservation_.valid ? 1 : 0;
+    blob[reservationOffset + 1] = reservation_.size;
+    blob[reservationOffset + 2] = reservation_.cacheAttribute;
+    // reservationOffset + 3 is reserved and remains zero.
+    store64(reservationOffset + 4, reservation_.virtualAddress);
+    store64(reservationOffset + 12, reservation_.physicalAddress);
+    store64(reservationOffset + 20, reservation_.backingId);
+    store64(reservationOffset + 28, reservation_.granuleOffset);
+    store64(reservationOffset + 36, reservation_.generation);
     return blob;
 }
 
 bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     // Staged validation: every field is checked before any live state is
     // touched, so invalid or truncated blobs leave the CPU untouched.
-    if (data == nullptr || size != kSerializedSize) {
+    if (data == nullptr || size < 8) {
         return false;
     }
     if (data[0] != 'M' || data[1] != 'P' || data[2] != '6' || data[3] != '2') {
@@ -2262,7 +2380,11 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     // XContext interpretation. Canonical legacy state is normalized below.
     const uint8_t version = data[4];
     if (version != kSerializationVersion && version != kSerializationVersionV4 &&
-        version != kSerializationVersionV3) {
+        version != kSerializationVersionV3 && version != kSerializationVersionV5) {
+        return false;
+    }
+    if ((version == kSerializationVersion && size != kSerializedSize) ||
+        (version != kSerializationVersion && size != kSerializedSizeV5)) {
         return false;
     }
     if (data[6] != 0 || data[7] != 0) {
@@ -2281,6 +2403,36 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
         }
         return value;
     };
+    Mips64ReservationState reservation;
+    if (version == kSerializationVersion) {
+        constexpr std::size_t reservationOffset = kSerializedSizeV5;
+        if (data[reservationOffset] > 1 || data[reservationOffset + 3] != 0) {
+            return false;
+        }
+        reservation.valid = data[reservationOffset] != 0;
+        reservation.size = data[reservationOffset + 1];
+        reservation.cacheAttribute = data[reservationOffset + 2];
+        reservation.virtualAddress = load64(reservationOffset + 4);
+        reservation.physicalAddress = load64(reservationOffset + 12);
+        reservation.backingId = load64(reservationOffset + 20);
+        reservation.granuleOffset = load64(reservationOffset + 28);
+        reservation.generation = load64(reservationOffset + 36);
+        if (reservation.valid) {
+            if (reservation.size != 8 || reservation.cacheAttribute > 7 ||
+                (reservation.virtualAddress & 7U) != 0 ||
+                reservation.physicalAddress >= ia64::kPhysicalAddressLimit - 7 ||
+                (reservation.physicalAddress & 7U) != 0 || reservation.backingId == 0 ||
+                (reservation.granuleOffset & 15U) != 0 ||
+                reservation.generation == std::numeric_limits<uint64_t>::max()) {
+                return false;
+            }
+        } else if (reservation.size != 0 || reservation.cacheAttribute != 0 ||
+                   reservation.virtualAddress != 0 || reservation.physicalAddress != 0 ||
+                   reservation.backingId != 0 || reservation.granuleOffset != 0 ||
+                   reservation.generation != 0) {
+            return false;
+        }
+    }
     std::array<uint64_t, kNumGpr> gpr{};
     for (unsigned i = 0; i < kNumGpr; ++i) {
         gpr[i] = load64(8 + static_cast<std::size_t>(i) * 8);
@@ -2352,7 +2504,7 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if (random >= kTlbEntries) {
         return false;
     }
-    if (version < kSerializationVersion) {
+    if (version < kSerializationVersionV5) {
         constexpr uint64_t legacyEntryHiVpnMask = 0xFFFFFFFFFFFFE000ULL;
         constexpr uint64_t legacyEntryHiWritableMask = legacyEntryHiVpnMask |
                                                        kEntryHiAsidMask;
@@ -2383,7 +2535,7 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     if ((context >> 32) != 0 || (context & 0xFULL) != 0) {
         return false;
     }
-    if (version < kSerializationVersion) {
+    if (version < kSerializationVersionV5) {
         constexpr uint64_t legacyXContextPteBaseMask = 0x000FFFFC00000000ULL;
         constexpr uint64_t legacyXContextDataMask = 0x00000003FFFFE000ULL;
         if ((xcontext & ~(legacyXContextPteBaseMask | legacyXContextDataMask)) != 0) {
@@ -2407,7 +2559,7 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     for (unsigned i = 0; i < kTlbEntries; ++i) {
         Mips64TlbEntry entry;
         entry.vpn2 = load64(entryOffset);
-        if (version < kSerializationVersion) {
+        if (version < kSerializationVersionV5) {
             constexpr uint64_t legacyTlbVpnMask = 0x0007FFFFFFFFFFFFULL;
             constexpr uint64_t legacyFillMask = 0x0001FFFFF8000000ULL; // old vpn2[48:27]
             constexpr uint64_t vpn2LowMask = (1ULL << (kMips64SegBits - 13)) - 1ULL;
@@ -2495,6 +2647,7 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     context_ = static_cast<uint32_t>(context);
     xcontext_ = xcontext;
     tlb_ = tlb;
+    reservation_ = reservation;
     // Endianness is part of the snapshot so round trips preserve config.
     endianness_ = static_cast<Mips64Endianness>(data[5]);
     lastError_.clear();
@@ -2528,6 +2681,7 @@ void Mips64Cpu::SwapArchitecturalState(Mips64Cpu& other) noexcept {
     swap(context_, other.context_);
     swap(xcontext_, other.xcontext_);
     tlb_.swap(other.tlb_);
+    swap(reservation_, other.reservation_);
     swap(fault_, other.fault_);
     lastError_.swap(other.lastError_);
     swap(endianness_, other.endianness_);
@@ -2658,10 +2812,12 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Lw: return "lw";
         case Mips64Op::Lwu: return "lwu";
         case Mips64Op::Ld: return "ld";
+        case Mips64Op::Lld: return "lld";
         case Mips64Op::Sb: return "sb";
         case Mips64Op::Sh: return "sh";
         case Mips64Op::Sw: return "sw";
         case Mips64Op::Sd: return "sd";
+        case Mips64Op::Scd: return "scd";
         case Mips64Op::Beq: return "beq";
         case Mips64Op::Bne: return "bne";
         case Mips64Op::Bltz: return "bltz";

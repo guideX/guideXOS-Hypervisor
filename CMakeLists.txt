@@ -736,6 +736,9 @@ endif()
 # ============================================================================
 set(MIPS64_CORE_SOURCES
     src/mips64/Mips64Cpu.cpp
+    # The CPU's LLD/SCD execution path depends on the VM-owned physical
+    # reservation monitor even in CPU-focused tests with sparse guest memory.
+    src/memory/PhysicalAddressMap.cpp
 )
 
 set(MIPS64_PLUGIN_SOURCES
@@ -745,7 +748,6 @@ set(MIPS64_PLUGIN_SOURCES
 
 set(MIPS64_MEMORY_SOURCES
     src/memory/memory.cpp
-    src/memory/PhysicalAddressMap.cpp
     src/mmu/mmu.cpp
 )
 
@@ -904,6 +906,20 @@ else()
 endif()
 add_test(NAME Mips64SerializationTests COMMAND test_mips64_serialization)
 
+# MIPS64-15 linked loads and atomic conditional stores. This target exercises
+# the production CPU and physical-memory reservation monitor together.
+add_executable(test_mips64_lld_scd
+    tests/test_mips64_lld_scd.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+if(MSVC)
+    target_compile_options(test_mips64_lld_scd PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_lld_scd PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64LldScdTests COMMAND test_mips64_lld_scd)
+
 # Link a real MIPS64 VM test to the same production implementation units as
 # ia64emu. This verifies registry auto-registration in the production-linked
 # path, scheduler stepping, panic handling and guest timer-handler execution.
@@ -1059,6 +1075,7 @@ add_test(NAME Mips64SnapshotDevicesTests COMMAND test_mips64_malta snapshot_devi
 add_test(NAME Mips64SnapshotRestoreTests COMMAND test_mips64_malta snapshot_restore)
 add_test(NAME Mips64SnapshotVmTests COMMAND test_mips64_malta snapshot_vm)
 add_test(NAME Mips64SnapshotCompatibilityTests COMMAND test_mips64_malta snapshot_compat)
+add_test(NAME Mips64SnapshotReservationTests COMMAND test_mips64_malta snapshot_reservation)
 
 # MIPS64-12 static ELF validation, Malta PROM handoff, production guest boot,
 # and deterministic snapshot/replay from before and after the ELF entry.

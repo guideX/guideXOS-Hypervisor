@@ -319,10 +319,10 @@ void testFullVmSnapshotReplayAtDsrl32Boundary() {
 
     const Mips64FullVmSnapshot before = vm.captureMips64FullSnapshot();
     CHECK(before.ValidateIntegrity());
-    CHECK(before.formatVersion == 2);
+    CHECK(before.formatVersion == 3);
     CHECK(before.uartComponentVersion == 4);
     CHECK(before.irqRoutingComponentVersion == 1);
-    CHECK(before.cpuComponentVersion == 5);
+    CHECK(before.cpuComponentVersion == 6);
     CHECK(readWord(vm.getMemory(), kTestPa, false) == word);
 
     CPUContext* context = vm.getCPUContext(0);

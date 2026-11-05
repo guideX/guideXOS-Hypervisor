@@ -36,8 +36,10 @@ struct Mips64FullSnapshotCpu {
 // VMStateSnapshot/VMCheckpointCodec, which retain their established IA-64
 // state model and on-disk format.
 struct Mips64FullVmSnapshot {
-    static constexpr uint16_t kFormatVersion = 2;
-    static constexpr uint32_t kCpuSerializationVersion = 5;
+    static constexpr uint16_t kFormatVersion = 3;
+    static constexpr uint16_t kFormatVersionV2 = 2;
+    static constexpr uint32_t kCpuSerializationVersion = 6;
+    static constexpr uint32_t kCpuSerializationVersionV5 = 5;
 
     std::array<uint8_t, 8> magic{{'G', 'X', 'M', '6', '4', 'S', 'N', 'P'}};
     uint16_t formatVersion = kFormatVersion;
@@ -57,7 +59,7 @@ struct Mips64FullVmSnapshot {
     bool mmuEnabled = true;
 
     uint32_t cpuComponentVersion = kCpuSerializationVersion;
-    uint32_t memoryComponentVersion = 1;
+    uint32_t memoryComponentVersion = 2;
     uint32_t fpgaComponentVersion = 1;
     uint32_t uartComponentVersion = 4;
     uint32_t irqRoutingComponentVersion = 1;

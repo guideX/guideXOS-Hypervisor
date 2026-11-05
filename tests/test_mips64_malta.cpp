@@ -480,7 +480,7 @@ bool sameReplayState(const Mips64FullVmSnapshot& left,
     return true;
 }
 
-void testSnapshotFormatAndCpuV5Restore() {
+void testSnapshotFormatAndCpuV6Restore() {
     VirtualMachine vm(2 * 1024 * 1024, "MIPS64");
     vm.configureMips64MaltaBootstrap(configFor(Mips64Endianness::Little));
     bool createdStateRejected = false;
@@ -493,9 +493,9 @@ void testSnapshotFormatAndCpuV5Restore() {
     CHECK(snapshot.ValidateIntegrity());
     CHECK(snapshot.formatVersion == Mips64FullVmSnapshot::kFormatVersion);
     CHECK(snapshot.cpuCount == 1 && snapshot.cpus.size() == 1);
-    CHECK(snapshot.cpuComponentVersion == 5);
+    CHECK(snapshot.cpuComponentVersion == 6);
     CHECK(snapshot.cpus[0].architecturalState.size() == Mips64Cpu::kSerializedSize);
-    CHECK(snapshot.cpus[0].architecturalState[4] == 5);
+    CHECK(snapshot.cpus[0].architecturalState[4] == 6);
     CHECK(snapshot.romSize == kMaltaBootImageWindow && snapshot.romContentHash != 0);
 
     uint8_t changedRam = 0xA7;
@@ -520,6 +520,25 @@ void testSnapshotFormatAndCpuV5Restore() {
     CHECK(!error.empty());
     CHECK(vm.captureMips64FullSnapshot().integrityChecksum == beforeFailure.integrityChecksum);
 
+    // Convert a current snapshot to the previous v2/v5 representation and
+    // ensure restore migrates it with no active LL reservation.
+    Mips64FullVmSnapshot legacy = snapshot;
+    legacy.formatVersion = Mips64FullVmSnapshot::kFormatVersionV2;
+    legacy.cpuComponentVersion = Mips64FullVmSnapshot::kCpuSerializationVersionV5;
+    legacy.memoryComponentVersion = 1;
+    legacy.physicalMemory.reservationTrackingVersion = 0;
+    legacy.physicalMemory.nextReservationGeneration = 0;
+    legacy.physicalMemory.reservationGenerations.clear();
+    for (Mips64FullSnapshotCpu& cpu : legacy.cpus) {
+        cpu.architecturalState.resize(Mips64Cpu::kSerializedSizeV5);
+        cpu.architecturalState[4] = Mips64Cpu::kSerializationVersionV5;
+    }
+    CHECK(legacy.RefreshIntegrity());
+    CHECK(legacy.ValidateIntegrity());
+    CHECK(vm.restoreMips64FullSnapshot(legacy, &error));
+    CHECK(!plugin(vm)->core().reservationState().valid);
+    CHECK(plugin(vm)->core().readGpr(5) == 0);
+
     CHECK(vm.restoreMips64FullSnapshot(snapshot, &error));
     CHECK(vm.getState() == VMState::PAUSED);
     CHECK(plugin(vm)->core().pc() == kMaltaResetVector + 12 * 4);
@@ -532,6 +551,109 @@ void testSnapshotFormatAndCpuV5Restore() {
     Mips64FullVmSnapshot badLength = snapshot;
     ++badLength.cpuComponentLength;
     CHECK(!badLength.ValidateIntegrity());
+}
+
+void testSnapshotReplayWithActiveLinkedReservation() {
+    constexpr uint64_t textPa = 0x1000;
+    constexpr uint64_t dataPa = 0x2000;
+    constexpr uint64_t textVa = kCKSeg0Base | textPa;
+    constexpr uint64_t dataVa = kCKSeg0Base | dataPa;
+    constexpr uint64_t original = 0x0123456789ABCDEFULL;
+    constexpr uint64_t replacement = 0xFEDCBA9876543210ULL;
+    VirtualMachine vm(2 * 1024 * 1024, "MIPS64");
+    vm.configureMips64MaltaBootstrap(configFor(Mips64Endianness::Big));
+    CHECK(vm.init());
+    auto* memory = dynamic_cast<Memory*>(&vm.getMemory());
+    CHECK(memory != nullptr);
+    Mips64ISAPlugin* cpu = plugin(vm);
+    CHECK(cpu != nullptr);
+    if (!memory || !cpu) return;
+    PhysicalAddressMap* map = memory->GetPhysicalAddressMap();
+    CHECK(map != nullptr);
+    if (!map) return;
+    write32(*map, textPa, encI(0x34, 4, 5, 0), false); // LLD $5,0($4)
+    write32(*map, textPa + 4, encI(0x3C, 4, 5, 0), false); // SCD $5,0($4)
+    uint8_t originalBytes[8]{};
+    for (unsigned index = 0; index < 8; ++index) {
+        originalBytes[index] = static_cast<uint8_t>(original >> (8 * (7 - index)));
+    }
+    map->Write(dataPa, originalBytes, sizeof(originalBytes));
+    cpu->core().writeGpr(4, dataVa);
+    cpu->core().writeGpr(5, 0);
+    cpu->core().setPc(textVa);
+    CHECK(vm.run(1) == 1);
+    CHECK(cpu->core().pc() == textVa + 4);
+    CHECK(cpu->core().readGpr(5) == original);
+    CHECK(cpu->core().reservationState().valid);
+    const Mips64FullVmSnapshot armed = vm.captureMips64FullSnapshot();
+    CHECK(armed.ValidateIntegrity());
+    CHECK(armed.physicalMemory.reservationGenerations.size() == 1);
+    CHECK(armed.cpuComponentVersion == 6 && armed.memoryComponentVersion == 2);
+
+    Mips64FullVmSnapshot corruptMonitor = armed;
+    ++corruptMonitor.physicalMemory.reservationGenerations[0].generation;
+    CHECK(!corruptMonitor.ValidateIntegrity());
+
+    const uint8_t changed = 0x5A;
+    vm.getMemory().Write(dataPa + 2, &changed, 1);
+    CHECK(vm.restoreMips64FullSnapshot(armed));
+    CHECK(cpu->core().reservationState().valid);
+    CHECK(cpu->core().readGpr(5) == original);
+    cpu->core().writeGpr(5, replacement);
+    CHECK(vm.run(1) == 1);
+    CHECK(cpu->core().readGpr(5) == 1);
+    uint8_t storedBytes[8]{};
+    map->Read(dataPa, storedBytes, sizeof(storedBytes));
+    uint64_t stored = 0;
+    for (uint8_t byte : storedBytes) stored = (stored << 8) | byte;
+    CHECK(stored == replacement);
+    const Mips64FullVmSnapshot first = vm.captureMips64FullSnapshot();
+
+    CHECK(vm.restoreMips64FullSnapshot(armed));
+    cpu->core().writeGpr(5, replacement);
+    CHECK(vm.run(1) == 1);
+    CHECK(cpu->core().readGpr(5) == 1);
+    const Mips64FullVmSnapshot replay = vm.captureMips64FullSnapshot();
+    CHECK(replay.ValidateIntegrity());
+    CHECK(sameReplayState(first, replay));
+    CHECK(replay.physicalMemory.nextReservationGeneration ==
+          first.physicalMemory.nextReservationGeneration);
+    CHECK(replay.vmStateValue == first.vmStateValue);
+    CHECK(replay.uart.virtualTimeCycle == first.uart.virtualTimeCycle);
+    CHECK(replay.console.bytes == first.console.bytes);
+    CHECK(replay.physicalMemory.reservationGenerations ==
+          first.physicalMemory.reservationGenerations);
+
+    // A snapshot may contain a still-valid CPU token whose monitor generation
+    // has already been invalidated by another writer. Replaying that failed
+    // SCD must fail the same way and leave the reserved doubleword untouched.
+    CHECK(vm.restoreMips64FullSnapshot(armed));
+    const uint8_t conflictByte = 0x5A;
+    vm.getMemory().Write(dataPa + 8, &conflictByte, 1);
+    const Mips64FullVmSnapshot invalidated = vm.captureMips64FullSnapshot();
+    CHECK(invalidated.ValidateIntegrity());
+    CHECK(cpu->core().reservationState().valid);
+    cpu->core().writeGpr(5, replacement);
+    CHECK(vm.run(1) == 1);
+    CHECK(cpu->core().readGpr(5) == 0);
+    uint8_t failedBytes[8]{};
+    map->Read(dataPa, failedBytes, sizeof(failedBytes));
+    uint64_t failedValue = 0;
+    for (uint8_t byte : failedBytes) failedValue = (failedValue << 8) | byte;
+    CHECK(failedValue == original);
+    const Mips64FullVmSnapshot firstFailure = vm.captureMips64FullSnapshot();
+
+    CHECK(vm.restoreMips64FullSnapshot(invalidated));
+    cpu->core().writeGpr(5, replacement);
+    CHECK(vm.run(1) == 1);
+    CHECK(cpu->core().readGpr(5) == 0);
+    const Mips64FullVmSnapshot replayFailure = vm.captureMips64FullSnapshot();
+    CHECK(replayFailure.ValidateIntegrity());
+    CHECK(sameReplayState(firstFailure, replayFailure));
+    CHECK(replayFailure.physicalMemory.reservationGenerations ==
+          firstFailure.physicalMemory.reservationGenerations);
+    CHECK(replayFailure.physicalMemory.nextReservationGeneration ==
+          firstFailure.physicalMemory.nextReservationGeneration);
 }
 
 void testSnapshotDenseSparseAndHighMemoryRestore() {
@@ -950,7 +1072,7 @@ void testSnapshotCompatibilityRejections() {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "usage: test_mips64_malta <map|fpga|reset|boot|ownership|snapshot_format|snapshot_memory|snapshot_devices|snapshot_restore|snapshot_vm|snapshot_compat>\n";
+        std::cerr << "usage: test_mips64_malta <map|fpga|reset|boot|ownership|snapshot_format|snapshot_memory|snapshot_devices|snapshot_restore|snapshot_vm|snapshot_compat|snapshot_reservation>\n";
         return 2;
     }
     const std::string mode = argv[1];
@@ -959,12 +1081,13 @@ int main(int argc, char** argv) {
     else if (mode == "reset") testSafeGuestSoftwareResetAndColdReset();
     else if (mode == "boot") testColdBootGuestAndPayloadBothEndians();
     else if (mode == "ownership") testTwoVmsAndTwoCpusAreBoardScoped();
-    else if (mode == "snapshot_format") testSnapshotFormatAndCpuV5Restore();
+    else if (mode == "snapshot_format") testSnapshotFormatAndCpuV6Restore();
     else if (mode == "snapshot_memory") testSnapshotDenseSparseAndHighMemoryRestore();
     else if (mode == "snapshot_devices") testSnapshotDeviceAndConsoleState();
     else if (mode == "snapshot_restore") testSnapshotTransactionalFailureInjectionAndResetMailbox();
     else if (mode == "snapshot_vm") testProductionVmDeterministicReplayAndTimerRestore();
     else if (mode == "snapshot_compat") testSnapshotCompatibilityRejections();
+    else if (mode == "snapshot_reservation") testSnapshotReplayWithActiveLinkedReservation();
     else return 2;
     std::cout << "test_mips64_malta[" << mode << "]: " << gPass << " passed, "
               << gFail << " failed\n";
