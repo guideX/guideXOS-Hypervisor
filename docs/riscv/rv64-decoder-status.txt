@@ -687,3 +687,21 @@ Validation and next target:
 - Standard PMP is a physical-access control feature. It does not add the RISC-V
   hypervisor extension or establish isolation beyond the ranges and access
   modes measured in the RISCV-15 tests.
+
+--- Phase RISCV-16: authentic OpenSBI domain policy and PMP transitions ---
+
+- The existing StandardPmp16 profile now has a guest-executed PMP domain
+  regression using unchanged OpenSBI v1.8.1. The FDT assigns hart 0 to a
+  supervisor domain with five explicitly bounded RAM regions, read-only guest
+  page tables, separately authorized UARTs and PLIC, and denied ACLINT access.
+  The selected domain has no S/U catch-all; unmatched addresses deny.
+- The emulator records legal executed `SFENCE.VMA` instructions in a bounded
+  trace with PC, operands, and privilege. The transition guest uses real M-mode
+  `pmpcfg0` writes to grant and revoke an unlocked S-mode NAPOT region and
+  executes the fence after each change. The MMU has no translation cache, so
+  the trace proves architectural instruction execution only.
+- The independent OpenSBI guest proves identity and nonidentity permitted RAM
+  mappings, denied firmware aliases, protected page-table reads and A/D writes,
+  guest trap recovery, UART0/UART1 and PLIC operations, and authentic SBI Base
+  and TIME services. See `phase-riscv-16-report.txt` for the measured PMP table,
+  FDT fixup behavior, artifact hashes, test results, and limits.

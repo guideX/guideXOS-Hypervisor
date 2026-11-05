@@ -4,6 +4,8 @@
 
 /build-mingw/
 /build-riscv/
+/tests/fixtures/riscv_opensbi_domain/.build/
+/tests/fixtures/riscv_pmp_transition/.build/
 /build/bin/
 /cmake-build*/
 /x64/

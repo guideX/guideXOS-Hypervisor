@@ -335,6 +335,7 @@ void RV64CPU::reset() {
     pmpTrace_.clear();
     pmpCsrTrace_.clear();
     pmpDeniedTrace_.clear();
+    sfenceVmaTrace_.clear();
     stvec_ = 0;
     sscratch_ = 0;
     sepc_ = 0;
@@ -2893,7 +2894,14 @@ StepResult RV64CPU::step() {
                             pc, result);
                 return result;
             }
-            mmu_->sfenceVma(state_.GetGR(insn.rs1), state_.GetGR(insn.rs2));
+            const uint64_t rs1 = state_.GetGR(insn.rs1);
+            const uint64_t rs2 = state_.GetGR(insn.rs2);
+            constexpr size_t kSfenceVmaTraceCapacity = 512;
+            if (sfenceVmaTrace_.size() == kSfenceVmaTraceCapacity) {
+                sfenceVmaTrace_.erase(sfenceVmaTrace_.begin());
+            }
+            sfenceVmaTrace_.push_back(SfenceVmaTraceEvent{pc, rs1, rs2, priv_});
+            mmu_->sfenceVma(rs1, rs2);
             state_.SetPC(pc + 4U);
             result.outcome = StepOutcome::Ok;
             result.nextPc = state_.GetPC();

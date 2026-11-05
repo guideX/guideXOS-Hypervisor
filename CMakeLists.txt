@@ -1072,6 +1072,61 @@ else()
     target_compile_options(test_riscv_opensbi_pmp PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# RISCV-16 FDT domain policy validation and guest-executed M-mode PMP changes.
+set(RISCV_PMP_TRANSITION_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_pmp_transition)
+set(RISCV_PMP_TRANSITION_BIN_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv16_pmp_transition.bin)
+set(RISCV_DOMAIN_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_opensbi_domain)
+set(RISCV_DOMAIN_SUPERVISOR_ELF_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv16_domain_supervisor.elf)
+set(RISCV_DOMAIN_DTB_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv16_domain_platform.dtb)
+configure_file(${RISCV_PMP_TRANSITION_FIXTURE_DIR}/transition.bin
+               ${RISCV_PMP_TRANSITION_BIN_COPY} COPYONLY)
+configure_file(${RISCV_DOMAIN_FIXTURE_DIR}/supervisor.elf
+               ${RISCV_DOMAIN_SUPERVISOR_ELF_COPY} COPYONLY)
+configure_file(${RISCV_DOMAIN_FIXTURE_DIR}/platform.dtb
+               ${RISCV_DOMAIN_DTB_COPY} COPYONLY)
+
+add_executable(test_riscv_pmp_domain_policy
+    tests/test_riscv_pmp_domain_policy.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_pmp_domain_policy PRIVATE bcrypt)
+add_test(NAME RiscVPmpDomainPolicyTests
+         COMMAND test_riscv_pmp_domain_policy
+                 ${RISCV_DOMAIN_DTB_COPY}
+                 ${RISCV_PMP_TRANSITION_BIN_COPY})
+
+add_executable(test_riscv_opensbi_domain
+    tests/test_riscv_opensbi_domain.cpp
+    src/riscv/riscv_elf64_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp
+)
+target_link_libraries(test_riscv_opensbi_domain PRIVATE bcrypt)
+add_test(NAME RiscVOpenSbiDomainTests
+         COMMAND test_riscv_opensbi_domain
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_DOMAIN_SUPERVISOR_ELF_COPY}
+                 ${RISCV_DOMAIN_DTB_COPY}
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv16-$<CONFIG>-opensbi-domain.trace.log)
+
+foreach(riscv16_target IN ITEMS test_riscv_pmp_domain_policy test_riscv_opensbi_domain)
+    if(MSVC)
+        target_compile_options(${riscv16_target} PRIVATE /W4)
+    else()
+        target_compile_options(${riscv16_target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

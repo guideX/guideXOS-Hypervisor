@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -446,7 +447,8 @@ bool VerifySignature(const RV64CPU& cpu, bool report) {
 
 bool PrepareGuest(RV64CPU& cpu, const std::vector<uint8_t>& firmware,
                   const std::vector<uint8_t>& supervisor,
-                  const std::vector<uint8_t>& fdt) {
+                  const std::vector<uint8_t>& fdt,
+                  uint64_t fdtReservationSize = kFdtReservationEnd - kFdtAddress) {
     std::vector<uint8_t> ram(static_cast<size_t>(kRamSize), 0);
     cpu.loadProgram(kRamBase, ram);
     if (!cpu.writePhysical(kFirmwareEntry, firmware.data(), firmware.size())) return false;
@@ -457,7 +459,7 @@ bool PrepareGuest(RV64CPU& cpu, const std::vector<uint8_t>& firmware,
     if (!cpu.configureMachineUart(uart)) return false;
     const std::array<Elf64ReservedRegion, 4> reserved{{
         {kFirmwareEntry, kFirmwareSlotEnd - kFirmwareEntry, "OpenSBI firmware slot"},
-        {kFdtAddress, kFdtReservationEnd - kFdtAddress, "FDT reservation"},
+        {kFdtAddress, fdtReservationSize, "FDT reservation"},
         {kResultAddress, 0x1000, "guest result and signature"},
         {kStackAddress, 0x10000, "guest supervisor stack"},
     }};
@@ -481,7 +483,8 @@ bool PrepareGuest(RV64CPU& cpu, const std::vector<uint8_t>& firmware,
     return true;
 }
 
-RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget) {
+RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget,
+                        const std::function<bool(const RV64CPU&)>& stopPredicate = {}) {
     RunEvidence evidence;
     Decoder decoder;
     std::map<uint64_t, uint64_t> observations;
@@ -549,6 +552,11 @@ RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget) {
         if (ReadWord(cpu, kResultAddress + 0x100 + 112, marker) && marker == kComplete) {
             evidence.complete = true;
             evidence.stopReason = "guest completion marker observed";
+            ++evidence.steps;
+            break;
+        }
+        if (stopPredicate && stopPredicate(cpu)) {
+            evidence.stopReason = "caller stop predicate satisfied";
             ++evidence.steps;
             break;
         }

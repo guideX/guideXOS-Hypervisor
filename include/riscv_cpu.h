@@ -193,6 +193,13 @@ struct PmpTraceEvent {
     bool allowed = false;
 };
 
+struct SfenceVmaTraceEvent {
+    uint64_t pc = 0;
+    uint64_t rs1 = 0;
+    uint64_t rs2 = 0;
+    PrivilegeMode privilege = PrivilegeMode::Machine;
+};
+
 struct Sv39Translation {
     bool ok = false;
     uint64_t paddr = 0;
@@ -606,6 +613,7 @@ public:
     const std::vector<PmpTraceEvent>& pmpTrace() const { return pmpTrace_; }
     const std::vector<PmpTraceEvent>& pmpCsrTrace() const { return pmpCsrTrace_; }
     const std::vector<PmpTraceEvent>& pmpDeniedTrace() const { return pmpDeniedTrace_; }
+    const std::vector<SfenceVmaTraceEvent>& sfenceVmaTrace() const { return sfenceVmaTrace_; }
 
     // Breakpoint-halt interception (default true for RISCV-1 compatibility).
     // When true, EBREAK/C.EBREAK report Halt. When false, they deliver a
@@ -711,6 +719,7 @@ private:
     mutable std::vector<PmpTraceEvent> pmpTrace_;
     mutable std::vector<PmpTraceEvent> pmpCsrTrace_;
     mutable std::vector<PmpTraceEvent> pmpDeniedTrace_;
+    std::vector<SfenceVmaTraceEvent> sfenceVmaTrace_;
 
     PrivilegeMode priv_ = PrivilegeMode::Machine;
     bool breakpointHalt_ = true;

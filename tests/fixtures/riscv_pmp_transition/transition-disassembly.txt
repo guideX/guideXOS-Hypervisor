@@ -1,0 +1,207 @@
+
+D:\dev\guideXOS_Hypervisor_RISCV\tests\fixtures\riscv_pmp_transition\.build\transition.elf:	file format elf64-littleriscv
+
+Disassembly of section .text:
+
+0000000080000000 <_start>:
+80000000: 200002b7     	lui	t0, 0x20000
+80000004: 3ff28293     	addi	t0, t0, 0x3ff
+80000008: 3b029073     	csrw	pmpaddr0, t0
+8000000c: 200042b7     	lui	t0, 0x20004
+80000010: 3b129073     	csrw	pmpaddr1, t0
+80000014: 200012b7     	lui	t0, 0x20001
+80000018: 9ff28293     	addi	t0, t0, -0x601
+8000001c: 3b229073     	csrw	pmpaddr2, t0
+80000020: 001b22b7     	lui	t0, 0x1b2
+80000024: 81d28293     	addi	t0, t0, -0x7e3
+80000028: 3a029073     	csrw	pmpcfg0, t0
+8000002c: 12000073     	sfence.vma
+80000030: 00000297     	auipc	t0, 0x0
+80000034: 04428293     	addi	t0, t0, 0x44
+80000038: 30529073     	csrw	mtvec, t0
+8000003c: 02000293     	li	t0, 0x20
+80000040: 30229073     	csrw	medeleg, t0
+80000044: 00000297     	auipc	t0, 0x0
+80000048: 0cc28293     	addi	t0, t0, 0xcc
+8000004c: 34129073     	csrw	mepc, t0
+80000050: 300022f3     	csrr	t0, mstatus
+80000054: ffffe337     	lui	t1, 0xffffe
+80000058: 7ff30313     	addi	t1, t1, 0x7ff
+8000005c: 0062f2b3     	and	t0, t0, t1
+80000060: 00100313     	li	t1, 0x1
+80000064: 00b31313     	slli	t1, t1, 0xb
+80000068: 0062e2b3     	or	t0, t0, t1
+8000006c: 30029073     	csrw	mstatus, t0
+80000070: 30200073     	mret
+
+0000000080000074 <machine_trap>:
+80000074: 342022f3     	csrr	t0, mcause
+80000078: 00900313     	li	t1, 0x9
+8000007c: 06629863     	bne	t0, t1, 0x800000ec <machine_fail>
+80000080: 01600313     	li	t1, 0x16
+80000084: 06689463     	bne	a7, t1, 0x800000ec <machine_fail>
+80000088: 00100313     	li	t1, 0x1
+8000008c: 00650863     	beq	a0, t1, 0x8000009c <machine_grant>
+80000090: 00200313     	li	t1, 0x2
+80000094: 02650863     	beq	a0, t1, 0x800000c4 <machine_revoke>
+80000098: 0540006f     	j	0x800000ec <machine_fail>
+
+000000008000009c <machine_grant>:
+8000009c: 001b22b7     	lui	t0, 0x1b2
+800000a0: 91d28293     	addi	t0, t0, -0x6e3
+800000a4: 3a029073     	csrw	pmpcfg0, t0
+800000a8: 12000073     	sfence.vma
+800000ac: 400012b7     	lui	t0, 0x40001
+800000b0: 00129293     	slli	t0, t0, 0x1
+800000b4: 00100313     	li	t1, 0x1
+800000b8: 0262b823     	sd	t1, 0x30(t0)
+800000bc: 00000513     	li	a0, 0x0
+800000c0: 0400006f     	j	0x80000100 <machine_return>
+
+00000000800000c4 <machine_revoke>:
+800000c4: 001b22b7     	lui	t0, 0x1b2
+800000c8: 81d28293     	addi	t0, t0, -0x7e3
+800000cc: 3a029073     	csrw	pmpcfg0, t0
+800000d0: 12000073     	sfence.vma
+800000d4: 400012b7     	lui	t0, 0x40001
+800000d8: 00129293     	slli	t0, t0, 0x1
+800000dc: 00200313     	li	t1, 0x2
+800000e0: 0262b823     	sd	t1, 0x30(t0)
+800000e4: 00000513     	li	a0, 0x0
+800000e8: 0180006f     	j	0x80000100 <machine_return>
+
+00000000800000ec <machine_fail>:
+800000ec: 400012b7     	lui	t0, 0x40001
+800000f0: 00129293     	slli	t0, t0, 0x1
+800000f4: 00100313     	li	t1, 0x1
+800000f8: 0062b823     	sd	t1, 0x10(t0)
+800000fc: fff00513     	li	a0, -0x1
+
+0000000080000100 <machine_return>:
+80000100: 341022f3     	csrr	t0, mepc
+80000104: 00428293     	addi	t0, t0, 0x4
+80000108: 34129073     	csrw	mepc, t0
+8000010c: 30200073     	mret
+
+0000000080000110 <supervisor_start>:
+80000110: 00000297     	auipc	t0, 0x0
+80000114: 08428293     	addi	t0, t0, 0x84
+80000118: 10529073     	csrw	stvec, t0
+
+000000008000011c <supervisor_initial_load>:
+8000011c: 080012b7     	lui	t0, 0x8001
+80000120: 00429293     	slli	t0, t0, 0x4
+80000124: 0002b303     	ld	t1, 0x0(t0)
+80000128: 1640006f     	j	0x8000028c <supervisor_fail>
+
+000000008000012c <supervisor_grant_request>:
+8000012c: 01600893     	li	a7, 0x16
+80000130: 00100513     	li	a0, 0x1
+80000134: 00000073     	ecall
+80000138: 14051a63     	bnez	a0, 0x8000028c <supervisor_fail>
+
+000000008000013c <supervisor_retry_after_grant>:
+8000013c: 080012b7     	lui	t0, 0x8001
+80000140: 00429293     	slli	t0, t0, 0x4
+80000144: 0002b303     	ld	t1, 0x0(t0)
+80000148: eedcb3b7     	lui	t2, 0xeedcb
+8000014c: 00439393     	slli	t2, t2, 0x4
+80000150: e1138393     	addi	t2, t2, -0x1ef
+80000154: 00c39393     	slli	t2, t2, 0xc
+80000158: 22338393     	addi	t2, t2, 0x223
+8000015c: 00c39393     	slli	t2, t2, 0xc
+80000160: 34438393     	addi	t2, t2, 0x344
+80000164: 12731463     	bne	t1, t2, 0x8000028c <supervisor_fail>
+80000168: 400012b7     	lui	t0, 0x40001
+8000016c: 00129293     	slli	t0, t0, 0x1
+80000170: 0262b023     	sd	t1, 0x20(t0)
+80000174: 01600893     	li	a7, 0x16
+80000178: 00200513     	li	a0, 0x2
+8000017c: 00000073     	ecall
+80000180: 10051663     	bnez	a0, 0x8000028c <supervisor_fail>
+
+0000000080000184 <supervisor_retry_after_revoke>:
+80000184: 080012b7     	lui	t0, 0x8001
+80000188: 00429293     	slli	t0, t0, 0x4
+8000018c: 0002b303     	ld	t1, 0x0(t0)
+80000190: 0fc0006f     	j	0x8000028c <supervisor_fail>
+
+0000000080000194 <supervisor_trap>:
+80000194: 142022f3     	csrr	t0, scause
+80000198: 00500313     	li	t1, 0x5
+8000019c: 0e629863     	bne	t0, t1, 0x8000028c <supervisor_fail>
+800001a0: 14302373     	csrr	t1, stval
+800001a4: 080013b7     	lui	t2, 0x8001
+800001a8: 00439393     	slli	t2, t2, 0x4
+800001ac: 0e731063     	bne	t1, t2, 0x8000028c <supervisor_fail>
+800001b0: 400013b7     	lui	t2, 0x40001
+800001b4: 00139393     	slli	t2, t2, 0x1
+800001b8: 0183be03     	ld	t3, 0x18(t2)
+800001bc: 00200e93     	li	t4, 0x2
+800001c0: 0dde7663     	bgeu	t3, t4, 0x8000028c <supervisor_fail>
+800001c4: 004e1e93     	slli	t4, t3, 0x4
+800001c8: 003e1f13     	slli	t5, t3, 0x3
+800001cc: 01ee8eb3     	add	t4, t4, t5
+800001d0: 040e8e93     	addi	t4, t4, 0x40
+800001d4: 007e8eb3     	add	t4, t4, t2
+800001d8: 005eb023     	sd	t0, 0x0(t4)
+800001dc: 006eb423     	sd	t1, 0x8(t4)
+800001e0: 14102f73     	csrr	t5, sepc
+800001e4: 01eeb823     	sd	t5, 0x10(t4)
+800001e8: 001e0e13     	addi	t3, t3, 0x1
+800001ec: 01c3bc23     	sd	t3, 0x18(t2)
+800001f0: 00100e93     	li	t4, 0x1
+800001f4: 01de0a63     	beq	t3, t4, 0x80000208 <first_access_fault>
+800001f8: 00000f17     	auipc	t5, 0x0
+800001fc: 020f0f13     	addi	t5, t5, 0x20
+80000200: 141f1073     	csrw	sepc, t5
+80000204: 10200073     	sret
+
+0000000080000208 <first_access_fault>:
+80000208: 00000f17     	auipc	t5, 0x0
+8000020c: f24f0f13     	addi	t5, t5, -0xdc
+80000210: 141f1073     	csrw	sepc, t5
+80000214: 10200073     	sret
+
+0000000080000218 <supervisor_done>:
+80000218: 400012b7     	lui	t0, 0x40001
+8000021c: 00129293     	slli	t0, t0, 0x1
+80000220: 0182b303     	ld	t1, 0x18(t0)
+80000224: 00200393     	li	t2, 0x2
+80000228: 06731263     	bne	t1, t2, 0x8000028c <supervisor_fail>
+8000022c: 47585337     	lui	t1, 0x47585
+80000230: 00431313     	slli	t1, t1, 0x4
+80000234: 4d530313     	addi	t1, t1, 0x4d5
+80000238: 01031313     	slli	t1, t1, 0x10
+8000023c: 54530313     	addi	t1, t1, 0x545
+80000240: 00c31313     	slli	t1, t1, 0xc
+80000244: 23130313     	addi	t1, t1, 0x231
+80000248: 0062b023     	sd	t1, 0x0(t0)
+8000024c: 00100313     	li	t1, 0x1
+80000250: 0062b423     	sd	t1, 0x8(t0)
+80000254: 00000313     	li	t1, 0x0
+80000258: 0062b823     	sd	t1, 0x10(t0)
+8000025c: 0310000f     	fence	rw, w
+80000260: 010d4337     	lui	t1, 0x10d4
+80000264: d3530313     	addi	t1, t1, -0x2cb
+80000268: 00c31313     	slli	t1, t1, 0xc
+8000026c: 41330313     	addi	t1, t1, 0x413
+80000270: 00e31313     	slli	t1, t1, 0xe
+80000274: 45530313     	addi	t1, t1, 0x455
+80000278: 00c31313     	slli	t1, t1, 0xc
+8000027c: 44530313     	addi	t1, t1, 0x445
+80000280: 0662bc23     	sd	t1, 0x78(t0)
+
+0000000080000284 <supervisor_wait>:
+80000284: 10500073     	wfi
+80000288: ffdff06f     	j	0x80000284 <supervisor_wait>
+
+000000008000028c <supervisor_fail>:
+8000028c: 400012b7     	lui	t0, 0x40001
+80000290: 00129293     	slli	t0, t0, 0x1
+80000294: 00100313     	li	t1, 0x1
+80000298: 0062b823     	sd	t1, 0x10(t0)
+
+000000008000029c <supervisor_fail_wait>:
+8000029c: 10500073     	wfi
+800002a0: ffdff06f     	j	0x8000029c <supervisor_fail_wait>

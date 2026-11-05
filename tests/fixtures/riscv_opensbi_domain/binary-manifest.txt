@@ -1,0 +1,11 @@
+OpenSBI source commit: 74434f255873d74e56cc50aa762d1caf24c099f8 (unchanged)
+OpenSBI fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+OpenSBI fw_jump.elf SHA-256: 255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+Payload compiler: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+Payload flags: --target=riscv64-unknown-elf -march=rv64ima_zicsr -mabi=lp64 -mno-relax -ffreestanding -fno-stack-protector -nostdlib
+FDT compiler: Version: DTC 1.7.2
+Payload entry=0x80200000; page tables at 0x83c00000; independently assembled S-mode ELF
+The build reads the pinned firmware and does not rebuild or alter OpenSBI.
+
+7D34AA21C380F403525867A0AF493F7F730468517A902C029CC952DD72B0870E  platform.dtb  4191 bytes
+2F90EBB20D7080321A7FF2DEDB088CCFA8251FDD68F64F0D47B943B6350B709D  supervisor.elf  28704 bytes
