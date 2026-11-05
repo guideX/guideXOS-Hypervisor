@@ -1209,6 +1209,7 @@ void testAuthenticLinux(const std::filesystem::path& outputRoot) {
         << "\nnext_frontier_raw=" << hex(first.nextWord)
         << "\nnext_frontier_decode=" << first.nextDisassembly
         << "\nnext_frontier_status=" << first.stopClass
+        << "\nnext_frontier_state:\n" << registersText(first.final)
         << "\ncontinuation_retired=" << first.continuationRetired
         << "\ncontinuation_guest_stores_decoded=" << first.continuationWrites
         << "\ncontinuation_guest_store_events=" << first.storeEvents.size()
