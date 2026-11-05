@@ -264,8 +264,13 @@ void testDecodeIsolation() {
                               uint8_t{5}, uint8_t{6}, uint8_t{7}}) {
         const auto decoded = PPC64ISAPlugin::decodeWord(
             encodeRldicr(3, 4, 5, 6, false, operation));
-        CHECK(decoded.kind == DecodedKind::UNSUPPORTED);
-        CHECK(!decoded.supported);
+        if (operation == 3) {
+            CHECK(decoded.kind == DecodedKind::RLDIMI);
+            CHECK(decoded.supported && decoded.sh == 5 && decoded.mb == 6);
+        } else {
+            CHECK(decoded.kind == DecodedKind::UNSUPPORTED);
+            CHECK(!decoded.supported);
+        }
     }
     // Changing Rc remains the record form of rldicr and does not change its
     // operation classification.

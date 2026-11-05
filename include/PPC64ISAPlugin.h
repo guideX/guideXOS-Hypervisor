@@ -421,6 +421,7 @@ enum class DecodedKind {
     RLWINM,     // rlwinm[.] (M-form, primary opcode 21)
     RLDICL,     // rldicl[.] (MD-form, primary opcode 30, MD XO 0)
     RLDICR,     // rldicr[.] (MD-form, primary opcode 30, MD XO 1)
+    RLDIMI,     // rldimi[.] (MD-form, primary opcode 30, MD XO 3)
     CMP,        // cmp        (X-form, XO 0; signed, L selects 32/64-bit)
     CMPL,       // cmpl       (X-form, XO 32; unsigned, L selects 32/64-bit)
     CMPI,       // cmpi       (D-form opcode 11; signed immediate)
@@ -502,7 +503,7 @@ struct DecodedInstruction {
     uint16_t ds = 0;     // DS-form 14-bit displacement field (bits 2-15)
     uint8_t dsXo = 0;    // DS-form 2-bit XO field (word bits 0-1)
     uint8_t sh = 0;      // MD-form 6-bit shift amount
-    uint8_t mb = 0;      // mask begin (M-form 5-bit; RLDICL MD-form 6-bit)
+    uint8_t mb = 0;      // mask begin (M-form 5-bit; RLDICL/RLDIMI MD-form 6-bit)
     uint8_t me = 0;      // mask end (M-form 5-bit; RLDICR MD-form 6-bit)
 };
 

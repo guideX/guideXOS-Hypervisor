@@ -843,7 +843,14 @@ Replay runLinux(const std::vector<uint8_t>& kernel, uint64_t budget,
                 before.gpr[12] == result.entryR12;
         }
 
-        const bool advanced = vm.step();
+        // Phase 29's accepted handoff is the first encounter with RLDIMI.
+        // Keep this historical relocation regression scoped to the pre-RLDIMI
+        // state; Phase 30 exercises retirement and continuation separately.
+        const bool rldimiHandoff = before.nip == 0xC000000001EAB1D0ULL &&
+            word == 0x796A000EU && decode.valid &&
+            static_cast<const DecodedInstruction*>(decode.internalData)->kind ==
+                DecodedKind::RLDIMI;
+        const bool advanced = rldimiHandoff ? false : vm.step();
         const PPC64RegisterView after = vm.getPPC64RegisterView();
         result.nipFrequency[before.nip]++;
         if (inLoop) {
@@ -983,9 +990,11 @@ Replay runLinux(const std::vector<uint8_t>& kernel, uint64_t budget,
             result.frontierFetched = fetched;
             result.frontierDecoded = decode.valid;
             result.productionDecode = disassembly;
-            result.stopReason = plugin->getLastExecutionDiagnostic();
-            result.stopClass = !decode.valid
-                ? "unsupported-or-invalid-instruction"
+            result.stopReason = rldimiHandoff
+                ? "Phase 29 handoff: stop before the newly supported RLDIMI instruction"
+                : plugin->getLastExecutionDiagnostic();
+            result.stopClass = rldimiHandoff ? "phase-boundary"
+                : !decode.valid ? "unsupported-or-invalid-instruction"
                 : plugin->hasFault() ? "architectural-or-translation-fault"
                                      : "production-vm-stop";
             break;
@@ -1527,7 +1536,10 @@ void testLinuxDataWalk() {
     CHECK(first.divdRetired);
     CHECK(first.divdR8Before == 0x54E3D0ULL && first.divdR8After == 0x3897EULL);
     CHECK(first.divdR12 == 0x18ULL);
-    CHECK(first.entryTimebase == 0 && first.finalTimebase == first.attempted);
+    // The Phase 29 regression now stops at the decoded Phase 30 handoff
+    // before calling step(), so only retired instructions advance timebase.
+    CHECK(first.entryTimebase == 0 && first.finalTimebase == first.retired &&
+          first.attempted == first.retired + 1U);
     CHECK(first.loopEntries != 0 && first.initialLoopCtr == 0x3897EULL);
     CHECK(first.entryR12 == 24ULL);
     CHECK(first.loopEntryLR == 0xC00000000000D098ULL);
@@ -1593,8 +1605,9 @@ void testLinuxDataWalk() {
     CHECK(first.fdtBackingUnchanged);
     CHECK(first.finalTraceWindow.size() == kFinalTraceWindow);
     CHECK(first.retired > kBaselineBudget);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction");
-    CHECK(first.frontierFetched && !first.frontierDecoded);
+    CHECK(first.stopClass == "phase-boundary");
+    CHECK(first.frontierFetched && first.frontierDecoded &&
+          first.productionDecode == "rldimi r10,r11,32,0");
     CHECK(first.frontierWord == 0x796A000EU);
     CHECK(first.stopNip == 0xC000000001EAB1D0ULL);
     CHECK(independentFrontier(first.frontierWord, first.stopNip) ==

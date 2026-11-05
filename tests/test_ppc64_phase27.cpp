@@ -500,7 +500,12 @@ void testDecoder() {
         unsupported[operation] = (30U << 26) | (4U << 21) | (5U << 16) |
                                 (6U << 11) | (7U << 6) | (operation << 2);
         const auto decoded = PPC64ISAPlugin::decodeWord(unsupported[operation]);
-        CHECK(decoded.kind == DecodedKind::UNSUPPORTED && !decoded.supported);
+        if (operation == 3) {
+            CHECK(decoded.kind == DecodedKind::RLDIMI && decoded.supported &&
+                  decoded.sh == 6 && decoded.mb == 7);
+        } else {
+            CHECK(decoded.kind == DecodedKind::UNSUPPORTED && !decoded.supported);
+        }
     }
     // MDS-form RLDCL/RLDCR use operation encodings 8 and 9 and remain isolated.
     for (unsigned operation : {8U, 9U}) {
@@ -517,7 +522,8 @@ void testDecoder() {
              << "production_decode="
              << PPC64ISAPlugin::disassembleDecoded(linux, kLinuxRldiclNip)
              << "\nindependent_decode=" << decodeRldiclIndependent(kLinuxRldicl)
-             << "\nMD_operation_1=RLDICR\nMD_operations_2_to_7=unsupported\n"
+             << "\nMD_operation_1=RLDICR\nMD_operation_3=RLDIMI\n"
+             << "MD_operations_2_4_to_7=unsupported\n"
              << "MDS_RLDCL_RLDCR=unsupported\nRLWINM=preserved\n";
     CHECK(writeText(runDirectory / "instruction-decoder-evidence.txt", evidence.str()));
     testSummary << "decoder_md_assertions=" << (checks - start) << "\n";
