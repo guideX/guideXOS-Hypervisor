@@ -5,8 +5,10 @@
 #include "IMemory.h"
 #include "ISAPluginRegistry.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
 
 namespace aarch64 {
 namespace {
@@ -278,18 +280,19 @@ void AArch64State::capture(const Cpu& cpu) {
 }
 
 void AArch64State::applyTo(Cpu& cpu) const {
-    for (unsigned i = 0; i < 31; ++i) {
-        cpu.writeX(i, x_[i]);
-    }
-    cpu.setSpEl0(spEl0_);
-    cpu.setSpEl1(spEl1_);
-    cpu.setPc(pc_);
-    cpu.setPstate(pstate_);
-    cpu.setElrEl1(elrEl1_);
-    cpu.setSpsrEl1(spsrEl1_);
-    cpu.setVbarEl1(vbarEl1_);
-    cpu.setEsrEl1(esrEl1_);
-    cpu.setFarEl1(farEl1_);
+    std::lock_guard<std::recursive_mutex> lock(cpu.executionMutex_);
+    if (cpu.snapshotBoundaryActive_ &&
+        (!cpu.allowCoordinatedSnapshotCodec_ || cpu.snapshotBoundaryOwner_ != std::this_thread::get_id())) return;
+    std::copy(std::begin(x_), std::end(x_), std::begin(cpu.x_));
+    cpu.spEl0_ = spEl0_;
+    cpu.spEl1_ = spEl1_;
+    cpu.pc_ = pc_;
+    cpu.pstate_ = pstate_;
+    cpu.elrEl1_ = elrEl1_;
+    cpu.spsrEl1_ = spsrEl1_;
+    cpu.vbarEl1_ = vbarEl1_;
+    cpu.esrEl1_ = esrEl1_;
+    cpu.farEl1_ = farEl1_;
     cpu.sctlrEl1_ = sctlrEl1_;
     cpu.tcrEl1_ = tcrEl1_;
     cpu.ttbr0El1_ = ttbr0El1_;
@@ -325,6 +328,7 @@ AArch64ISAPlugin::AArch64ISAPlugin(uint64_t entryPoint, ExceptionLevel entryLeve
 
 void AArch64ISAPlugin::reset() {
     std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (cpu_.snapshotBoundaryActive_) return;
     cpu_.reset(entryPoint_, entryLevel_);
     state_.capture(cpu_);
     instructionDecodedPending_ = false;
@@ -332,6 +336,14 @@ void AArch64ISAPlugin::reset() {
 
 ia64::ISADecodeResult AArch64ISAPlugin::decode(ia64::IMemory& memory) {
     std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (cpu_.snapshotBoundaryActive_) {
+        ia64::ISADecodeResult rejected;
+        rejected.valid = false;
+        rejected.instructionAddress = cpu_.pc();
+        rejected.instructionLength = kInstructionSize;
+        rejected.disassembly = "snapshot coordinator owns the guest execution boundary";
+        return rejected;
+    }
     lastDecoded_ = cpu_.fetchDecode(memory);
     instructionDecodedPending_ = true;
     ia64::ISADecodeResult result;
@@ -353,6 +365,7 @@ size_t AArch64ISAPlugin::getInstructionLength(ia64::IMemory& /*memory*/,
 ia64::ISAExecutionResult AArch64ISAPlugin::execute(
     ia64::IMemory& memory, const ia64::ISADecodeResult& decodeResult) {
     std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (cpu_.snapshotBoundaryActive_) return ia64::ISAExecutionResult::EXCEPTION;
     if (!instructionDecodedPending_) return ia64::ISAExecutionResult::EXCEPTION;
     instructionDecodedPending_ = false;
     if (!decodeResult.valid || decodeResult.internalData == nullptr) {
@@ -384,6 +397,7 @@ const ia64::ISAState& AArch64ISAPlugin::getState() const {
 
 void AArch64ISAPlugin::setState(const ia64::ISAState& state) {
     std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (cpu_.snapshotBoundaryActive_) return;
     const auto* a64 = dynamic_cast<const AArch64State*>(&state);
     if (a64 == nullptr) {
         throw std::invalid_argument("AArch64ISAPlugin::setState: incompatible state type");
@@ -400,6 +414,7 @@ uint64_t AArch64ISAPlugin::getPC() const {
 
 void AArch64ISAPlugin::setPC(uint64_t pc) {
     std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (cpu_.snapshotBoundaryActive_) return;
     cpu_.setPc(pc);
     state_.capture(cpu_);
     instructionDecodedPending_ = false;
@@ -415,6 +430,8 @@ std::vector<uint8_t> AArch64ISAPlugin::serialize_state() const {
 
 bool AArch64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
     std::lock_guard<std::recursive_mutex> lock(cpu_.executionMutex_);
+    if (cpu_.snapshotBoundaryActive_ &&
+        (!cpu_.allowCoordinatedSnapshotCodec_ || cpu_.snapshotBoundaryOwner_ != std::this_thread::get_id())) return false;
     if (data.size() != kSerializedStateSize && data.size() != kSerializedStateV2Size &&
         data.size() != kSerializedStateV1Size) {
         return false;

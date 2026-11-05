@@ -43,6 +43,15 @@ public:
                         const std::vector<uint8_t>& snapshot,
                         std::string* error = nullptr,
                         const AArch64DeviceSnapshotLimits& limits = {});
+
+private:
+    static bool beginMachineBoundary(const AArch64ISAPlugin& cpu,
+                                     const ia64::Memory& memory,
+                                     std::string* error);
+    static void endMachineBoundary(const AArch64ISAPlugin& cpu,
+                                   const ia64::Memory& memory) noexcept;
+    static bool setNestedCodecAccess(const AArch64ISAPlugin& cpu, bool enabled,
+                                     std::string* error);
 };
 
 } // namespace aarch64

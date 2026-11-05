@@ -287,3 +287,229 @@ topology matrix, harden lifecycle concurrency boundaries, and qualify one real
 deterministic device model only after its ownership and state-transition
 contract is explicit. Keep GIC and Generic Timer models as separately scoped
 work; this report claims no GIC/timer functionality.
+
+## AARCH64-9R Qualification Closure — 2026-11-04
+
+This dated closure records the qualification work performed after the partial
+report above. The historical result remains accurate for the original attempt;
+the following gates were not complete until this pass.
+
+### Starting repository state
+
+- Repository: `D:/dev/guideXOS_Hypervisor_AARCH64`
+- Branch: `AARCH64`; upstream: `origin/AARCH64`; starting ahead/behind: `0/0`
+- Starting HEAD: `0d0915b508353a867acb076ec323b93e25ad1541`
+- Starting worktree: clean; the architecture-local marker named AARCH64-8 as
+  complete and AARCH64-9 as next.
+- The earlier report documented the implemented v2 device/source snapshot
+  infrastructure and a 1,680-assertion focused suite, while explicitly leaving
+  the malformed-input, topology, overlap, memory-growth, and guest-owned MMU
+  requirements open.
+
+### Hash-correct malformed-input matrix
+
+The focused test now starts from captured v2 images, mutates defined envelope,
+nested-machine, device, or source fields, independently reseals the nested
+machine digest when needed, then independently recomputes the outer SHA-256
+with Windows CNG. Every one of the 35 table-driven envelope cases prints
+`hash=valid`; every case is passed through the production device-aware restore
+API. A full inventory comparison covers CPU checkpoint (including PC, PSTATE,
+EL and MMU state), all guest RAM and page-table bytes, device identity/schema
+and payloads, source state, and registry counts. Each rejected case reports
+its actual error and whether the device staging callback was reached.
+
+The matrix covers unsupported version and profile, wrong architecture, count
+and total-length errors, duplicate/missing mandatory sections (including the
+nested RAM region), nested offsets and overlap, outer length and integer
+overflow, unsupported flags, reserved fields, device/source counts and bounds,
+short and malformed device state, invalid source bits and mode, unsupported
+schema/type, duplicate IDs, unknown owner, trailing data, and unsupported CPU
+checkpoint version/length. Envelope and nested structural checks reject
+before device staging. The short schema payload and malformed device-state
+field reach `stageRestore`, which rejects them; the destination inventory is
+still unchanged. Separate inventory-checked failures cover incompatible RAM
+geometry, invalid CPU state, and configured resource limits.
+
+### Device and interrupt-source topology
+
+The restore matrix verifies a valid matching restore with reversed device
+registration order, then rejects wrong ID, wrong type with a same-sized test
+payload, unsupported schema, missing/extra/removed/recreated devices, missing
+or extra source, wrong source owner, and both level/edge mode replacements.
+The malformed envelope cases additionally cover duplicate device/source IDs,
+invalid device identity, invalid asserted/pending encodings, unknown owners, and
+invalid source count. Registration tests exercise the maximum of 64 devices
+and 256 sources and reject the next entry. Every incompatible restore compares
+the complete destination inventory before and after. Owner removal deletes its
+sources; registering the same valid identity again starts with reset defaults.
+Persistent IDs and type/schema metadata define identity; host pointers and
+registration order do not.
+
+### Concurrency contract and lock order
+
+The registry mutex protects topology and source state. Beginning a device-aware
+operation sets a registry operation gate and copies the topology while holding
+that mutex, then releases it. Registry registration, removal, reset, source
+mutation/query, and device lookup reject while the gate is active. This keeps
+registered `unique_ptr` ownership stable for the operation.
+
+The coordinator then acquires the CPU execution mutex and RAM access mutex in
+that order using nonblocking attempts, marks a machine boundary, and releases
+both mutexes before quiesce/capture/staging callbacks. Public CPU execution and
+mutators report or ignore the boundary according to their return type; RAM
+access and mutation APIs reject it. The nested v1 CPU/RAM codec is enabled only
+for the owning coordinator thread. During the final restore commit, the
+coordinator acquires CPU, then RAM, then the registry mutex; it restores CPU
+and RAM, assigns already-validated source booleans, releases the registry
+mutex, and invokes the contractually no-fail `commitRestore` callbacks while
+CPU and RAM remain locked. The registry operation gate remains active until
+all device holds have been resumed. No registry path holds its mutex while
+acquiring CPU or RAM, so there is no reverse nested lock order.
+
+Reset, quiesce, capture-state, stage-restore, and resume callbacks run without
+CPU, RAM, or registry mutexes held. Device implementations remain responsible
+for synchronization of their own direct public state. `commitRestore` must
+apply only fully staged state, be `noexcept`, and must not call back into
+operations that can fail. The registry and its CPU/RAM objects must outlive
+in-flight calls. A previously borrowed raw device pointer, `Memory::GetRawData`
+view, and direct device-owned access require caller-side lifetime and
+synchronization; the coordinator cannot revoke a pointer already borrowed.
+Destruction of the registry or its containing machine therefore requires
+external serialization, as required by C++ object lifetime. The supported
+removal API itself rejects while a snapshot owns a device and destroys it only
+after the operation gate is released.
+
+### Deterministic overlap and failure-atomicity results
+
+Five barrier-controlled repetitions cover capture/capture, restore/capture,
+capture/restore, restore/restore, CPU stepping and RAM writes at a held capture
+boundary, device unregister/register/reset during an operation, source
+mutation/removal during an operation, and nested v1/v2 operations from device
+callbacks. Conflicting operations reject without changing topology or machine
+state; CPU stepping resumes after the gate is released. The same tests verify
+quiescence cleanup and absence of leaked device holds. The 60-second CTest
+timeout bounds hangs; all worker threads are released and joined on the normal
+test path, and the completed run took 0.50 seconds.
+
+Failure injection covers CPU checkpoint validation, RAM geometry, schema and
+payload validation, source topology, configured limits, device quiescence,
+and device restore preparation. In the preparation failure, device 11 has
+already produced a staging token before device 12 refuses; no live state has
+changed. Quiescence refusal after an earlier device accepted releases both
+devices. Source assignments cannot fail after topology validation while the
+registry gate is held, and device commit is the documented no-fail final step.
+The inner CPU/RAM restore completes its allocation and validation before its
+commit point. Successful restore clears the software TLB as before; rejected
+restore never crosses that commit point. Invalid hash-correct images and
+incompatible targets preserve the complete compared inventory.
+
+### Guest-owned Stage-1 and replay
+
+The new program begins at PC `0x1000` with Stage-1 disabled. Real guest MOVZ,
+MOVK, and STR instructions write the root, next-level, and leaf descriptors in
+guest RAM. Guest MSR instructions program TCR_EL1, TTBR0_EL1, and MAIR_EL1;
+the SCTLR_EL1.M write is at PC `0x1070`, followed by DSB ISHST and ISB. The
+synchronization boundary is PC `0x107c`. The guest then loads and stores through
+VA `0x4000`, which maps to PA `0x8000`, and reaches the snapshot boundary at
+PC `0x108c` after 35 instructions from reset (28 before enabling, 31 through
+the synchronization sequence). Device 11 and 12 hold nondefault state; level
+source 101 is asserted and edge source 102 is pending.
+
+The 131,956-byte v2 image has standard SHA-256
+`4101ffe94b5362beacccec16dbabde20a63bb2a2b22462f7e9db72549838374b`.
+An independently constructed matching machine restores at `0x108c`; checkpoint
+bytes, all RAM including guest-built page tables, effective MMU registers,
+device state, and source state match the saved image. The restored instance has
+a cold TLB, reconstructs the VA-to-PA translation, executes three more guest
+instructions, and reaches final PC `0x1098`. Its final CPU, RAM, devices, and
+sources match uninterrupted execution. Sources remain software state only;
+this test makes no GIC or guest IRQ-delivery claim.
+
+The existing EL0 translated replay also passes from saved/restored PC `0x100c`
+to final PC `0x1014`. Its 131,956-byte standard-SHA image is
+`d43014ea5ca9a550ab9472e4a3e01b0f33a103a34018af2173a23e12dc91e533`.
+The existing independent-machine lifecycle suite continues to verify device,
+source, CPU, and RAM isolation.
+
+### SHA correction and legacy compatibility
+
+The new independent CNG digest checks exposed a production defect: the custom
+SHA-256 round table used `0x4d2c2dfc` instead of the standard constant
+`0x4d2c6dfc`. New v2 captures now emit standard SHA-256. To preserve the v2
+image created by the original partial run, validation accepts the historical
+digest variant only when the standard digest fails and the full image matches
+that exact legacy calculation. The writer never emits the legacy digest. A
+fixed historical Scenario A/D image digest,
+`41f484ee8dcbffa4abe27f2a175ba04e00e7f27256f2e4b906a578e9a4cb4a53`, is
+validated and restored by the compatibility test. The AARCH64-8 v1 fixture and
+its independently verified digest remain
+`41a4922957d41e8a09bcd56963264836dfa7918355173d35a954816e6def6941`; v1
+restores into empty topology and is rejected for nonempty device topology.
+Existing CPU checkpoint v1/v2/v3 coverage remains in the passing AARCH64-8
+snapshot suite.
+
+### Lifecycle memory observations
+
+The test measures Windows process memory with `GetProcessMemoryInfo` after
+initialization, after 10 warm-up cycles, after five batches of 100 complete
+construct/register/mutate/capture/mutate/restore/validate/remove/destroy
+cycles, and at the end. In the final CTest run, private bytes were 2,342,912
+at baseline; 1,306,624 after warm-up; and 1,310,720, 1,327,104, 1,335,296,
+1,355,776, and 1,363,968 after successive 100-cycle batches. Final private
+bytes were 1,363,968, 57,344 bytes above the warm measurement. Final working
+set was 6,500,352 bytes; observed peak working set was 8,904,704 bytes and peak
+commit was 4,255,744 bytes. The test permits a conservative 16 MiB per-batch
+increase to accommodate allocator behavior; observed growth was small and
+bounded. The baseline-to-warm drop reflects process-counter/allocator
+fluctuation, so the comparison uses the post-warm measurements as well. No
+outstanding-allocation hook exists in this test target; no allocation count is
+claimed.
+
+### Commands and acceptance result
+
+Focused build and direct test:
+
+```powershell
+cmake --build build --target test_aarch64_device_snapshot -j 4
+.\build\bin\test_aarch64_device_snapshot.exe
+```
+
+Required regression build:
+
+```powershell
+cmake --build build --target test_efi_memory_map test_ia64_sal test_riscv_decoder test_aarch64_foundation test_aarch64_memory_branch test_aarch64_pc_stack test_aarch64_compiler_stack test_aarch64_exception_levels test_aarch64_mmu test_aarch64_tlb test_aarch64_snapshot test_aarch64_device_snapshot -j 4
+```
+
+Required selected CTest gate (run with verbose output to retain per-suite
+assertion totals):
+
+```powershell
+ctest --test-dir build -R '^(EfiMemoryMapTests|IA64SalTests|RiscVDecoderSmokeTest|AArch64FoundationTests|AArch64MemoryBranchTests|AArch64PcStackTests|AArch64CompilerStackTests|AArch64ExceptionLevelTests|AArch64MMUTests|AArch64TLBTests|AArch64SnapshotTests|AArch64DeviceSnapshotTests)$' --output-on-failure -V
+```
+
+The fresh selected run passed 12/12 suites. Existing AArch64 suites reported
+10,220 assertions (222, 1,304, 939, 5,725, 326, 565, 220, and 919); the
+expanded device suite reported 13,200 assertions with zero failures, for
+23,420 passing AArch64 assertions in total. EFI memory-map, IA-64 SAL, and
+RISC-V decoder regressions also passed. `git diff --check` passed before local
+commit. The modified focused target built without new warnings. The broader
+build printed existing warnings in shared IA-64, VM, loader, and Windows macro
+headers; no new warning was attributed to the AARCH64-9 snapshot sources or
+focused test. ThreadSanitizer is unavailable in the installed MinGW GCC 15.2.0
+toolchain: a minimal `-fsanitize=thread` probe failed to link because `-ltsan`
+is not installed. Deterministic barrier tests and lock review are the
+concurrency evidence for this Windows environment.
+
+Production changes were limited to correcting the SHA-256 constant, adding
+read-only validation compatibility for the prior v2 digest, and coordinating
+the device-aware CPU/RAM boundary so public execution and mutation APIs reject
+overlapping operations. The focused CTest has a 60-second timeout. No unrelated
+architecture or device model was added.
+
+**Final outcome: `AARCH64_DEVICE_STATE_ACCEPTED`.** The registry, CPU, and RAM
+must remain alive for in-flight calls, direct borrowed references require
+external synchronization, device `commitRestore` must honor its no-fail
+contract, and this work still models no GIC, timer, IRQ delivery, SMP, Stage-2,
+or virtual time. AARCH64-10 may separately specify and qualify a deterministic
+real device model and define GIC and Generic Timer scopes; it should not infer
+those capabilities from this snapshot test fixture.

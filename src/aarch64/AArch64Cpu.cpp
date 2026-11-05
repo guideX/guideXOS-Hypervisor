@@ -375,6 +375,7 @@ int64_t signExtend(uint32_t value, unsigned bits) {
 
 void Cpu::reset(uint64_t entryPoint, ExceptionLevel initialLevel) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return;
     for (uint64_t& r : x_) {
         r = 0;
     }
@@ -415,6 +416,7 @@ uint64_t Cpu::readX(unsigned index) const {
 
 void Cpu::writeX(unsigned index, uint64_t value) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return;
     requireXIndex(index);
     x_[index] = value;
 }
@@ -425,6 +427,7 @@ uint32_t Cpu::readW(unsigned index) const {
 
 void Cpu::writeW(unsigned index, uint32_t value) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return;
     // W writes zero-extend into the full 64-bit register (ARM DDI 0487 B2.3).
     writeX(index, static_cast<uint64_t>(value));
 }
@@ -438,6 +441,8 @@ uint64_t Cpu::readReg31(bool is64, bool withZero) const {
 }
 
 void Cpu::writeReg31(bool is64, bool withZero, uint64_t value) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return;
     if (withZero) {
         return; // writes to XZR/WZR are discarded
     }
@@ -446,6 +451,7 @@ void Cpu::writeReg31(bool is64, bool withZero, uint64_t value) {
 
 void Cpu::setNzcv(bool n, bool z, bool c, bool v) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return;
     pstate_ &= ~(kPstateN | kPstateZ | kPstateC | kPstateV);
     if (n) pstate_ |= kPstateN;
     if (z) pstate_ |= kPstateZ;
@@ -1713,6 +1719,7 @@ Fault Cpu::executeEret(const Decoded& /*decoded*/) {
 
 Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return Fault::SnapshotBoundary;
     if (!decoded.valid) {
         if (decoded.hasMemoryAbort) {
             if (decoded.memoryAbortInstruction && exceptionVectorPending_) {
@@ -2490,12 +2497,14 @@ public:
 
 Fault Cpu::executeDecoded(const Decoded& decoded) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return Fault::SnapshotBoundary;
     DenyMemory deny;
     return executeDecoded(decoded, deny);
 }
 
 Fault Cpu::step(ia64::IMemory& memory) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_) return Fault::SnapshotBoundary;
     const Decoded decoded = fetchDecode(memory);
     return executeDecoded(decoded, memory);
 }
@@ -2508,7 +2517,9 @@ RunOutcome Cpu::run(ia64::IMemory& memory, uint64_t maxSteps) {
         if (fault != Fault::None) {
             outcome.stoppedOnFault = true;
             outcome.fault = fault;
-            outcome.error = lastError_;
+            outcome.error = fault == Fault::SnapshotBoundary
+                ? "AArch64 snapshot coordinator owns the guest execution boundary"
+                : lastError_;
             return outcome;
         }
         ++outcome.stepsExecuted;

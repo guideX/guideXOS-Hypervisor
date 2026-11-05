@@ -42,6 +42,7 @@ struct ParsedEnvelope {
     std::vector<uint8_t> machineBytes;
     AArch64SnapshotInfo machineInfo;
     uint64_t totalDeviceStateBytes = 0;
+    bool legacyDigest = false;
 };
 
 void setError(std::string* error, const std::string& message) {
@@ -77,6 +78,7 @@ void appendU64(std::vector<uint8_t>& out, uint64_t value) {
 
 class Sha256 final {
 public:
+    explicit Sha256(bool legacyDigest = false) : legacyDigest_(legacyDigest) {}
     void update(const uint8_t* data, std::size_t size) {
         totalBytes_ += static_cast<uint64_t>(size);
         while (size != 0) {
@@ -113,7 +115,7 @@ private:
             0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
             0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
             0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
-            0x27b70a85u,0x2e1b2138u,0x4d2c2dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
+            0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
             0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
             0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
             0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u,
@@ -133,7 +135,8 @@ private:
         uint32_t e=state_[4],f=state_[5],g=state_[6],h=state_[7];
         for (unsigned i = 0; i < 64; ++i) {
             const uint32_t s1 = rotr(e,6)^rotr(e,11)^rotr(e,25), ch=(e&f)^(~e&g);
-            const uint32_t t1=h+s1+ch+k[i]+w[i], s0=rotr(a,2)^rotr(a,13)^rotr(a,22);
+            const uint32_t roundConstant = legacyDigest_ && i == 34 ? 0x4d2c2dfcu : k[i];
+            const uint32_t t1=h+s1+ch+roundConstant+w[i], s0=rotr(a,2)^rotr(a,13)^rotr(a,22);
             const uint32_t maj=(a&b)^(a&c)^(b&c), t2=s0+maj;
             h=g;g=f;f=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;
         }
@@ -145,10 +148,11 @@ private:
     std::array<uint8_t,64> buffer_{};
     std::size_t buffered_ = 0;
     uint64_t totalBytes_ = 0;
+    bool legacyDigest_ = false;
 };
 
-std::array<uint8_t,32> digest(const std::vector<uint8_t>& bytes) {
-    Sha256 hash;
+std::array<uint8_t,32> digest(const std::vector<uint8_t>& bytes, bool legacyDigest = false) {
+    Sha256 hash(legacyDigest);
     hash.update(bytes.data(), static_cast<std::size_t>(kDigestOffset));
     constexpr std::array<uint8_t,kDigestBytes> zero{};
     hash.update(zero.data(), zero.size());
@@ -181,10 +185,20 @@ bool parseEnvelope(const std::vector<uint8_t>& bytes, ParsedEnvelope& parsed,
     }
     if (getU32(bytes.data()+120) != 0 || getU32(bytes.data()+124) != 0) { setError(error, "device snapshot reserved fields are nonzero"); return false; }
 
-    const auto actualDigest = digest(bytes);
+    auto actualDigest = digest(bytes);
     uint8_t difference = 0;
     for (std::size_t i = 0; i < actualDigest.size(); ++i) difference |= static_cast<uint8_t>(actualDigest[i] ^ bytes[static_cast<std::size_t>(kDigestOffset)+i]);
-    if (difference != 0) { setError(error, "device snapshot SHA-256 integrity check failed"); return false; }
+    if (difference != 0) {
+        // Preserve snapshots emitted by the original partial AARCH64-9 build,
+        // whose SHA-256 round table had one incorrect constant. New writers
+        // always use standard SHA-256; this read-only fallback is compatibility
+        // for those already-created v2 envelopes.
+        actualDigest = digest(bytes, true);
+        difference = 0;
+        for (std::size_t i = 0; i < actualDigest.size(); ++i) difference |= static_cast<uint8_t>(actualDigest[i] ^ bytes[static_cast<std::size_t>(kDigestOffset)+i]);
+        if (difference != 0) { setError(error, "device snapshot SHA-256 integrity check failed"); return false; }
+        parsed.legacyDigest = true;
+    }
 
     std::array<SectionView,4> sections{};
     std::size_t cursor = static_cast<std::size_t>(kHeaderBytes);
@@ -317,6 +331,84 @@ void appendSection(std::vector<uint8_t>& out, uint32_t type,
 
 } // namespace
 
+bool AArch64DeviceSnapshot::beginMachineBoundary(const AArch64ISAPlugin& cpu,
+                                                 const ia64::Memory& memory,
+                                                 std::string* error) {
+    auto& cpuState = const_cast<Cpu&>(cpu.cpu_);
+    {
+        std::unique_lock<std::recursive_mutex> cpuLock(cpuState.executionMutex_, std::try_to_lock);
+        if (!cpuLock.owns_lock()) {
+            setError(error, "AArch64 CPU is executing; snapshot coordination requires an instruction boundary");
+            return false;
+        }
+        if (cpu.instructionDecodedPending_) {
+            setError(error, "AArch64 plugin has a decoded instruction pending execution");
+            return false;
+        }
+        if (cpuState.snapshotBoundaryActive_) {
+            setError(error, "another snapshot coordinator already owns the AArch64 CPU boundary");
+            return false;
+        }
+        cpuState.snapshotBoundaryActive_ = true;
+        cpuState.allowCoordinatedSnapshotCodec_ = false;
+        cpuState.snapshotBoundaryOwner_ = std::this_thread::get_id();
+    }
+
+    auto& ram = const_cast<ia64::Memory&>(memory);
+    std::unique_lock<std::recursive_mutex> memoryLock(ram.accessMutex_, std::try_to_lock);
+    if (!memoryLock.owns_lock()) {
+        std::lock_guard<std::recursive_mutex> cpuLock(cpuState.executionMutex_);
+        cpuState.snapshotBoundaryActive_ = false;
+        cpuState.snapshotBoundaryOwner_ = {};
+        setError(error, "guest RAM has an active memory operation; snapshot coordination requires quiescence");
+        return false;
+    }
+    if (ram.snapshotBoundaryActive_) {
+        memoryLock.unlock();
+        std::lock_guard<std::recursive_mutex> cpuLock(cpuState.executionMutex_);
+        cpuState.snapshotBoundaryActive_ = false;
+        cpuState.snapshotBoundaryOwner_ = {};
+        setError(error, "another snapshot coordinator already owns guest RAM");
+        return false;
+    }
+    ram.snapshotBoundaryActive_ = true;
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+void AArch64DeviceSnapshot::endMachineBoundary(const AArch64ISAPlugin& cpu,
+                                               const ia64::Memory& memory) noexcept {
+    try {
+        auto& ram = const_cast<ia64::Memory&>(memory);
+        {
+            std::lock_guard<std::recursive_mutex> memoryLock(ram.accessMutex_);
+            ram.snapshotBoundaryActive_ = false;
+        }
+        auto& cpuState = const_cast<Cpu&>(cpu.cpu_);
+        std::lock_guard<std::recursive_mutex> cpuLock(cpuState.executionMutex_);
+        cpuState.allowCoordinatedSnapshotCodec_ = false;
+        cpuState.snapshotBoundaryOwner_ = {};
+        cpuState.snapshotBoundaryActive_ = false;
+    } catch (...) {
+        // A standard mutex failure during cleanup is unrecoverable but must
+        // not escape a scope guard during stack unwinding.
+    }
+}
+
+bool AArch64DeviceSnapshot::setNestedCodecAccess(const AArch64ISAPlugin& cpu,
+                                                  bool enabled,
+                                                  std::string* error) {
+    auto& cpuState = const_cast<Cpu&>(cpu.cpu_);
+    std::lock_guard<std::recursive_mutex> cpuLock(cpuState.executionMutex_);
+    if (!cpuState.snapshotBoundaryActive_ ||
+        cpuState.snapshotBoundaryOwner_ != std::this_thread::get_id()) {
+        setError(error, "nested CPU/RAM snapshot codec access is outside its owning coordinator");
+        return false;
+    }
+    cpuState.allowCoordinatedSnapshotCodec_ = enabled;
+    return true;
+}
+
 bool AArch64DeviceSnapshot::capture(const AArch64ISAPlugin& cpu,
                                     const ia64::IMemory& memory,
                                     AArch64DeviceRegistry& devices,
@@ -329,13 +421,23 @@ bool AArch64DeviceSnapshot::capture(const AArch64ISAPlugin& cpu,
     std::vector<AArch64InterruptSourceState> sources;
     if (!devices.beginSnapshot(registered, sources, error)) return false;
     ScopeExit operation{[&devices] { devices.endSnapshot(); }};
+    const auto* ram = dynamic_cast<const ia64::Memory*>(&memory);
+    if (ram == nullptr) { setError(error, "device snapshot requires the production contiguous ia64::Memory backend"); return false; }
+    if (!beginMachineBoundary(cpu, *ram, error)) return false;
+    ScopeExit boundary{[&cpu, ram] { endMachineBoundary(cpu, *ram); }};
     std::vector<AArch64StatefulDevice*> quiesced;
     try { quiesced.reserve(registered.size()); }
     catch (...) { setError(error, "unable to allocate device quiescence bookkeeping"); return false; }
     if (!quiesceAll(registered, quiesced, error)) return false;
 
     std::vector<uint8_t> machine;
-    if (!AArch64ExecutionSnapshot::capture(cpu, memory, machine, error, limits.machine)) {
+    bool machineCaptured = false;
+    if (!setNestedCodecAccess(cpu, true, error)) { resumeAll(quiesced); return false; }
+    {
+        ScopeExit nestedCodec{[&cpu] { std::string ignored; setNestedCodecAccess(cpu, false, &ignored); }};
+        machineCaptured = AArch64ExecutionSnapshot::capture(cpu, memory, machine, error, limits.machine);
+    }
+    if (!machineCaptured) {
         resumeAll(quiesced); return false;
     }
     std::vector<uint8_t> devicePayload, sourcePayload;
@@ -435,7 +537,12 @@ bool AArch64DeviceSnapshot::validate(const std::vector<uint8_t>& snapshot,
         info->totalDeviceStateBytes = parsed.totalDeviceStateBytes;
         info->formatVersion = kFormatVersion;
         info->totalBytes = snapshot.size();
-        info->sha256 = digest(snapshot);
+        if (parsed.legacyDigest) {
+            std::copy_n(snapshot.begin() + static_cast<std::ptrdiff_t>(kDigestOffset),
+                        info->sha256.size(), info->sha256.begin());
+        } else {
+            info->sha256 = digest(snapshot);
+        }
     }
     if (error != nullptr) error->clear();
     return true;
@@ -467,6 +574,8 @@ bool AArch64DeviceSnapshot::restore(AArch64ISAPlugin& cpu, ia64::IMemory& memory
     std::vector<AArch64InterruptSourceState> currentSources;
     if (!devices.beginSnapshot(registered, currentSources, error)) return false;
     ScopeExit operation{[&devices] { devices.endSnapshot(); }};
+    if (!beginMachineBoundary(cpu, *ram, error)) return false;
+    ScopeExit boundary{[&cpu, ram] { endMachineBoundary(cpu, *ram); }};
     if (registered.size() != parsed.deviceRecords.size() || currentSources.size() != parsed.sourceRecords.size()) {
         setError(error, "destination device or interrupt-source topology count does not match snapshot"); return false;
     }
@@ -536,8 +645,14 @@ bool AArch64DeviceSnapshot::restore(AArch64ISAPlugin& cpu, ia64::IMemory& memory
                     std::unique_lock<std::mutex> sourceLock(devices.mutex_, std::try_to_lock);
                     if (!sourceLock.owns_lock()) {
                         setError(error, "interrupt-source registry is busy during restore");
-                    } else if (AArch64ExecutionSnapshot::restore(
-                                   cpu, memory, parsed.machineBytes, error, limits.machine)) {
+                    } else {
+                        bool machineRestored = false;
+                        if (setNestedCodecAccess(cpu, true, error)) {
+                            ScopeExit nestedCodec{[&cpu] { setNestedCodecAccess(cpu, false, nullptr); }};
+                            machineRestored = AArch64ExecutionSnapshot::restore(
+                                cpu, memory, parsed.machineBytes, error, limits.machine);
+                        }
+                        if (machineRestored) {
                         // The recursive CPU/RAM locks remain held. Source IDs
                         // were validated while the operation gate held topology.
                         for (const auto& source : parsed.sourceRecords) {
@@ -549,6 +664,7 @@ bool AArch64DeviceSnapshot::restore(AArch64ISAPlugin& cpu, ia64::IMemory& memory
                         for (std::size_t i = 0; i < registered.size(); ++i)
                             registered[i]->commitRestore(std::move(tokens[i]));
                         restored = true;
+                        }
                     }
                 }
             }

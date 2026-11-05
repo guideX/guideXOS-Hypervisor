@@ -691,6 +691,7 @@ add_test(NAME AArch64MMUTests COMMAND test_aarch64_mmu)
 add_test(NAME AArch64TLBTests COMMAND test_aarch64_tlb)
 add_test(NAME AArch64SnapshotTests COMMAND test_aarch64_snapshot)
 add_test(NAME AArch64DeviceSnapshotTests COMMAND test_aarch64_device_snapshot)
+set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -892,7 +893,7 @@ add_executable(test_aarch64_device_snapshot
 
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
-    target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32)
+    target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)

@@ -332,6 +332,12 @@ bool AArch64ExecutionSnapshot::capture(const AArch64ISAPlugin& cpu,
         setError(error, "AArch64 CPU is executing; capture requires a quiescent boundary");
         return false;
     }
+    if (cpu.cpu_.snapshotBoundaryActive_ &&
+        (!cpu.cpu_.allowCoordinatedSnapshotCodec_ ||
+         cpu.cpu_.snapshotBoundaryOwner_ != std::this_thread::get_id())) {
+        setError(error, "another snapshot coordinator owns the AArch64 execution boundary");
+        return false;
+    }
     if (cpu.instructionDecodedPending_) {
         setError(error, "AArch64 plugin has a decoded instruction pending execution");
         return false;
@@ -445,6 +451,12 @@ bool AArch64ExecutionSnapshot::restore(AArch64ISAPlugin& cpu,
     std::unique_lock<std::recursive_mutex> cpuLock(cpu.cpu_.executionMutex_, std::try_to_lock);
     if (!cpuLock.owns_lock()) {
         setError(error, "destination AArch64 CPU is executing; restore requires quiescence");
+        return false;
+    }
+    if (cpu.cpu_.snapshotBoundaryActive_ &&
+        (!cpu.cpu_.allowCoordinatedSnapshotCodec_ ||
+         cpu.cpu_.snapshotBoundaryOwner_ != std::this_thread::get_id())) {
+        setError(error, "another snapshot coordinator owns the AArch64 execution boundary");
         return false;
     }
     if (cpu.instructionDecodedPending_) {

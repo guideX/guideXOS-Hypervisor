@@ -68,6 +68,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "aarch64/AArch64MMU.h"
@@ -116,6 +117,7 @@ enum class Fault {
     UnsupportedFeature,  // allocated A64 encoding outside the subset
     MemoryFault,         // guest data access failed or its address range wrapped
     TranslationFault,    // guest-controlled Stage-1 translation/access abort
+    SnapshotBoundary,    // guest execution rejected while a complete snapshot is coordinated
 };
 
 // Implemented A64 operation set.
@@ -271,26 +273,31 @@ public:
     uint64_t sp() const;
     void setSp(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         activeSpRef() = value;
     }
     uint64_t spEl0() const { return spEl0_; }
     uint64_t spEl1() const { return spEl1_; }
     void setSpEl0(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         spEl0_ = value;
     }
     void setSpEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         spEl1_ = value;
     }
     uint64_t pc() const { return pc_; }
     void setPc(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         pc_ = value;
     }
     uint32_t pstate() const { return pstate_; }
     void setPstate(uint32_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         pstate_ = value;
     }
     ExceptionLevel exceptionLevel() const {
@@ -303,26 +310,31 @@ public:
     uint64_t elrEl1() const { return elrEl1_; }
     void setElrEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         elrEl1_ = value;
     }
     uint32_t spsrEl1() const { return spsrEl1_; }
     void setSpsrEl1(uint32_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         spsrEl1_ = value;
     }
     uint64_t vbarEl1() const { return vbarEl1_; }
     void setVbarEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         vbarEl1_ = value & ~uint64_t{0x7FF};
     }
     uint32_t esrEl1() const { return esrEl1_; }
     void setEsrEl1(uint32_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         esrEl1_ = value;
     }
     uint64_t farEl1() const { return farEl1_; }
     void setFarEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         farEl1_ = value;
     }
     uint64_t sctlrEl1() const { return sctlrEl1_; }
@@ -338,22 +350,27 @@ public:
     const AArch64TLB& tlb() const { return tlb_; }
     void setSctlrEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         sctlrEl1_ = effectiveSctlrEl1_ = value;
     }
     void setTcrEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         tcrEl1_ = effectiveTcrEl1_ = value;
     }
     void setTtbr0El1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         ttbr0El1_ = effectiveTtbr0El1_ = value;
     }
     void setTtbr1El1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         ttbr1El1_ = effectiveTtbr1El1_ = value;
     }
     void setMairEl1(uint64_t value) {
         std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+        if (snapshotBoundaryActive_) return;
         mairEl1_ = effectiveMairEl1_ = value;
     }
     bool flagN() const { return (pstate_ & kPstateN) != 0; }
@@ -449,6 +466,12 @@ private:
     // Serializes complete instruction execution with snapshot management.
     // This mutex is host coordination state and is never serialized.
     mutable std::recursive_mutex executionMutex_;
+    // The device-aware coordinator owns the full machine boundary between
+    // quiescence and commit. Guest stepping and host mutators reject while it
+    // is active; only the coordinator thread may invoke the nested v1 codec.
+    mutable bool snapshotBoundaryActive_ = false;
+    mutable bool allowCoordinatedSnapshotCodec_ = false;
+    mutable std::thread::id snapshotBoundaryOwner_{};
     Fault lastFault_ = Fault::None;
     std::string lastError_;
 };
