@@ -1928,7 +1928,7 @@ void testR3InstructionFaultMatrix() {
     CHECK(unaligned.step());
     CHECK(cpu->getNIP() == VEC_ALIGN);
     CHECK(cpu->getSRR0() == unalignedNIP);
-    CHECK(cpu->getMSR() == MSR_ME);
+    CHECK(cpu->getMSR() == (MSR_ME | MSR_SF));
 
     VirtualMachine unmapped(kRamSize, 1, "PPC64", platform());
     CHECK(prepareCapacity(unmapped));

@@ -502,7 +502,7 @@ void runProgramDGuestFaults() {
     CHECK((cpu.getSRR1() & SRR1_MSR_MASK) == (MSR_IR | MSR_DR | MSR_RI));
     CHECK(cpu.getDAR() == dataEA);
     CHECK(cpu.getDSISR() == DSISR_NOHPTE);
-    CHECK(cpu.getMSR() == 0);
+    CHECK(cpu.getMSR() == MSR_SF);
     CHECK(cpu.readGPR(10) == 0xfeedfacecafebeefULL);
     CHECK(cpu.getLastFault().translationStage == PPC64TranslationStage::PROCESS);
     CHECK(cpu.getLastFault().translationFault ==

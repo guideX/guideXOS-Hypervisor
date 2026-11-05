@@ -105,9 +105,9 @@ constexpr size_t STATE_SIZE_V5 = STATE_SIZE_V4 + 8;
 //   DR  IBM 59 mask 0x0000000000000010 (data relocate; radix profile)
 //   RI  IBM 62 mask 0x0000000000000002 (recoverable interrupt)
 //   LE  IBM 63 mask 0x0000000000000001 (little-endian; must be 0, BE only)
-// On guest exception entry the new MSR is oldMSR with EE/PR/IR/DR/RI
-// cleared (enter privileged, non-recoverable, real-address, EE off);
-// all other bits preserved.
+// On guest exception entry the new MSR clears EE/PR/IR/DR/RI and sets SF
+// (enter privileged, 64-bit, non-recoverable, real-address, EE off);
+// all other bits are preserved.
 constexpr uint64_t MSR_SF = 1ULL << 63;
 constexpr uint64_t MSR_HV = 1ULL << 60;
 // POWER9 Book3S secure-state bit (IBM bit 41). This profile stores the bit
@@ -341,8 +341,8 @@ constexpr uint32_t ENCODING_SC_HCALL = 0x44000022;
 // A host IMemory Read/Write failure is recorded as-is (with the host
 // exception text preserved in `reason`); it is NOT automatically proof
 // of a guest Data/Instruction Storage Interrupt. The `category` values
-// name the emulator-observed condition and leave room for later Book III
-// DSI/ISI/Alignment/Program-interrupt delivery, which is out of scope.
+// name the emulator-observed condition; PROGRAM_TRAP is the conditional TDI
+// Program exception, and other categories retain their existing handling.
 //
 // Precision rules: the faulting NIP is preserved (never advanced past
 // the faulting instruction), no partial destination/base register update
@@ -367,6 +367,7 @@ enum class PPC64FaultCategory : uint8_t {
     DATA_STORE_FAILURE,  // Data-store memory access failed
     ALIGNMENT,           // Fetch or data alignment violation
     SYSCALL,             // System-call trap (sc)
+    PROGRAM_TRAP,        // Conditional TDI trap delivered as Program exception
     PRIVILEGE_VIOLATION,  // Privileged instruction in problem state (Phase 4)
     UNSUPPORTED_STATE,    // Valid encoding but unsupported MSR/mode/config
                           // (Phase 4: HV/IR/DR/LE/IP set, non-identity
@@ -397,7 +398,7 @@ struct PPC64Fault {
 };
 
 enum class DecodedKind {
-    TDI,        // tdi with TO=0 (architecturally non-trapping form)
+    TDI,        // tdi (D-form, 64-bit signed/unsigned immediate trap tests)
     ADDI,
     ADDIS,
     ORI,
@@ -962,7 +963,8 @@ private:
     ISAExecutionResult maybeDeliver(IMemory& memory, ISAExecutionResult legacy,
                                     uint64_t vecOffset, uint64_t srr0,
                                     uint32_t srr1cause, bool updateDAR,
-                                    uint64_t dar, uint32_t dsisr);
+                                    uint64_t dar, uint32_t dsisr,
+                                    bool forceArchitecturalDelivery = false);
     void markGuestProgress() { consecutiveGuestExceptions_ = 0; }
     void countGuestDelivery() { ++consecutiveGuestExceptions_; }
 

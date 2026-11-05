@@ -47,6 +47,8 @@ constexpr uint64_t kLinuxRamSize = 128ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kLinuxKernelEnd = 0x029C2158ULL;
 constexpr uint64_t kFrontierNip = 0xC000000001EAB1D0ULL;
 constexpr uint32_t kFrontierWord = 0x796A000EU;
+constexpr uint64_t kTdiFrontierNip = 0xC000000001EAA2C8ULL;
+constexpr uint32_t kTdiFrontierWord = 0x0B090000U;
 constexpr uint64_t kLinuxPTCR = 0x04000000ULL;
 constexpr uint64_t kLinuxPartitionRoot = 0x04010000ULL;
 constexpr uint64_t kLinuxPartitionL1 = 0x04020000ULL;
@@ -642,6 +644,9 @@ struct AuthenticReplay {
     bool relocationReturnCorrect = false;
     bool continuationMemoryAttributed = true;
     bool nextFrontierDecoded = false;
+    bool tdiDecoded = false;
+    bool tdiRetired = false;
+    bool tdiNoTrap = false;
     bool observerStable = true;
     uint16_t lpid = 0;
     uint64_t entryTimebase = 0;
@@ -661,6 +666,7 @@ struct AuthenticReplay {
     uint64_t totalRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t nextWord = 0;
+    uint32_t tdiWord = 0;
     uint64_t continuationMemoryBytesChanged = 0;
     uint64_t unattributedMemoryBytes = 0;
     std::string nextDisassembly;
@@ -669,6 +675,8 @@ struct AuthenticReplay {
     PPC64RegisterView pre{};
     PPC64RegisterView post{};
     PPC64RegisterView final{};
+    PPC64RegisterView tdiPre{};
+    PPC64RegisterView tdiPost{};
     PPC64RegisterView entry{};
     std::vector<uint8_t> fdt;
     std::string continuationTrace;
@@ -926,6 +934,26 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         }
         const auto& nextInstruction =
             *static_cast<const DecodedInstruction*>(next.internalData);
+        const bool atTdiFrontier = before.nip == kTdiFrontierNip;
+        if (atTdiFrontier) {
+            result.tdiPre = before;
+            result.tdiWord = word;
+            result.tdiDecoded = word == kTdiFrontierWord &&
+                nextInstruction.kind == DecodedKind::TDI &&
+                nextInstruction.supported && nextInstruction.to == 24U &&
+                nextInstruction.ra == 9U && nextInstruction.simm == 0 &&
+                next.disassembly == "tdi 24,r9,0";
+            result.nextFrontierDecoded = result.tdiDecoded;
+            result.nextWord = word;
+            result.nextDisassembly = next.disassembly;
+            result.stopClass = "supported-phase31-frontier";
+            result.final = before;
+            trace << "frontier nip=" << hex(before.nip)
+                  << " raw=" << hex(word)
+                  << " decode=" << next.disassembly
+                  << " decoded=true executed=false\n";
+            break;
+        }
         StoreAccess store = describeStore(word, nextInstruction.kind, before);
         std::array<uint8_t, 8> storeBefore{};
         std::array<uint8_t, 8> expectedStore{};
@@ -970,6 +998,20 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             result.error = plugin->getLastExecutionDiagnostic();
             result.final = after;
             break;
+        }
+        if (atTdiFrontier) {
+            result.tdiPost = after;
+            result.tdiRetired = retired;
+            PPC64RegisterView expectedNoTrap = before;
+            expectedNoTrap.nip = before.nip + 4U;
+            result.tdiNoTrap = before.gpr[9] == 0U &&
+                (before.msr & 0x0000000000008000ULL) == 0U &&
+                sameRegisterView(after, expectedNoTrap);
+            trace << "tdi_state raw=" << hex(word)
+                  << " r9=" << hex(before.gpr[9])
+                  << " msr=" << hex(before.msr)
+                  << " expected_trap=0 no_trap=" << result.tdiNoTrap
+                  << " next=" << hex(after.nip) << "\n";
         }
         if (isStore(nextInstruction.kind)) {
             std::array<uint8_t, 8> storeAfter{};
@@ -1163,6 +1205,7 @@ void testAuthenticLinux(const std::filesystem::path& outputRoot) {
     CHECK(first.nextDisassembly == second.nextDisassembly);
     CHECK(first.continuationTrace == second.continuationTrace);
     CHECK(first.continuationRetired == second.continuationRetired);
+    CHECK(first.continuationRetired == 21U);
     CHECK(first.continuationWrites == second.continuationWrites);
     CHECK(first.continuationMemoryAttributed && second.continuationMemoryAttributed);
     CHECK(first.continuationMemoryBytesChanged == second.continuationMemoryBytesChanged);
@@ -1174,12 +1217,26 @@ void testAuthenticLinux(const std::filesystem::path& outputRoot) {
     CHECK(first.finalTimebase == second.finalTimebase);
     CHECK(first.entryCycles == second.entryCycles);
     CHECK(first.finalCycles == second.finalCycles);
-    CHECK(first.nextFrontierDecoded == false && second.nextFrontierDecoded == false);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.nextFrontierDecoded && second.nextFrontierDecoded);
+    CHECK(first.stopClass == "supported-phase31-frontier" &&
           second.stopClass == first.stopClass);
-    CHECK(first.nextWord == 0x0000000B090000U && second.nextWord == first.nextWord);
-    CHECK(first.final.nip == 0xC000000001EAA2C8ULL &&
+    CHECK(first.tdiDecoded && second.tdiDecoded);
+    CHECK(first.tdiWord == kTdiFrontierWord &&
+          second.tdiWord == first.tdiWord);
+    CHECK(first.tdiPre.nip == kTdiFrontierNip &&
+          second.tdiPre.nip == first.tdiPre.nip);
+    CHECK(first.tdiPre.gpr[9] == 0U && second.tdiPre.gpr[9] == 0U);
+    CHECK(first.tdiPre.msr == 0x8000000000000002ULL &&
+          second.tdiPre.msr == first.tdiPre.msr);
+    CHECK((first.tdiPre.msr & 0x8000ULL) == 0U);
+    CHECK(!first.tdiRetired && !second.tdiRetired);
+    CHECK(!first.tdiNoTrap && !second.tdiNoTrap);
+    CHECK(first.final.nip == kTdiFrontierNip &&
           second.final.nip == first.final.nip);
+    CHECK(sameRegisterView(first.tdiPre, second.tdiPre));
+    CHECK(sameRegisterView(first.tdiPost, second.tdiPost));
+    CHECK(first.nextWord == kTdiFrontierWord &&
+          second.nextWord == first.nextWord);
     CHECK(first.totalRetired == 2'641'058ULL &&
           second.totalRetired == first.totalRetired);
 
@@ -1205,6 +1262,13 @@ void testAuthenticLinux(const std::filesystem::path& outputRoot) {
         << "expected_r10=" << hex(first.rldimiExpected)
         << "\npost_instruction_state:\n" << registersText(first.post)
         << "next_instruction_nip=" << hex(first.post.nip)
+        << "\nauthentic_tdi_nip=" << hex(first.tdiPre.nip)
+        << "\nauthentic_tdi_raw=0x" << std::hex << first.tdiWord << std::dec
+        << "\nauthentic_tdi_decode=tdi 24,r9,0"
+        << "\nauthentic_tdi_to=24\nauthentic_tdi_ra=9\nauthentic_tdi_si=0"
+        << "\nauthentic_tdi_pre_state:\n" << registersText(first.tdiPre)
+        << "authentic_tdi_retired=false (lookahead only; Phase 31 executes it)"
+        << "\nauthentic_tdi_condition_not_evaluated_in_phase30=true"
         << "\nnext_frontier_nip=" << hex(first.final.nip)
         << "\nnext_frontier_raw=" << hex(first.nextWord)
         << "\nnext_frontier_decode=" << first.nextDisassembly
@@ -1248,6 +1312,14 @@ void testAuthenticLinux(const std::filesystem::path& outputRoot) {
         "production=rldimi r10,r11,32,0\n"
         "independent=rldimi r10,r11,32,0\n"
         "fetched_bytes=79 6a 00 0e\n"));
+    CHECK(writeText(runDirectory / "tdi-instruction-evidence.txt",
+        "guest_nip=0xc000000001eaa2c8\nraw=0x0b090000\n"
+        "fetched_bytes=0b 09 00 00\nprimary_opcode=2\nTO=24\nRA=9\nSI=0\n"
+        "independent_decode=tdi 24,r9,0\n"
+        "pre_r9=" + hex(first.tdiPre.gpr[9]) + "\n"
+        "pre_msr=" + hex(first.tdiPre.msr) + "\n"
+        "MSR_EE_mask=0x0000000000008000\nMSR_EE=0\n"
+        "phase30_frontier_lookahead=true\nexecuted=false\n"));
     CHECK(writeText(runDirectory / "independent-rldimi-vectors.txt",
         "oracle=independent LSB rotate plus MSB-first circular Power mask walk\n"
         "RA=0xaabbccddeeff0011 RS=0x1122334455667788 SH=32 MB=0 "

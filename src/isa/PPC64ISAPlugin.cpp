@@ -65,14 +65,40 @@ uint64_t getU64(const uint8_t* in) {
     return value;
 }
 
+int16_t signExtendImmediate16(uint16_t value) {
+    int32_t low = static_cast<int32_t>(value);
+    if ((value & 0x8000U) != 0) low -= 0x10000;
+    return static_cast<int16_t>(low);
+}
+
 int64_t signExtend16(int16_t value) {
     return static_cast<int64_t>(value);
 }
 
 // Sign-extend the (SIMM || 0x0000) 32-bit pattern used by addis.
 int64_t signExtendShifted16(int16_t simm) {
-    int32_t shifted = static_cast<int32_t>(simm) << 16;
-    return static_cast<int64_t>(shifted);
+    // Avoid left-shifting a negative signed value.
+    return static_cast<int64_t>(simm) * 65536;
+}
+
+bool signedLessThan64(uint64_t lhs, uint64_t rhs) {
+    // XOR with the sign bit maps two's-complement signed order to unsigned
+    // order without converting out-of-range uint64_t values to int64_t.
+    constexpr uint64_t kSignBit = 0x8000000000000000ULL;
+    return (lhs ^ kSignBit) < (rhs ^ kSignBit);
+}
+
+bool tdiTrapCondition(uint8_t to, uint64_t operand, uint64_t immediate) {
+    const bool signedLess = signedLessThan64(operand, immediate);
+    const bool signedGreater = signedLessThan64(immediate, operand);
+    const bool equal = operand == immediate;
+    const bool unsignedLess = operand < immediate;
+    const bool unsignedGreater = operand > immediate;
+    return (((to & 0x10U) != 0) && signedLess) ||
+           (((to & 0x08U) != 0) && signedGreater) ||
+           (((to & 0x04U) != 0) && equal) ||
+           (((to & 0x02U) != 0) && unsignedLess) ||
+           (((to & 0x01U) != 0) && unsignedGreater);
 }
 
 // Sign-extend the 26-bit branch offset (LI || 0b00) to 64 bits.
@@ -1012,9 +1038,10 @@ ISAExecutionResult PPC64ISAPlugin::maybeDeliver(IMemory& memory,
                                                ISAExecutionResult legacy,
                                                uint64_t vecOffset, uint64_t srr0,
                                                uint32_t srr1cause, bool updateDAR,
-                                               uint64_t dar, uint32_t dsisr) {
+                                               uint64_t dar, uint32_t dsisr,
+                                               bool forceArchitecturalDelivery) {
     (void)memory;
-    if (!guestDeliveryEnabled_) {
+    if (!guestDeliveryEnabled_ && !forceArchitecturalDelivery) {
         justDelivered_ = false;
         return legacy;
     }
@@ -1036,8 +1063,10 @@ ISAExecutionResult PPC64ISAPlugin::maybeDeliver(IMemory& memory,
         state_.dar = dar;
         state_.dsisr = dsisr;
     }
-    // Book III-S entry: EE/PR/IR/DR/RI cleared; all else preserved.
-    state_.msr = oldMSR & ~(MSR_EE | MSR_PR | MSR_IR | MSR_DR | MSR_RI);
+    // Book III-S 64-bit entry: SF is set; EE/PR/IR/DR/RI are cleared;
+    // remaining modeled state is preserved. SRR1 retains the pre-entry SF.
+    state_.msr = (oldMSR & ~(MSR_EE | MSR_PR | MSR_IR | MSR_DR | MSR_RI)) |
+        MSR_SF;
     state_.nip = EXC_VECTOR_BASE + vecOffset;
     // Phase 5: guest exception entry ends any reservation. The handler must
     // take its own reservation; it cannot consume one from the faulting code.
@@ -1186,24 +1215,24 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.kind = DecodedKind::TDI;
             instr.to = static_cast<uint8_t>((word >> 21) & 0x1FU);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1FU);
-            instr.simm = static_cast<int16_t>(word & 0xFFFFU);
-            // The Linux fixed-entry endian fixup starts with tdi TO=0, a
-            // guaranteed no-trap form. Other TO predicates remain outside
-            // this interpreter subset and are deliberately rejected.
-            instr.supported = instr.to == 0;
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
+            instr.supported = true;
             break;
         case OPCODE_ADDI:
             instr.kind = DecodedKind::ADDI;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             break;
         case OPCODE_ADDIS:
             instr.kind = DecodedKind::ADDIS;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             break;
         case OPCODE_ORI:
@@ -1301,21 +1330,24 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.bf = static_cast<uint8_t>((word >> 23) & 0x07U);
             instr.l = ((word >> 21) & 0x1U) != 0;
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             break;
         case OPCODE_ADDIC:
             instr.kind = DecodedKind::ADDIC;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             break;
         case OPCODE_ADDIC_DOT:
             instr.kind = DecodedKind::ADDIC_DOT;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             break;
         case OPCODE_XORI:
@@ -1430,7 +1462,8 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             }
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             // Update forms cannot target r0-as-literal and cannot use the
             // destination as its own base (Power ISA Book I §4.6).
@@ -1459,7 +1492,8 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             // S-field (source) sits in the RT bit position for stores.
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
             instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
-            instr.simm = static_cast<int16_t>(word & 0xFFFF);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             // Store-with-update cannot update the r0 literal. RS==RA
             // overlap is well-defined (old source value is stored, then
@@ -3244,10 +3278,32 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
     const uint64_t cia = state_.nip;
     switch (instr.kind) {
         case DecodedKind::TDI:
-            // Only TO=0 reaches execution (see decodeWord); it has no trap
-            // predicate and therefore retires as a non-mutating instruction.
+        {
+            const uint64_t operand = state_.gpr[instr.ra];
+            const uint64_t immediate = static_cast<uint64_t>(
+                signExtend16(instr.simm));
+            if (tdiTrapCondition(instr.to, operand, immediate)) {
+                // TDI is itself a guest-visible Trap-type Program interrupt.
+                // Deliver it even when legacy synchronous-fault delivery is
+                // disabled; a taken architectural trap must not become a
+                // host-only unsupported-instruction stop.
+                std::ostringstream reason;
+                reason << "TDI trap condition true (TO="
+                       << static_cast<unsigned>(instr.to) << ", RA=r"
+                       << static_cast<unsigned>(instr.ra) << ", operand=0x"
+                       << std::hex << operand << ", SI=" << std::dec
+                       << instr.simm << ")";
+                recordFault(PPC64FaultCategory::PROGRAM_TRAP, cia, instr.raw,
+                            true, 0, false, PPC64AccessType::NONE, 0,
+                            reason.str(), false);
+                const ISAExecutionResult delivery = maybeDeliver(
+                    memory, ISAExecutionResult::EXCEPTION, VEC_PROG, cia,
+                    SRR1_PROGTRAP, false, 0, 0, true);
+                return justDelivered_ ? ISAExecutionResult::INTERRUPT : delivery;
+            }
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
+        }
         case DecodedKind::ADDI: {
             // RA=0 selects the constant zero, not the contents of GPR0.
             uint64_t base = (instr.ra == 0) ? 0 : state_.gpr[instr.ra];

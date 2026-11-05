@@ -1259,6 +1259,43 @@ endif()
 add_test(NAME PPC64Phase30Tests COMMAND test_ppc64_phase30)
 set_tests_properties(PPC64Phase30Tests PROPERTIES TIMEOUT 1800)
 
+# PPC64 TDI comparison semantics, Program-trap delivery, and boot-PACA guard.
+add_executable(test_ppc64_phase31
+    tests/test_ppc64_phase31.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase31 PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_ppc64_phase31 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase31 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase31Tests COMMAND test_ppc64_phase31)
+set_tests_properties(PPC64Phase31Tests PROPERTIES TIMEOUT 1800)
+
+# Authenticated Linux replay through the TDI frontier and bounded continuation.
+add_executable(test_ppc64_phase31_linux
+    tests/test_ppc64_phase31_linux.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase31_linux PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase31_linux PRIVATE
+    PPC64_PHASE31_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase31_linux PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase31_linux PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase31LinuxReplayTests COMMAND test_ppc64_phase31_linux)
+set_tests_properties(PPC64Phase31LinuxReplayTests PROPERTIES TIMEOUT 1800)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp
