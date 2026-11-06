@@ -89,7 +89,7 @@ Final Phase 32 replay artifacts are under `E:\CodexArtifacts\guideXOS_Hypervisor
 - The marker advances to `last_completed=PPC64-32`, `next_expected=PPC64-33` only after the validated local commits.
 - Implementation commit: `1db6871d06f0db75e1e50027768368a25295ce3d` (`PPC64-32 implement SUBFE and qualify Linux`).
 - Regression fixture commit: `e618986a0aab8e3a4c1d7e1021a1fe8517cb902a` (`test(PPC64): refresh arithmetic regression frontiers`).
-- A documentation closeout commit follows the regression fixture commit; it is the final HEAD. Final branch status is `PPC64`, four commits ahead and zero behind `origin/PPC64`; the worktree is clean after closeout.
+- A documentation-only commit aligned this report's filename with the exact path requested for Phase 32. Final branch status is `PPC64`, six commits ahead and zero behind `origin/PPC64`; the worktree is clean after this closeout.
 - The ignored `build/` directory was retained. Push status: **not pushed**.
 
 ## Limits
