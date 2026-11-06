@@ -733,3 +733,19 @@ Validation and next target:
   DebuggerTests failure and the legacy ELFValidationTests link failure.
   EFI/SAL CTests and direct IA-64 ACPI/interrupt regressions passed in both
   configurations. Linux, QEMU, SMP, and new hardware remain out of scope.
+
+--- Phase RISCV-18: authentic Linux Image entry ---
+
+- The production RISC-V CPU retired 100,000 instructions from the pinned
+  upstream Linux v6.12 RV64 Image after unchanged OpenSBI v1.8.1 transferred
+  M-to-S control. The first Image instruction is the authentic header JAL to
+  `_start_kernel` at Image offset 0xd4. The first bounded frontier is the
+  early startup BSS-clear loop: PC 0x80200104, `sd x0, 0(x13)`. At that budget
+  boundary it had not yet been executed; the prior retired PC was 0x8020010c.
+  There was no Linux trap or unsupported instruction at the recorded frontier.
+- The Linux profile remains RV64IMA_Zicsr with C/F/D/V disabled. Linux
+  instructions were fetched and executed from the genuine raw Image; no RV64C
+  execution was required and no code was patched. Decoder/execution support was
+  not broadened in RISCV-18. The
+  frontier evidence is in `phase-riscv18-final-debug` artifact
+  `riscv-linux-frontier-v1.json`.

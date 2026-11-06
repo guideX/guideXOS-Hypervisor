@@ -1172,6 +1172,59 @@ foreach(riscv17_target IN ITEMS test_riscv_boot_contract
     endif()
 endforeach()
 
+# RISCV-18 uses an authentic pinned upstream Linux v6.12 raw Image retained
+# outside the source tree; manifest and Linux-specific FDT remain small fixtures.
+set(RISCV_LINUX_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_image)
+set(RISCV_LINUX_IMAGE_PATH
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv18-linux-source/Image"
+    CACHE FILEPATH "Path to the pinned Linux v6.12 RV64 Image")
+set(RISCV_LINUX_MANIFEST_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv18-linux-manifest.json)
+set(RISCV_LINUX_DTB_COPY
+    ${CMAKE_CURRENT_BINARY_DIR}/riscv18-linux-platform.dtb)
+configure_file(${RISCV_LINUX_FIXTURE_DIR}/manifest.json
+               ${RISCV_LINUX_MANIFEST_COPY} COPYONLY)
+configure_file(${RISCV_LINUX_FIXTURE_DIR}/platform.dtb
+               ${RISCV_LINUX_DTB_COPY} COPYONLY)
+
+set(RISCV_LINUX_TEST_SOURCES
+    src/riscv/riscv_linux_image_loader.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp)
+add_executable(test_riscv_linux_image_loader
+    tests/test_riscv_linux_image_loader.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_link_libraries(test_riscv_linux_image_loader PRIVATE bcrypt)
+add_test(NAME RiscVLinuxImageLoaderTests
+         COMMAND test_riscv_linux_image_loader
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_DTB_COPY})
+
+add_executable(test_riscv_linux_image_entry
+    tests/test_riscv_linux_image_entry.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_link_libraries(test_riscv_linux_image_entry PRIVATE bcrypt)
+add_test(NAME RiscVLinuxImageEntryTests
+         COMMAND test_riscv_linux_image_entry
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_DTB_COPY}
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv18-$<CONFIG>-artifacts)
+
+foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
+                                test_riscv_linux_image_entry)
+    if(MSVC)
+        target_compile_options(${riscv18_target} PRIVATE /W4)
+    else()
+        target_compile_options(${riscv18_target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
+
 if(MSVC)
     target_compile_options(test_riscv_sv39 PRIVATE /W4)
 else()

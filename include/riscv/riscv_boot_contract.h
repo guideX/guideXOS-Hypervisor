@@ -68,6 +68,23 @@ inline constexpr std::array<PhysicalRange, 8> kFixtureReservations{{
      "test fixture only", true, true},
 }};
 
+// Linux Image placement derives from the pinned upstream RV64 S-mode format.
+// The FDT and firmware ranges alias the authoritative RISCV-17 inventory above;
+// Linux drops all test payload, page-table, result, and stack reservations.
+inline constexpr uint64_t kLinuxImageTextOffset = 0x00200000ULL;
+inline constexpr uint64_t kLinuxImageAlignment = 0x00200000ULL;
+inline constexpr uint64_t kLinuxImageEntry = kRamBase + kLinuxImageTextOffset;
+inline constexpr uint64_t kLinuxFdtAddress = kFdtAddress;
+inline constexpr uint64_t kLinuxFdtCapacity = kFdtCapacity;
+inline constexpr uint64_t kLinuxBootHartId = 0;
+inline constexpr uint32_t kLinuxImageHeaderVersion = 0x00000002U;
+inline constexpr std::array<PhysicalRange, 4> kLinuxReservations{{
+    kFixtureReservations[0], // OpenSBI text
+    kFixtureReservations[1], // OpenSBI data/scratch
+    kFixtureReservations[2], // protected firmware-slot gap
+    kFixtureReservations[4], // FDT and post-fixup capacity
+}};
+
 inline constexpr std::array<PhysicalRange, 5> kPmpGuestRamWindows{{
     {"guest-ram-2m", 0x80200000ULL, 0x00200000ULL, 0x00200000ULL,
      "supervisor domain", "RAM", "S-mode RWX", "OpenSBI domain FDT",

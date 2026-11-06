@@ -1,0 +1,202 @@
+guideXOS Hypervisor — Phase RISCV-18 Report
+Authentic Linux Image Loading, Memory Placement, and First Kernel Entry
+Date: 2026-11-05
+Outcome: A — authentic Linux entry and bounded instruction execution established
+
+Preflight and scope
+-------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV
+Starting HEAD: a41e11a70df40fc50df9bfb094bc778f5532914d
+Starting origin/RISCV divergence: 0 ahead / 0 behind
+Starting phase marker: RISCV-17 complete; RISCV-18 selected
+Pre-edit baseline: all 25 existing RISC-V Debug CTest suites passed
+(1,725.11 seconds).
+The pre-existing untracked Testing/ directory and OpenSBI fixture .build/
+directories for dual-UART, PLIC/UART, and PMP were retained. Build trees and
+execution evidence are under E:\CodexArtifacts\guideXOS_Hypervisor. No branch
+switch, reset, rebase, merge, stash, clean, or push occurred. No IA-64
+implementation file or shared .phase was modified. No QEMU was run.
+
+Linux source, build, and binary provenance
+------------------------------------------
+Upstream source: https://github.com/torvalds/linux.git
+Tag: v6.12
+Resolved commit: adc218676eef25575469234709c2d87185ca223a
+Architecture/ABI/privilege: RISC-V RV64 / lp64 / S-mode
+Compiler: riscv64-linux-gnu-gcc 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1)
+Linker: GNU ld 2.42; Make 4.3; DTC 1.7.0; pahole 1.25
+Build command: make O=/home/guidex/linux-v6.12-build -j8 V=1 Image vmlinux
+Kernel profile: RV64IMA_Zicsr, MMU/Sv39, SBI, OF, 8250 console; SMP, C, FPU,
+V, EFI, BLOCK, and NET disabled. Compiler flags include
+-mabi=lp64 -march=rv64ima_zicsr_zifencei -mno-save-restore -mcmodel=medany.
+The configuration hash was reproduced from a fresh out-of-tree defconfig,
+scripts/config, and olddefconfig directory:
+5dfc1dec7885ea79d1c6ca14262f7ff305d02ac37e74f01ee260cdd7317082ab
+
+Raw Image: E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv18-linux-source\Image
+Image SHA-256: 60ccb1172ffbe4b49cbc4447e7ccb4b705b5d60a9e92d3f10cf02a0d46bbca2c
+Image file length: 17,714,512 bytes
+vmlinux SHA-256: 49a047dd85bac9e8da49f89907dfdcc845b8c9c564f9d6eb63ba76f68768d093
+Linux source archive SHA-256:
+efd408daeffacf42c89392b3eed88dc4d72920b39195cee8035f4114203284ad
+The source tree, vmlinux, Image, .config, verbose build log, linked-entry
+disassembly, ELF attribute inspection, and configuration reproduction record
+are retained outside the repository. No Linux source tree or generated kernel
+binary is committed. `readelf -A` reported no RISC-V attributes section
+because the build used `-mno-riscv-attribute`; the `.config`, compiler command
+lines, and linked disassembly are the ISA compatibility evidence.
+
+Image header and memory plan
+----------------------------
+The parser follows the 64-byte v0.2 header in upstream arch/riscv image.h.
+code0=0x0d40006f (uncompressed JAL x0,+0xd4); code1=0. text_offset=0x200000;
+image_size=18,068,392; flags=0; version=2; reserved fields=0;
+deprecated magic=0x0000005643534952; magic2=0x05435352 (RSC, 0x05).
+The deprecated magic may be absent when the modern magic2 is present.
+
+Load address and entry: 0x80200000, 2 MiB from the 0x80000000 RAM base.
+Initial branch target: 0x802000d4, verified inside the effective Image.
+File-backed extent: [0x80200000, 0x812e4d50); effective extent:
+[0x80200000, 0x8133b3a8). The 353,880-byte tail is zero-filled by the loader.
+The Image and its complete effective footprint fit in [0x80000000,0x84000000).
+FDT: 0x82200000, 12,288-byte protected capacity; post-OpenSBI FDT is 8,174
+bytes (SHA-256 580e8235e4c870bd79ae9348e4a8bdca8d999e1c394efe2c773a19d886c14475).
+RAM remaining unreserved after the Image and firmware/FDT ranges is 46,931,032
+bytes. The eventual Linux runtime allocation footprint is not known from the
+raw Image header and is not claimed here.
+
+The Linux profile reserves resident OpenSBI text [0x80000000,0x80080000),
+OpenSBI data/scratch [0x80080000,0x800a0000), the protected slot gap
+[0x800a0000,0x80200000), and FDT [0x82200000,0x82203000). It drops the
+RISCV-17 test payload, page-table, result, and stack reservations. The Linux
+Image itself is not declared reserved or no-map. The loader validates all
+half-open ranges, overflow, RAM and firmware overlap, active FDT capacity,
+reservation conflicts, FW_JUMP equality, PMP first-match coverage, and CPU
+memory before staging a single contiguous transactional write. The staged
+effective-size tail is zeroed; failed writes attempt memory rollback and do not
+change CPU state.
+
+Linux device tree and PMP
+------------------------
+The separate platform DTS/DTB advertises exactly one enabled hart 0, the
+implemented RV64IMA_Zicsr ISA and standard extension properties, Sv39, 64 MiB
+RAM, 10 MHz timebase, UART0/1, 96-source PLIC, and firmware-owned ACLINT timer
+registers. It advertises no extra harts, storage, networking, PCI, or virtio.
+The fixed-up OpenSBI FDT validates with the boot hart enabled, chosen UART0
+console, expected device addresses and interrupt contexts, ACLINT disabled to
+S-mode, and the four firmware/FDT reservations above.
+
+The observed StandardPmp16 state has 14 active entries and entries 14–15 OFF.
+Entries 0–1 deny OpenSBI data/scratch and text; 2–5 preserve the two duplicate
+ACLINT mtimecmp/mtime deny entries; 6–7 grant UART0/1 read/write; 8 grants the
+2 MiB Linux RAM window RWX; 9 grants PLIC read/write; 10–13 grant the 4, 8,
+16, and 32 MiB RAM windows RWX. Config bytes are 0x18 for deny entries, 0x1b
+for MMIO read/write, and 0x1f for RAM RWX. There is no S/U catch-all. The
+entry instruction matches PMP entry 8 and is executable. The full effective
+table is recorded in riscv-pmp-effective-v1.json.
+
+Authentic firmware handoff and Linux execution
+----------------------------------------------
+OpenSBI v1.8.1 fw_jump.bin and ELF are the unchanged RISCV-9 artifacts. The
+firmware binary SHA-256 is
+CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3.
+The matching fw_jump.elf SHA-256 is
+255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0.
+The real firmware banner was observed. The emulator executed 12,287,177
+firmware steps (12,287,139 M-mode retirements, 38 traps, 39 MRET, zero
+interrupts and zero intercepted SBI ECALLs) before the authentic M-to-S
+handoff. MMIO was bounded at 8,814 observed events; the retained trace cap is
+8,192. Firmware budget: 20,000,000 steps/ticks.
+
+At the first Linux entry, the production RV64CPU is in S-mode at PC
+0x80200000 with a0=0, a1=0x82200000, satp=0. The first fetched and retired
+instruction bytes match the raw Image header's JAL x0,+0xd4. The next target
+0x802000d4 matches upstream vmlinux `_start_kernel`. No host-side SBI provider
+intercepts the firmware path.
+
+Linux ran for a bounded 100,000 retired instructions with zero Linux traps,
+interrupts, or SBI ECALLs. Its initial startup entered the BSS-clear loop. At
+the budget frontier the last retired PC was 0x8020010c (blt x13,x14,-8); the
+next fetched but unexecuted instruction was at 0x80200104, raw word 0x0006b023,
+`sd zero,0(a3)`. Its physical fetch address was 0x80200104 and PMP entry 8
+allowed execution. This is a progress/budget frontier, not an unsupported
+instruction or fault. The linked vmlinux disassembly at VMA
+0xffffffff80000104 contains the same instruction bytes and BSS loop. Trace
+head/tail retention is 64 entries each; the Linux budget is 100,000 steps and
+repeated-PC threshold is 100,000. Linux initialization, console output,
+scheduler, and complete boot were not established or required.
+
+Validation
+----------
+Full RISC-V Release CTest matrix: 27/27 passed (178.79 seconds), including
+both Linux Image targets. The Release Linux Image entry test completed in
+11.83 seconds. A direct Release rerun reports 39/39 loader checks and 23/23
+integration checks passed. The final Debug focused CTest rerun also passed
+2/2 (87.56 seconds): 39/39 loader checks and 23/23 entry checks.
+
+Full RISC-V Debug CTest matrix: 27/27 passed (1,702.22 seconds); its Linux
+entry integration took 84.78 seconds. The final Release entry rerun took
+12.18 seconds. Release and Debug handoff JSON were parsed and verified to
+record the exact entry state (PC 0x80200000, S-mode, a0=0, a1=0x82200000,
+satp=0), the separate post-execution progress PC 0x80200104, and no host SBI
+provider. Successful trace rows encode no trap cause; the handoff trace starts
+with the raw Image JAL and target 0x802000d4.
+
+IA-64 EFI memory-map and SAL CTests passed in Debug (2/2) and Release (2/2).
+Direct ACPI, interrupt-controller, and processor-interrupt-block executables
+passed in Debug and Release. No IA-64 implementation source changed.
+
+The all-target Debug and Release build attempts each fail in the unrelated
+test_watchpoint target at link time with 26 unresolved IA-64 bridge symbols.
+All RISC-V test targets built and ran; the RISC-V-only CTest matrices pass.
+RISCV-17's separately recorded general Release DebuggerTests and
+ELFValidationTests issues remain classified outside this RISC-V matrix.
+
+Implementation and evidence files
+---------------------------------
+Added include/riscv/riscv_linux_image_loader.h and
+src/riscv/riscv_linux_image_loader.cpp for strict raw Image planning,
+validation, and transactional placement. Extended
+include/riscv/riscv_boot_contract.h with Linux-only aliases and the separate
+reservation profile; the RISCV-17 ranges remain authoritative.
+
+Added tests/riscv_linux_test_helpers.h (shared FDT/PMP helpers),
+tests/test_riscv_linux_image_loader.cpp, and
+tests/test_riscv_linux_image_entry.cpp. The loader negative suite covers
+malformed and truncated headers, unsupported endian/version/flags, invalid
+sizes and entry branches, file/effective extent mismatch, overflow, alignment,
+RAM/firmware/FDT/reservation collisions, disabled hart, insufficient FDT
+capacity, missing PMP permissions, stale FW_JUMP target, rollback, zero fill,
+and repeated loads. Explicit runtime checks are enabled in Debug and Release.
+
+Added the Linux fixture manifest, platform DTS/DTB, README, and build script
+under tests/fixtures/riscv_linux_image/. Added this report and updated
+docs/riscv/rv64-decoder-status.txt. Machine-readable runtime outputs include
+the Linux image contract, reservation comparison, FDT/boot profile, effective
+PMP table, OpenSBI handoff, Linux trace, first frontier, and outcome JSON.
+
+Specification and implementation references
+---------------------------------------------
+https://github.com/torvalds/linux/blob/v6.12/Documentation/arch/riscv/boot.rst
+https://github.com/torvalds/linux/blob/v6.12/arch/riscv/include/asm/image.h
+https://github.com/torvalds/linux/blob/v6.12/arch/riscv/kernel/head.S
+
+Commit and final state
+----------------------
+Ending HEAD: the local RISCV-18 commit that contains this report (its object ID
+is included in the final session summary because this file is part of that
+commit)
+Final origin/RISCV divergence: 1 ahead / 0 behind; local commit, not pushed
+Final tracked/untracked status: clean tracked tree; original untracked Testing/
+and fixture .build/ artifacts retained and left untouched
+Phase marker: last_completed=RISCV-18; next_expected=RISCV-19
+
+Evidence-based RISCV-19 recommendation
+--------------------------------------
+Continue bounded execution of this exact Linux Image through the early
+startup/BSS frontier, capture the first genuine trap or unsupported operation
+with its instruction and architectural state, then add only the narrow
+emulator feature required by that evidence. Preserve the pinned kernel and
+firmware, single-hart restricted-domain policy, and bounded trace. Do not treat
+the 100,000-instruction entry result as a Linux boot.
