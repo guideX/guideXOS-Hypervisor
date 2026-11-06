@@ -691,7 +691,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                           unsigned instructionBudget = 200000,
                           bool continuePastDsrl32Frontier = false,
                           bool continuePastLldFrontier = false,
-                          bool continuePastTneFrontier = false) {
+                          bool continuePastTneFrontier = false,
+                          bool continuePastSllvFrontier = false) {
     constexpr uint64_t probeRamBytes = 256ULL * 1024 * 1024;
     constexpr unsigned traceInstructionLimit = 256;
     constexpr unsigned continuationTraceLimit = 512;
@@ -703,6 +704,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     constexpr uint32_t lldFrontierWord = 0xD0850000U;
     constexpr uint64_t tneFrontierPc = 0xFFFFFFFF801CAF50ULL;
     constexpr uint32_t tneFrontierWord = 0x00040336U;
+    constexpr uint64_t sllvFrontierPc = 0xFFFFFFFF80B4EF34ULL;
+    constexpr uint32_t sllvFrontierWord = 0x00E63004U;
     const auto startTime = std::chrono::steady_clock::now();
     const auto image = readFile(imagePath);
     if (image.empty()) throw std::runtime_error("kernel image is empty or unreadable");
@@ -749,9 +752,13 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     bool lldFrontierVerified = false;
     bool lldReplayVerified = false;
     bool tneFrontierVerified = false;
+    bool sllvFrontierVerified = false;
+    bool sllvReplayVerified = false;
     unsigned retiredAfterLld = 0;
     unsigned successfulStepsAfterLld = 0;
+    unsigned successfulStepsAfterSllv = 0;
     Mips64FullVmSnapshot lldActiveSnapshot;
+    Mips64FullVmSnapshot sllvSnapshot;
     std::string formerFrontierRecord;
     std::string sltiuFrontierRecord;
     std::string lldFrontierRecord;
@@ -759,6 +766,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     std::string lldReplayRecord;
     std::string tneFrontierRecord;
     std::string tneExecutionRecord;
+    std::string sllvFrontierRecord;
+    std::string sllvExecutionRecord;
+    std::string sllvReplayRecord;
     std::string lldPreInstructionRecord;
     std::ostringstream frontierInstructionTrace;
     std::ostringstream preSltiuContinuationTrace;
@@ -830,7 +840,7 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         const bool recordingPrefix = attempts < traceInstructionLimit;
         bool didRetire = false;
         bool architecturalStepHandled = false;
-        if (continuePastTneFrontier && stopPc == tneFrontierPc) {
+        if (continuePastTneFrontier && !tneFrontierVerified && stopPc == tneFrontierPc) {
             const Mips64Decoded decoded = decodeInstruction(stopWord);
             CPUContext* context = vm.getCPUContext(0);
             const uint64_t a0 = cpu->core().readGpr(4);
@@ -843,7 +853,28 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                 cpu->core().cp0Cause() != 0 || cpu->core().cp0Epc() != 0 ||
                 cpu->core().cp0BadVAddr() != 0 || cpu->core().delayArmed() ||
                 cpu->core().fault() != Mips64Fault::None) {
-                throw std::runtime_error("authentic Phase 16 TNE prestate did not reproduce");
+                std::ostringstream message;
+                message << "authentic Phase 16 TNE prestate did not reproduce"
+                        << " context=" << (context != nullptr)
+                        << " fetch_ok=" << stopFetchOk
+                        << " pa=0x" << std::hex << stopPhysical
+                        << " word=0x" << stopWord
+                        << " retired=" << std::dec << retired
+                        << " vm_cycles=" << vm.getCyclesExecuted()
+                        << " cp0_count=" << cpu->core().cp0Count()
+                        << " decoded_valid=" << decoded.valid
+                        << " decoded_op=" << static_cast<unsigned>(decoded.op)
+                        << " rs=" << static_cast<unsigned>(decoded.rs)
+                        << " rt=" << static_cast<unsigned>(decoded.rt)
+                        << " code=" << static_cast<unsigned>(decoded.code)
+                        << " a0=0x" << std::hex << a0
+                        << " status=0x" << cpu->core().cp0Status()
+                        << " cause=0x" << cpu->core().cp0Cause()
+                        << " epc=0x" << cpu->core().cp0Epc()
+                        << " badvaddr=0x" << cpu->core().cp0BadVAddr()
+                        << " delay=" << cpu->core().delayArmed()
+                        << " fault=" << static_cast<unsigned>(cpu->core().fault());
+                throw std::runtime_error(message.str());
             }
             const Mips64FullVmSnapshot beforeTne = vm.captureMips64FullSnapshot();
             if (!beforeTne.ValidateIntegrity() || beforeTne.formatVersion != 3 ||
@@ -946,6 +977,167 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
             tneFrontierVerified = true;
             didRetire = firstRetired;
             architecturalStepHandled = trapTaken;
+        } else if (continuePastSllvFrontier && stopPc == sllvFrontierPc) {
+            const Mips64Decoded decoded = decodeInstruction(stopWord);
+            CPUContext* context = vm.getCPUContext(0);
+            const uint64_t value = cpu->core().readGpr(6);
+            const uint64_t shiftRegister = cpu->core().readGpr(7);
+            if (!context || !stopFetchOk || stopPhysical != 0x000B4EF34ULL ||
+                stopWord != sllvFrontierWord || retired != 150510U ||
+                vm.getCyclesExecuted() != 150510U || cpu->core().cp0Count() != 150510U ||
+                !decoded.valid || decoded.op != Mips64Op::Sllv || decoded.rs != 7 ||
+                decoded.rt != 6 || decoded.rd != 6 || decoded.sa != 0 ||
+                value != 1 || shiftRegister != 0 || cpu->core().readGpr(0) != 0 ||
+                cpu->core().cp0Status() != 0x00400080ULL || cpu->core().cp0Cause() != 0 ||
+                cpu->core().cp0Epc() != 0 || cpu->core().cp0BadVAddr() != 0 ||
+                cpu->core().delayArmed() || cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("authentic Phase 16 SLLV prestate did not reproduce");
+            }
+            uint8_t instructionBytes[4]{};
+            vm.getMemory().Read(stopPhysical, instructionBytes, sizeof(instructionBytes));
+            if (read32(instructionBytes, false) != sllvFrontierWord) {
+                throw std::runtime_error("authentic SLLV word differs in guest memory");
+            }
+
+            // The captured operands are $6=1 and $7=0. Independent
+            // architectural calculation: 32-bit 1 << (0 & 31) = 1, then
+            // sign-extend that nonnegative word to 0x0000000000000001.
+            constexpr unsigned expectedShift = 0;
+            constexpr uint32_t expectedWord = 0x00000001U;
+            constexpr uint64_t expectedResult = 0x0000000000000001ULL;
+            sllvSnapshot = vm.captureMips64FullSnapshot();
+            if (!sllvSnapshot.ValidateIntegrity() || sllvSnapshot.formatVersion != 3 ||
+                sllvSnapshot.cpuComponentVersion != 6 ||
+                sllvSnapshot.memoryComponentVersion != 2 ||
+                sllvSnapshot.uartComponentVersion != 4 ||
+                sllvSnapshot.irqRoutingComponentVersion != 1 ||
+                sllvSnapshot.cpus.size() != 1 ||
+                sllvSnapshot.cpus[0].architecturalState.size() != 1001 ||
+                sllvSnapshot.cpus[0].architecturalState != cpu->core().serialize()) {
+                throw std::runtime_error("authentic pre-SLLV full-VM snapshot failed qualification");
+            }
+            const auto* board = vm.getMips64MaltaBootstrapBoard();
+            if (!board || !board->ConsoleSink() || !board->Uart()) {
+                throw std::runtime_error("authentic SLLV snapshot lost Malta device state");
+            }
+            std::ostringstream beforeEvent;
+            beforeEvent << "{\"type\":\"sllv_frontier_before\",\"retired\":" << retired
+                        << ",\"attempts\":" << attempts << ",\"pc_va\":\"0x"
+                        << std::hex << std::setw(16) << std::setfill('0') << stopPc
+                        << "\",\"fetch_pa\":\"0x" << std::setw(9) << stopPhysical
+                        << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                        << "\",\"instruction_bytes_be\":\""
+                        << std::setw(2) << unsigned(instructionBytes[0])
+                        << std::setw(2) << unsigned(instructionBytes[1])
+                        << std::setw(2) << unsigned(instructionBytes[2])
+                        << std::setw(2) << unsigned(instructionBytes[3])
+                        << "\",\"disassembly\":\"" << cpu->core().disassemble(decoded)
+                        << "\",\"rs\":" << std::dec << unsigned(decoded.rs)
+                        << ",\"rt\":" << unsigned(decoded.rt)
+                        << ",\"rd\":" << unsigned(decoded.rd)
+                        << ",\"sa\":" << unsigned(decoded.sa)
+                        << ",\"gpr6_before\":\"0x" << std::hex << std::setw(16) << value
+                        << "\",\"gpr7_before\":\"0x" << std::setw(16) << shiftRegister
+                        << "\",\"effective_shift\":" << std::dec << expectedShift
+                        << ",\"word_result_expected\":\"0x" << std::hex << std::setw(8)
+                        << expectedWord << "\",\"result_expected\":\"0x" << std::setw(16)
+                        << expectedResult << "\",\"status\":\"0x" << std::setw(16)
+                        << cpu->core().cp0Status() << "\",\"cause\":\"0x" << std::setw(16)
+                        << cpu->core().cp0Cause() << "\",\"epc\":\"0x" << std::setw(16)
+                        << cpu->core().cp0Epc() << "\",\"badvaddr\":\"0x" << std::setw(16)
+                        << cpu->core().cp0BadVAddr() << "\",\"count\":" << std::dec
+                        << cpu->core().cp0Count() << ",\"vm_cycles\":" << vm.getCyclesExecuted()
+                        << ",\"delay_armed\":false,\"snapshot_checkpoint\":true}";
+            sllvFrontierRecord = beforeEvent.str();
+
+            const uint64_t beforeCycles = vm.getCyclesExecuted();
+            const uint64_t beforeRetired = context->instructionsExecuted;
+            const uint64_t beforeHi = cpu->core().hi();
+            const uint64_t beforeLo = cpu->core().lo();
+            const std::vector<uint8_t> beforeConsole = board->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot beforeUart = board->Uart()->CaptureSnapshot();
+            didRetire = executeOneAndTrace(vm, *cpu,
+                continuationTraceRecords < continuationTraceLimit
+                    ? static_cast<std::ostream*>(&postSltiuContinuationTrace) : nullptr);
+            if (continuationTraceRecords < continuationTraceLimit) ++continuationTraceRecords;
+            const Mips64FullVmSnapshot afterFirst = vm.captureMips64FullSnapshot();
+            const bool firstStateValid = didRetire && afterFirst.ValidateIntegrity() &&
+                cpu->core().pc() == sllvFrontierPc + 4 &&
+                cpu->core().readGpr(6) == expectedResult &&
+                cpu->core().cp0Count() == 150511U && vm.getCyclesExecuted() == beforeCycles + 1 &&
+                context->instructionsExecuted == beforeRetired + 1 &&
+                cpu->core().cp0Status() == 0x00400080ULL && cpu->core().cp0Cause() == 0 &&
+                cpu->core().cp0Epc() == 0 && cpu->core().cp0BadVAddr() == 0 &&
+                cpu->core().hi() == beforeHi && cpu->core().lo() == beforeLo &&
+                cpu->core().fault() == Mips64Fault::None && !cpu->core().delayArmed() &&
+                vm.getState() != VMState::ERROR &&
+                afterFirst.physicalMemory.reservationGenerations ==
+                    sllvSnapshot.physicalMemory.reservationGenerations &&
+                afterFirst.physicalMemory.nextReservationGeneration ==
+                    sllvSnapshot.physicalMemory.nextReservationGeneration;
+            const bool noDeviceEffects = afterFirst.console.bytes == beforeConsole &&
+                afterFirst.uart.transmitCount == beforeUart.transmitCount &&
+                afterFirst.uart.virtualTimeCycle == beforeUart.virtualTimeCycle + 1;
+            if (!firstStateValid || !noDeviceEffects) {
+                std::ostringstream message;
+                message << "production VM did not retire authentic SLLV correctly"
+                        << " retired=" << didRetire << " pc=0x" << std::hex << cpu->core().pc()
+                        << " gpr6=0x" << cpu->core().readGpr(6)
+                        << " count=" << std::dec << cpu->core().cp0Count()
+                        << " cycles=" << vm.getCyclesExecuted()
+                        << " context_retired=" << context->instructionsExecuted
+                        << " status=0x" << std::hex << cpu->core().cp0Status()
+                        << " cause=0x" << cpu->core().cp0Cause()
+                        << " epc=0x" << cpu->core().cp0Epc()
+                        << " fault=" << Mips64Cpu::faultName(cpu->core().fault())
+                        << " delay=" << cpu->core().delayArmed()
+                        << " vm_error=" << (vm.getState() == VMState::ERROR)
+                        << " reservation_match="
+                        << (afterFirst.physicalMemory.reservationGenerations ==
+                            sllvSnapshot.physicalMemory.reservationGenerations)
+                        << " device_match=" << noDeviceEffects;
+                throw std::runtime_error(message.str());
+            }
+            const std::vector<uint8_t> firstCpu = cpu->core().serialize();
+            const std::vector<uint8_t> firstConsole = board->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot firstUart = board->Uart()->CaptureSnapshot();
+            const uint64_t firstCycles = vm.getCyclesExecuted();
+            const uint64_t firstRetired = context->instructionsExecuted;
+            std::string restoreError;
+            if (!vm.restoreMips64FullSnapshot(sllvSnapshot, &restoreError) ||
+                !restoreError.empty() || cpu->core().serialize() !=
+                    sllvSnapshot.cpus[0].architecturalState ||
+                context->instructionsExecuted != beforeRetired ||
+                vm.getCyclesExecuted() != beforeCycles ||
+                board->ConsoleSink()->Bytes() != beforeConsole ||
+                board->Uart()->CaptureSnapshot().transmitCount != beforeUart.transmitCount ||
+                board->Uart()->CaptureSnapshot().virtualTimeCycle != beforeUart.virtualTimeCycle) {
+                throw std::runtime_error("authentic SLLV restore changed the pre-instruction state: " +
+                                         restoreError);
+            }
+            const bool replayRetired = executeOneAndTrace(vm, *cpu, nullptr);
+            const Ns16550Uart::Snapshot replayUart = board->Uart()->CaptureSnapshot();
+            if (!replayRetired || cpu->core().serialize() != firstCpu ||
+                context->instructionsExecuted != firstRetired || vm.getCyclesExecuted() != firstCycles ||
+                board->ConsoleSink()->Bytes() != firstConsole ||
+                replayUart.transmitCount != firstUart.transmitCount ||
+                replayUart.virtualTimeCycle != firstUart.virtualTimeCycle ||
+                cpu->core().readGpr(6) != expectedResult || cpu->core().pc() != sllvFrontierPc + 4) {
+                throw std::runtime_error("authentic SLLV instruction snapshot replay diverged");
+            }
+            std::ostringstream executionEvent;
+            executionEvent << "{\"type\":\"sllv_execution\",\"gpr6_after\":\"0x"
+                           << std::hex << std::setw(16) << std::setfill('0')
+                           << cpu->core().readGpr(6) << "\",\"pc_after\":\"0x"
+                           << std::setw(16) << cpu->core().pc() << "\",\"count_after\":"
+                           << std::dec << cpu->core().cp0Count() << ",\"vm_cycles_after\":"
+                           << vm.getCyclesExecuted() << ",\"retired_after\":"
+                           << context->instructionsExecuted << ",\"snapshot_replay_verified\":true"
+                           << ",\"snapshot_format_version\":3,\"snapshot_cpu_version\":6"
+                           << ",\"snapshot_cpu_bytes\":1001,\"snapshot_memory_version\":2"
+                           << ",\"snapshot_uart_version\":4,\"snapshot_irq_version\":1}";
+            sllvExecutionRecord = executionEvent.str();
+            sllvFrontierVerified = true;
         } else if (continuePastDsrl32Frontier && stopPc == formerFrontierPc) {
             if (retired != 150041 || vm.getCyclesExecuted() != 150041 ||
                 !stopFetchOk || stopWord != formerFrontierWord) {
@@ -1377,6 +1569,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         }
         if (didRetire) {
             ++retired;
+            if (sllvFrontierVerified && stopPc != sllvFrontierPc) {
+                ++successfulStepsAfterSllv;
+            }
             if (lldFrontierVerified && stopPc != lldFrontierPc) {
                 ++retiredAfterLld;
                 ++successfulStepsAfterLld;
@@ -1396,7 +1591,15 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     }
 
     if (continuePastTneFrontier && !tneFrontierVerified) {
-        throw std::runtime_error("authentic Phase 16 TNE frontier was not reached");
+        std::ostringstream message;
+        message << "authentic Phase 16 TNE frontier was not reached: stop_reason="
+                << stopReason << " stop_pc=0x" << std::hex << stopPc
+                << " stop_word=0x" << stopWord << " attempts=" << std::dec << attempts
+                << " retired=" << retired;
+        throw std::runtime_error(message.str());
+    }
+    if (continuePastSllvFrontier && !sllvFrontierVerified) {
+        throw std::runtime_error("authentic Phase 16 SLLV frontier was not reached");
     }
 
     if (continuePastLldFrontier && lldFrontierVerified &&
@@ -1466,6 +1669,74 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         lldFrontierRecord += ",\"snapshot_replay_verified\":true}";
     }
 
+    if (continuePastSllvFrontier && sllvFrontierVerified &&
+        stopReason == "unsupported_instruction") {
+        const Mips64Decoded next = decodeInstruction(stopWord);
+        if (!stopFetchOk || next.valid || next.fault != Mips64Fault::UnsupportedInstruction ||
+            !sllvSnapshot.ValidateIntegrity()) {
+            throw std::runtime_error("Phase 17 did not stop at a genuine unsupported frontier");
+        }
+        const Mips64FullVmSnapshot firstFinal = vm.captureMips64FullSnapshot();
+        CPUContext* context = vm.getCPUContext(0);
+        const auto* board = vm.getMips64MaltaBootstrapBoard();
+        if (!context || !board || !board->ConsoleSink() || !board->Uart()) {
+            throw std::runtime_error("Phase 17 replay lost CPU or Malta device state");
+        }
+        const uint64_t firstInstructions = context->instructionsExecuted;
+        const uint64_t firstCycles = vm.getCyclesExecuted();
+        const std::vector<uint8_t> firstConsole = board->ConsoleSink()->Bytes();
+        const Ns16550Uart::Snapshot firstUart = board->Uart()->CaptureSnapshot();
+        std::string restoreError;
+        if (!vm.restoreMips64FullSnapshot(sllvSnapshot, &restoreError) || !restoreError.empty() ||
+            cpu->core().serialize() != sllvSnapshot.cpus[0].architecturalState ||
+            context->instructionsExecuted != 150510U || vm.getCyclesExecuted() != 150510U ||
+            board->ConsoleSink()->Bytes() != sllvSnapshot.console.bytes ||
+            board->Uart()->CaptureSnapshot().transmitCount !=
+                sllvSnapshot.uart.transmitCount ||
+            board->Uart()->CaptureSnapshot().virtualTimeCycle !=
+                sllvSnapshot.uart.virtualTimeCycle) {
+            throw std::runtime_error("authentic SLLV continuation restore changed checkpoint state: " +
+                                     restoreError);
+        }
+        const unsigned replaySteps = successfulStepsAfterSllv + 1U;
+        for (unsigned index = 0; index < replaySteps; ++index) {
+            if (!executeOneAndTrace(vm, *cpu, nullptr)) {
+                throw std::runtime_error("SLLV snapshot replay stopped before the next frontier");
+            }
+        }
+        const Mips64Probe replayFetch = cpu->core().probeAddress(cpu->core().pc(), Mips64Access::Fetch);
+        uint8_t replayBytes[4]{};
+        if (!replayFetch.ok) throw std::runtime_error("replayed next frontier did not translate");
+        vm.getMemory().Read(replayFetch.phys, replayBytes, sizeof(replayBytes));
+        const uint32_t replayWord = read32(replayBytes, false);
+        const Mips64FullVmSnapshot replayFinal = vm.captureMips64FullSnapshot();
+        const Ns16550Uart::Snapshot replayUart = board->Uart()->CaptureSnapshot();
+        if (!replayFinal.ValidateIntegrity() || !sameReplayState(firstFinal, replayFinal) ||
+            replayFinal.physicalMemory.reservationGenerations !=
+                firstFinal.physicalMemory.reservationGenerations ||
+            replayFinal.physicalMemory.nextReservationGeneration !=
+                firstFinal.physicalMemory.nextReservationGeneration ||
+            cpu->core().pc() != stopPc || replayFetch.phys != stopPhysical || replayWord != stopWord ||
+            context->instructionsExecuted != firstInstructions || vm.getCyclesExecuted() != firstCycles ||
+            board->ConsoleSink()->Bytes() != firstConsole ||
+            replayUart.transmitCount != firstUart.transmitCount ||
+            replayUart.virtualTimeCycle != firstUart.virtualTimeCycle) {
+            throw std::runtime_error("authentic SLLV continuation replay diverged");
+        }
+        sllvReplayVerified = true;
+        std::ostringstream replayEvent;
+        replayEvent << "{\"type\":\"sllv_continuation_snapshot_replay\",\"checkpoint_pc_va\":\"0x"
+                    << std::hex << std::setw(16) << std::setfill('0') << sllvFrontierPc
+                    << "\",\"steps_including_sllv\":" << std::dec << replaySteps
+                    << ",\"retired_beyond_sllv\":" << successfulStepsAfterSllv
+                    << ",\"next_frontier_pc_va\":\"0x" << std::hex << std::setw(16) << stopPc
+                    << "\",\"next_frontier_instruction\":\"0x" << std::setw(8) << stopWord
+                    << "\",\"total_retired\":" << std::dec << retired
+                    << ",\"total_attempts\":" << attempts
+                    << ",\"snapshot_replay_verified\":true}";
+        sllvReplayRecord = replayEvent.str();
+    }
+
     if (stopReason == "instruction_budget_exhausted") {
         // The budget ended after a successful final step; this is the next
         // PC that would have been attempted if the deterministic budget grew.
@@ -1499,9 +1770,12 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     if (!lldFrontierRecord.empty()) trace << lldFrontierRecord << "\n";
     if (!tneFrontierRecord.empty()) trace << tneFrontierRecord << "\n";
     if (!tneExecutionRecord.empty()) trace << tneExecutionRecord << "\n";
+    if (!sllvFrontierRecord.empty()) trace << sllvFrontierRecord << "\n";
+    if (!sllvExecutionRecord.empty()) trace << sllvExecutionRecord << "\n";
     trace << postSltiuContinuationTrace.str();
     if (!lldScdRecord.empty()) trace << lldScdRecord << "\n";
     if (!lldReplayRecord.empty()) trace << lldReplayRecord << "\n";
+    if (!sllvReplayRecord.empty()) trace << sllvReplayRecord << "\n";
     if (continuePastDsrl32Frontier && formerFrontierVerified && attempts > 150042U) {
         const unsigned attemptedAfterFrontier = attempts - 150042U;
         if (attemptedAfterFrontier > continuationTraceRecords) {
@@ -1541,6 +1815,7 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
           << "\",\"gpr2\":\"0x" << std::setw(16) << cpu->core().readGpr(2)
           << "\",\"gpr12\":\"0x" << std::setw(16) << cpu->core().readGpr(12)
           << "\",\"valid_tlb_entries\":" << std::dec << validTlbEntries
+          << ",\"delay_armed\":" << (cpu->core().delayArmed() ? "true" : "false")
           << ",\"attempted_steps\":" << attempts
           << ",\"retired_from_reset\":" << retired
           << ",\"retired_from_linux_entry\":"
@@ -1550,6 +1825,11 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
           << ",\"sltiu_frontier_verified\":" << (sltiuFrontierVerified ? "true" : "false")
           << ",\"retired_beyond_sltiu_frontier\":"
           << (sltiuFrontierVerified && retired >= 150287 ? retired - 150287 : 0)
+          << ",\"sllv_frontier_verified\":" << (sllvFrontierVerified ? "true" : "false")
+          << ",\"sllv_snapshot_replay_verified\":" << (sllvReplayVerified ? "true" : "false")
+          << ",\"retired_beyond_sllv_frontier\":"
+          << (sllvFrontierVerified && retired >= 150510 ? retired - 150510 : 0)
+          << ",\"successful_steps_after_sllv\":" << successfulStepsAfterSllv
           << ",\"frontier_verified\":" << (formerFrontierVerified ? "true" : "false")
           << ",\"lld_frontier_verified\":" << (lldFrontierVerified ? "true" : "false")
           << ",\"lld_snapshot_replay_verified\":" << (lldReplayVerified ? "true" : "false")
@@ -1669,6 +1949,11 @@ int main(int argc, char** argv) {
         if (argc == 4 && std::string(argv[1]) == "--continue-tne-kernel") {
             constexpr unsigned totalAttemptBudget = 350000;
             return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget, true, true, true);
+        }
+        if (argc == 4 && std::string(argv[1]) == "--continue-sllv-kernel") {
+            constexpr unsigned totalAttemptBudget = 1150511;
+            return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget,
+                                         true, true, true, true);
         }
         testElfValidationBothEndians();
         testLoadPlanRejectsRomAndMmioWithoutPartialRamWrites();

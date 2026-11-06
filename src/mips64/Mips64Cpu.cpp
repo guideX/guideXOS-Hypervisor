@@ -68,6 +68,7 @@ bool supportsMips64LlScCacheAttribute(uint8_t cca) {
 
 // -- SPECIAL funct field -------------------------------------------------------
 constexpr uint8_t kFnSll = 0x00;
+constexpr uint8_t kFnSllv = 0x04;
 constexpr uint8_t kFnSrl = 0x02;
 constexpr uint8_t kFnSra = 0x03;
 constexpr uint8_t kFnJr = 0x08;
@@ -242,6 +243,13 @@ Mips64Decoded decodeInstruction(uint32_t word) {
             Mips64Op mapped = Mips64Op::Invalid;
             switch (funct) {
                 case kFnSll: mapped = Mips64Op::Sll; break;
+                case kFnSllv:
+                    if (decoded.sa != 0) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved SPECIAL shift amount for SLLV");
+                    }
+                    mapped = Mips64Op::Sllv;
+                    break;
                 case kFnSrl: mapped = Mips64Op::Srl; break;
                 case kFnSra: mapped = Mips64Op::Sra; break;
                 case kFnJr: mapped = Mips64Op::Jr; break;
@@ -1401,6 +1409,16 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             // sa is 5 bits by construction, so the shift is always defined.
             writeGpr(decoded.rd, signExtend32(low32(readGpr(decoded.rt)) << decoded.sa));
             break;
+        case Mips64Op::Sllv: {
+            // SLLV is a word operation even on MIPS64: use only the low
+            // 32-bit source and low five shift-count bits, then sign-extend.
+            // Read both operands before writing rd so all register aliases work.
+            const uint32_t value = low32(readGpr(decoded.rt));
+            const unsigned shift = static_cast<unsigned>(readGpr(decoded.rs) & 0x1FULL);
+            const uint32_t wordResult = static_cast<uint32_t>(value << shift);
+            writeGpr(decoded.rd, signExtend32(wordResult));
+            break;
+        }
         case Mips64Op::Srl:
             writeGpr(decoded.rd, signExtend32(low32(readGpr(decoded.rt)) >> decoded.sa));
             break;
@@ -2222,6 +2240,10 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Mtlo:
             std::snprintf(buffer, sizeof(buffer), "%s $%u", name, decoded.rs);
             break;
+        case Mips64Op::Sllv:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, $%u", name,
+                          decoded.rd, decoded.rt, decoded.rs);
+            break;
         case Mips64Op::Sll:
         case Mips64Op::Srl:
         case Mips64Op::Sra:
@@ -2864,6 +2886,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Tlbwi: return "tlbwi";
         case Mips64Op::Tlbwr: return "tlbwr";
         case Mips64Op::Dsrl32: return "dsrl32";
+        case Mips64Op::Sllv: return "sllv";
         default: return "invalid";
     }
 }

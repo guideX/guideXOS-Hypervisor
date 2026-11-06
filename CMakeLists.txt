@@ -1145,6 +1145,21 @@ else()
 endif()
 add_test(NAME Mips64SltiuTests COMMAND test_mips64_sltiu)
 
+# MIPS64-17 architectural qualification for variable word shift-left.
+add_executable(test_mips64_sllv
+    tests/test_mips64_sllv.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_sllv PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_sllv PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_sllv PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64SllvTests COMMAND test_mips64_sllv)
+
 # MIPS64-9 production-scheduler UART interrupt guest and RX/IRQ replay.
 add_executable(test_mips64_interrupt_guest
     tests/test_mips64_irq_vm.cpp

@@ -431,6 +431,8 @@ enum class Mips64Op : uint8_t {
     Sltiu,
     // Atomic reservation operations. Appended to preserve existing enum values.
     Lld, Scd, Tne,
+    // MIPS64r2 variable word shift-left, appended to preserve enum values.
+    Sllv,
 };
 
 struct Mips64ReservationState {
