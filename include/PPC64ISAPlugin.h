@@ -235,6 +235,7 @@ constexpr uint16_t XO_ADDC = 10;
 constexpr uint16_t XO_ADDE = 138;
 constexpr uint16_t XO_SUBF = 40;
 constexpr uint16_t XO_SUBFC = 8;
+constexpr uint16_t XO_SUBFE = 136;
 constexpr uint16_t XO_DIVD = 489;   // signed doubleword divide, OE-capable
 constexpr uint16_t XO_AND = 28;    // no OE form
 constexpr uint16_t XO_OR = 444;    // no OE form
@@ -322,6 +323,11 @@ constexpr uint16_t SPR_PVR = 287;
 constexpr uint32_t XER_SO = 0x80000000U;
 constexpr uint32_t XER_OV = 0x40000000U;
 constexpr uint32_t XER_CA = 0x20000000U;
+// Power ISA v3.1C extends the visible low 32 bits of XER with OV32 at
+// architectural XER[44] and CA32 at XER[45]. The stored u32 uses the
+// architectural MSB-first numbering (architectural bit 44 => u32 bit 19).
+constexpr uint32_t XER_OV32 = 0x00080000U;
+constexpr uint32_t XER_CA32 = 0x00040000U;
 
 // CR field helpers use Power bit numbering: CR bit BI (0-31, MSB-first),
 // CR field BF (0-7) holding {LT,GT,EQ,SO} from MSB to LSB.
@@ -411,6 +417,7 @@ enum class DecodedKind {
     ADDC,       // addc[.]    (X-form, XO9 5; CA update; OE=1 rejected)
     ADDE,       // adde[.]    (X-form, XO9 69; CA in/out; OE=1 rejected)
     SUBFC,      // subfc[.]   (X-form, XO9 4; CA update; OE=1 rejected)
+    SUBFE,      // subfe[o][.] (XO-form, XO9 136; CA in/out)
     DIVD,       // divd[o][.] (XO-form, opcode 31 XO9 489; signed 64-bit)
     AND,        // and[.]     (X-form, XO 28)
     OR,         // or[.]      (X-form, XO 444)
@@ -522,15 +529,18 @@ struct DecodedInstruction {
  *   CR bit BI occupies u32 bit (31 - BI); field BF occupies u32 bits
  *   (28 - 4*BF + [0..3]). All access goes through crGetBit/crGetField/
  *   crSetField so bit numbering lives in exactly one place.
- * - XER stores SO=0x80000000, OV=0x40000000, CA=0x20000000 (the low
- *   32 bits of the architectural XER, i.e. XER[32:63]).
+ * - XER stores SO=0x80000000, OV=0x40000000, CA=0x20000000,
+ *   OV32=0x00080000, and CA32=0x00040000 (the low 32 bits of architectural
+ *   XER, i.e. XER[32:63]); these remain in the existing 32-bit checkpoint
+ *   field, so the serialized state layout is unchanged.
  * - Record-form fixed-point operations set CR0 from the wrapped result
  *   (LT=result<0, GT=result>0, EQ=result==0, SO=XER.SO after any OE
  *   update); non-record forms never touch CR.
- * - OE=1 arithmetic sets XER.OV from the signed-overflow calculation
- *   and accumulates XER.SO (sticky: SO := SO | OV).
- * - Carry producers (addc/adde/subfc/addic/addic.) set XER.CA from the
- *   unsigned carry out; plain add/subf never modify CA.
+ * - OE=1 arithmetic sets XER.OV and XER.OV32 from mode-width and low-word
+ *   signed-overflow calculations, and accumulates XER.SO (sticky).
+ * - Carry producers (addc/adde/subfe/subfc/addic/addic.) set XER.CA for the
+ *   active arithmetic mode and XER.CA32 for the low-word carry; plain
+ *   add/subf never modify either carry field.
  */
 class PPC64ISAState : public ISAState {
 public:

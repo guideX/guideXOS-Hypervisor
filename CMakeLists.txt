@@ -1296,6 +1296,26 @@ endif()
 add_test(NAME PPC64Phase31LinuxReplayTests COMMAND test_ppc64_phase31_linux)
 set_tests_properties(PPC64Phase31LinuxReplayTests PROPERTIES TIMEOUT 1800)
 
+# PPC64 SUBFE carry/overflow semantics and authenticated Linux continuation.
+add_executable(test_ppc64_phase32
+    tests/test_ppc64_phase32.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase32 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase32 PRIVATE
+    PPC64_PHASE32_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase32 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase32 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase32Tests COMMAND test_ppc64_phase32)
+set_tests_properties(PPC64Phase32Tests PROPERTIES TIMEOUT 1800)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

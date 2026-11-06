@@ -130,6 +130,20 @@ bool subOverflows(uint64_t a, uint64_t b, uint64_t result) {
     return ((((b ^ a) & (b ^ result)) >> 63) & 1U) != 0;
 }
 
+bool addOverflows32(uint64_t a, uint64_t b, uint64_t result) {
+    const uint32_t a32 = static_cast<uint32_t>(a);
+    const uint32_t b32 = static_cast<uint32_t>(b);
+    const uint32_t result32 = static_cast<uint32_t>(result);
+    return ((((a32 ^ result32) & (b32 ^ result32)) >> 31U) & 1U) != 0;
+}
+
+bool subOverflows32(uint64_t a, uint64_t b, uint64_t result) {
+    const uint32_t a32 = static_cast<uint32_t>(a);
+    const uint32_t b32 = static_cast<uint32_t>(b);
+    const uint32_t result32 = static_cast<uint32_t>(result);
+    return ((((b32 ^ a32) & (b32 ^ result32)) >> 31U) & 1U) != 0;
+}
+
 uint64_t rotateLeft64(uint64_t value, unsigned shift) {
     shift &= 63U;
     if (shift == 0U) {
@@ -542,9 +556,9 @@ void PPC64ISAPlugin::updateCR0(PPC64ISAState& state, uint64_t result) {
     // CR0 reflects the wrapped 64-bit result even when signed overflow
     // occurred; SO copies the (possibly just-updated) XER.SO.
     uint8_t field = 0;
-    if (static_cast<int64_t>(result) < 0) {
+    if ((result >> 63U) != 0) {
         field |= 0x8U;  // LT
-    } else if (static_cast<int64_t>(result) > 0) {
+    } else if (result != 0) {
         field |= 0x4U;  // GT
     } else {
         field |= 0x2U;  // EQ
@@ -563,12 +577,28 @@ void PPC64ISAPlugin::setXERCA(PPC64ISAState& state, bool carry) {
     }
 }
 
+static void setXERCA32(PPC64ISAState& state, bool carry) {
+    if (carry) {
+        state.xer |= XER_CA32;
+    } else {
+        state.xer &= ~XER_CA32;
+    }
+}
+
 void PPC64ISAPlugin::setXEROverflow(PPC64ISAState& state, bool overflow) {
     if (overflow) {
         state.xer |= XER_OV;
         state.xer |= XER_SO;  // SO is sticky: SO := SO | OV
     } else {
         state.xer &= ~XER_OV;
+    }
+}
+
+static void setXEROverflow32(PPC64ISAState& state, bool overflow) {
+    if (overflow) {
+        state.xer |= XER_OV32;
+    } else {
+        state.xer &= ~XER_OV32;
     }
 }
 
@@ -1578,6 +1608,9 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             } else if (base == XO_SUBFC && !oe) {
                 instr.kind = DecodedKind::SUBFC;
                 instr.supported = true;
+            } else if (base == XO_SUBFE) {
+                instr.kind = DecodedKind::SUBFE;
+                instr.supported = true;
             } else if (combined == XO_AND) {
                 instr.kind = DecodedKind::AND;
                 instr.supported = true;
@@ -1848,6 +1881,15 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             break;
         case DecodedKind::SUBFC:
             out << "subfc";
+            if (instr.rc) {
+                out << ".";
+            }
+            out << " r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << ",r" << static_cast<int>(instr.rb);
+            break;
+        case DecodedKind::SUBFE:
+            out << (instr.oe ? "subfeo" : "subfe");
             if (instr.rc) {
                 out << ".";
             }
@@ -3348,7 +3390,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             state_.gpr[instr.rt] = result;
             // Plain add never touches XER.CA, even on unsigned carry.
             if (instr.oe) {
-                setXEROverflow(state_, addOverflows(a, b, result));
+                const bool overflow32 = addOverflows32(a, b, result);
+                const bool overflow64 = addOverflows(a, b, result);
+                const bool is64BitMode = (state_.msr & MSR_SF) != 0;
+                setXEROverflow(state_, is64BitMode ? overflow64 : overflow32);
+                setXEROverflow32(state_, overflow32);
             }
             if (instr.rc) {
                 updateCR0(state_, result);
@@ -3362,7 +3408,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t result = b - a;  // RT := RB - RA, wraps mod 2^64
             state_.gpr[instr.rt] = result;
             if (instr.oe) {
-                setXEROverflow(state_, subOverflows(a, b, result));
+                const bool overflow32 = subOverflows32(a, b, result);
+                const bool overflow64 = subOverflows(a, b, result);
+                const bool is64BitMode = (state_.msr & MSR_SF) != 0;
+                setXEROverflow(state_, is64BitMode ? overflow64 : overflow32);
+                setXEROverflow32(state_, overflow32);
             }
             if (instr.rc) {
                 updateCR0(state_, result);
@@ -3398,11 +3448,11 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             }
 
             state_.gpr[instr.rt] = quotient;
-            // OE updates OV and sticky SO on every DIVD. The current CPU state
-            // models the legacy SO/OV/CA XER fields; it has no separate OV32
-            // storage, so there is no additional state to update here.
+            // DIVD's multiply/divide overflow is mode-independent and reflects
+            // its doubleword result in both OV and OV32.
             if (instr.oe) {
                 setXEROverflow(state_, exceptional);
+                setXEROverflow32(state_, exceptional);
             }
             if (instr.rc) {
                 // For exceptional operands LT/GT/EQ are architecturally
@@ -3421,7 +3471,13 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t b = static_cast<uint64_t>(signExtend16(instr.simm));
             const uint64_t result = a + b;  // wraps mod 2^64
             state_.gpr[instr.rt] = result;
-            setXERCA(state_, result < a);  // unsigned carry out
+            const uint64_t low32Sum =
+                static_cast<uint32_t>(a) +
+                static_cast<uint64_t>(static_cast<uint32_t>(b));
+            const bool carry32 = (low32Sum >> 32U) != 0;
+            setXERCA(state_, (state_.msr & MSR_SF) != 0
+                ? result < a : carry32);
+            setXERCA32(state_, carry32);
             if (instr.kind == DecodedKind::ADDIC_DOT) {
                 updateCR0(state_, result);
             }
@@ -3433,7 +3489,13 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t b = state_.gpr[instr.rb];
             const uint64_t result = a + b;
             state_.gpr[instr.rt] = result;
-            setXERCA(state_, result < a);
+            const uint64_t low32Sum =
+                static_cast<uint32_t>(a) +
+                static_cast<uint64_t>(static_cast<uint32_t>(b));
+            const bool carry32 = (low32Sum >> 32U) != 0;
+            setXERCA(state_, (state_.msr & MSR_SF) != 0
+                ? result < a : carry32);
+            setXERCA32(state_, carry32);
             if (instr.rc) {
                 updateCR0(state_, result);
             }
@@ -3448,7 +3510,14 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t result = partial + carryIn;
             state_.gpr[instr.rt] = result;
             // Carry out of either half-addition propagates.
-            setXERCA(state_, (partial < a) || (result < partial));
+            const bool carry64 = (partial < a) || (result < partial);
+            const uint64_t low32Sum =
+                static_cast<uint32_t>(a) +
+                static_cast<uint64_t>(static_cast<uint32_t>(b)) + carryIn;
+            const bool carry32 = (low32Sum >> 32U) != 0;
+            setXERCA(state_, (state_.msr & MSR_SF) != 0
+                ? carry64 : carry32);
+            setXERCA32(state_, carry32);
             if (instr.rc) {
                 updateCR0(state_, result);
             }
@@ -3461,9 +3530,72 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t result = b - a;
             state_.gpr[instr.rt] = result;
             // CA is NOT borrow: CA=1 iff the subtraction needs no borrow.
-            setXERCA(state_, b >= a);
+            const bool carry32 = static_cast<uint32_t>(b) >=
+                static_cast<uint32_t>(a);
+            setXERCA(state_, (state_.msr & MSR_SF) != 0
+                ? b >= a : carry32);
+            setXERCA32(state_, carry32);
             if (instr.rc) {
                 updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::SUBFE: {
+            // SUBFE is the full three-operand sum ~RA + RB + CAin. Capture
+            // every input before writing RT so all register aliasings use
+            // the original architectural state.
+            const uint64_t raValue = state_.gpr[instr.ra];
+            const uint64_t rbValue = state_.gpr[instr.rb];
+            const bool carryIn = (state_.xer & XER_CA) != 0;
+            const uint64_t complementedRa = ~raValue;
+            const uint64_t partial = complementedRa + rbValue;
+            const uint64_t result = partial + (carryIn ? 1U : 0U);
+            const bool carry64 = (partial < complementedRa) ||
+                (carryIn && result < partial);
+
+            // CA32 is the carry from the independently evaluated low-order
+            // 32-bit sum, while CA is the full-width carry in 64-bit mode.
+            const uint64_t low32Sum =
+                static_cast<uint32_t>(complementedRa) +
+                static_cast<uint64_t>(static_cast<uint32_t>(rbValue)) +
+                (carryIn ? 1U : 0U);
+            const bool carry32 = (low32Sum >> 32U) != 0;
+            const uint32_t complementedRa32 =
+                static_cast<uint32_t>(complementedRa);
+            const uint32_t rb32 = static_cast<uint32_t>(rbValue);
+            const uint32_t result32 = static_cast<uint32_t>(low32Sum);
+
+            const bool signA64 = (complementedRa >> 63U) != 0;
+            const bool signB64 = (rbValue >> 63U) != 0;
+            const bool signResult64 = (result >> 63U) != 0;
+            const bool overflow64 =
+                signA64 == signB64 && signResult64 != signA64;
+            const bool signA32 = (complementedRa32 >> 31U) != 0;
+            const bool signB32 = (rb32 >> 31U) != 0;
+            const bool signResult32 = (result32 >> 31U) != 0;
+            const bool overflow32 =
+                signA32 == signB32 && signResult32 != signA32;
+
+            const bool is64BitMode = (state_.msr & MSR_SF) != 0;
+            state_.gpr[instr.rt] = result;
+            // In SF=0 mode CA is the carry out of the low word; CA32 always
+            // records that word carry independently of the active mode.
+            setXERCA(state_, is64BitMode ? carry64 : carry32);
+            setXERCA32(state_, carry32);
+            if (instr.oe) {
+                setXEROverflow(state_, is64BitMode ? overflow64 : overflow32);
+                setXEROverflow32(state_, overflow32);
+            }
+            if (instr.rc) {
+                if (is64BitMode) {
+                    updateCR0(state_, result);
+                } else {
+                    const uint64_t wordResult = result32 |
+                        ((result32 & 0x80000000U) != 0
+                            ? 0xFFFFFFFF00000000ULL : 0ULL);
+                    updateCR0(state_, wordResult);
+                }
             }
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;

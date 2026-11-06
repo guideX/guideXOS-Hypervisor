@@ -431,7 +431,7 @@ void testExceptionsStatusAndPreservation() {
             CHECK(result.after.gpr[1] == 0); // documented deterministic choice
             CHECK(result.after.nip == kEntry + 4);
             CHECK(result.after.xer == (oe
-                ? static_cast<uint32_t>(kXerOv | kXerSo | kXerCa)
+                ? static_cast<uint32_t>(kXerOv | kXerSo | kXerCa | XER_OV32)
                 : initialXER));
             CHECK((result.after.cr & 0x0FFFFFFFU) ==
                   (result.before.cr & 0x0FFFFFFFU));
