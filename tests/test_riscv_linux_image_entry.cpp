@@ -5,6 +5,7 @@
 #include <cctype>
 #include <filesystem>
 #include <limits>
+#include <unordered_map>
 
 namespace {
 
@@ -293,12 +294,378 @@ struct LinuxRun {
     std::deque<LinuxStepLine> tailTrace;
 };
 
-LinuxRun RunLinuxEntry(RV64CPU& cpu) {
+struct LinuxSymbols {
+    bool valid = false;
+    uint64_t imageStart = 0;
+    uint64_t bssStart = 0;
+    uint64_t bssStop = 0;
+    uint64_t bootCpuHartId = 0;
+    uint64_t initTask = 0;
+    uint64_t initThreadUnion = 0;
+    uint64_t earlyPgDir = 0;
+    uint64_t trampolinePgDir = 0;
+    uint64_t swapperPgDir = 0;
+    uint64_t relocateEnableMmu = 0;
+    uint64_t setupVm = 0;
+    uint64_t handleException = 0;
+    uint64_t socEarlyInit = 0;
+    uint64_t startKernel = 0;
+    uint64_t headTextAddress = 0;
+    uint64_t headTextOffset = 0;
+    uint64_t headTextSize = 0;
+    std::map<std::string, uint64_t> values;
+
+    uint64_t physical(uint64_t virtualAddress) const {
+        return virtualAddress >= imageStart
+            ? boot_contract::kLinuxImageEntry + (virtualAddress - imageStart) : 0;
+    }
+};
+
+struct BssProgressSample {
+    uint64_t stores = 0;
+    uint64_t address = 0;
+    bool zeroAfterGuestStore = false;
+};
+
+struct BssEvidence {
+    uint64_t loopStorePc = 0;
+    uint64_t loopBranchPc = 0;
+    uint64_t loopExitPc = 0;
+    uint64_t expectedStart = 0;
+    uint64_t expectedStop = 0;
+    uint64_t initialPointer = 0;
+    uint64_t initialStop = 0;
+    uint64_t pointerAt100k = 0;
+    uint64_t stopAt100k = 0;
+    uint64_t storeCountAt100k = 0;
+    uint64_t storesRetired = 0;
+    uint64_t firstStoreAddress = 0;
+    uint64_t lastStoreAddress = 0;
+    uint64_t exitPointer = 0;
+    uint64_t exitStop = 0;
+    bool observedLoopEntry = false;
+    bool boundsMatchSymbols = false;
+    bool loopExitObserved = false;
+    bool allMemoryZero = false;
+    std::string zeroRangeSha256;
+    std::vector<BssProgressSample> progress;
+};
+
+struct LinuxSnapshot {
+    std::string name;
+    std::string detail;
+    uint64_t pc = 0;
+    uint64_t retired = 0;
+    PrivilegeMode privilege = PrivilegeMode::Supervisor;
+    uint64_t satp = 0;
+    std::array<uint64_t, NUM_GENERAL_REGISTERS> registers{};
+};
+
+struct LinuxCsrChange {
+    uint64_t pc = 0;
+    PrivilegeMode privilege = PrivilegeMode::Supervisor;
+    uint16_t csr = 0;
+    uint64_t before = 0;
+    uint64_t after = 0;
+};
+
+struct LinuxTrapEvent {
+    uint64_t pc = 0;
+    uint32_t raw = 0;
+    uint8_t length = 0;
+    std::string disassembly;
+    PrivilegeMode origin = PrivilegeMode::Supervisor;
+    PrivilegeMode target = PrivilegeMode::Machine;
+    PrivilegeMode after = PrivilegeMode::Machine;
+    TrapCause cause = TrapCause::IllegalInstruction;
+    uint64_t interruptCause = 0;
+    uint64_t vector = 0;
+    uint64_t nextPc = 0;
+    uint64_t mcause = 0;
+    uint64_t mepc = 0;
+    uint64_t mtval = 0;
+    uint64_t scause = 0;
+    uint64_t sepc = 0;
+    uint64_t stval = 0;
+    uint64_t mstatus = 0;
+    uint64_t sstatus = 0;
+    uint64_t satp = 0;
+    bool interrupt = false;
+    bool sbiHandled = false;
+    bool progressAfterward = false;
+    uint64_t resumedPc = 0;
+    bool returned = false;
+    uint64_t returnPc = 0;
+    std::string transitionName;
+    bool architecturalTransition = false;
+    std::array<uint64_t, NUM_GENERAL_REGISTERS> registers{};
+};
+
+struct LinuxStage {
+    uint64_t targetRetired = 0;
+    uint64_t actualRetired = 0;
+    uint64_t additionalRetired = 0;
+    uint64_t stepCalls = 0;
+    uint64_t pc = 0;
+    uint64_t lastRetiredPc = 0;
+    uint64_t bssStores = 0;
+};
+
+struct Sv39WalkLevel {
+    unsigned level = 0;
+    uint64_t tableAddress = 0;
+    uint64_t pteAddress = 0;
+    uint64_t pte = 0;
+    bool readable = false;
+};
+
+struct ContinuationEvidence {
+    BssEvidence bss;
+    uint64_t linuxStepCalls = 100000;
+    uint64_t supervisorRetired = 100000;
+    uint64_t machineRetiredAfterHandoff = 0;
+    uint64_t trapHandlerInstructions = 0;
+    uint64_t trapEvents = 0;
+    uint64_t interruptEvents = 0;
+    uint64_t ecallEvents = 0;
+    uint64_t sbiEcalls = 0;
+    uint64_t sfenceVmaCount = 0;
+    uint64_t firstSatpWritePc = 0;
+    uint64_t firstSatpValue = 0;
+    uint64_t finalSatp = 0;
+    uint64_t repeatedArchitecturalStates = 0;
+    std::string stopClassification = "instruction_budget";
+    std::string stopReason = "bounded Linux instruction budget exhausted";
+    bool stoppedAtArchitectureFrontier = false;
+    bool setupVmReached = false;
+    bool satpWritten = false;
+    bool kernelVirtualExecutionReached = false;
+    bool pmpUnchanged = false;
+    bool fdtUnchanged = false;
+    bool uartPrefixPreserved = false;
+    uint64_t handoffRetiredCounter = 0;
+    uint64_t handoffMtime = 0;
+    uint64_t finalMtime = 0;
+    uint64_t handoffMtimecmp = 0;
+    uint64_t finalMtimecmp = 0;
+    uint64_t handoffMmioSequence = 0;
+    uint64_t finalMmioSequence = 0;
+    uint64_t handoffMmioReads = 0;
+    uint64_t finalMmioReads = 0;
+    uint64_t handoffMmioWrites = 0;
+    uint64_t finalMmioWrites = 0;
+    std::vector<LinuxSnapshot> milestones;
+    std::vector<LinuxCsrChange> csrChanges;
+    std::vector<LinuxTrapEvent> traps;
+    std::vector<LinuxStage> stages;
+    std::vector<Sv39WalkLevel> firstPageWalk;
+};
+
+bool InRange(size_t offset, size_t bytes, size_t total) {
+    return offset <= total && bytes <= total - offset;
+}
+
+std::string ElfString(const std::vector<uint8_t>& elf, uint64_t offset,
+                      uint64_t size, uint32_t nameOffset) {
+    if (nameOffset >= size || offset > elf.size() || size > elf.size() - offset) return {};
+    const size_t begin = static_cast<size_t>(offset + nameOffset);
+    size_t end = begin;
+    const size_t limit = static_cast<size_t>(offset + size);
+    while (end < limit && elf[end] != 0) ++end;
+    if (end == limit) return {};
+    return std::string(elf.begin() + static_cast<std::ptrdiff_t>(begin),
+                       elf.begin() + static_cast<std::ptrdiff_t>(end));
+}
+
+std::map<std::string, uint64_t> ParseElfSymbolTable(const std::vector<uint8_t>& elf) {
+    std::map<std::string, uint64_t> symbols;
+    if (elf.size() < 64 || elf[0] != 0x7F || elf[1] != 'E' || elf[2] != 'L' ||
+        elf[3] != 'F' || elf[4] != 2 || elf[5] != 1) return symbols;
+    const uint64_t sectionOffset = Le64(elf, 40);
+    const uint16_t sectionEntrySize = Le16(elf, 58);
+    const uint16_t sectionCount = Le16(elf, 60);
+    if (sectionEntrySize < 64 || sectionCount == 0 || sectionOffset > elf.size() ||
+        static_cast<uint64_t>(sectionCount) * sectionEntrySize > elf.size() - sectionOffset) {
+        return symbols;
+    }
+    struct Section { uint32_t type; uint64_t offset; uint64_t size; uint32_t link; uint64_t entrySize; };
+    std::vector<Section> sections;
+    sections.reserve(sectionCount);
+    for (uint16_t index = 0; index < sectionCount; ++index) {
+        const size_t at = static_cast<size_t>(sectionOffset +
+            static_cast<uint64_t>(index) * sectionEntrySize);
+        sections.push_back({Le32(elf, at + 4), Le64(elf, at + 24), Le64(elf, at + 32),
+                            Le32(elf, at + 40), Le64(elf, at + 56)});
+    }
+    for (const Section& section : sections) {
+        if (section.type != 2 || section.link >= sections.size() || section.entrySize < 24 ||
+            section.offset > elf.size() || section.size > elf.size() - section.offset) continue;
+        const Section& strings = sections[section.link];
+        if (strings.offset > elf.size() || strings.size > elf.size() - strings.offset) continue;
+        const uint64_t count = section.size / section.entrySize;
+        for (uint64_t index = 0; index < count; ++index) {
+            const size_t at = static_cast<size_t>(section.offset + index * section.entrySize);
+            const std::string name = ElfString(elf, strings.offset, strings.size, Le32(elf, at));
+            if (!name.empty()) symbols[name] = Le64(elf, at + 8);
+        }
+    }
+    return symbols;
+}
+
+LinuxSymbols ParseLinuxVmlinux(const std::vector<uint8_t>& elf) {
+    LinuxSymbols symbols;
+    if (elf.size() < 64 || elf[0] != 0x7F || elf[1] != 'E' || elf[2] != 'L' ||
+        elf[3] != 'F' || elf[4] != 2 || elf[5] != 1) return symbols;
+    const uint64_t sectionOffset = Le64(elf, 40);
+    const uint16_t sectionEntrySize = Le16(elf, 58);
+    const uint16_t sectionCount = Le16(elf, 60);
+    const uint16_t sectionNameIndex = Le16(elf, 62);
+    if (sectionEntrySize < 64 || sectionCount == 0 || sectionNameIndex >= sectionCount ||
+        sectionOffset > elf.size() ||
+        static_cast<uint64_t>(sectionCount) * sectionEntrySize > elf.size() - sectionOffset) {
+        return symbols;
+    }
+    struct Section { uint32_t type; uint64_t offset; uint64_t size; uint32_t link; uint64_t address; uint64_t entrySize; };
+    std::vector<Section> sections;
+    sections.reserve(sectionCount);
+    for (uint16_t index = 0; index < sectionCount; ++index) {
+        const size_t at = static_cast<size_t>(sectionOffset +
+            static_cast<uint64_t>(index) * sectionEntrySize);
+        sections.push_back({Le32(elf, at + 4), Le64(elf, at + 24), Le64(elf, at + 32),
+                            Le32(elf, at + 40), Le64(elf, at + 16), Le64(elf, at + 56)});
+    }
+    const Section& sectionNames = sections[sectionNameIndex];
+    const uint64_t sectionNameTableOffset = sectionNames.offset;
+    const uint64_t sectionNameTableSize = sectionNames.size;
+    if (sectionNameTableOffset > elf.size() ||
+        sectionNameTableSize > elf.size() - sectionNameTableOffset) return symbols;
+
+    for (uint16_t index = 0; index < sectionCount; ++index) {
+        const size_t at = static_cast<size_t>(sectionOffset +
+            static_cast<uint64_t>(index) * sectionEntrySize);
+        const std::string name = ElfString(elf, sectionNameTableOffset, sectionNameTableSize,
+                                           Le32(elf, at));
+        if (name == ".head.text") {
+            symbols.headTextAddress = sections[index].address;
+            symbols.headTextOffset = sections[index].offset;
+            symbols.headTextSize = sections[index].size;
+        }
+    }
+
+    for (const Section& section : sections) {
+        if (section.type != 2 || section.link >= sections.size() || section.entrySize < 24 ||
+            section.offset > elf.size() || section.size > elf.size() - section.offset) continue;
+        const Section& strings = sections[section.link];
+        if (strings.offset > elf.size() || strings.size > elf.size() - strings.offset) continue;
+        const uint64_t count = section.size / section.entrySize;
+        for (uint64_t index = 0; index < count; ++index) {
+            const size_t at = static_cast<size_t>(section.offset + index * section.entrySize);
+            const std::string name = ElfString(elf, strings.offset, strings.size, Le32(elf, at));
+            if (!name.empty()) symbols.values[name] = Le64(elf, at + 8);
+        }
+    }
+    const auto get = [&symbols](const char* name) -> uint64_t {
+        const auto found = symbols.values.find(name);
+        return found == symbols.values.end() ? 0 : found->second;
+    };
+    symbols.imageStart = get("_start");
+    symbols.bssStart = get("__bss_start");
+    symbols.bssStop = get("__bss_stop");
+    symbols.bootCpuHartId = get("boot_cpu_hartid");
+    symbols.initTask = get("init_task");
+    symbols.initThreadUnion = get("init_thread_union");
+    symbols.earlyPgDir = get("early_pg_dir");
+    symbols.trampolinePgDir = get("trampoline_pg_dir");
+    symbols.swapperPgDir = get("swapper_pg_dir");
+    symbols.relocateEnableMmu = get("relocate_enable_mmu");
+    symbols.setupVm = get("setup_vm");
+    symbols.handleException = get("handle_exception");
+    symbols.socEarlyInit = get("soc_early_init");
+    symbols.startKernel = get("start_kernel");
+    symbols.valid = symbols.imageStart == 0xFFFFFFFF80000000ULL &&
+        symbols.bssStart == 0xFFFFFFFF810E5000ULL &&
+        symbols.bssStop == 0xFFFFFFFF8113B3A8ULL &&
+        symbols.bootCpuHartId != 0 && symbols.initTask != 0 &&
+        symbols.initThreadUnion != 0 && symbols.earlyPgDir != 0 &&
+        symbols.trampolinePgDir != 0 && symbols.swapperPgDir != 0 &&
+        symbols.relocateEnableMmu != 0 && symbols.setupVm != 0 &&
+        symbols.handleException != 0 && symbols.socEarlyInit != 0 &&
+        symbols.startKernel != 0 && symbols.headTextSize > 0;
+    return symbols;
+}
+
+uint32_t ElfWordAt(const std::vector<uint8_t>& elf, uint64_t offset) {
+    if (!InRange(static_cast<size_t>(offset), 4, elf.size())) return 0;
+    return Le32(elf, static_cast<size_t>(offset));
+}
+
+bool VerifyHeadDisassembly(const std::vector<uint8_t>& vmlinux,
+                           const std::vector<uint8_t>& image,
+                           const LinuxSymbols& symbols) {
+    if (!symbols.valid || symbols.headTextAddress != symbols.imageStart ||
+        symbols.headTextOffset > vmlinux.size() ||
+        symbols.headTextSize > vmlinux.size() - symbols.headTextOffset || image.size() < 0x114) {
+        return false;
+    }
+    static constexpr std::array<size_t, 7> offsets{{0x0, 0xd4, 0x100, 0x104, 0x108, 0x10c, 0x110}};
+    for (const size_t offset : offsets) {
+        if (offset + 4 > symbols.headTextSize || offset + 4 > image.size()) return false;
+        const uint32_t linked = ElfWordAt(vmlinux, symbols.headTextOffset + offset);
+        const uint32_t rawImage = Le32(image, offset);
+        if (linked != rawImage) return false;
+    }
+    return ElfWordAt(vmlinux, symbols.headTextOffset + 0x104) == 0x0006B023U &&
+        ElfWordAt(vmlinux, symbols.headTextOffset + 0x108) == 0x00868693U &&
+        ElfWordAt(vmlinux, symbols.headTextOffset + 0x10c) == 0xFEE6CCE3U;
+}
+
+LinuxRun RunLinuxEntry(RV64CPU& cpu, BssEvidence* bss = nullptr) {
     LinuxRun run;
     run.trace.reserve(kLinuxTraceHeadLimit);
     for (size_t index = 0; index < kLinuxStepBudget; ++index) {
+        const uint64_t pcBefore = cpu.getPC();
+        const uint64_t a3Before = cpu.readGR(13);
+        const uint64_t a4Before = cpu.readGR(14);
         const PrivilegeMode before = cpu.privilege();
         const StepResult step = cpu.step();
+        if (bss != nullptr && pcBefore == bss->loopStorePc && !bss->observedLoopEntry) {
+            bss->observedLoopEntry = true;
+            bss->initialPointer = a3Before;
+            bss->initialStop = a4Before;
+            bss->boundsMatchSymbols = a3Before == bss->expectedStart &&
+                a4Before == bss->expectedStop;
+        }
+        if (bss != nullptr && pcBefore == bss->loopStorePc &&
+            step.outcome == StepOutcome::Ok && step.insn.rawWord == 0x0006B023U &&
+            step.insn.mnemonic == Mnemonic::SD && step.insn.rs2 == 0 &&
+            a3Before >= bss->expectedStart && a3Before < bss->expectedStop) {
+            ++bss->storesRetired;
+            if (bss->firstStoreAddress == 0) bss->firstStoreAddress = a3Before;
+            bss->lastStoreAddress = a3Before;
+            const bool sample = bss->storesRetired == 1 ||
+                (bss->storesRetired % 4096ULL) == 0;
+            if (sample || bss->progress.size() < 2) {
+                uint64_t stored = UINT64_MAX;
+                const bool readable = cpu.readU64(a3Before, stored);
+                bss->progress.push_back({bss->storesRetired, a3Before,
+                                         readable && stored == 0});
+            }
+        }
+        if (bss != nullptr && pcBefore == bss->loopBranchPc &&
+            step.outcome == StepOutcome::Ok && step.insn.rawWord == 0xFEE6CCE3U &&
+            step.nextPc == bss->loopExitPc) {
+            bss->loopExitObserved = true;
+            bss->exitPointer = a3Before;
+            bss->exitStop = a4Before;
+            if (bss->progress.empty() || bss->progress.back().stores != bss->storesRetired) {
+                uint64_t stored = UINT64_MAX;
+                const uint64_t last = bss->storesRetired == 0 ? 0 :
+                    bss->expectedStart + (bss->storesRetired - 1) * 8ULL;
+                const bool readable = bss->storesRetired == 0 || cpu.readU64(last, stored);
+                bss->progress.push_back({bss->storesRetired, last,
+                                         bss->storesRetired == 0 || (readable && stored == 0)});
+            }
+        }
         if (index < kLinuxTraceHeadLimit) {
             run.trace.push_back({step, before, cpu.privilege()});
         } else {
@@ -358,6 +725,851 @@ LinuxRun RunLinuxEntry(RV64CPU& cpu) {
             run.frontierPhysicalAddress = fetch->physicalAddress;
     }
     return run;
+}
+
+LinuxSnapshot CaptureSnapshot(const RV64CPU& cpu, const LinuxRun& run,
+                              const std::string& name, const std::string& detail) {
+    LinuxSnapshot snapshot;
+    snapshot.name = name;
+    snapshot.detail = detail;
+    snapshot.pc = cpu.getPC();
+    snapshot.retired = run.retired;
+    snapshot.privilege = cpu.privilege();
+    snapshot.satp = CsrOrZero(cpu, 0x180);
+    for (size_t index = 0; index < snapshot.registers.size(); ++index)
+        snapshot.registers[index] = cpu.readGR(index);
+    return snapshot;
+}
+
+void RecordMilestone(ContinuationEvidence& evidence, const RV64CPU& cpu,
+                     const LinuxRun& run, const std::string& name,
+                     const std::string& detail) {
+    if (std::any_of(evidence.milestones.begin(), evidence.milestones.end(),
+        [&](const LinuxSnapshot& item) { return item.name == name; })) return;
+    if (evidence.milestones.size() < 128)
+        evidence.milestones.push_back(CaptureSnapshot(cpu, run, name, detail));
+}
+
+uint64_t ArchitecturalStateFingerprint(const RV64CPU& cpu) {
+    uint64_t hash = 1469598103934665603ULL;
+    const auto add = [&hash](uint64_t value) {
+        for (unsigned byte = 0; byte < 8; ++byte) {
+            hash ^= static_cast<uint8_t>(value >> (byte * 8U));
+            hash *= 1099511628211ULL;
+        }
+    };
+    add(cpu.getPC());
+    add(static_cast<uint64_t>(cpu.privilege()));
+    for (size_t index = 1; index < NUM_GENERAL_REGISTERS; ++index) add(cpu.readGR(index));
+    for (const uint16_t csr : {uint16_t{0x100}, uint16_t{0x105}, uint16_t{0x141},
+                               uint16_t{0x142}, uint16_t{0x143}, uint16_t{0x180},
+                               uint16_t{0x300}, uint16_t{0x305}, uint16_t{0x341},
+                               uint16_t{0x342}, uint16_t{0x343}}) {
+        add(CsrOrZero(cpu, csr));
+    }
+    return hash;
+}
+
+bool IsCsrInstruction(Mnemonic mnemonic) {
+    return mnemonic == Mnemonic::CSRRW || mnemonic == Mnemonic::CSRRS ||
+        mnemonic == Mnemonic::CSRRC || mnemonic == Mnemonic::CSRRWI ||
+        mnemonic == Mnemonic::CSRRSI || mnemonic == Mnemonic::CSRRCI;
+}
+
+uint64_t ReadGuestU64(const RV64CPU& cpu, uint64_t address, bool& readable) {
+    uint8_t bytes[8]{};
+    readable = cpu.readPhysical(address, bytes, sizeof(bytes));
+    if (!readable) return 0;
+    uint64_t result = 0;
+    for (unsigned index = 0; index < 8; ++index)
+        result |= static_cast<uint64_t>(bytes[index]) << (index * 8U);
+    return result;
+}
+
+void ObserveBssStep(RV64CPU& cpu, LinuxRun& run, ContinuationEvidence& evidence,
+                    const StepResult& step, uint64_t pcBefore,
+                    uint64_t a3Before, uint64_t a4Before) {
+    BssEvidence& bss = evidence.bss;
+    if (pcBefore == bss.loopStorePc && !bss.observedLoopEntry) {
+        bss.observedLoopEntry = true;
+        bss.initialPointer = a3Before;
+        bss.initialStop = a4Before;
+        bss.boundsMatchSymbols = a3Before == bss.expectedStart &&
+            a4Before == bss.expectedStop;
+    }
+    if (pcBefore == bss.loopStorePc && step.outcome == StepOutcome::Ok &&
+        step.insn.rawWord == 0x0006B023U && step.insn.mnemonic == Mnemonic::SD &&
+        step.insn.rs2 == 0 && a3Before >= bss.expectedStart &&
+        a3Before < bss.expectedStop) {
+        ++bss.storesRetired;
+        if (bss.firstStoreAddress == 0) bss.firstStoreAddress = a3Before;
+        bss.lastStoreAddress = a3Before;
+        if (bss.storesRetired == 1 || (bss.storesRetired % 4096ULL) == 0) {
+            bool readable = false;
+            const uint64_t stored = ReadGuestU64(cpu, a3Before, readable);
+            bss.progress.push_back({bss.storesRetired, a3Before,
+                                    readable && stored == 0});
+        }
+    }
+    if (pcBefore == bss.loopBranchPc && step.outcome == StepOutcome::Ok &&
+        step.insn.rawWord == 0xFEE6CCE3U && step.nextPc == bss.loopExitPc) {
+        bss.loopExitObserved = true;
+        bss.exitPointer = a3Before;
+        bss.exitStop = a4Before;
+        if (bss.progress.empty() || bss.progress.back().stores != bss.storesRetired) {
+            bool readable = false;
+            const uint64_t last = bss.storesRetired == 0 ? 0 :
+                bss.expectedStart + (bss.storesRetired - 1) * 8ULL;
+            const uint64_t stored = bss.storesRetired == 0 ? 0 :
+                ReadGuestU64(cpu, last, readable);
+            bss.progress.push_back({bss.storesRetired, last,
+                bss.storesRetired == 0 || (readable && stored == 0)});
+        }
+        const uint64_t length = bss.expectedStop - bss.expectedStart;
+        if (length <= static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            std::vector<uint8_t> bytes(static_cast<size_t>(length), 0xFF);
+            const bool rangeReadable = cpu.readPhysical(
+                bss.expectedStart, bytes.data(), bytes.size());
+            bss.allMemoryZero = rangeReadable && std::all_of(
+                bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0; });
+            if (rangeReadable) bss.zeroRangeSha256 = Sha256(bytes);
+        }
+        if (bss.allMemoryZero && bss.storesRetired == length / 8ULL) {
+            RecordMilestone(evidence, cpu, run, "bss_clear_completed",
+                            "all linked BSS words were stored by guest SD instructions and read back zero");
+        }
+    }
+}
+
+std::vector<Sv39WalkLevel> CapturePageWalk(const RV64CPU& cpu, uint64_t virtualAddress) {
+    std::vector<Sv39WalkLevel> result;
+    const uint64_t satp = CsrOrZero(cpu, 0x180);
+    if (((satp >> 60) & 0xFULL) != kSatpModeSv39) return result;
+    uint64_t table = (satp & kSatpPpnMask) << 12;
+    for (int level = 2; level >= 0; --level) {
+        const uint64_t vpn = (virtualAddress >> (12U + 9U * static_cast<unsigned>(level))) & 0x1FFULL;
+        const uint64_t pteAddress = table + vpn * 8ULL;
+        bool readable = false;
+        const uint64_t pte = ReadGuestU64(cpu, pteAddress, readable);
+        result.push_back({static_cast<unsigned>(level), table, pteAddress, pte, readable});
+        if (!readable || (pte & 1ULL) == 0) break;
+        if ((pte & 0xEULL) != 0) break;
+        table = ((pte >> 10) & kSatpPpnMask) << 12;
+    }
+    return result;
+}
+
+void RecordTrap(ContinuationEvidence& evidence, const RV64CPU& cpu,
+                const StepResult& step, PrivilegeMode before,
+                const Decoder& decoder) {
+    ++evidence.trapEvents;
+    if (step.interruptTaken) ++evidence.interruptEvents;
+    if (step.trapCause == TrapCause::EcallFromS || step.trapCause == TrapCause::EcallFromM ||
+        step.trapCause == TrapCause::EcallFromU) ++evidence.ecallEvents;
+    if (before == PrivilegeMode::Supervisor && step.trapCause == TrapCause::EcallFromS &&
+        cpu.privilege() == PrivilegeMode::Machine && !step.sbiHandled) {
+        ++evidence.sbiEcalls;
+    }
+    if (evidence.traps.size() >= 128) return;
+    LinuxTrapEvent event;
+    event.pc = step.pc;
+    event.raw = step.insn.rawWord;
+    event.length = step.length;
+    event.disassembly = decoder.Disassemble(step.insn);
+    event.origin = before;
+    event.target = step.trapTarget;
+    event.after = cpu.privilege();
+    event.cause = step.trapCause;
+    event.interruptCause = step.interruptCause;
+    event.vector = step.trapVector;
+    event.nextPc = cpu.getPC();
+    event.mcause = CsrOrZero(cpu, 0x342);
+    event.mepc = CsrOrZero(cpu, 0x341);
+    event.mtval = CsrOrZero(cpu, 0x343);
+    event.scause = CsrOrZero(cpu, 0x142);
+    event.sepc = CsrOrZero(cpu, 0x141);
+    event.stval = CsrOrZero(cpu, 0x143);
+    event.mstatus = CsrOrZero(cpu, 0x300);
+    event.sstatus = CsrOrZero(cpu, 0x100);
+    event.satp = CsrOrZero(cpu, 0x180);
+    event.interrupt = step.interruptTaken;
+    event.sbiHandled = step.sbiHandled;
+    for (size_t index = 0; index < event.registers.size(); ++index)
+        event.registers[index] = cpu.readGR(index);
+    evidence.traps.push_back(std::move(event));
+    const LinuxTrapEvent& captured = evidence.traps.back();
+    if (evidence.firstPageWalk.empty() &&
+        (captured.cause == TrapCause::InstructionPageFault ||
+         captured.cause == TrapCause::LoadPageFault ||
+         captured.cause == TrapCause::StorePageFault)) {
+        const uint64_t faultAddress = captured.origin == PrivilegeMode::Supervisor
+            ? captured.stval : captured.mtval;
+        evidence.firstPageWalk = CapturePageWalk(cpu, faultAddress);
+    }
+}
+
+void CaptureProgressFrontier(RV64CPU& cpu, LinuxRun& run) {
+    run.nextPc = cpu.getPC();
+    run.frontierPrivilegeBefore = cpu.privilege();
+    run.frontier = StepResult{};
+    run.frontier.pc = cpu.getPC();
+    run.frontier.nextPc = cpu.getPC();
+    run.frontier.outcome = StepOutcome::Ok; // The current instruction is inspected, never executed here.
+    const Sv39Translation translation = cpu.translateFetch(run.frontier.pc, 4);
+    if (!translation.ok) return;
+    run.frontierPhysicalAddress = translation.paddr;
+    std::array<uint8_t, 4> bytes{};
+    if (cpu.readPhysical(run.frontierPhysicalAddress, bytes.data(), bytes.size())) {
+        run.frontier.insn = Decoder().Decode(
+            static_cast<uint32_t>(bytes[0]) |
+            (static_cast<uint32_t>(bytes[1]) << 8) |
+            (static_cast<uint32_t>(bytes[2]) << 16) |
+            (static_cast<uint32_t>(bytes[3]) << 24));
+    }
+}
+
+void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
+                           ContinuationEvidence& evidence,
+                           const LinuxSymbols& symbols) {
+    static constexpr std::array<uint64_t, 4> kTotalBudgets{{250000, 1000000, 5000000, 20000000}};
+    static constexpr uint64_t kTrapHandlerInstructionBudget = 250000;
+    static constexpr uint64_t kTrapEventBudget = 4096;
+    static constexpr uint64_t kPersistentStateRepeatLimit = 8192;
+    Decoder decoder;
+    std::unordered_map<uint64_t, std::pair<uint64_t, uint32_t>> repeatedStates;
+    uint64_t trapDepth = 0;
+    bool pendingTrapProgress = false;
+    size_t pendingTrapIndex = 0;
+    uint64_t lastStageTarget = run.retired;
+    run.reachedFrontier = false;
+    run.stopReason.clear();
+    for (const uint64_t target : kTotalBudgets) {
+        if (target <= lastStageTarget || run.reachedFrontier) break;
+        LinuxStage stage;
+        stage.targetRetired = target;
+        const uint64_t retiredAtStageStart = run.retired;
+        const uint64_t callsAtStageStart = evidence.linuxStepCalls;
+        while (run.retired < target && !run.reachedFrontier) {
+            const uint64_t pcBefore = cpu.getPC();
+            const uint64_t a3Before = cpu.readGR(13);
+            const uint64_t a4Before = cpu.readGR(14);
+            const PrivilegeMode privilegeBefore = cpu.privilege();
+            uint16_t csrAddressBefore = 0;
+            uint64_t csrValueBefore = 0;
+            bool hasCsrBefore = false;
+            const uint64_t headPhysical = boot_contract::kLinuxImageEntry;
+            const bool pcInPhysicalHead = pcBefore >= headPhysical &&
+                pcBefore < headPhysical + 0x1000ULL;
+            const bool pcInVirtualHead = pcBefore >= symbols.imageStart &&
+                pcBefore < symbols.imageStart + 0x1000ULL;
+            if (pcInPhysicalHead || pcInVirtualHead) {
+                const uint64_t fetchAddress = pcInPhysicalHead
+                    ? pcBefore : symbols.physical(pcBefore);
+                std::array<uint8_t, 4> bytes{};
+                if (cpu.readPhysical(fetchAddress, bytes.data(), bytes.size())) {
+                    const uint32_t raw = static_cast<uint32_t>(bytes[0]) |
+                        (static_cast<uint32_t>(bytes[1]) << 8) |
+                        (static_cast<uint32_t>(bytes[2]) << 16) |
+                        (static_cast<uint32_t>(bytes[3]) << 24);
+                    const DecodedInstruction decoded = decoder.Decode(raw);
+                    if (IsCsrInstruction(decoded.mnemonic)) {
+                        csrAddressBefore = static_cast<uint16_t>((raw >> 20) & 0xFFFU);
+                        hasCsrBefore = cpu.readCsr(csrAddressBefore, csrValueBefore);
+                    }
+                }
+            }
+            const StepResult step = cpu.step();
+            ++evidence.linuxStepCalls;
+            ++stage.stepCalls;
+            if (run.trace.size() < kLinuxTraceHeadLimit) {
+                run.trace.push_back({step, privilegeBefore, cpu.privilege()});
+            } else {
+                if (run.tailTrace.size() == kLinuxTraceTailLimit)
+                    run.tailTrace.pop_front();
+                run.tailTrace.push_back({step, privilegeBefore, cpu.privilege()});
+            }
+            run.nextPc = cpu.getPC();
+
+            if (pcBefore == symbols.physical(symbols.relocateEnableMmu) ||
+                pcBefore == symbols.relocateEnableMmu) {
+                RecordMilestone(evidence, cpu, run, "relocate_enable_mmu_entered",
+                                "guest PC matched pinned vmlinux symbol");
+            }
+            if (pcBefore == symbols.physical(symbols.setupVm) || pcBefore == symbols.setupVm) {
+                evidence.setupVmReached = true;
+                RecordMilestone(evidence, cpu, run, "setup_vm_entered",
+                                "guest PC matched pinned vmlinux setup_vm symbol");
+            }
+            if (pcBefore == symbols.physical(symbols.socEarlyInit) || pcBefore == symbols.socEarlyInit)
+                RecordMilestone(evidence, cpu, run, "soc_early_init_entered",
+                                "guest PC matched pinned vmlinux symbol");
+            if (pcBefore == symbols.physical(symbols.startKernel) || pcBefore == symbols.startKernel)
+                RecordMilestone(evidence, cpu, run, "start_kernel_entered",
+                                "guest PC matched pinned vmlinux symbol");
+            if (pcBefore >= 0xFFFFFFFF80000000ULL && !evidence.kernelVirtualExecutionReached) {
+                evidence.kernelVirtualExecutionReached = true;
+                RecordMilestone(evidence, cpu, run, "kernel_virtual_address_execution",
+                                "guest executed at a canonical kernel virtual address");
+            }
+
+            if (step.outcome == StepOutcome::Ok) {
+                ++run.retired;
+                run.hasRetired = true;
+                run.lastRetiredPc = step.pc;
+                if (privilegeBefore == PrivilegeMode::Supervisor) ++evidence.supervisorRetired;
+                else if (privilegeBefore == PrivilegeMode::Machine)
+                    ++evidence.machineRetiredAfterHandoff;
+                if (trapDepth != 0) {
+                    ++evidence.trapHandlerInstructions;
+                    if (evidence.trapHandlerInstructions > kTrapHandlerInstructionBudget) {
+                        evidence.stopClassification = "trap_handler_instruction_budget";
+                        evidence.stopReason = "bounded Linux trap-handler instruction budget exhausted";
+                        run.reachedFrontier = true;
+                        run.frontierPrivilegeBefore = cpu.privilege();
+                        CaptureProgressFrontier(cpu, run);
+                        break;
+                    }
+                    if (step.insn.mnemonic == Mnemonic::MRET || step.insn.mnemonic == Mnemonic::SRET) {
+                        --trapDepth;
+                        for (auto trap = evidence.traps.rbegin(); trap != evidence.traps.rend(); ++trap) {
+                            if (trap->progressAfterward && !trap->returned) {
+                                trap->returned = true;
+                                trap->returnPc = step.nextPc;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (pendingTrapProgress) {
+                    evidence.traps[pendingTrapIndex].progressAfterward = true;
+                    evidence.traps[pendingTrapIndex].resumedPc = step.pc;
+                    pendingTrapProgress = false;
+                }
+                ObserveBssStep(cpu, run, evidence, step, pcBefore, a3Before, a4Before);
+
+                const bool isStore = step.insn.mnemonic == Mnemonic::SB ||
+                    step.insn.mnemonic == Mnemonic::SH || step.insn.mnemonic == Mnemonic::SW ||
+                    step.insn.mnemonic == Mnemonic::SD;
+                if (isStore && privilegeBefore == PrivilegeMode::Supervisor) {
+                    const uint64_t storeAddress = cpu.readGR(step.insn.rs1) +
+                        static_cast<uint64_t>(step.insn.immediate);
+                    if (storeAddress == symbols.physical(symbols.bootCpuHartId)) {
+                        bool readable = false;
+                        const uint64_t value = ReadGuestU64(cpu, storeAddress, readable);
+                        RecordMilestone(evidence, cpu, run, "boot_cpu_hartid_initialized",
+                            readable && value == boot_contract::kLinuxBootHartId
+                                ? "guest store wrote hart 0 to boot_cpu_hartid"
+                                : "guest store reached boot_cpu_hartid but readback differed");
+                    }
+                }
+                if (cpu.readGR(4) == symbols.physical(symbols.initTask) ||
+                    cpu.readGR(4) == symbols.initTask) {
+                    RecordMilestone(evidence, cpu, run, "initial_task_pointer_set",
+                                    "tp matched pinned vmlinux init_task symbol");
+                }
+                const uint64_t stackBase = symbols.physical(symbols.initThreadUnion);
+                if (cpu.readGR(2) >= stackBase && cpu.readGR(2) <= stackBase + 0x4000ULL) {
+                    RecordMilestone(evidence, cpu, run, "initial_stack_setup",
+                                    "sp entered the pinned initial thread union stack");
+                }
+                if (run.retired == kLinuxStepBudget) {
+                    evidence.bss.pointerAt100k = cpu.readGR(13);
+                    evidence.bss.stopAt100k = cpu.readGR(14);
+                    evidence.bss.storeCountAt100k =
+                        (evidence.bss.pointerAt100k - evidence.bss.expectedStart) / 8ULL;
+                    RecordMilestone(evidence, cpu, run, "riscv18_100000_instruction_frontier",
+                                    "same CPU continued from the accepted bounded BSS-loop state");
+                }
+
+                if (hasCsrBefore) {
+                    const uint16_t csr = csrAddressBefore;
+                    const uint64_t afterValue = CsrOrZero(cpu, csr);
+                    if (csrValueBefore != afterValue && evidence.csrChanges.size() < 256) {
+                        evidence.csrChanges.push_back({step.pc, privilegeBefore, csr,
+                                                       csrValueBefore, afterValue});
+                        if (csr == 0x105 && afterValue != 0) {
+                            RecordMilestone(evidence, cpu, run,
+                                "early_exception_vector_installed",
+                                "guest changed stvec during early startup");
+                            if (afterValue == symbols.handleException ||
+                                afterValue == symbols.physical(symbols.handleException)) {
+                                RecordMilestone(evidence, cpu, run,
+                                    "kernel_exception_handler_restored",
+                                    "stvec matched the pinned handle_exception symbol");
+                            }
+                        }
+                        if (csr == 0x180 && !evidence.satpWritten) {
+                            evidence.satpWritten = true;
+                            evidence.firstSatpWritePc = step.pc;
+                            evidence.firstSatpValue = afterValue;
+                            RecordMilestone(evidence, cpu, run, "first_satp_write",
+                                "guest wrote satp using the production CSR semantics");
+                        }
+                    }
+                }
+                if (step.insn.mnemonic == Mnemonic::SFENCE_VMA) ++evidence.sfenceVmaCount;
+
+                if (evidence.bss.loopExitObserved && evidence.bss.zeroRangeSha256.empty()) {
+                    evidence.stopClassification = "bss_range_read_failed";
+                    evidence.stopReason = "BSS loop exited but the bounded BSS verification read failed";
+                    run.reachedFrontier = true;
+                    run.frontier = step;
+                    run.frontierPrivilegeBefore = privilegeBefore;
+                    break;
+                }
+            } else if (step.outcome == StepOutcome::Trap) {
+                ++run.traps;
+                if (step.interruptTaken) ++run.interrupts;
+                const size_t trapsBefore = evidence.traps.size();
+                RecordTrap(evidence, cpu, step, privilegeBefore, decoder);
+                const uint64_t satpAfterTrap = CsrOrZero(cpu, 0x180);
+                const bool sv39RelocationTransition = step.trapCause ==
+                        TrapCause::InstructionPageFault &&
+                    privilegeBefore == PrivilegeMode::Supervisor &&
+                    step.trapTarget == PrivilegeMode::Supervisor &&
+                    step.pc == boot_contract::kLinuxImageEntry + 0x98ULL &&
+                    step.trapVector == symbols.imageStart + 0x98ULL &&
+                    ((satpAfterTrap >> 60) & 0xFULL) == kSatpModeSv39;
+                if (evidence.traps.size() > trapsBefore) {
+                    pendingTrapIndex = evidence.traps.size() - 1;
+                    pendingTrapProgress = true;
+                    if (sv39RelocationTransition) {
+                        evidence.traps.back().transitionName =
+                            "sv39_kernel_virtual_alias_relocation";
+                        evidence.traps.back().architecturalTransition = true;
+                        RecordMilestone(evidence, cpu, run,
+                            "sv39_kernel_virtual_alias_transition",
+                            "expected instruction page fault vectored from the unmapped physical alias to the mapped kernel virtual alias");
+                    }
+                }
+                if (!sv39RelocationTransition) ++trapDepth;
+                if (evidence.trapEvents > kTrapEventBudget) {
+                    evidence.stopClassification = "trap_event_budget";
+                    evidence.stopReason = "bounded Linux trap-event budget exhausted";
+                    run.reachedFrontier = true;
+                    run.frontier = step;
+                    run.frontierPrivilegeBefore = privilegeBefore;
+                    break;
+                }
+            } else {
+                run.frontier = step;
+                run.frontierPrivilegeBefore = privilegeBefore;
+                run.reachedFrontier = true;
+                if (step.outcome == StepOutcome::Unsupported) {
+                    evidence.stopClassification = "unsupported_instruction";
+                    evidence.stopReason = "first unsupported Linux instruction";
+                } else if (step.outcome == StepOutcome::Waiting) {
+                    evidence.stopClassification = "persistent_wait";
+                    evidence.stopReason = "Linux hart entered WFI with no locally enabled pending interrupt";
+                } else if (step.outcome == StepOutcome::Halt) {
+                    evidence.stopClassification = "architectural_halt";
+                    evidence.stopReason = "Linux execution returned an architectural halt outcome";
+                } else {
+                    evidence.stopClassification = "architectural_fault";
+                    evidence.stopReason = std::string("Linux step returned ") +
+                        StepOutcomeToString(step.outcome);
+                }
+                break;
+            }
+
+            const uint64_t currentPc = cpu.getPC();
+            const uint64_t state = ArchitecturalStateFingerprint(cpu);
+            auto& repeat = repeatedStates[currentPc];
+            if (repeat.first == state) {
+                ++repeat.second;
+                if (repeat.second >= kPersistentStateRepeatLimit) {
+                    evidence.repeatedArchitecturalStates = repeat.second;
+                    evidence.stopClassification = "architectural_state_nonprogress";
+                    evidence.stopReason = "repeated PC and identical architectural state persisted";
+                    run.reachedFrontier = true;
+                    run.frontierPrivilegeBefore = cpu.privilege();
+                    CaptureProgressFrontier(cpu, run);
+                    break;
+                }
+            } else {
+                repeat.first = state;
+                repeat.second = 0;
+            }
+        }
+        stage.actualRetired = run.retired;
+        stage.additionalRetired = run.retired - retiredAtStageStart;
+        stage.stepCalls = evidence.linuxStepCalls - callsAtStageStart;
+        stage.pc = cpu.getPC();
+        stage.lastRetiredPc = run.lastRetiredPc;
+        stage.bssStores = evidence.bss.storesRetired;
+        evidence.stages.push_back(stage);
+        lastStageTarget = target;
+        if (run.reachedFrontier) break;
+    }
+
+    if (!run.reachedFrontier) {
+        evidence.stopClassification = "instruction_budget";
+        evidence.stopReason = "bounded staged Linux instruction budget exhausted; guest remained in forward progress";
+        CaptureProgressFrontier(cpu, run);
+    }
+    run.stopReason = evidence.stopReason;
+    evidence.finalSatp = CsrOrZero(cpu, 0x180);
+    evidence.finalMtime = cpu.mtime();
+    evidence.finalMtimecmp = cpu.mtimecmp();
+    evidence.finalMmioSequence = cpu.machineMmioEventSequence();
+    evidence.finalMmioReads = cpu.mmioReadCount();
+    evidence.finalMmioWrites = cpu.mmioWriteCount();
+    if (run.reachedFrontier && run.frontier.outcome != StepOutcome::Waiting &&
+        run.frontierPhysicalAddress == 0) {
+        const auto fetch = std::find_if(cpu.pmpTrace().rbegin(), cpu.pmpTrace().rend(),
+            [&](const PmpTraceEvent& event) {
+                return event.kind == PmpTraceKind::PhysicalAccess &&
+                    event.access == AccessType::Fetch && event.hasVirtualAddress &&
+                    event.virtualAddress == run.frontier.pc;
+            });
+        if (fetch != cpu.pmpTrace().rend()) run.frontierPhysicalAddress = fetch->physicalAddress;
+    }
+}
+
+void WriteContinuationArtifacts(const std::filesystem::path& dir,
+                                const std::vector<uint8_t>& firmware,
+                                const std::vector<uint8_t>& firmwareElf,
+                                const std::vector<uint8_t>& image,
+                                const std::vector<uint8_t>& vmlinux,
+                                const std::vector<uint8_t>& config,
+                                const std::vector<uint8_t>& handoffFdt,
+                                const LinuxSymbols& symbols,
+                                const FirmwareRun& firmwareRun,
+                                const LinuxRun& run,
+                                const ContinuationEvidence& evidence,
+                                const RV64CPU& cpu) {
+    Decoder decoder;
+    const auto writeRegisters = [](std::ostream& out,
+                                  const std::array<uint64_t, NUM_GENERAL_REGISTERS>& registers) {
+        out << '[';
+        for (size_t index = 0; index < registers.size(); ++index)
+            out << (index == 0 ? "" : ",") << JsonQuote(Hex(registers[index]));
+        out << ']';
+    };
+    {
+        std::ofstream out(dir / "riscv19-linux-symbols.json", std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n  \"vmlinuxSha256\": \""
+            << Sha256(vmlinux) << "\",\n  \"imageSha256\": \"" << Sha256(image) << "\",\n"
+            << "  \"imageStartVirtual\": \"" << Hex(symbols.imageStart) << "\",\n"
+            << "  \"bssStartVirtual\": \"" << Hex(symbols.bssStart) << "\",\n"
+            << "  \"bssStopVirtual\": \"" << Hex(symbols.bssStop) << "\",\n"
+            << "  \"bssStartPhysical\": \"" << Hex(symbols.physical(symbols.bssStart)) << "\",\n"
+            << "  \"bssStopPhysical\": \"" << Hex(symbols.physical(symbols.bssStop)) << "\",\n"
+            << "  \"boot_cpu_hartidVirtual\": \"" << Hex(symbols.bootCpuHartId) << "\",\n"
+            << "  \"boot_cpu_hartidPhysical\": \"" << Hex(symbols.physical(symbols.bootCpuHartId)) << "\",\n"
+            << "  \"init_taskVirtual\": \"" << Hex(symbols.initTask) << "\",\n"
+            << "  \"init_thread_unionVirtual\": \"" << Hex(symbols.initThreadUnion) << "\",\n"
+            << "  \"early_pg_dirVirtual\": \"" << Hex(symbols.earlyPgDir) << "\",\n"
+            << "  \"trampoline_pg_dirVirtual\": \"" << Hex(symbols.trampolinePgDir) << "\",\n"
+            << "  \"swapper_pg_dirVirtual\": \"" << Hex(symbols.swapperPgDir) << "\",\n"
+            << "  \"relocate_enable_mmuVirtual\": \"" << Hex(symbols.relocateEnableMmu) << "\",\n"
+            << "  \"setup_vmVirtual\": \"" << Hex(symbols.setupVm) << "\",\n"
+            << "  \"handle_exceptionVirtual\": \"" << Hex(symbols.handleException) << "\",\n"
+            << "  \"soc_early_initVirtual\": \"" << Hex(symbols.socEarlyInit) << "\",\n"
+            << "  \"start_kernelVirtual\": \"" << Hex(symbols.startKernel) << "\",\n"
+            << "  \"imageLoopStoreWord\": \"" << Hex(Le32(image, 0x104)) << "\",\n"
+            << "  \"imageLoopIncrementWord\": \"" << Hex(Le32(image, 0x108)) << "\",\n"
+            << "  \"imageLoopBranchWord\": \"" << Hex(Le32(image, 0x10C)) << "\",\n"
+            << "  \"loopStorePc\": \"" << Hex(boot_contract::kLinuxImageEntry + 0x104ULL) << "\",\n"
+            << "  \"loopBranchPc\": \"" << Hex(boot_contract::kLinuxImageEntry + 0x10CULL) << "\",\n"
+            << "  \"loopExitPc\": \"" << Hex(boot_contract::kLinuxImageEntry + 0x110ULL) << "\"\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv19-linux-run-summary.json", std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n  \"phase\": \"RISCV-19\",\n"
+            << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
+            << "  \"linuxImageSha256\": \"" << Sha256(image) << "\",\n"
+            << "  \"vmlinuxSha256\": \"" << Sha256(vmlinux) << "\",\n"
+            << "  \"configSha256\": \"" << Sha256(config) << "\",\n"
+            << "  \"openSbiSha256\": \"" << Sha256(firmware) << "\",\n"
+            << "  \"firmwareSteps\": " << firmwareRun.steps << ",\n"
+            << "  \"firmwareMModeRetired\": " << firmwareRun.machineRetired << ",\n"
+            << "  \"stageRetiredBudgetDomain\": \"post-handoff S-mode Linux plus M-mode OpenSBI guest instructions\",\n"
+            << "  \"postHandoffStepCalls\": " << evidence.linuxStepCalls << ",\n"
+            << "  \"postHandoffRetiredInstructions\": " << run.retired << ",\n"
+            << "  \"linuxRetiredInstructions\": " << evidence.supervisorRetired << ",\n"
+            << "  \"supervisorRetiredInstructions\": " << evidence.supervisorRetired << ",\n"
+            << "  \"machineRetiredAfterHandoff\": " << evidence.machineRetiredAfterHandoff << ",\n"
+            << "  \"trapHandlerInstructions\": " << evidence.trapHandlerInstructions << ",\n"
+            << "  \"trapHandlerInstructionBudget\": 250000,\n"
+            << "  \"trapEventBudget\": 4096,\n"
+            << "  \"trapEvents\": " << evidence.trapEvents << ",\n"
+            << "  \"interruptEvents\": " << evidence.interruptEvents << ",\n"
+            << "  \"ecallEvents\": " << evidence.ecallEvents << ",\n"
+            << "  \"sbiEcalls\": " << evidence.sbiEcalls << ",\n"
+            << "  \"firstLinuxPc\": \"" << Hex(boot_contract::kLinuxImageEntry) << "\",\n"
+            << "  \"lastRetiredPc\": \"" << Hex(run.lastRetiredPc) << "\",\n"
+            << "  \"finalPc\": \"" << Hex(cpu.getPC()) << "\",\n"
+            << "  \"finalPrivilege\": \"" << PrivilegeModeToString(cpu.privilege()) << "\",\n"
+            << "  \"finalSatp\": \"" << Hex(evidence.finalSatp) << "\",\n"
+            << "  \"virtualTimeTicksAtHandoff\": " << evidence.handoffMtime << ",\n"
+            << "  \"virtualTimeTicksFinal\": " << evidence.finalMtime << ",\n"
+            << "  \"virtualTimeTicksRetiredDelta\": "
+            << evidence.finalMtime - evidence.handoffMtime << ",\n"
+            << "  \"firmwareMtimecmpAtHandoff\": \"" << Hex(evidence.handoffMtimecmp) << "\",\n"
+            << "  \"firmwareMtimecmpFinal\": \"" << Hex(evidence.finalMtimecmp) << "\",\n"
+            << "  \"bssStartVirtual\": \"" << Hex(symbols.bssStart) << "\",\n"
+            << "  \"bssStopVirtual\": \"" << Hex(symbols.bssStop) << "\",\n"
+            << "  \"bssStartPhysical\": \"" << Hex(evidence.bss.expectedStart) << "\",\n"
+            << "  \"bssStopPhysical\": \"" << Hex(evidence.bss.expectedStop) << "\",\n"
+            << "  \"bssGuestStoresRetired\": " << evidence.bss.storesRetired << ",\n"
+            << "  \"bssExpectedStores\": " << (evidence.bss.expectedStop -
+                evidence.bss.expectedStart) / 8ULL << ",\n"
+            << "  \"bssLoopExitObserved\": " << (evidence.bss.loopExitObserved ? "true" : "false") << ",\n"
+            << "  \"bssAllZeroAfterExit\": " << (evidence.bss.allMemoryZero ? "true" : "false") << ",\n"
+            << "  \"bssZeroRangeSha256\": \"" << evidence.bss.zeroRangeSha256 << "\",\n"
+            << "  \"setupVmReached\": " << (evidence.setupVmReached ? "true" : "false") << ",\n"
+            << "  \"firstSatpWriteObserved\": " << (evidence.satpWritten ? "true" : "false") << ",\n"
+            << "  \"firstSatpWritePc\": \"" << Hex(evidence.firstSatpWritePc) << "\",\n"
+            << "  \"firstSatpValue\": \"" << Hex(evidence.firstSatpValue) << "\",\n"
+            << "  \"kernelVirtualExecutionReached\": "
+            << (evidence.kernelVirtualExecutionReached ? "true" : "false") << ",\n"
+            << "  \"hostSbiProviderPresent\": false,\n"
+            << "  \"handoffRetiredCounter\": " << evidence.handoffRetiredCounter << ",\n"
+            << "  \"finalRetiredCounter\": " << cpu.instructionsRetired() << ",\n"
+            << "  \"handoffMmioSequence\": " << evidence.handoffMmioSequence << ",\n"
+            << "  \"finalMmioSequence\": " << evidence.finalMmioSequence << ",\n"
+            << "  \"handoffMmioReads\": " << evidence.handoffMmioReads << ",\n"
+            << "  \"finalMmioReads\": " << evidence.finalMmioReads << ",\n"
+            << "  \"handoffMmioWrites\": " << evidence.handoffMmioWrites << ",\n"
+            << "  \"finalMmioWrites\": " << evidence.finalMmioWrites << ",\n"
+            << "  \"fdtSha256AtHandoff\": \"" << Sha256(handoffFdt) << "\",\n"
+            << "  \"stopClassification\": " << JsonQuote(evidence.stopClassification) << ",\n"
+            << "  \"stopReason\": " << JsonQuote(evidence.stopReason) << "\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv19-linux-milestones.json", std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n  \"stages\": [\n";
+        for (size_t index = 0; index < evidence.stages.size(); ++index) {
+            const LinuxStage& stage = evidence.stages[index];
+            out << "    {\"targetRetired\":" << stage.targetRetired
+                << ",\"actualRetired\":" << stage.actualRetired
+                << ",\"additionalRetired\":" << stage.additionalRetired
+                << ",\"stepCalls\":" << stage.stepCalls
+                << ",\"pc\":\"" << Hex(stage.pc)
+                << "\",\"lastRetiredPc\":\"" << Hex(stage.lastRetiredPc)
+                << "\",\"bssStores\":" << stage.bssStores << "}"
+                << (index + 1 == evidence.stages.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"milestones\": [\n";
+        for (size_t index = 0; index < evidence.milestones.size(); ++index) {
+            const LinuxSnapshot& milestone = evidence.milestones[index];
+            out << "    {\"name\":" << JsonQuote(milestone.name)
+                << ",\"detail\":" << JsonQuote(milestone.detail)
+                << ",\"pc\":\"" << Hex(milestone.pc)
+                << "\",\"retired\":" << milestone.retired
+                << ",\"privilege\":\"" << PrivilegeModeToString(milestone.privilege)
+                << "\",\"satp\":\"" << Hex(milestone.satp) << "\",\"registers\":";
+            writeRegisters(out, milestone.registers);
+            out << "}" << (index + 1 == evidence.milestones.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"bss\": {\n"
+            << "    \"observedLoopEntry\": " << (evidence.bss.observedLoopEntry ? "true" : "false") << ",\n"
+            << "    \"boundsMatchSymbols\": " << (evidence.bss.boundsMatchSymbols ? "true" : "false") << ",\n"
+            << "    \"initialA3\": \"" << Hex(evidence.bss.initialPointer) << "\",\n"
+            << "    \"initialA4\": \"" << Hex(evidence.bss.initialStop) << "\",\n"
+            << "    \"a3At100000\": \"" << Hex(evidence.bss.pointerAt100k) << "\",\n"
+            << "    \"storesAt100000\": " << evidence.bss.storeCountAt100k << ",\n"
+            << "    \"storesRetired\": " << evidence.bss.storesRetired << ",\n"
+            << "    \"firstStoreAddress\": \"" << Hex(evidence.bss.firstStoreAddress) << "\",\n"
+            << "    \"lastStoreAddress\": \"" << Hex(evidence.bss.lastStoreAddress) << "\",\n"
+            << "    \"exitPointer\": \"" << Hex(evidence.bss.exitPointer) << "\",\n"
+            << "    \"exitStop\": \"" << Hex(evidence.bss.exitStop) << "\",\n"
+            << "    \"loopExitObserved\": " << (evidence.bss.loopExitObserved ? "true" : "false") << ",\n"
+            << "    \"allMemoryZero\": " << (evidence.bss.allMemoryZero ? "true" : "false") << ",\n"
+            << "    \"zeroRangeSha256\": \"" << evidence.bss.zeroRangeSha256 << "\",\n"
+            << "    \"progressSamples\": [\n";
+        for (size_t index = 0; index < evidence.bss.progress.size(); ++index) {
+            const BssProgressSample& sample = evidence.bss.progress[index];
+            out << "      {\"stores\":" << sample.stores << ",\"address\":\""
+                << Hex(sample.address) << "\",\"zeroAfterGuestStore\":"
+                << (sample.zeroAfterGuestStore ? "true" : "false") << "}"
+                << (index + 1 == evidence.bss.progress.size() ? "\n" : ",\n");
+        }
+        out << "    ]\n  }\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv19-linux-csr-state.json", std::ios::out | std::ios::trunc);
+        static constexpr std::array<std::pair<const char*, uint16_t>, 12> kCsrs{{
+            {"mstatus", uint16_t{0x300}}, {"sstatus", uint16_t{0x100}},
+            {"mie", uint16_t{0x304}}, {"mip", uint16_t{0x344}},
+            {"mtvec", uint16_t{0x305}}, {"stvec", uint16_t{0x105}},
+            {"mepc", uint16_t{0x341}}, {"sepc", uint16_t{0x141}},
+            {"mcause", uint16_t{0x342}}, {"scause", uint16_t{0x142}},
+            {"stval", uint16_t{0x143}}, {"satp", uint16_t{0x180}},
+        }};
+        out << "{\n  \"schemaVersion\": 1,\n  \"pc\": \"" << Hex(cpu.getPC())
+            << "\",\n  \"privilege\": \"" << PrivilegeModeToString(cpu.privilege())
+            << "\",\n  \"registers\":[";
+        for (size_t index = 0; index < NUM_GENERAL_REGISTERS; ++index)
+            out << (index == 0 ? "" : ",") << JsonQuote(Hex(cpu.readGR(index)));
+        out << "],\n  \"csrs\": [\n";
+        for (size_t index = 0; index < kCsrs.size(); ++index)
+            out << "    {\"name\":" << JsonQuote(kCsrs[index].first)
+                << ",\"address\":\"" << Hex(kCsrs[index].second)
+                << "\",\"value\":\"" << Hex(CsrOrZero(cpu, kCsrs[index].second)) << "\"}"
+                << (index + 1 == kCsrs.size() ? "\n" : ",\n");
+        out << "  ],\n  \"csrChanges\": [\n";
+        for (size_t index = 0; index < evidence.csrChanges.size(); ++index) {
+            const LinuxCsrChange& change = evidence.csrChanges[index];
+            out << "    {\"pc\":\"" << Hex(change.pc) << "\",\"privilege\":\""
+                << PrivilegeModeToString(change.privilege) << "\",\"csr\":\""
+                << Hex(change.csr) << "\",\"before\":\"" << Hex(change.before)
+                << "\",\"after\":\"" << Hex(change.after) << "\"}"
+                << (index + 1 == evidence.csrChanges.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"mtime\": " << evidence.finalMtime
+            << ",\n  \"mtimecmp\": \"" << Hex(evidence.finalMtimecmp)
+            << "\",\n  \"pmpEntries\": [\n";
+        for (size_t index = 0; index < cpu.pmpImplementedEntries(); ++index) {
+            PmpEntryView entry;
+            if (!cpu.pmpEntry(index, entry)) continue;
+            out << "    {\"index\":" << index << ",\"active\":"
+                << (entry.active ? "true" : "false") << ",\"config\":\""
+                << Hex(entry.config) << "\",\"lower\":\"" << Hex(entry.lowerBound)
+                << "\",\"upperExclusive\":\"" << Hex(entry.upperBound) << "\"}"
+                << (index + 1 == cpu.pmpImplementedEntries() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"pmpUnchanged\": " << (evidence.pmpUnchanged ? "true" : "false")
+            << ",\n  \"fdtUnchanged\": " << (evidence.fdtUnchanged ? "true" : "false")
+            << ",\n  \"uartPrefixPreserved\": " << (evidence.uartPrefixPreserved ? "true" : "false")
+            << "\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv19-linux-frontier.json", std::ios::out | std::ios::trunc);
+        const StepResult& step = run.frontier;
+        const uint64_t pc = step.pc;
+        uint64_t nearestValue = 0;
+        std::string nearestName;
+        const uint64_t linuxPhysicalEnd = symbols.physical(symbols.bssStop);
+        const bool pcInLinuxVirtual = pc >= symbols.imageStart && pc < symbols.bssStop;
+        const bool pcInLinuxPhysical = pc >= boot_contract::kLinuxImageEntry &&
+            pc < linuxPhysicalEnd;
+        const auto chooseNearest = [&](const std::map<std::string, uint64_t>& table,
+                                       const auto& addressForSymbol) {
+            for (const auto& [name, value] : table) {
+                if (value == 0) continue;
+                const uint64_t address = addressForSymbol(value);
+                if (address <= pc && address >= nearestValue) {
+                    nearestValue = address;
+                    nearestName = name;
+                }
+            }
+        };
+        if (pcInLinuxVirtual) {
+            chooseNearest(symbols.values, [](uint64_t value) { return value; });
+        } else if (pcInLinuxPhysical) {
+            chooseNearest(symbols.values, [&symbols](uint64_t value) {
+                return symbols.physical(value);
+            });
+        } else if (pc >= boot_contract::kFirmwareEntry &&
+                   pc < boot_contract::kFirmwareSlotEnd) {
+            const std::map<std::string, uint64_t> firmwareSymbols =
+                ParseElfSymbolTable(firmwareElf);
+            chooseNearest(firmwareSymbols, [](uint64_t value) { return value; });
+            if (nearestName.empty()) {
+                nearestName = "OpenSBI firmware";
+                nearestValue = boot_contract::kFirmwareEntry;
+            }
+        } else {
+            nearestName = "outside pinned Linux and OpenSBI images";
+        }
+        out << "{\n  \"schemaVersion\": 1,\n  \"classification\": "
+            << JsonQuote(evidence.stopClassification) << ",\n  \"stopReason\": "
+            << JsonQuote(evidence.stopReason) << ",\n  \"executed\": "
+            << (run.reachedFrontier ? "true" : "false") << ",\n"
+            << "  \"pc\": \"" << Hex(pc) << "\",\n  \"raw\": \""
+            << Hex(step.insn.rawWord) << "\",\n  \"instruction\": "
+            << JsonQuote(decoder.Disassemble(step.insn)) << ",\n  \"symbol\": "
+            << JsonQuote(nearestName) << ",\n  \"symbolAddress\": \""
+            << Hex(nearestValue) << "\",\n  \"privilegeBefore\": \""
+            << PrivilegeModeToString(run.frontierPrivilegeBefore) << "\",\n  \"privilegeAfter\": \""
+            << PrivilegeModeToString(cpu.privilege()) << "\",\n  \"trapCause\": \""
+            << (step.outcome == StepOutcome::Trap ? TrapCauseToString(step.trapCause) : "none")
+            << "\",\n  \"trapTarget\": \"" << PrivilegeModeToString(step.trapTarget)
+            << "\",\n  \"trapVector\": \"" << Hex(step.trapVector)
+            << "\",\n  \"sepc\": \"" << Hex(CsrOrZero(cpu, 0x141))
+            << "\",\n  \"scause\": \"" << Hex(CsrOrZero(cpu, 0x142))
+            << "\",\n  \"stval\": \"" << Hex(CsrOrZero(cpu, 0x143))
+            << "\",\n  \"mepc\": \"" << Hex(CsrOrZero(cpu, 0x341))
+            << "\",\n  \"mcause\": \"" << Hex(CsrOrZero(cpu, 0x342))
+            << "\",\n  \"mtval\": \"" << Hex(CsrOrZero(cpu, 0x343))
+            << "\",\n  \"satp\": \"" << Hex(CsrOrZero(cpu, 0x180))
+            << "\",\n  \"mstatus\": \"" << Hex(CsrOrZero(cpu, 0x300))
+            << "\",\n  \"sstatus\": \"" << Hex(CsrOrZero(cpu, 0x100))
+            << "\",\n  \"registers\":";
+        std::array<uint64_t, NUM_GENERAL_REGISTERS> registers{};
+        for (size_t index = 0; index < registers.size(); ++index) registers[index] = cpu.readGR(index);
+        writeRegisters(out, registers);
+        out << ",\n  \"prehistory\": [\n";
+        for (size_t index = 0; index < run.tailTrace.size(); ++index) {
+            const LinuxStepLine& line = run.tailTrace[index];
+            out << "    {\"pc\":\"" << Hex(line.step.pc) << "\",\"raw\":\""
+                << Hex(line.step.insn.rawWord) << "\",\"instruction\":"
+                << JsonQuote(decoder.Disassemble(line.step.insn)) << ",\"outcome\":\""
+                << StepOutcomeToString(line.step.outcome) << "\",\"nextPc\":\""
+                << Hex(line.step.nextPc) << "\"}"
+                << (index + 1 == run.tailTrace.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"traps\": [\n";
+        for (size_t index = 0; index < evidence.traps.size(); ++index) {
+            const LinuxTrapEvent& trap = evidence.traps[index];
+            out << "    {\"pc\":\"" << Hex(trap.pc) << "\",\"raw\":\""
+                << Hex(trap.raw) << "\",\"instruction\":" << JsonQuote(trap.disassembly)
+                << ",\"cause\":\""
+                << (trap.interrupt ? "interrupt" : TrapCauseToString(trap.cause))
+                << "\",\"origin\":\"" << PrivilegeModeToString(trap.origin)
+                << "\",\"target\":\"" << PrivilegeModeToString(trap.target)
+                << "\",\"vector\":\"" << Hex(trap.vector)
+                << "\",\"nextPc\":\"" << Hex(trap.nextPc)
+                << "\",\"scause\":\"" << Hex(trap.scause)
+                << "\",\"sepc\":\"" << Hex(trap.sepc)
+                << "\",\"stval\":\"" << Hex(trap.stval)
+                << "\",\"satp\":\"" << Hex(trap.satp)
+                << "\",\"interrupt\":" << (trap.interrupt ? "true" : "false")
+                << ",\"interruptCause\":" << trap.interruptCause
+                << ",\"progressAfterward\":" << (trap.progressAfterward ? "true" : "false")
+                << ",\"resumedPc\":\"" << Hex(trap.resumedPc)
+                << "\",\"returned\":" << (trap.returned ? "true" : "false")
+                << ",\"returnPc\":\"" << Hex(trap.returnPc)
+                << "\",\"transitionName\":" << JsonQuote(trap.transitionName)
+                << ",\"architecturalTransition\":"
+                << (trap.architecturalTransition ? "true" : "false")
+                << ",\"mcause\":\"" << Hex(trap.mcause)
+                << "\",\"mepc\":\"" << Hex(trap.mepc)
+                << "\",\"mtval\":\"" << Hex(trap.mtval)
+                << "\",\"mstatus\":\"" << Hex(trap.mstatus)
+                << "\",\"sstatus\":\"" << Hex(trap.sstatus)
+                << "\",\"registers\":";
+            writeRegisters(out, trap.registers);
+            out << "}"
+                << (index + 1 == evidence.traps.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"firstPageWalk\": [\n";
+        for (size_t index = 0; index < evidence.firstPageWalk.size(); ++index) {
+            const Sv39WalkLevel& level = evidence.firstPageWalk[index];
+            out << "    {\"level\":" << level.level << ",\"table\":\""
+                << Hex(level.tableAddress) << "\",\"pteAddress\":\""
+                << Hex(level.pteAddress) << "\",\"pte\":\"" << Hex(level.pte)
+                << "\",\"readable\":" << (level.readable ? "true" : "false") << "}"
+                << (index + 1 == evidence.firstPageWalk.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"pmpDeniedEvents\": [\n";
+        const auto& denied = cpu.pmpDeniedTrace();
+        for (size_t index = 0; index < denied.size(); ++index) {
+            const PmpTraceEvent& event = denied[index];
+            out << "    {\"pc\":\"" << Hex(event.pc) << "\",\"virtualAddress\":\""
+                << Hex(event.virtualAddress) << "\",\"physicalAddress\":\""
+                << Hex(event.physicalAddress) << "\",\"size\":" << event.size
+                << ",\"access\":" << JsonQuote(event.access == AccessType::Fetch ? "fetch" :
+                    event.access == AccessType::Load ? "load" : "store")
+                << ",\"privilege\":\"" << PrivilegeModeToString(event.privilege)
+                << "\",\"matchingEntry\":" << static_cast<int>(event.matchingEntry)
+                << ",\"config\":\"" << Hex(event.config) << "\"}"
+                << (index + 1 == denied.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
 }
 
 void WriteImageContract(const std::filesystem::path& dir,
@@ -427,8 +1639,15 @@ void WriteFirmwareTrace(const std::filesystem::path& path,
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 7) {
-        std::cerr << "usage: test_riscv_linux_image_entry fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir\n";
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    constexpr int kExpectedArgc = 9;
+    constexpr const char* kUsage = "usage: test_riscv_linux_startup_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config";
+#else
+    constexpr int kExpectedArgc = 7;
+    constexpr const char* kUsage = "usage: test_riscv_linux_image_entry fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir";
+#endif
+    if (argc != kExpectedArgc) {
+        std::cerr << kUsage << '\n';
         return 2;
     }
     const std::vector<uint8_t> firmware = ReadFile(argv[1]);
@@ -437,6 +1656,27 @@ int main(int argc, char** argv) {
     const std::string manifest = AsString(ReadFile(argv[4]));
     const std::vector<uint8_t> sourceFdt = ReadFile(argv[5]);
     const std::filesystem::path artifactDir(argv[6]);
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    const std::vector<uint8_t> vmlinux = ReadFile(argv[7]);
+    const std::vector<uint8_t> config = ReadFile(argv[8]);
+    const LinuxSymbols symbols = ParseLinuxVmlinux(vmlinux);
+    const bool headDisassemblyMatches = VerifyHeadDisassembly(vmlinux, image, symbols);
+    const std::string expectedConfigHash = Upper(JsonString(manifest, "configSha256"));
+    Expect(!vmlinux.empty() && Sha256(vmlinux) ==
+           "49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093",
+           "pinned Linux v6.12 vmlinux hash matches RISCV-18 provenance");
+    Expect(!config.empty() && Sha256(config) == expectedConfigHash &&
+           expectedConfigHash == "5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB",
+           "pinned Linux v6.12 .config hash matches RISCV-18 provenance");
+    Expect(symbols.valid,
+           "vmlinux ELF symbol table contains the pinned BSS and startup symbols");
+    Expect(headDisassemblyMatches,
+           "linked vmlinux head.S bytes match the Image entry and BSS-loop instructions");
+#else
+    const std::vector<uint8_t> vmlinux;
+    const std::vector<uint8_t> config;
+    const LinuxSymbols symbols;
+#endif
     std::error_code fsError;
     std::filesystem::create_directories(artifactDir, fsError);
     Expect(!fsError, "artifact output directory is created outside the source tree");
@@ -529,6 +1769,16 @@ int main(int argc, char** argv) {
     const uint64_t handoffA0 = cpu.readGR(10);
     const uint64_t handoffA1 = cpu.readGR(11);
     const uint64_t handoffSatp = CsrOrZero(cpu, 0x180);
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    const uint64_t handoffRetiredCounter = cpu.instructionsRetired();
+    const uint64_t handoffStepCounter = cpu.stepsTaken();
+    const uint64_t handoffMtime = cpu.mtime();
+    const uint64_t handoffMtimecmp = cpu.mtimecmp();
+    const uint64_t handoffMmioSequence = cpu.machineMmioEventSequence();
+    const uint64_t handoffMmioReads = cpu.mmioReadCount();
+    const uint64_t handoffMmioWrites = cpu.mmioWriteCount();
+    const std::string handoffUartOutput = cpu.machineUartOutput();
+#endif
     std::vector<std::string> failures;
     const bool actualPmpValid = ComparePmp(cpu, failures);
     Expect(firmwareSaved && firmwareRun.machineRetired > 0 && firmwareRun.handoff,
@@ -592,12 +1842,34 @@ int main(int argc, char** argv) {
            "first S-mode fetch bytes equal the authentic Linux Image header JAL");
 
     LinuxRun linuxRun;
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    ContinuationEvidence continuation;
+    continuation.handoffRetiredCounter = handoffRetiredCounter;
+    continuation.handoffMtime = handoffMtime;
+    continuation.handoffMtimecmp = handoffMtimecmp;
+    continuation.handoffMmioSequence = handoffMmioSequence;
+    continuation.handoffMmioReads = handoffMmioReads;
+    continuation.handoffMmioWrites = handoffMmioWrites;
+    continuation.bss.expectedStart = symbols.physical(symbols.bssStart);
+    continuation.bss.expectedStop = symbols.physical(symbols.bssStop);
+    continuation.bss.loopStorePc = boot_contract::kLinuxImageEntry + 0x104ULL;
+    continuation.bss.loopBranchPc = boot_contract::kLinuxImageEntry + 0x10CULL;
+    continuation.bss.loopExitPc = boot_contract::kLinuxImageEntry + 0x110ULL;
+    RecordMilestone(continuation, cpu, linuxRun, "authentic_opensbi_linux_handoff",
+                    "M-mode OpenSBI MRET entered S-mode Linux with a0=0, a1=FDT, satp=Bare");
+#endif
     const bool handoffStateValid = firmwareRun.handoff &&
         handoffPrivilege == PrivilegeMode::Supervisor &&
         handoffPc == boot_contract::kLinuxImageEntry &&
         handoffA0 == boot_contract::kLinuxBootHartId &&
         handoffA1 == boot_contract::kLinuxFdtAddress && handoffSatp == 0;
-    if (handoffStateValid) linuxRun = RunLinuxEntry(cpu);
+    if (handoffStateValid) {
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+        linuxRun = RunLinuxEntry(cpu, &continuation.bss);
+#else
+        linuxRun = RunLinuxEntry(cpu);
+#endif
+    }
     else linuxRun.stopReason = "Linux execution not started because the OpenSBI entry state failed";
     bool firstBranchRetired = false;
     uint64_t firstBranchTarget = 0;
@@ -615,6 +1887,89 @@ int main(int argc, char** argv) {
            linuxRun.trace.size() + linuxRun.tailTrace.size() <=
                kLinuxTraceHeadLimit + kLinuxTraceTailLimit,
            "Linux entry execution and retained trace remain within explicit bounds");
+
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    const uint64_t acceptedFrontierA3 = cpu.readGR(13);
+    const uint64_t acceptedFrontierA4 = cpu.readGR(14);
+    continuation.bss.pointerAt100k = acceptedFrontierA3;
+    continuation.bss.stopAt100k = acceptedFrontierA4;
+    continuation.bss.storeCountAt100k = continuation.bss.boundsMatchSymbols &&
+        acceptedFrontierA3 >= continuation.bss.expectedStart
+            ? (acceptedFrontierA3 - continuation.bss.expectedStart) / 8ULL : 0;
+    continuation.linuxStepCalls = linuxRun.retired;
+    continuation.supervisorRetired = linuxRun.retired;
+    const bool exactPriorFrontier = linuxRun.retired == 100000 &&
+        linuxRun.traps == 0 && linuxRun.lastRetiredPc == 0x8020010CULL &&
+        linuxRun.nextPc == 0x80200104ULL && !linuxRun.reachedFrontier &&
+        linuxRun.frontier.pc == 0x80200104ULL &&
+        linuxRun.frontier.insn.rawWord == 0x0006B023U &&
+        continuation.bss.observedLoopEntry && continuation.bss.boundsMatchSymbols &&
+        acceptedFrontierA4 == continuation.bss.expectedStop;
+    Expect(exactPriorFrontier,
+           "fresh authentic replay exactly reproduces the RISCV-18 100,000-instruction BSS frontier");
+    const uint64_t expectedStores = (continuation.bss.expectedStop -
+        continuation.bss.expectedStart) / 8ULL;
+    Expect(continuation.bss.storeCountAt100k ==
+               (acceptedFrontierA3 - continuation.bss.expectedStart) / 8ULL &&
+           continuation.bss.storeCountAt100k < expectedStores,
+           "guest a3 records measurable BSS-store progress at the accepted frontier");
+    continuation.stages.push_back({100000, linuxRun.retired, linuxRun.retired,
+        linuxRun.retired, cpu.getPC(), linuxRun.lastRetiredPc,
+        continuation.bss.storesRetired});
+    RecordMilestone(continuation, cpu, linuxRun, "riscv18_100000_instruction_frontier",
+                    "exact PC, decoded instruction, a3/a4 and S-mode state matched the accepted run");
+    const uint64_t pcAtContinuation = cpu.getPC();
+    const uint64_t retiredAtContinuation = cpu.instructionsRetired();
+    const uint64_t mtimeAtContinuation = cpu.mtime();
+    const uint64_t a3AtContinuation = cpu.readGR(13);
+    const uint64_t a4AtContinuation = cpu.readGR(14);
+    Expect(pcAtContinuation == linuxRun.nextPc &&
+           retiredAtContinuation - handoffRetiredCounter == 100000 &&
+           mtimeAtContinuation >= handoffMtime &&
+           a3AtContinuation == acceptedFrontierA3 && a4AtContinuation == acceptedFrontierA4,
+           "continuation starts from the retained CPU, RAM, retirement, timer and register state");
+    ContinueLinuxInStages(cpu, linuxRun, continuation, symbols);
+    Expect(continuation.linuxStepCalls > 100000 &&
+           cpu.stepsTaken() - handoffStepCounter == continuation.linuxStepCalls &&
+           cpu.instructionsRetired() - handoffRetiredCounter == linuxRun.retired,
+           "staged continuation preserves the CPU state and accounts every subsequent step and retirement");
+    Expect(continuation.bss.observedLoopEntry && continuation.bss.boundsMatchSymbols &&
+           continuation.bss.loopExitObserved && continuation.bss.exitPointer ==
+               continuation.bss.expectedStop && continuation.bss.exitStop ==
+               continuation.bss.expectedStop && continuation.bss.storesRetired == expectedStores &&
+           continuation.bss.allMemoryZero,
+           "guest SD loop reaches its linked BSS exit and every BSS byte reads zero");
+    Expect(continuation.setupVmReached || linuxRun.reachedFrontier,
+           "post-BSS continuation reaches setup_vm or records a precise first architectural frontier");
+    Expect(cpu.sbiProvider() == nullptr,
+           "continuation leaves the host SBI provider absent while authentic firmware handles guest calls");
+    std::vector<std::string> continuationFailures;
+    const bool pmpAfterValid = ComparePmp(cpu, continuationFailures);
+    continuation.pmpUnchanged = actualPmpValid && pmpAfterValid;
+    const std::vector<uint8_t> finalFdtAfterContinuation = ReadHandoffFdt(cpu);
+    continuation.fdtUnchanged = !finalFdtAfterContinuation.empty() &&
+        Sha256(finalFdtAfterContinuation) == Sha256(finalFdtBytes);
+    continuation.uartPrefixPreserved = cpu.machineUartOutput().size() >= handoffUartOutput.size() &&
+        cpu.machineUartOutput().compare(0, handoffUartOutput.size(), handoffUartOutput) == 0;
+    Expect(continuation.pmpUnchanged && continuationFailures.empty(),
+           "the complete effective PMP policy remains unchanged through Linux continuation");
+    Expect(continuation.fdtUnchanged && continuation.uartPrefixPreserved,
+           "OpenSBI FDT contents and existing guest UART output persist through continuation");
+    Expect(continuation.finalMtime >= handoffMtime &&
+           cpu.instructionsRetired() - handoffRetiredCounter == linuxRun.retired,
+           "deterministic virtual time and retirement state persist across all execution stages");
+    const uint64_t bssFirst = continuation.bss.expectedStart;
+    const uint64_t bssMiddle = continuation.bss.expectedStart +
+        ((continuation.bss.expectedStop - continuation.bss.expectedStart) / 2ULL & ~7ULL);
+    uint64_t firstBssWord = UINT64_MAX;
+    uint64_t middleBssWord = UINT64_MAX;
+    uint64_t lastBssWord = UINT64_MAX;
+    const bool bssSamplesReadable = cpu.readU64(bssFirst, firstBssWord) &&
+        cpu.readU64(bssMiddle, middleBssWord) &&
+        cpu.readU64(continuation.bss.expectedStop - 8ULL, lastBssWord);
+    Expect(bssSamplesReadable && firstBssWord == 0 && middleBssWord == 0 && lastBssWord == 0,
+           "BSS beginning, midpoint and final guest-written words remain zero");
+#endif
 
     WriteImageContract(artifactDir, planned.plan, image, firmwareLoaded,
                       sourceFdtValid, actualPmpValid);
@@ -868,6 +2223,11 @@ int main(int argc, char** argv) {
         out << "]\n}\n";
     }
 
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    WriteContinuationArtifacts(artifactDir, firmware, firmwareElf, image, vmlinux, config,
+        finalFdtBytes, symbols, firmwareRun, linuxRun, continuation, cpu);
+#endif
+
     std::cout << "OpenSBI: steps=" << firmwareRun.steps
               << " M-retired=" << firmwareRun.machineRetired
               << " S-retired-before-kernel=" << firmwareRun.supervisorRetired
@@ -882,10 +2242,19 @@ int main(int argc, char** argv) {
               << " stop=" << linuxRun.stopReason << '\n'
               << "Artifacts: " << artifactDir.string() << '\n';
     if (g_failures != 0) {
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+        std::cerr << "RISCV-19 Linux startup continuation checks=" << g_checks
+                  << " failures=" << g_failures << '\n';
+#else
         std::cerr << "RISCV-18 Linux entry checks=" << g_checks
                   << " failures=" << g_failures << '\n';
+#endif
         return 1;
     }
+#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+    std::cout << "RISCV-19 Linux startup continuation checks=" << g_checks << " failures=0\n";
+#else
     std::cout << "RISCV-18 Linux entry checks=" << g_checks << " failures=0\n";
+#endif
     return 0;
 }

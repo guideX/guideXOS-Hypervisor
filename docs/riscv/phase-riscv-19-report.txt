@@ -1,0 +1,177 @@
+guideXOS Hypervisor — Phase RISCV-19 Report
+Authentic Linux v6.12 Startup Continuation and First Bounded Frontier
+Date: 2026-11-05
+Outcome: A — authentic Linux cleared BSS and reached subsequent startup milestones
+
+Repository and scope
+--------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV
+Starting HEAD: 128a5076e358654dfd76e0a6c70e533dc1e8a80b
+Starting upstream divergence: 0 ahead / 0 behind
+The RISCV-18 marker selected RISCV-19. The pre-edit Debug baseline passed the
+26 existing RISC-V CTests that do not write the RISCV-18 entry artifacts; the
+unchanged entry executable then passed its 23 checks using a fresh RISCV-19
+baseline artifact directory. This covers all 27 existing RISC-V suites.
+
+The pre-existing untracked Testing/ directory and fixture .build/ directories
+for dual-UART, PLIC/UART, and PMP were preserved. RISCV-18 traces and kernel
+artifacts were not overwritten. Final RISCV-19 evidence is under
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv19-artifacts\final-debug and
+final-release. No IA-64 implementation file or shared .phase was changed. No
+QEMU was run and nothing was pushed.
+
+Pinned artifact provenance
+--------------------------
+Linux source: upstream v6.12, commit
+adc218676eef25575469234709c2d87185ca223a.
+Linux Image SHA-256:
+60ccb1172ffbe4b49cbc4447e7ccb4b705b5d60a9e92d3f10cf02a0d46bbca2c
+vmlinux SHA-256:
+49a047dd85bac9e8da49f89907dfdcc845b8c9c564f9d6eb63ba76f68768d093
+Linux .config SHA-256:
+5dfc1dec7885ea79d1c6ca14262f7ff305d02ac37e74f01ee260cdd7317082ab
+
+OpenSBI: upstream v1.8.1, commit
+74434f255873d74e56cc50aa762d1caf24c099f8.
+fw_jump.bin SHA-256:
+CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+fw_jump.elf SHA-256:
+255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+
+The Linux image, vmlinux, configuration, and firmware were not rebuilt or
+modified. Execution retained the RV64IMA_Zicsr, S-mode, Sv39, one-hart profile
+and the RISCV-18 RAM, FDT, UART, PLIC, ACLINT, and StandardPmp16 configuration.
+
+Reproduced RISCV-18 entry and BSS completion
+--------------------------------------------
+The authentic OpenSBI run retired 12,287,177 steps, including 12,287,139
+M-mode instructions, and made the real MRET handoff. At Linux entry the CPU
+was S-mode with PC=0x80200000, a0=0, a1=0x82200000, and satp=0. No host SBI
+provider was attached. The authentic Image header JAL was retired.
+
+The fresh run reproduced the 100,000-instruction RISCV-18 frontier exactly:
+the last retired PC was 0x8020010c and the next instruction at 0x80200104 was
+`sd zero,0(a3)`. At that point a3=0x81326188, a4=0x8133b3a8, and the guest had
+retired 33,329 stores into BSS.
+
+The linked symbols identify BSS as virtual range
+[0xffffffff810e5000,0xffffffff8113b3a8), which maps to physical range
+[0x812e5000,0x8133b3a8). The guest itself executed all 44,149 doubleword
+stores, reached a3=a4=0x8133b3a8, took the loop exit at Image PC 0x80200110,
+and retired beyond the loop. The last guest store targeted 0x8133b3a0. A
+post-exit verification found every byte zero; SHA-256 of the range was
+3A31D292F5965F1EF94C92D0E99D60716E9C7B6DA2A036FC34A651755EFAC294.
+
+Subsequent authenticated Linux milestones
+------------------------------------------
+Retired counts below are post-handoff guest retirements. At these early
+milestones they are S-mode Linux instructions.
+
+Milestone                              Retired       Observed PC
+-------------------------------------  ------------  --------------------
+BSS clear completed                    132,460       0x80200110
+boot_cpu_hartid initialized            132,463       0x8020011c
+initial task pointer set               132,465       0x80200124
+initial stack setup                    132,467       0x8020012c
+early exception vector installed       132,472       0x80200140
+setup_vm entered                       132,474       0x80a070d0
+relocate_enable_mmu entered            153,784       0x80200044
+first satp write                       153,806       0x80200098
+kernel virtual alias executed          153,806       0xffffffff80000098
+kernel exception vector restored       153,818       0xffffffff800000cc
+soc_early_init entered                 153,827       0xffffffff80803c40
+start_kernel entered                   153,853       0xffffffff80800a68
+
+The first satp write instruction was at 0x80200094 and wrote
+0x80000000000812ee. Linux then took one expected instruction page fault at
+physical alias PC 0x80200098: scause=12, sepc=stval=0x80200098, S-mode target
+vector=0xffffffff80000098. The captured Sv39 walk found the level-2 PTE at
+0x812ee010 was zero for the unmapped physical alias. The guest resumed at the
+mapped kernel virtual alias and continued through relocate_enable_mmu. Linux
+then selected satp=0x8000000000080c05 and restored stvec to the pinned
+handle_exception symbol. This was the expected relocation transition, not an
+unhandled page-table or PMP defect. No PMP denial was recorded.
+
+Final bounded frontier and counters
+-----------------------------------
+The staged total-retirement targets were 100,000, 250,000, 1,000,000,
+5,000,000, and 20,000,000 post-handoff guest instructions. The same CPU and
+guest RAM continued between stages. The final run made 14,373,535 step calls
+and retired 14,373,245 instructions: 14,303,690 S-mode Linux instructions and
+69,555 authentic M-mode OpenSBI handler instructions. Trap-handler work had a
+separate 250,000-instruction budget; its 250,001st counted instruction
+triggered the stop. The independent trap-event budget was 4,096.
+
+The final PC was 0x80019194 in M-mode, at `slli x19,x19,2`, within the pinned
+firmware symbol `sbi_trap_handler` (symbol address 0x80019134). `addr2line` on
+the pinned OpenSBI ELF maps this to /lib/sbi/sbi_trap.c:327. The immediate
+frontier state had mcause=9 (S-mode ECALL), mepc=0xffffffff8000a56c,
+mstatus=0x920, satp=0x80000000000812ef, and the last recorded supervisor
+timer interrupt in scause/sepc. The stop classification is
+`trap_handler_instruction_budget`; this is an execution-policy frontier, not
+an architectural fault or an unsupported Linux instruction.
+
+The run recorded 290 trap events: 153 supervisor ECALLs, 136 interrupts, and
+the single expected Sv39 alias page fault. All 153 ECALLs reached the real
+OpenSBI M-mode vector; the host SBI provider remained absent. The bounded
+event trace shows machine timer cause 7 and supervisor timer cause 5. The
+final timer count advanced deterministically from 12,287,139 to 26,660,384,
+matching the post-handoff retirement delta. PMP entries and the final FDT
+matched handoff state, the UART output retained its handoff prefix, and no
+PMP-denied access occurred.
+
+Debug and Release produced byte-identical run-summary, milestones, frontier,
+CSR-state, and symbol JSON. Their final PCs, CSRs, counters, trap counts,
+virtual time, and BSS checksum matched exactly. The kernel reached
+`start_kernel`, but scheduler initialization, successful console setup, and a
+Linux boot were not established.
+
+The authoritative machine-readable files are `riscv19-linux-run-summary.json`,
+`riscv19-linux-milestones.json`, `riscv19-linux-frontier.json`,
+`riscv19-linux-csr-state.json`, and `riscv19-linux-symbols.json` in each
+configuration directory. Their matching SHA-256 values are, respectively:
+2F5AB5A950BDDE0FA49CC0442D1191272C4265A782A99A207654B701DE198DB6,
+702F1D3E87DEEAD67AA62E8BFBB43D1F318B8C00425FA73B8684916DC35A2BF6,
+9B95D82D4C8F954C47F2F2DE062EF537313E5DA8F0237F1EF5070958F9E7EABF,
+C1D124F4DA39C43B9FA9B756956542D366DBF417978F2C76E36FB3958CAD3136, and
+27FEA2BD23B2E76340A0AC97674ADC7B7FFFB6D486B6565CF7DA124D67F7492B.
+
+Implementation and regressions
+------------------------------
+No production CPU, Sv39, PMP, OpenSBI, or Linux code was changed. The narrow
+RISCV-19 changes add a separate CTest continuation target and bounded evidence
+capture. Interrupts are serialized with their architectural interrupt cause,
+separately from synchronous exception codes; this avoids the overlapping
+numeric cause values from being mislabeled as load/store faults.
+
+Validation results:
+- Existing RISC-V Debug baseline: 26/26 CTests plus the RISCV-18 entry
+  executable checks passed before edits. After the changes, the entry CTest
+  passed in Debug (1/1, 87.25 s) and the new continuation CTest passed in
+  Debug (1/1, 355.70 s).
+- Existing RISC-V Release matrix: 26/26 CTests passed (168.61 s), excluding
+  the artifact-producing entry test. The entry CTest passed in Release
+  (1/1, 12.38 s); the new continuation CTest passed in Release (1/1, 63.13 s).
+  Together these cover all 27 existing suites plus the RISCV-19 suite in both
+  configurations, with the Debug unchanged suites established in the pre-edit
+  baseline.
+- EFI memory-map and IA-64 SAL CTests passed in Debug and Release (2/2 each).
+  Direct IA-64 ACPI, interrupt-controller, and processor interrupt-block tests
+  passed in Debug and Release (3/3 each). No IA-64 implementation was changed.
+- `git diff --check` passed. General `test_watchpoint`, `DebuggerTests`, and
+  `ELFValidationTests` behavior was outside the focused RISC-V/IA-64 matrix and
+  is not claimed as passing here.
+
+Source changes are limited to CMakeLists.txt, the Linux entry/continuation
+test source, this report, the decoder-status record, and `.phase-riscv`. The
+local commit is on RISCV; the final commit ID is in the completion record.
+
+Recommended RISCV-20 target
+--------------------------
+Continue the same pinned kernel after `start_kernel` with a larger independent
+trap-handler budget (at least 500,000 instructions) and the existing bounded
+20,000,000 post-handoff retirement cap. Capture the next Linux-specific ISA,
+MMU, SBI, or device frontier if one occurs. Keep the authentic OpenSBI path and
+do not claim a boot until console and later kernel initialization are
+independently observed.

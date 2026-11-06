@@ -1,4 +1,4 @@
-RISC-V Decoder and Execution Status (updated Phase RISCV-15)
+RISC-V Decoder and Execution Status (updated Phase RISCV-19)
 
 Current decoded instruction families:
 - RV64I
@@ -749,3 +749,22 @@ Validation and next target:
   not broadened in RISCV-18. The
   frontier evidence is in `phase-riscv18-final-debug` artifact
   `riscv-linux-frontier-v1.json`.
+
+--- Phase RISCV-19: authentic Linux startup continuation ---
+
+- With the same pinned Linux v6.12 Image and OpenSBI v1.8.1 firmware, the new
+  continuation target reproduces the 100,000-instruction RISCV-18 frontier,
+  then executes the real BSS loop to completion. The guest performs 44,149
+  doubleword stores across physical range [0x812e5000,0x8133b3a8), exits at
+  the linked `__bss_stop`, and leaves the complete range zero.
+- Linux advances through the initial task and stack setup, `setup_vm`, the
+  first `satp` write, the expected Sv39 physical-to-virtual alias transition,
+  `soc_early_init`, and `start_kernel`. No CPU implementation or ISA support
+  was changed in this phase.
+- Debug and Release produce byte-identical run-summary, milestones, frontier,
+  CSR-state, and symbol JSON. The bounded continuation stops in authentic
+  OpenSBI M-mode `sbi_trap_handler` after its separate trap-handler instruction
+  budget is consumed. The stop is a budget frontier; it is not a Linux fault,
+  unsupported instruction, or successful boot claim. See
+  `phase-riscv-19-report.txt` for hashes, exact counters, trap/MMU evidence,
+  validation results, and the next frontier recommendation.

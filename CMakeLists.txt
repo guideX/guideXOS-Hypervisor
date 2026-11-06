@@ -1179,6 +1179,12 @@ set(RISCV_LINUX_FIXTURE_DIR
 set(RISCV_LINUX_IMAGE_PATH
     "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv18-linux-source/Image"
     CACHE FILEPATH "Path to the pinned Linux v6.12 RV64 Image")
+set(RISCV_LINUX_VMLINUX_PATH
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv18-linux-source/vmlinux"
+    CACHE FILEPATH "Path to the pinned Linux v6.12 RV64 vmlinux")
+set(RISCV_LINUX_CONFIG_PATH
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv18-linux-source/linux-v6.12-rv64-nonefi.config"
+    CACHE FILEPATH "Path to the pinned Linux v6.12 RV64 .config")
 set(RISCV_LINUX_MANIFEST_COPY
     ${CMAKE_CURRENT_BINARY_DIR}/riscv18-linux-manifest.json)
 set(RISCV_LINUX_DTB_COPY
@@ -1216,8 +1222,26 @@ add_test(NAME RiscVLinuxImageEntryTests
                  ${RISCV_LINUX_DTB_COPY}
                  ${CMAKE_CURRENT_BINARY_DIR}/riscv18-$<CONFIG>-artifacts)
 
+add_executable(test_riscv_linux_startup_continuation
+    tests/test_riscv_linux_image_entry.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_startup_continuation
+                           PRIVATE RISCV_LINUX_STARTUP_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_startup_continuation PRIVATE bcrypt)
+add_test(NAME RiscVLinuxStartupContinuationTests
+         COMMAND test_riscv_linux_startup_continuation
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_DTB_COPY}
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv19-$<CONFIG>-artifacts
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_CONFIG_PATH})
+
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
-                                test_riscv_linux_image_entry)
+                                test_riscv_linux_image_entry
+                                test_riscv_linux_startup_continuation)
     if(MSVC)
         target_compile_options(${riscv18_target} PRIVATE /W4)
     else()
