@@ -17,6 +17,7 @@
 
 namespace aarch64 { class AArch64ExecutionSnapshot; }
 namespace aarch64 { class AArch64DeviceSnapshot; }
+namespace aarch64 { class AArch64PhysicalBus; }
 
 namespace ia64 {
 
@@ -166,6 +167,7 @@ public:
 private:
     friend class aarch64::AArch64ExecutionSnapshot;
     friend class aarch64::AArch64DeviceSnapshot;
+    friend class aarch64::AArch64PhysicalBus;
 /**
  * Check if memory access is within bounds
  * @param address Starting address

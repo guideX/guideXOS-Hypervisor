@@ -605,7 +605,11 @@ void testPermissionsAttributesAndFaults() {
     put64(memory, entry, pageDescriptor(0x8000, 0, true, false, false, 1));
     result = AArch64MMU::translate(memory, va, 1, MMUAccess::Read,
         makeTcr(), root, 0, 0xFF, false);
-    CHECK(result.fault == MMUFaultKind::UnsupportedConfiguration); // invalid MAIR slot
+    CHECK(result.success); // MAIR Attr1=0x00 is Device-nGnRnE.
+    CHECK_EQ(0, result.attributes.memoryAttribute);
+    result = AArch64MMU::translate(memory, va, 1, MMUAccess::Read,
+        makeTcr(), root, 0, 0x1FF, false);
+    CHECK(result.fault == MMUFaultKind::UnsupportedConfiguration); // unsupported Attr1 encoding
     put64(memory, entry, pageDescriptor(0x100000000ULL));
     result = AArch64MMU::translate(memory, va, 1, MMUAccess::Read,
         makeTcr(25, 25, 0), root, 0, 0xFF, false);

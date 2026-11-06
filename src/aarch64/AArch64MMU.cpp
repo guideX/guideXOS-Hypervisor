@@ -347,10 +347,13 @@ MMUResult AArch64MMU::translate(const ia64::IMemory& memory,
         }
         const uint8_t attrIndex = static_cast<uint8_t>((descriptor >> 2) & 7u);
         const uint8_t attr = static_cast<uint8_t>((mair >> (attrIndex * 8u)) & 0xFFu);
-        if (attr != 0xFFu && attr != 0x44u) {
+        // Bounded Normal attributes and Device-nGnRnE are supported. Device
+        // accesses are dispatched by AArch64PhysicalBus after this stage-1
+        // translation; no cache or reordering model is implied.
+        if (attr != 0xFFu && attr != 0x44u && attr != 0x00u) {
             return fault(MMUFaultKind::UnsupportedConfiguration, level,
                          static_cast<uint8_t>(0x04u + level),
-                         "MAIR_EL1 AttrIdx does not select supported Normal memory");
+                         "MAIR_EL1 AttrIdx does not select supported Normal or Device-nGnRnE memory");
         }
         const uint8_t shareability = static_cast<uint8_t>((descriptor >> 8) & 3u);
         if (shareability == 1u) {

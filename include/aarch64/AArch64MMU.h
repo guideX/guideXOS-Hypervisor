@@ -53,8 +53,9 @@ struct MMUContext {
 };
 
 // Bounded ARMv8-A EL0/EL1 stage-1 walker: 4 KiB granules, 39/48-bit VAs,
-// up to 48-bit output addresses, and a deliberately small Normal-memory
-// attribute profile. It reads descriptors directly from physical IMemory.
+// up to 48-bit output addresses, and a deliberately small Normal plus
+// Device-nGnRnE attribute profile. It reads descriptors directly from
+// physical IMemory.
 class AArch64MMU {
 public:
     static constexpr uint64_t kPageSize = 4096;

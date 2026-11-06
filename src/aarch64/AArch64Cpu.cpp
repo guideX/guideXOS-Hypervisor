@@ -44,6 +44,7 @@
 // Instruction fetch still requires 4-byte alignment.
 
 #include "aarch64/AArch64Cpu.h"
+#include "aarch64/AArch64PhysicalBus.h"
 
 #include "IMemory.h"
 
@@ -497,7 +498,22 @@ bool Cpu::readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
                           Decoded* fetchFault, uint8_t* status,
                           bool* duringWalk, uint64_t* faultAddress) const {
     if ((effectiveSctlrEl1_ & 1u) == 0) {
-        memory.Read(virtualAddress, destination, size);
+        try {
+            memory.Read(virtualAddress, destination, size);
+        } catch (const AArch64PhysicalAccessFault& exception) {
+            if (exception.kind() != AArch64PhysicalFaultKind::ExternalAbort) throw;
+            if (status != nullptr) *status = 0x10u;
+            if (duringWalk != nullptr) *duringWalk = false;
+            if (faultAddress != nullptr) *faultAddress = virtualAddress;
+            if (fetchFault != nullptr) {
+                fetchFault->hasMemoryAbort = true;
+                fetchFault->memoryAbortInstruction = access == MMUAccess::Instruction;
+                fetchFault->memoryAbortWrite = access == MMUAccess::Write;
+                fetchFault->memoryAbortWalk = false;
+                fetchFault->memoryAbortStatus = 0x10u;
+            }
+            return false;
+        }
         return true;
     }
     const auto fail = [&](uint8_t dfsc, bool walk, uint64_t faultVa) {
@@ -515,7 +531,8 @@ bool Cpu::readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
     };
     if (size == 0) return true;
     if (!addressRangeIsRepresentable(virtualAddress, size)) return fail(0x00, false, virtualAddress);
-    struct Segment { uint64_t pa; size_t offset; size_t size; };
+    struct Segment { uint64_t pa; size_t offset; size_t size; uint8_t attribute; };
+    const auto* physicalBus = dynamic_cast<const AArch64PhysicalMemory*>(&memory);
     std::vector<Segment> segments;
     size_t completed = 0;
     while (completed < size) {
@@ -525,18 +542,33 @@ bool Cpu::readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
         const size_t count = (size - completed < pageRemaining) ? size - completed : pageRemaining;
         const MMUResult translated = translateGuestAddress(memory, va, access);
         if (!translated.success) return fail(translated.faultStatus, translated.duringTableWalk, va);
-        const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
-        if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
-            const uint64_t validBytes = translated.physicalAddress > total
-                ? 0 : total - translated.physicalAddress;
-            return fail(0x10, false, va + (validBytes < count ? validBytes : count));
+        if (physicalBus == nullptr) {
+            const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
+            if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
+                const uint64_t validBytes = translated.physicalAddress > total
+                    ? 0 : total - translated.physicalAddress;
+                return fail(0x10, false, va + (validBytes < count ? validBytes : count));
+            }
+        } else if (physicalBus->containsMmioRange(translated.physicalAddress, count)) {
+            if (translated.attributes.memoryAttribute != 0x00u) {
+                return fail(0x10, false, va);
+            }
+            // A device access is one transaction. Do not split it at a page
+            // boundary or turn a paired access into multiple register calls.
+            if (size != 4 || segments.size() != 0 || count != size) {
+                return fail(0x10, false, va);
+            }
         }
-        segments.push_back({translated.physicalAddress, completed, count});
+        segments.push_back({translated.physicalAddress, completed, count,
+                            translated.attributes.memoryAttribute});
         completed += count;
     }
     for (const Segment& segment : segments) {
         try {
             memory.Read(segment.pa, destination + segment.offset, segment.size);
+        } catch (const AArch64PhysicalAccessFault& exception) {
+            if (exception.kind() != AArch64PhysicalFaultKind::ExternalAbort) throw;
+            return fail(0x10, false, virtualAddress + segment.offset);
         } catch (...) {
             return fail(0x10, false, virtualAddress + segment.offset);
         }
@@ -549,7 +581,15 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
                            uint8_t* status, bool* duringWalk,
                            uint64_t* faultAddress) {
     if ((effectiveSctlrEl1_ & 1u) == 0) {
-        memory.Write(virtualAddress, source, size);
+        try {
+            memory.Write(virtualAddress, source, size);
+        } catch (const AArch64PhysicalAccessFault& exception) {
+            if (exception.kind() != AArch64PhysicalFaultKind::ExternalAbort) throw;
+            if (status != nullptr) *status = 0x10u;
+            if (duringWalk != nullptr) *duringWalk = false;
+            if (faultAddress != nullptr) *faultAddress = virtualAddress;
+            return false;
+        }
         return true;
     }
     const auto fail = [&](uint8_t dfsc, bool walk, uint64_t faultVa) {
@@ -560,7 +600,8 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
     };
     if (size == 0) return true;
     if (!addressRangeIsRepresentable(virtualAddress, size)) return fail(0x00, false, virtualAddress);
-    struct Segment { uint64_t pa; size_t offset; size_t size; };
+    struct Segment { uint64_t pa; size_t offset; size_t size; uint8_t attribute; };
+    const auto* physicalBus = dynamic_cast<const AArch64PhysicalMemory*>(&memory);
     std::vector<Segment> segments;
     size_t completed = 0;
     while (completed < size) {
@@ -570,13 +611,23 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
         const size_t count = (size - completed < pageRemaining) ? size - completed : pageRemaining;
         const MMUResult translated = translateGuestAddress(memory, va, MMUAccess::Write);
         if (!translated.success) return fail(translated.faultStatus, translated.duringTableWalk, va);
-        const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
-        if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
-            const uint64_t validBytes = translated.physicalAddress > total
-                ? 0 : total - translated.physicalAddress;
-            return fail(0x10, false, va + (validBytes < count ? validBytes : count));
+        if (physicalBus == nullptr) {
+            const uint64_t total = static_cast<uint64_t>(memory.GetTotalSize());
+            if (translated.physicalAddress > total || count > total - translated.physicalAddress) {
+                const uint64_t validBytes = translated.physicalAddress > total
+                    ? 0 : total - translated.physicalAddress;
+                return fail(0x10, false, va + (validBytes < count ? validBytes : count));
+            }
+        } else if (physicalBus->containsMmioRange(translated.physicalAddress, count)) {
+            if (translated.attributes.memoryAttribute != 0x00u) {
+                return fail(0x10, false, va);
+            }
+            if (size != 4 || segments.size() != 0 || count != size) {
+                return fail(0x10, false, va);
+            }
         }
-        segments.push_back({translated.physicalAddress, completed, count});
+        segments.push_back({translated.physicalAddress, completed, count,
+                            translated.attributes.memoryAttribute});
         completed += count;
     }
     // Translate and bounds-check the entire virtual range before the first
@@ -584,6 +635,9 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
     for (const Segment& segment : segments) {
         try {
             memory.Write(segment.pa, source + segment.offset, segment.size);
+        } catch (const AArch64PhysicalAccessFault& exception) {
+            if (exception.kind() != AArch64PhysicalFaultKind::ExternalAbort) throw;
+            return fail(0x10, false, virtualAddress + segment.offset);
         } catch (...) {
             return fail(0x10, false, virtualAddress + segment.offset);
         }

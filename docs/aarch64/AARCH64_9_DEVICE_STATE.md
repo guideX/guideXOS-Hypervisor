@@ -2,12 +2,12 @@
 
 ## Outcome
 
-**Outcome: `AARCH64_DEVICE_STATE_PARTIAL`.** This phase adds bounded device
-ownership, lifecycle callbacks, interrupt-source state, a v2 complete snapshot
-envelope, and a transactional restore path. The implementation deliberately
-does not advance `docs/aarch64/.phase`: the complete required malformed-input
-matrix, all topology mismatch variants, and the full concurrent lifecycle
-qualification have not been completed.
+**Final outcome: `AARCH64_DEVICE_STATE_ACCEPTED`.** The registry, interrupt
+source lifecycle, v2 complete snapshot envelope, and transactional restore
+path passed the final qualification recorded at the end of this report. The
+earlier sections retain chronological implementation notes; their interim
+partial status is superseded by the final acceptance evidence below. The
+architecture-local marker now records AARCH64-9 complete and AARCH64-10 next.
 
 The supported execution profile is still one production AArch64 CPU, the
 existing EL0/EL1 Stage-1 MMU, and contiguous zero-based `ia64::Memory` RAM with

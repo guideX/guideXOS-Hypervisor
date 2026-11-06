@@ -18,6 +18,16 @@ inline constexpr std::size_t kMaxDeviceTypeIdBytes = 63;
 
 enum class AArch64InterruptMode : uint8_t { Level = 1, Edge = 2 };
 
+enum class AArch64MmioAccessResult : uint8_t {
+    Success = 0,
+    ExternalAbort = 1,
+    Unsupported = 2,
+    Unmapped = 3
+};
+
+inline constexpr std::size_t kMaxAArch64MmioRegions = 64;
+inline constexpr uint64_t kMaxAArch64MmioRegionBytes = 16ULL * 1024ULL * 1024ULL;
+
 struct AArch64InterruptSourceState {
     uint64_t id = 0;
     uint64_t ownerDeviceId = 0;
@@ -54,6 +64,24 @@ public:
         std::unique_ptr<AArch64DeviceRestoreToken> token) noexcept = 0;
 };
 
+// Optional interface for a stateful device that owns one physical MMIO
+// aperture. The registry publishes this range together with device
+// registration and removes it before destroying the owner.
+class AArch64MMIODevice {
+public:
+    virtual ~AArch64MMIODevice() = default;
+    virtual uint64_t mmioBase() const noexcept = 0;
+    virtual uint64_t mmioApertureBytes() const noexcept = 0;
+    virtual uint64_t mmioAlignment() const noexcept = 0;
+    virtual uint32_t supportedMmioWidths() const noexcept = 0; // bit N means N-byte access
+    virtual AArch64MmioAccessResult readMmio(uint64_t offset, uint8_t* bytes,
+                                             std::size_t size) = 0;
+    virtual AArch64MmioAccessResult writeMmio(uint64_t offset,
+                                              const uint8_t* bytes,
+                                              std::size_t size) = 0;
+    virtual uint64_t interruptSourceId() const noexcept { return 0; }
+};
+
 // Per-machine owner of snapshot-capable devices and their interrupt outputs.
 // The registry owns devices through unique_ptr; IDs are logical guest/platform
 // identities and never derive from host addresses or registration order.
@@ -87,12 +115,31 @@ public:
 
 private:
     friend class AArch64DeviceSnapshot;
+    friend class AArch64PhysicalBus;
+    friend class AArch64PL011;
     struct RegisteredDevice {
         std::unique_ptr<AArch64StatefulDevice> device;
+        AArch64MMIODevice* mmio = nullptr;
         std::string type;
         uint32_t schema = 0;
         std::size_t maxStateBytes = 0;
     };
+    struct MmioRegion {
+        uint64_t base = 0;
+        uint64_t size = 0;
+        uint64_t end = 0;
+        uint64_t owner = 0;
+        uint32_t supportedWidths = 0;
+        AArch64MMIODevice* device = nullptr;
+    };
+    bool bindPhysicalRam(uint64_t ramBytes, const void* ramIdentity,
+                         std::string* error);
+    bool containsMmioRange(uint64_t address, std::size_t size) const;
+    AArch64MmioAccessResult accessMmio(uint64_t address, uint8_t* bytes,
+                                       std::size_t size, bool write);
+    bool beginDeviceOperation(uint64_t ownerId, AArch64StatefulDevice*& device,
+                              std::string* error);
+    void endDeviceOperation() noexcept;
     bool beginSnapshot(std::vector<AArch64StatefulDevice*>& devices,
                       std::vector<AArch64InterruptSourceState>& sources,
                       std::string* error);
@@ -100,8 +147,13 @@ private:
 
     mutable std::mutex mutex_;
     bool snapshotActive_ = false;
+    std::size_t activeDeviceOperations_ = 0;
+    bool physicalRamBound_ = false;
+    uint64_t physicalRamBytes_ = 0;
+    const void* physicalRamIdentity_ = nullptr;
     std::map<uint64_t, RegisteredDevice> devices_;
     std::map<uint64_t, AArch64InterruptSourceState> sources_;
+    std::map<uint64_t, MmioRegion> mmioRegions_;
 };
 
 } // namespace aarch64

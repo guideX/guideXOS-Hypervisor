@@ -691,6 +691,7 @@ add_test(NAME AArch64MMUTests COMMAND test_aarch64_mmu)
 add_test(NAME AArch64TLBTests COMMAND test_aarch64_tlb)
 add_test(NAME AArch64SnapshotTests COMMAND test_aarch64_snapshot)
 add_test(NAME AArch64DeviceSnapshotTests COMMAND test_aarch64_device_snapshot)
+add_test(NAME AArch64PL011Tests COMMAND test_aarch64_pl011)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 
 # Installation rules (optional)
@@ -891,9 +892,24 @@ add_executable(test_aarch64_device_snapshot
     ${HEADERS}
 )
 
+# AARCH64-10: production physical MMIO dispatch, PL011 r1p5 behavior,
+# guest-visible UART programs, Device-memory translation, and replay.
+add_executable(test_aarch64_pl011
+    tests/test_aarch64_pl011.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    src/aarch64/AArch64DeviceState.cpp
+    src/aarch64/AArch64DeviceSnapshot.cpp
+    src/aarch64/AArch64PhysicalBus.cpp
+    src/aarch64/AArch64PL011.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
     target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_pl011 PRIVATE ws2_32 bcrypt)
 endif()
 
 if(WIN32)
@@ -909,9 +925,11 @@ endif()
 if(MSVC)
     target_compile_options(test_aarch64_snapshot PRIVATE /W4)
     target_compile_options(test_aarch64_device_snapshot PRIVATE /W4)
+    target_compile_options(test_aarch64_pl011 PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_pl011 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
