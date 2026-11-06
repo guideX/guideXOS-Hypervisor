@@ -86,7 +86,10 @@ Final Phase 32 replay artifacts are under `E:\CodexArtifacts\guideXOS_Hypervisor
 - Full CTest included PPC64 Phases 1–31, VM checkpoint, arithmetic/decoder, exception, translation/relocation, SAL, and console cases. The final Phase 32 target was rebuilt and rerun after the final evidence and stop-state assertions were added.
 - Standalone IA-64 checks passed: ACPI firmware, interrupt controller, and processor interrupt block.
 - `git diff --check` passed. QEMU differential qualification remains `QEMU_REFERENCE_PENDING`; QEMU was not launched.
-- The marker advances to `last_completed=PPC64-32`, `next_expected=PPC64-33` only after the validated local commits. The implementation commit SHA, final worktree state, final HEAD, and push status are recorded at closeout.
+- The marker advances to `last_completed=PPC64-32`, `next_expected=PPC64-33` only after the validated local commits.
+- Implementation commit: `1db6871d06f0db75e1e50027768368a25295ce3d` (`PPC64-32 implement SUBFE and qualify Linux`).
+- A documentation-only closeout commit follows the implementation commit; it is the final HEAD. Final branch status is `PPC64`, two commits ahead and zero behind `origin/PPC64`; the worktree is clean after closeout.
+- The ignored `build/` directory was retained. Push status: **not pushed**.
 
 ## Limits
 
