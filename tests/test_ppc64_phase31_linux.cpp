@@ -843,9 +843,14 @@ void testAuthenticLinux() {
     CHECK(first.totalRetired == second.totalRetired);
     CHECK(first.retiredAfterTdi == second.retiredAfterTdi);
     CHECK(first.stopClass == second.stopClass);
-    CHECK(first.stopWord == 0x7D296910U && second.stopWord == first.stopWord);
-    CHECK(first.stopDisassembly == "<unsupported ppc64 opcode 31>" &&
+    CHECK(first.stopWord == 0x7C7143A6U && second.stopWord == first.stopWord);
+    CHECK(first.stopDisassembly == "mtspr 273,r3 ; unsupported SPR" &&
           second.stopDisassembly == first.stopDisassembly);
+    CHECK(first.retiredAfterTdi == 11U &&
+          second.retiredAfterTdi == first.retiredAfterTdi);
+    CHECK(first.totalRetired == 2'641'070ULL);
+    CHECK(first.final.nip == 0xC000000000034D48ULL &&
+          second.final.nip == first.final.nip);
     CHECK(sameState(first.preTdi, second.preTdi));
     CHECK(sameState(first.postTdi, second.postTdi));
     CHECK(sameState(first.final, second.final));

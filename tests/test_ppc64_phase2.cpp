@@ -212,9 +212,14 @@ static void testOverflowSticky() {
     Memory mem(4096);
     const uint64_t kMax = 0x7FFFFFFFFFFFFFFFULL;
     const uint64_t kMin = 0x8000000000000000ULL;
+    const auto reset64BitMode = [&cpu]() {
+        setState(cpu);
+        auto& state = dynamic_cast<ppc64::PPC64ISAState&>(cpu.getState());
+        state.msr = ppc64::MSR_SF;
+    };
 
     // addo: INT64_MAX + 1 -> INT64_MIN, OV=1, SO=1 (sticky set).
-    setState(cpu);
+    reset64BitMode();
     cpu.writeGPR(4, kMax);
     cpu.writeGPR(5, 1);
     CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, true, 266, false)) == ISAExecutionResult::CONTINUE);
@@ -232,7 +237,7 @@ static void testOverflowSticky() {
     CHECK((cpu.getXER() & ppc64::XER_SO) != 0);
 
     // Plain add (OE=0) on overflowing values: wraps, touches nothing.
-    setState(cpu);
+    reset64BitMode();
     cpu.writeGPR(4, kMax);
     cpu.writeGPR(5, 1);
     CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, false, 266, false)) == ISAExecutionResult::CONTINUE);
@@ -241,14 +246,14 @@ static void testOverflowSticky() {
     CHECK(cpu.getCR() == 0);
 
     // addo. combines OV/SO with CR0 (result negative -> LT|SO).
-    setState(cpu);
+    reset64BitMode();
     cpu.writeGPR(4, kMax);
     cpu.writeGPR(5, 1);
     CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, true, 266, true)) == ISAExecutionResult::CONTINUE);
     CHECK(crField(cpu.getCR(), 0) == (0x8 | 0x1));
 
     // subfo underflow: INT64_MIN - 1 -> INT64_MAX, OV=1, SO=1.
-    setState(cpu);
+    reset64BitMode();
     cpu.writeGPR(4, 1);
     cpu.writeGPR(5, kMin);
     CHECK(runOne(cpu, mem, encodeXO(3, 4, 5, true, 40, false)) == ISAExecutionResult::CONTINUE);
