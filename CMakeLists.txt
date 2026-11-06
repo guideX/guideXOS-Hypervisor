@@ -692,7 +692,9 @@ add_test(NAME AArch64TLBTests COMMAND test_aarch64_tlb)
 add_test(NAME AArch64SnapshotTests COMMAND test_aarch64_snapshot)
 add_test(NAME AArch64DeviceSnapshotTests COMMAND test_aarch64_device_snapshot)
 add_test(NAME AArch64PL011Tests COMMAND test_aarch64_pl011)
+add_test(NAME AArch64GenericTimerTests COMMAND test_aarch64_generic_timer)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
+set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -906,10 +908,26 @@ add_executable(test_aarch64_pl011
     ${HEADERS}
 )
 
+# AARCH64-11: genuine system-register Generic Timer access, instruction-retired
+# virtual time, level outputs, timer-aware snapshot replay, and PL011 coexistence.
+add_executable(test_aarch64_generic_timer
+    tests/test_aarch64_generic_timer.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    src/aarch64/AArch64DeviceState.cpp
+    src/aarch64/AArch64DeviceSnapshot.cpp
+    src/aarch64/AArch64PhysicalBus.cpp
+    src/aarch64/AArch64PL011.cpp
+    src/aarch64/AArch64GenericTimer.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
     target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_pl011 PRIVATE ws2_32 bcrypt)
+    target_link_libraries(test_aarch64_generic_timer PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)
@@ -926,10 +944,12 @@ if(MSVC)
     target_compile_options(test_aarch64_snapshot PRIVATE /W4)
     target_compile_options(test_aarch64_device_snapshot PRIVATE /W4)
     target_compile_options(test_aarch64_pl011 PRIVATE /W4)
+    target_compile_options(test_aarch64_generic_timer PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_pl011 PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_generic_timer PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

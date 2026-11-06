@@ -62,6 +62,17 @@ public:
                               std::string* error) const = 0;
     virtual void commitRestore(
         std::unique_ptr<AArch64DeviceRestoreToken> token) noexcept = 0;
+
+    // Devices with derived or multiple interrupt outputs may validate their
+    // serialized state against the snapshot's separately owned source records.
+    // The default keeps existing single-device contracts source-agnostic.
+    virtual bool validateInterruptSourceState(
+        const uint8_t* state, std::size_t size,
+        const std::vector<AArch64InterruptSourceState>& sources,
+        std::string* error) const {
+        (void)state; (void)size; (void)sources; (void)error;
+        return true;
+    }
 };
 
 // Optional interface for a stateful device that owns one physical MMIO
@@ -117,6 +128,7 @@ private:
     friend class AArch64DeviceSnapshot;
     friend class AArch64PhysicalBus;
     friend class AArch64PL011;
+    friend class AArch64GenericTimer;
     struct RegisteredDevice {
         std::unique_ptr<AArch64StatefulDevice> device;
         AArch64MMIODevice* mmio = nullptr;

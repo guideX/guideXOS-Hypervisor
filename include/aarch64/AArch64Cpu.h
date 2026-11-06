@@ -66,6 +66,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -83,6 +84,25 @@ namespace aarch64 {
 class AArch64ExecutionSnapshot;
 class AArch64DeviceSnapshot;
 class AArch64ISAPlugin;
+
+// Optional per-machine architectural system-register bank. The CPU holds only
+// a weak reference so removing a device cannot leave a dangling CPU callback.
+// A guest instruction step leases the owner across execute + retirement, which
+// also makes device snapshot boundaries atomic with respect to virtual time.
+class AArch64SystemRegisterHandler {
+public:
+    virtual ~AArch64SystemRegisterHandler() = default;
+    virtual bool handlesSystemRegister(uint16_t key) const noexcept = 0;
+    virtual bool el0AccessAllowed(uint16_t key, bool isRead) const noexcept = 0;
+    virtual bool el0AccessIsUndefined(uint16_t key,
+                                      bool isRead) const noexcept = 0;
+    virtual bool writeIsUndefined(uint16_t key) const noexcept = 0;
+    virtual uint64_t readSystemRegister(uint16_t key) const noexcept = 0;
+    virtual bool writeSystemRegister(uint16_t key, uint64_t value,
+                                     std::string* error) noexcept = 0;
+    virtual bool beginInstructionStep() noexcept = 0;
+    virtual void finishInstructionStep(bool retired) noexcept = 0;
+};
 
 // Fixed A64 instruction size in bytes.
 inline constexpr std::size_t kInstructionSize = 4;
@@ -254,6 +274,12 @@ public:
     // -- reset ------------------------------------------------------------
     void reset(uint64_t entryPoint = 0,
                ExceptionLevel initialLevel = ExceptionLevel::EL0);
+
+    // Bind a machine-owned system-register device (for example the Generic
+    // Timer). The weak ownership is intentionally excluded from CPU snapshots
+    // and CPU copies; device snapshots own the device state.
+    bool bindSystemRegisterHandler(
+        const std::shared_ptr<AArch64SystemRegisterHandler>& handler);
 
     // -- X registers ------------------------------------------------------
     // Only indices 0..30 are addressable here; index 31 is rejected because
@@ -462,6 +488,7 @@ private:
     // been fetched and dispatched. A failed fetch in this window is fatal,
     // preventing an unmapped vector from repeatedly aborting into itself.
     bool exceptionVectorPending_ = false;
+    std::weak_ptr<AArch64SystemRegisterHandler> systemRegisterHandler_;
     mutable AArch64TLB tlb_;
     // Serializes complete instruction execution with snapshot management.
     // This mutex is host coordination state and is never serialized.

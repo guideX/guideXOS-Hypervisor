@@ -461,6 +461,12 @@ bool AArch64DeviceSnapshot::capture(const AArch64ISAPlugin& cpu,
                 setError(error, "device " + std::to_string(device->instanceId()) + " emitted invalid identity or an oversized state");
                 resumeAll(quiesced); return false;
             }
+            if (!device->validateInterruptSourceState(state.data(), state.size(),
+                                                     sources, error)) {
+                if (error != nullptr && error->empty())
+                    *error = "device state is inconsistent with its interrupt-source records";
+                resumeAll(quiesced); return false;
+            }
             totalState += state.size();
             appendU64(devicePayload, device->instanceId());
             appendU32(devicePayload, device->stateSchemaVersion());
@@ -603,6 +609,17 @@ bool AArch64DeviceSnapshot::restore(AArch64ISAPlugin& cpu, ia64::IMemory& memory
         const auto& current = currentSources[i]; const auto& saved = parsed.sourceRecords[i];
         if (current.id != saved.id || current.ownerDeviceId != saved.ownerDeviceId || current.mode != saved.mode) {
             setError(error, "destination interrupt-source identity, owner, or trigger mode does not match snapshot"); return false;
+        }
+    }
+
+    for (std::size_t i = 0; i < registered.size(); ++i) {
+        const DeviceRecord& record = parsed.deviceRecords[i];
+        if (!registered[i]->validateInterruptSourceState(
+                snapshot.data() + record.stateOffset, record.stateSize,
+                parsed.sourceRecords, error)) {
+            if (error != nullptr && error->empty())
+                *error = "snapshot device state is inconsistent with its interrupt-source records";
+            return false;
         }
     }
 

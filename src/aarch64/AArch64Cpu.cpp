@@ -188,6 +188,16 @@ const char* sysregName(uint8_t op0, uint8_t op1, uint8_t crn,
     case sysregKey(3, 0, 2, 0, 0): return "ttbr0_el1";
     case sysregKey(3, 0, 2, 0, 1): return "ttbr1_el1";
     case sysregKey(3, 0, 10, 2, 0): return "mair_el1";
+    case sysregKey(3, 3, 14, 0, 0): return "cntfrq_el0";
+    case sysregKey(3, 3, 14, 0, 1): return "cntpct_el0";
+    case sysregKey(3, 3, 14, 0, 2): return "cntvct_el0";
+    case sysregKey(3, 0, 14, 1, 0): return "cntkctl_el1";
+    case sysregKey(3, 3, 14, 2, 0): return "cntp_tval_el0";
+    case sysregKey(3, 3, 14, 2, 1): return "cntp_ctl_el0";
+    case sysregKey(3, 3, 14, 2, 2): return "cntp_cval_el0";
+    case sysregKey(3, 3, 14, 3, 0): return "cntv_tval_el0";
+    case sysregKey(3, 3, 14, 3, 1): return "cntv_ctl_el0";
+    case sysregKey(3, 3, 14, 3, 2): return "cntv_cval_el0";
     default: return nullptr;
     }
 }
@@ -253,6 +263,7 @@ Cpu& Cpu::operator=(const Cpu& other) {
     tlb_ = other.tlb_;
     lastFault_ = other.lastFault_;
     lastError_ = other.lastError_;
+    systemRegisterHandler_.reset();
     return *this;
 }
 
@@ -293,7 +304,18 @@ Cpu& Cpu::operator=(Cpu&& other) {
     tlb_ = std::move(other.tlb_);
     lastFault_ = other.lastFault_;
     lastError_ = std::move(other.lastError_);
+    systemRegisterHandler_.reset();
     return *this;
+}
+
+bool Cpu::bindSystemRegisterHandler(
+    const std::shared_ptr<AArch64SystemRegisterHandler>& handler) {
+    std::lock_guard<std::recursive_mutex> lock(executionMutex_);
+    if (snapshotBoundaryActive_ || !handler) return false;
+    const auto current = systemRegisterHandler_.lock();
+    if (current && current != handler) return false;
+    systemRegisterHandler_ = handler;
+    return true;
 }
 
 bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v) {
@@ -1522,6 +1544,9 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     const uint16_t ttbr0Key = sysregKey(3, 0, 2, 0, 0);
     const uint16_t ttbr1Key = sysregKey(3, 0, 2, 0, 1);
     const uint16_t mairKey = sysregKey(3, 0, 10, 2, 0);
+    const auto timerHandler = systemRegisterHandler_.lock();
+    const bool timerRegister = timerHandler &&
+                               timerHandler->handlesSystemRegister(key);
     constexpr uint32_t kSupportedSpsrFields =
         0xF0000000u | kPstateDAIF | (1u << 20) | kPstateModeMask;
 
@@ -1529,7 +1554,8 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
                        key == spEl0Key || key == spselKey || key == spsrKey ||
                        key == elrKey || key == vbarKey || key == esrKey ||
                        key == farKey || key == sctlrKey || key == tcrKey ||
-                       key == ttbr0Key || key == ttbr1Key || key == mairKey;
+                       key == ttbr0Key || key == ttbr1Key || key == mairKey ||
+                       timerRegister;
     if (!known) {
         lastError_ = "system-register encoding is outside the implemented subset: " +
                      encodedSysregName(decoded.sysOp0, decoded.sysOp1,
@@ -1538,16 +1564,43 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
         return Fault::UnsupportedFeature;
     }
 
-    // NZCV is directly accessible at EL0. In this deterministic profile,
-    // SCTLR_EL1.UMA is fixed to zero, so DAIF accesses at EL0 trap to EL1.
-    // Other privileged-only accesses are architecturally UNDEFINED here.
-    const bool el0AccessAllowed = key == nzcvKey;
+    if (timerRegister && !isRead && timerHandler->writeIsUndefined(key)) {
+        takeSynchronousException(0x00, 0, pc_);
+        return Fault::None;
+    }
+
+    // NZCV is directly accessible at EL0. DAIF accesses at EL0 trap to EL1
+    // in this profile. Timer access uses the distinct CNTKCTL_EL1 controls;
+    // other privileged-only accesses remain architecturally UNDEFINED.
+    const bool el0AccessAllowed = key == nzcvKey ||
+        (timerRegister && timerHandler->el0AccessAllowed(key, isRead));
     if (el == 0 && !el0AccessAllowed) {
         if (key == daifKey) {
+            takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
+        } else if (timerRegister &&
+                   !timerHandler->el0AccessIsUndefined(key, isRead)) {
             takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
         } else {
             takeSynchronousException(0x00, 0, pc_);
         }
+        return Fault::None;
+    }
+
+    if (timerRegister) {
+        if (isRead) {
+            const uint64_t value = timerHandler->readSystemRegister(key);
+            if (decoded.rd != 31) x_[decoded.rd] = value;
+        } else {
+            const uint64_t source = decoded.rd == 31 ? 0 : x_[decoded.rd];
+            std::string reason;
+            if (!timerHandler->writeSystemRegister(key, source, &reason)) {
+                lastError_ = reason.empty()
+                    ? "Generic Timer system-register write is unsupported"
+                    : reason;
+                return Fault::UnsupportedFeature;
+            }
+        }
+        pc_ += kInstructionSize;
         return Fault::None;
     }
 
@@ -1795,6 +1848,26 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         lastError_ = decoded.error.empty() ? "invalid instruction" : decoded.error;
         return lastFault_;
     }
+
+    // Acquire one timer/device operation lease for the complete instruction,
+    // including its retirement tick and derived interrupt-source update.
+    // Snapshot coordination therefore sees either the whole step or none of
+    // it. A synchronous exception caused by this fetched instruction is still
+    // a completed step; fetch failures and emulator faults do not retire.
+    auto stepHandler = systemRegisterHandler_.lock();
+    if (stepHandler && !stepHandler->beginInstructionStep()) {
+        lastFault_ = Fault::SnapshotBoundary;
+        lastError_ = "Generic Timer device is quiesced or unavailable at the instruction boundary";
+        return lastFault_;
+    }
+    struct InstructionStepLease {
+        std::shared_ptr<AArch64SystemRegisterHandler> handler;
+        bool retired = false;
+        ~InstructionStepLease() {
+            if (handler) handler->finishInstructionStep(retired);
+        }
+    } stepLease{stepHandler};
+
     // A successfully fetched vector instruction establishes that exception
     // dispatch reached guest code. Later faults are ordinary nested faults.
     exceptionVectorPending_ = false;
@@ -2522,6 +2595,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     }
     lastFault_ = Fault::None;
     lastError_.clear();
+    stepLease.retired = true;
     return Fault::None;
 }
 
