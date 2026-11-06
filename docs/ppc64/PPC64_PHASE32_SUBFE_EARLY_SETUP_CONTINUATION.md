@@ -79,16 +79,17 @@ At this frontier, the recorded state is R3=R13=`0xC000000001F42380`, R9=0, CR=`0
 
 ## Evidence and regression results
 
-Final Phase 32 replay artifacts are under `E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase32\run-1793938441052`. The directory includes the production replay trace, pre/post SUBFE state, carry-writer dataflow, independent Python ELF inspection, Capstone disassembly, FDT/kernel identities, memory-access log, frontier CPU state, full CTest and targeted CTest logs, and standalone IA-64 logs. Its SHA-256 manifest has 32 entries, all verified; manifest SHA-256 is `7f6595d5f24dcf82cf5999f9aed99caa27ca78bcbcdb6f3ea9089c7ca323fd2c`.
+Final Phase 32 replay artifacts are under `E:\CodexArtifacts\guideXOS_Hypervisor\PPC64\Phase32\run-1793938441052`. The directory includes the production replay trace, pre/post SUBFE state, carry-writer dataflow, independent Python ELF inspection, Capstone disassembly, FDT/kernel identities, memory-access log, frontier CPU state, full CTest and targeted CTest logs, and standalone IA-64 logs. Its SHA-256 manifest has 33 entries, all verified; manifest SHA-256 is `e46349aa501a945cccf6d88dec7ebf8b7d0f87cfb22bada76c932031c32454d5`.
 
 - Final Phase 32 target: **432 focused production VM-step checks**, **165 authentic Linux replay checks**, **0 failures**. Two fresh Linux VMs were used. Two setup/artifact checks bring the executable's total to 599.
 - Full CTest: 47 entries, **41 passed, 0 executed failures, 6 Not Run**. The unavailable shared executables were `test_syscall_dispatcher.exe`, `test_debugger.exe`, `test_profiler.exe`, `test_fuzzer.exe`, `test_vm_isolation.exe`, and `test_elf_validation.exe`. CTest returned nonzero only because those six executables were unavailable; none is counted as a pass.
-- Full CTest included PPC64 Phases 1–31, VM checkpoint, arithmetic/decoder, exception, translation/relocation, SAL, and console cases. The final Phase 32 target was rebuilt and rerun after the final evidence and stop-state assertions were added.
+- Full CTest included PPC64 Phases 1–31, VM checkpoint, arithmetic/decoder, exception, translation/relocation, SAL, and console cases. After updating the 64-bit-mode setup in the Phase 2 fixture and Phase 31's expected frontier, both `PPC64Phase2Tests` and `PPC64Phase31LinuxReplayTests` were rebuilt and rerun; both passed. The final Phase 32 target was also rebuilt and rerun after the evidence and stop-state assertions were added.
 - Standalone IA-64 checks passed: ACPI firmware, interrupt controller, and processor interrupt block.
 - `git diff --check` passed. QEMU differential qualification remains `QEMU_REFERENCE_PENDING`; QEMU was not launched.
 - The marker advances to `last_completed=PPC64-32`, `next_expected=PPC64-33` only after the validated local commits.
 - Implementation commit: `1db6871d06f0db75e1e50027768368a25295ce3d` (`PPC64-32 implement SUBFE and qualify Linux`).
-- A documentation-only closeout commit follows the implementation commit; it is the final HEAD. Final branch status is `PPC64`, two commits ahead and zero behind `origin/PPC64`; the worktree is clean after closeout.
+- Regression fixture commit: `e618986a0aab8e3a4c1d7e1021a1fe8517cb902a` (`test(PPC64): refresh arithmetic regression frontiers`).
+- A documentation closeout commit follows the regression fixture commit; it is the final HEAD. Final branch status is `PPC64`, four commits ahead and zero behind `origin/PPC64`; the worktree is clean after closeout.
 - The ignored `build/` directory was retained. Push status: **not pushed**.
 
 ## Limits
