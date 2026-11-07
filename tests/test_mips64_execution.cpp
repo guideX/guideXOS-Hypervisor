@@ -315,7 +315,7 @@ static void testUnsupportedAndReserved() {
     CHECK(setupKusegIdentityMap(cpu, mem));
     storeWord(mem, 0, encodeI(0x31, 0, 8, 0), true);  // lwc1: valid, unimplemented
     storeWord(mem, 4, encodeI(0x2F, 0, 8, 0), true);  // cache: valid, unimplemented
-    storeWord(mem, 8, encodeI(0x30, 8, 9, 0), true);  // ll: valid, unimplemented
+    storeWord(mem, 8, encodeI(0x30, 8, 9, 0), true);  // LL needs a physical reservation map
     storeWord(mem, 12, encodeI(0x1D, 0, 0, 0), true);  // reserved primary opcode
     storeWord(mem, 16, encodeR(0, 0, 0, 0, 0x05), true);  // reserved SPECIAL funct
     cpu.setPc(0);
@@ -323,7 +323,7 @@ static void testUnsupportedAndReserved() {
     cpu.setPc(4);
     CHECK(stepFault(cpu, mem, Mips64Fault::UnsupportedInstruction));
     cpu.setPc(8);
-    CHECK(stepFault(cpu, mem, Mips64Fault::UnsupportedInstruction));
+    CHECK(stepFault(cpu, mem, Mips64Fault::MemoryFaultLoad));
     cpu.setPc(12);
     CHECK(stepFault(cpu, mem, Mips64Fault::ReservedInstruction));
     cpu.setPc(16);

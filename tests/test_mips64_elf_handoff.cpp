@@ -706,6 +706,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     constexpr uint32_t tneFrontierWord = 0x00040336U;
     constexpr uint64_t sllvFrontierPc = 0xFFFFFFFF80B4EF34ULL;
     constexpr uint32_t sllvFrontierWord = 0x00E63004U;
+    constexpr uint64_t llFrontierPc = 0xFFFFFFFF801CBFD4ULL;
+    constexpr uint32_t llFrontierWord = 0xC2020060U;
+    constexpr uint64_t scFrontierPc = llFrontierPc + 8;
     const auto startTime = std::chrono::steady_clock::now();
     const auto image = readFile(imagePath);
     if (image.empty()) throw std::runtime_error("kernel image is empty or unreadable");
@@ -754,11 +757,17 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     bool tneFrontierVerified = false;
     bool sllvFrontierVerified = false;
     bool sllvReplayVerified = false;
+    bool llFrontierVerified = false;
+    bool llReplayVerified = false;
+    bool scFrontierVerified = false;
     unsigned retiredAfterLld = 0;
     unsigned successfulStepsAfterLld = 0;
     unsigned successfulStepsAfterSllv = 0;
+    unsigned successfulStepsAfterLl = 0;
     Mips64FullVmSnapshot lldActiveSnapshot;
     Mips64FullVmSnapshot sllvSnapshot;
+    Mips64FullVmSnapshot llBeforeSnapshot;
+    Mips64FullVmSnapshot llActiveSnapshot;
     std::string formerFrontierRecord;
     std::string sltiuFrontierRecord;
     std::string lldFrontierRecord;
@@ -769,6 +778,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     std::string sllvFrontierRecord;
     std::string sllvExecutionRecord;
     std::string sllvReplayRecord;
+    std::string llFrontierRecord;
+    std::string scFrontierRecord;
+    std::string llReplayRecord;
     std::string lldPreInstructionRecord;
     std::ostringstream frontierInstructionTrace;
     std::ostringstream preSltiuContinuationTrace;
@@ -840,6 +852,9 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         const bool recordingPrefix = attempts < traceInstructionLimit;
         bool didRetire = false;
         bool architecturalStepHandled = false;
+        bool sllvFrontierCapturedThisStep = false;
+        bool lldFrontierCapturedThisStep = false;
+        bool llFrontierCapturedThisStep = false;
         if (continuePastTneFrontier && !tneFrontierVerified && stopPc == tneFrontierPc) {
             const Mips64Decoded decoded = decodeInstruction(stopWord);
             CPUContext* context = vm.getCPUContext(0);
@@ -977,7 +992,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
             tneFrontierVerified = true;
             didRetire = firstRetired;
             architecturalStepHandled = trapTaken;
-        } else if (continuePastSllvFrontier && stopPc == sllvFrontierPc) {
+        } else if (continuePastSllvFrontier && !sllvFrontierVerified &&
+                   stopPc == sllvFrontierPc) {
             const Mips64Decoded decoded = decodeInstruction(stopWord);
             CPUContext* context = vm.getCPUContext(0);
             const uint64_t value = cpu->core().readGpr(6);
@@ -1137,8 +1153,10 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                            << ",\"snapshot_cpu_bytes\":1001,\"snapshot_memory_version\":2"
                            << ",\"snapshot_uart_version\":4,\"snapshot_irq_version\":1}";
             sllvExecutionRecord = executionEvent.str();
+            sllvFrontierCapturedThisStep = true;
             sllvFrontierVerified = true;
-        } else if (continuePastDsrl32Frontier && stopPc == formerFrontierPc) {
+        } else if (continuePastDsrl32Frontier && formerFrontierRecord.empty() &&
+                   stopPc == formerFrontierPc) {
             if (retired != 150041 || vm.getCyclesExecuted() != 150041 ||
                 !stopFetchOk || stopWord != formerFrontierWord) {
                 throw std::runtime_error("authentic Phase 12 prefix/frontier did not reproduce");
@@ -1245,12 +1263,20 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
             formerFrontierRecord = event.str();
             formerFrontierVerified = true;
         } else if (continuePastDsrl32Frontier && formerFrontierVerified &&
+                   sltiuFrontierRecord.empty() &&
                    stopPc == sltiuFrontierPc) {
             if (!stopFetchOk || stopPhysical != 0x00B4F0B4ULL ||
                 stopWord != sltiuFrontierWord || retired != 150287U ||
                 vm.getCyclesExecuted() != 150287U || cpu->core().readGpr(2) != 6ULL ||
                 cpu->core().fault() != Mips64Fault::None) {
-                throw std::runtime_error("authentic Phase 13 SLTIU frontier did not reproduce");
+                std::ostringstream message;
+                message << "authentic Phase 13 SLTIU frontier did not reproduce: pc=0x"
+                        << std::hex << stopPc << " pa=0x" << stopPhysical << " word=0x"
+                        << stopWord << " retired=" << std::dec << retired << " cycles="
+                        << vm.getCyclesExecuted() << " count=" << cpu->core().cp0Count()
+                        << " gpr2=0x" << std::hex << cpu->core().readGpr(2)
+                        << " fault=" << Mips64Cpu::faultName(cpu->core().fault());
+                throw std::runtime_error(message.str());
             }
             const Mips64Decoded decoded = decodeInstruction(stopWord);
             if (!decoded.valid || decoded.op != Mips64Op::Sltiu || decoded.rs != 2 ||
@@ -1366,7 +1392,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                   << ",\"snapshot_cpu_version\":" << snapshot.cpuComponentVersion << "}";
             sltiuFrontierRecord = event.str();
             sltiuFrontierVerified = true;
-        } else if (continuePastLldFrontier && stopPc == lldFrontierPc) {
+        } else if (continuePastLldFrontier && lldFrontierRecord.empty() &&
+                   stopPc == lldFrontierPc) {
             if (!formerFrontierVerified || !sltiuFrontierVerified || !stopFetchOk ||
                 stopPhysical != 0x00091A338ULL || stopWord != lldFrontierWord ||
                 retired != 150313U || vm.getCyclesExecuted() != 150313U ||
@@ -1498,6 +1525,7 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                   << ",\"snapshot_memory_version\":" << lldActiveSnapshot.memoryComponentVersion
                   << "}";
             lldFrontierRecord = event.str();
+            lldFrontierCapturedThisStep = true;
             lldFrontierVerified = true;
         } else if (continuePastLldFrontier && lldFrontierVerified &&
                    stopPc == lldFrontierPc + 0x10 && lldScdRecord.empty()) {
@@ -1544,6 +1572,207 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                   << ",\"reservation_generation_before\":" << reservation.generation
                   << ",\"reservation_consumed\":true,\"scd_success\":true}";
             lldScdRecord = event.str();
+        } else if (continuePastSllvFrontier && sllvFrontierVerified &&
+                   stopPc == llFrontierPc && llFrontierRecord.empty()) {
+            const Mips64Decoded decoded = decodeInstruction(stopWord);
+            const uint64_t base = cpu->core().readGpr(decoded.rs);
+            const int64_t offset = static_cast<int16_t>(decoded.imm);
+            const uint64_t effective = base + static_cast<uint64_t>(offset);
+            const Mips64Probe dataProbe = cpu->core().probeAddress(effective, Mips64Access::Load);
+            uint8_t instructionBytes[4]{};
+            uint8_t dataBytes[4]{};
+            if (!stopFetchOk || stopPhysical != 0x001CBFD4ULL || stopWord != llFrontierWord ||
+                !decoded.valid || decoded.op != Mips64Op::Ll || decoded.rs != 16 ||
+                decoded.rt != 2 || decoded.imm != 0x60 || !dataProbe.ok ||
+                (effective & 3U) != 0 || dataProbe.cacheAttribute != 3) {
+                throw std::runtime_error("authentic Linux LL frontier fields or translation changed");
+            }
+            vm.getMemory().Read(stopPhysical, instructionBytes, sizeof(instructionBytes));
+            vm.getMemory().Read(dataProbe.phys, dataBytes, sizeof(dataBytes));
+            if (read32(instructionBytes, false) != llFrontierWord) {
+                throw std::runtime_error("authenticated LL instruction differs in guest memory");
+            }
+            const uint32_t loadedWord = read32(dataBytes, false);
+            const uint64_t expected = (loadedWord & 0x80000000U) != 0
+                ? (0xFFFFFFFF00000000ULL | loadedWord) : loadedWord;
+            const uint64_t destinationBefore = cpu->core().readGpr(decoded.rt);
+            const uint64_t beforeCount = cpu->core().cp0Count();
+            const uint64_t beforeCycles = vm.getCyclesExecuted();
+            CPUContext* context = vm.getCPUContext(0);
+            const auto* board = vm.getMips64MaltaBootstrapBoard();
+            if (!context || !board || !board->ConsoleSink() || !board->Uart() ||
+                retired != 150572U || attempts != 150572U || beforeCount != 150572U ||
+                beforeCycles != 150572U || cpu->core().cp0Status() != 0x00400080ULL ||
+                cpu->core().cp0Cause() != 0 || cpu->core().cp0Epc() != 0 ||
+                cpu->core().cp0BadVAddr() != 0 || cpu->core().delayArmed() ||
+                cpu->core().fault() != Mips64Fault::None ||
+                cpu->core().reservationState().valid) {
+                throw std::runtime_error("authentic Linux LL CPU/CP0 prestate changed");
+            }
+
+            std::ostringstream sequence;
+            sequence << "[";
+            for (unsigned index = 0; index < 13; ++index) {
+                const uint64_t va = llFrontierPc + index * 4ULL;
+                const Mips64Probe probe = cpu->core().probeAddress(va, Mips64Access::Fetch);
+                if (!probe.ok) throw std::runtime_error("LL/SC instruction window fetch did not translate");
+                uint8_t rawBytes[4]{};
+                vm.getMemory().Read(probe.phys, rawBytes, sizeof(rawBytes));
+                const uint32_t raw = read32(rawBytes, false);
+                const Mips64Decoded instruction = decodeInstruction(raw);
+                if (index != 0) sequence << ",";
+                sequence << "{\"pc_va\":\"0x" << std::hex << std::setw(16)
+                         << std::setfill('0') << va << "\",\"word\":\"0x"
+                         << std::setw(8) << raw << "\",\"disassembly\":\""
+                         << cpu->core().disassemble(instruction) << "\"}";
+            }
+            sequence << "]";
+
+            llBeforeSnapshot = vm.captureMips64FullSnapshot();
+            if (!llBeforeSnapshot.ValidateIntegrity() || llBeforeSnapshot.formatVersion != 3 ||
+                llBeforeSnapshot.cpuComponentVersion != 6 ||
+                llBeforeSnapshot.cpus.size() != 1 ||
+                llBeforeSnapshot.cpus[0].architecturalState.size() != 1001) {
+                throw std::runtime_error("pre-LL full-VM checkpoint failed validation");
+            }
+            const std::vector<uint8_t> beforeConsole = board->ConsoleSink()->Bytes();
+            const Ns16550Uart::Snapshot beforeUart = board->Uart()->CaptureSnapshot();
+            didRetire = executeOneAndTrace(vm, *cpu, &postSltiuContinuationTrace);
+            if (!didRetire || cpu->core().pc() != llFrontierPc + 4 ||
+                cpu->core().readGpr(decoded.rt) != expected ||
+                cpu->core().reservationState().size != 4 ||
+                !cpu->core().reservationState().valid ||
+                cpu->core().reservationState().virtualAddress != effective ||
+                cpu->core().reservationState().physicalAddress != dataProbe.phys ||
+                cpu->core().reservationState().cacheAttribute != dataProbe.cacheAttribute ||
+                cpu->core().cp0Count() != beforeCount + 1 || vm.getCyclesExecuted() != beforeCycles + 1 ||
+                cpu->core().fault() != Mips64Fault::None ||
+                board->ConsoleSink()->Bytes() != beforeConsole ||
+                board->Uart()->CaptureSnapshot().transmitCount != beforeUart.transmitCount) {
+                throw std::runtime_error("production VM did not retire authentic LL correctly");
+            }
+            const std::vector<uint8_t> firstLlCpu = cpu->core().serialize();
+            uint8_t afterLlBytes[4]{};
+            vm.getMemory().Read(dataProbe.phys, afterLlBytes, sizeof(afterLlBytes));
+            llActiveSnapshot = vm.captureMips64FullSnapshot();
+            if (!llActiveSnapshot.ValidateIntegrity() ||
+                llActiveSnapshot.physicalMemory.reservationGenerations.empty()) {
+                throw std::runtime_error("active word-LL full-VM checkpoint failed validation");
+            }
+            std::string restoreError;
+            if (!vm.restoreMips64FullSnapshot(llBeforeSnapshot, &restoreError) ||
+                !restoreError.empty() || cpu->core().pc() != llFrontierPc ||
+                cpu->core().reservationState().valid || vm.getCyclesExecuted() != beforeCycles) {
+                throw std::runtime_error("pre-LL full-VM restore failed: " + restoreError);
+            }
+            didRetire = executeOneAndTrace(vm, *cpu, nullptr);
+            if (!didRetire || cpu->core().serialize() != firstLlCpu ||
+                vm.getCyclesExecuted() != beforeCycles + 1 ||
+                context->instructionsExecuted != retired + 1 ||
+                !std::equal(std::begin(afterLlBytes), std::end(afterLlBytes),
+                            std::begin(dataBytes))) {
+                throw std::runtime_error("pre-LL snapshot replay changed result or reservation");
+            }
+            if (!vm.restoreMips64FullSnapshot(llActiveSnapshot, &restoreError) ||
+                !restoreError.empty() || cpu->core().serialize() != firstLlCpu ||
+                cpu->core().reservationState().size != 4 ||
+                !cpu->core().reservationState().valid) {
+                throw std::runtime_error("active word-LL snapshot restore failed: " + restoreError);
+            }
+            std::ostringstream event;
+            event << "{\"type\":\"ll_word_frontier\",\"retired_before\":" << retired
+                  << ",\"attempts_before\":" << attempts << ",\"pc_va\":\"0x"
+                  << std::hex << std::setw(16) << std::setfill('0') << stopPc
+                  << "\",\"fetch_pa\":\"0x" << std::setw(9) << stopPhysical
+                  << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                  << "\",\"instruction_bytes_be\":\"";
+            for (uint8_t byte : instructionBytes) event << std::hex << std::setw(2) << unsigned(byte);
+            event << "\",\"disassembly\":\"" << cpu->core().disassemble(decoded)
+                  << "\",\"rs\":" << std::dec << unsigned(decoded.rs)
+                  << ",\"rt\":" << unsigned(decoded.rt) << ",\"signed_offset\":" << offset
+                  << ",\"base_va\":\"0x" << std::hex << std::setw(16) << base
+                  << "\",\"effective_va\":\"0x" << std::setw(16) << effective
+                  << "\",\"data_pa\":\"0x" << std::setw(9) << dataProbe.phys
+                  << "\",\"cca\":" << std::dec << unsigned(dataProbe.cacheAttribute)
+                  << ",\"data_bytes_be\":\"";
+            for (uint8_t byte : dataBytes) event << std::hex << std::setw(2) << unsigned(byte);
+            event << "\",\"loaded_word_be\":\"0x" << std::hex << std::setw(8) << loadedWord
+                  << "\",\"destination_before\":\"0x" << std::setw(16) << destinationBefore
+                  << "\",\"expected_sign_extended\":\"0x" << std::setw(16) << expected
+                  << "\",\"reservation_before_valid\":false"
+                  << ",\"destination_after\":\"0x" << std::setw(16)
+                  << cpu->core().readGpr(decoded.rt) << "\",\"reservation_size\":4"
+                  << ",\"reservation_backing_id\":" << std::dec
+                  << cpu->core().reservationState().backingId
+                  << ",\"reservation_granule_offset\":\"0x" << std::hex << std::setw(16)
+                  << cpu->core().reservationState().granuleOffset
+                  << "\",\"reservation_generation\":" << std::dec
+                  << cpu->core().reservationState().generation
+                  << ",\"status\":\"0x" << std::hex << std::setw(16)
+                  << cpu->core().cp0Status() << "\",\"cause\":\"0x" << std::setw(16)
+                  << cpu->core().cp0Cause() << "\",\"epc\":\"0x" << std::setw(16)
+                  << cpu->core().cp0Epc() << "\",\"badvaddr\":\"0x" << std::setw(16)
+                  << cpu->core().cp0BadVAddr() << "\",\"cp0_count_after\":" << std::dec
+                  << cpu->core().cp0Count() << ",\"vm_cycles_after\":" << vm.getCyclesExecuted()
+                  << ",\"following_instructions\":" << sequence.str()
+                  << ",\"pre_ll_snapshot_replay_verified\":true"
+                  << ",\"active_reservation_snapshot\":true"
+                  << ",\"snapshot_format_version\":3,\"snapshot_cpu_version\":6"
+                  << ",\"snapshot_cpu_bytes\":1001,\"snapshot_memory_version\":2";
+            std::string eventText = event.str();
+            eventText.push_back('}');
+            llFrontierRecord = eventText;
+            llFrontierCapturedThisStep = true;
+            llFrontierVerified = true;
+        } else if (continuePastSllvFrontier && llFrontierVerified &&
+                   stopPc == scFrontierPc && scFrontierRecord.empty()) {
+            const Mips64Decoded decoded = decodeInstruction(stopWord);
+            const Mips64ReservationState reservation = cpu->core().reservationState();
+            const uint64_t source = cpu->core().readGpr(decoded.rt);
+            const uint64_t effective = cpu->core().readGpr(decoded.rs) +
+                static_cast<uint64_t>(static_cast<int64_t>(static_cast<int16_t>(decoded.imm)));
+            const Mips64Probe dataProbe = cpu->core().probeAddress(effective, Mips64Access::Store);
+            uint8_t beforeBytes[4]{};
+            if (!decoded.valid || decoded.op != Mips64Op::Sc || decoded.rs != 16 ||
+                decoded.rt != 2 || !reservation.valid || reservation.size != 4 ||
+                reservation.virtualAddress != effective || !dataProbe.ok ||
+                reservation.physicalAddress != dataProbe.phys ||
+                reservation.cacheAttribute != dataProbe.cacheAttribute) {
+                throw std::runtime_error("authenticated SC does not match the active word LL reservation");
+            }
+            vm.getMemory().Read(dataProbe.phys, beforeBytes, sizeof(beforeBytes));
+            const uint32_t sourceWord = static_cast<uint32_t>(source);
+            didRetire = executeOneAndTrace(vm, *cpu, &postSltiuContinuationTrace);
+            uint8_t afterBytes[4]{};
+            vm.getMemory().Read(dataProbe.phys, afterBytes, sizeof(afterBytes));
+            if (!didRetire || cpu->core().readGpr(decoded.rt) != 1 ||
+                read32(afterBytes, false) != sourceWord || cpu->core().reservationState().valid ||
+                cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("authentic Linux SC did not commit its four-byte word");
+            }
+            std::ostringstream event;
+            event << "{\"type\":\"sc_word_execution\",\"pc_va\":\"0x"
+                  << std::hex << std::setw(16) << std::setfill('0') << stopPc
+                  << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                  << "\",\"disassembly\":\"" << cpu->core().disassemble(decoded)
+                  << "\",\"base_register_value\":\"0x" << std::setw(16)
+                  << cpu->core().readGpr(decoded.rs)
+                  << "\",\"effective_va\":\"0x" << std::setw(16) << effective
+                  << "\",\"data_pa\":\"0x" << std::setw(9) << dataProbe.phys
+                  << "\",\"source_before\":\"0x" << std::setw(16) << source
+                  << "\",\"stored_low_word\":\"0x" << std::setw(8) << sourceWord
+                  << "\",\"result_register_after\":\"0x" << std::setw(16)
+                  << cpu->core().readGpr(decoded.rt) << "\",\"bytes_before_be\":\"";
+            for (uint8_t byte : beforeBytes) event << std::hex << std::setw(2) << unsigned(byte);
+            event << "\",\"bytes_after_be\":\"";
+            for (uint8_t byte : afterBytes) event << std::hex << std::setw(2) << unsigned(byte);
+            event << "\",\"cca\":" << std::dec << unsigned(dataProbe.cacheAttribute)
+                  << ",\"reservation_generation_before\":" << reservation.generation
+                  << ",\"reservation_consumed\":true,\"sc_success\":true"
+                  << ",\"cp0_count_after\":" << cpu->core().cp0Count()
+                  << ",\"vm_cycles_after\":" << vm.getCyclesExecuted() << "}";
+            scFrontierRecord = event.str();
+            scFrontierVerified = true;
         } else if (continuePastLldFrontier && lldFrontierVerified && stopFetchOk) {
             const Mips64Decoded candidate = decodeInstruction(stopWord);
             if (!candidate.valid && candidate.fault == Mips64Fault::UnsupportedInstruction) {
@@ -1569,15 +1798,18 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
         }
         if (didRetire) {
             ++retired;
-            if (sllvFrontierVerified && stopPc != sllvFrontierPc) {
+            if (sllvFrontierVerified && !sllvFrontierCapturedThisStep) {
                 ++successfulStepsAfterSllv;
             }
-            if (lldFrontierVerified && stopPc != lldFrontierPc) {
+            if (llFrontierVerified && !llFrontierCapturedThisStep) {
+                ++successfulStepsAfterLl;
+            }
+            if (lldFrontierVerified && !lldFrontierCapturedThisStep) {
                 ++retiredAfterLld;
                 ++successfulStepsAfterLld;
             }
         } else if (architecturalStepHandled) {
-            if (lldFrontierVerified && stopPc != lldFrontierPc) ++successfulStepsAfterLld;
+            if (lldFrontierVerified && !lldFrontierCapturedThisStep) ++successfulStepsAfterLld;
         } else {
             const Mips64Fault fault = cpu->core().fault();
             stopReason = fault == Mips64Fault::UnsupportedInstruction
@@ -1600,6 +1832,15 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     }
     if (continuePastSllvFrontier && !sllvFrontierVerified) {
         throw std::runtime_error("authentic Phase 16 SLLV frontier was not reached");
+    }
+    if (continuePastSllvFrontier && (!llFrontierVerified || !scFrontierVerified)) {
+        std::ostringstream message;
+        message << "authentic four-byte LL/SC sequence was not qualified: stop_reason="
+                << stopReason << " stop_pc=0x" << std::hex << stopPc
+                << " stop_pa=0x" << stopPhysical << " stop_word=0x" << stopWord
+                << " attempts=" << std::dec << attempts << " retired=" << retired
+                << " ll=" << llFrontierVerified << " sc=" << scFrontierVerified;
+        throw std::runtime_error(message.str());
     }
 
     if (continuePastLldFrontier && lldFrontierVerified &&
@@ -1628,11 +1869,15 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                 throw std::runtime_error("active LLD replay stopped before the recorded next frontier");
             }
         }
+        const uint64_t replayAttemptPc = cpu->core().pc();
         const Mips64Probe replayFetch = cpu->core().probeAddress(cpu->core().pc(), Mips64Access::Fetch);
         uint8_t replayBytes[4]{};
         if (!replayFetch.ok) throw std::runtime_error("replayed next frontier did not translate");
         vm.getMemory().Read(replayFetch.phys, replayBytes, sizeof(replayBytes));
         const uint32_t replayWord = read32(replayBytes, false);
+        if (replayAttemptPc != stopPc || replayFetch.phys != stopPhysical || replayWord != stopWord) {
+            throw std::runtime_error("active LLD replay diverged before the unsupported frontier");
+        }
         const Mips64FullVmSnapshot replayFinal = vm.captureMips64FullSnapshot();
         const Ns16550Uart::Snapshot replayUart =
             vm.getMips64MaltaBootstrapBoard()->Uart()->CaptureSnapshot();
@@ -1704,11 +1949,15 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                 throw std::runtime_error("SLLV snapshot replay stopped before the next frontier");
             }
         }
+        const uint64_t replayAttemptPc = cpu->core().pc();
         const Mips64Probe replayFetch = cpu->core().probeAddress(cpu->core().pc(), Mips64Access::Fetch);
         uint8_t replayBytes[4]{};
         if (!replayFetch.ok) throw std::runtime_error("replayed next frontier did not translate");
         vm.getMemory().Read(replayFetch.phys, replayBytes, sizeof(replayBytes));
         const uint32_t replayWord = read32(replayBytes, false);
+        if (replayAttemptPc != stopPc || replayFetch.phys != stopPhysical || replayWord != stopWord) {
+            throw std::runtime_error("SLLV snapshot replay diverged before the unsupported frontier");
+        }
         const Mips64FullVmSnapshot replayFinal = vm.captureMips64FullSnapshot();
         const Ns16550Uart::Snapshot replayUart = board->Uart()->CaptureSnapshot();
         if (!replayFinal.ValidateIntegrity() || !sameReplayState(firstFinal, replayFinal) ||
@@ -1735,6 +1984,102 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
                     << ",\"total_attempts\":" << attempts
                     << ",\"snapshot_replay_verified\":true}";
         sllvReplayRecord = replayEvent.str();
+    }
+
+    if (continuePastSllvFrontier && sllvFrontierVerified &&
+        (stopReason == "unsupported_instruction" ||
+         stopReason == "architectural_exception")) {
+        const Mips64Decoded next = decodeInstruction(stopWord);
+        const bool unsupportedStop = stopReason == "unsupported_instruction" &&
+            !next.valid && next.fault == Mips64Fault::UnsupportedInstruction;
+        const bool exceptionStop = stopReason == "architectural_exception" &&
+            Mips64Cpu::faultEntersException(cpu->core().fault()) &&
+            cpu->core().cp0Epc() == stopPc && cpu->core().causeExcCode() != 0;
+        if (!llFrontierVerified || !scFrontierVerified || !stopFetchOk ||
+            (!unsupportedStop && !exceptionStop) ||
+            !llBeforeSnapshot.ValidateIntegrity() || !llActiveSnapshot.ValidateIntegrity()) {
+            throw std::runtime_error("word-atomic continuation did not reach a qualified next frontier");
+        }
+        const Mips64FullVmSnapshot firstFinal = vm.captureMips64FullSnapshot();
+        CPUContext* context = vm.getCPUContext(0);
+        const auto* board = vm.getMips64MaltaBootstrapBoard();
+        if (!context || !board || !board->ConsoleSink() || !board->Uart()) {
+            throw std::runtime_error("word-atomic replay lost CPU or Malta device state");
+        }
+        const std::vector<uint8_t> firstCpu = cpu->core().serialize();
+        const uint64_t firstInstructions = context->instructionsExecuted;
+        const uint64_t firstCycles = vm.getCyclesExecuted();
+        const std::vector<uint8_t> firstConsole = board->ConsoleSink()->Bytes();
+        const Ns16550Uart::Snapshot firstUart = board->Uart()->CaptureSnapshot();
+        std::string restoreError;
+        if (!vm.restoreMips64FullSnapshot(llActiveSnapshot, &restoreError) ||
+            !restoreError.empty() || !cpu->core().reservationState().valid ||
+            cpu->core().reservationState().size != 4 ||
+            cpu->core().pc() != llFrontierPc + 4) {
+            throw std::runtime_error("active word-LL snapshot restore failed: " + restoreError);
+        }
+        for (unsigned index = 0; index < successfulStepsAfterLl; ++index) {
+            if (!executeOneAndTrace(vm, *cpu, nullptr)) {
+                throw std::runtime_error("active word-LL replay stopped before the next frontier");
+            }
+        }
+        const uint64_t replayAttemptPc = cpu->core().pc();
+        const Mips64Probe replayFetch = cpu->core().probeAddress(replayAttemptPc, Mips64Access::Fetch);
+        uint8_t replayBytes[4]{};
+        if (!replayFetch.ok) throw std::runtime_error("word-atomic replay frontier did not translate");
+        vm.getMemory().Read(replayFetch.phys, replayBytes, sizeof(replayBytes));
+        const uint32_t replayWord = read32(replayBytes, false);
+        if (replayAttemptPc != stopPc || replayFetch.phys != stopPhysical || replayWord != stopWord) {
+            std::ostringstream message;
+            message << "active word-LL replay diverged before the terminal instruction: pc=0x"
+                    << std::hex << replayAttemptPc << "/0x" << stopPc << " pa=0x"
+                    << replayFetch.phys << "/0x" << stopPhysical << " word=0x"
+                    << replayWord << "/0x" << stopWord << " steps=" << std::dec
+                    << successfulStepsAfterLl << " retired=" << retired
+                    << " context=" << context->instructionsExecuted
+                    << " expected_context=" << firstInstructions;
+            throw std::runtime_error(message.str());
+        }
+        if (exceptionStop && (executeOneAndTrace(vm, *cpu, nullptr) ||
+            !Mips64Cpu::faultEntersException(cpu->core().fault()) ||
+            cpu->core().cp0Epc() != stopPc || cpu->core().causeExcCode() == 0)) {
+            throw std::runtime_error("active word-LL replay did not reproduce the terminal exception");
+        }
+        const Mips64FullVmSnapshot replayFinal = vm.captureMips64FullSnapshot();
+        const Ns16550Uart::Snapshot replayUart = board->Uart()->CaptureSnapshot();
+        if (!replayFinal.ValidateIntegrity() || !sameReplayState(firstFinal, replayFinal) ||
+            replayFinal.physicalMemory.reservationGenerations !=
+                firstFinal.physicalMemory.reservationGenerations ||
+            replayFinal.physicalMemory.nextReservationGeneration !=
+                firstFinal.physicalMemory.nextReservationGeneration ||
+            cpu->core().serialize() != firstCpu ||
+            context->instructionsExecuted != firstInstructions || vm.getCyclesExecuted() != firstCycles ||
+            board->ConsoleSink()->Bytes() != firstConsole ||
+            replayUart.transmitCount != firstUart.transmitCount ||
+            replayUart.virtualTimeCycle != firstUart.virtualTimeCycle) {
+            throw std::runtime_error("active word-LL snapshot replay diverged before the next frontier");
+        }
+        llReplayVerified = true;
+        std::ostringstream event;
+        event << "{\"type\":\"word_ll_sc_snapshot_replay\",\"checkpoint_pc_va\":\"0x"
+              << std::hex << std::setw(16) << std::setfill('0') << llFrontierPc + 4
+              << "\",\"checkpoint_reservation_size\":4,\"steps_after_ll\":" << std::dec
+              << successfulStepsAfterLl << ",\"total_retired\":" << retired
+              << ",\"next_frontier_pc_va\":\"0x" << std::hex << std::setw(16) << stopPc
+              << "\",\"next_frontier_instruction\":\"0x" << std::setw(8) << stopWord
+              << "\",\"stop_reason\":\"" << stopReason
+              << "\",\"exception_code\":" << std::dec << cpu->core().causeExcCode()
+              << ",\"exception_epc\":\"0x" << std::hex << std::setw(16)
+              << cpu->core().cp0Epc()
+              << "\",\"reservation_generations_replayed\":" << std::dec
+              << replayFinal.physicalMemory.reservationGenerations.size()
+              << ",\"snapshot_replay_verified\":true}";
+        llReplayRecord = event.str();
+        llFrontierRecord.pop_back();
+        llFrontierRecord += ",\"active_continuation_snapshot_replay_verified\":true}";
+    }
+    if (continuePastSllvFrontier && !llReplayVerified) {
+        throw std::runtime_error("authentic word-LL continuation snapshot replay was not qualified");
     }
 
     if (stopReason == "instruction_budget_exhausted") {
@@ -1772,10 +2117,13 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     if (!tneExecutionRecord.empty()) trace << tneExecutionRecord << "\n";
     if (!sllvFrontierRecord.empty()) trace << sllvFrontierRecord << "\n";
     if (!sllvExecutionRecord.empty()) trace << sllvExecutionRecord << "\n";
+    if (!llFrontierRecord.empty()) trace << llFrontierRecord << "\n";
+    if (!scFrontierRecord.empty()) trace << scFrontierRecord << "\n";
     trace << postSltiuContinuationTrace.str();
     if (!lldScdRecord.empty()) trace << lldScdRecord << "\n";
     if (!lldReplayRecord.empty()) trace << lldReplayRecord << "\n";
     if (!sllvReplayRecord.empty()) trace << sllvReplayRecord << "\n";
+    if (!llReplayRecord.empty()) trace << llReplayRecord << "\n";
     if (continuePastDsrl32Frontier && formerFrontierVerified && attempts > 150042U) {
         const unsigned attemptedAfterFrontier = attempts - 150042U;
         if (attemptedAfterFrontier > continuationTraceRecords) {
@@ -1830,6 +2178,12 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
           << ",\"retired_beyond_sllv_frontier\":"
           << (sllvFrontierVerified && retired >= 150510 ? retired - 150510 : 0)
           << ",\"successful_steps_after_sllv\":" << successfulStepsAfterSllv
+          << ",\"ll_frontier_verified\":" << (llFrontierVerified ? "true" : "false")
+          << ",\"ll_snapshot_replay_verified\":" << (llReplayVerified ? "true" : "false")
+          << ",\"sc_frontier_verified\":" << (scFrontierVerified ? "true" : "false")
+          << ",\"successful_steps_after_ll\":" << successfulStepsAfterLl
+          << ",\"retired_beyond_ll_frontier\":"
+          << (llFrontierVerified && retired >= 150572U ? retired - 150572U : 0)
           << ",\"frontier_verified\":" << (formerFrontierVerified ? "true" : "false")
           << ",\"lld_frontier_verified\":" << (lldFrontierVerified ? "true" : "false")
           << ",\"lld_snapshot_replay_verified\":" << (lldReplayVerified ? "true" : "false")
@@ -1862,6 +2216,35 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
               << "\",\"epc\":\"0x" << std::setw(16) << cpu->core().cp0Epc()
               << "\",\"badvaddr\":\"0x" << std::setw(16) << cpu->core().cp0BadVAddr()
               << "\",\"valid_tlb_entries\":" << std::dec << validTlbEntries << "}\n";
+    }
+    if (llFrontierVerified && (stopReason == "unsupported_instruction" ||
+                               stopReason == "architectural_exception")) {
+        const Mips64Decoded next = decodeInstruction(stopWord);
+        trace << "{\"type\":\"ll_sc_next_frontier\",\"pc_va\":\"0x"
+              << std::hex << std::setw(16) << std::setfill('0') << stopPc
+              << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
+              << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+              << "\",\"opcode\":" << std::dec << unsigned((stopWord >> 26) & 0x3FU)
+              << ",\"rs\":" << unsigned(next.rs) << ",\"rt\":" << unsigned(next.rt)
+              << ",\"rd\":" << unsigned(next.rd) << ",\"sa\":" << unsigned(next.sa)
+              << ",\"decoded_valid\":" << (next.valid ? "true" : "false")
+              << ",\"decoded_fault\":\"" << Mips64Cpu::faultName(next.fault)
+              << "\",\"disassembly\":\"" << cpu->core().disassemble(next)
+              << "\",\"stop_reason\":\"" << stopReason
+              << "\",\"mips_fault\":\"" << Mips64Cpu::faultName(cpu->core().fault())
+              << "\",\"exc_code\":" << std::dec << cpu->core().causeExcCode()
+              << ",\"epc\":\"0x" << std::hex << std::setw(16) << cpu->core().cp0Epc()
+              << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+              << "\",\"badvaddr\":\"0x" << std::setw(16) << cpu->core().cp0BadVAddr()
+              << "\",\"status\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+              << "\",\"cp0_count\":" << std::dec << cpu->core().cp0Count()
+              << ",\"vm_cycles\":" << vm.getCyclesExecuted()
+              << ",\"attempts\":" << attempts << ",\"retired\":" << retired
+              << ",\"uart_bytes\":"
+              << (vm.getMips64MaltaBootstrapBoard() &&
+                  vm.getMips64MaltaBootstrapBoard()->ConsoleSink()
+                      ? vm.getMips64MaltaBootstrapBoard()->ConsoleSink()->Bytes().size() : 0)
+              << "}\n";
     }
     if (!lldPreInstructionRecord.empty()) trace << lldPreInstructionRecord << "\n";
     trace.close();

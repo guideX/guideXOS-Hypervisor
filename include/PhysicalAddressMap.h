@@ -104,12 +104,13 @@ struct PhysicalRegionSnapshot {
     std::vector<std::pair<uint64_t, uint8_t>> sparseBytes;
 };
 
-// CPU-local linked-load token. backingId and granuleOffset identify the
-// physical backing location independently of guest virtual aliases.
+// CPU-local linked-load token. accessSize qualifies the LL/LLD width;
+// backingId and granuleOffset identify physical backing independently of VA.
 struct Mips64ReservationToken {
     uint64_t backingId = 0;
     uint64_t granuleOffset = 0;
     uint64_t generation = 0;
+    uint8_t accessSize = 0;
 };
 
 struct Mips64ReservationGeneration {
@@ -191,10 +192,10 @@ public:
 
     void Read(uint64_t address, uint8_t* destination, size_t size) const;
     void Write(uint64_t address, const uint8_t* source, size_t size);
-    // MIPS64 linked-load/store-conditional support. The monitor covers only
+    // MIPS64 4-byte LL/SC and 8-byte LLD/SCD support. The monitor covers only
     // dense guest RAM and uses a 16-byte backing-relative granule. The check
-    // and the conditional store share the bus reservation lock with ordinary
-    // writes, making the store commit indivisible to supported bus writers.
+    // and conditional store share the bus reservation lock with supported
+    // writers; caches and host-parallel SMP are not modeled.
     void ReadLinked(uint64_t address, uint8_t* destination, size_t size,
                     Mips64ReservationToken& token);
     Mips64ConditionalStoreResult StoreConditional(

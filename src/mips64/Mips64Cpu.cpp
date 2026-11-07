@@ -50,7 +50,10 @@ constexpr uint8_t kOpLwu = 0x27;
 constexpr uint8_t kOpSb = 0x28;
 constexpr uint8_t kOpSh = 0x29;
 constexpr uint8_t kOpSw = 0x2B;
+constexpr uint8_t kOpLl = 0x30;
+constexpr uint8_t kOpLwc2 = 0x32;
 constexpr uint8_t kOpLld = 0x34;
+constexpr uint8_t kOpSc = 0x38;
 constexpr uint8_t kOpScd = 0x3C;
 constexpr uint8_t kOpLd = 0x37;
 constexpr uint8_t kOpSd = 0x3F;
@@ -124,6 +127,7 @@ constexpr uint8_t kC0Mfc0 = 0x00;
 constexpr uint8_t kC0Dmfc0 = 0x01;
 constexpr uint8_t kC0Mtc0 = 0x04;
 constexpr uint8_t kC0Dmtc0 = 0x05;
+constexpr uint8_t kC0Mfmc0 = 0x0B;
 constexpr uint8_t kC0Func = 0x10;
 constexpr uint8_t kC0FnEret = 0x18;
 // -- COP0 TLB function field (CO=1 class, MIPS64r2) -------------------------------
@@ -339,6 +343,19 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                         "reserved REGIMM rt encoding");
         }
         case kOpCop0: {
+            if (decoded.rs == kC0Mfmc0) {
+                // MIPS64 Release 2 DI/EI use MFMC0, rt, rd=12, sa=0 and
+                // the low sc bit to select disable/enable. Recognize these
+                // valid encodings without implementing their CP0 side effect.
+                if (decoded.rd == 12 && decoded.sa == 0 && (word & 0x1FU) == 0) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                ((word >> 5) & 1U) == 0
+                                    ? "valid MIPS64 Release 2 DI requires interrupt-control support"
+                                    : "valid MIPS64 Release 2 EI requires interrupt-control support");
+                }
+                return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                            "reserved MFMC0 encoding");
+            }
             // MFC0/DMFC0/MTC0/DMTC0: bits 10:3 must be zero; sel in bits 2:0.
             if (decoded.rs == kC0Mfc0 || decoded.rs == kC0Dmfc0 ||
                 decoded.rs == kC0Mtc0 || decoded.rs == kC0Dmtc0) {
@@ -452,8 +469,13 @@ Mips64Decoded decodeInstruction(uint32_t word) {
         case kOpSb: decoded.op = Mips64Op::Sb; break;
         case kOpSh: decoded.op = Mips64Op::Sh; break;
         case kOpSw: decoded.op = Mips64Op::Sw; break;
+        case kOpLl: decoded.op = Mips64Op::Ll; break;
+        case kOpLwc2:
+            return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                        "LWC2 requires unsupported COP2 load support");
         case kOpLld: decoded.op = Mips64Op::Lld; break;
         case kOpLd: decoded.op = Mips64Op::Ld; break;
+        case kOpSc: decoded.op = Mips64Op::Sc; break;
         case kOpScd: decoded.op = Mips64Op::Scd; break;
         case kOpSd: decoded.op = Mips64Op::Sd; break;
         default:
@@ -1630,11 +1652,13 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Lhu:
         case Mips64Op::Lw:
         case Mips64Op::Lwu:
+        case Mips64Op::Ll:
         case Mips64Op::Ld:
         case Mips64Op::Lld:
         case Mips64Op::Sb:
         case Mips64Op::Sh:
         case Mips64Op::Sw:
+        case Mips64Op::Sc:
         case Mips64Op::Sd:
         case Mips64Op::Scd:
             if (executeMemory(memory, decoded, address, wasDelaySlot, branchPc) !=
@@ -1667,8 +1691,8 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
     const uint64_t base = readGpr(decoded.rs);
     const uint64_t originalEffective = base + signExtend16(decoded.imm);
 
-    const bool isLinked = decoded.op == Mips64Op::Lld;
-    const bool isConditionalStore = decoded.op == Mips64Op::Scd;
+    const bool isLinked = decoded.op == Mips64Op::Ll || decoded.op == Mips64Op::Lld;
+    const bool isConditionalStore = decoded.op == Mips64Op::Sc || decoded.op == Mips64Op::Scd;
     const Mips64ReservationState priorReservation = reservation_;
     // An LL replaces the CPU's previous reservation, and an SC consumes it
     // even when alignment, translation, or the physical transaction faults.
@@ -1684,11 +1708,13 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
         case Mips64Op::Lhu: accessSize = 2; break;
         case Mips64Op::Lw: accessSize = 4; signExtend = true; break;
         case Mips64Op::Lwu: accessSize = 4; break;
+        case Mips64Op::Ll: accessSize = 4; signExtend = true; break;
         case Mips64Op::Ld: accessSize = 8; break;
         case Mips64Op::Lld: accessSize = 8; break;
         case Mips64Op::Sb: accessSize = 1; isLoad = false; break;
         case Mips64Op::Sh: accessSize = 2; isLoad = false; break;
         case Mips64Op::Sw: accessSize = 4; isLoad = false; break;
+        case Mips64Op::Sc: accessSize = 4; isLoad = false; break;
         case Mips64Op::Sd: accessSize = 8; isLoad = false; break;
         case Mips64Op::Scd: accessSize = 8; isLoad = false; break;
         default:
@@ -1728,7 +1754,7 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
 
     if (isLinked && !supportsMips64LlScCacheAttribute(probe.cacheAttribute)) {
         raiseException(Mips64ExcCode::DBE, Mips64Fault::MemoryFaultLoad,
-                       "LLD target uses an unsupported noncached memory access type",
+                       "linked-load target uses an unsupported noncached memory access type",
                        address, inDelaySlot, branchPc, false, 0);
         return Mips64StepResult::Fault;
     }
@@ -1743,7 +1769,7 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
             ia64::PhysicalAddressMap* physicalMap =
                 physicalMemory ? physicalMemory->GetPhysicalAddressMap() : nullptr;
             try {
-                if (!physicalMap) throw std::runtime_error("LLD requires an enabled physical RAM map");
+                if (!physicalMap) throw std::runtime_error("linked load requires an enabled physical RAM map");
                 physicalMap->ReadLinked(probe.phys, bytes, accessSize, token);
                 linked = true;
             } catch (const std::exception& ex) {
@@ -1806,6 +1832,7 @@ Mips64StepResult Mips64Cpu::executeMemory(ia64::IMemory& memory,
         token.backingId = priorReservation.backingId;
         token.granuleOffset = priorReservation.granuleOffset;
         token.generation = priorReservation.generation;
+        token.accessSize = priorReservation.size;
         try {
             const bool matches = priorReservation.valid && priorReservation.size == accessSize &&
                 priorReservation.virtualAddress == effective &&
@@ -2189,11 +2216,13 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Lhu:
         case Mips64Op::Lw:
         case Mips64Op::Lwu:
+        case Mips64Op::Ll:
         case Mips64Op::Ld:
         case Mips64Op::Lld:
         case Mips64Op::Sb:
         case Mips64Op::Sh:
         case Mips64Op::Sw:
+        case Mips64Op::Sc:
         case Mips64Op::Sd:
         case Mips64Op::Scd:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, %d($%u)", name, decoded.rt,
@@ -2454,10 +2483,14 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
         reservation.granuleOffset = load64(reservationOffset + 28);
         reservation.generation = load64(reservationOffset + 36);
         if (reservation.valid) {
-            if (reservation.size != 8 || reservation.cacheAttribute > 7 ||
-                (reservation.virtualAddress & 7U) != 0 ||
-                reservation.physicalAddress >= ia64::kPhysicalAddressLimit - 7 ||
-                (reservation.physicalAddress & 7U) != 0 || reservation.backingId == 0 ||
+            const bool supportedSize = reservation.size == 4 || reservation.size == 8;
+            const uint64_t reservationSize = supportedSize ? reservation.size : 1;
+            if (!supportedSize || !supportsMips64LlScCacheAttribute(reservation.cacheAttribute) ||
+                (reservation.virtualAddress & (reservationSize - 1)) != 0 ||
+                reservation.physicalAddress >=
+                    ia64::kPhysicalAddressLimit - (reservationSize - 1) ||
+                (reservation.physicalAddress & (reservationSize - 1)) != 0 ||
+                reservation.backingId == 0 ||
                 (reservation.granuleOffset & 15U) != 0 ||
                 reservation.generation == std::numeric_limits<uint64_t>::max()) {
                 return false;
@@ -2848,11 +2881,13 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Lhu: return "lhu";
         case Mips64Op::Lw: return "lw";
         case Mips64Op::Lwu: return "lwu";
+        case Mips64Op::Ll: return "ll";
         case Mips64Op::Ld: return "ld";
         case Mips64Op::Lld: return "lld";
         case Mips64Op::Sb: return "sb";
         case Mips64Op::Sh: return "sh";
         case Mips64Op::Sw: return "sw";
+        case Mips64Op::Sc: return "sc";
         case Mips64Op::Sd: return "sd";
         case Mips64Op::Scd: return "scd";
         case Mips64Op::Beq: return "beq";

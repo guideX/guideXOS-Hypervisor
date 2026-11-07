@@ -470,9 +470,13 @@ void PhysicalAddressMap::ReadLinked(uint64_t address, uint8_t* destination,
         throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
                                "null linked-load destination");
     }
-    if (size != sizeof(uint64_t)) {
+    if (size != sizeof(uint32_t) && size != sizeof(uint64_t)) {
         throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
-                               "MIPS64 LLD requires an eight-byte access");
+                               "MIPS64 linked load requires a four- or eight-byte access");
+    }
+    if ((address & (static_cast<uint64_t>(size) - 1)) != 0) {
+        throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
+                               "MIPS64 linked load address is not naturally aligned");
     }
     std::lock_guard<std::mutex> lock(reservationMutex_);
     const Region& region = Resolve(address, size);
@@ -480,7 +484,7 @@ void PhysicalAddressMap::ReadLinked(uint64_t address, uint8_t* destination,
         region.backend->BackendKind() !=
             static_cast<uint8_t>(PhysicalBackendKind::DenseRam)) {
         throw PhysicalBusError(PhysicalBusErrorCode::PermissionDenied,
-                               "MIPS64 LLD requires supported dense guest RAM");
+                               "MIPS64 linked load requires supported dense guest RAM");
     }
     if (!region.info.readable) {
         throw PhysicalBusError(PhysicalBusErrorCode::PermissionDenied,
@@ -517,6 +521,7 @@ void PhysicalAddressMap::ReadLinked(uint64_t address, uint8_t* destination,
     token.backingId = backingId;
     token.granuleOffset = granuleOffset;
     token.generation = generation->second;
+    token.accessSize = static_cast<uint8_t>(size);
 }
 
 Mips64ConditionalStoreResult PhysicalAddressMap::StoreConditional(
@@ -526,9 +531,13 @@ Mips64ConditionalStoreResult PhysicalAddressMap::StoreConditional(
         throw PhysicalBusError(PhysicalBusErrorCode::DeviceFailure,
                                "null conditional-store source");
     }
-    if (size != sizeof(uint64_t)) {
+    if (size != sizeof(uint32_t) && size != sizeof(uint64_t)) {
         throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
-                               "MIPS64 SCD requires an eight-byte access");
+                               "MIPS64 conditional store requires a four- or eight-byte access");
+    }
+    if ((address & (static_cast<uint64_t>(size) - 1)) != 0) {
+        throw PhysicalBusError(PhysicalBusErrorCode::InvalidWidth,
+                               "MIPS64 conditional store address is not naturally aligned");
     }
     std::lock_guard<std::mutex> lock(reservationMutex_);
     const Region& region = Resolve(address, size);
@@ -546,7 +555,8 @@ Mips64ConditionalStoreResult PhysicalAddressMap::StoreConditional(
     const uint64_t backingId = BackingId(region);
     const uint64_t offset = address - region.info.base;
     const uint64_t granuleOffset = offset & ~(kMips64ReservationGranuleBytes - 1);
-    if (token.backingId != backingId || token.granuleOffset != granuleOffset) {
+    if (token.accessSize != size || token.backingId != backingId ||
+        token.granuleOffset != granuleOffset) {
         return Mips64ConditionalStoreResult::ReservationFailed;
     }
     const auto key = std::make_pair(backingId, granuleOffset);

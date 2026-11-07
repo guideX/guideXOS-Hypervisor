@@ -66,3 +66,7 @@ The trace records earlier authenticated DSRL32, SLTIU, LLD/SCD, and TNE checkpoi
 ## Next phase
 
 MIPS64-18 should investigate the `0xc2020060` COP2 load at `0xffffffff801cbfd4` from the authentic guest state. Establish whether the kernel expects Malta COP2 state or a particular MIPS64 coprocessor behavior, then implement only the demonstrated architectural path and continue the same unmodified ELF/PROM to the next frontier.
+
+## Erratum recorded in MIPS64-18
+
+The preceding frontier narrative is incorrect: `0xc2020060` has primary opcode `0x30` and is `LL $v0,96($s0)`, not LWC2. The Phase 17 JSON trace already records opcode decimal 48, `rs=16`, `rt=2`, and immediate `0x0060`; the trace itself is preserved unchanged. The LWC2 label was introduced only in this report text. See [MIPS64-18 LL/SC word atomics](MIPS64_PHASE18_LL_SC_WORD_ATOMICS.md) for the authentic memory operands, four-byte reservation, SC pairing, replay, and next frontier. A genuine LWC2 opcode is `0x32` and remains distinct.

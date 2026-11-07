@@ -433,6 +433,8 @@ enum class Mips64Op : uint8_t {
     Lld, Scd, Tne,
     // MIPS64r2 variable word shift-left, appended to preserve enum values.
     Sllv,
+    // MIPS64 Release 2 word reservation operations, appended for snapshot ABI.
+    Ll, Sc,
 };
 
 struct Mips64ReservationState {
@@ -626,7 +628,7 @@ public:
     // Serialization blob layout (blob itself is always little-endian and
     // versioned; the configured CPU endianness is stored and restored):
     //   offset 0:  magic 'M','P','6','2' (4 bytes)
-    //   offset 4:  format version u8 (=5), endianness u8, reserved u16
+    //   offset 4:  format version u8 (=6), endianness u8, reserved u16
     //   offset 8:  GPR[32] x u64 LE (256 bytes)
     //   offset 264: PC u64, HI u64, LO u64 (24 bytes)
     //   offset 288: delayArmed u8, delayTarget u64 LE, delayBranch u64 LE
@@ -639,7 +641,10 @@ public:
     //               (vpn2 u64, pfn0 u32, pfn1 u32, mask u16, asid u8,
     //                c0 u8, c1 u8, flags u8 [v0,d0,v1,d1,g,badMask],
     //                reserved 10 bytes zero; vpn2 stores packed R||VPN2)
-    // Total: 957 bytes.
+    //   offset 957: CPU-local reservation (active u8, width u8, CCA u8,
+    //               reserved u8, virtual/physical/backing/granule/generation
+    //               as five u64 LE values).
+    // Total: 1001 bytes.
     //
     // Version history (see docs/MIPS64_PHASE4R1_ACCEPTANCE_CLOSURE.md):
     //   v1 'MP61' (301 bytes), v2 (373 bytes): rejected.
@@ -658,6 +663,11 @@ public:
     //      Status/EBase bits outside their writable masks, Count/Compare
     //      above 32 bits and non-zero delay fields with delayArmed=0 are
     //      rejected.
+    //   v6 (MIPS64-15/18): appends the CPU-local reservation token without
+    //      changing the 957-byte v5 prefix. Active widths are 8 bytes for
+    //      LLD/SCD and 4 bytes for LL/SC; each requires natural alignment and
+    //      a modeled cached CCA (3 or 5). Inactive reservation fields are
+    //      canonical zeroes. Historical v3-v5 migration remains unchanged.
     // Truncation, bad magic/version, null data and out-of-range fields fail
     // safely with live state untouched.
     static constexpr std::size_t kSerializedSizeV5 = 957;

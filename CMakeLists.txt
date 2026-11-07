@@ -920,6 +920,33 @@ else()
 endif()
 add_test(NAME Mips64LldScdTests COMMAND test_mips64_lld_scd)
 
+# MIPS64-18 four-byte LL/SC word operations, including their distinction from
+# COP2 loads and the authenticated Linux frontier encoding.
+add_executable(test_mips64_ll_sc_word
+    tests/test_mips64_ll_sc_word.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+if(MSVC)
+    target_compile_options(test_mips64_ll_sc_word PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_ll_sc_word PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64LlScWordTests COMMAND test_mips64_ll_sc_word)
+
+# CPU v6 and physical reservation-generation validation/replay for active LL.
+add_executable(test_mips64_word_reservation_snapshot
+    tests/test_mips64_word_reservation_snapshot.cpp
+    ${MIPS64_CORE_SOURCES}
+    ${MIPS64_MEMORY_SOURCES}
+)
+if(MSVC)
+    target_compile_options(test_mips64_word_reservation_snapshot PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_word_reservation_snapshot PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64WordReservationSnapshotTests COMMAND test_mips64_word_reservation_snapshot)
+
 # MIPS64-16 conditional Trap (TNE), including precise exception entry,
 # delay-slot attribution, both fetch endiannesses and production-VM replay.
 add_executable(test_mips64_tne
