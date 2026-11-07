@@ -857,9 +857,13 @@ struct AuthenticReplay {
     bool hvBranchTaken = false;
     bool setupPacaReturned = false;
     bool stoppedOnUnsupported = false;
+    bool extswFetched = false;
+    bool extswRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
+    uint64_t totalRetiredBeforeExtsw = 0;
+    uint64_t lastSuccessfulNip = 0;
     uint64_t pacaBacking = 0;
     uint64_t pacaBytesHash = 0;
     uint64_t ramBeforeSPRG1 = 0;
@@ -869,20 +873,33 @@ struct AuthenticReplay {
     uint64_t sprg1Reads = 0;
     bool sprg1ReadbackCorrect = true;
     uint32_t rawWord = 0;
+    uint32_t extswRawWord = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
+    uint64_t stopBackingAddress = 0;
+    bool stopFetchTranslated = false;
+    bool stopFetchExecuteAllowed = false;
+    uint64_t extswNip = 0;
+    uint16_t extswLPID = 0;
+    uint64_t extswRamBefore = 0;
+    uint64_t extswRamAfter = 0;
     uint64_t msrAtFrontier = 0;
     uint32_t crAtFrontier = 0;
     uint32_t xerAtFrontier = 0;
     uint64_t lpidAtFrontier = 0;
     uint64_t initialSprg1 = 0;
     uint64_t finalSprg1 = 0;
+    uint64_t extswContextFollowing = 0;
     std::string decode;
+    std::string extswDecode;
     std::string stopClass;
     std::string stopDisassembly;
+    std::vector<std::string> extswContext;
     std::string error;
     PPC64RegisterView before{};
     PPC64RegisterView after{};
+    PPC64RegisterView extswBefore{};
+    PPC64RegisterView extswAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -897,7 +914,8 @@ void addDigest(uint64_t& digest, uint64_t value) {
 
 AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  const std::vector<uint8_t>& referenceFdt,
-                                 const LinuxElfEvidence& elfEvidence) {
+                                 const LinuxElfEvidence& elfEvidence,
+                                 bool stopAtExtsw = true) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1077,6 +1095,13 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.stopDisassembly = next.disassembly;
                 result.stopWord = cpu->hasFault() && cpu->getLastFault().hasRaw
                     ? cpu->getLastFault().raw : 0U;
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.stopFetchTranslated = translation.success;
+                result.stopFetchExecuteAllowed = translation.executeAllowed;
+                result.stopBackingAddress = translation.hostBackingAddress;
                 stopped = true;
                 break;
             }
@@ -1085,6 +1110,38 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             if (following.kind == DecodedKind::MFSPR && following.sprn == SPR_SPRG1) {
                 ++result.sprg1Reads;
             }
+            if (following.kind == DecodedKind::EXTSW && !result.extswFetched) {
+                result.extswFetched = true;
+                result.extswNip = before.nip;
+                result.extswRawWord = following.raw;
+                result.extswDecode = next.disassembly;
+                result.extswBefore = before;
+                result.totalRetiredBeforeExtsw =
+                    result.prefixRetired + result.continuationRetired;
+                result.extswLPID = cpu->getActiveLPID();
+                result.extswRamBefore = fingerprintRam(*memory);
+                const size_t contextStart = lastInstructions.size() > 16U
+                    ? lastInstructions.size() - 16U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    result.extswContext.push_back(lastInstructions[index]);
+                }
+                if (stopAtExtsw) {
+                    result.stopClass = "phase33-authenticated-extsw-boundary";
+                    result.stopNip = before.nip;
+                    result.stopWord = following.raw;
+                    result.stopDisassembly = next.disassembly;
+                    const uint64_t gra = before.nip & kGuestRealMask;
+                    const auto translation = PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition, gra,
+                        PPC64TranslationAccess::FETCH);
+                    result.stopFetchTranslated = translation.success;
+                    result.stopFetchExecuteAllowed = translation.executeAllowed;
+                    result.stopBackingAddress = translation.hostBackingAddress;
+                    stopped = true;
+                    break;
+                }
+            }
             const bool retired = vm.step();
             const PPC64RegisterView after = vm.getPPC64RegisterView();
             if (!retired) {
@@ -1092,10 +1149,25 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.stopNip = before.nip;
                 result.stopWord = following.raw;
                 result.stopDisassembly = next.disassembly;
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.stopFetchTranslated = translation.success;
+                result.stopFetchExecuteAllowed = translation.executeAllowed;
+                result.stopBackingAddress = translation.hostBackingAddress;
                 stopped = true;
                 break;
             }
             ++result.continuationRetired;
+            result.lastSuccessfulNip = before.nip;
+            if (following.kind == DecodedKind::EXTSW &&
+                result.extswFetched && before.nip == result.extswNip &&
+                !result.extswRetired) {
+                result.extswAfter = after;
+                result.extswRetired = after.nip == before.nip + 4U;
+                result.extswRamAfter = fingerprintRam(*memory);
+            }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
                 following.kind == DecodedKind::BCLR && after.nip == before.lr) {
                 result.setupPacaReturned = true;
@@ -1111,7 +1183,17 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             line << "nip=" << hex(before.nip) << " raw="
                  << wordHex(following.raw) << " instruction="
                  << next.disassembly << " next=" << hex(after.nip)
-                 << " sprg1=" << hex(after.sprg1);
+                 << " sprg1=" << hex(after.sprg1)
+                 << " r3=" << hex(before.gpr[3])
+                 << " r4=" << hex(before.gpr[4])
+                 << " r5=" << hex(before.gpr[5])
+                 << " r31=" << hex(before.gpr[31]);
+            if (result.extswFetched && result.extswContextFollowing < 16U) {
+                result.extswContext.push_back(line.str());
+                if (before.nip != result.extswNip) {
+                    ++result.extswContextFollowing;
+                }
+            }
             if (lastInstructions.size() == 64U) lastInstructions.pop_front();
             lastInstructions.push_back(line.str());
             if (result.continuationRetired <= 128U ||
@@ -1133,6 +1215,12 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
     if (!stopped) {
         result.stopClass = "bounded-continuation-limit";
         result.stopNip = result.final.nip;
+        const uint64_t gra = result.stopNip & kGuestRealMask;
+        const auto translation = PPC64PartitionMMU::translateGuestReal(
+            vm.getMemory(), *partition, gra, PPC64TranslationAccess::FETCH);
+        result.stopFetchTranslated = translation.success;
+        result.stopFetchExecuteAllowed = translation.executeAllowed;
+        result.stopBackingAddress = translation.hostBackingAddress;
         cpu->clearFault();
         const ISADecodeResult endpoint = cpu->decode(vm.getMemory());
         if (endpoint.internalData != nullptr) {
@@ -1146,6 +1234,11 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         }
     }
     result.totalRetired = result.prefixRetired + result.continuationRetired;
+    if (result.extswFetched) {
+        trace << "authentic_extsw_dataflow_context_begin\n";
+        for (const auto& line : result.extswContext) trace << line << "\n";
+        trace << "authentic_extsw_dataflow_context_end\n";
+    }
     result.trace = trace.str();
     return result;
 }
@@ -1226,8 +1319,12 @@ void testAuthenticLinuxContinuation() {
           second.ramBeforeSPRG1 == second.ramAfterSPRG1);
     CHECK(first.continuationRetired >= 10'000U &&
           second.continuationRetired == first.continuationRetired);
-    CHECK(first.stoppedOnUnsupported && second.stoppedOnUnsupported);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction");
+    CHECK(first.extswFetched && second.extswFetched);
+    CHECK(first.extswRawWord == 0x7CA507B4U &&
+          second.extswRawWord == first.extswRawWord);
+    CHECK(!first.extswRetired && !second.extswRetired);
+    CHECK(!first.stoppedOnUnsupported && !second.stoppedOnUnsupported);
+    CHECK(first.stopClass == "phase33-authenticated-extsw-boundary");
     CHECK(first.sprg1ReadbackCorrect && second.sprg1ReadbackCorrect);
     CHECK(first.totalRetired == second.totalRetired);
     CHECK(first.stopClass == second.stopClass && first.stopNip == second.stopNip);

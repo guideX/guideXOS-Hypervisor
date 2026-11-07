@@ -1336,6 +1336,27 @@ endif()
 add_test(NAME PPC64Phase33Tests COMMAND test_ppc64_phase33)
 set_tests_properties(PPC64Phase33Tests PROPERTIES TIMEOUT 1800)
 
+# PPC64 EXTSW semantics, record form, mode qualification, and authenticated
+# Linux continuation through the production VM execution path.
+add_executable(test_ppc64_phase34
+    tests/test_ppc64_phase34.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase34 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase34 PRIVATE
+    PPC64_PHASE33_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase34 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase34 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase34Tests COMMAND test_ppc64_phase34)
+set_tests_properties(PPC64Phase34Tests PROPERTIES TIMEOUT 1800)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

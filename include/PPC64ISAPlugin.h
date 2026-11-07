@@ -251,6 +251,7 @@ constexpr uint16_t XO_OR = 444;    // no OE form
 constexpr uint16_t XO_XOR = 316;   // no OE form
 constexpr uint16_t XO_CMP = 0;     // Rc must be 0
 constexpr uint16_t XO_CMPL = 32;   // Rc must be 0
+constexpr uint16_t XO_EXTSW = 986; // extend sign word, Rc selects CR0 update
 
 // X-form/XFX 10-bit combined extended opcode ((word >> 1) & 0x3FF).
 constexpr uint16_t XO_MFSPR = 339;
@@ -431,6 +432,7 @@ enum class DecodedKind {
     AND,        // and[.]     (X-form, XO 28)
     OR,         // or[.]      (X-form, XO 444)
     XOR,        // xor[.]     (X-form, XO 316)
+    EXTSW,      // extsw[.]   (X-form, XO 986; 64-bit fixed-point facility)
     ANDI_DOT,   // andi.      (D-form opcode 28; always records CR0)
     ANDIS_DOT,  // andis.     (D-form opcode 29; always records CR0)
     XORI,       // xori       (D-form opcode 26; never records)

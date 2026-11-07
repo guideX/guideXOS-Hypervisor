@@ -1654,6 +1654,13 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             } else if (combined == XO_XOR) {
                 instr.kind = DecodedKind::XOR;
                 instr.supported = true;
+            } else if (combined == XO_EXTSW) {
+                // EXTSW is an X-form 64-bit fixed-point instruction.  The
+                // five bits between RA and XO are reserved and must be zero;
+                // RS is in the RT field position and RA is the destination.
+                instr.oe = false;
+                instr.kind = DecodedKind::EXTSW;
+                instr.supported = instr.rb == 0;
             } else if (combined == XO_CMP && !rc) {
                 // cmp: reserved ISA bit 9 (word bit 22) must be zero.
                 if (((word >> 22) & 0x1U) != 0) {
@@ -1958,6 +1965,14 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << " r" << static_cast<int>(instr.ra)
                 << ",r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.rb);
+            break;
+        case DecodedKind::EXTSW:
+            out << "extsw" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt);
+            if (!instr.supported) {
+                out << " ; invalid reserved field";
+            }
             break;
         case DecodedKind::ANDI_DOT:
             out << "andi. r" << static_cast<int>(instr.ra)
@@ -3652,6 +3667,23 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             } else {
                 result = s ^ t;
             }
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::EXTSW: {
+            // The PPC64 fixed-point facility operates on the low word and
+            // replicates its sign bit through the high word.  Unsigned
+            // operations keep the result independent of host signed-shift
+            // rules and make RA==RS safe.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t word = source & 0xFFFFFFFFULL;
+            const uint64_t result = (word & 0x80000000ULL) != 0
+                ? word | 0xFFFFFFFF00000000ULL
+                : word;
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);
