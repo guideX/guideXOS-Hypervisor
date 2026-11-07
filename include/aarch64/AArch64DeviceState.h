@@ -129,6 +129,7 @@ private:
     friend class AArch64PhysicalBus;
     friend class AArch64PL011;
     friend class AArch64GenericTimer;
+    friend class AArch64GICv3;
     struct RegisteredDevice {
         std::unique_ptr<AArch64StatefulDevice> device;
         AArch64MMIODevice* mmio = nullptr;
@@ -151,6 +152,8 @@ private:
                                        std::size_t size, bool write);
     bool beginDeviceOperation(uint64_t ownerId, AArch64StatefulDevice*& device,
                               std::string* error);
+    bool queryInterruptSourceForController(
+        uint64_t sourceId, AArch64InterruptSourceState& state) const noexcept;
     void endDeviceOperation() noexcept;
     bool beginSnapshot(std::vector<AArch64StatefulDevice*>& devices,
                       std::vector<AArch64InterruptSourceState>& sources,

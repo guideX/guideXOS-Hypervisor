@@ -343,6 +343,19 @@ bool AArch64DeviceRegistry::queryInterruptSource(
     return true;
 }
 
+bool AArch64DeviceRegistry::queryInterruptSourceForController(
+    uint64_t sourceId, AArch64InterruptSourceState& state) const noexcept {
+    try {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = sources_.find(sourceId);
+        if (it == sources_.end()) return false;
+        state = it->second;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool AArch64DeviceRegistry::resetInterruptSource(uint64_t sourceId,
                                                  std::string* error) {
     std::lock_guard<std::mutex> lock(mutex_);

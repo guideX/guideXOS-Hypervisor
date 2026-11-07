@@ -693,8 +693,10 @@ add_test(NAME AArch64SnapshotTests COMMAND test_aarch64_snapshot)
 add_test(NAME AArch64DeviceSnapshotTests COMMAND test_aarch64_device_snapshot)
 add_test(NAME AArch64PL011Tests COMMAND test_aarch64_pl011)
 add_test(NAME AArch64GenericTimerTests COMMAND test_aarch64_generic_timer)
+add_test(NAME AArch64GICv3Tests COMMAND test_aarch64_gicv3)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
+set_tests_properties(AArch64GICv3Tests PROPERTIES TIMEOUT 120)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -923,11 +925,28 @@ add_executable(test_aarch64_generic_timer
     ${HEADERS}
 )
 
+# AARCH64-12: bounded GICv3 Distributor/Redistributor, architectural CPU
+# interface registers, source routing, genuine CPU IRQ entry, and snapshots.
+add_executable(test_aarch64_gicv3
+    tests/test_aarch64_gicv3.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    src/aarch64/AArch64DeviceState.cpp
+    src/aarch64/AArch64DeviceSnapshot.cpp
+    src/aarch64/AArch64PhysicalBus.cpp
+    src/aarch64/AArch64PL011.cpp
+    src/aarch64/AArch64GenericTimer.cpp
+    src/aarch64/AArch64GICv3.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
     target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_pl011 PRIVATE ws2_32 bcrypt)
     target_link_libraries(test_aarch64_generic_timer PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_gicv3 PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)
@@ -945,11 +964,13 @@ if(MSVC)
     target_compile_options(test_aarch64_device_snapshot PRIVATE /W4)
     target_compile_options(test_aarch64_pl011 PRIVATE /W4)
     target_compile_options(test_aarch64_generic_timer PRIVATE /W4)
+    target_compile_options(test_aarch64_gicv3 PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_pl011 PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_generic_timer PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_gicv3 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

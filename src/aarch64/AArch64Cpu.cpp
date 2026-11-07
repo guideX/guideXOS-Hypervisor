@@ -263,7 +263,7 @@ Cpu& Cpu::operator=(const Cpu& other) {
     tlb_ = other.tlb_;
     lastFault_ = other.lastFault_;
     lastError_ = other.lastError_;
-    systemRegisterHandler_.reset();
+    systemRegisterHandlers_.clear();
     return *this;
 }
 
@@ -304,7 +304,7 @@ Cpu& Cpu::operator=(Cpu&& other) {
     tlb_ = std::move(other.tlb_);
     lastFault_ = other.lastFault_;
     lastError_ = std::move(other.lastError_);
-    systemRegisterHandler_.reset();
+    systemRegisterHandlers_.clear();
     return *this;
 }
 
@@ -312,10 +312,55 @@ bool Cpu::bindSystemRegisterHandler(
     const std::shared_ptr<AArch64SystemRegisterHandler>& handler) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     if (snapshotBoundaryActive_ || !handler) return false;
-    const auto current = systemRegisterHandler_.lock();
-    if (current && current != handler) return false;
-    systemRegisterHandler_ = handler;
+    for (auto it = systemRegisterHandlers_.begin(); it != systemRegisterHandlers_.end();) {
+        const auto current = it->lock();
+        if (!current) {
+            it = systemRegisterHandlers_.erase(it);
+            continue;
+        }
+        if (current == handler) return true;
+        ++it;
+    }
+    // Keep the per-step lease bounded while allowing the Generic Timer and
+    // GIC CPU interface to coexist (plus a small number of future banks).
+    if (systemRegisterHandlers_.size() >= 8) return false;
+    systemRegisterHandlers_.push_back(handler);
     return true;
+}
+
+bool Cpu::acceptPendingIrq() {
+    if ((pstate_ & kPstateI) != 0 ||
+        static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2) > 1) {
+        return false;
+    }
+    for (auto it = systemRegisterHandlers_.begin(); it != systemRegisterHandlers_.end();) {
+        const auto handler = it->lock();
+        if (!handler) {
+            it = systemRegisterHandlers_.erase(it);
+            continue;
+        }
+        if (handler->irqOutputAsserted()) {
+            takeIrqException();
+            return true;
+        }
+        ++it;
+    }
+    return false;
+}
+
+void Cpu::takeIrqException() {
+    synchronizeTranslationContext();
+    const uint8_t originEl = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+    const bool originUsesSpEl0 = originEl == 0 || (pstate_ & kPstateSpsel) == 0;
+    const uint64_t vectorOffset = originEl == 0 ? 0x480
+        : (originUsesSpEl0 ? 0x080 : 0x280);
+    elrEl1_ = pc_;
+    spsrEl1_ = pstate_;
+    // IRQ entry has no synchronous syndrome. Preserve ESR_EL1 and FAR_EL1.
+    pstate_ = (pstate_ & (kPstateN | kPstateZ | kPstateC | kPstateV)) |
+              kPstateDAIF | 0x5u;
+    pc_ = vbarEl1_ + vectorOffset;
+    exceptionVectorPending_ = true;
 }
 
 bool conditionHolds(uint8_t cond, bool n, bool z, bool c, bool v) {
@@ -577,7 +622,7 @@ bool Cpu::readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
             }
             // A device access is one transaction. Do not split it at a page
             // boundary or turn a paired access into multiple register calls.
-            if (size != 4 || segments.size() != 0 || count != size) {
+            if (segments.size() != 0 || count != size) {
                 return fail(0x10, false, va);
             }
         }
@@ -644,7 +689,7 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
             if (translated.attributes.memoryAttribute != 0x00u) {
                 return fail(0x10, false, va);
             }
-            if (size != 4 || segments.size() != 0 || count != size) {
+            if (segments.size() != 0 || count != size) {
                 return fail(0x10, false, va);
             }
         }
@@ -881,16 +926,21 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
     // 0xF9000000 (STR). Indexed bases: 0xB8400000 / 0xF8400000 (LDR/LDUR),
     // 0xB8000000 / 0xF8000000 (STR/STUR).
     {
-        const uint32_t lsw = word & 0xFFC00000u;
-        const bool isUnsigned = (lsw == 0xB9000000u || lsw == 0xF9000000u ||
-                                 lsw == 0xB9400000u || lsw == 0xF9400000u);
-        const bool isUnscaledOrIndexed = (lsw == 0xB8000000u || lsw == 0xF8000000u ||
-                                          lsw == 0xB8400000u || lsw == 0xF8400000u);
+        const uint32_t lsClass = word & 0x3F000000u;
+        const bool isUnsigned = (lsClass == 0x39000000u);
+        const bool isUnscaledOrIndexed = (lsClass == 0x38000000u);
         if (isUnsigned || isUnscaledOrIndexed) {
-            const bool sf = (word & 0x40000000u) != 0; // size[0]: 0 = W, 1 = X
-            const bool isLoad = (word & 0x00400000u) != 0; // o1 bit 22
+            const uint32_t sizeCode = (word >> 30) & 3u;
+            const uint32_t opc = (word >> 22) & 3u;
+            if (opc > 1u) {
+                return invalid(word, address, Fault::UnsupportedFeature,
+                               "signed byte/halfword and sign-extending scalar loads are outside this profile");
+            }
+            const bool isLoad = opc == 1u;
+            const bool sf = sizeCode == 3u; // 64-bit GPR transfer only for 8-byte accesses
             Decoded d;
             d.sf64 = sf;
+            d.accessBytes = static_cast<uint8_t>(1u << sizeCode);
             d.word = word;
             d.address = address;
             d.rn = static_cast<uint8_t>((word >> 5) & 31u);
@@ -899,8 +949,8 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
                 d.op = isLoad ? Op::LdrImm : Op::StrImm;
                 d.addrMode = 0;
                 d.imm12 = static_cast<uint16_t>((word >> 10) & 0xFFFu);
-                // Unsigned offset scales by the access size (x4 for W, x8 for X).
-                d.memOffset = static_cast<uint64_t>(d.imm12) << (sf ? 3 : 2);
+                // Unsigned offset scales by the transfer width.
+                d.memOffset = static_cast<uint64_t>(d.imm12) << sizeCode;
                 d.signedOffset = 0;
             } else {
                 const uint32_t mode = (word >> 10) & 3u; // bits[11:10]
@@ -936,20 +986,32 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
             const std::string rt = (d.rd == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rd);
             const bool load = isLoad;
             if (d.op == Op::LdrImm || d.op == Op::StrImm) {
+                const char* mnemonic = d.accessBytes == 1 ? (load ? "ldrb" : "strb")
+                                      : d.accessBytes == 2 ? (load ? "ldrh" : "strh")
+                                      : (load ? "ldr" : "str");
                 std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%llu]",
-                              load ? "ldr" : "str", rt.c_str(), base.c_str(),
+                              mnemonic, rt.c_str(), base.c_str(),
                               static_cast<unsigned long long>(d.memOffset));
             } else if (d.op == Op::Ldur || d.op == Op::Stur) {
+                const char* mnemonic = d.accessBytes == 1 ? (load ? "ldurb" : "sturb")
+                                      : d.accessBytes == 2 ? (load ? "ldurh" : "sturh")
+                                      : (load ? "ldur" : "stur");
                 std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%lld]",
-                              load ? "ldur" : "stur", rt.c_str(), base.c_str(),
+                              mnemonic, rt.c_str(), base.c_str(),
                               static_cast<long long>(d.signedOffset));
             } else if (d.op == Op::LdrPre || d.op == Op::StrPre) {
+                const char* mnemonic = d.accessBytes == 1 ? (load ? "ldrb" : "strb")
+                                      : d.accessBytes == 2 ? (load ? "ldrh" : "strh")
+                                      : (load ? "ldr" : "str");
                 std::snprintf(buf, sizeof(buf), "%s %s, [%s, #%lld]!",
-                              load ? "ldr" : "str", rt.c_str(), base.c_str(),
+                              mnemonic, rt.c_str(), base.c_str(),
                               static_cast<long long>(d.signedOffset));
             } else {
+                const char* mnemonic = d.accessBytes == 1 ? (load ? "ldrb" : "strb")
+                                      : d.accessBytes == 2 ? (load ? "ldrh" : "strh")
+                                      : (load ? "ldr" : "str");
                 std::snprintf(buf, sizeof(buf), "%s %s, [%s], #%lld",
-                              load ? "ldr" : "str", rt.c_str(), base.c_str(),
+                              mnemonic, rt.c_str(), base.c_str(),
                               static_cast<long long>(d.signedOffset));
             }
             d.disassembly = buf;
@@ -1544,9 +1606,20 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     const uint16_t ttbr0Key = sysregKey(3, 0, 2, 0, 0);
     const uint16_t ttbr1Key = sysregKey(3, 0, 2, 0, 1);
     const uint16_t mairKey = sysregKey(3, 0, 10, 2, 0);
-    const auto timerHandler = systemRegisterHandler_.lock();
-    const bool timerRegister = timerHandler &&
-                               timerHandler->handlesSystemRegister(key);
+    std::shared_ptr<AArch64SystemRegisterHandler> registerHandler;
+    for (auto it = systemRegisterHandlers_.begin(); it != systemRegisterHandlers_.end();) {
+        const auto handler = it->lock();
+        if (!handler) {
+            it = systemRegisterHandlers_.erase(it);
+            continue;
+        }
+        if (handler->handlesSystemRegister(key)) {
+            registerHandler = handler;
+            break;
+        }
+        ++it;
+    }
+    const bool deviceRegister = static_cast<bool>(registerHandler);
     constexpr uint32_t kSupportedSpsrFields =
         0xF0000000u | kPstateDAIF | (1u << 20) | kPstateModeMask;
 
@@ -1555,7 +1628,7 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
                        key == elrKey || key == vbarKey || key == esrKey ||
                        key == farKey || key == sctlrKey || key == tcrKey ||
                        key == ttbr0Key || key == ttbr1Key || key == mairKey ||
-                       timerRegister;
+                       deviceRegister;
     if (!known) {
         lastError_ = "system-register encoding is outside the implemented subset: " +
                      encodedSysregName(decoded.sysOp0, decoded.sysOp1,
@@ -1564,7 +1637,7 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
         return Fault::UnsupportedFeature;
     }
 
-    if (timerRegister && !isRead && timerHandler->writeIsUndefined(key)) {
+    if (deviceRegister && !isRead && registerHandler->writeIsUndefined(key)) {
         takeSynchronousException(0x00, 0, pc_);
         return Fault::None;
     }
@@ -1573,12 +1646,12 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     // in this profile. Timer access uses the distinct CNTKCTL_EL1 controls;
     // other privileged-only accesses remain architecturally UNDEFINED.
     const bool el0AccessAllowed = key == nzcvKey ||
-        (timerRegister && timerHandler->el0AccessAllowed(key, isRead));
+        (deviceRegister && registerHandler->el0AccessAllowed(key, isRead));
     if (el == 0 && !el0AccessAllowed) {
         if (key == daifKey) {
             takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
-        } else if (timerRegister &&
-                   !timerHandler->el0AccessIsUndefined(key, isRead)) {
+        } else if (deviceRegister &&
+                   !registerHandler->el0AccessIsUndefined(key, isRead)) {
             takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
         } else {
             takeSynchronousException(0x00, 0, pc_);
@@ -1586,14 +1659,14 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
         return Fault::None;
     }
 
-    if (timerRegister) {
+    if (deviceRegister) {
         if (isRead) {
-            const uint64_t value = timerHandler->readSystemRegister(key);
+            const uint64_t value = registerHandler->readSystemRegister(key);
             if (decoded.rd != 31) x_[decoded.rd] = value;
         } else {
             const uint64_t source = decoded.rd == 31 ? 0 : x_[decoded.rd];
             std::string reason;
-            if (!timerHandler->writeSystemRegister(key, source, &reason)) {
+            if (!registerHandler->writeSystemRegister(key, source, &reason)) {
                 lastError_ = reason.empty()
                     ? "Generic Timer system-register write is unsupported"
                     : reason;
@@ -1849,24 +1922,42 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         return lastFault_;
     }
 
-    // Acquire one timer/device operation lease for the complete instruction,
-    // including its retirement tick and derived interrupt-source update.
-    // Snapshot coordination therefore sees either the whole step or none of
-    // it. A synchronous exception caused by this fetched instruction is still
-    // a completed step; fetch failures and emulator faults do not retire.
-    auto stepHandler = systemRegisterHandler_.lock();
-    if (stepHandler && !stepHandler->beginInstructionStep()) {
-        lastFault_ = Fault::SnapshotBoundary;
-        lastError_ = "Generic Timer device is quiesced or unavailable at the instruction boundary";
-        return lastFault_;
+    // Acquire every bound device operation for the complete instruction,
+    // including timer retirement and source publication. This makes a
+    // device-aware snapshot boundary atomic with respect to both devices.
+    std::vector<std::shared_ptr<AArch64SystemRegisterHandler>> stepHandlers;
+    std::vector<std::shared_ptr<AArch64SystemRegisterHandler>> leasedHandlers;
+    for (auto it = systemRegisterHandlers_.begin(); it != systemRegisterHandlers_.end();) {
+        auto handler = it->lock();
+        if (!handler) {
+            it = systemRegisterHandlers_.erase(it);
+            continue;
+        }
+        stepHandlers.push_back(std::move(handler));
+        ++it;
+    }
+    std::stable_sort(stepHandlers.begin(), stepHandlers.end(),
+        [](const auto& left, const auto& right) {
+            return left->instructionStepOrder() < right->instructionStepOrder();
+        });
+    for (const auto& handler : stepHandlers) {
+        if (!handler->beginInstructionStep()) {
+            for (auto leased = leasedHandlers.rbegin(); leased != leasedHandlers.rend(); ++leased)
+                (*leased)->finishInstructionStep(false);
+            lastFault_ = Fault::SnapshotBoundary;
+            lastError_ = "AArch64 system-register device is quiesced or unavailable at the instruction boundary";
+            return lastFault_;
+        }
+        leasedHandlers.push_back(handler);
     }
     struct InstructionStepLease {
-        std::shared_ptr<AArch64SystemRegisterHandler> handler;
+        std::vector<std::shared_ptr<AArch64SystemRegisterHandler>> handlers;
         bool retired = false;
         ~InstructionStepLease() {
-            if (handler) handler->finishInstructionStep(retired);
+            for (const auto& handler : handlers)
+                handler->finishInstructionStep(retired);
         }
-    } stepLease{stepHandler};
+    } stepLease{std::move(leasedHandlers)};
 
     // A successfully fetched vector instruction establishes that exception
     // dispatch reached guest code. Later faults are ordinary nested faults.
@@ -2087,7 +2178,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // Base register 31 is SP; destination 31 is WZR/XZR (discarded).
         const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
-        const size_t size = decoded.sf64 ? 8 : 4;
+        const size_t size = decoded.accessBytes;
         if (!addressRangeIsRepresentable(address, size)) {
             if ((effectiveSctlrEl1_ & 1u) != 0) {
                 takeMemoryAbort(address, MMUAccess::Read, 0x00, false);
@@ -2137,7 +2228,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // The memory access always happens (and can fault) even for XZR.
         const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address = base + decoded.memOffset; // wraps mod 2^64
-        const size_t size = decoded.sf64 ? 8 : 4;
+        const size_t size = decoded.accessBytes;
         if (!addressRangeIsRepresentable(address, size)) {
             if ((effectiveSctlrEl1_ & 1u) != 0) {
                 takeMemoryAbort(address, MMUAccess::Write, 0x00, false);
@@ -2346,7 +2437,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // Unscaled signed-offset access: no scaling, no writeback, base
         // preserved. Rn==31 is SP; Rt==31 is WZR/XZR.
         const bool isLoad = (decoded.op == Op::Ldur);
-        const size_t size = decoded.sf64 ? 8 : 4;
+        const size_t size = decoded.accessBytes;
         const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address =
             base + static_cast<uint64_t>(decoded.signedOffset); // wraps mod 2^64
@@ -2429,7 +2520,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         // The written-back value is base+offset in both cases.
         const bool isLoad = (decoded.op == Op::LdrPre || decoded.op == Op::LdrPost);
         const bool isPost = (decoded.op == Op::LdrPost || decoded.op == Op::StrPost);
-        const size_t size = decoded.sf64 ? 8 : 4;
+        const size_t size = decoded.accessBytes;
         const uint64_t base = (decoded.rn == 31) ? activeSpRef() : x_[decoded.rn];
         const uint64_t address =
             isPost ? base
@@ -2633,6 +2724,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded) {
 Fault Cpu::step(ia64::IMemory& memory) {
     std::lock_guard<std::recursive_mutex> lock(executionMutex_);
     if (snapshotBoundaryActive_) return Fault::SnapshotBoundary;
+    acceptPendingIrq();
     const Decoded decoded = fetchDecode(memory);
     return executeDecoded(decoded, memory);
 }

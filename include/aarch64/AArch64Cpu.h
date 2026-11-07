@@ -31,8 +31,9 @@
 //   selected system registers, SVC/BRK, VBAR_EL1 vector dispatch, ERET and a
 //   bounded guest-controlled EL0/EL1 Stage-1 4 KiB MMU. With SCTLR_EL1.M=0,
 //   the established flat-memory execution profile remains active.
-// OUT OF SCOPE: Stage-2, EL2/EL3, GIC interrupts, timers, PL011, virtio, SMP,
-//   JIT, SIMD/FP, and the rest of the A64 ISA (see docs/aarch64/).
+// OUT OF SCOPE: Stage-2, EL2/EL3, GICv3 SMP/SGIs/ITS/LPIs/virtualization,
+//   FIQ, virtio, JIT, SIMD/FP, and the rest of the A64 ISA. The bounded
+//   single-PE GICv3, timer, PL011, and IRQ profile is in docs/aarch64/.
 //
 // AARCH64-2 memory profile (explicit and bounded):
 //   - Little-endian guest data access through the generic IMemory contract.
@@ -100,6 +101,10 @@ public:
     virtual uint64_t readSystemRegister(uint16_t key) const noexcept = 0;
     virtual bool writeSystemRegister(uint16_t key, uint64_t value,
                                      std::string* error) noexcept = 0;
+    virtual uint8_t instructionStepOrder() const noexcept { return 0; }
+    // Optional wired IRQ output. The CPU samples this only at an instruction
+    // boundary; acknowledging the interrupt remains a guest ICC_IAR operation.
+    virtual bool irqOutputAsserted() const noexcept { return false; }
     virtual bool beginInstructionStep() noexcept = 0;
     virtual void finishInstructionStep(bool retired) noexcept = 0;
 };
@@ -207,6 +212,7 @@ struct Decoded {
     uint8_t shift = 0;         // ADD/SUB shift amount (0 or 12); MOVZ/MOVK pos = hw*16
     int64_t branchOffset = 0;  // B/BL/CBZ/CBNZ/B.cond signed byte offset (scaled by 4)
     uint64_t memOffset = 0;    // LDR/STR scaled unsigned byte offset (imm12 << 2 or 3)
+    uint8_t accessBytes = 4;   // byte width for scalar GPR LDR/STR transfers
     // Addressing mode for LDP/STP and LDR/STR indexed forms:
     //   0 = offset (signed-offset pair, or unsigned-offset single; no writeback)
     //   1 = pre-index  (address = base + offset, then writeback)
@@ -442,6 +448,8 @@ private:
     Fault executeSystemRegister(const Decoded& decoded);
     Fault executeTlbi(const Decoded& decoded);
     Fault executePstateImmediate(const Decoded& decoded);
+    bool acceptPendingIrq();
+    void takeIrqException();
     void takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
                                   uint64_t preferredReturnAddress);
     void synchronizeTranslationContext();
@@ -488,7 +496,7 @@ private:
     // been fetched and dispatched. A failed fetch in this window is fatal,
     // preventing an unmapped vector from repeatedly aborting into itself.
     bool exceptionVectorPending_ = false;
-    std::weak_ptr<AArch64SystemRegisterHandler> systemRegisterHandler_;
+    std::vector<std::weak_ptr<AArch64SystemRegisterHandler>> systemRegisterHandlers_;
     mutable AArch64TLB tlb_;
     // Serializes complete instruction execution with snapshot management.
     // This mutex is host coordination state and is never serialized.

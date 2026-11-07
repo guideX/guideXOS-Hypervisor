@@ -510,7 +510,7 @@ bool AArch64GenericTimer::registerInterruptSources(std::string* error) {
 
 bool AArch64GenericTimer::attach(Cpu& cpu, std::string* error) {
     if (!cpu.bindSystemRegisterHandler(endpoint_)) {
-        setError(error, "AArch64 CPU already has another system-register device or is quiescent");
+        setError(error, "AArch64 CPU system-register handler limit was reached or the CPU is quiescent");
         return false;
     }
     if (error != nullptr) error->clear();

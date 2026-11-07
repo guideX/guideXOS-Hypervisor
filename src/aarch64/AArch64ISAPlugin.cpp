@@ -344,6 +344,7 @@ ia64::ISADecodeResult AArch64ISAPlugin::decode(ia64::IMemory& memory) {
         rejected.disassembly = "snapshot coordinator owns the guest execution boundary";
         return rejected;
     }
+    cpu_.acceptPendingIrq();
     lastDecoded_ = cpu_.fetchDecode(memory);
     instructionDecodedPending_ = true;
     ia64::ISADecodeResult result;
