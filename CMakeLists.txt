@@ -1235,13 +1235,23 @@ add_test(NAME RiscVLinuxStartupContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 ${CMAKE_CURRENT_BINARY_DIR}/riscv19-$<CONFIG>-artifacts
+                 ${CMAKE_CURRENT_BINARY_DIR}/riscv20-$<CONFIG>-artifacts
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH})
 
+add_executable(test_riscv_linux_trap_continuation
+    tests/test_riscv_linux_trap_continuation.cpp
+    src/riscv/riscv_cpu.cpp
+    src/riscv/riscv_mmu.cpp
+    src/decoder/riscv_decoder.cpp)
+target_link_libraries(test_riscv_linux_trap_continuation PRIVATE bcrypt)
+add_test(NAME RiscVLinuxTrapContinuationTests
+         COMMAND test_riscv_linux_trap_continuation)
+
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_image_entry
-                                test_riscv_linux_startup_continuation)
+                                test_riscv_linux_startup_continuation
+                                test_riscv_linux_trap_continuation)
     if(MSVC)
         target_compile_options(${riscv18_target} PRIVATE /W4)
     else()

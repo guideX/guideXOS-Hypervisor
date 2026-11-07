@@ -1,6 +1,7 @@
 #define RISCV_OPENSBI_FWJUMP_HELPERS_ONLY
 #include "test_riscv_opensbi_fw_jump.cpp"
 #include "riscv_linux_test_helpers.h"
+#include "riscv_trap_accounting.h"
 
 #include <cctype>
 #include <filesystem>
@@ -370,6 +371,7 @@ struct LinuxCsrChange {
 };
 
 struct LinuxTrapEvent {
+    size_t accountingEventIndex = SIZE_MAX;
     uint64_t pc = 0;
     uint32_t raw = 0;
     uint8_t length = 0;
@@ -409,6 +411,12 @@ struct LinuxStage {
     uint64_t pc = 0;
     uint64_t lastRetiredPc = 0;
     uint64_t bssStores = 0;
+    uint64_t sModeRetired = 0;
+    uint64_t mModeRetired = 0;
+    uint64_t sModeHandlerInstructions = 0;
+    uint64_t mModeHandlerInstructions = 0;
+    uint64_t activeHandlers = 0;
+    uint64_t maxNestingDepth = 0;
 };
 
 struct Sv39WalkLevel {
@@ -421,10 +429,10 @@ struct Sv39WalkLevel {
 
 struct ContinuationEvidence {
     BssEvidence bss;
+    riscv_test::TrapAccounting accounting;
     uint64_t linuxStepCalls = 100000;
     uint64_t supervisorRetired = 100000;
     uint64_t machineRetiredAfterHandoff = 0;
-    uint64_t trapHandlerInstructions = 0;
     uint64_t trapEvents = 0;
     uint64_t interruptEvents = 0;
     uint64_t ecallEvents = 0;
@@ -510,6 +518,61 @@ std::map<std::string, uint64_t> ParseElfSymbolTable(const std::vector<uint8_t>& 
         }
     }
     return symbols;
+}
+
+struct ElfFunctionSymbol {
+    std::string name;
+    uint64_t address = 0;
+    uint64_t size = 0;
+};
+
+std::vector<ElfFunctionSymbol> ParseElfFunctionSymbols(const std::vector<uint8_t>& elf) {
+    std::vector<ElfFunctionSymbol> functions;
+    if (elf.size() < 64 || elf[0] != 0x7F || elf[1] != 'E' || elf[2] != 'L' ||
+        elf[3] != 'F' || elf[4] != 2 || elf[5] != 1) return functions;
+    const uint64_t sectionOffset = Le64(elf, 40);
+    const uint16_t sectionEntrySize = Le16(elf, 58);
+    const uint16_t sectionCount = Le16(elf, 60);
+    if (sectionEntrySize < 64 || sectionCount == 0 || sectionOffset > elf.size() ||
+        static_cast<uint64_t>(sectionCount) * sectionEntrySize > elf.size() - sectionOffset)
+        return functions;
+    struct Section { uint32_t type; uint64_t offset; uint64_t size; uint32_t link; uint64_t entrySize; };
+    std::vector<Section> sections;
+    sections.reserve(sectionCount);
+    for (uint16_t index = 0; index < sectionCount; ++index) {
+        const size_t at = static_cast<size_t>(sectionOffset +
+            static_cast<uint64_t>(index) * sectionEntrySize);
+        sections.push_back({Le32(elf, at + 4), Le64(elf, at + 24), Le64(elf, at + 32),
+                            Le32(elf, at + 40), Le64(elf, at + 56)});
+    }
+    for (const Section& section : sections) {
+        if (section.type != 2 || section.link >= sections.size() || section.entrySize < 24 ||
+            section.offset > elf.size() || section.size > elf.size() - section.offset) continue;
+        const Section& strings = sections[section.link];
+        if (strings.offset > elf.size() || strings.size > elf.size() - strings.offset) continue;
+        const uint64_t count = section.size / section.entrySize;
+        for (uint64_t index = 0; index < count; ++index) {
+            const size_t at = static_cast<size_t>(section.offset + index * section.entrySize);
+            const uint8_t symbolType = elf[at + 4] & 0x0FU;
+            if (symbolType != 2) continue; // STT_FUNC
+            const uint64_t address = Le64(elf, at + 8);
+            const uint64_t size = Le64(elf, at + 16);
+            const std::string name = ElfString(elf, strings.offset, strings.size, Le32(elf, at));
+            if (!name.empty() && size != 0 && address <= UINT64_MAX - size)
+                functions.push_back({name, address, size});
+        }
+    }
+    return functions;
+}
+
+std::string FunctionContaining(const std::vector<ElfFunctionSymbol>& functions,
+                               uint64_t address) {
+    const ElfFunctionSymbol* match = nullptr;
+    for (const ElfFunctionSymbol& function : functions) {
+        if (function.address <= address && address < function.address + function.size &&
+            (match == nullptr || function.size < match->size)) match = &function;
+    }
+    return match != nullptr ? match->name : std::string{};
 }
 
 LinuxSymbols ParseLinuxVmlinux(const std::vector<uint8_t>& elf) {
@@ -862,15 +925,7 @@ std::vector<Sv39WalkLevel> CapturePageWalk(const RV64CPU& cpu, uint64_t virtualA
 void RecordTrap(ContinuationEvidence& evidence, const RV64CPU& cpu,
                 const StepResult& step, PrivilegeMode before,
                 const Decoder& decoder) {
-    ++evidence.trapEvents;
-    if (step.interruptTaken) ++evidence.interruptEvents;
-    if (step.trapCause == TrapCause::EcallFromS || step.trapCause == TrapCause::EcallFromM ||
-        step.trapCause == TrapCause::EcallFromU) ++evidence.ecallEvents;
-    if (before == PrivilegeMode::Supervisor && step.trapCause == TrapCause::EcallFromS &&
-        cpu.privilege() == PrivilegeMode::Machine && !step.sbiHandled) {
-        ++evidence.sbiEcalls;
-    }
-    if (evidence.traps.size() >= 128) return;
+    if (evidence.traps.size() >= riscv_test::kTrapAccountingEventLimit) return;
     LinuxTrapEvent event;
     event.pc = step.pc;
     event.raw = step.insn.rawWord;
@@ -894,6 +949,8 @@ void RecordTrap(ContinuationEvidence& evidence, const RV64CPU& cpu,
     event.satp = CsrOrZero(cpu, 0x180);
     event.interrupt = step.interruptTaken;
     event.sbiHandled = step.sbiHandled;
+    if (!evidence.accounting.events().empty())
+        event.accountingEventIndex = evidence.accounting.events().size() - 1;
     for (size_t index = 0; index < event.registers.size(); ++index)
         event.registers[index] = cpu.readGR(index);
     evidence.traps.push_back(std::move(event));
@@ -932,14 +989,30 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                            ContinuationEvidence& evidence,
                            const LinuxSymbols& symbols) {
     static constexpr std::array<uint64_t, 4> kTotalBudgets{{250000, 1000000, 5000000, 20000000}};
-    static constexpr uint64_t kTrapHandlerInstructionBudget = 250000;
-    static constexpr uint64_t kTrapEventBudget = 4096;
+    // The initial corrected replay reached 1,000,001 M-mode handler
+    // instructions across 1,942 completed/active invocations by 15.7M total
+    // retirements. Keep independent bounded limits, with enough headroom for
+    // the remaining 20M continuation rather than treating cumulative short
+    // firmware handlers as one stalled invocation.
+    static constexpr uint64_t kMachineInstructionBudget = 4000000;
+    static constexpr uint64_t kMachineHandlerInstructionBudget = 3000000;
+    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 1000000;
+    static constexpr uint64_t kIndividualHandlerInstructionBudget = 200000;
+    static constexpr uint64_t kTrapEventBudget = riscv_test::kTrapAccountingEventLimit;
+    static constexpr size_t kMaximumTrapNesting = riscv_test::kTrapAccountingNestingLimit;
     static constexpr uint64_t kPersistentStateRepeatLimit = 8192;
     Decoder decoder;
     std::unordered_map<uint64_t, std::pair<uint64_t, uint32_t>> repeatedStates;
-    uint64_t trapDepth = 0;
-    bool pendingTrapProgress = false;
-    size_t pendingTrapIndex = 0;
+    const auto synchronizeAccounting = [&]() {
+        const auto& counts = evidence.accounting.counters();
+        evidence.linuxStepCalls = counts.stepCalls;
+        evidence.supervisorRetired = counts.supervisorRetired;
+        evidence.machineRetiredAfterHandoff = counts.machineRetired;
+        evidence.trapEvents = counts.nonRetiringTrapTransitions;
+        evidence.interruptEvents = counts.interruptTransitions;
+        evidence.ecallEvents = counts.supervisorEcalls + counts.machineEcalls;
+        evidence.sbiEcalls = counts.sbiCalls;
+    };
     uint64_t lastStageTarget = run.retired;
     run.reachedFrontier = false;
     run.stopReason.clear();
@@ -979,7 +1052,25 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 }
             }
             const StepResult step = cpu.step();
-            ++evidence.linuxStepCalls;
+            const uint64_t satpAfterTrap = step.outcome == StepOutcome::Trap
+                ? CsrOrZero(cpu, 0x180) : 0;
+            const bool sv39RelocationTransition = step.outcome == StepOutcome::Trap &&
+                step.trapCause == TrapCause::InstructionPageFault &&
+                privilegeBefore == PrivilegeMode::Supervisor &&
+                step.trapTarget == PrivilegeMode::Supervisor &&
+                step.pc == boot_contract::kLinuxImageEntry + 0x98ULL &&
+                step.trapVector == symbols.imageStart + 0x98ULL &&
+                ((satpAfterTrap >> 60) & 0xFULL) == kSatpModeSv39;
+            const riscv_test::TrapAccountingDelta accountingDelta =
+                evidence.accounting.observe(privilegeBefore, step, cpu.privilege(), cpu,
+                                            !sv39RelocationTransition);
+            synchronizeAccounting();
+            if (accountingDelta.trapReturned &&
+                accountingDelta.returnedEventIndex < evidence.traps.size()) {
+                LinuxTrapEvent& returnedTrap = evidence.traps[accountingDelta.returnedEventIndex];
+                returnedTrap.returned = true;
+                returnedTrap.returnPc = step.nextPc;
+            }
             ++stage.stepCalls;
             if (run.trace.size() < kLinuxTraceHeadLimit) {
                 run.trace.push_back({step, privilegeBefore, cpu.privilege()});
@@ -1016,35 +1107,6 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 ++run.retired;
                 run.hasRetired = true;
                 run.lastRetiredPc = step.pc;
-                if (privilegeBefore == PrivilegeMode::Supervisor) ++evidence.supervisorRetired;
-                else if (privilegeBefore == PrivilegeMode::Machine)
-                    ++evidence.machineRetiredAfterHandoff;
-                if (trapDepth != 0) {
-                    ++evidence.trapHandlerInstructions;
-                    if (evidence.trapHandlerInstructions > kTrapHandlerInstructionBudget) {
-                        evidence.stopClassification = "trap_handler_instruction_budget";
-                        evidence.stopReason = "bounded Linux trap-handler instruction budget exhausted";
-                        run.reachedFrontier = true;
-                        run.frontierPrivilegeBefore = cpu.privilege();
-                        CaptureProgressFrontier(cpu, run);
-                        break;
-                    }
-                    if (step.insn.mnemonic == Mnemonic::MRET || step.insn.mnemonic == Mnemonic::SRET) {
-                        --trapDepth;
-                        for (auto trap = evidence.traps.rbegin(); trap != evidence.traps.rend(); ++trap) {
-                            if (trap->progressAfterward && !trap->returned) {
-                                trap->returned = true;
-                                trap->returnPc = step.nextPc;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (pendingTrapProgress) {
-                    evidence.traps[pendingTrapIndex].progressAfterward = true;
-                    evidence.traps[pendingTrapIndex].resumedPc = step.pc;
-                    pendingTrapProgress = false;
-                }
                 ObserveBssStep(cpu, run, evidence, step, pcBefore, a3Before, a4Before);
 
                 const bool isStore = step.insn.mnemonic == Mnemonic::SB ||
@@ -1122,17 +1184,9 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 if (step.interruptTaken) ++run.interrupts;
                 const size_t trapsBefore = evidence.traps.size();
                 RecordTrap(evidence, cpu, step, privilegeBefore, decoder);
-                const uint64_t satpAfterTrap = CsrOrZero(cpu, 0x180);
-                const bool sv39RelocationTransition = step.trapCause ==
-                        TrapCause::InstructionPageFault &&
-                    privilegeBefore == PrivilegeMode::Supervisor &&
-                    step.trapTarget == PrivilegeMode::Supervisor &&
-                    step.pc == boot_contract::kLinuxImageEntry + 0x98ULL &&
-                    step.trapVector == symbols.imageStart + 0x98ULL &&
-                    ((satpAfterTrap >> 60) & 0xFULL) == kSatpModeSv39;
+                if (accountingDelta.trapEntered && evidence.traps.size() > trapsBefore)
+                    evidence.traps.back().accountingEventIndex = accountingDelta.enteredEventIndex;
                 if (evidence.traps.size() > trapsBefore) {
-                    pendingTrapIndex = evidence.traps.size() - 1;
-                    pendingTrapProgress = true;
                     if (sv39RelocationTransition) {
                         evidence.traps.back().transitionName =
                             "sv39_kernel_virtual_alias_relocation";
@@ -1142,7 +1196,6 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                             "expected instruction page fault vectored from the unmapped physical alias to the mapped kernel virtual alias");
                     }
                 }
-                if (!sv39RelocationTransition) ++trapDepth;
                 if (evidence.trapEvents > kTrapEventBudget) {
                     evidence.stopClassification = "trap_event_budget";
                     evidence.stopReason = "bounded Linux trap-event budget exhausted";
@@ -1172,6 +1225,44 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 break;
             }
 
+            if (!run.reachedFrontier) {
+                const auto& counts = evidence.accounting.counters();
+                std::string classification;
+                std::string reason;
+                if (counts.machineRetired > kMachineInstructionBudget) {
+                    classification = "m_mode_instruction_budget";
+                    reason = "bounded post-handoff M-mode firmware instruction allowance exhausted";
+                } else if (counts.machineHandlerInstructions > kMachineHandlerInstructionBudget) {
+                    classification = "m_mode_handler_instruction_budget";
+                    reason = "bounded M-mode trap-handler instruction allowance exhausted";
+                } else if (counts.supervisorHandlerInstructions > kSupervisorHandlerInstructionBudget) {
+                    classification = "s_mode_handler_instruction_budget";
+                    reason = "bounded S-mode trap-handler instruction allowance exhausted";
+                } else if (counts.largestHandlerInvocation > kIndividualHandlerInstructionBudget) {
+                    classification = "individual_handler_instruction_budget";
+                    reason = "one matched trap-handler invocation exceeded its instruction allowance";
+                } else if (counts.maxNestingDepth > kMaximumTrapNesting) {
+                    classification = "trap_nesting_budget";
+                    reason = "bounded trap nesting depth exceeded";
+                } else if (evidence.accounting.lifetimesUncertain()) {
+                    classification = "trap_accounting_uncertain";
+                    reason = "trap-handler lifetime transitions could not be paired conclusively";
+                }
+                if (!classification.empty()) {
+                    evidence.stopClassification = std::move(classification);
+                    evidence.stopReason = std::move(reason);
+                    run.reachedFrontier = true;
+                    if (step.outcome == StepOutcome::Trap) {
+                        run.frontier = step;
+                        run.frontierPrivilegeBefore = privilegeBefore;
+                    } else {
+                        run.frontierPrivilegeBefore = cpu.privilege();
+                        CaptureProgressFrontier(cpu, run);
+                    }
+                    break;
+                }
+            }
+
             const uint64_t currentPc = cpu.getPC();
             const uint64_t state = ArchitecturalStateFingerprint(cpu);
             auto& repeat = repeatedStates[currentPc];
@@ -1197,6 +1288,12 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         stage.pc = cpu.getPC();
         stage.lastRetiredPc = run.lastRetiredPc;
         stage.bssStores = evidence.bss.storesRetired;
+        stage.sModeRetired = evidence.accounting.counters().supervisorRetired;
+        stage.mModeRetired = evidence.accounting.counters().machineRetired;
+        stage.sModeHandlerInstructions = evidence.accounting.counters().supervisorHandlerInstructions;
+        stage.mModeHandlerInstructions = evidence.accounting.counters().machineHandlerInstructions;
+        stage.activeHandlers = evidence.accounting.activeHandlerInvocations();
+        stage.maxNestingDepth = evidence.accounting.counters().maxNestingDepth;
         evidence.stages.push_back(stage);
         lastStageTarget = target;
         if (run.reachedFrontier) break;
@@ -1204,7 +1301,7 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
 
     if (!run.reachedFrontier) {
         evidence.stopClassification = "instruction_budget";
-        evidence.stopReason = "bounded staged Linux instruction budget exhausted; guest remained in forward progress";
+        evidence.stopReason = "20-million post-handoff guest-retirement cap reached with guest forward progress";
         CaptureProgressFrontier(cpu, run);
     }
     run.stopReason = evidence.stopReason;
@@ -1239,6 +1336,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                                 const ContinuationEvidence& evidence,
                                 const RV64CPU& cpu) {
     Decoder decoder;
+    const auto& accounting = evidence.accounting;
+    const auto& trapCounts = accounting.counters();
+    const std::vector<ElfFunctionSymbol> linuxFunctions = ParseElfFunctionSymbols(vmlinux);
+    const std::vector<ElfFunctionSymbol> firmwareFunctions = ParseElfFunctionSymbols(firmwareElf);
     const auto writeRegisters = [](std::ostream& out,
                                   const std::array<uint64_t, NUM_GENERAL_REGISTERS>& registers) {
         out << '[';
@@ -1247,8 +1348,8 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << ']';
     };
     {
-        std::ofstream out(dir / "riscv19-linux-symbols.json", std::ios::out | std::ios::trunc);
-        out << "{\n  \"schemaVersion\": 1,\n  \"vmlinuxSha256\": \""
+        std::ofstream out(dir / "riscv20-linux-symbols.json", std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 2,\n  \"vmlinuxSha256\": \""
             << Sha256(vmlinux) << "\",\n  \"imageSha256\": \"" << Sha256(image) << "\",\n"
             << "  \"imageStartVirtual\": \"" << Hex(symbols.imageStart) << "\",\n"
             << "  \"bssStartVirtual\": \"" << Hex(symbols.bssStart) << "\",\n"
@@ -1275,8 +1376,8 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"loopExitPc\": \"" << Hex(boot_contract::kLinuxImageEntry + 0x110ULL) << "\"\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv19-linux-run-summary.json", std::ios::out | std::ios::trunc);
-        out << "{\n  \"schemaVersion\": 1,\n  \"phase\": \"RISCV-19\",\n"
+        std::ofstream out(dir / "riscv20-linux-run-summary.json", std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 2,\n  \"phase\": \"RISCV-20\",\n"
             << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
             << "  \"linuxImageSha256\": \"" << Sha256(image) << "\",\n"
             << "  \"vmlinuxSha256\": \"" << Sha256(vmlinux) << "\",\n"
@@ -1285,18 +1386,44 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"firmwareSteps\": " << firmwareRun.steps << ",\n"
             << "  \"firmwareMModeRetired\": " << firmwareRun.machineRetired << ",\n"
             << "  \"stageRetiredBudgetDomain\": \"post-handoff S-mode Linux plus M-mode OpenSBI guest instructions\",\n"
-            << "  \"postHandoffStepCalls\": " << evidence.linuxStepCalls << ",\n"
+            << "  \"totalPostHandoffStepCalls\": " << trapCounts.stepCalls << ",\n"
             << "  \"postHandoffRetiredInstructions\": " << run.retired << ",\n"
-            << "  \"linuxRetiredInstructions\": " << evidence.supervisorRetired << ",\n"
-            << "  \"supervisorRetiredInstructions\": " << evidence.supervisorRetired << ",\n"
-            << "  \"machineRetiredAfterHandoff\": " << evidence.machineRetiredAfterHandoff << ",\n"
-            << "  \"trapHandlerInstructions\": " << evidence.trapHandlerInstructions << ",\n"
-            << "  \"trapHandlerInstructionBudget\": 250000,\n"
-            << "  \"trapEventBudget\": 4096,\n"
-            << "  \"trapEvents\": " << evidence.trapEvents << ",\n"
-            << "  \"interruptEvents\": " << evidence.interruptEvents << ",\n"
-            << "  \"ecallEvents\": " << evidence.ecallEvents << ",\n"
-            << "  \"sbiEcalls\": " << evidence.sbiEcalls << ",\n"
+            << "  \"linuxRetiredInstructions\": " << trapCounts.supervisorRetired << ",\n"
+            << "  \"normalSModeLinuxInstructions\": " << trapCounts.supervisorLinuxInstructions << ",\n"
+            << "  \"sModeRetiredInstructions\": " << trapCounts.supervisorRetired << ",\n"
+            << "  \"sModeHandlerInstructions\": " << trapCounts.supervisorHandlerInstructions << ",\n"
+            << "  \"mModeOpenSbiInstructions\": " << trapCounts.machineRetired << ",\n"
+            << "  \"mModeHandlerInstructions\": " << trapCounts.machineHandlerInstructions << ",\n"
+            << "  \"unattributedHandlerInstructions\": " << trapCounts.unattributedHandlerInstructions << ",\n"
+            << "  \"handlerAccounting\": {\n"
+            << "    \"schemaVersion\": 2,\n"
+            << "    \"instructionAttribution\": \"current privilege plus active trap target, closed by matching MRET/SRET\",\n"
+            << "    \"nonRetiringTrapTransitions\": " << trapCounts.nonRetiringTrapTransitions << ",\n"
+            << "    \"supervisorEcalls\": " << trapCounts.supervisorEcalls << ",\n"
+            << "    \"machineEcalls\": " << trapCounts.machineEcalls << ",\n"
+            << "    \"machineTimerInterrupts\": " << trapCounts.machineTimerInterrupts << ",\n"
+            << "    \"supervisorTimerInterrupts\": " << trapCounts.supervisorTimerInterrupts << ",\n"
+            << "    \"externalInterrupts\": " << trapCounts.externalInterrupts << ",\n"
+            << "    \"otherInterrupts\": " << trapCounts.otherInterrupts << ",\n"
+            << "    \"supervisorSynchronousExceptions\": " << trapCounts.supervisorSynchronousExceptions << ",\n"
+            << "    \"machineSynchronousExceptions\": " << trapCounts.machineSynchronousExceptions << ",\n"
+            << "    \"mretInstructions\": " << trapCounts.mretInstructions << ",\n"
+            << "    \"sretInstructions\": " << trapCounts.sretInstructions << ",\n"
+            << "    \"handlerEntries\": " << trapCounts.handlerEntries << ",\n"
+            << "    \"handlerReturns\": " << trapCounts.handlerReturns << ",\n"
+            << "    \"activeHandlerInvocationsAtStop\": " << accounting.activeHandlerInvocations() << ",\n"
+            << "    \"maximumNestingDepth\": " << trapCounts.maxNestingDepth << ",\n"
+            << "    \"largestHandlerInvocation\": " << trapCounts.largestHandlerInvocation << ",\n"
+            << "    \"lifetimeAttributionUncertain\": " << (accounting.lifetimesUncertain() ? "true" : "false") << ",\n"
+            << "    \"droppedEventDetails\": " << trapCounts.droppedEvents << "\n"
+            << "  },\n"
+            << "  \"budgets\": {\"totalRetired\":20000000,\"mModeRetired\":4000000,"
+            << "\"mModeHandlerInstructions\":3000000,\"sModeHandlerInstructions\":1000000,"
+            << "\"individualHandlerInstructions\":200000,\"trapEvents\":8192,\"maximumNestingDepth\":64},\n"
+            << "  \"trapEvents\": " << trapCounts.nonRetiringTrapTransitions << ",\n"
+            << "  \"interruptEvents\": " << trapCounts.interruptTransitions << ",\n"
+            << "  \"ecallEvents\": " << (trapCounts.supervisorEcalls + trapCounts.machineEcalls) << ",\n"
+            << "  \"sbiEcalls\": " << trapCounts.sbiCalls << ",\n"
             << "  \"firstLinuxPc\": \"" << Hex(boot_contract::kLinuxImageEntry) << "\",\n"
             << "  \"lastRetiredPc\": \"" << Hex(run.lastRetiredPc) << "\",\n"
             << "  \"finalPc\": \"" << Hex(cpu.getPC()) << "\",\n"
@@ -1338,8 +1465,8 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"stopReason\": " << JsonQuote(evidence.stopReason) << "\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv19-linux-milestones.json", std::ios::out | std::ios::trunc);
-        out << "{\n  \"schemaVersion\": 1,\n  \"stages\": [\n";
+        std::ofstream out(dir / "riscv20-linux-milestones.json", std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 2,\n  \"stages\": [\n";
         for (size_t index = 0; index < evidence.stages.size(); ++index) {
             const LinuxStage& stage = evidence.stages[index];
             out << "    {\"targetRetired\":" << stage.targetRetired
@@ -1348,7 +1475,13 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 << ",\"stepCalls\":" << stage.stepCalls
                 << ",\"pc\":\"" << Hex(stage.pc)
                 << "\",\"lastRetiredPc\":\"" << Hex(stage.lastRetiredPc)
-                << "\",\"bssStores\":" << stage.bssStores << "}"
+                << "\",\"bssStores\":" << stage.bssStores
+                << ",\"sModeRetired\":" << stage.sModeRetired
+                << ",\"mModeRetired\":" << stage.mModeRetired
+                << ",\"sModeHandlerInstructions\":" << stage.sModeHandlerInstructions
+                << ",\"mModeHandlerInstructions\":" << stage.mModeHandlerInstructions
+                << ",\"activeHandlers\":" << stage.activeHandlers
+                << ",\"maxNestingDepth\":" << stage.maxNestingDepth << "}"
                 << (index + 1 == evidence.stages.size() ? "\n" : ",\n");
         }
         out << "  ],\n  \"milestones\": [\n";
@@ -1389,7 +1522,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "    ]\n  }\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv19-linux-csr-state.json", std::ios::out | std::ios::trunc);
+        std::ofstream out(dir / "riscv20-linux-csr-state.json", std::ios::out | std::ios::trunc);
         static constexpr std::array<std::pair<const char*, uint16_t>, 12> kCsrs{{
             {"mstatus", uint16_t{0x300}}, {"sstatus", uint16_t{0x100}},
             {"mie", uint16_t{0x304}}, {"mip", uint16_t{0x344}},
@@ -1398,7 +1531,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             {"mcause", uint16_t{0x342}}, {"scause", uint16_t{0x142}},
             {"stval", uint16_t{0x143}}, {"satp", uint16_t{0x180}},
         }};
-        out << "{\n  \"schemaVersion\": 1,\n  \"pc\": \"" << Hex(cpu.getPC())
+        out << "{\n  \"schemaVersion\": 2,\n  \"pc\": \"" << Hex(cpu.getPC())
             << "\",\n  \"privilege\": \"" << PrivilegeModeToString(cpu.privilege())
             << "\",\n  \"registers\":[";
         for (size_t index = 0; index < NUM_GENERAL_REGISTERS; ++index)
@@ -1436,7 +1569,152 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv19-linux-frontier.json", std::ios::out | std::ios::trunc);
+        std::ofstream out(dir / "riscv20-linux-trap-accounting.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 2,\n"
+            << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
+            << "  \"linuxImageSha256\": \"" << Sha256(image) << "\",\n"
+            << "  \"vmlinuxSha256\": \"" << Sha256(vmlinux) << "\",\n"
+            << "  \"openSbiSha256\": \"" << Sha256(firmware) << "\",\n"
+            << "  \"stepCalls\": " << trapCounts.stepCalls << ",\n"
+            << "  \"nonRetiringTrapTransitions\": " << trapCounts.nonRetiringTrapTransitions << ",\n"
+            << "  \"totalRetired\": " << trapCounts.totalRetired << ",\n"
+            << "  \"perPrivilegeRetired\": {\"U\":" << trapCounts.userRetired
+            << ",\"S\":" << trapCounts.supervisorRetired
+            << ",\"M\":" << trapCounts.machineRetired << "},\n"
+            << "  \"normalSModeLinuxInstructions\": " << trapCounts.supervisorLinuxInstructions << ",\n"
+            << "  \"sModeHandlerInstructions\": " << trapCounts.supervisorHandlerInstructions << ",\n"
+            << "  \"mModeHandlerInstructions\": " << trapCounts.machineHandlerInstructions << ",\n"
+            << "  \"unattributedHandlerInstructions\": " << trapCounts.unattributedHandlerInstructions << ",\n"
+            << "  \"trapClasses\": {\n"
+            << "    \"supervisorEcalls\":" << trapCounts.supervisorEcalls << ",\n"
+            << "    \"machineEcalls\":" << trapCounts.machineEcalls << ",\n"
+            << "    \"machineTimerInterrupts\":" << trapCounts.machineTimerInterrupts << ",\n"
+            << "    \"supervisorTimerInterrupts\":" << trapCounts.supervisorTimerInterrupts << ",\n"
+            << "    \"externalInterrupts\":" << trapCounts.externalInterrupts << ",\n"
+            << "    \"otherInterrupts\":" << trapCounts.otherInterrupts << ",\n"
+            << "    \"supervisorSynchronousExceptions\":" << trapCounts.supervisorSynchronousExceptions << ",\n"
+            << "    \"machineSynchronousExceptions\":" << trapCounts.machineSynchronousExceptions << "\n"
+            << "  },\n"
+            << "  \"returns\": {\"mretInstructions\":" << trapCounts.mretInstructions
+            << ",\"sretInstructions\":" << trapCounts.sretInstructions
+            << ",\"handlerEntries\":" << trapCounts.handlerEntries
+            << ",\"handlerReturns\":" << trapCounts.handlerReturns
+            << ",\"activeAtStop\":" << accounting.activeHandlerInvocations()
+            << ",\"maximumNestingDepth\":" << trapCounts.maxNestingDepth
+            << ",\"largestInvocationInstructions\":" << trapCounts.largestHandlerInvocation
+            << ",\"unmatchedReturns\":" << trapCounts.unmatchedReturns
+            << ",\"privilegeMismatches\":" << trapCounts.privilegeMismatches
+            << ",\"lifetimeUncertain\":" << (accounting.lifetimesUncertain() ? "true" : "false")
+            << "},\n"
+            << "  \"eventDetailsRetained\": " << accounting.events().size() << ",\n"
+            << "  \"eventDetailLimit\": " << riscv_test::kTrapAccountingEventLimit << ",\n"
+            << "  \"droppedEventDetails\": " << trapCounts.droppedEvents << ",\n"
+            << "  \"events\": [\n";
+        for (size_t index = 0; index < accounting.events().size(); ++index) {
+            const riscv_test::TrapAccountingEvent& event = accounting.events()[index];
+            out << "    {\"id\":" << event.id << ",\"parentId\":";
+            if (event.parentId == UINT64_MAX) out << "null";
+            else out << event.parentId;
+            out << ",\"pc\":\"" << Hex(event.pc)
+                << "\",\"origin\":\"" << PrivilegeModeToString(event.origin)
+                << "\",\"target\":\"" << PrivilegeModeToString(event.target)
+                << "\",\"cause\":" << event.cause
+                << ",\"interrupt\":" << (event.interrupt ? "true" : "false")
+                << ",\"handlerInvocation\":" << (event.handlerInvocation ? "true" : "false")
+                << ",\"vector\":\"" << Hex(event.vector)
+                << "\",\"handlerInstructions\":" << event.handlerInstructions
+                << ",\"returned\":" << (event.returned ? "true" : "false")
+                << ",\"returnInstructionPc\":\"" << Hex(event.returnInstructionPc)
+                << "\",\"returnTargetPc\":\"" << Hex(event.returnTargetPc)
+                << "\",\"resumed\":" << (event.resumed ? "true" : "false")
+                << ",\"resumedPc\":\"" << Hex(event.resumedPc)
+                << "\",\"handlerPcPrefix\":[";
+            for (size_t pc = 0; pc < event.handlerPcPrefixSize; ++pc)
+                out << (pc == 0 ? "" : ",") << JsonQuote(Hex(event.handlerPcPrefix[pc]));
+            out << "]}" << (index + 1 == accounting.events().size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv20-linux-sbi-events.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 2,\n"
+            << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
+            << "  \"linuxImageSha256\": \"" << Sha256(image) << "\",\n"
+            << "  \"vmlinuxSha256\": \"" << Sha256(vmlinux) << "\",\n"
+            << "  \"openSbiSha256\": \"" << Sha256(firmware) << "\",\n"
+            << "  \"hostSbiProviderPresent\": false,\n"
+            << "  \"authenticMachineFirmware\": true,\n"
+            << "  \"callCount\": " << trapCounts.sbiCalls << ",\n"
+            << "  \"calls\": [\n";
+        bool firstCall = true;
+        for (size_t index = 0; index < accounting.events().size(); ++index) {
+            const riscv_test::TrapAccountingEvent& event = accounting.events()[index];
+            if (!event.sbiCall) continue;
+            const riscv_test::TrapAccountingEvent* previousService = nullptr;
+            uint64_t previousServiceCount = 0;
+            uint64_t previousIdenticalCount = 0;
+            for (size_t previous = 0; previous < index; ++previous) {
+                const riscv_test::TrapAccountingEvent& candidate = accounting.events()[previous];
+                if (!candidate.sbiCall || candidate.sbiEid != event.sbiEid ||
+                    candidate.sbiFid != event.sbiFid) continue;
+                previousService = &candidate;
+                ++previousServiceCount;
+                if (candidate.sbiArgs == event.sbiArgs) ++previousIdenticalCount;
+            }
+            const bool retiredBetween = previousService != nullptr &&
+                event.totalRetiredAtTrap > previousService->totalRetiredAtTrap;
+            const std::string recurrenceAssessment = !event.returned
+                ? "call_open_at_execution_frontier"
+                : !event.resumed
+                    ? "returned_without_observed_guest_resumption"
+                    : previousService != nullptr && retiredBetween
+                        ? "recurring_call_returned_and_guest_retired_between_calls"
+                        : previousService != nullptr
+                            ? "recurring_call_returned_without_intervening_retirement"
+                            : "call_returned_and_guest_resumed";
+            out << (firstCall ? "" : ",\n")
+                << "    {\"eventId\":" << event.id
+                << ",\"linuxEcallPc\":\"" << Hex(event.pc)
+                << "\",\"linuxFunction\":"
+                << JsonQuote(FunctionContaining(linuxFunctions, event.pc))
+                << ",\"rawInstruction\":\"0x00000073\",\"eid\":\"" << Hex(event.sbiEid)
+                << "\",\"fid\":\"" << Hex(event.sbiFid) << "\",\"arguments\":[";
+            for (size_t arg = 0; arg < event.sbiArgs.size(); ++arg)
+                out << (arg == 0 ? "" : ",") << JsonQuote(Hex(event.sbiArgs[arg]));
+            out << "],\"machineModeEntryPc\":\"" << Hex(event.machineEntryPc)
+                << "\",\"machineEntrySymbol\":"
+                << JsonQuote(FunctionContaining(firmwareFunctions, event.machineEntryPc))
+                << ",\"handlerDispatchPath\":[";
+            for (size_t pc = 0; pc < event.handlerPcPrefixSize; ++pc) {
+                const uint64_t handlerPc = event.handlerPcPrefix[pc];
+                out << (pc == 0 ? "" : ",") << "{\"pc\":" << JsonQuote(Hex(handlerPc))
+                    << ",\"symbol\":"
+                    << JsonQuote(FunctionContaining(firmwareFunctions, handlerPc)) << "}";
+            }
+            out << "],\"handlerPathTruncated\":"
+                << (event.handlerInstructions > event.handlerPcPrefixSize ? "true" : "false")
+                << ",\"returned\":" << (event.returned ? "true" : "false")
+                << ",\"mretPc\":\"" << Hex(event.returnInstructionPc)
+                << "\",\"sModeReturnPc\":\"" << Hex(event.returnTargetPc)
+                << "\",\"sModeResumptionObserved\":" << (event.resumed ? "true" : "false")
+                << ",\"sModeResumptionPc\":\"" << Hex(event.resumedPc)
+                << "\",\"resultA0\":\"" << Hex(event.sbiError)
+                << "\",\"resultA1\":\"" << Hex(event.sbiValue)
+                << "\",\"resultCaptured\":" << (event.sbiResultCaptured ? "true" : "false")
+                << ",\"sameServiceCallsPreviously\":" << previousServiceCount
+                << ",\"identicalArgumentCallsPreviously\":" << previousIdenticalCount
+                << ",\"recurs\":" << (previousService != nullptr ? "true" : "false")
+                << ",\"guestRetiredBetweenPreviousSameService\":" << (retiredBetween ? "true" : "false")
+                << ",\"recurrenceAssessment\":" << JsonQuote(recurrenceAssessment)
+                << "}";
+            firstCall = false;
+        }
+        out << "\n  ]\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv20-linux-frontier.json", std::ios::out | std::ios::trunc);
         const StepResult& step = run.frontier;
         const uint64_t pc = step.pc;
         uint64_t nearestValue = 0;
@@ -1474,7 +1752,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         } else {
             nearestName = "outside pinned Linux and OpenSBI images";
         }
-        out << "{\n  \"schemaVersion\": 1,\n  \"classification\": "
+        out << "{\n  \"schemaVersion\": 2,\n  \"classification\": "
             << JsonQuote(evidence.stopClassification) << ",\n  \"stopReason\": "
             << JsonQuote(evidence.stopReason) << ",\n  \"executed\": "
             << (run.reachedFrontier ? "true" : "false") << ",\n"
@@ -1514,6 +1792,9 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "  ],\n  \"traps\": [\n";
         for (size_t index = 0; index < evidence.traps.size(); ++index) {
             const LinuxTrapEvent& trap = evidence.traps[index];
+            const riscv_test::TrapAccountingEvent* tracked =
+                trap.accountingEventIndex < accounting.events().size()
+                    ? &accounting.events()[trap.accountingEventIndex] : nullptr;
             out << "    {\"pc\":\"" << Hex(trap.pc) << "\",\"raw\":\""
                 << Hex(trap.raw) << "\",\"instruction\":" << JsonQuote(trap.disassembly)
                 << ",\"cause\":\""
@@ -1528,10 +1809,12 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 << "\",\"satp\":\"" << Hex(trap.satp)
                 << "\",\"interrupt\":" << (trap.interrupt ? "true" : "false")
                 << ",\"interruptCause\":" << trap.interruptCause
-                << ",\"progressAfterward\":" << (trap.progressAfterward ? "true" : "false")
-                << ",\"resumedPc\":\"" << Hex(trap.resumedPc)
-                << "\",\"returned\":" << (trap.returned ? "true" : "false")
-                << ",\"returnPc\":\"" << Hex(trap.returnPc)
+                << ",\"accountingEventIndex\":" << trap.accountingEventIndex
+                << ",\"handlerInvocation\":" << (tracked != nullptr && tracked->handlerInvocation ? "true" : "false")
+                << ",\"progressAfterward\":" << (tracked != nullptr && tracked->resumed ? "true" : "false")
+                << ",\"resumedPc\":\"" << Hex(tracked != nullptr ? tracked->resumedPc : 0)
+                << "\",\"returned\":" << (tracked != nullptr && tracked->returned ? "true" : "false")
+                << ",\"returnPc\":\"" << Hex(tracked != nullptr ? tracked->returnTargetPc : 0)
                 << "\",\"transitionName\":" << JsonQuote(trap.transitionName)
                 << ",\"architecturalTransition\":"
                 << (trap.architecturalTransition ? "true" : "false")
@@ -1898,6 +2181,8 @@ int main(int argc, char** argv) {
             ? (acceptedFrontierA3 - continuation.bss.expectedStart) / 8ULL : 0;
     continuation.linuxStepCalls = linuxRun.retired;
     continuation.supervisorRetired = linuxRun.retired;
+    continuation.accounting.seed(linuxRun.retired, linuxRun.retired,
+                                  linuxRun.retired, 0);
     const bool exactPriorFrontier = linuxRun.retired == 100000 &&
         linuxRun.traps == 0 && linuxRun.lastRetiredPc == 0x8020010CULL &&
         linuxRun.nextPc == 0x80200104ULL && !linuxRun.reachedFrontier &&
@@ -1931,8 +2216,27 @@ int main(int argc, char** argv) {
     ContinueLinuxInStages(cpu, linuxRun, continuation, symbols);
     Expect(continuation.linuxStepCalls > 100000 &&
            cpu.stepsTaken() - handoffStepCounter == continuation.linuxStepCalls &&
-           cpu.instructionsRetired() - handoffRetiredCounter == linuxRun.retired,
+           cpu.instructionsRetired() - handoffRetiredCounter == linuxRun.retired &&
+           continuation.accounting.counters().totalRetired == linuxRun.retired,
            "staged continuation preserves the CPU state and accounts every subsequent step and retirement");
+    const auto& trapCounts = continuation.accounting.counters();
+    const uint64_t returnedTimeCalls = static_cast<uint64_t>(std::count_if(
+        continuation.accounting.events().begin(), continuation.accounting.events().end(),
+        [](const riscv_test::TrapAccountingEvent& event) {
+            return event.sbiCall && event.sbiEid == 0x54494D45ULL && event.sbiFid == 0 &&
+                event.returned && event.resumed && event.sbiResultCaptured;
+        }));
+    Expect(trapCounts.stepCalls == continuation.linuxStepCalls &&
+           trapCounts.supervisorRetired + trapCounts.machineRetired + trapCounts.userRetired ==
+               trapCounts.totalRetired && !continuation.accounting.lifetimesUncertain(),
+           "per-privilege retirement counters reconcile with total guest retirements and paired transitions");
+    Expect(trapCounts.maxNestingDepth != 0 &&
+           trapCounts.handlerEntries - trapCounts.handlerReturns ==
+               continuation.accounting.activeHandlerInvocations() &&
+           trapCounts.supervisorEcalls == continuation.sbiEcalls,
+           "architectural handler entries, returns, active frames, and S-mode ECALLs reconcile");
+    Expect(returnedTimeCalls >= 2,
+           "repeated pinned Linux SBI TIME calls complete through authentic OpenSBI and resume S-mode");
     Expect(continuation.bss.observedLoopEntry && continuation.bss.boundsMatchSymbols &&
            continuation.bss.loopExitObserved && continuation.bss.exitPointer ==
                continuation.bss.expectedStop && continuation.bss.exitStop ==

@@ -768,3 +768,24 @@ Validation and next target:
   unsupported instruction, or successful boot claim. See
   `phase-riscv-19-report.txt` for hashes, exact counters, trap/MMU evidence,
   validation results, and the next frontier recommendation.
+
+--- Phase RISCV-20: trap accounting and 20-million continuation ---
+
+- The pinned Linux v6.12 Image and OpenSBI v1.8.1 artifacts remain unchanged.
+  Authentic M-mode OpenSBI still performs the MRET handoff to S-mode Linux;
+  the host does not provide SBI services.
+- RISCV-19's startup milestones reproduce, including BSS clearing, `setup_vm`,
+  the Sv39 alias transition, `soc_early_init`, and `start_kernel`. The old
+  generic `trapDepth` diagnostic was replaced in the continuation harness with
+  privilege-aware, target-matched handler frames. M-mode firmware, normal
+  S-mode Linux, and S-mode handler retirements are reported independently.
+- The prior ECALL at Linux `__sbi_ecall` is a successful SBI TIME request.
+  All 419 observed SBI Base/TIME calls completed with success; repeated timer
+  calls are separated by guest execution. Misaligned load/store traps from
+  Linux's intentional unaligned copy probe are emulated by pinned OpenSBI.
+- The same production CPU and guest RAM reached the 20,000,000 post-handoff
+  retirement cap. Debug and Release both stop at the same S-mode Linux
+  `_raw_spin_unlock` frontier with identical architectural summary fields.
+  No decoder or production CPU change was needed, and the result does not claim
+  successful Linux boot. See `phase-riscv-20-report.txt` and its Debug/Release
+  artifact bundles for exact counts and evidence.
