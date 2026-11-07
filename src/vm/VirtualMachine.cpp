@@ -959,6 +959,7 @@ PPC64RegisterView VirtualMachine::getPPC64RegisterView(int cpuIndex) const {
     view.xer = plugin->getXER();
     view.msr = plugin->getMSR();
     view.pidr = plugin->getPIDR();
+    view.sprg1 = plugin->getSPRG1();
     view.srr0 = plugin->getSRR0();
     view.srr1 = plugin->getSRR1();
     view.dar = plugin->getDAR();

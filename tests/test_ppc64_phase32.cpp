@@ -687,6 +687,7 @@ uint64_t fingerprintGuestRam(Memory& memory) {
 
 bool sameState(const PPC64RegisterView& lhs, const PPC64RegisterView& rhs) {
     return lhs.nip == rhs.nip && std::equal(lhs.gpr, lhs.gpr + 32, rhs.gpr) &&
+        lhs.sprg1 == rhs.sprg1 &&
         lhs.cr == rhs.cr &&
         lhs.xer == rhs.xer && lhs.lr == rhs.lr && lhs.ctr == rhs.ctr &&
         lhs.msr == rhs.msr && lhs.srr0 == rhs.srr0 && lhs.srr1 == rhs.srr1 &&
@@ -699,6 +700,7 @@ bool sameState(const PPC64RegisterView& lhs, const PPC64RegisterView& rhs) {
 std::string stateText(const PPC64RegisterView& state) {
     std::ostringstream out;
     out << "NIP=" << hex(state.nip) << "\nMSR=" << hex(state.msr)
+        << "\nSPRG1=" << hex(state.sprg1)
         << "\nCR=0x" << std::hex << std::setw(8) << std::setfill('0')
         << state.cr << "\nXER=0x" << std::setw(8) << state.xer
         << "\nLR=" << hex(state.lr) << "\nCTR=" << hex(state.ctr)
@@ -814,6 +816,9 @@ struct AuthenticReplay {
     bool bugSiteValid = false;
     bool reachedSubfe = false;
     bool subfeRetired = false;
+    bool reachedSprg1 = false;
+    bool sprg1Retired = false;
+    bool sprg1RamUnchanged = false;
     bool subfeRamUnchanged = false;
     bool subfeDecodeCorrect = false;
     bool addicDataflowCorrect = false;
@@ -826,12 +831,15 @@ struct AuthenticReplay {
     uint64_t tdiRamAfter = 0;
     uint64_t subfeRamBefore = 0;
     uint64_t subfeRamAfter = 0;
+    uint64_t sprg1RamBefore = 0;
+    uint64_t sprg1RamAfter = 0;
     uint64_t finalRam = 0;
     uint64_t guestRealFetch = 0;
     uint64_t backingFetch = 0;
     uint32_t tdiWord = 0;
     uint32_t addicWord = 0;
     uint32_t subfeWord = 0;
+    uint32_t sprg1Word = 0;
     uint64_t expectedSubfeResult = 0;
     bool expectedSubfeCA = false;
     bool expectedSubfeCA32 = false;
@@ -840,6 +848,7 @@ struct AuthenticReplay {
     uint32_t stopWord = 0;
     std::string tdiDecode;
     std::string subfeDecode;
+    std::string sprg1Decode;
     std::string stopDisassembly;
     std::string stopClass;
     std::string stopDiagnostic;
@@ -850,6 +859,8 @@ struct AuthenticReplay {
     PPC64RegisterView afterAddic{};
     PPC64RegisterView preSubfe{};
     PPC64RegisterView postSubfe{};
+    PPC64RegisterView preSprg1{};
+    PPC64RegisterView postSprg1{};
     PPC64RegisterView final{};
     std::vector<uint8_t> fdt;
     std::string last64BeforeTdi;
@@ -1167,6 +1178,15 @@ AuthenticReplay runAuthenticLinux(
             result.expectedSubfeCA = expected.ca;
             result.expectedSubfeCA32 = expected.ca32;
         }
+        const bool sprg1Instruction = instruction.kind == DecodedKind::MTSPR &&
+            instruction.sprn == SPR_SPRG1 && instruction.rt == 3U;
+        if (sprg1Instruction && !result.reachedSprg1) {
+            result.reachedSprg1 = true;
+            result.preSprg1 = before;
+            result.sprg1Word = instruction.raw;
+            result.sprg1Decode = decoded.disassembly;
+            result.sprg1RamBefore = fingerprintGuestRam(*memory);
+        }
         const bool retired = vm.step();
         const PPC64RegisterView after = vm.getPPC64RegisterView();
         if (before.nip == kAddicNip) {
@@ -1178,6 +1198,13 @@ AuthenticReplay runAuthenticLinux(
             result.subfeRamUnchanged =
                 result.subfeRamBefore == result.subfeRamAfter;
             result.postSubfe = after;
+        }
+        if (sprg1Instruction) {
+            result.sprg1Retired = retired;
+            result.postSprg1 = after;
+            result.sprg1RamAfter = fingerprintGuestRam(*memory);
+            result.sprg1RamUnchanged =
+                result.sprg1RamBefore == result.sprg1RamAfter;
         }
         std::ostringstream line;
         line << "nip=" << hex(before.nip) << " raw="
@@ -1414,17 +1441,45 @@ void testAuthenticLinux() {
           second.postSubfe.nip == first.postSubfe.nip);
     CHECK(first.subfeRetired && first.addicDataflowCorrect &&
           second.addicDataflowCorrect);
-    CHECK(first.totalRetired == 2'641'070ULL &&
+    CHECK(first.reachedSprg1 && second.reachedSprg1);
+    CHECK(first.sprg1Retired && second.sprg1Retired);
+    CHECK(first.preSprg1.nip != 0 &&
+          second.preSprg1.nip == first.preSprg1.nip);
+    CHECK(first.sprg1Word == second.sprg1Word);
+    const DecodedInstruction authenticSprg1 =
+        PPC64ISAPlugin::decodeWord(first.sprg1Word);
+    CHECK(authenticSprg1.supported && authenticSprg1.kind == DecodedKind::MTSPR &&
+          authenticSprg1.sprn == SPR_SPRG1 && authenticSprg1.rt == 3U);
+    CHECK(first.sprg1Decode == "mtspr 273,r3" &&
+          second.sprg1Decode == first.sprg1Decode);
+    CHECK(first.preSprg1.gpr[3] == first.preSprg1.gpr[13] &&
+          second.preSprg1.gpr[3] == first.preSprg1.gpr[3] &&
+          second.preSprg1.gpr[13] == first.preSprg1.gpr[13]);
+    CHECK(first.preSprg1.sprg1 == 0 && second.preSprg1.sprg1 == 0);
+    CHECK(first.postSprg1.nip == first.preSprg1.nip + 4U &&
+          second.postSprg1.nip == first.postSprg1.nip);
+    CHECK(first.postSprg1.sprg1 == first.preSprg1.gpr[3] &&
+          second.postSprg1.sprg1 == first.postSprg1.sprg1);
+    CHECK(first.sprg1RamUnchanged && second.sprg1RamUnchanged);
+    CHECK(first.sprg1RamBefore == first.sprg1RamAfter &&
+          second.sprg1RamBefore == second.sprg1RamAfter);
+    CHECK(first.postSprg1.cr == first.preSprg1.cr &&
+          first.postSprg1.xer == first.preSprg1.xer &&
+          first.postSprg1.msr == first.preSprg1.msr &&
+          second.postSprg1.cr == second.preSprg1.cr &&
+          second.postSprg1.xer == second.preSprg1.xer &&
+          second.postSprg1.msr == second.preSprg1.msr);
+    CHECK(first.totalRetired == 2'651'354ULL &&
           second.totalRetired == first.totalRetired);
     CHECK(first.totalRetired == second.totalRetired);
     CHECK(first.retiredAfterTdi == second.retiredAfterTdi);
     CHECK(first.stopClass == second.stopClass);
     CHECK(first.final.nip != kSubfeNip && second.final.nip == first.final.nip);
-    CHECK(first.retiredAfterTdi == 11ULL);
+    CHECK(first.retiredAfterTdi == 10'295ULL);
     CHECK(first.stopClass == "unsupported-or-invalid-instruction");
-    CHECK(first.final.nip == 0xC000000000034D48ULL);
-    CHECK(first.stopWord == 0x7C7143A6U);
-    CHECK(first.stopDisassembly == "mtspr 273,r3 ; unsupported SPR");
+    CHECK(first.final.nip == 0xC00000000138A414ULL);
+    CHECK(first.stopWord == 0x7CA507B4U);
+    CHECK(first.stopDisassembly == "<unsupported ppc64 opcode 31>");
     CHECK(first.continuationTrace.find(
         "nip=0xc000000001eaa5c0 raw=0x0b090000 instruction=tdi 24,r9,0 retired=1 next=0xc000000001eaa5c4") !=
         std::string::npos);
@@ -1439,6 +1494,8 @@ void testAuthenticLinux() {
     CHECK(sameState(first.afterAddic, second.afterAddic));
     CHECK(sameState(first.preSubfe, second.preSubfe));
     CHECK(sameState(first.postSubfe, second.postSubfe));
+    CHECK(sameState(first.preSprg1, second.preSprg1));
+    CHECK(sameState(first.postSprg1, second.postSprg1));
     CHECK(sameState(first.final, second.final));
     CHECK(first.last64BeforeTdi == second.last64BeforeTdi);
     CHECK(first.branchHistory == second.branchHistory);
@@ -1447,8 +1504,6 @@ void testAuthenticLinux() {
     CHECK(first.tdiRamBefore == second.tdiRamBefore);
     CHECK(first.tdiRamAfter == second.tdiRamAfter);
     CHECK(first.finalRam == second.finalRam);
-    CHECK(first.finalRam == first.subfeRamAfter &&
-          second.finalRam == second.subfeRamAfter);
     CHECK(first.guestRealFetch == 0x01EAA2C8ULL);
     CHECK(first.backingFetch == first.guestRealFetch);
 
@@ -1602,19 +1657,41 @@ void testAuthenticLinux() {
         "\nnext_nip=" + hex(first.postTdi.nip) + "\n"));
     CHECK(writeText(runDirectory / "authentic-continuation-trace.txt",
                     first.continuationTrace));
+    CHECK(writeText(runDirectory / "authentic-sprg1-execution.txt",
+        "instruction=" + first.sprg1Decode +
+        "\nword=" + wordHex(first.sprg1Word) +
+        "\nNIP_before=" + hex(first.preSprg1.nip) +
+        "\nR3_before=" + hex(first.preSprg1.gpr[3]) +
+        "\nR13_before=" + hex(first.preSprg1.gpr[13]) +
+        "\nSPRG1_before=" + hex(first.preSprg1.sprg1) +
+        "\nSPRG1_after=" + hex(first.postSprg1.sprg1) +
+        "\nNIP_after=" + hex(first.postSprg1.nip) +
+        "\nretired=" + std::string(first.sprg1Retired ? "true" : "false") +
+        "\nCR_preserved=" +
+            std::string(first.preSprg1.cr == first.postSprg1.cr ? "true" : "false") +
+        "\nXER_preserved=" +
+            std::string(first.preSprg1.xer == first.postSprg1.xer ? "true" : "false") +
+        "\nMSR_preserved=" +
+            std::string(first.preSprg1.msr == first.postSprg1.msr ? "true" : "false") +
+        "\nRAM_unchanged_by_SPRG1_instruction=" +
+            std::string(first.sprg1RamUnchanged ? "true" : "false") +
+        "\n"));
     CHECK(writeText(runDirectory / "final-frontier-summary.txt",
         "status=" + first.stopClass + "\nnip=" + hex(first.final.nip) +
         "\nraw=" + wordHex(first.stopWord) +
         "\ndecode=" + first.stopDisassembly +
-        "\nsymbol=setup_paca+0x18"
+        "\nsprg1_retired_at=" + hex(first.preSprg1.nip) +
+        "\nsprg1_value=" + hex(first.final.sprg1) +
         "\ntotal_linux_retired=" + std::to_string(first.totalRetired) +
         "\nretired_after_tdi=" + std::to_string(first.retiredAfterTdi) +
         "\nFDT_unchanged_through_frontier=" +
             std::string(first.fdtUnchanged ? "true" : "false") +
         "\nfinal_guest_ram_fingerprint=" + hex(first.finalRam) +
-        "\nRAM_unchanged_from_post_SUBFE=" +
-            std::string(first.finalRam == first.subfeRamAfter ? "true" : "false") +
-        "\nexception_state=none; stopped before unsupported mtspr execution"
+        "\nRAM_unchanged_by_SPRG1_instruction=" +
+            std::string(first.sprg1RamUnchanged ? "true" : "false") +
+        "\nfinal_guest_RAM_matches_second_replay=" +
+            std::string(first.finalRam == second.finalRam ? "true" : "false") +
+        "\nexception_state=none; stopped before unsupported opcode execution"
         "\nstop_diagnostic=" + first.stopDiagnostic +
         "\nfinal_cpu_state:\n" + stateText(first.final)));
     CHECK(writeText(runDirectory / "two-run-comparison.txt",
@@ -1670,7 +1747,7 @@ void testAuthenticLinux() {
         "K ADDIC/ADDE/SUBF/SUBFC neighboring arithmetic: regression suite\n"
         "L Production VM.step executes real SUBFE instruction words: PASS\n"
         "M Authenticated Linux executes SUBFE at 0xc000000001eaa5bc: PASS\n"
-        "N Linux continues beyond SUBFE; two fresh replays agree: PASS\n"));
+        "N Linux retires setup_paca SPRG1 and continues to the later unsupported opcode; two fresh replays agree: PASS\n"));
     CHECK(writeText(runDirectory / "replay-summary.txt",
         "runs=2\nretired_before_tdi=" + std::to_string(first.retiredBeforeTdi) +
         "\nretired_after_tdi=" + std::to_string(first.retiredAfterTdi) +
