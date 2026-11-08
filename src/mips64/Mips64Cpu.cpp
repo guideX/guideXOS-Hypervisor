@@ -22,6 +22,7 @@ namespace {
 
 // -- primary opcodes ----------------------------------------------------------
 constexpr uint8_t kOpSpecial = 0x00;
+constexpr uint8_t kOpSpecial3 = 0x1F;
 constexpr uint8_t kOpRegimm = 0x01;
 constexpr uint8_t kOpJ = 0x02;
 constexpr uint8_t kOpJal = 0x03;
@@ -109,6 +110,7 @@ constexpr uint8_t kFnDsll = 0x38;
 constexpr uint8_t kFnDsrl = 0x3A;
 constexpr uint8_t kFnDsra = 0x3B;
 constexpr uint8_t kFnDsrl32 = 0x3E;
+constexpr uint8_t kFnDext = 0x03;
 
 // -- REGIMM rt field ------------------------------------------------------------
 constexpr uint8_t kRiBltz = 0x00;
@@ -143,10 +145,7 @@ bool isReservedSpecialFunct(uint8_t funct) {
     switch (funct) {
         case 0x05:
         case 0x0E:
-        case 0x14:
         case 0x15:
-        case 0x16:
-        case 0x17:
         case 0x1C:
         case 0x1D:
         case 0x1E:
@@ -164,6 +163,51 @@ bool isReservedSpecialFunct(uint8_t funct) {
 // Primary opcode 0x1D (JALX/MIPS16e) is unallocated in MIPS64r2 when no
 // MIPS16e ASE is present; this core has no ASEs, so it is reserved.
 bool isReservedPrimaryOpcode(uint8_t op) { return op == 0x1D; }
+
+// MIPS64r2 SPECIAL3 functions allocated by Volume I's Release 2 encoding
+// table. They are recognized as valid but remain unsupported unless handled
+// explicitly by the decoder below. Keep this list narrow so an unrelated
+// SPECIAL3 function cannot become an accidentally accepted instruction.
+bool isKnownSpecial3Function(uint8_t funct) {
+    switch (funct) {
+        case 0x00: // EXT
+        case 0x01: // DEXTM
+        case 0x02: // DEXTU
+        case 0x03: // DEXT
+        case 0x04: // INS
+        case 0x05: // DINSM
+        case 0x06: // DINSU
+        case 0x07: // DINS
+        case 0x19: // LWLE
+        case 0x1A: // LWRE
+        case 0x1B: // CACHEE
+        case 0x1C: // SBE
+        case 0x1D: // SHE
+        case 0x1E: // SCE
+        case 0x1F: // SWE
+        case 0x20: // BSHFL
+        case 0x21: // SWLE
+        case 0x22: // SWRE
+        case 0x23: // PREFE
+        case 0x24: // DBSHFL
+        case 0x25: // CACHE
+        case 0x26: // SC
+        case 0x27: // SCD
+        case 0x28: // LBUE
+        case 0x29: // LHUE
+        case 0x2C: // LBE
+        case 0x2D: // LHE
+        case 0x2E: // LLE
+        case 0x2F: // LWE
+        case 0x35: // PREF
+        case 0x36: // LL
+        case 0x37: // LLD
+        case 0x3B: // RDHWR
+            return true;
+        default:
+            return false;
+    }
+}
 
 // -- sign-extension helpers (all via unsigned arithmetic; no UB) ---------------
 uint64_t signExtend8(uint8_t value) {
@@ -333,6 +377,24 @@ Mips64Decoded decodeInstruction(uint32_t word) {
             }
             return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
                         "valid MIPS64 SPECIAL encoding outside the implemented subset");
+        }
+        case kOpSpecial3: {
+            const uint8_t funct = static_cast<uint8_t>(word & 0x3FU);
+            if (funct == kFnDext) {
+                // In this format bits 15:11 are MSBD and bits 10:6 are LSB.
+                // The generic rd/sa fields already contain those values;
+                // DEXT's architectural destination is RT. All five-bit
+                // encodings satisfy pos < 32, size in 1..32 and pos+size<=63.
+                decoded.op = Mips64Op::Dext;
+                decoded.valid = true;
+                return decoded;
+            }
+            if (isKnownSpecial3Function(funct)) {
+                return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                            "valid MIPS64r2 SPECIAL3 instruction outside the DEXT subset");
+            }
+            return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                        "reserved SPECIAL3 function encoding");
         }
         case kOpRegimm: {
             Mips64Op mapped = Mips64Op::Invalid;
@@ -1483,6 +1545,19 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rd, source >> shift);
             break;
         }
+        case Mips64Op::Dext: {
+            // DEXT reads a full 64-bit source, extracts [pos + size - 1:pos],
+            // and writes a right-justified zero-extended result to RT. The
+            // five-bit MSBD field guarantees size is 1..32, so this mask shift
+            // is always defined. Read RS before writing RT for aliasing.
+            const uint64_t source = readGpr(decoded.rs);
+            const unsigned pos = decoded.sa;
+            const unsigned size = static_cast<unsigned>(decoded.rd) + 1U;
+            const uint64_t mask = (uint64_t{1} << size) - 1U;
+            const uint64_t result = (source >> pos) & mask;
+            writeGpr(decoded.rt, result);
+            break;
+        }
         case Mips64Op::Dsra: {
             const int64_t value = static_cast<int64_t>(readGpr(decoded.rt));
             writeGpr(decoded.rd, static_cast<uint64_t>(value >> decoded.sa));
@@ -2316,6 +2391,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, $%u", name,
                           decoded.rd, decoded.rt, decoded.rs);
             break;
+        case Mips64Op::Dext:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u, %u", name,
+                          decoded.rt, decoded.rs, decoded.sa,
+                          static_cast<unsigned>(decoded.rd) + 1U);
+            break;
         case Mips64Op::Sll:
         case Mips64Op::Srl:
         case Mips64Op::Sra:
@@ -2978,6 +3058,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Tlbwr: return "tlbwr";
         case Mips64Op::Dsrl32: return "dsrl32";
         case Mips64Op::Sllv: return "sllv";
+        case Mips64Op::Dext: return "dext";
         default: return "invalid";
     }
 }

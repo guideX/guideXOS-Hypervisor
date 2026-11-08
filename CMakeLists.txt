@@ -1222,3 +1222,18 @@ else()
     target_compile_options(test_mips64_di_ei PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64DiEiTests COMMAND test_mips64_di_ei)
+
+# MIPS64-20 architectural qualification for the authenticated DEXT frontier.
+add_executable(test_mips64_dext
+    tests/test_mips64_dext.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_dext PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_dext PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_dext PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64DextTests COMMAND test_mips64_dext)

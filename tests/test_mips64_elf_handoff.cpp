@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -384,6 +385,71 @@ bool sameReplayState(const Mips64FullVmSnapshot& left,
         if (a.info.base != b.info.base || a.info.size != b.info.size ||
             a.backendKind != b.backendKind || a.denseBytes != b.denseBytes ||
             a.sparseBytes != b.sparseBytes) return false;
+    }
+    return true;
+}
+
+// The authentic DEXT continuation uses a stricter comparison than legacy
+// handoff probes: compare all snapshot-owned board, UART timing, routing,
+// memory-monitor, CPU scheduling and VM state, while allowing the console's
+// generation counter to advance when a snapshot is restored. Console bytes
+// and sequence are compared by sameReplayState above.
+bool sameDextReplayState(const Mips64FullVmSnapshot& left,
+                         const Mips64FullVmSnapshot& right) {
+    if (!sameReplayState(left, right) ||
+        left.magic != right.magic || left.formatVersion != right.formatVersion ||
+        left.isaIdentity != right.isaIdentity ||
+        left.boardProfileIdentity != right.boardProfileIdentity ||
+        left.cpuCount != right.cpuCount || left.endianness != right.endianness ||
+        left.byteOrderTag != right.byteOrderTag || left.ramSize != right.ramSize ||
+        left.romBase != right.romBase || left.romSize != right.romSize ||
+        left.romContentHash != right.romContentHash ||
+        left.flashMirrorMapped != right.flashMirrorMapped ||
+        left.configuredSwitches != right.configuredSwitches ||
+        left.configuredJumpers != right.configuredJumpers ||
+        left.builtInDemoRom != right.builtInDemoRom || left.mmuEnabled != right.mmuEnabled ||
+        left.cpuComponentVersion != right.cpuComponentVersion ||
+        left.memoryComponentVersion != right.memoryComponentVersion ||
+        left.fpgaComponentVersion != right.fpgaComponentVersion ||
+        left.uartComponentVersion != right.uartComponentVersion ||
+        left.irqRoutingComponentVersion != right.irqRoutingComponentVersion ||
+        left.consoleComponentVersion != right.consoleComponentVersion ||
+        left.schedulerComponentVersion != right.schedulerComponentVersion ||
+        left.vmComponentVersion != right.vmComponentVersion ||
+        left.fpga.version != right.fpga.version ||
+        left.fpga.endianness != right.fpga.endianness ||
+        left.fpga.switches != right.fpga.switches || left.fpga.jumpers != right.fpga.jumpers ||
+        left.fpga.ledBar != right.fpga.ledBar ||
+        left.fpga.asciiDisplay != right.fpga.asciiDisplay ||
+        left.fpga.breakReset != right.fpga.breakReset ||
+        left.fpga.resetPending != right.fpga.resetPending ||
+        left.fpga.resetRequestCount != right.fpga.resetRequestCount ||
+        left.console.capacityBytes != right.console.capacityBytes ||
+        left.uart.dlab != right.uart.dlab ||
+        left.uart.transmitterReady != right.uart.transmitterReady ||
+        left.uart.virtualTimeCycle != right.uart.virtualTimeCycle ||
+        left.uart.receiveTimeoutDeadlineCycle != right.uart.receiveTimeoutDeadlineCycle ||
+        left.uart.receiveTimeoutArmed != right.uart.receiveTimeoutArmed ||
+        left.uart.receiveTimeoutPending != right.uart.receiveTimeoutPending ||
+        left.uartInterruptTargetCpu != right.uartInterruptTargetCpu ||
+        left.uartHardwareInterruptLine != right.uartHardwareInterruptLine ||
+        left.uartCauseIp != right.uartCauseIp ||
+        left.routedUartInterruptLevel != right.routedUartInterruptLevel ||
+        left.pendingDeferredBoardReset != right.pendingDeferredBoardReset ||
+        left.vmStateValue != right.vmStateValue ||
+        left.physicalMemory.payloadBytes != right.physicalMemory.payloadBytes ||
+        left.physicalMemory.reservationTrackingVersion !=
+            right.physicalMemory.reservationTrackingVersion ||
+        left.cpus.size() != right.cpus.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < left.cpus.size(); ++i) {
+        if (left.cpus[i].cpuId != right.cpus[i].cpuId ||
+            left.cpus[i].idleCycles != right.cpus[i].idleCycles ||
+            left.cpus[i].enabled != right.cpus[i].enabled ||
+            left.cpus[i].lastActivationTime != right.cpus[i].lastActivationTime) {
+            return false;
+        }
     }
     return true;
 }
@@ -2312,7 +2378,8 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
 
 int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
                             const std::filesystem::path& tracePath,
-                            unsigned instructionBudget) {
+                            unsigned instructionBudget,
+                            bool continuePastAuthenticDext = false) {
     constexpr uint64_t probeRamBytes = 256ULL * 1024 * 1024;
     constexpr uint64_t diPc = 0xFFFFFFFF80B426C0ULL;
     constexpr uint64_t diPa = 0x000B426C0ULL;
@@ -2369,6 +2436,10 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
     unsigned retiredBeforeEntry = 0;
     bool authenticDiVerified = false;
     bool authenticDiReplayVerified = false;
+    bool authenticDextVerified = false;
+    bool authenticDextReplayVerified = false;
+    unsigned dextRetirements = 0;
+    std::optional<Mips64FullVmSnapshot> authenticDextStartingSnapshot;
     std::vector<std::string> architecturalEvents;
     std::set<uint64_t> distinctPcs;
     std::string stopReason = "instruction_budget_exhausted";
@@ -2377,7 +2448,8 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
     uint32_t stopWord = 0;
     bool stopFetchOk = false;
 
-    for (; attempts < instructionBudget;) {
+    for (; continuePastAuthenticDext ? retired < instructionBudget
+                                     : attempts < instructionBudget;) {
         stopPc = cpu->core().pc();
         distinctPcs.insert(stopPc);
         if (stopPc == plan.entryPoint && !entryReached) {
@@ -2406,6 +2478,141 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
             break;
         }
 
+        if (continuePastAuthenticDext && stopPc == 0xFFFFFFFF8012F5A8ULL &&
+            stopWord == 0x7C83C983U && !authenticDextVerified) {
+            constexpr uint64_t dextPc = 0xFFFFFFFF8012F5A8ULL;
+            constexpr uint32_t dextWord = 0x7C83C983U;
+            constexpr unsigned expectedRetiredAtDext = 151584U;
+            constexpr uint64_t independentlyExpectedDextResult = 0;
+            const uint64_t sourceBefore = cpu->core().readGpr(4);
+            const uint64_t destinationBefore = cpu->core().readGpr(3);
+            const uint64_t countBeforeDext = cpu->core().cp0Count();
+            const uint64_t cyclesBeforeDext = vm.getCyclesExecuted();
+            const uint64_t instructionsBeforeDext = context->instructionsExecuted;
+            const uint64_t statusBeforeDext = cpu->core().cp0Status();
+            const uint64_t causeBeforeDext = cpu->core().cp0Cause();
+            const uint64_t epcBeforeDext = cpu->core().cp0Epc();
+            const uint64_t errorEpcBeforeDext = cpu->core().cp0ErrorEpc();
+            const uint64_t badVAddrBeforeDext = cpu->core().cp0BadVAddr();
+            const uint64_t hiBeforeDext = cpu->core().hi();
+            const uint64_t loBeforeDext = cpu->core().lo();
+            const auto reservationBeforeDext = cpu->core().reservationState();
+            Mips64FullVmSnapshot beforeDext = vm.captureMips64FullSnapshot();
+            if (!decoded.valid || decoded.op != Mips64Op::Dext ||
+                stopPhysical != 0x0012F5A8ULL || decoded.rs != 4 || decoded.rt != 3 ||
+                decoded.rd != 25 || decoded.sa != 6 || retired != expectedRetiredAtDext ||
+                attempts != expectedRetiredAtDext ||
+                instructionsBeforeDext != expectedRetiredAtDext ||
+                countBeforeDext != expectedRetiredAtDext ||
+                cyclesBeforeDext != expectedRetiredAtDext || sourceBefore != 0 ||
+                destinationBefore != 0 || independentlyExpectedDextResult != 0 ||
+                statusBeforeDext != 0x00400080ULL || causeBeforeDext != 0 ||
+                epcBeforeDext != 0 || errorEpcBeforeDext != 0 || badVAddrBeforeDext != 0 ||
+                cpu->core().delayArmed() || reservationBeforeDext.valid ||
+                !beforeDext.ValidateIntegrity() || beforeDext.formatVersion != 3 ||
+                beforeDext.cpuComponentVersion != 6 || beforeDext.memoryComponentVersion != 2 ||
+                beforeDext.uartComponentVersion != 4 ||
+                beforeDext.irqRoutingComponentVersion != 1 || beforeDext.cpus.size() != 1 ||
+                beforeDext.cpus[0].architecturalState != cpu->core().serialize()) {
+                std::ostringstream message;
+                message << "authentic Linux DEXT prestate mismatch: pc=0x" << std::hex << stopPc
+                        << " pa=0x" << stopPhysical << " word=0x" << stopWord
+                        << " retired=" << std::dec << retired << " attempts=" << attempts
+                        << " count=" << countBeforeDext << " cycles=" << cyclesBeforeDext
+                        << " source=0x" << std::hex << sourceBefore
+                        << " destination=0x" << destinationBefore
+                        << " status=0x" << statusBeforeDext << " cause=0x" << causeBeforeDext;
+                throw std::runtime_error(message.str());
+            }
+            std::ostringstream pre;
+            pre << "{\"type\":\"authentic_dext_pre_execution\",\"retired\":" << std::dec
+                << retired << ",\"attempts\":" << attempts
+                << ",\"pc_va\":\"0x" << std::hex << std::setw(16) << std::setfill('0')
+                << dextPc << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
+                << "\",\"instruction\":\"0x" << std::setw(8) << dextWord
+                << "\",\"decoded_op\":\"dext\",\"opcode\":" << std::dec
+                << unsigned((dextWord >> 26) & 0x3FU) << ",\"rs\":4,\"rt\":3,\"msbd\":25"
+                << ",\"lsb\":6,\"size\":26,\"source\":\"0x" << std::hex
+                << std::setw(16) << sourceBefore << "\",\"destination_before\":\"0x"
+                << std::setw(16) << destinationBefore
+                << "\",\"independent_expected_result\":\"0x0000000000000000\""
+                << ",\"status\":\"0x" << std::setw(16) << statusBeforeDext
+                << "\",\"cause\":\"0x" << std::setw(16) << causeBeforeDext
+                << "\",\"count\":" << std::dec << countBeforeDext
+                << ",\"epc\":\"0x" << std::hex << std::setw(16) << epcBeforeDext
+                << "\",\"error_epc\":\"0x" << std::setw(16) << errorEpcBeforeDext
+                << "\",\"badvaddr\":\"0x" << std::setw(16) << badVAddrBeforeDext
+                << "\",\"hi\":\"0x" << std::setw(16) << hiBeforeDext
+                << "\",\"lo\":\"0x" << std::setw(16) << loBeforeDext
+                << "\",\"delay_armed\":false,\"reservation_valid\":false"
+                << ",\"vm_cycles\":" << std::dec << cyclesBeforeDext
+                << ",\"snapshot_valid\":true,\"snapshot_format\":"
+                << beforeDext.formatVersion << ",\"cpu_component_version\":"
+                << beforeDext.cpuComponentVersion << "}";
+            architecturalEvents.push_back(pre.str());
+
+            if (!executeOneAndTrace(vm, *cpu, nullptr) ||
+                context->instructionsExecuted != instructionsBeforeDext + 1 ||
+                cpu->core().pc() != dextPc + 4 ||
+                cpu->core().readGpr(3) != independentlyExpectedDextResult ||
+                cpu->core().cp0Count() != countBeforeDext + 1 ||
+                vm.getCyclesExecuted() != cyclesBeforeDext + 1 ||
+                cpu->core().cp0Status() != statusBeforeDext ||
+                cpu->core().cp0Cause() != causeBeforeDext ||
+                cpu->core().cp0Epc() != epcBeforeDext ||
+                cpu->core().cp0ErrorEpc() != errorEpcBeforeDext ||
+                cpu->core().cp0BadVAddr() != badVAddrBeforeDext ||
+                cpu->core().hi() != hiBeforeDext || cpu->core().lo() != loBeforeDext ||
+                cpu->core().delayArmed() || cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("authentic Linux DEXT did not retire as independently expected");
+            }
+            const Mips64FullVmSnapshot afterDext = vm.captureMips64FullSnapshot();
+            const std::vector<uint8_t> firstDextCpu = cpu->core().serialize();
+            const uint64_t firstDextInstructions = context->instructionsExecuted;
+            const uint64_t firstDextCycles = vm.getCyclesExecuted();
+            const uint64_t firstDextPc = cpu->core().pc();
+            std::string restoreError;
+            if (!afterDext.ValidateIntegrity() ||
+                !vm.restoreMips64FullSnapshot(beforeDext, &restoreError) || !restoreError.empty() ||
+                cpu->core().serialize() != beforeDext.cpus[0].architecturalState ||
+                context->instructionsExecuted != instructionsBeforeDext ||
+                vm.getCyclesExecuted() != cyclesBeforeDext ||
+                !executeOneAndTrace(vm, *cpu, nullptr) || cpu->core().serialize() != firstDextCpu ||
+                context->instructionsExecuted != firstDextInstructions ||
+                vm.getCyclesExecuted() != firstDextCycles || cpu->core().pc() != firstDextPc) {
+                throw std::runtime_error("authentic Linux DEXT full-VM checkpoint replay diverged: " +
+                                         restoreError);
+            }
+            const Mips64FullVmSnapshot replayDext = vm.captureMips64FullSnapshot();
+            if (!replayDext.ValidateIntegrity() || !sameDextReplayState(afterDext, replayDext) ||
+                replayDext.physicalMemory.reservationGenerations !=
+                    afterDext.physicalMemory.reservationGenerations ||
+                replayDext.physicalMemory.nextReservationGeneration !=
+                    afterDext.physicalMemory.nextReservationGeneration) {
+                throw std::runtime_error("authentic Linux DEXT replay changed full-VM state");
+            }
+            authenticDextStartingSnapshot.emplace(std::move(beforeDext));
+            authenticDextVerified = true;
+            authenticDextReplayVerified = true;
+            ++dextRetirements;
+            std::ostringstream post;
+            post << "{\"type\":\"authentic_dext_retirement\",\"pc_va\":\"0x" << std::hex
+                 << std::setw(16) << std::setfill('0') << dextPc
+                 << "\",\"instruction\":\"0x" << std::setw(8) << dextWord
+                 << "\",\"source\":\"0x" << std::setw(16) << sourceBefore
+                 << "\",\"result\":\"0x" << std::setw(16) << cpu->core().readGpr(3)
+                 << "\",\"expected_result\":\"0x0000000000000000\",\"next_pc_va\":\"0x"
+                 << std::setw(16) << cpu->core().pc() << "\",\"status_after\":\"0x"
+                 << std::setw(16) << cpu->core().cp0Status() << "\",\"cause_after\":\"0x"
+                 << std::setw(16) << cpu->core().cp0Cause() << "\",\"count_after\":"
+                 << std::dec << cpu->core().cp0Count() << ",\"vm_cycles_after\":"
+                 << vm.getCyclesExecuted() << ",\"snapshot_replay_verified\":true}";
+            architecturalEvents.push_back(post.str());
+            ++attempts;
+            ++retired;
+            continue;
+        }
+
         const bool recordingPrefix = attempts < traceInstructionLimit;
         const bool isDi = decoded.valid && decoded.op == Mips64Op::Di;
         const bool isEi = decoded.valid && decoded.op == Mips64Op::Ei;
@@ -2416,6 +2623,7 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
         const uint64_t cyclesBefore = vm.getCyclesExecuted();
         const uint64_t instructionsBefore = context->instructionsExecuted;
         const uint64_t pcBefore = cpu->core().pc();
+        const bool delayArmedBefore = cpu->core().delayArmed();
 
         if (stopPc == diPc && !authenticDiVerified) {
             const auto& reservation = cpu->core().reservationState();
@@ -2599,9 +2807,40 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
                       << "\",\"instruction_retired\":false}";
                 architecturalEvents.push_back(event.str());
             } else {
-                stopReason = Mips64Cpu::faultEntersException(cpu->core().fault())
-                    ? "architectural_exception"
+                const bool architecturalException =
+                    Mips64Cpu::faultEntersException(cpu->core().fault());
+                stopReason = architecturalException ? "architectural_exception"
                     : (didRetire ? "cpu_counter_mismatch" : "vm_run_returned_zero");
+                if (architecturalException) {
+                    std::ostringstream event;
+                    event << "{\"type\":\"architectural_exception_frontier\",\"attempt_pc_va\":\"0x"
+                          << std::hex << std::setw(16) << std::setfill('0') << pcBefore
+                          << "\",\"attempt_pc_pa\":\"0x" << std::setw(9) << stopPhysical
+                          << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                          << "\",\"opcode\":" << std::dec << unsigned((stopWord >> 26) & 0x3FU)
+                          << ",\"rs\":" << unsigned((stopWord >> 21) & 0x1FU)
+                          << ",\"rt\":" << unsigned((stopWord >> 16) & 0x1FU)
+                          << ",\"rd\":" << unsigned((stopWord >> 11) & 0x1FU)
+                          << ",\"sa\":" << unsigned((stopWord >> 6) & 0x1FU)
+                          << ",\"funct\":" << unsigned(stopWord & 0x3FU)
+                          << ",\"decoded_valid\":" << (decoded.valid ? "true" : "false")
+                          << ",\"decode_fault\":\"" << Mips64Cpu::faultName(decoded.fault)
+                          << "\",\"disassembly\":\"" << cpu->core().disassemble(decoded)
+                          << "\",\"stop_reason\":\"architectural_exception\",\"fault\":\""
+                          << Mips64Cpu::faultName(cpu->core().fault())
+                          << "\",\"exc_code\":" << cpu->core().causeExcCode()
+                          << ",\"status_after\":\"0x" << std::hex << std::setw(16)
+                          << cpu->core().cp0Status() << "\",\"cause_after\":\"0x"
+                          << std::setw(16) << cpu->core().cp0Cause()
+                          << "\",\"epc_after\":\"0x" << std::setw(16)
+                          << cpu->core().cp0Epc() << "\",\"badvaddr_after\":\"0x"
+                          << std::setw(16) << cpu->core().cp0BadVAddr()
+                          << "\",\"cause_bd\":"
+                          << ((cpu->core().cp0Cause() & kCauseBitBd) ? "true" : "false")
+                          << ",\"delay_armed_before\":"
+                          << (delayArmedBefore ? "true" : "false") << "}";
+                    architecturalEvents.push_back(event.str());
+                }
                 ++attempts;
                 break;
             }
@@ -2611,6 +2850,11 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
 
     if (!authenticDiVerified || !authenticDiReplayVerified) {
         throw std::runtime_error("authentic Linux DI boundary and replay were not verified");
+    }
+    if (continuePastAuthenticDext &&
+        (!authenticDextVerified || !authenticDextReplayVerified || dextRetirements != 1 ||
+         !authenticDextStartingSnapshot.has_value())) {
+        throw std::runtime_error("authentic Linux DEXT retirement or instruction replay failed");
     }
     stopPc = cpu->core().pc();
     const Mips64Probe finalFetch = cpu->core().probeAddress(stopPc, Mips64Access::Fetch);
@@ -2630,17 +2874,151 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
     }
 
     const Mips64FullVmSnapshot finalSnapshot = vm.captureMips64FullSnapshot();
+    bool authenticContinuationReplayVerified = false;
+    if (continuePastAuthenticDext) {
+        constexpr uint64_t dextFrontierRetired = 151584U;
+        const uint64_t expectedContinuationRetired = retired - dextFrontierRetired;
+        std::string restoreError;
+        if (!vm.restoreMips64FullSnapshot(*authenticDextStartingSnapshot, &restoreError) ||
+            !restoreError.empty()) {
+            throw std::runtime_error("could not restore authentic DEXT frontier snapshot: " +
+                                     restoreError);
+        }
+        uint64_t replayAttempts = 0;
+        uint64_t replayRetired = 0;
+        std::string replayStopReason = "instruction_budget_exhausted";
+        const uint64_t expectedContinuationAttempts = attempts - dextFrontierRetired;
+        while (replayAttempts < expectedContinuationAttempts) {
+            const uint64_t replayPc = cpu->core().pc();
+            const Mips64Probe replayFetch = cpu->core().probeAddress(replayPc, Mips64Access::Fetch);
+            if (!replayFetch.ok) {
+                replayStopReason = Mips64Cpu::faultName(cpu->core().fault());
+                ++replayAttempts;
+                break;
+            }
+            uint8_t replayBytes[4]{};
+            vm.getMemory().Read(replayFetch.phys, replayBytes, sizeof(replayBytes));
+            const uint32_t replayWord = read32(replayBytes, false);
+            const Mips64Decoded replayDecoded = decodeInstruction(replayWord);
+            if (!replayDecoded.valid &&
+                replayDecoded.fault == Mips64Fault::UnsupportedInstruction) {
+                replayStopReason = "unsupported_instruction";
+                ++replayAttempts;
+                break;
+            }
+            const uint64_t replayStatusBefore = cpu->core().cp0Status();
+            const uint64_t replayCyclesBefore = vm.getCyclesExecuted();
+            const uint64_t replayInstructionsBefore = context->instructionsExecuted;
+            const bool replayDidRetire = executeOneAndTrace(vm, *cpu, nullptr);
+            const uint64_t replayInstructionsAfter = context->instructionsExecuted;
+            if (replayInstructionsAfter == replayInstructionsBefore + 1) {
+                ++replayRetired;
+            } else {
+                const bool interruptDelivered = cpu->core().statusExl() &&
+                    !((replayStatusBefore & kStatusBitExl) != 0) &&
+                    cpu->core().cp0Epc() == replayPc &&
+                    cpu->core().causeExcCode() == static_cast<uint32_t>(Mips64ExcCode::Int) &&
+                    cpu->core().fault() == Mips64Fault::None &&
+                    vm.getCyclesExecuted() == replayCyclesBefore + 1;
+                if (!interruptDelivered) {
+                    replayStopReason = Mips64Cpu::faultEntersException(cpu->core().fault())
+                        ? "architectural_exception"
+                        : (replayDidRetire ? "cpu_counter_mismatch" : "vm_run_returned_zero");
+                    ++replayAttempts;
+                    break;
+                }
+            }
+            ++replayAttempts;
+        }
+        const uint64_t replayStopPc = cpu->core().pc();
+        const Mips64Probe replayFinalFetch = cpu->core().probeAddress(replayStopPc,
+                                                                       Mips64Access::Fetch);
+        uint64_t replayStopPhysical = replayFinalFetch.ok ? replayFinalFetch.phys : 0;
+        uint32_t replayStopWord = 0;
+        if (replayFinalFetch.ok) {
+            uint8_t replayBytes[4]{};
+            vm.getMemory().Read(replayFinalFetch.phys, replayBytes, sizeof(replayBytes));
+            replayStopWord = read32(replayBytes, false);
+        }
+        if (replayStopReason == "instruction_budget_exhausted" && replayFinalFetch.ok) {
+            const Mips64Decoded replayFinalDecoded = decodeInstruction(replayStopWord);
+            if (!replayFinalDecoded.valid &&
+                replayFinalDecoded.fault == Mips64Fault::UnsupportedInstruction) {
+                replayStopReason = "unsupported_instruction";
+            }
+        }
+        const Mips64FullVmSnapshot replayFinalSnapshot = vm.captureMips64FullSnapshot();
+        authenticContinuationReplayVerified = replayFinalSnapshot.ValidateIntegrity() &&
+            sameDextReplayState(finalSnapshot, replayFinalSnapshot) &&
+            replayFinalSnapshot.physicalMemory.reservationGenerations ==
+                finalSnapshot.physicalMemory.reservationGenerations &&
+            replayFinalSnapshot.physicalMemory.nextReservationGeneration ==
+                finalSnapshot.physicalMemory.nextReservationGeneration &&
+            replayStopReason == stopReason && replayStopPc == stopPc &&
+            replayStopPhysical == stopPhysical && replayStopWord == stopWord &&
+            replayAttempts == expectedContinuationAttempts &&
+            replayRetired == expectedContinuationRetired;
+        if (!authenticContinuationReplayVerified) {
+            std::ostringstream message;
+            message << "authentic Linux DEXT continuation checkpoint replay diverged: "
+                    << "snapshot_valid=" << replayFinalSnapshot.ValidateIntegrity()
+                    << " same_state=" << sameDextReplayState(finalSnapshot, replayFinalSnapshot)
+                    << " reservation_generations="
+                    << (replayFinalSnapshot.physicalMemory.reservationGenerations ==
+                        finalSnapshot.physicalMemory.reservationGenerations)
+                    << " next_reservation_generation="
+                    << (replayFinalSnapshot.physicalMemory.nextReservationGeneration ==
+                        finalSnapshot.physicalMemory.nextReservationGeneration)
+                    << " stop_reason=" << replayStopReason << "/" << stopReason
+                    << " stop_pc=0x" << std::hex << replayStopPc << "/0x" << stopPc
+                    << " stop_pa=0x" << replayStopPhysical << "/0x" << stopPhysical
+                    << " stop_word=0x" << replayStopWord << "/0x" << stopWord
+                    << " attempts=" << std::dec << replayAttempts << "/"
+                    << expectedContinuationAttempts << " retired=" << replayRetired << "/"
+                    << expectedContinuationRetired;
+            throw std::runtime_error(message.str());
+        }
+        if (!vm.restoreMips64FullSnapshot(finalSnapshot, &restoreError) || !restoreError.empty()) {
+            throw std::runtime_error("could not restore final continuation snapshot: " +
+                                     restoreError);
+        }
+    }
     if (attempts > traceInstructionLimit) {
-        trace << "{\"type\":\"gap\",\"region\":\"authentic_di_ei_continuation\",\"from_attempt\":"
+        trace << "{\"type\":\"gap\",\"region\":\""
+              << (continuePastAuthenticDext ? "authentic_dext_continuation"
+                                            : "authentic_di_ei_continuation")
+              << "\",\"from_attempt\":"
               << traceInstructionLimit << ",\"to_attempt_exclusive\":" << attempts
               << ",\"skipped_instructions\":" << (attempts - traceInstructionLimit) << "}\n";
     }
     for (const std::string& event : architecturalEvents) trace << event << "\n";
-    trace << "{\"type\":\"di_ei_continuation_summary\",\"attempts\":" << attempts
+    uint64_t finalMemoryRegionBytes = 0;
+    for (const auto& region : finalSnapshot.physicalMemory.regions) {
+        finalMemoryRegionBytes += region.info.size;
+    }
+    trace << "{\"type\":\""
+          << (continuePastAuthenticDext ? "dext_continuation_summary"
+                                        : "di_ei_continuation_summary")
+          << "\",\"attempts\":" << attempts
           << ",\"retired\":" << retired << ",\"entry_reached\":"
           << (entryReached ? "true" : "false") << ",\"entry_retired_before_linux\":"
           << retiredBeforeEntry << ",\"authentic_di_verified\":true"
           << ",\"authentic_di_snapshot_replay_verified\":true"
+          << ",\"authentic_dext_verified\":"
+          << (authenticDextVerified ? "true" : "false")
+          << ",\"authentic_dext_snapshot_replay_verified\":"
+          << (authenticDextReplayVerified ? "true" : "false")
+          << ",\"authentic_continuation_snapshot_replay_verified\":"
+          << (authenticContinuationReplayVerified ? "true" : "false")
+          << ",\"dext_retirements\":" << dextRetirements
+          << ",\"retired_beyond_dext_frontier\":"
+          << (retired > 151584U ? retired - 151584U : 0U)
+          << ",\"retired_after_dext\":"
+          << (retired > 151585U ? retired - 151585U : 0U)
+          << ",\"retired_since_linux_entry\":"
+          << (retired > retiredBeforeEntry ? retired - retiredBeforeEntry : 0U)
+          << ",\"attempts_since_dext_frontier\":"
+          << (attempts > 151584U ? attempts - 151584U : 0U)
           << ",\"di_retirements\":" << diRetirements << ",\"ei_retirements\":"
           << eiRetirements << ",\"ehb_retirements\":" << ehbRetirements
           << ",\"interrupt_deliveries\":" << interruptDeliveries
@@ -2660,6 +3038,35 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
           << ",\"compare\":" << cpu->core().cp0Compare()
           << ",\"vm_cycles\":" << vm.getCyclesExecuted()
           << ",\"uart_bytes\":" << board->ConsoleSink()->Bytes().size()
+          << ",\"uart_tx_count\":" << finalSnapshot.uart.transmitCount
+          << ",\"uart_rx_fifo_bytes\":" << finalSnapshot.uart.receiveFifo.size()
+          << ",\"uart_pending_host_input_bytes\":"
+          << finalSnapshot.uart.pendingHostInput.size()
+          << ",\"uart_virtual_time_cycle\":" << finalSnapshot.uart.virtualTimeCycle
+          << ",\"uart_receive_timeout_armed\":"
+          << (finalSnapshot.uart.receiveTimeoutArmed ? "true" : "false")
+          << ",\"uart_receive_timeout_pending\":"
+          << (finalSnapshot.uart.receiveTimeoutPending ? "true" : "false")
+          << ",\"console_sequence\":" << finalSnapshot.console.sequence
+          << ",\"memory_regions\":" << finalSnapshot.physicalMemory.regions.size()
+          << ",\"memory_region_bytes\":" << finalMemoryRegionBytes
+          << ",\"reservation_tracking_version\":"
+          << unsigned(finalSnapshot.physicalMemory.reservationTrackingVersion)
+          << ",\"reservation_generation_count\":"
+          << finalSnapshot.physicalMemory.reservationGenerations.size()
+          << ",\"next_reservation_generation\":"
+          << finalSnapshot.physicalMemory.nextReservationGeneration
+          << ",\"cpu_arch_state_bytes\":"
+          << (finalSnapshot.cpus.empty() ? 0U : finalSnapshot.cpus[0].architecturalState.size())
+          << ",\"cpu_arch_state_hash\":\"0x" << std::hex
+          << (finalSnapshot.cpus.empty() ? 0U : Mips64FullSnapshotHashBytes(
+                 finalSnapshot.cpus[0].architecturalState)) << "\""
+          << ",\"tlb_entries\":" << std::dec << Mips64Cpu::tlbSize()
+          << ",\"scheduler_active_cpu\":" << finalSnapshot.activeCpuIndex
+          << ",\"scheduler_last_cpu\":" << finalSnapshot.scheduler.lastCPUIndex
+          << ",\"scheduler_quantum\":" << finalSnapshot.scheduler.quantumSize
+          << ",\"scheduler_cpu_counters\":"
+          << finalSnapshot.scheduler.cpuBundleCounters.size()
           << ",\"snapshot_valid\":" << (finalSnapshot.ValidateIntegrity() ? "true" : "false")
           << ",\"snapshot_format\":" << finalSnapshot.formatVersion
           << ",\"cpu_component_version\":" << finalSnapshot.cpuComponentVersion << "}\n";
@@ -2669,29 +3076,44 @@ int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
               << std::hex << std::setw(16) << std::setfill('0') << stopPc
               << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
               << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
-              << "\",\"decoded_valid\":" << (finalDecoded.valid ? "true" : "false")
+              << "\",\"opcode\":" << std::dec << unsigned((stopWord >> 26) & 0x3FU)
+              << ",\"rs\":" << unsigned((stopWord >> 21) & 0x1FU)
+              << ",\"rt\":" << unsigned((stopWord >> 16) & 0x1FU)
+              << ",\"rd\":" << unsigned((stopWord >> 11) & 0x1FU)
+              << ",\"sa\":" << unsigned((stopWord >> 6) & 0x1FU)
+              << ",\"funct\":" << unsigned(stopWord & 0x3FU)
+              << ",\"decoded_valid\":" << (finalDecoded.valid ? "true" : "false")
               << ",\"decode_fault\":\"" << Mips64Cpu::faultName(finalDecoded.fault)
               << "\",\"disassembly\":\"" << cpu->core().disassemble(finalDecoded)
-              << "\",\"status\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+              << "\",\"status\":\"0x" << std::hex << std::setw(16)
+              << cpu->core().cp0Status()
               << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
               << "\",\"epc\":\"0x" << std::setw(16) << cpu->core().cp0Epc()
               << "\",\"badvaddr\":\"0x" << std::setw(16) << cpu->core().cp0BadVAddr()
               << "\",\"count\":" << std::dec << cpu->core().cp0Count()
               << ",\"architectural_exception\":"
               << (Mips64Cpu::faultEntersException(cpu->core().fault()) ? "true" : "false")
+              << ",\"delay_armed\":" << (cpu->core().delayArmed() ? "true" : "false")
               << "}\n";
     }
     trace.close();
 
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - startTime).count();
-    std::cout << "MIPS64_DI_EI_LINUX_CONTINUATION image=" << imagePath.string()
+    std::cout << (continuePastAuthenticDext ? "MIPS64_DEXT_LINUX_CONTINUATION image="
+                                            : "MIPS64_DI_EI_LINUX_CONTINUATION image=")
+              << imagePath.string()
               << " endian=big entry=0x" << std::hex << plan.entryPoint
               << " attempts=" << std::dec << attempts << " retired=" << retired
               << " entry_reached=" << (entryReached ? "true" : "false")
               << " authentic_di_verified=true authentic_di_replay_verified=true"
               << " di=" << diRetirements << " ei=" << eiRetirements
               << " ehb=" << ehbRetirements << " interrupts=" << interruptDeliveries
+              << " authentic_dext_verified=" << (authenticDextVerified ? "true" : "false")
+              << " authentic_dext_replay_verified="
+              << (authenticDextReplayVerified ? "true" : "false")
+              << " authentic_continuation_replay_verified="
+              << (authenticContinuationReplayVerified ? "true" : "false")
               << " stop_reason=" << stopReason << " stop_pc=0x" << std::hex << stopPc
               << " stop_pa=0x" << stopPhysical << " stop_word=0x" << stopWord
               << " status=0x" << cpu->core().cp0Status()
@@ -2734,6 +3156,10 @@ int main(int argc, char** argv) {
         if (argc == 4 && std::string(argv[1]) == "--continue-di-ei-kernel") {
             constexpr unsigned totalAttemptBudget = 1151573;
             return runDiEiLinuxContinuation(argv[2], argv[3], totalAttemptBudget);
+        }
+        if (argc == 4 && std::string(argv[1]) == "--continue-dext-kernel") {
+            constexpr unsigned totalRetiredTarget = 151585U + 1000000U;
+            return runDiEiLinuxContinuation(argv[2], argv[3], totalRetiredTarget, true);
         }
         testElfValidationBothEndians();
         testLoadPlanRejectsRomAndMmioWithoutPartialRamWrites();

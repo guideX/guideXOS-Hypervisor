@@ -439,6 +439,8 @@ enum class Mips64Op : uint8_t {
     // Appended so previously assigned operation values remain stable.
     Di, Ei, Ehb,
     JrHb, JalrHb,
+    // MIPS64 Release 2 doubleword extract bit field.
+    Dext,
 };
 
 struct Mips64ReservationState {
@@ -457,8 +459,8 @@ struct Mips64Decoded {
     uint32_t raw = 0;
     uint8_t rs = 0;
     uint8_t rt = 0;
-    uint8_t rd = 0;
-    uint8_t sa = 0;
+    uint8_t rd = 0;      // DEXT interprets bits 15:11 as msbd, not a GPR
+    uint8_t sa = 0;      // DEXT interprets bits 10:6 as lsb, not a shift amount
     uint8_t sel = 0;     // COP0 selector (bits 2:0) for MFC0/MTC0 family
     uint16_t code = 0;   // SPECIAL Trap software code (bits 15:6)
     uint16_t imm = 0;
