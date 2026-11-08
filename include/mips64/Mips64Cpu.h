@@ -435,6 +435,10 @@ enum class Mips64Op : uint8_t {
     Sllv,
     // MIPS64 Release 2 word reservation operations, appended for snapshot ABI.
     Ll, Sc,
+    // MIPS64 Release 2 atomic interrupt control and execution barrier.
+    // Appended so previously assigned operation values remain stable.
+    Di, Ei, Ehb,
+    JrHb, JalrHb,
 };
 
 struct Mips64ReservationState {
@@ -539,6 +543,9 @@ public:
     bool statusExl() const { return (status_ & kStatusBitExl) != 0; }
     bool statusErl() const { return (status_ & kStatusBitErl) != 0; }
     bool statusBev() const { return (status_ & kStatusBitBev) != 0; }
+    bool interruptsEnabledForDelivery() const noexcept {
+        return (status_ & kStatusBitIe) != 0;
+    }
     bool causeBd() const { return (cause_ & kCauseBitBd) != 0; }
     uint32_t causeExcCode() const {
         return static_cast<uint32_t>((cause_ & kCauseExcCodeMask) >> kCauseExcCodeShift);

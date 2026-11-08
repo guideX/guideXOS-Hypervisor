@@ -1206,3 +1206,19 @@ add_test(NAME Mips64UartTimeoutGuestTests COMMAND test_mips64_interrupt_guest ti
 add_test(NAME Mips64UartTimeoutSnapshotTests COMMAND test_mips64_interrupt_guest timeout_snapshot)
 add_test(NAME Mips64UartLineStatusGuestTests COMMAND test_mips64_interrupt_guest line_status_guest)
 add_test(NAME Mips64UartLineStatusSnapshotTests COMMAND test_mips64_interrupt_guest line_status_snapshot)
+
+# MIPS64-19 encoded DI/EI, EHB, interrupt-boundary, Malta guest, and snapshot qualification.
+add_executable(test_mips64_di_ei
+    tests/test_mips64_di_ei.cpp
+    ${ALL_SOURCES}
+)
+target_include_directories(test_mips64_di_ei PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(WIN32)
+    target_link_libraries(test_mips64_di_ei PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_di_ei PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_di_ei PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64DiEiTests COMMAND test_mips64_di_ei)

@@ -107,11 +107,9 @@ void testExactFrontierDecodeAndLwc2Separation() {
     CHECK(decodeInstruction(0xF0810000U).op == Mips64Op::Scd);
 
     const Mips64Decoded di = decodeInstruction(0x41606000U);
-    CHECK(!di.valid && di.fault == Mips64Fault::UnsupportedInstruction);
-    CHECK(di.error.find("DI") != std::string::npos);
+    CHECK(di.valid && di.op == Mips64Op::Di && di.rt == 0);
     const Mips64Decoded ei = decodeInstruction(0x41606020U);
-    CHECK(!ei.valid && ei.fault == Mips64Fault::UnsupportedInstruction);
-    CHECK(ei.error.find("EI") != std::string::npos);
+    CHECK(ei.valid && ei.op == Mips64Op::Ei && ei.rt == 0);
     const Mips64Decoded malformedMfmc0 = decodeInstruction(0x41606800U);
     CHECK(!malformedMfmc0.valid && malformedMfmc0.fault == Mips64Fault::ReservedInstruction);
 }

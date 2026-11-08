@@ -2310,6 +2310,399 @@ int runBoundedKernelProbe(const std::filesystem::path& imagePath,
     return 0;
 }
 
+int runDiEiLinuxContinuation(const std::filesystem::path& imagePath,
+                            const std::filesystem::path& tracePath,
+                            unsigned instructionBudget) {
+    constexpr uint64_t probeRamBytes = 256ULL * 1024 * 1024;
+    constexpr uint64_t diPc = 0xFFFFFFFF80B426C0ULL;
+    constexpr uint64_t diPa = 0x000B426C0ULL;
+    constexpr uint32_t diWord = 0x41606000U;
+    constexpr unsigned expectedRetiredAtDi = 151572U;
+    constexpr unsigned traceInstructionLimit = 256U;
+    const auto startTime = std::chrono::steady_clock::now();
+    const auto image = readFile(imagePath);
+    if (image.empty()) throw std::runtime_error("kernel image is empty or unreadable");
+
+    Mips64ElfLoadOptions loadOptions;
+    loadOptions.guestEndianness = Mips64Endianness::Big;
+    loadOptions.guestRamSize = probeRamBytes;
+    loadOptions.reservedPhysicalRanges = {
+        {kMaltaPromDefaultPhysicalAddress, kMaltaPromImageBytes},
+        {kMaltaElfCompletionPhysicalAddress, sizeof(uint32_t)}
+    };
+    Mips64ElfLoadPlan plan;
+    std::string error;
+    if (!Mips64ElfLoader::BuildPlan(image.data(), image.size(), loadOptions,
+                                    plan, &error)) {
+        throw std::runtime_error("kernel ELF rejected: " + error);
+    }
+
+    Logger::getInstance().setLogLevel(LogLevel::ERROR);
+    VirtualMachine vm(static_cast<size_t>(probeRamBytes), "MIPS64");
+    MaltaBootstrapConfig config;
+    config.endianness = Mips64Endianness::Big;
+    config.guestRamSize = probeRamBytes;
+    config.prom.kernelImageName = imagePath.filename().string();
+    config.prom.kernelCommandLine = "console=ttyS0,38400n8";
+    if (!vm.configureMips64MaltaElfHandoff(image.data(), image.size(), config, &error)) {
+        throw std::runtime_error("kernel Malta handoff setup failed: " + error);
+    }
+    if (!vm.init()) throw std::runtime_error("production VM initialization failed");
+    Mips64ISAPlugin* cpu = plugin(vm);
+    CPUContext* context = vm.getCPUContext(0);
+    auto* board = vm.getMips64MaltaBootstrapBoard();
+    if (!cpu || !context || !board || !board->Uart() || !board->ConsoleSink()) {
+        throw std::runtime_error("production Malta VM lost CPU or UART state");
+    }
+
+    std::filesystem::create_directories(tracePath.parent_path());
+    std::ofstream trace(tracePath, std::ios::binary | std::ios::trunc);
+    if (!trace) throw std::runtime_error("could not create DI/EI continuation trace");
+
+    unsigned attempts = 0;
+    unsigned retired = 0;
+    unsigned interruptDeliveries = 0;
+    unsigned diRetirements = 0;
+    unsigned eiRetirements = 0;
+    unsigned ehbRetirements = 0;
+    bool entryReached = false;
+    unsigned retiredBeforeEntry = 0;
+    bool authenticDiVerified = false;
+    bool authenticDiReplayVerified = false;
+    std::vector<std::string> architecturalEvents;
+    std::set<uint64_t> distinctPcs;
+    std::string stopReason = "instruction_budget_exhausted";
+    uint64_t stopPc = cpu->core().pc();
+    uint64_t stopPhysical = 0;
+    uint32_t stopWord = 0;
+    bool stopFetchOk = false;
+
+    for (; attempts < instructionBudget;) {
+        stopPc = cpu->core().pc();
+        distinctPcs.insert(stopPc);
+        if (stopPc == plan.entryPoint && !entryReached) {
+            entryReached = true;
+            retiredBeforeEntry = retired;
+        }
+        const Mips64Probe fetch = cpu->core().probeAddress(stopPc, Mips64Access::Fetch);
+        stopFetchOk = fetch.ok;
+        stopPhysical = fetch.ok ? fetch.phys : 0;
+        stopWord = 0;
+        if (fetch.ok) {
+            uint8_t bytes[4]{};
+            vm.getMemory().Read(fetch.phys, bytes, sizeof(bytes));
+            stopWord = read32(bytes, false);
+        }
+
+        const Mips64Decoded decoded = fetch.ok ? decodeInstruction(stopWord) : Mips64Decoded{};
+        if (!fetch.ok) {
+            stopReason = Mips64Cpu::faultName(cpu->core().fault());
+            ++attempts;
+            break;
+        }
+        if (!decoded.valid && decoded.fault == Mips64Fault::UnsupportedInstruction) {
+            stopReason = "unsupported_instruction";
+            ++attempts;
+            break;
+        }
+
+        const bool recordingPrefix = attempts < traceInstructionLimit;
+        const bool isDi = decoded.valid && decoded.op == Mips64Op::Di;
+        const bool isEi = decoded.valid && decoded.op == Mips64Op::Ei;
+        const bool isEhb = decoded.valid && decoded.op == Mips64Op::Ehb;
+        const uint64_t statusBefore = cpu->core().cp0Status();
+        const uint64_t causeBefore = cpu->core().cp0Cause();
+        const uint64_t countBefore = cpu->core().cp0Count();
+        const uint64_t cyclesBefore = vm.getCyclesExecuted();
+        const uint64_t instructionsBefore = context->instructionsExecuted;
+        const uint64_t pcBefore = cpu->core().pc();
+
+        if (stopPc == diPc && !authenticDiVerified) {
+            const auto& reservation = cpu->core().reservationState();
+            uint8_t hardwareLines = 0;
+            for (unsigned line = 0; line < 6; ++line) {
+                if (cpu->core().hardwareInterruptLine(line)) {
+                    hardwareLines |= static_cast<uint8_t>(1U << line);
+                }
+            }
+            const auto uartSnapshot = board->Uart()->CaptureSnapshot();
+            const auto uartSignal = board->Uart()->InterruptSignal();
+            const uint64_t uartPending = (uartSignal && *uartSignal) ? 1U : 0U;
+            const Mips64FullVmSnapshot beforeDi = vm.captureMips64FullSnapshot();
+            if (stopPhysical != diPa || stopWord != diWord || !decoded.valid ||
+                decoded.op != Mips64Op::Di || decoded.rt != 0 ||
+                retired != expectedRetiredAtDi ||
+                context->instructionsExecuted != expectedRetiredAtDi ||
+                countBefore != expectedRetiredAtDi || cyclesBefore != expectedRetiredAtDi ||
+                statusBefore != 0x00400080ULL || causeBefore != 0 ||
+                cpu->core().cp0Epc() != 0 || cpu->core().cp0ErrorEpc() != 0 ||
+                cpu->core().cp0BadVAddr() != 0 || cpu->core().statusExl() ||
+                cpu->core().statusErl() || !cpu->core().isKernelMode() ||
+                (statusBefore & kStatusImMask) != 0 ||
+                (causeBefore & kCauseIpMask) != 0 || hardwareLines != 0 || uartPending != 0 ||
+                !uartSnapshot.receiveFifo.empty() || !uartSnapshot.pendingHostInput.empty() ||
+                reservation.valid || !beforeDi.ValidateIntegrity() ||
+                beforeDi.formatVersion != 3 || beforeDi.cpuComponentVersion != 6 ||
+                beforeDi.memoryComponentVersion != 2 || beforeDi.uartComponentVersion != 4 ||
+                beforeDi.irqRoutingComponentVersion != 1 || beforeDi.cpus.size() != 1 ||
+                beforeDi.cpus[0].architecturalState != cpu->core().serialize()) {
+                std::ostringstream message;
+                message << "authentic Linux DI prestate mismatch: pc=0x" << std::hex << stopPc
+                        << " pa=0x" << stopPhysical << " word=0x" << stopWord
+                        << " retired=" << std::dec << retired
+                        << " context=" << context->instructionsExecuted
+                        << " count=" << countBefore << " cycles=" << cyclesBefore
+                        << " status=0x" << std::hex << statusBefore
+                        << " cause=0x" << causeBefore << " epc=0x" << cpu->core().cp0Epc()
+                        << " error_epc=0x" << cpu->core().cp0ErrorEpc()
+                        << " badvaddr=0x" << cpu->core().cp0BadVAddr()
+                        << " hardware_lines=0x" << unsigned(hardwareLines)
+                        << " uart_pending=" << uartPending
+                        << " reservation_valid=" << reservation.valid;
+                throw std::runtime_error(message.str());
+            }
+
+            std::ostringstream event;
+            event << "{\"type\":\"authentic_di_pre_instruction\",\"retired\":" << retired
+                  << ",\"attempts\":" << attempts
+                  << ",\"pc_va\":\"0x" << std::hex << std::setw(16) << std::setfill('0') << stopPc
+                  << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
+                  << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                  << "\",\"decoded_op\":\"di\",\"rt\":" << std::dec << unsigned(decoded.rt)
+                  << ",\"status\":\"0x" << std::hex << std::setw(16) << statusBefore
+                  << "\",\"cause\":\"0x" << std::setw(16) << causeBefore
+                  << "\",\"pending_ip\":\"0x" << std::setw(4) << (causeBefore & kCauseIpMask)
+                  << "\",\"count\":" << std::dec << countBefore
+                  << ",\"compare\":" << cpu->core().cp0Compare()
+                  << ",\"epc\":\"0x" << std::hex << std::setw(16) << cpu->core().cp0Epc()
+                  << "\",\"error_epc\":\"0x" << std::setw(16) << cpu->core().cp0ErrorEpc()
+                  << "\",\"badvaddr\":\"0x" << std::setw(16) << cpu->core().cp0BadVAddr()
+                  << "\",\"ksu\":" << std::dec << cpu->core().statusKsu()
+                  << ",\"ie\":" << ((statusBefore & kStatusBitIe) ? "true" : "false")
+                  << ",\"exl\":" << (cpu->core().statusExl() ? "true" : "false")
+                  << ",\"erl\":" << (cpu->core().statusErl() ? "true" : "false")
+                  << ",\"status_im\":\"0x" << std::hex << std::setw(4) << (statusBefore & kStatusImMask)
+                  << "\",\"hardware_irq_lines\":\"0x" << std::setw(2) << unsigned(hardwareLines)
+                  << "\",\"uart_irq_pending\":" << std::dec << uartPending
+                  << ",\"uart_fifo_bytes\":" << uartSnapshot.receiveFifo.size()
+                  << ",\"reservation_valid\":false,\"reservation_size\":"
+                  << unsigned(reservation.size) << ",\"vm_cycles\":" << cyclesBefore
+                  << ",\"snapshot_format\":" << beforeDi.formatVersion
+                  << ",\"cpu_component_version\":" << beforeDi.cpuComponentVersion
+                  << ",\"snapshot_valid\":true}";
+            architecturalEvents.push_back(event.str());
+
+            if (!executeOneAndTrace(vm, *cpu, recordingPrefix ? &trace : nullptr) ||
+                context->instructionsExecuted != instructionsBefore + 1 ||
+                cpu->core().pc() != diPc + 4 || cpu->core().cp0Count() != countBefore + 1 ||
+                vm.getCyclesExecuted() != cyclesBefore + 1 ||
+                cpu->core().cp0Status() != statusBefore || cpu->core().fault() != Mips64Fault::None) {
+                throw std::runtime_error("authentic Linux DI did not retire with expected Status state");
+            }
+            const Mips64FullVmSnapshot afterDi = vm.captureMips64FullSnapshot();
+            const std::vector<uint8_t> firstDiCpu = cpu->core().serialize();
+            const uint64_t firstDiInstructions = context->instructionsExecuted;
+            const uint64_t firstDiCycles = vm.getCyclesExecuted();
+            const uint64_t firstDiPc = cpu->core().pc();
+            std::string restoreError;
+            if (!afterDi.ValidateIntegrity() ||
+                !vm.restoreMips64FullSnapshot(beforeDi, &restoreError) || !restoreError.empty() ||
+                cpu->core().serialize() != beforeDi.cpus[0].architecturalState ||
+                context->instructionsExecuted != instructionsBefore ||
+                vm.getCyclesExecuted() != cyclesBefore ||
+                !executeOneAndTrace(vm, *cpu, nullptr) ||
+                cpu->core().serialize() != firstDiCpu ||
+                context->instructionsExecuted != firstDiInstructions ||
+                vm.getCyclesExecuted() != firstDiCycles || cpu->core().pc() != firstDiPc) {
+                throw std::runtime_error("authentic Linux DI full-VM checkpoint replay diverged: " +
+                                         restoreError);
+            }
+            const Mips64FullVmSnapshot replayDi = vm.captureMips64FullSnapshot();
+            if (!replayDi.ValidateIntegrity() || !sameReplayState(afterDi, replayDi) ||
+                replayDi.physicalMemory.reservationGenerations !=
+                    afterDi.physicalMemory.reservationGenerations ||
+                replayDi.physicalMemory.nextReservationGeneration !=
+                    afterDi.physicalMemory.nextReservationGeneration) {
+                throw std::runtime_error("authentic Linux DI replay changed full-VM state");
+            }
+            authenticDiVerified = true;
+            authenticDiReplayVerified = true;
+            ++diRetirements;
+            std::ostringstream post;
+            post << "{\"type\":\"authentic_di_retirement\",\"pc_va\":\"0x" << std::hex
+                 << std::setw(16) << std::setfill('0') << diPc
+                 << "\",\"instruction\":\"0x" << std::setw(8) << diWord
+                 << "\",\"prior_status\":\"0x" << std::setw(16) << statusBefore
+                 << "\",\"returned_status\":\"0x" << std::setw(16) << statusBefore
+                 << "\",\"status_after\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+                 << "\",\"next_pc_va\":\"0x" << std::setw(16) << cpu->core().pc()
+                 << "\",\"count_after\":" << std::dec << cpu->core().cp0Count()
+                 << ",\"vm_cycles_after\":" << vm.getCyclesExecuted()
+                 << ",\"snapshot_replay_verified\":true}";
+            architecturalEvents.push_back(post.str());
+            ++attempts;
+            ++retired;
+            continue;
+        }
+
+        const bool didRetire = executeOneAndTrace(vm, *cpu,
+                                                   recordingPrefix ? &trace : nullptr);
+        const uint64_t instructionsAfter = context->instructionsExecuted;
+        const bool retiredThisInstruction = instructionsAfter == instructionsBefore + 1;
+        if (retiredThisInstruction) {
+            ++retired;
+            if (isDi || isEi) {
+                const uint64_t returnedStatus = cpu->core().readGpr(decoded.rt);
+                std::ostringstream event;
+                event << "{\"type\":\"di_ei_retirement\",\"op\":\""
+                      << (isDi ? "di" : "ei") << "\",\"pc_va\":\"0x" << std::hex
+                      << std::setw(16) << std::setfill('0') << pcBefore
+                      << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+                      << "\",\"rt\":" << std::dec << unsigned(decoded.rt)
+                      << ",\"prior_status\":\"0x" << std::hex << std::setw(16) << statusBefore
+                      << "\",\"returned_status\":\"0x" << std::setw(16) << returnedStatus
+                      << "\",\"status_after\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+                      << "\",\"cause_before\":\"0x" << std::setw(16) << causeBefore
+                      << "\",\"cause_after\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+                      << "\",\"count_before\":" << std::dec << countBefore
+                      << ",\"count_after\":" << cpu->core().cp0Count()
+                      << ",\"vm_cycles_before\":" << cyclesBefore
+                      << ",\"vm_cycles_after\":" << vm.getCyclesExecuted()
+                      << ",\"retired\":true}";
+                architecturalEvents.push_back(event.str());
+                if (isDi) ++diRetirements;
+                if (isEi) ++eiRetirements;
+            }
+            if (isEhb) ++ehbRetirements;
+        } else {
+            const bool interruptDelivered = cpu->core().statusExl() &&
+                !((statusBefore & kStatusBitExl) != 0) &&
+                cpu->core().cp0Epc() == pcBefore &&
+                cpu->core().causeExcCode() == static_cast<uint32_t>(Mips64ExcCode::Int) &&
+                cpu->core().fault() == Mips64Fault::None && vm.getCyclesExecuted() == cyclesBefore + 1;
+            if (interruptDelivered) {
+                ++interruptDeliveries;
+                std::ostringstream event;
+                event << "{\"type\":\"interrupt_delivery\",\"epc\":\"0x" << std::hex
+                      << std::setw(16) << std::setfill('0') << cpu->core().cp0Epc()
+                      << "\",\"vector_pc\":\"0x" << std::setw(16) << cpu->core().pc()
+                      << "\",\"status_before\":\"0x" << std::setw(16) << statusBefore
+                      << "\",\"status_after\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+                      << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+                      << "\",\"pending_ip\":\"0x" << std::setw(4)
+                      << (cpu->core().cp0Cause() & kCauseIpMask)
+                      << "\",\"count_before\":" << std::dec << countBefore
+                      << ",\"count_after\":" << cpu->core().cp0Count()
+                      << ",\"vm_cycles_before\":" << cyclesBefore
+                      << ",\"vm_cycles_after\":" << vm.getCyclesExecuted()
+                      << ",\"attempt_pc_va\":\"0x" << std::hex << std::setw(16) << pcBefore
+                      << "\",\"instruction_retired\":false}";
+                architecturalEvents.push_back(event.str());
+            } else {
+                stopReason = Mips64Cpu::faultEntersException(cpu->core().fault())
+                    ? "architectural_exception"
+                    : (didRetire ? "cpu_counter_mismatch" : "vm_run_returned_zero");
+                ++attempts;
+                break;
+            }
+        }
+        ++attempts;
+    }
+
+    if (!authenticDiVerified || !authenticDiReplayVerified) {
+        throw std::runtime_error("authentic Linux DI boundary and replay were not verified");
+    }
+    stopPc = cpu->core().pc();
+    const Mips64Probe finalFetch = cpu->core().probeAddress(stopPc, Mips64Access::Fetch);
+    stopFetchOk = finalFetch.ok;
+    stopPhysical = finalFetch.ok ? finalFetch.phys : 0;
+    stopWord = 0;
+    if (finalFetch.ok) {
+        uint8_t bytes[4]{};
+        vm.getMemory().Read(finalFetch.phys, bytes, sizeof(bytes));
+        stopWord = read32(bytes, false);
+    }
+    if (stopReason == "instruction_budget_exhausted" && finalFetch.ok) {
+        const Mips64Decoded finalDecoded = decodeInstruction(stopWord);
+        if (!finalDecoded.valid && finalDecoded.fault == Mips64Fault::UnsupportedInstruction) {
+            stopReason = "unsupported_instruction";
+        }
+    }
+
+    const Mips64FullVmSnapshot finalSnapshot = vm.captureMips64FullSnapshot();
+    if (attempts > traceInstructionLimit) {
+        trace << "{\"type\":\"gap\",\"region\":\"authentic_di_ei_continuation\",\"from_attempt\":"
+              << traceInstructionLimit << ",\"to_attempt_exclusive\":" << attempts
+              << ",\"skipped_instructions\":" << (attempts - traceInstructionLimit) << "}\n";
+    }
+    for (const std::string& event : architecturalEvents) trace << event << "\n";
+    trace << "{\"type\":\"di_ei_continuation_summary\",\"attempts\":" << attempts
+          << ",\"retired\":" << retired << ",\"entry_reached\":"
+          << (entryReached ? "true" : "false") << ",\"entry_retired_before_linux\":"
+          << retiredBeforeEntry << ",\"authentic_di_verified\":true"
+          << ",\"authentic_di_snapshot_replay_verified\":true"
+          << ",\"di_retirements\":" << diRetirements << ",\"ei_retirements\":"
+          << eiRetirements << ",\"ehb_retirements\":" << ehbRetirements
+          << ",\"interrupt_deliveries\":" << interruptDeliveries
+          << ",\"unique_guest_pcs\":" << distinctPcs.size()
+          << ",\"stop_reason\":\"" << stopReason << "\",\"stop_pc_va\":\"0x"
+          << std::hex << std::setw(16) << std::setfill('0') << stopPc
+          << "\",\"stop_pc_pa\":\"0x" << std::setw(9) << stopPhysical
+          << "\",\"stop_instruction\":\"0x" << std::setw(8) << stopWord
+          << "\",\"stop_fetch_ok\":" << (stopFetchOk ? "true" : "false")
+          << ",\"stop_fault\":\"" << Mips64Cpu::faultName(cpu->core().fault())
+          << "\",\"stop_exc_code\":" << std::dec << cpu->core().causeExcCode()
+          << ",\"status\":\"0x" << std::hex << std::setw(16) << cpu->core().cp0Status()
+          << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+          << "\",\"epc\":\"0x" << std::setw(16) << cpu->core().cp0Epc()
+          << "\",\"error_epc\":\"0x" << std::setw(16) << cpu->core().cp0ErrorEpc()
+          << "\",\"count\":" << std::dec << cpu->core().cp0Count()
+          << ",\"compare\":" << cpu->core().cp0Compare()
+          << ",\"vm_cycles\":" << vm.getCyclesExecuted()
+          << ",\"uart_bytes\":" << board->ConsoleSink()->Bytes().size()
+          << ",\"snapshot_valid\":" << (finalSnapshot.ValidateIntegrity() ? "true" : "false")
+          << ",\"snapshot_format\":" << finalSnapshot.formatVersion
+          << ",\"cpu_component_version\":" << finalSnapshot.cpuComponentVersion << "}\n";
+    if (stopFetchOk) {
+        const Mips64Decoded finalDecoded = decodeInstruction(stopWord);
+        trace << "{\"type\":\"continuation_frontier\",\"pc_va\":\"0x"
+              << std::hex << std::setw(16) << std::setfill('0') << stopPc
+              << "\",\"pc_pa\":\"0x" << std::setw(9) << stopPhysical
+              << "\",\"instruction\":\"0x" << std::setw(8) << stopWord
+              << "\",\"decoded_valid\":" << (finalDecoded.valid ? "true" : "false")
+              << ",\"decode_fault\":\"" << Mips64Cpu::faultName(finalDecoded.fault)
+              << "\",\"disassembly\":\"" << cpu->core().disassemble(finalDecoded)
+              << "\",\"status\":\"0x" << std::setw(16) << cpu->core().cp0Status()
+              << "\",\"cause\":\"0x" << std::setw(16) << cpu->core().cp0Cause()
+              << "\",\"epc\":\"0x" << std::setw(16) << cpu->core().cp0Epc()
+              << "\",\"badvaddr\":\"0x" << std::setw(16) << cpu->core().cp0BadVAddr()
+              << "\",\"count\":" << std::dec << cpu->core().cp0Count()
+              << ",\"architectural_exception\":"
+              << (Mips64Cpu::faultEntersException(cpu->core().fault()) ? "true" : "false")
+              << "}\n";
+    }
+    trace.close();
+
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startTime).count();
+    std::cout << "MIPS64_DI_EI_LINUX_CONTINUATION image=" << imagePath.string()
+              << " endian=big entry=0x" << std::hex << plan.entryPoint
+              << " attempts=" << std::dec << attempts << " retired=" << retired
+              << " entry_reached=" << (entryReached ? "true" : "false")
+              << " authentic_di_verified=true authentic_di_replay_verified=true"
+              << " di=" << diRetirements << " ei=" << eiRetirements
+              << " ehb=" << ehbRetirements << " interrupts=" << interruptDeliveries
+              << " stop_reason=" << stopReason << " stop_pc=0x" << std::hex << stopPc
+              << " stop_pa=0x" << stopPhysical << " stop_word=0x" << stopWord
+              << " status=0x" << cpu->core().cp0Status()
+              << " cause=0x" << cpu->core().cp0Cause()
+              << " count=" << std::dec << cpu->core().cp0Count()
+              << " cycles=" << vm.getCyclesExecuted()
+              << " uart_bytes=" << board->ConsoleSink()->Bytes().size()
+              << " elapsed_ms=" << elapsedMs << " trace=" << tracePath.string() << "\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2337,6 +2730,10 @@ int main(int argc, char** argv) {
             constexpr unsigned totalAttemptBudget = 1150511;
             return runBoundedKernelProbe(argv[2], argv[3], totalAttemptBudget,
                                          true, true, true, true);
+        }
+        if (argc == 4 && std::string(argv[1]) == "--continue-di-ei-kernel") {
+            constexpr unsigned totalAttemptBudget = 1151573;
+            return runDiEiLinuxContinuation(argv[2], argv[3], totalAttemptBudget);
         }
         testElfValidationBothEndians();
         testLoadPlanRejectsRomAndMmioWithoutPartialRamWrites();

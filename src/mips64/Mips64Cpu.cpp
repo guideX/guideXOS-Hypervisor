@@ -246,7 +246,11 @@ Mips64Decoded decodeInstruction(uint32_t word) {
             const uint8_t funct = static_cast<uint8_t>(word & 0x3F);
             Mips64Op mapped = Mips64Op::Invalid;
             switch (funct) {
-                case kFnSll: mapped = Mips64Op::Sll; break;
+                case kFnSll:
+                    // EHB is the architecturally named SLL $zero,$zero,3
+                    // encoding. Keep all other SLL encodings unchanged.
+                    mapped = word == 0x000000C0U ? Mips64Op::Ehb : Mips64Op::Sll;
+                    break;
                 case kFnSllv:
                     if (decoded.sa != 0) {
                         return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
@@ -256,8 +260,21 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                     break;
                 case kFnSrl: mapped = Mips64Op::Srl; break;
                 case kFnSra: mapped = Mips64Op::Sra; break;
-                case kFnJr: mapped = Mips64Op::Jr; break;
-                case kFnJalr: mapped = Mips64Op::Jalr; break;
+                case kFnJr:
+                    if (decoded.rt != 0 || decoded.rd != 0 ||
+                        (decoded.sa != 0 && decoded.sa != 16)) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved JR hint/register encoding");
+                    }
+                    mapped = decoded.sa == 16 ? Mips64Op::JrHb : Mips64Op::Jr;
+                    break;
+                case kFnJalr:
+                    if (decoded.rt != 0 || (decoded.sa != 0 && decoded.sa != 16)) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved JALR hint/register encoding");
+                    }
+                    mapped = decoded.sa == 16 ? Mips64Op::JalrHb : Mips64Op::Jalr;
+                    break;
                 case kFnSyscall: mapped = Mips64Op::Syscall; break;
                 case kFnBreak: mapped = Mips64Op::Break; break;
                 case kFnTne: mapped = Mips64Op::Tne; break;
@@ -344,14 +361,15 @@ Mips64Decoded decodeInstruction(uint32_t word) {
         }
         case kOpCop0: {
             if (decoded.rs == kC0Mfmc0) {
-                // MIPS64 Release 2 DI/EI use MFMC0, rt, rd=12, sa=0 and
-                // the low sc bit to select disable/enable. Recognize these
-                // valid encodings without implementing their CP0 side effect.
-                if (decoded.rd == 12 && decoded.sa == 0 && (word & 0x1FU) == 0) {
-                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
-                                ((word >> 5) & 1U) == 0
-                                    ? "valid MIPS64 Release 2 DI requires interrupt-control support"
-                                    : "valid MIPS64 Release 2 EI requires interrupt-control support");
+                // MIPS64 Release 2 DI/EI use MFMC0, rd=Status, sa=0,
+                // reserved bits [4:0]=0, and bit 5 to select the operation.
+                // rt is the freely selected destination register.
+                if (decoded.rd == kCp0RegStatus && decoded.sa == 0 &&
+                    (word & 0x1FU) == 0) {
+                    decoded.op = ((word >> 5) & 1U) == 0
+                        ? Mips64Op::Di : Mips64Op::Ei;
+                    decoded.valid = true;
+                    return decoded;
                 }
                 return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
                             "reserved MFMC0 encoding");
@@ -1255,6 +1273,7 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         decoded.op == Mips64Op::Beq || decoded.op == Mips64Op::Bne ||
         decoded.op == Mips64Op::J || decoded.op == Mips64Op::Jal ||
         decoded.op == Mips64Op::Jr || decoded.op == Mips64Op::Jalr ||
+        decoded.op == Mips64Op::JrHb || decoded.op == Mips64Op::JalrHb ||
         decoded.op == Mips64Op::Bltz || decoded.op == Mips64Op::Bgez ||
         decoded.op == Mips64Op::Bltzal || decoded.op == Mips64Op::Bgezal ||
         decoded.op == Mips64Op::Bltzl || decoded.op == Mips64Op::Bgezl ||
@@ -1469,6 +1488,10 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rd, static_cast<uint64_t>(value >> decoded.sa));
             break;
         }
+        case Mips64Op::Ehb:
+            // The in-order interpreter serializes architectural state at
+            // every instruction boundary, so EHB has no deferred work.
+            break;
         case Mips64Op::Mult: {
             const int64_t lhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rs))));
             const int64_t rhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rt))));
@@ -1582,6 +1605,21 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
         case Mips64Op::Mtlo:
             lo_ = readGpr(decoded.rs);
             break;
+        case Mips64Op::Di:
+        case Mips64Op::Ei: {
+            if (!requireKernel(address, wasDelaySlot, branchPc,
+                               decoded.op == Mips64Op::Di ? "DI" : "EI")) {
+                return Mips64StepResult::Fault;
+            }
+            // DI/EI are atomic Status operations. Return the prior 32-bit
+            // Status sign-extended before changing IE, and preserve every
+            // other implemented Status bit without using MTC0's mask path.
+            const uint64_t previousStatus = status_;
+            writeGpr(decoded.rt, signExtend32(low32(previousStatus)));
+            status_ = (previousStatus & ~kStatusBitIe) |
+                (decoded.op == Mips64Op::Ei ? kStatusBitIe : 0ULL);
+            break;
+        }
         case Mips64Op::Mfc0: {
             if (!requireKernel(address, wasDelaySlot, branchPc, "MFC0")) {
                 return Mips64StepResult::Fault;
@@ -2072,9 +2110,11 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
             writesLink = true;
             break;
         case Mips64Op::Jr:
+        case Mips64Op::JrHb:
             target = readGpr(decoded.rs);
             break;
         case Mips64Op::Jalr:
+        case Mips64Op::JalrHb:
             target = readGpr(decoded.rs);
             writesLink = true;
             break;
@@ -2083,7 +2123,9 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
             return Mips64StepResult::Fault;
     }
 
-    if ((decoded.op == Mips64Op::Jr || decoded.op == Mips64Op::Jalr) && (target & 0x3ULL) != 0) {
+    if ((decoded.op == Mips64Op::Jr || decoded.op == Mips64Op::Jalr ||
+         decoded.op == Mips64Op::JrHb || decoded.op == Mips64Op::JalrHb) &&
+        (target & 0x3ULL) != 0) {
         setFault(Mips64Fault::MisalignedBranchTarget,
                  "JR/JALR target is not word-aligned");
         return Mips64StepResult::Fault;
@@ -2094,7 +2136,8 @@ Mips64StepResult Mips64Cpu::executeBranch(ia64::IMemory& memory,
         // written even when a conditional link-branch is not taken.
         // REGIMM link branches always target $ra; JALR targets rd.
         const unsigned linkReg =
-            (decoded.op == Mips64Op::Jalr) ? decoded.rd : kReturnAddrReg;
+            (decoded.op == Mips64Op::Jalr || decoded.op == Mips64Op::JalrHb)
+                ? decoded.rd : kReturnAddrReg;
         writeGpr(linkReg, address + 2 * kInstructionSize);
     }
 
@@ -2310,14 +2353,20 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u", name, decoded.rt,
                           decoded.rd, decoded.sel);
             break;
+        case Mips64Op::Di:
+        case Mips64Op::Ei:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u", name, decoded.rt);
+            break;
         case Mips64Op::J:
         case Mips64Op::Jal:
             std::snprintf(buffer, sizeof(buffer), "%s 0x%X", name, decoded.index << 2);
             break;
         case Mips64Op::Jr:
+        case Mips64Op::JrHb:
             std::snprintf(buffer, sizeof(buffer), "%s $%u", name, decoded.rs);
             break;
         case Mips64Op::Jalr:
+        case Mips64Op::JalrHb:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u", name, decoded.rd, decoded.rs);
             break;
         case Mips64Op::Eret:
@@ -2327,6 +2376,7 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Tlbr:
         case Mips64Op::Tlbwi:
         case Mips64Op::Tlbwr:
+        case Mips64Op::Ehb:
             std::snprintf(buffer, sizeof(buffer), "%s", name);
             break;
         case Mips64Op::Tne:
@@ -2444,8 +2494,9 @@ bool Mips64Cpu::deserialize(const uint8_t* data, std::size_t size) {
     // this byte layout but carry the legacy full-width VPN2 and pre-MIPS64-5
     // XContext interpretation. Canonical legacy state is normalized below.
     const uint8_t version = data[4];
-    if (version != kSerializationVersion && version != kSerializationVersionV4 &&
-        version != kSerializationVersionV3 && version != kSerializationVersionV5) {
+    if (version != kSerializationVersion && version != kSerializationVersionV5 &&
+        version != kSerializationVersionV4 &&
+        version != kSerializationVersionV3) {
         return false;
     }
     if ((version == kSerializationVersion && size != kSerializedSize) ||
@@ -2908,10 +2959,15 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Jal: return "jal";
         case Mips64Op::Jr: return "jr";
         case Mips64Op::Jalr: return "jalr";
+        case Mips64Op::JrHb: return "jr.hb";
+        case Mips64Op::JalrHb: return "jalr.hb";
         case Mips64Op::Mfc0: return "mfc0";
         case Mips64Op::Mtc0: return "mtc0";
         case Mips64Op::Dmfc0: return "dmfc0";
         case Mips64Op::Dmtc0: return "dmtc0";
+        case Mips64Op::Di: return "di";
+        case Mips64Op::Ei: return "ei";
+        case Mips64Op::Ehb: return "ehb";
         case Mips64Op::Eret: return "eret";
         case Mips64Op::Syscall: return "syscall";
         case Mips64Op::Break: return "break";
