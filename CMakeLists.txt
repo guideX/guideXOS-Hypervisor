@@ -1418,6 +1418,26 @@ endif()
 add_test(NAME PPC64Phase37Tests COMMAND test_ppc64_phase37)
 set_tests_properties(PPC64Phase37Tests PROPERTIES TIMEOUT 3600)
 
+# PPC64 SRD seven-bit logical-right shift and authenticated Linux continuation.
+add_executable(test_ppc64_phase38
+    tests/test_ppc64_phase38.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase38 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase38 PRIVATE
+    PPC64_PHASE33_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase38 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase38 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase38Tests COMMAND test_ppc64_phase38)
+set_tests_properties(PPC64Phase38Tests PROPERTIES TIMEOUT 3600)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

@@ -1661,6 +1661,11 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 // the instruction. RB[57:63] supplies the full 7-bit count.
                 instr.kind = DecodedKind::SLD;
                 instr.supported = true;
+            } else if (combined == XO_SRD) {
+                // SRD has the same POWER9 availability and seven-bit count
+                // contract as SLD, but performs a logical right shift.
+                instr.kind = DecodedKind::SRD;
+                instr.supported = true;
             } else if (base == XO_ADDC && !oe) {
                 instr.kind = DecodedKind::ADDC;
                 instr.supported = true;
@@ -2311,6 +2316,12 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             break;
         case DecodedKind::SLD:
             out << "sld" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt)
+                << ",r" << static_cast<unsigned>(instr.rb);
+            break;
+        case DecodedKind::SRD:
+            out << "srd" << (instr.rc ? "." : "")
                 << " r" << static_cast<unsigned>(instr.ra)
                 << ",r" << static_cast<unsigned>(instr.rt)
                 << ",r" << static_cast<unsigned>(instr.rb);
@@ -3436,6 +3447,22 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t countRegister = state_.gpr[instr.rb];
             const unsigned shift = static_cast<unsigned>(countRegister & 0x7FULL);
             const uint64_t result = shift < 64U ? source << shift : 0U;
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::SRD: {
+            // Snapshot both operands before writing RA so all aliases work.
+            // RB's low seven bits are the shift distance; guard the >=64
+            // case to avoid host undefined behavior and implement POWER's
+            // architectural zero result for distances 64 through 127.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t countRegister = state_.gpr[instr.rb];
+            const unsigned shift = static_cast<unsigned>(countRegister & 0x7FULL);
+            const uint64_t result = shift < 64U ? source >> shift : 0U;
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);
@@ -5502,7 +5529,7 @@ std::string PPC64ISAPlugin::disassemble(IMemory& memory, uint64_t address) {
 }
 
 bool PPC64ISAPlugin::hasFeature(const std::string& feature) const {
-    if (feature == "sld") {
+    if (feature == "sld" || feature == "srd") {
         return true;
     }
     if (feature == "dcbt") {

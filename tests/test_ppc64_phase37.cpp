@@ -26,6 +26,11 @@ uint64_t referenceSld37(uint64_t source, uint64_t count) {
     return shift < 64U ? source << shift : 0U;
 }
 
+uint64_t referenceSrd37(uint64_t source, uint64_t count) {
+    const unsigned shift = static_cast<unsigned>(count & 0x7FULL);
+    return shift < 64U ? source >> shift : 0U;
+}
+
 uint32_t cr0Oracle37(uint32_t cr, uint32_t xer, uint64_t result) {
     uint32_t field = 0;
     if ((result >> 63U) != 0U) field |= 0x8U;
@@ -308,14 +313,14 @@ void testSldDecoderIsolation37() {
     const int firstCheck = checks;
     const auto sld = PPC64ISAPlugin::decodeWord(kSldLinuxWord37);
     CHECK(sld.kind == DecodedKind::SLD && sld.supported);
-    const std::array<uint32_t, 4> unsupportedShifts{
+    const std::array<uint32_t, 3> unsupportedShifts{
         (31U << 26U) | (24U << 1U),
         (31U << 26U) | (536U << 1U),
-        (31U << 26U) | (539U << 1U),
         (31U << 26U) | (794U << 1U)};
     for (uint32_t word : unsupportedShifts) {
         CHECK(PPC64ISAPlugin::decodeWord(word).kind == DecodedKind::UNSUPPORTED);
     }
+    CHECK(PPC64ISAPlugin::decodeWord(0x7D293436U).kind == DecodedKind::SRD);
     CHECK(PPC64ISAPlugin::decodeWord(0x7C001A2CU).kind == DecodedKind::DCBT);
     CHECK(PPC64ISAPlugin::decodeWord(0x7BA91788U).kind == DecodedKind::RLDIC);
     CHECK(PPC64ISAPlugin::decodeWord(encodeRldic35(1U, 2U, 3U, 4U, false, 0U)).kind ==
@@ -430,18 +435,32 @@ void testAuthenticLinuxSld37() {
     CHECK(first.sldTimebaseAfter == first.sldTimebaseBefore + 1U &&
           second.sldTimebaseAfter == second.sldTimebaseBefore + 1U &&
           first.sldTimebaseBefore == second.sldTimebaseBefore);
-    CHECK(first.stopNip == kSldLinuxNip37 + 4U &&
+    CHECK(first.srdFetched && second.srdFetched &&
+          first.srdRetired && second.srdRetired);
+    CHECK(first.srdNip == kSldLinuxNip37 + 4U &&
+          second.srdNip == first.srdNip);
+    CHECK(first.srdRawWord == 0x7D293436U &&
+          second.srdRawWord == first.srdRawWord &&
+          first.srdDecode == "srd r9,r9,r6");
+    CHECK(first.srdBefore.gpr[9] == first.sldAfter.gpr[9] &&
+          first.srdBefore.gpr[6] == first.sldAfter.gpr[6]);
+    CHECK(first.srdShiftCount == (first.srdBefore.gpr[6] & 0x7FU) &&
+          first.srdExpected == referenceSrd37(first.srdBefore.gpr[9],
+                                               first.srdBefore.gpr[6]));
+    CHECK(first.srdAfter.gpr[9] == first.srdExpected &&
+          first.srdAfter.nip == first.srdNip + 4U);
+    CHECK(first.srdBefore.cr == first.srdAfter.cr &&
+          first.srdBefore.xer == first.srdAfter.xer &&
+          first.srdBefore.msr == first.srdAfter.msr &&
+          first.srdBefore.sprg1 == first.srdAfter.sprg1 &&
+          first.srdRamBefore == first.srdRamAfter);
+    CHECK(first.stopNip > first.srdNip &&
           first.stopNip == second.stopNip && first.stopWord == second.stopWord);
-    CHECK(first.stopWord == 0x7D293436U &&
-          ((first.stopWord >> 26U) & 63U) == 31U &&
-          ((first.stopWord >> 21U) & 31U) == 9U &&
-          ((first.stopWord >> 16U) & 31U) == 9U &&
-          ((first.stopWord >> 11U) & 31U) == 6U &&
-          ((first.stopWord >> 1U) & 1023U) == 539U &&
-          (first.stopWord & 1U) == 0U);
-    CHECK(PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
-          DecodedKind::UNSUPPORTED);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction");
+    CHECK(first.stopWord != first.srdRawWord &&
+          PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
+              DecodedKind::UNSUPPORTED);
+    CHECK(first.stopClass == "unsupported-or-invalid-instruction" ||
+          first.stopClass == "bounded-continuation-limit");
     CHECK(first.stopClass == second.stopClass &&
           first.traceDigest == second.traceDigest);
     CHECK(first.totalRetired == second.totalRetired &&
@@ -451,13 +470,13 @@ void testAuthenticLinuxSld37() {
           first.finalSprg1 == second.finalSprg1);
     CHECK(first.sldPrecedingInstructions == second.sldPrecedingInstructions &&
           first.sldFollowingInstructions == second.sldFollowingInstructions);
-    CHECK(first.lastSuccessfulNip == kSldLinuxNip37 &&
+    CHECK(first.lastSuccessfulNip > first.srdNip &&
           first.sldPrecedingInstructions.size() >= 8U &&
-          first.sldFollowingInstructions.size() == 1U);
-    CHECK(first.sldFollowingInstructions[0].find("retired=0") !=
+          first.sldFollowingInstructions.size() >= 2U);
+    CHECK(first.sldFollowingInstructions[0].find("instruction=srd r9,r9,r6") !=
               std::string::npos &&
-          first.sldFollowingInstructions[0].find("R9_input=" +
-              hex(first.sldAfter.gpr[9])) != std::string::npos);
+          first.sldFollowingInstructions[0].find("nip=" +
+              hex(first.srdNip)) != std::string::npos);
 
     writeSldAttribution37(kernelFile,
         runDirectory / "sld-elf-source-attribution.txt");

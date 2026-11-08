@@ -865,6 +865,8 @@ struct AuthenticReplay {
     bool dcbtRetired = false;
     bool sldFetched = false;
     bool sldRetired = false;
+    bool srdFetched = false;
+    bool srdRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
@@ -874,6 +876,14 @@ struct AuthenticReplay {
     uint64_t dcbtStorageEffectiveAddress = 0;
     uint64_t sldShiftCount = 0;
     uint64_t sldExpected = 0;
+    uint64_t srdShiftCount = 0;
+    uint64_t srdExpected = 0;
+    uint64_t srdCyclesBefore = 0;
+    uint64_t srdCyclesAfter = 0;
+    uint64_t srdTimebaseBefore = 0;
+    uint64_t srdTimebaseAfter = 0;
+    uint64_t srdRamBefore = 0;
+    uint64_t srdRamAfter = 0;
     uint64_t sldCyclesBefore = 0;
     uint64_t sldCyclesAfter = 0;
     uint64_t sldTimebaseBefore = 0;
@@ -881,6 +891,7 @@ struct AuthenticReplay {
     uint64_t sldRamBefore = 0;
     uint64_t sldRamAfter = 0;
     uint16_t sldLPID = 0;
+    uint16_t srdLPID = 0;
     uint64_t sldContextFollowing = 0;
     uint64_t dcbtCyclesBefore = 0;
     uint64_t dcbtCyclesAfter = 0;
@@ -913,6 +924,7 @@ struct AuthenticReplay {
     uint32_t rldicRawWord = 0;
     uint32_t dcbtRawWord = 0;
     uint32_t sldRawWord = 0;
+    uint32_t srdRawWord = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
     uint64_t stopBackingAddress = 0;
@@ -925,6 +937,7 @@ struct AuthenticReplay {
     uint64_t rldicNip = 0;
     uint64_t dcbtNip = 0;
     uint64_t sldNip = 0;
+    uint64_t srdNip = 0;
     uint64_t rldicGuestRealAddress = 0;
     uint64_t rldicFetchBackingAddress = 0;
     uint64_t rldicTagLoadEffectiveAddress = 0;
@@ -968,6 +981,7 @@ struct AuthenticReplay {
     std::string rldicDecode;
     std::string dcbtDecode;
     std::string sldDecode;
+    std::string srdDecode;
     std::string stopClass;
     std::string stopDisassembly;
     std::vector<std::string> extswContext;
@@ -987,6 +1001,8 @@ struct AuthenticReplay {
     PPC64RegisterView dcbtAfter{};
     PPC64RegisterView sldBefore{};
     PPC64RegisterView sldAfter{};
+    PPC64RegisterView srdBefore{};
+    PPC64RegisterView srdAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1446,6 +1462,25 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                     break;
                 }
             }
+            if (following.kind == DecodedKind::SRD && result.sldRetired &&
+                before.nip == result.sldAfter.nip && !result.srdFetched) {
+                // Capture the first authentic SRD immediately after the
+                // Phase 37 SLD from the live VM state. The expected value is
+                // computed independently with the architectural seven-bit
+                // count and a guarded unsigned host shift.
+                result.srdFetched = true;
+                result.srdNip = before.nip;
+                result.srdRawWord = following.raw;
+                result.srdDecode = next.disassembly;
+                result.srdBefore = before;
+                result.srdLPID = cpu->getActiveLPID();
+                result.srdShiftCount = before.gpr[following.rb] & 0x7FULL;
+                result.srdExpected = result.srdShiftCount < 64U
+                    ? before.gpr[following.rt] >> result.srdShiftCount : 0U;
+                result.srdCyclesBefore = vm.getCyclesExecuted();
+                result.srdTimebaseBefore = vm.getPPC64Timebase();
+                result.srdRamBefore = fingerprintRam(*memory);
+            }
             if (following.kind == DecodedKind::MFSPR && following.sprn == SPR_SPRG1) {
                 ++result.sprg1Reads;
             }
@@ -1563,6 +1598,14 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.sldCyclesAfter = vm.getCyclesExecuted();
                 result.sldTimebaseAfter = vm.getPPC64Timebase();
                 result.sldRamAfter = fingerprintRam(*memory);
+            }
+            if (following.kind == DecodedKind::SRD && result.srdFetched &&
+                before.nip == result.srdNip && !result.srdRetired) {
+                result.srdAfter = after;
+                result.srdRetired = after.nip == before.nip + 4U;
+                result.srdCyclesAfter = vm.getCyclesExecuted();
+                result.srdTimebaseAfter = vm.getPPC64Timebase();
+                result.srdRamAfter = fingerprintRam(*memory);
             }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
                 following.kind == DecodedKind::BCLR && after.nip == before.lr) {
@@ -1691,6 +1734,37 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             trace << line << "\n";
         }
         trace << "authentic_sld_following_context_end\n";
+    }
+    if (result.srdFetched) {
+        trace << "authentic_srd_retirement nip=" << hex(result.srdNip)
+              << " raw=" << wordHex(result.srdRawWord)
+              << " instruction=" << result.srdDecode
+              << " RS=" << static_cast<unsigned>(
+                     (result.srdRawWord >> 21U) & 31U)
+              << " RA=" << static_cast<unsigned>(
+                     (result.srdRawWord >> 16U) & 31U)
+              << " RB=" << static_cast<unsigned>(
+                     (result.srdRawWord >> 11U) & 31U)
+              << " XO=" << ((result.srdRawWord >> 1U) & 1023U)
+              << " Rc=" << (result.srdRawWord & 1U)
+              << " R9_before=" << hex(result.srdBefore.gpr[9])
+              << " R6_before=" << hex(result.srdBefore.gpr[6])
+              << " shift=" << std::dec << result.srdShiftCount
+              << " expected_R9=" << hex(result.srdExpected)
+              << " actual_R9=" << hex(result.srdAfter.gpr[9])
+              << " post_NIP=" << hex(result.srdAfter.nip)
+              << " retired=" << result.srdRetired
+              << " CR_before_after=0x" << std::hex
+              << result.srdBefore.cr << "/0x" << result.srdAfter.cr
+              << " XER_before_after=0x" << result.srdBefore.xer << "/0x"
+              << result.srdAfter.xer
+              << " MSR_before_after=" << hex(result.srdBefore.msr) << "/"
+              << hex(result.srdAfter.msr)
+              << " SPRG1_before_after=" << hex(result.srdBefore.sprg1) << "/"
+              << hex(result.srdAfter.sprg1)
+              << " LPID=" << std::dec << result.srdLPID
+              << " RAM_before_after=" << hex(result.srdRamBefore) << "/"
+              << hex(result.srdRamAfter) << "\n";
     }
     result.trace = trace.str();
     return result;
