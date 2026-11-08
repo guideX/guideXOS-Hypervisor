@@ -813,6 +813,28 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         return d;
     }
 
+    // REV reverses bytes in a W or X general-purpose register.  The fixed
+    // encodings are REV Wd,Wn = 0x5AC00800 and REV Xd,Xn = 0xDAC00C00;
+    // both use XZR/WZR for register 31 and never SP.  This is needed by the
+    // bounded guest FDT parser to decode big-endian 32-bit cells.
+    if ((word & 0xFFFFFC00u) == 0x5AC00800u ||
+        (word & 0xFFFFFC00u) == 0xDAC00C00u) {
+        Decoded d;
+        d.op = Op::Rev;
+        d.valid = true;
+        d.sf64 = (word & 0x80000000u) != 0;
+        d.word = word;
+        d.address = address;
+        d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+        d.rd = static_cast<uint8_t>(word & 31u);
+        const std::string source = d.rn == 31
+            ? std::string(d.sf64 ? "xzr" : "wzr") : regName(d.sf64, d.rn);
+        const std::string destination = d.rd == 31
+            ? std::string(d.sf64 ? "xzr" : "wzr") : regName(d.sf64, d.rd);
+        d.disassembly = "rev " + destination + ", " + source;
+        return d;
+    }
+
     // Move wide immediate: bits[28:23] == 100101.
     if ((word & 0x1F800000u) == 0x12800000u) {
         const bool sf = (word & 0x80000000u) != 0;
@@ -2060,6 +2082,20 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
                     (cur & ~mask) | (static_cast<uint32_t>(decoded.imm16) << pos));
             }
         }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Rev: {
+        // REV reads register 31 as XZR/WZR, writes W results with the
+        // architectural upper-half zero extension, and discards an XZR/WZR
+        // destination.  NZCV is unchanged.
+        const uint64_t source = decoded.rn == 31 ? 0 : x_[decoded.rn];
+        const unsigned width = decoded.sf64 ? 8u : 4u;
+        uint64_t result = 0;
+        for (unsigned byte = 0; byte < width; ++byte)
+            result = (result << 8) | ((source >> (byte * 8)) & 0xFFu);
+        if (decoded.rd != 31)
+            x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);
         pc_ += kInstructionSize;
         break;
     }

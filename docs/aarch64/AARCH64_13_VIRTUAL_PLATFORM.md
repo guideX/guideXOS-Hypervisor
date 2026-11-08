@@ -279,3 +279,76 @@ project=guideXOS_Hypervisor_AARCH64
 last_completed=AARCH64-12
 next_expected=AARCH64-13
 ```
+
+## AARCH64-13R - Integrated Guest Acceptance Closure (2026-11-08)
+
+This section records the completed AARCH64-13R acceptance run and supersedes the earlier "still unimplemented" assessment above. The historical AARCH64-13 results remain intact. Work began on branch `AARCH64` at `487afcf3fe3b55df55c0671be66020bea16b3a5c`, equal to `origin/AARCH64` (ahead/behind `0/0`). The root `.phase` belongs to the IA-64 project and was not changed.
+
+### Guest implementation and integrated scenarios
+
+The instruction subset now includes A64 `REV Wd,Wn` and `REV Xd,Xn`, needed by the guest to read FDT big-endian cells. Decode and execution tests cover both widths, W-result zero extension, unchanged flags, and register-31 zero-register behavior. Encoding reference: [Arm A64 REV instruction](https://developer.arm.com/documentation/ddi0602/2023-06/Base-Instructions/REV32--Reverse-bytes-in-32-bit-words-?lang=en).
+
+The guest contains a bounded FDT-v17 parser. It checks the header and block boundaries, walks structure tokens, resolves property names, decodes big-endian cells, and discovers RAM, UART, GICv3, and timer properties. The guest verifies compatible strings, register ranges, GIC phandle and interrupt-cell relationships, UART SPI, and timer PPI. The host independently validates the generated DTBs and observed discovered values. Twenty malformed-DTB controls are rejected through the guest parser path. No `dtc`, `fdtdump`, or `libfdt` is available in this environment, so no external FDT-tool validation is claimed.
+
+For the full integrated run, one guest binary runs against two independently configured platforms and obtains addresses and interrupt IDs from each DTB:
+
+| Configuration | UART | UART SPI | Timer frequency | Result |
+| --- | ---: | ---: | ---: | --- |
+| A | `0x09000000` | 33 | 1 MHz | accepted |
+| B | `0x09100000` | 34 | 2 MHz | accepted with the same guest bytes |
+
+Config A enters at `0x10000`, with its FDT at `0x100000`. Through guest PL011 MMIO writes the captured banner is exactly `guideXOS Hypervisor AArch64\nFDT hardware discovery OK\n`. The guest configures GICv3, programs physical timer PPI 30, services the discovered UART SPI after host RX injection, and completes acknowledge/EOI/ERET flows. The integrated run exercises the physical timer PPI; the prior AARCH64-12 GICv3 suite retains coverage for virtual timer PPI 27.
+
+The guest also builds Stage-1 tables at `0x40000`, maps the initial 2 MiB with identity page mappings and the remaining default RAM with Normal-memory blocks, and installs Device mappings for UART at VA `0x20000000` and GIC at VA `0x21000000`. A guest data alias is exercised at `0x30000000`. The guest enables the MMU and then continues translated memory, UART, GIC, timer, and exception-vector activity. Config A reaches MMU enable at PC `0x12fac`, timer wait at `0x13020`, timer vector at `0x20280`, UART vector at `0x2028c`, and final PC `0x1305c` after 52,362 guest instructions. Config B reaches the same final PC after 52,367 instructions. Timer IRQ continuation is 9,899 instructions; the active-handler snapshot continuation is 17 instructions.
+
+The production platform snapshot path is exercised at two live execution points: during the timer countdown before expiry and after the UART interrupt is acknowledged while its handler is active and before EOI. Each snapshot is restored into an independent compatible platform. The replay checks CPU/EL state, PC/ELR/SPSR, guest RAM, UART FIFO/output, timer state, GIC pending/active state, and source state, then compares deterministic continuation instruction counts and final guest state. Snapshot capture does not advance the timer counter. Full-platform restore mismatch is failure-atomic for changed RAM geometry, UART base, UART SPI, GIC regions, and timer frequency; RAM and serialized CPU state, timer, UART, GIC, and interrupt sources are checked unchanged. Existing DeviceSnapshot coverage also exercises topology/schema mismatch and corrupt or truncated payloads.
+
+Guest reset after completion, independent-machine isolation, and the existing 100-cycle platform lifecycle test pass. The platform test reports **5,902 checks, zero failures**. The exact selected 16-suite CTest run passed **16/16**; its accepted AArch64 suites total **40,761 assertions**. EFI memory-map, IA-64 SAL, and RISC-V decoder smoke tests also passed in that selection.
+
+### Reproduction and artifacts
+
+Build and run the same selected regression set with:
+
+```powershell
+cmake -S D:\dev\guideXOS_Hypervisor_AARCH64 `
+  -B E:\CodexArtifacts\guideXOS_Hypervisor\build-aarch64-13r `
+  -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+cmake --build E:\CodexArtifacts\guideXOS_Hypervisor\build-aarch64-13r `
+  --target test_aarch64_foundation test_aarch64_memory_branch `
+  test_aarch64_pc_stack test_aarch64_compiler_stack `
+  test_aarch64_exception_levels test_aarch64_mmu test_aarch64_tlb `
+  test_aarch64_snapshot test_aarch64_device_snapshot test_aarch64_pl011 `
+  test_aarch64_generic_timer test_aarch64_gicv3 test_aarch64_platform `
+  test_efi_memory_map test_ia64_sal test_riscv_decoder -j 4
+
+ctest --test-dir E:\CodexArtifacts\guideXOS_Hypervisor\build-aarch64-13r `
+  --output-on-failure -R "^(AArch64FoundationTests|AArch64MemoryBranchTests|AArch64PcStackTests|AArch64CompilerStackTests|AArch64ExceptionLevelTests|AArch64MMUTests|AArch64TLBTests|AArch64SnapshotTests|AArch64DeviceSnapshotTests|AArch64PL011Tests|AArch64GenericTimerTests|AArch64GICv3Tests|AArch64PlatformTests|EfiMemoryMapTests|IA64SalTests|RiscVDecoderSmokeTest)$"
+
+E:\CodexArtifacts\guideXOS_Hypervisor\build-aarch64-13r\bin\test_aarch64_platform.exe `
+  --write-13r-artifacts E:\CodexArtifacts\guideXOS_Hypervisor\phase-AARCH64-13R
+```
+
+The generated evidence is outside the repository at `E:\CodexArtifacts\guideXOS_Hypervisor\phase-AARCH64-13R`:
+
+| Artifact | Size (bytes) | SHA-256 |
+| --- | ---: | --- |
+| `integrated_guest.bin` | 12,384 | `C709E7144F0F0D6FB4C0ACBAD24873449C8CAF6918F01CA422BBB63FBD71B001` |
+| `integrated_guest.words.txt` | 48,426 | `9464A78D5C27291A33F68610E49B35F55106516C73F72949D3723311BB2D3DA1` |
+| `integrated_guest_manifest.txt` | 297 | `66AC726351EB1ADCCFCECDC5E74D5E50F8261EB98BE8ABDD29988D1F9E3156BD` |
+| `config_a.dtb` | 1,154 | `E08EEDF42AA706FFDDA073A99E9965FF3C6C583A4EA280EB4C576D1D583A01F2` |
+| `config_b.dtb` | 1,154 | `CC8780AFD7881A65C225F667B330DB82674CED2B75DB6B29E2DC1ABBB3395FFF` |
+| `countdown.snapshot` | 16,779,728 | `465E654957004CFF07F61E38E32416871467FD0F6E2BDA111F210AC8E26EEF2C` |
+| `active_handler.snapshot` | 16,779,730 | `F1CF3C528151224F930A6E02BAC902FA69E1FB639FEBF0218DB7D0CB760AACC3` |
+| `uart_output.bin` | 54 | `110D22EDA56A93776D298CEC2BF846BEA4B017AFE901D731D4D594B8D7AE787E` |
+| `execution_summary.txt` | 977 | `42D1A99CD772CE8FD5CA160E8F59AB7A048EF953DE7ECBD01B77CA825E8E3AD5` |
+
+This host uses MinGW GCC 15.2 and Ninja. It does not have Clang, an AArch64 cross-assembler/linker, `llvm-mc`, `dtc`, `fdtdump`, or QEMU. The integrated fixture uses checked A64 words validated by the production decoder; no external assembler, firmware image, ISO, or QEMU boot result is claimed.
+
+**Outcome: `AARCH64_PLATFORM_ACCEPTED`.** Recommend AARCH64-14 to proceed with the next platform/guest work. The architecture-local phase marker is advanced to:
+
+```ini
+project=guideXOS_Hypervisor_AARCH64
+last_completed=AARCH64-13
+next_expected=AARCH64-14
+```

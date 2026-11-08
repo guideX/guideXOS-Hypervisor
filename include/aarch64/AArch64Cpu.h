@@ -151,6 +151,7 @@ enum class Op {
     Nop,
     Movz,
     Movk,
+    Rev,      // REV (byte-reverse within a 32- or 64-bit GPR)
     AddImm,
     SubImm,
     B,

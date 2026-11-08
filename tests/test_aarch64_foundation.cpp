@@ -310,6 +310,43 @@ void testAddSub() {
     CHECK_EQ(4u, cpu.pc());
 }
 
+void testRevByteOrder() {
+    Cpu cpu;
+    FlatMemory mem(0x1000);
+
+    // ARM DDI 0487 REV encoding anchors: REV W2,W1 = 0x5AC00822 and
+    // REV X2,X1 = 0xDAC00C22.  The W form is required to byte-swap FDT
+    // big-endian cells after an ordinary little-endian guest load.
+    const Decoded wDecode = Cpu::decodeWord(0x5AC00822u, 0);
+    const Decoded xDecode = Cpu::decodeWord(0xDAC00C22u, 0);
+    CHECK(wDecode.valid && wDecode.op == Op::Rev && !wDecode.sf64);
+    CHECK(xDecode.valid && xDecode.op == Op::Rev && xDecode.sf64);
+    CHECK(wDecode.disassembly == "rev w2, w1");
+    CHECK(xDecode.disassembly == "rev x2, x1");
+
+    cpu.reset(0);
+    cpu.writeX(1, 0xFFFFFFFF12345678ull);
+    cpu.setNzcv(true, false, true, true);
+    CHECK(runOne(cpu, mem, 0x5AC00822u) == Fault::None);
+    CHECK_EQ(0x78563412u, cpu.readX(2)); // W write zero-extends to X2.
+    CHECK(cpu.flagN() && !cpu.flagZ() && cpu.flagC() && cpu.flagV());
+
+    cpu.reset(0);
+    cpu.writeX(1, 0x0123456789ABCDEFull);
+    CHECK(runOne(cpu, mem, 0xDAC00C22u) == Fault::None);
+    CHECK_EQ(0xEFCDAB8967452301ull, cpu.readX(2));
+
+    // Register 31 is the zero register for REV, never SP.
+    cpu.reset(0);
+    cpu.writeX(3, 0xAABBCCDDEEFF0011ull);
+    cpu.setSp(0x8800);
+    CHECK(runOne(cpu, mem, 0x5AC00800u | (31u << 5)) == Fault::None);
+    CHECK_EQ(0u, cpu.readX(0)); // REV W0, WZR.
+    CHECK(runOne(cpu, mem, 0x5AC00800u | (1u << 5) | 31u, 4) == Fault::None);
+    CHECK_EQ(0xAABBCCDDEEFF0011ull, cpu.readX(3));
+    CHECK_EQ(0x8800u, cpu.sp());
+}
+
 void testBranches() {
     Cpu cpu;
     FlatMemory mem(0x1000);
@@ -657,6 +694,7 @@ int main() {
     testWidthsAndReg31();
     testMovzMovk();
     testAddSub();
+    testRevByteOrder();
     testBranches();
     testAlignmentAndEndian();
     testFaults();
