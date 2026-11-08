@@ -1187,6 +1187,16 @@ AuthenticReplay runAuthenticLinux(
             result.sprg1Decode = decoded.disassembly;
             result.sprg1RamBefore = fingerprintGuestRam(*memory);
         }
+        if (instruction.kind == DecodedKind::DCBT) {
+            result.stopClass = "phase35-dcbt-boundary";
+            result.stopWord = instruction.raw;
+            result.stopDisassembly = decoded.disassembly;
+            result.final = before;
+            continuationSample << "boundary nip=" << hex(before.nip)
+                << " raw=" << wordHex(instruction.raw)
+                << " decode=" << decoded.disassembly << "\n";
+            break;
+        }
         const bool retired = vm.step();
         const PPC64RegisterView after = vm.getPPC64RegisterView();
         if (before.nip == kAddicNip) {
@@ -1476,10 +1486,10 @@ void testAuthenticLinux() {
     CHECK(first.stopClass == second.stopClass);
     CHECK(first.final.nip != kSubfeNip && second.final.nip == first.final.nip);
     CHECK(first.retiredAfterTdi == 11'147ULL);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction");
+    CHECK(first.stopClass == "phase35-dcbt-boundary");
     CHECK(first.final.nip == 0xC000000000170424ULL);
     CHECK(first.stopWord == 0x7C001A2CU);
-    CHECK(first.stopDisassembly == "<unsupported ppc64 opcode 31>");
+    CHECK(first.stopDisassembly == "dcbt 0,r3,0");
     CHECK(first.continuationTrace.find(
         "nip=0xc000000001eaa5c0 raw=0x0b090000 instruction=tdi 24,r9,0 retired=1 next=0xc000000001eaa5c4") !=
         std::string::npos);

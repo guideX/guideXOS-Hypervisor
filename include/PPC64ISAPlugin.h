@@ -491,6 +491,7 @@ enum class DecodedKind {
     LDARX,      // ldarx (X-form, opcode 31 XO 84; establishes reservation)
     STWCX,      // stwcx. (X-form, opcode 31 XO 150, Rc=1 required)
     STDCX,      // stdcx. (X-form, opcode 31 XO 214, Rc=1 required)
+    DCBT,       // dcbt (X-form, opcode 31 XO 278; optional cache hint)
     SYNC,       // sync / lwsync (opcode 31 XO 598; exact encodings only)
     ISYNC,      // isync (XL-form, opcode 19 XO 150; exact encoding only)
     EIEIO,      // eieio (X-form, opcode 31 XO 854; exact encoding only)
@@ -525,6 +526,7 @@ struct DecodedInstruction {
     uint8_t sh = 0;      // MD-form 6-bit shift amount
     uint8_t mb = 0;      // mask begin (M-form 5-bit; RLDICL/RLDIMI MD-form 6-bit)
     uint8_t me = 0;      // mask end (M-form 5-bit; RLDICR MD-form 6-bit)
+    uint8_t th = 0;      // dcbt touch hint (X-form bits 21-25; not a GPR)
 };
 
 /**

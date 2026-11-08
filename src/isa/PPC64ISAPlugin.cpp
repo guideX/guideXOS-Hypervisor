@@ -1630,7 +1630,19 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.oe = oe;
             instr.rc = rc;
             // Arithmetic family (OE selects a valid overflow variant).
-            if (base == XO_ADD) {
+            if (combined == 278U) {
+                // POWER9 implements ordinary dcbt. The TH field is a hint,
+                // not an RT operand. POWER9 specifies the otherwise-invalid
+                // TH=1..7 forms to behave like TH=0; defined POWER9 TH forms
+                // also include 8, 10, 11, 16, and 17. Other TH values and
+                // Rc=1 are rejected as invalid encodings in this profile.
+                instr.kind = DecodedKind::DCBT;
+                instr.th = instr.rt;
+                instr.rt = 0;
+                const bool power9Th = instr.th <= 8U || instr.th == 10U ||
+                    instr.th == 11U || instr.th == 16U || instr.th == 17U;
+                instr.supported = !rc && power9Th;
+            } else if (base == XO_ADD) {
                 instr.kind = DecodedKind::ADD;
                 instr.supported = true;
             } else if (base == XO_SUBF) {
@@ -2276,6 +2288,19 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
                 << ",r" << static_cast<int>(instr.rb);
             if (!instr.supported) {
                 out << " ; invalid encoding (Rc must be 1)";
+            }
+            break;
+        case DecodedKind::DCBT:
+            out << "dcbt ";
+            if (instr.ra == 0U) {
+                out << "0";
+            } else {
+                out << "r" << static_cast<unsigned>(instr.ra);
+            }
+            out << ",r" << static_cast<unsigned>(instr.rb)
+                << "," << static_cast<unsigned>(instr.th);
+            if (!instr.supported) {
+                out << " ; invalid encoding";
             }
             break;
         case DecodedKind::SYNC:
@@ -3386,6 +3411,12 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                                                   const DecodedInstruction& instr) {
     const uint64_t cia = state_.nip;
     switch (instr.kind) {
+        case DecodedKind::DCBT:
+            // The selected POWER9 functional profile recognizes dcbt but
+            // models no cache hierarchy. Prefetch is optional and must not
+            // become a guest load: do not translate or dereference its EA.
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
         case DecodedKind::TDI:
         {
             const uint64_t operand = state_.gpr[instr.ra];
@@ -5445,6 +5476,9 @@ std::string PPC64ISAPlugin::disassemble(IMemory& memory, uint64_t address) {
 }
 
 bool PPC64ISAPlugin::hasFeature(const std::string& feature) const {
+    if (feature == "dcbt") {
+        return true;
+    }
     if (feature == "interpreter") {
         return true;
     }

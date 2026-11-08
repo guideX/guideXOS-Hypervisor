@@ -677,6 +677,16 @@ AuthenticReplay runAuthenticLinux(
         }
         const auto& instruction =
             *static_cast<const DecodedInstruction*>(decoded.internalData);
+        if (instruction.kind == DecodedKind::DCBT) {
+            result.stopClass = "phase35-dcbt-boundary";
+            result.stopWord = instruction.raw;
+            result.stopDisassembly = decoded.disassembly;
+            result.final = before;
+            continuationSample << "boundary nip=" << hex(before.nip)
+                << " raw=" << wordHex(instruction.raw)
+                << " decode=" << decoded.disassembly << "\n";
+            break;
+        }
         const bool retired = vm.step();
         const PPC64RegisterView after = vm.getPPC64RegisterView();
         std::ostringstream line;
@@ -844,10 +854,10 @@ void testAuthenticLinux() {
     CHECK(first.retiredAfterTdi == second.retiredAfterTdi);
     CHECK(first.stopClass == second.stopClass);
     CHECK(first.stopWord == 0x7C001A2CU && second.stopWord == first.stopWord);
-    CHECK(first.stopDisassembly == "<unsupported ppc64 opcode 31>" &&
+    CHECK(first.stopDisassembly == "dcbt 0,r3,0" &&
           second.stopDisassembly == first.stopDisassembly);
-    // Current PPC64 sources include the later SPRG1, EXTSW, and RLDIC
-    // implementations, so this entry replay reaches the new opcode-31 frontier.
+    // Keep this historical Phase 31 replay bounded at the Phase 35 endpoint;
+    // Phase 36 separately executes DCBT and proves subsequent continuation.
     CHECK(first.retiredAfterTdi == 11'147U &&
           second.retiredAfterTdi == first.retiredAfterTdi);
     CHECK(first.totalRetired == 2'652'206ULL);

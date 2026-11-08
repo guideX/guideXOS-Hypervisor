@@ -486,9 +486,9 @@ void testAuthenticLinuxRldic35() {
     if (kernel.empty() || fdt.empty()) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-                                               false, false, 65'536U);
+                                               false, false, 65'536U, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-                                                false, false, 65'536U);
+                                                false, false, 65'536U, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -553,9 +553,7 @@ void testAuthenticLinuxRldic35() {
     CHECK(sameRegisters(first.final, second.final));
     CHECK(first.rldicContext == second.rldicContext);
     CHECK(first.rldicContinuationTrace == second.rldicContinuationTrace);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" ||
-          first.stopClass == "bounded-continuation-limit");
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction");
+    CHECK(first.stopClass == "phase35-dcbt-boundary");
     CHECK(first.stopWord == 0x7C001A2CU &&
           second.stopWord == first.stopWord &&
           independentDcbtDecode35(first.stopWord) ==
@@ -773,6 +771,7 @@ void testAuthenticLinuxRldic35() {
 
 } // namespace
 
+#ifndef PPC64_PHASE35_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -804,3 +803,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

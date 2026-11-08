@@ -861,11 +861,31 @@ struct AuthenticReplay {
     bool extswRetired = false;
     bool rldicFetched = false;
     bool rldicRetired = false;
+    bool dcbtFetched = false;
+    bool dcbtRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
     uint64_t totalRetiredBeforeExtsw = 0;
     uint64_t rldicPostRetired = 0;
+    uint64_t dcbtEffectiveAddress = 0;
+    uint64_t dcbtStorageEffectiveAddress = 0;
+    uint64_t dcbtCyclesBefore = 0;
+    uint64_t dcbtCyclesAfter = 0;
+    uint64_t dcbtTimebaseBefore = 0;
+    uint64_t dcbtTimebaseAfter = 0;
+    uint64_t dcbtRamBefore = 0;
+    uint64_t dcbtRamAfter = 0;
+    uint16_t dcbtLPID = 0;
+    uint8_t dcbtTH = 0;
+    uint8_t dcbtRA = 0;
+    uint8_t dcbtRB = 0;
+    bool dcbtFdtPreserved = false;
+    bool dcbtFetchTranslated = false;
+    bool dcbtFetchExecuteAllowed = false;
+    uint64_t dcbtFetchBackingAddress = 0;
+    uint64_t dcbtFdtBackingHashBefore = 0;
+    uint64_t dcbtFdtBackingHashAfter = 0;
     uint64_t lastSuccessfulNip = 0;
     uint64_t pacaBacking = 0;
     uint64_t pacaBytesHash = 0;
@@ -878,6 +898,7 @@ struct AuthenticReplay {
     uint32_t rawWord = 0;
     uint32_t extswRawWord = 0;
     uint32_t rldicRawWord = 0;
+    uint32_t dcbtRawWord = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
     uint64_t stopBackingAddress = 0;
@@ -888,6 +909,7 @@ struct AuthenticReplay {
     uint64_t extswRamBefore = 0;
     uint64_t extswRamAfter = 0;
     uint64_t rldicNip = 0;
+    uint64_t dcbtNip = 0;
     uint64_t rldicGuestRealAddress = 0;
     uint64_t rldicFetchBackingAddress = 0;
     uint64_t rldicTagLoadEffectiveAddress = 0;
@@ -929,11 +951,13 @@ struct AuthenticReplay {
     std::string decode;
     std::string extswDecode;
     std::string rldicDecode;
+    std::string dcbtDecode;
     std::string stopClass;
     std::string stopDisassembly;
     std::vector<std::string> extswContext;
     std::vector<std::string> rldicContext;
     std::vector<std::string> rldicContinuationTrace;
+    std::vector<std::string> dcbtPrecedingInstructions;
     std::string error;
     PPC64RegisterView before{};
     PPC64RegisterView after{};
@@ -941,6 +965,8 @@ struct AuthenticReplay {
     PPC64RegisterView extswAfter{};
     PPC64RegisterView rldicBefore{};
     PPC64RegisterView rldicAfter{};
+    PPC64RegisterView dcbtBefore{};
+    PPC64RegisterView dcbtAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -958,7 +984,8 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  const LinuxElfEvidence& elfEvidence,
                                  bool stopAtExtsw = true,
                                  bool stopAtRldic = false,
-                                 uint64_t rldicContinuationBudget = 0) {
+                                 uint64_t rldicContinuationBudget = 0,
+                                 bool stopAtDcbt = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -999,6 +1026,7 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         fdtTranslation.hostBackingAddress <= kLinuxRamSize &&
         referenceFdt.size() <= kLinuxRamSize - fdtTranslation.hostBackingAddress;
     std::vector<uint8_t> fdtBackingBefore;
+    std::vector<uint8_t> dcbtFdtBackingBefore;
     if (result.fdtBackingMapped) {
         result.fdtBackingAddress = fdtTranslation.hostBackingAddress;
         fdtBackingBefore.resize(referenceFdt.size());
@@ -1279,6 +1307,63 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                     break;
                 }
             }
+            if (following.kind == DecodedKind::DCBT && !result.dcbtFetched) {
+                result.dcbtFetched = true;
+                result.dcbtNip = before.nip;
+                result.dcbtRawWord = following.raw;
+                result.dcbtDecode = next.disassembly;
+                result.dcbtBefore = before;
+                result.dcbtTH = following.th;
+                result.dcbtRA = following.ra;
+                result.dcbtRB = following.rb;
+                result.dcbtLPID = cpu->getActiveLPID();
+                result.dcbtEffectiveAddress =
+                    (following.ra == 0U ? 0U : before.gpr[following.ra]) +
+                    before.gpr[following.rb];
+                result.dcbtStorageEffectiveAddress =
+                    (before.msr & MSR_SF) != 0
+                        ? result.dcbtEffectiveAddress
+                        : static_cast<uint32_t>(result.dcbtEffectiveAddress);
+                const uint64_t dcbtGra = before.nip & kGuestRealMask;
+                const auto dcbtFetch = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, dcbtGra,
+                    PPC64TranslationAccess::FETCH);
+                result.dcbtFetchTranslated = dcbtFetch.success;
+                result.dcbtFetchExecuteAllowed = dcbtFetch.executeAllowed;
+                result.dcbtFetchBackingAddress = dcbtFetch.hostBackingAddress;
+                result.dcbtCyclesBefore = vm.getCyclesExecuted();
+                result.dcbtTimebaseBefore = vm.getPPC64Timebase();
+                result.dcbtRamBefore = fingerprintRam(*memory);
+                const size_t precedingStart = lastInstructions.size() > 16U
+                    ? lastInstructions.size() - 16U : 0U;
+                for (size_t index = precedingStart;
+                     index < lastInstructions.size(); ++index) {
+                    result.dcbtPrecedingInstructions.push_back(
+                        lastInstructions[index]);
+                }
+                if (result.fdtBackingMapped) {
+                    dcbtFdtBackingBefore.resize(referenceFdt.size());
+                    memory->ReadGuestReal(result.fdtBackingAddress,
+                        dcbtFdtBackingBefore.data(), dcbtFdtBackingBefore.size());
+                    for (uint8_t byte : dcbtFdtBackingBefore) {
+                        result.dcbtFdtBackingHashBefore ^= byte;
+                        result.dcbtFdtBackingHashBefore *=
+                            1099511628211ULL;
+                    }
+                }
+            }
+            if (stopAtDcbt && following.kind == DecodedKind::DCBT) {
+                result.stopClass = "phase35-dcbt-boundary";
+                result.stopNip = before.nip;
+                result.stopWord = following.raw;
+                result.stopDisassembly = next.disassembly;
+                result.stopFetchTranslated = result.dcbtFetchTranslated;
+                result.stopFetchExecuteAllowed =
+                    result.dcbtFetchExecuteAllowed;
+                result.stopBackingAddress = result.dcbtFetchBackingAddress;
+                stopped = true;
+                break;
+            }
             if (following.kind == DecodedKind::MFSPR && following.sprn == SPR_SPRG1) {
                 ++result.sprg1Reads;
             }
@@ -1363,6 +1448,30 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         result.fdtBackingHashAfterRldic ^= byte;
                         result.fdtBackingHashAfterRldic *= 1099511628211ULL;
                     }
+                }
+            }
+            if (following.kind == DecodedKind::DCBT &&
+                result.dcbtFetched && before.nip == result.dcbtNip &&
+                !result.dcbtRetired) {
+                result.dcbtAfter = after;
+                result.dcbtRetired = after.nip == before.nip + 4U;
+                result.dcbtCyclesAfter = vm.getCyclesExecuted();
+                result.dcbtTimebaseAfter = vm.getPPC64Timebase();
+                result.dcbtRamAfter = fingerprintRam(*memory);
+                if (result.fdtBackingMapped &&
+                    dcbtFdtBackingBefore.size() == referenceFdt.size()) {
+                    std::vector<uint8_t> dcbtFdtBackingAfter(
+                        referenceFdt.size());
+                    memory->ReadGuestReal(result.fdtBackingAddress,
+                        dcbtFdtBackingAfter.data(), dcbtFdtBackingAfter.size());
+                    for (uint8_t byte : dcbtFdtBackingAfter) {
+                        result.dcbtFdtBackingHashAfter ^= byte;
+                        result.dcbtFdtBackingHashAfter *=
+                            1099511628211ULL;
+                    }
+                    result.dcbtFdtPreserved =
+                        dcbtFdtBackingBefore == dcbtFdtBackingAfter &&
+                        dcbtFdtBackingAfter == referenceFdt;
                 }
             }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
@@ -1462,6 +1571,13 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             trace << line << "\n";
         }
         trace << "authentic_rldic_continuation_trace_end\n";
+    }
+    if (result.dcbtFetched) {
+        trace << "authentic_dcbt_dataflow_context_begin\n";
+        for (const auto& line : result.dcbtPrecedingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_dcbt_dataflow_context_end\n";
     }
     result.trace = trace.str();
     return result;
