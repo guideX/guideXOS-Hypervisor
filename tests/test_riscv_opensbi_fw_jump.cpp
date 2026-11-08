@@ -3,6 +3,7 @@
 #include "riscv/riscv_elf64_loader.h"
 #include "riscv_cpu.h"
 #include "riscv_decoder.h"
+#include "riscv_uart_tx_observer.h"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -491,7 +492,8 @@ bool PrepareGuest(RV64CPU& cpu, const std::vector<uint8_t>& firmware,
 }
 
 RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget,
-                        const std::function<bool(const RV64CPU&)>& stopPredicate = {}) {
+                        const std::function<bool(const RV64CPU&)>& stopPredicate = {},
+                        riscv_test::UartTxObserver* uartObserver = nullptr) {
     RunEvidence evidence;
     Decoder decoder;
     std::map<uint64_t, uint64_t> observations;
@@ -523,6 +525,8 @@ RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget,
             break;
         }
         const StepResult step = cpu.step();
+        if (uartObserver != nullptr)
+            uartObserver->observeAfterStep(cpu, step, before, 0);
         TraceStep(evidence, step, before, cpu, decoder);
         if (step.outcome == StepOutcome::Ok) {
             if (before == PrivilegeMode::Machine) ++evidence.mRetired;
@@ -546,6 +550,8 @@ RunEvidence RunFirmware(RV64CPU& cpu, uint64_t budget,
                     evidence.handoffSatp = CsrOrZero(cpu, 0x180);
                     evidence.handoffPc = cpu.getPC();
                     evidence.handoffPrivilege = cpu.privilege();
+                    if (uartObserver != nullptr)
+                        uartObserver->beginLinuxHandoff(cpu);
                 }
             }
         } else if (step.outcome == StepOutcome::Trap) {

@@ -2,11 +2,13 @@
 #include "test_riscv_opensbi_fw_jump.cpp"
 #include "riscv_linux_test_helpers.h"
 #include "riscv_trap_accounting.h"
+#include "riscv_uart_tx_observer.h"
 
 #include <cctype>
 #include <filesystem>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -120,7 +122,8 @@ std::string AsString(const std::vector<uint8_t>& bytes) {
     return std::string(bytes.begin(), bytes.end());
 }
 
-FirmwareRun RunOpenSbiToLinux(RV64CPU& cpu) {
+FirmwareRun RunOpenSbiToLinux(RV64CPU& cpu,
+                              riscv_test::UartTxObserver* uartObserver = nullptr) {
     FirmwareRun run;
     uint64_t priorPc = UINT64_MAX;
     uint64_t repeatedPc = 0;
@@ -137,6 +140,8 @@ FirmwareRun RunOpenSbiToLinux(RV64CPU& cpu) {
         }
         const PrivilegeMode before = cpu.privilege();
         const StepResult step = cpu.step();
+        if (uartObserver != nullptr)
+            uartObserver->observeAfterStep(cpu, step, before, 0);
         if (run.trace.size() == kFirmwareTraceLimit) run.trace.pop_front();
         run.trace.push_back({step, before, cpu.privilege()});
         if (step.outcome == StepOutcome::Ok) {
@@ -147,6 +152,8 @@ FirmwareRun RunOpenSbiToLinux(RV64CPU& cpu) {
                 cpu.getPC() == boot_contract::kLinuxImageEntry) {
                 run.handoff = true;
                 run.stopReason = "OpenSBI transferred control to Linux Image entry";
+                if (uartObserver != nullptr)
+                    uartObserver->beginLinuxHandoff(cpu);
                 ++run.steps;
                 break;
             }
@@ -417,6 +424,31 @@ struct LinuxStage {
     uint64_t mModeHandlerInstructions = 0;
     uint64_t activeHandlers = 0;
     uint64_t maxNestingDepth = 0;
+    uint64_t newLinuxSymbols = 0;
+    uint64_t newSbiCalls = 0;
+    uint64_t newMachineTimerInterrupts = 0;
+    uint64_t newSupervisorTimerInterrupts = 0;
+    uint64_t newMmioEvents = 0;
+    uint64_t newUartBytes = 0;
+    uint64_t stateFingerprintAtStart = 0;
+    uint64_t stateFingerprintAtEnd = 0;
+    PrivilegeMode privilege = PrivilegeMode::Supervisor;
+    uint64_t satp = 0;
+    std::vector<std::string> newSymbolNames;
+};
+
+struct LinuxSymbolVisit {
+    std::string name;
+    uint64_t symbolAddress = 0;
+    uint64_t guestPc = 0;
+    uint64_t retired = 0;
+    uint64_t returnAddress = 0;
+    PrivilegeMode privilege = PrivilegeMode::Supervisor;
+    uint64_t satp = 0;
+    uint64_t sstatus = 0;
+    uint64_t mstatus = 0;
+    std::string milestoneClass;
+    bool functionCompletionDemonstrated = false;
 };
 
 struct Sv39WalkLevel {
@@ -451,6 +483,7 @@ struct ContinuationEvidence {
     bool pmpUnchanged = false;
     bool fdtUnchanged = false;
     bool uartPrefixPreserved = false;
+    bool uart1PrefixPreserved = false;
     uint64_t handoffRetiredCounter = 0;
     uint64_t handoffMtime = 0;
     uint64_t finalMtime = 0;
@@ -466,6 +499,10 @@ struct ContinuationEvidence {
     std::vector<LinuxCsrChange> csrChanges;
     std::vector<LinuxTrapEvent> traps;
     std::vector<LinuxStage> stages;
+    std::vector<LinuxSymbolVisit> symbolVisits;
+    std::unordered_set<std::string> seenLinuxSymbols;
+    uint64_t uniqueLinuxSymbols = 0;
+    uint64_t droppedSymbolVisitDetails = 0;
     std::vector<Sv39WalkLevel> firstPageWalk;
 };
 
@@ -682,7 +719,8 @@ bool VerifyHeadDisassembly(const std::vector<uint8_t>& vmlinux,
         ElfWordAt(vmlinux, symbols.headTextOffset + 0x10c) == 0xFEE6CCE3U;
 }
 
-LinuxRun RunLinuxEntry(RV64CPU& cpu, BssEvidence* bss = nullptr) {
+LinuxRun RunLinuxEntry(RV64CPU& cpu, BssEvidence* bss = nullptr,
+                       riscv_test::UartTxObserver* uartObserver = nullptr) {
     LinuxRun run;
     run.trace.reserve(kLinuxTraceHeadLimit);
     for (size_t index = 0; index < kLinuxStepBudget; ++index) {
@@ -691,6 +729,9 @@ LinuxRun RunLinuxEntry(RV64CPU& cpu, BssEvidence* bss = nullptr) {
         const uint64_t a4Before = cpu.readGR(14);
         const PrivilegeMode before = cpu.privilege();
         const StepResult step = cpu.step();
+        if (uartObserver != nullptr)
+            uartObserver->observeAfterStep(cpu, step, before,
+                run.retired + (step.outcome == StepOutcome::Ok ? 1ULL : 0ULL));
         if (bss != nullptr && pcBefore == bss->loopStorePc && !bss->observedLoopEntry) {
             bss->observedLoopEntry = true;
             bss->initialPointer = a3Before;
@@ -790,6 +831,193 @@ LinuxRun RunLinuxEntry(RV64CPU& cpu, BssEvidence* bss = nullptr) {
     return run;
 }
 
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+std::vector<uint8_t> MakeUartObserverGuestProgram() {
+    static constexpr std::array<uint32_t, 27> words{{
+        0x100002B7U, // lui   t0,0x10000        UART0
+        0x04600313U, // addi  t1,zero,'F'
+        0x00628023U, // sb    t1,0(t0)          M-mode UART0 TX
+        0x1000A2B7U, // lui   t0,0x1000a        UART1
+        0x03100313U, // addi  t1,zero,'1'
+        0x00628023U, // sb    t1,0(t0)          M-mode UART1 TX
+        0x000012B7U, // lui   t0,1
+        0x80028293U, // addi  t0,t0,-2048       mstatus.MPP = S
+        0x30029073U, // csrw  mstatus,t0
+        0x00000297U, // auipc t0,0              PC = 0x80000024
+        0x01C28293U, // addi  t0,t0,0x1c        S-mode entry = 0x80000040
+        0x34129073U, // csrw  mepc,t0
+        0x30200073U, // mret
+        0x00000013U, // nop (not executed)
+        0x00000013U, // nop (not executed)
+        0x00000013U, // nop (not executed)
+        0x100002B7U, // lui   t0,0x10000        S-mode UART0
+        0x04100313U, // addi  t1,zero,'A'
+        0x00628023U, // sb    t1,0(t0)          S-mode UART0 TX
+        0x04100313U, // addi  t1,zero,'A'
+        0x00628023U, // sb    t1,0(t0)          repeated byte write
+        0x1000A2B7U, // lui   t0,0x1000a        S-mode UART1
+        0x04300313U, // addi  t1,zero,'C'
+        0x00628023U, // sb    t1,0(t0)          S-mode UART1 TX
+        0x100002B7U, // lui   t0,0x10000        UART0 RX
+        0x0002C383U, // lbu   t2,0(t0)
+        0x00000013U  // nop
+    }};
+    std::vector<uint8_t> bytes;
+    bytes.reserve(words.size() * 4U);
+    for (uint32_t word : words) {
+        bytes.push_back(static_cast<uint8_t>(word));
+        bytes.push_back(static_cast<uint8_t>(word >> 8));
+        bytes.push_back(static_cast<uint8_t>(word >> 16));
+        bytes.push_back(static_cast<uint8_t>(word >> 24));
+    }
+    return bytes;
+}
+
+bool ConfigureUartObserverGuest(RV64CPU& cpu,
+                                const std::vector<uint8_t>& program) {
+    cpu.loadProgram(0x80000000ULL, program);
+    return cpu.configureMachinePlic({0x0C000000ULL, 96, true}) &&
+        cpu.configureMachineUart({0x10000000ULL, true}) &&
+        cpu.configureMachineUart1({0x1000A000ULL, true});
+}
+
+void TestUartTxProvenanceObserver() {
+    const std::vector<uint8_t> program = MakeUartObserverGuestProgram();
+    RV64CPU cpu(PmpMachineProfile::LegacyNoPmp);
+    Expect(ConfigureUartObserverGuest(cpu, program),
+           "small RV64 MRET guest configures independent UART0/UART1 and PLIC state");
+    riscv_test::UartTxObserver observer;
+    observer.reset(cpu);
+    bool injectedRx = false;
+    for (size_t instruction = 0; instruction < 24; ++instruction) {
+        const PrivilegeMode before = cpu.privilege();
+        const StepResult step = cpu.step();
+        const uint64_t mmioBeforeObservation = cpu.machineMmioEventSequence();
+        const std::string uart0BeforeObservation = cpu.machineUartOutput();
+        const std::string uart1BeforeObservation = cpu.machineUart1Output();
+        const bool rxReadyBeforeObservation = cpu.machineUartReceiveDataReady();
+        const bool irq0BeforeObservation = cpu.machineUartReceiveIrqAsserted();
+        const bool irq1BeforeObservation = cpu.machineUart1ReceiveIrqAsserted();
+        const bool plic10BeforeObservation = cpu.machinePlicSourcePending(10);
+        const bool plic12BeforeObservation = cpu.machinePlicSourcePending(12);
+        const MachinePlicDiagnostics diagnosticsBefore = cpu.machinePlicDiagnostics();
+        observer.observeAfterStep(cpu, step, before, observer.afterLinuxHandoff()
+            ? cpu.instructionsRetired() - observer.handoffRetiredCounter() : 0);
+        const MachinePlicDiagnostics diagnosticsAfter = cpu.machinePlicDiagnostics();
+        Expect(cpu.machineMmioEventSequence() == mmioBeforeObservation &&
+               cpu.machineUartOutput() == uart0BeforeObservation &&
+               cpu.machineUart1Output() == uart1BeforeObservation &&
+               cpu.machineUartReceiveDataReady() == rxReadyBeforeObservation &&
+               cpu.machineUartReceiveIrqAsserted() == irq0BeforeObservation &&
+               cpu.machineUart1ReceiveIrqAsserted() == irq1BeforeObservation &&
+               cpu.machinePlicSourcePending(10) == plic10BeforeObservation &&
+               cpu.machinePlicSourcePending(12) == plic12BeforeObservation &&
+               diagnosticsBefore.priorityWrites == diagnosticsAfter.priorityWrites &&
+               diagnosticsBefore.enableWrites == diagnosticsAfter.enableWrites &&
+               diagnosticsBefore.thresholdWrites == diagnosticsAfter.thresholdWrites &&
+               diagnosticsBefore.claimReads == diagnosticsAfter.claimReads &&
+               diagnosticsBefore.completionWrites == diagnosticsAfter.completionWrites,
+               "UART observation does not write MMIO or change RX, PLIC, or device state");
+        Expect(step.outcome == StepOutcome::Ok,
+               "authentic RV64 instruction in the small UART guest retires successfully");
+        if (step.insn.mnemonic == Mnemonic::MRET && before == PrivilegeMode::Machine) {
+            Expect(cpu.privilege() == PrivilegeMode::Supervisor &&
+                   cpu.getPC() == 0x80000040ULL,
+                   "real guest MRET establishes the S-mode UART writer and Linux-entry boundary");
+            observer.beginLinuxHandoff(cpu);
+            injectedRx = cpu.injectMachineUartReceiveByte(0x52U);
+            Expect(injectedRx && cpu.machineUartReceiveDataReady() &&
+                   !cpu.machineUartReceiveIrqAsserted() &&
+                   !cpu.machinePlicSourcePending(10),
+                   "UART RX remains queued with its existing interrupt state unchanged");
+        }
+    }
+
+    const auto& events = observer.observations();
+    Expect(injectedRx && observer.outputByteCounts()[0] == 3 &&
+           observer.outputByteCounts()[1] == 2 && events.size() == 5 &&
+           observer.droppedEvents() == 0 && observer.attributionFailures() == 0,
+           "observer retains five actual guest TX bytes with complete MMIO attribution");
+    Expect(cpu.machineUartOutput() == "FAA" && cpu.machineUart1Output() == "1C",
+           "guest MMIO writes preserve exact independent UART output ordering");
+    static constexpr std::array<uint64_t, 5> kExpectedPcs{{
+        0x80000008ULL, 0x80000014ULL, 0x80000048ULL,
+        0x80000050ULL, 0x8000005CULL}};
+    static constexpr std::array<uint8_t, 5> kExpectedBytes{{'F', '1', 'A', 'A', 'C'}};
+    static constexpr std::array<uint8_t, 5> kExpectedUarts{{0, 1, 0, 0, 1}};
+    bool ordered = events.size() == kExpectedPcs.size();
+    bool provenance = ordered;
+    bool byteWrites = ordered;
+    bool repeatedWrites = false;
+    for (size_t index = 0; index < events.size() && index < kExpectedPcs.size(); ++index) {
+        const auto& event = events[index];
+        ordered = ordered && event.outputSequence == index + 1 &&
+            event.guestPc == kExpectedPcs[index] && event.byte == kExpectedBytes[index] &&
+            event.uartIndex == kExpectedUarts[index];
+        const bool preHandoff = index < 2;
+        provenance = provenance && event.afterLinuxHandoff == !preHandoff &&
+            event.privilege == (preHandoff ? PrivilegeMode::Machine : PrivilegeMode::Supervisor) &&
+            event.origin == (preHandoff
+                ? riscv_test::UartTxOrigin::OpenSbiBeforeLinuxHandoff
+                : riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff) &&
+            (preHandoff ? event.postHandoffRetirements == 0
+                        : event.postHandoffRetirements > 0) &&
+            event.matchedStep;
+        byteWrites = byteWrites && event.matchedMmioEvent && event.mmioSize == 1 &&
+            event.mmioRegisterOffset == 0 && event.mmioAddress ==
+                (event.uartIndex == 0 ? 0x10000000ULL : 0x1000A000ULL);
+        if (index == 3)
+            repeatedWrites = events[2].byte == event.byte &&
+                events[2].mmioSequence < event.mmioSequence;
+    }
+    Expect(ordered, "observer preserves exact cross-UART TX byte order and writer PCs");
+    Expect(provenance, "observer distinguishes M-mode pre-handoff firmware and S-mode guest TX");
+    Expect(byteWrites, "captured bytes map to byte-sized UART THR MMIO writes");
+    Expect(repeatedWrites, "separate repeated writes of the same UART byte remain distinct");
+    Expect(cpu.readGR(7) == 0x52 && !cpu.machineUartReceiveDataReady() &&
+           !cpu.machineUartReceiveIrqAsserted(),
+           "guest UART RX read still returns the queued byte and clears data-ready");
+
+    cpu.reset();
+    riscv_test::UartTxObserver resetObserver;
+    resetObserver.reset(cpu);
+    for (size_t instruction = 0; instruction < 3; ++instruction) {
+        const PrivilegeMode before = cpu.privilege();
+        const StepResult step = cpu.step();
+        resetObserver.observeAfterStep(cpu, step, before, 0);
+    }
+    Expect(cpu.machineUartMapping().enabled && cpu.machineUart1Mapping().enabled &&
+           cpu.machineUartOutput() == "F" && cpu.machineUart1Output().empty() &&
+           resetObserver.outputByteCounts()[0] == 1 &&
+           resetObserver.observations().size() == 1 &&
+           resetObserver.observations().front().outputSequence == 1,
+           "CPU reset starts a clean observer epoch without leaking prior UART bytes");
+
+    RV64CPU boundedCpu(PmpMachineProfile::LegacyNoPmp);
+    Expect(ConfigureUartObserverGuest(boundedCpu, program),
+           "bounded-capture guest uses an independent CPU and UART device state");
+    riscv_test::UartTxObserver boundedObserver(2);
+    boundedObserver.reset(boundedCpu);
+    for (size_t instruction = 0; instruction < 24; ++instruction) {
+        const PrivilegeMode before = boundedCpu.privilege();
+        const StepResult step = boundedCpu.step();
+        boundedObserver.observeAfterStep(boundedCpu, step, before, 0);
+        if (step.insn.mnemonic == Mnemonic::MRET && before == PrivilegeMode::Machine)
+            boundedObserver.beginLinuxHandoff(boundedCpu);
+    }
+    Expect(boundedObserver.outputByteCounts()[0] == 3 &&
+           boundedObserver.outputByteCounts()[1] == 2 &&
+           boundedObserver.observations().size() == 2 &&
+           boundedObserver.observations().front().outputSequence == 4 &&
+           boundedObserver.observations().back().outputSequence == 5 &&
+           boundedObserver.droppedEvents() == 3,
+           "bounded TX capture retains only its ordered ring while aggregate counts remain exact");
+    Expect(cpu.machineUartOutput() == "F" && boundedCpu.machineUartOutput() == "FAA" &&
+           boundedCpu.machineUart1Output() == "1C",
+           "separate CPU instances keep firmware and guest UART buffers isolated");
+}
+#endif
+
 LinuxSnapshot CaptureSnapshot(const RV64CPU& cpu, const LinuxRun& run,
                               const std::string& name, const std::string& detail) {
     LinuxSnapshot snapshot;
@@ -811,6 +1039,48 @@ void RecordMilestone(ContinuationEvidence& evidence, const RV64CPU& cpu,
         [&](const LinuxSnapshot& item) { return item.name == name; })) return;
     if (evidence.milestones.size() < 128)
         evidence.milestones.push_back(CaptureSnapshot(cpu, run, name, detail));
+}
+
+std::string LinuxMilestoneClass(const std::string& name) {
+    if (name == "setup_arch") return "architecture_setup";
+    if (name == "sched_init" || name.rfind("sched_", 0) == 0) return "scheduler";
+    if (name == "time_init" || name == "timekeeping_init" ||
+        name.rfind("clocksource", 0) == 0) return "timekeeping";
+    if (name.find("console") != std::string::npos ||
+        name.find("earlycon") != std::string::npos) return "console";
+    if (name.find("irq") != std::string::npos || name.find("intc") != std::string::npos)
+        return "interrupt_controller";
+    if (name.rfind("memblock", 0) == 0 || name == "mem_init" ||
+        name == "sparse_init" || name == "free_area_init") return "memory_initialization";
+    if (name == "do_initcalls" || name == "do_basic_setup" ||
+        name == "do_one_initcall" || name == "kernel_init_freeable") return "initcall";
+    return "kernel_function";
+}
+
+void RecordLinuxSymbolVisit(ContinuationEvidence& evidence, LinuxStage& stage,
+                            const ElfFunctionSymbol& function, uint64_t observedPc,
+                            uint64_t retired, PrivilegeMode privilege,
+                            const RV64CPU& cpu) {
+    if (!evidence.seenLinuxSymbols.insert(function.name).second) return;
+    ++evidence.uniqueLinuxSymbols;
+    if (stage.newSymbolNames.size() < 256)
+        stage.newSymbolNames.push_back(function.name);
+    if (evidence.symbolVisits.size() >= 4096) {
+        ++evidence.droppedSymbolVisitDetails;
+        return;
+    }
+    LinuxSymbolVisit visit;
+    visit.name = function.name;
+    visit.symbolAddress = function.address;
+    visit.guestPc = observedPc;
+    visit.retired = retired;
+    visit.returnAddress = cpu.readGR(1);
+    visit.privilege = privilege;
+    visit.satp = CsrOrZero(cpu, 0x180);
+    visit.sstatus = CsrOrZero(cpu, 0x100);
+    visit.mstatus = CsrOrZero(cpu, 0x300);
+    visit.milestoneClass = LinuxMilestoneClass(function.name);
+    evidence.symbolVisits.push_back(std::move(visit));
 }
 
 uint64_t ArchitecturalStateFingerprint(const RV64CPU& cpu) {
@@ -987,22 +1257,45 @@ void CaptureProgressFrontier(RV64CPU& cpu, LinuxRun& run) {
 
 void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                            ContinuationEvidence& evidence,
-                           const LinuxSymbols& symbols) {
-    static constexpr std::array<uint64_t, 4> kTotalBudgets{{250000, 1000000, 5000000, 20000000}};
-    // The initial corrected replay reached 1,000,001 M-mode handler
-    // instructions across 1,942 completed/active invocations by 15.7M total
-    // retirements. Keep independent bounded limits, with enough headroom for
-    // the remaining 20M continuation rather than treating cumulative short
-    // firmware handlers as one stalled invocation.
+                           const LinuxSymbols& symbols,
+                           riscv_test::UartTxObserver* uartObserver = nullptr,
+                           const std::vector<ElfFunctionSymbol>* linuxFunctions = nullptr) {
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    static constexpr std::array<uint64_t, 7> kTotalBudgets{{
+        250000, 1000000, 5000000, 20000000, 25000000, 30000000, 40000000}};
+    // At 20M, authentic firmware retired 2.57M instructions and S-mode
+    // handlers retired 0.55M. These independent bounded limits preserve
+    // headroom for a 40M run while remaining below an unbounded firmware loop.
+    static constexpr uint64_t kMachineInstructionBudget = 8000000;
+    static constexpr uint64_t kMachineHandlerInstructionBudget = 7000000;
+    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 2000000;
+#else
+    static constexpr std::array<uint64_t, 4> kTotalBudgets{{
+        250000, 1000000, 5000000, 20000000}};
+    // Preserve the accepted RISCV-20 safety budgets for its original target.
     static constexpr uint64_t kMachineInstructionBudget = 4000000;
     static constexpr uint64_t kMachineHandlerInstructionBudget = 3000000;
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 1000000;
+#endif
     static constexpr uint64_t kIndividualHandlerInstructionBudget = 200000;
     static constexpr uint64_t kTrapEventBudget = riscv_test::kTrapAccountingEventLimit;
     static constexpr size_t kMaximumTrapNesting = riscv_test::kTrapAccountingNestingLimit;
     static constexpr uint64_t kPersistentStateRepeatLimit = 8192;
     Decoder decoder;
     std::unordered_map<uint64_t, std::pair<uint64_t, uint32_t>> repeatedStates;
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    std::unordered_map<uint64_t, const ElfFunctionSymbol*> linuxFunctionsAtEntry;
+    if (linuxFunctions != nullptr) {
+        linuxFunctionsAtEntry.reserve(linuxFunctions->size() * 2U);
+        for (const ElfFunctionSymbol& function : *linuxFunctions) {
+            linuxFunctionsAtEntry.emplace(function.address, &function);
+            if (function.address >= symbols.imageStart) {
+                const uint64_t physical = symbols.physical(function.address);
+                if (physical != 0) linuxFunctionsAtEntry.emplace(physical, &function);
+            }
+        }
+    }
+#endif
     const auto synchronizeAccounting = [&]() {
         const auto& counts = evidence.accounting.counters();
         evidence.linuxStepCalls = counts.stepCalls;
@@ -1013,6 +1306,9 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         evidence.ecallEvents = counts.supervisorEcalls + counts.machineEcalls;
         evidence.sbiEcalls = counts.sbiCalls;
     };
+#if !defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    (void)linuxFunctions;
+#endif
     uint64_t lastStageTarget = run.retired;
     run.reachedFrontier = false;
     run.stopReason.clear();
@@ -1022,11 +1318,27 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         stage.targetRetired = target;
         const uint64_t retiredAtStageStart = run.retired;
         const uint64_t callsAtStageStart = evidence.linuxStepCalls;
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+        const auto countersAtStageStart = evidence.accounting.counters();
+        const uint64_t symbolsAtStageStart = evidence.uniqueLinuxSymbols;
+        const uint64_t mmioAtStageStart = cpu.machineMmioEventSequence();
+        const uint64_t uartBytesAtStageStart = uartObserver == nullptr ? 0 :
+            uartObserver->outputByteCounts()[0] + uartObserver->outputByteCounts()[1];
+#endif
+        stage.stateFingerprintAtStart = ArchitecturalStateFingerprint(cpu);
         while (run.retired < target && !run.reachedFrontier) {
             const uint64_t pcBefore = cpu.getPC();
             const uint64_t a3Before = cpu.readGR(13);
             const uint64_t a4Before = cpu.readGR(14);
             const PrivilegeMode privilegeBefore = cpu.privilege();
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+            if (privilegeBefore == PrivilegeMode::Supervisor) {
+                const auto function = linuxFunctionsAtEntry.find(pcBefore);
+                if (function != linuxFunctionsAtEntry.end())
+                    RecordLinuxSymbolVisit(evidence, stage, *function->second, pcBefore,
+                                           run.retired, privilegeBefore, cpu);
+            }
+#endif
             uint16_t csrAddressBefore = 0;
             uint64_t csrValueBefore = 0;
             bool hasCsrBefore = false;
@@ -1065,6 +1377,23 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 evidence.accounting.observe(privilegeBefore, step, cpu.privilege(), cpu,
                                             !sv39RelocationTransition);
             synchronizeAccounting();
+            if (uartObserver != nullptr) {
+                const size_t newTxBytes = uartObserver->observeAfterStep(
+                    cpu, step, privilegeBefore,
+                    run.retired + (step.outcome == StepOutcome::Ok ? 1ULL : 0ULL));
+                if (newTxBytes != 0 && privilegeBefore == PrivilegeMode::Machine) {
+                    for (auto event = evidence.accounting.events().rbegin();
+                         event != evidence.accounting.events().rend(); ++event) {
+                        if (!event->sbiCall || event->returned) continue;
+                        if (!uartObserver->observations().empty()) {
+                            uartObserver->associateRecentSbiCall(
+                                uartObserver->observations().back().mmioSequence,
+                                event->id, event->sbiEid, event->sbiFid);
+                        }
+                        break;
+                    }
+                }
+            }
             if (accountingDelta.trapReturned &&
                 accountingDelta.returnedEventIndex < evidence.traps.size()) {
                 LinuxTrapEvent& returnedTrap = evidence.traps[accountingDelta.returnedEventIndex];
@@ -1108,6 +1437,19 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 run.hasRetired = true;
                 run.lastRetiredPc = step.pc;
                 ObserveBssStep(cpu, run, evidence, step, pcBefore, a3Before, a4Before);
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+                if (privilegeBefore == PrivilegeMode::Supervisor &&
+                    step.insn.mnemonic == Mnemonic::JALR && step.insn.rd == 0 &&
+                    step.insn.rs1 == 1 && step.insn.immediate == 0) {
+                    for (auto visit = evidence.symbolVisits.rbegin();
+                         visit != evidence.symbolVisits.rend(); ++visit) {
+                        if (visit->functionCompletionDemonstrated ||
+                            visit->returnAddress != step.nextPc) continue;
+                        visit->functionCompletionDemonstrated = true;
+                        break;
+                    }
+                }
+#endif
 
                 const bool isStore = step.insn.mnemonic == Mnemonic::SB ||
                     step.insn.mnemonic == Mnemonic::SH || step.insn.mnemonic == Mnemonic::SW ||
@@ -1286,6 +1628,8 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         stage.additionalRetired = run.retired - retiredAtStageStart;
         stage.stepCalls = evidence.linuxStepCalls - callsAtStageStart;
         stage.pc = cpu.getPC();
+        stage.privilege = cpu.privilege();
+        stage.satp = CsrOrZero(cpu, 0x180);
         stage.lastRetiredPc = run.lastRetiredPc;
         stage.bssStores = evidence.bss.storesRetired;
         stage.sModeRetired = evidence.accounting.counters().supervisorRetired;
@@ -1294,14 +1638,41 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         stage.mModeHandlerInstructions = evidence.accounting.counters().machineHandlerInstructions;
         stage.activeHandlers = evidence.accounting.activeHandlerInvocations();
         stage.maxNestingDepth = evidence.accounting.counters().maxNestingDepth;
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+        const auto& stageCounts = evidence.accounting.counters();
+        stage.newLinuxSymbols = evidence.uniqueLinuxSymbols - symbolsAtStageStart;
+        stage.newSbiCalls = stageCounts.sbiCalls - countersAtStageStart.sbiCalls;
+        stage.newMachineTimerInterrupts = stageCounts.machineTimerInterrupts -
+            countersAtStageStart.machineTimerInterrupts;
+        stage.newSupervisorTimerInterrupts = stageCounts.supervisorTimerInterrupts -
+            countersAtStageStart.supervisorTimerInterrupts;
+        stage.newMmioEvents = cpu.machineMmioEventSequence() - mmioAtStageStart;
+        stage.newUartBytes = uartObserver == nullptr ? 0 :
+            uartObserver->outputByteCounts()[0] + uartObserver->outputByteCounts()[1] -
+                uartBytesAtStageStart;
+        stage.stateFingerprintAtEnd = ArchitecturalStateFingerprint(cpu);
+#endif
         evidence.stages.push_back(stage);
         lastStageTarget = target;
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+        std::cout << "RISCV-21 stage target=" << stage.targetRetired
+                  << " actual=" << stage.actualRetired
+                  << " S=" << stage.sModeRetired
+                  << " M=" << stage.mModeRetired
+                  << " PC=" << Hex(stage.pc)
+                  << " symbols+=" << stage.newLinuxSymbols
+                  << " SBI+=" << stage.newSbiCalls
+                  << " timerM+=" << stage.newMachineTimerInterrupts
+                  << " timerS+=" << stage.newSupervisorTimerInterrupts
+                  << " UART+=" << stage.newUartBytes << std::endl;
+#endif
         if (run.reachedFrontier) break;
     }
 
     if (!run.reachedFrontier) {
         evidence.stopClassification = "instruction_budget";
-        evidence.stopReason = "20-million post-handoff guest-retirement cap reached with guest forward progress";
+        evidence.stopReason = std::to_string(kTotalBudgets.back() / 1000000ULL) +
+            "-million post-handoff guest-retirement cap reached with guest forward progress";
         CaptureProgressFrontier(cpu, run);
     }
     run.stopReason = evidence.stopReason;
@@ -1334,7 +1705,28 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                                 const FirmwareRun& firmwareRun,
                                 const LinuxRun& run,
                                 const ContinuationEvidence& evidence,
-                                const RV64CPU& cpu) {
+                                const RV64CPU& cpu,
+                                const riscv_test::UartTxObserver* uartObserver,
+                                const std::string& handoffUart0,
+                                const std::string& handoffUart1) {
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    const std::string phasePrefix = "riscv21";
+    const std::string phaseName = "RISCV-21";
+    constexpr uint64_t totalRetiredBudget = 40000000;
+    constexpr uint64_t machineRetiredBudget = 8000000;
+    constexpr uint64_t machineHandlerInstructionBudget = 7000000;
+    constexpr uint64_t supervisorHandlerInstructionBudget = 2000000;
+#else
+    const std::string phasePrefix = "riscv20";
+    const std::string phaseName = "RISCV-20";
+    constexpr uint64_t totalRetiredBudget = 20000000;
+    constexpr uint64_t machineRetiredBudget = 4000000;
+    constexpr uint64_t machineHandlerInstructionBudget = 3000000;
+    constexpr uint64_t supervisorHandlerInstructionBudget = 1000000;
+    (void)uartObserver;
+    (void)handoffUart0;
+    (void)handoffUart1;
+#endif
     Decoder decoder;
     const auto& accounting = evidence.accounting;
     const auto& trapCounts = accounting.counters();
@@ -1348,7 +1740,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << ']';
     };
     {
-        std::ofstream out(dir / "riscv20-linux-symbols.json", std::ios::out | std::ios::trunc);
+        std::ofstream out(dir / (phasePrefix + "-linux-symbols.json"), std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 2,\n  \"vmlinuxSha256\": \""
             << Sha256(vmlinux) << "\",\n  \"imageSha256\": \"" << Sha256(image) << "\",\n"
             << "  \"imageStartVirtual\": \"" << Hex(symbols.imageStart) << "\",\n"
@@ -1376,8 +1768,8 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"loopExitPc\": \"" << Hex(boot_contract::kLinuxImageEntry + 0x110ULL) << "\"\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv20-linux-run-summary.json", std::ios::out | std::ios::trunc);
-        out << "{\n  \"schemaVersion\": 2,\n  \"phase\": \"RISCV-20\",\n"
+        std::ofstream out(dir / (phasePrefix + "-linux-run-summary.json"), std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 2,\n  \"phase\": " << JsonQuote(phaseName) << ",\n"
             << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
             << "  \"linuxImageSha256\": \"" << Sha256(image) << "\",\n"
             << "  \"vmlinuxSha256\": \"" << Sha256(vmlinux) << "\",\n"
@@ -1417,9 +1809,14 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "    \"lifetimeAttributionUncertain\": " << (accounting.lifetimesUncertain() ? "true" : "false") << ",\n"
             << "    \"droppedEventDetails\": " << trapCounts.droppedEvents << "\n"
             << "  },\n"
-            << "  \"budgets\": {\"totalRetired\":20000000,\"mModeRetired\":4000000,"
-            << "\"mModeHandlerInstructions\":3000000,\"sModeHandlerInstructions\":1000000,"
-            << "\"individualHandlerInstructions\":200000,\"trapEvents\":8192,\"maximumNestingDepth\":64},\n"
+            << "  \"budgets\": {\"totalRetired\":" << totalRetiredBudget
+            << ",\"mModeRetired\":" << machineRetiredBudget
+            << ",\"mModeHandlerInstructions\":" << machineHandlerInstructionBudget
+            << ",\"sModeHandlerInstructions\":" << supervisorHandlerInstructionBudget
+            << ",\"individualHandlerInstructions\":200000,\"trapEvents\":"
+            << riscv_test::kTrapAccountingEventLimit
+            << ",\"maximumNestingDepth\":" << riscv_test::kTrapAccountingNestingLimit
+            << ",\"repeatedArchitecturalStates\":8192},\n"
             << "  \"trapEvents\": " << trapCounts.nonRetiringTrapTransitions << ",\n"
             << "  \"interruptEvents\": " << trapCounts.interruptTransitions << ",\n"
             << "  \"ecallEvents\": " << (trapCounts.supervisorEcalls + trapCounts.machineEcalls) << ",\n"
@@ -1465,7 +1862,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"stopReason\": " << JsonQuote(evidence.stopReason) << "\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv20-linux-milestones.json", std::ios::out | std::ios::trunc);
+        std::ofstream out(dir / (phasePrefix + "-linux-milestones.json"), std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 2,\n  \"stages\": [\n";
         for (size_t index = 0; index < evidence.stages.size(); ++index) {
             const LinuxStage& stage = evidence.stages[index];
@@ -1522,7 +1919,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "    ]\n  }\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv20-linux-csr-state.json", std::ios::out | std::ios::trunc);
+        std::ofstream out(dir / (phasePrefix + "-linux-csr-state.json"), std::ios::out | std::ios::trunc);
         static constexpr std::array<std::pair<const char*, uint16_t>, 12> kCsrs{{
             {"mstatus", uint16_t{0x300}}, {"sstatus", uint16_t{0x100}},
             {"mie", uint16_t{0x304}}, {"mip", uint16_t{0x344}},
@@ -1569,7 +1966,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv20-linux-trap-accounting.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-trap-accounting.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 2,\n"
             << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
@@ -1637,7 +2034,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "  ]\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv20-linux-sbi-events.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-sbi-events.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 2,\n"
             << "  \"linuxSourceCommit\": \"adc218676eef25575469234709c2d87185ca223a\",\n"
@@ -1714,7 +2111,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "\n  ]\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv20-linux-frontier.json", std::ios::out | std::ios::trunc);
+        std::ofstream out(dir / (phasePrefix + "-linux-frontier.json"), std::ios::out | std::ios::trunc);
         const StepResult& step = run.frontier;
         const uint64_t pc = step.pc;
         uint64_t nearestValue = 0;
@@ -1853,6 +2250,158 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         }
         out << "  ]\n}\n";
     }
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    {
+        std::ofstream out(dir / "riscv21-linux-progress-stages.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n  \"phase\": \"RISCV-21\",\n"
+            << "  \"stages\": [\n";
+        for (size_t index = 0; index < evidence.stages.size(); ++index) {
+            const LinuxStage& stage = evidence.stages[index];
+            out << "    {\"targetRetired\":" << stage.targetRetired
+                << ",\"actualRetired\":" << stage.actualRetired
+                << ",\"additionalRetired\":" << stage.additionalRetired
+                << ",\"stepCalls\":" << stage.stepCalls
+                << ",\"pc\":" << JsonQuote(Hex(stage.pc))
+                << ",\"lastRetiredPc\":" << JsonQuote(Hex(stage.lastRetiredPc))
+                << ",\"privilege\":" << JsonQuote(PrivilegeModeToString(stage.privilege))
+                << ",\"satp\":" << JsonQuote(Hex(stage.satp))
+                << ",\"bssStores\":" << stage.bssStores
+                << ",\"sModeRetired\":" << stage.sModeRetired
+                << ",\"mModeRetired\":" << stage.mModeRetired
+                << ",\"sModeHandlerInstructions\":" << stage.sModeHandlerInstructions
+                << ",\"mModeHandlerInstructions\":" << stage.mModeHandlerInstructions
+                << ",\"activeHandlers\":" << stage.activeHandlers
+                << ",\"maxNestingDepth\":" << stage.maxNestingDepth
+                << ",\"newLinuxSymbols\":" << stage.newLinuxSymbols
+                << ",\"newSbiCalls\":" << stage.newSbiCalls
+                << ",\"newMachineTimerInterrupts\":" << stage.newMachineTimerInterrupts
+                << ",\"newSupervisorTimerInterrupts\":" << stage.newSupervisorTimerInterrupts
+                << ",\"newMmioEvents\":" << stage.newMmioEvents
+                << ",\"newUartBytes\":" << stage.newUartBytes
+                << ",\"stateFingerprintAtStart\":" << JsonQuote(Hex(stage.stateFingerprintAtStart))
+                << ",\"stateFingerprintAtEnd\":" << JsonQuote(Hex(stage.stateFingerprintAtEnd))
+                << ",\"newSymbolNames\":[";
+            for (size_t symbol = 0; symbol < stage.newSymbolNames.size(); ++symbol)
+                out << (symbol == 0 ? "" : ",") << JsonQuote(stage.newSymbolNames[symbol]);
+            out << "]}" << (index + 1 == evidence.stages.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+    {
+        std::ofstream out(dir / "riscv21-linux-symbol-visits.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"uniqueFunctionEntries\": " << evidence.uniqueLinuxSymbols << ",\n"
+            << "  \"detailLimit\": 4096,\n"
+            << "  \"droppedDetails\": " << evidence.droppedSymbolVisitDetails << ",\n"
+            << "  \"visits\": [\n";
+        for (size_t index = 0; index < evidence.symbolVisits.size(); ++index) {
+            const LinuxSymbolVisit& visit = evidence.symbolVisits[index];
+            out << "    {\"symbol\":" << JsonQuote(visit.name)
+                << ",\"symbolAddress\":" << JsonQuote(Hex(visit.symbolAddress))
+                << ",\"guestPc\":" << JsonQuote(Hex(visit.guestPc))
+                << ",\"retired\":" << visit.retired
+                << ",\"returnAddress\":" << JsonQuote(Hex(visit.returnAddress))
+                << ",\"privilege\":" << JsonQuote(PrivilegeModeToString(visit.privilege))
+                << ",\"satp\":" << JsonQuote(Hex(visit.satp))
+                << ",\"sstatus\":" << JsonQuote(Hex(visit.sstatus))
+                << ",\"mstatus\":" << JsonQuote(Hex(visit.mstatus))
+                << ",\"milestoneClass\":" << JsonQuote(visit.milestoneClass)
+                << ",\"functionCompletionDemonstrated\":"
+                << (visit.functionCompletionDemonstrated ? "true" : "false")
+                << ",\"completionStatus\":" << JsonQuote(
+                    visit.functionCompletionDemonstrated ? "return_observed" : "entry_only")
+                << "}" << (index + 1 == evidence.symbolVisits.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+    if (uartObserver != nullptr) {
+        std::array<std::array<std::string, 2>, 3> retainedByOrigin;
+        std::ofstream eventsOut(dir / "riscv21-linux-uart-events.json",
+                                std::ios::out | std::ios::trunc);
+        const auto& observations = uartObserver->observations();
+        const auto& byteCounts = uartObserver->outputByteCounts();
+        const auto& originByteCounts = uartObserver->outputByteCountsByOrigin();
+        eventsOut << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"observerCapacity\": " << uartObserver->capacity() << ",\n"
+            << "  \"retainedEvents\": " << observations.size() << ",\n"
+            << "  \"droppedEvents\": " << uartObserver->droppedEvents() << ",\n"
+            << "  \"attributionFailures\": " << uartObserver->attributionFailures() << ",\n"
+            << "  \"aggregateOutputBytes\": {\"uart0\":" << byteCounts[0]
+            << ",\"uart1\":" << byteCounts[1] << "},\n"
+            << "  \"outputBytesByOrigin\": {\"opensbiBeforeHandoff\":{\"uart0\":"
+            << originByteCounts[0][0] << ",\"uart1\":" << originByteCounts[0][1]
+            << "},\"linuxSupervisor\":{\"uart0\":" << originByteCounts[1][0]
+            << ",\"uart1\":" << originByteCounts[1][1]
+            << "},\"opensbiAfterHandoff\":{\"uart0\":" << originByteCounts[2][0]
+            << ",\"uart1\":" << originByteCounts[2][1] << "}},\n  \"events\": [\n";
+        for (size_t index = 0; index < observations.size(); ++index) {
+            const auto& event = observations[index];
+            const size_t originIndex = event.origin == riscv_test::UartTxOrigin::OpenSbiBeforeLinuxHandoff
+                ? 0 : event.origin == riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff
+                    ? 1 : event.origin == riscv_test::UartTxOrigin::OpenSbiAfterLinuxHandoff ? 2 : 3;
+            if (originIndex < retainedByOrigin.size())
+                retainedByOrigin[originIndex][event.uartIndex].push_back(
+                    static_cast<char>(event.byte));
+            eventsOut << "    {\"outputSequence\":" << event.outputSequence
+                << ",\"uartIndex\":" << static_cast<unsigned>(event.uartIndex)
+                << ",\"uartOutputOffset\":" << event.uartOutputOffset
+                << ",\"byte\":" << static_cast<unsigned>(event.byte)
+                << ",\"mmioSequence\":" << event.mmioSequence
+                << ",\"guestPc\":" << JsonQuote(Hex(event.guestPc))
+                << ",\"privilege\":" << JsonQuote(PrivilegeModeToString(event.privilege))
+                << ",\"postHandoffRetirements\":" << event.postHandoffRetirements
+                << ",\"mmioAddress\":" << JsonQuote(Hex(event.mmioAddress))
+                << ",\"mmioRegisterOffset\":" << static_cast<unsigned>(event.mmioRegisterOffset)
+                << ",\"mmioSize\":" << static_cast<unsigned>(event.mmioSize)
+                << ",\"origin\":" << JsonQuote(riscv_test::UartTxOriginName(event.origin))
+                << ",\"afterLinuxHandoff\":" << (event.afterLinuxHandoff ? "true" : "false")
+                << ",\"matchedMmioEvent\":" << (event.matchedMmioEvent ? "true" : "false")
+                << ",\"matchedStep\":" << (event.matchedStep ? "true" : "false")
+                << ",\"sbiCallAssociated\":" << (event.sbiCallAssociated ? "true" : "false")
+                << ",\"sbiEventId\":";
+            if (event.sbiCallAssociated) eventsOut << event.sbiEventId;
+            else eventsOut << "null";
+            eventsOut << ",\"sbiEid\":" << JsonQuote(Hex(event.sbiEid))
+                << ",\"sbiFid\":" << JsonQuote(Hex(event.sbiFid))
+                << "}" << (index + 1 == observations.size() ? "\n" : ",\n");
+        }
+        eventsOut << "  ]\n}\n";
+
+        const auto writeUartCapture = [&](const std::string& name, const std::string& bytes) {
+            const std::vector<uint8_t> binary(bytes.begin(), bytes.end());
+            WriteBytes(dir / name, binary);
+        };
+        writeUartCapture("riscv21-opensbi-pre-handoff-uart0.bin", handoffUart0);
+        writeUartCapture("riscv21-opensbi-pre-handoff-uart1.bin", handoffUart1);
+        writeUartCapture("riscv21-opensbi-post-handoff-uart0-retained.bin", retainedByOrigin[2][0]);
+        writeUartCapture("riscv21-opensbi-post-handoff-uart1-retained.bin", retainedByOrigin[2][1]);
+        writeUartCapture("riscv21-linux-s-mode-uart0-retained.bin", retainedByOrigin[1][0]);
+        writeUartCapture("riscv21-linux-s-mode-uart1-retained.bin", retainedByOrigin[1][1]);
+        std::ofstream consoleOut(dir / "riscv21-linux-console-observation.json",
+                                 std::ios::out | std::ios::trunc);
+        consoleOut << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"capturedPostHandoffWritesComplete\": "
+            << (uartObserver->droppedEvents() == 0 ? "true" : "false") << ",\n"
+            << "  \"attributionComplete\": "
+            << (uartObserver->attributionFailures() == 0 ? "true" : "false") << ",\n"
+            << "  \"uart0PreHandoffBytes\": " << handoffUart0.size() << ",\n"
+            << "  \"uart1PreHandoffBytes\": " << handoffUart1.size() << ",\n"
+            << "  \"uart0LinuxSModeBytes\": " << originByteCounts[1][0] << ",\n"
+            << "  \"uart1LinuxSModeBytes\": " << originByteCounts[1][1] << ",\n"
+            << "  \"uart0OpenSbiPostHandoffBytes\": " << originByteCounts[2][0] << ",\n"
+            << "  \"uart1OpenSbiPostHandoffBytes\": " << originByteCounts[2][1] << ",\n"
+            << "  \"observerDroppedEvents\": " << uartObserver->droppedEvents() << ",\n"
+            << "  \"observerAttributionFailures\": " << uartObserver->attributionFailures() << ",\n"
+            << "  \"binaryCaptures\": [\"riscv21-opensbi-pre-handoff-uart0.bin\","
+            << "\"riscv21-opensbi-pre-handoff-uart1.bin\","
+            << "\"riscv21-opensbi-post-handoff-uart0-retained.bin\","
+            << "\"riscv21-opensbi-post-handoff-uart1-retained.bin\","
+            << "\"riscv21-linux-s-mode-uart0-retained.bin\","
+            << "\"riscv21-linux-s-mode-uart1-retained.bin\"]\n}\n";
+    }
+#endif
 }
 
 void WriteImageContract(const std::filesystem::path& dir,
@@ -1922,6 +2471,14 @@ void WriteFirmwareTrace(const std::filesystem::path& path,
 } // namespace
 
 int main(int argc, char** argv) {
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    if (argc == 2 && std::string(argv[1]) == "--uart-observer-smoke") {
+        TestUartTxProvenanceObserver();
+        std::cout << "RISCV-21 UART observer smoke checks=" << g_checks
+                  << " failures=" << g_failures << '\n';
+        return g_failures == 0 ? 0 : 1;
+    }
+#endif
 #if defined(RISCV_LINUX_STARTUP_CONTINUATION)
     constexpr int kExpectedArgc = 9;
     constexpr const char* kUsage = "usage: test_riscv_linux_startup_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config";
@@ -1972,6 +2529,9 @@ int main(int argc, char** argv) {
     Expect(!image.empty() && Sha256(image) == expectedImageHash &&
            expectedImageHash == "60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C",
            "authentic upstream Linux v6.12 Image matches the pinned manifest hash");
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    TestUartTxProvenanceObserver();
+#endif
 
     const ElfLayout firmwareLayout = InspectElf(firmwareElf);
     Expect(firmwareLayout.valid && firmwareLayout.type == 3 &&
@@ -2046,7 +2606,13 @@ int main(int argc, char** argv) {
            cpu.readGR(11) == boot_contract::kLinuxFdtAddress && !cpu.pagingEnabled(),
            "authentic OpenSBI begins in M-mode with a0=0, a1=FDT, Bare satp, and no host SBI provider");
 
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    riscv_test::UartTxObserver uartObserver;
+    uartObserver.reset(cpu);
+    const FirmwareRun firmwareRun = RunOpenSbiToLinux(cpu, &uartObserver);
+#else
     const FirmwareRun firmwareRun = RunOpenSbiToLinux(cpu);
+#endif
     const uint64_t handoffPc = cpu.getPC();
     const PrivilegeMode handoffPrivilege = cpu.privilege();
     const uint64_t handoffA0 = cpu.readGR(10);
@@ -2061,6 +2627,7 @@ int main(int argc, char** argv) {
     const uint64_t handoffMmioReads = cpu.mmioReadCount();
     const uint64_t handoffMmioWrites = cpu.mmioWriteCount();
     const std::string handoffUartOutput = cpu.machineUartOutput();
+    const std::string handoffUart1Output = cpu.machineUart1Output();
 #endif
     std::vector<std::string> failures;
     const bool actualPmpValid = ComparePmp(cpu, failures);
@@ -2148,7 +2715,11 @@ int main(int argc, char** argv) {
         handoffA1 == boot_contract::kLinuxFdtAddress && handoffSatp == 0;
     if (handoffStateValid) {
 #if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+        linuxRun = RunLinuxEntry(cpu, &continuation.bss, &uartObserver);
+#else
         linuxRun = RunLinuxEntry(cpu, &continuation.bss);
+#endif
 #else
         linuxRun = RunLinuxEntry(cpu);
 #endif
@@ -2213,7 +2784,57 @@ int main(int argc, char** argv) {
            mtimeAtContinuation >= handoffMtime &&
            a3AtContinuation == acceptedFrontierA3 && a4AtContinuation == acceptedFrontierA4,
            "continuation starts from the retained CPU, RAM, retirement, timer and register state");
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+    const std::vector<ElfFunctionSymbol> linuxFunctionSymbols =
+        ParseElfFunctionSymbols(vmlinux);
+    ContinueLinuxInStages(cpu, linuxRun, continuation, symbols,
+                          &uartObserver, &linuxFunctionSymbols);
+    const auto stage20 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 20000000ULL; });
+    Expect(stage20 != continuation.stages.end() &&
+           stage20->actualRetired == 20000000ULL &&
+           stage20->pc == 0xFFFFFFFF8067A5E0ULL &&
+           stage20->lastRetiredPc == 0xFFFFFFFF8067A5DCULL &&
+           stage20->privilege == PrivilegeMode::Supervisor &&
+           stage20->satp == 0x80000000000812EFULL,
+           "RISCV-20 20M boundary remains at its accepted PC, retired instruction, mode, and satp");
+    Expect(linuxRun.retired > 20000000ULL,
+           "Linux guest retires beyond the preserved 20M continuation boundary");
+    const uint64_t observedOutputBytes = uartObserver.outputByteCounts()[0] +
+        uartObserver.outputByteCounts()[1];
+    Expect(uartObserver.observations().size() + uartObserver.droppedEvents() ==
+               observedOutputBytes && uartObserver.attributionFailures() == 0,
+           "every observed UART byte is retained or counted as a bounded drop and maps to guest MMIO");
+    bool uartProvenanceValid = true;
+    for (const auto& event : uartObserver.observations()) {
+        uartProvenanceValid = uartProvenanceValid && event.matchedMmioEvent &&
+            event.matchedStep && event.mmioSize == 1 && event.mmioRegisterOffset == 0 &&
+            event.mmioAddress == (event.uartIndex == 0 ? 0x10000000ULL : 0x1000A000ULL);
+        if (event.origin == riscv_test::UartTxOrigin::OpenSbiBeforeLinuxHandoff) {
+            uartProvenanceValid = uartProvenanceValid && !event.afterLinuxHandoff &&
+                event.privilege == PrivilegeMode::Machine &&
+                event.postHandoffRetirements == 0;
+        } else if (event.origin == riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff) {
+            uartProvenanceValid = uartProvenanceValid && event.afterLinuxHandoff &&
+                event.privilege == PrivilegeMode::Supervisor &&
+                event.postHandoffRetirements > 0;
+        } else if (event.origin == riscv_test::UartTxOrigin::OpenSbiAfterLinuxHandoff) {
+            uartProvenanceValid = uartProvenanceValid && event.afterLinuxHandoff &&
+                event.privilege == PrivilegeMode::Machine &&
+                event.postHandoffRetirements > 0;
+        } else {
+            uartProvenanceValid = false;
+        }
+    }
+    Expect(uartProvenanceValid,
+           "retained RISCV-21 TX events identify their actual guest PC, privilege, handoff phase, and byte write");
+    const auto& preHandoffByteCounts = uartObserver.outputByteCountsByOrigin()[0];
+    Expect(preHandoffByteCounts[0] == handoffUartOutput.size() &&
+           preHandoffByteCounts[1] == handoffUart1Output.size(),
+           "captured OpenSBI UART0/1 prefixes equal the firmware bytes emitted before Linux MRET handoff");
+#else
     ContinueLinuxInStages(cpu, linuxRun, continuation, symbols);
+#endif
     Expect(continuation.linuxStepCalls > 100000 &&
            cpu.stepsTaken() - handoffStepCounter == continuation.linuxStepCalls &&
            cpu.instructionsRetired() - handoffRetiredCounter == linuxRun.retired &&
@@ -2255,10 +2876,13 @@ int main(int argc, char** argv) {
         Sha256(finalFdtAfterContinuation) == Sha256(finalFdtBytes);
     continuation.uartPrefixPreserved = cpu.machineUartOutput().size() >= handoffUartOutput.size() &&
         cpu.machineUartOutput().compare(0, handoffUartOutput.size(), handoffUartOutput) == 0;
+    continuation.uart1PrefixPreserved = cpu.machineUart1Output().size() >= handoffUart1Output.size() &&
+        cpu.machineUart1Output().compare(0, handoffUart1Output.size(), handoffUart1Output) == 0;
     Expect(continuation.pmpUnchanged && continuationFailures.empty(),
            "the complete effective PMP policy remains unchanged through Linux continuation");
-    Expect(continuation.fdtUnchanged && continuation.uartPrefixPreserved,
-           "OpenSBI FDT contents and existing guest UART output persist through continuation");
+    Expect(continuation.fdtUnchanged && continuation.uartPrefixPreserved &&
+           continuation.uart1PrefixPreserved,
+           "OpenSBI FDT contents and existing guest UART0/1 output persist through continuation");
     Expect(continuation.finalMtime >= handoffMtime &&
            cpu.instructionsRetired() - handoffRetiredCounter == linuxRun.retired,
            "deterministic virtual time and retirement state persist across all execution stages");
@@ -2529,7 +3153,13 @@ int main(int argc, char** argv) {
 
 #if defined(RISCV_LINUX_STARTUP_CONTINUATION)
     WriteContinuationArtifacts(artifactDir, firmware, firmwareElf, image, vmlinux, config,
-        finalFdtBytes, symbols, firmwareRun, linuxRun, continuation, cpu);
+        finalFdtBytes, symbols, firmwareRun, linuxRun, continuation, cpu,
+#if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+        &uartObserver,
+#else
+        nullptr,
+#endif
+        handoffUartOutput, handoffUart1Output);
 #endif
 
     std::cout << "OpenSBI: steps=" << firmwareRun.steps
@@ -2547,7 +3177,7 @@ int main(int argc, char** argv) {
               << "Artifacts: " << artifactDir.string() << '\n';
     if (g_failures != 0) {
 #if defined(RISCV_LINUX_STARTUP_CONTINUATION)
-        std::cerr << "RISCV-19 Linux startup continuation checks=" << g_checks
+        std::cerr << "RISCV-21 Linux startup continuation checks=" << g_checks
                   << " failures=" << g_failures << '\n';
 #else
         std::cerr << "RISCV-18 Linux entry checks=" << g_checks
@@ -2556,7 +3186,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 #if defined(RISCV_LINUX_STARTUP_CONTINUATION)
-    std::cout << "RISCV-19 Linux startup continuation checks=" << g_checks << " failures=0\n";
+    std::cout << "RISCV-21 Linux startup continuation checks=" << g_checks << " failures=0\n";
 #else
     std::cout << "RISCV-18 Linux entry checks=" << g_checks << " failures=0\n";
 #endif

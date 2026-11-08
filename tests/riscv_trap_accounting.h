@@ -10,7 +10,7 @@
 
 namespace riscv_test {
 
-constexpr size_t kTrapAccountingEventLimit = 8192;
+constexpr size_t kTrapAccountingEventLimit = 16384;
 constexpr size_t kTrapAccountingNestingLimit = 64;
 constexpr size_t kTrapAccountingHandlerPathLimit = 32;
 

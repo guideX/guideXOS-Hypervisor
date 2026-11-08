@@ -1,0 +1,248 @@
+guideXOS Hypervisor — Phase RISCV-21 Report
+Authentic Linux Initialization, UART Console Observation, and Next Frontier
+Date: 2026-11-08
+Outcome: A — authentic Linux progressed beyond the RISCV-20 boundary, emitted
+UART0 console bytes, and reached a bounded S-mode handler instruction frontier
+
+Repository and scope
+--------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV
+Starting HEAD: 6fc749391316e2bcd1e7c6aacd1ee58df0643ad3
+Starting origin/RISCV divergence: 0 ahead / 0 behind
+Starting phase marker: RISCV-20 complete; RISCV-21 selected
+
+The pre-existing untracked Testing/ directory and fixture .build/ directories
+for dual-UART, PLIC/UART, and PMP were preserved. Existing accepted artifacts
+and earlier phase evidence were not changed. New builds and evidence are under
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-{debug-build,release-build}
+and phase-riscv21-artifacts\{Debug,Release}. No IA-64 implementation source
+was changed. No QEMU was run and nothing was pushed.
+
+The requested new test target is
+test_riscv_linux_console_continuation. The existing OpenSBI test registration
+was made dependent on the OpenSBI domain test to avoid a CTest ordering race.
+The test implementation changes are confined to the RISC-V Linux/OpenSBI test
+harness, its UART observer, and trap-accounting capacity. No production CPU,
+MMU, PMP, UART, PLIC, Linux, or firmware implementation was changed.
+The first generated run-summary budget object still contained copied RISCV-20
+constants. Its metadata and the writer were corrected to state the RISCV-21
+compile-time limits (40M total, 8M M-mode, 7M M-handler, 2M S-handler, and
+16,384 trap events); the measured execution records were not changed.
+
+Pinned artifacts and machine profile
+------------------------------------
+Linux source: upstream v6.12, commit
+adc218676eef25575469234709c2d87185ca223a.
+Image SHA-256:
+60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C
+vmlinux SHA-256:
+49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093
+Configuration SHA-256:
+5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB
+
+OpenSBI v1.8.1 source commit:
+74434f255873d74e56cc50aa762d1caf24c099f8.
+fw_jump.bin SHA-256:
+CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+fw_jump.elf SHA-256:
+255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+
+The accepted single-hart RV64IMA_Zicsr S-mode/Sv39 machine contract is
+unchanged: RAM [0x80000000,0x84000000), Linux entry 0x80200000, FDT
+0x82200000, StandardPmp16 restricted supervisor domain, UART0 at
+0x10000000, UART1 at 0x1000A000, PLIC at 0x0C000000, machine-owned ACLINT,
+and 10 MHz timer. Existing Linux bootargs including
+console=ttyS0,115200 earlycon=uart8250,mmio,0x10000000 were preserved.
+OpenSBI performs authentic initialization and MRET; there is no host SBI
+provider or synthetic service injection.
+
+RISCV-20 reproduction and bounded continuation
+-----------------------------------------------
+Each configuration performs a fresh firmware boot and reproduces the
+authentic M-to-S handoff. Linux starts at PC 0x80200000 in S-mode with a0=0,
+a1=0x82200000, and satp=Bare. The 100,000-instruction frontier, all 44,149
+BSS stores, BSS zero check, setup_vm, first satp write, Sv39 alias transition,
+soc_early_init, and start_kernel were reproduced. The handoff FDT checksum is
+580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475; the
+restricted-domain PMP checks show no changes or denied events.
+
+The exact 20-million acceptance boundary was reproduced in both Debug and
+Release: 20,000,000 post-handoff retirements; 17,426,956 S-mode Linux
+instructions; 2,573,044 M-mode OpenSBI instructions; next PC
+0xffffffff8067a5e0; last retired PC 0xffffffff8067a5dc; S-mode;
+satp=0x80000000000812ef. This matches RISCV-20.
+
+The continued run evaluated total post-handoff targets of 250,000,
+1,000,000, 5,000,000, 20,000,000, 25,000,000, 30,000,000, and 40,000,000.
+The captured milestones are:
+
+Target       Actual       S-mode       M-mode       New symbols/SBI/timers
+-----------  -----------  -----------  -----------  -----------------------
+0.25M        250,000      249,175      825          129 / 3 / 0+0
+1M           1,000,000    996,736      3,264        27 / 8 / 0+0
+5M           5,000,000    4,996,736    3,264        124 / 0 / 0+0
+20M          20,000,000   17,426,956   2,573,044    1,927 / 408 / 199+199
+25M          25,000,000   22,308,081   2,691,919    27 / 250 / 125+125
+30M          30,000,000   27,189,206   2,810,794    231 / 250 / 125+125
+40M          37,098,664   34,118,592   2,980,072    4 / 356 / 178+178
+
+The final actual total is below the 40-million target because the independent
+2,000,000 S-mode handler instruction allowance (counter 2,000,001 at the
+stop boundary) was exhausted. The stop is classified
+s_mode_handler_instruction_budget, reason "bounded S-mode trap-handler
+instruction allowance exhausted". It is a safety-budget frontier, not a
+Linux architectural fault, unsupported instruction, or claim that Linux
+booted. At the stop the CPU is S-mode at PC 0xffffffff800a5cd0, last retired
+PC 0xffffffff800a5ccc, satp=0x80000000000812ef. The next instruction is
+0x8067, jalr x0, 0(x1), in pinned Linux symbol tick_program_event. One active
+S-mode handler frame remains at the bounded stop.
+
+Final accounting: 37,105,227 post-handoff step calls; 34,118,592 S-mode
+Linux retirements, comprising 32,118,591 normal S-mode instructions and
+2,000,001 S-mode handler instructions; 2,980,072 M-mode OpenSBI instructions,
+all attributed to M-mode handler execution; zero unattributed handler
+instructions. There were 6,563 non-retiring trap transitions, 6,562 handler
+entries, 6,561 matched returns, maximum nesting depth 2, and largest completed
+handler length 5,943. The bounded trap-event capacity is 16,384; 6,563 events
+were retained with none dropped. The final run recorded 1,275 successful SBI
+calls: 1,257 TIME extension calls (EID 0x54494D45) and 18 SBI Base calls
+(EID 0x10). Every call returned, all captured error values were zero, and
+each has an authentic M-mode OpenSBI entry, matched MRET, and observed S-mode
+resumption. No host SBI provider was present. The run also recorded 627
+machine timer events and 627 supervisor timer events. At the 20-million
+boundary there were 4,851 traps and 419 successful SBI Base/TIME calls,
+matching RISCV-20.
+
+Linux initialization and progress evidence
+------------------------------------------
+The vmlinux symbol observer recorded 2,469 distinct Linux symbol entries in
+these categories: architecture setup 1, console 31, initcall 2, interrupt
+controller 83, kernel functions 2,292, memory initialization 38, scheduler
+17, and timekeeping 5. Each entry includes the linked symbol, guest PC,
+post-handoff retirement count, privilege, relevant CSR state, and return or
+entry-only status.
+
+Observed S-mode entries with independent return evidence include:
+
+Symbol             Guest PC              Retired    Completion
+-----------------  --------------------  ---------  ----------------
+start_kernel       0xffffffff80800a64    153,853    entry only
+setup_arch         0xffffffff80804e1c    160,020    return observed
+mem_init           0xffffffff808078d8  9,598,204    return observed
+sched_init         0xffffffff8080b9ac 11,059,336    return observed
+timekeeping_init   0xffffffff8080e8a0 11,237,565    return observed
+time_init          0xffffffff808056a4 11,238,552    return observed
+console_init       0xffffffff8080cfdc 11,385,030    return observed
+
+Early console parsing and setup also returned: param_setup_earlycon,
+setup_earlycon, uart_parse_earlycon, earlycon_map, earlycon_init,
+early_serial8250_setup, serial8250_early_in/out, and register_console were
+observed. Later univ8250 console setup and serial port initialization paths
+were also visited. These function observations do not establish completion
+of the whole Linux boot, userspace, or every device initialization.
+
+UART TX observation and authentic Linux console output
+------------------------------------------------------
+The read-only observer correlates actual UART output-buffer growth with the
+guest MMIO write trace after each CPU step. Retained records contain global
+byte order, UART identity and offset, byte value, MMIO sequence/address/
+register/width, guest PC, privilege, post-handoff retirement count, handoff
+origin, and SBI association. Capacity is bounded at 16,384 events.
+
+Release retained 9,979 bytes, all accounted for with zero drops and zero
+attribution failures:
+
+Origin                         UART0 bytes  UART1 bytes
+-----------------------------  -----------  -----------
+OpenSBI before Linux handoff       4,349            0
+Linux S-mode after handoff         5,630            0
+OpenSBI M-mode after handoff           0            0
+
+The first Linux UART0 byte is '[' (0x5b), global output sequence 4,350,
+output offset 4,349. It came from guest PC 0xffffffff80449314 in S-mode at
+2,028,672 post-handoff retirements, inside pinned-vmlinux symbol
+early_serial8250_write, via byte write to UART0 address 0x10000000/register
+offset 0. The bytes form authentic kernel output; the
+captured prefix begins:
+
+[    0.000000] Linux version 6.12.0 (codex@linux-riscv-fixture) ...
+[    0.000000] Machine model: guideXOS RISCV-18 Linux entry profile
+[    0.000000] SBI specification v3.0 detected
+[    0.000000] SBI implementation ID=0x1 Version=0x10008
+[    0.000000] SBI TIME extension detected
+
+The Linux S-mode UART0 capture ends with the authentic line
+"[    1.455534] workingset: timestamp_bits=46 max_order=13 bucket_order=0"
+followed by CR/LF. No UART1 bytes were transmitted. No OpenSBI M-mode TX
+was attributed after Linux handoff. The SBI DBCN extension was reported by
+Linux, but these observed console bytes were direct S-mode UART MMIO writes;
+none were associated with SBI calls. Output continued through 25,875,704
+post-handoff retirements; no further TX occurred later in the run. This is
+positive evidence of earlycon/8250 console output, not a fabricated host
+message.
+
+Independent observer regression
+-------------------------------
+The standalone smoke guest writes both UARTs in M-mode and S-mode, checks
+repeated and byte-sized writes, RX behavior, exact PC/privilege/MMIO matching,
+handoff classification, observer non-mutation, reset and CPU isolation, and
+bounded retention. It passed 62 checks with zero failures in both build
+configurations. The observer's event buffer and aggregate accounting remain
+bounded; the full Linux run had no retained-event loss.
+
+Debug and Release validation
+----------------------------
+The requested focused RISC-V matrix includes the new continuation target
+(30 RISC-V suites total). The continuation target was run directly once in
+each configuration to retain its complete long-run artifacts; the other 29
+RISC-V CTest suites passed in each configuration:
+
+Debug: 29/29 CTest RISC-V suites passed; direct Linux continuation passed.
+Release: 29/29 CTest RISC-V suites passed; direct Linux continuation passed.
+EFI memory-map and IA-64 SAL CTests: 2/2 passed in each configuration.
+Direct IA-64 ACPI, interrupt-controller, and processor-interrupt-block tests:
+3/3 passed in each configuration.
+
+All requested focused build targets compiled in Debug and Release. A separate
+repository-wide Debug all-target build was attempted; unrelated existing
+test_watchpoint and test_elf_validation targets failed to link. These targets
+are outside the accepted RISC-V/EFI/SAL/direct IA-64 matrix. No IA-64
+implementation source changed.
+
+Debug and Release produce byte-identical 17-file artifact bundles, including
+all 11 valid JSON records, six UART captures, stage summaries, architectural
+counters, symbols, SBI/trap observations, and frontier evidence. The pinned
+Linux and firmware hashes were independently rechecked against their
+accepted values.
+
+Artifacts and next scope
+------------------------
+Debug evidence:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-artifacts\Debug
+Release evidence:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-artifacts\Release
+Build trees:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-debug-build
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-release-build
+
+SHA-256 (the corresponding Debug and Release files are byte-identical):
+run-summary.json:
+0E1440E462477B9ACB02D6FED407116244AA547D968BE5D4EDAAF9DA74A4DC93
+frontier.json:
+6CF6F176F079E3925C9BE3B4013DCE02A3C737B5D71330663F570C70DC202902
+uart-events.json:
+F7465239BE64664B1EBA93EA020B83A05AD0EE5B85BF65E864BDC66D68FB617C
+Linux UART0 byte capture:
+2E8B68F93E9D799025E4DB52756F79A0C7F74F838B3ABB9B9B48E68FDE4A77BD
+
+RISCV-21 establishes authentic Linux console output and continued kernel
+initialization beyond the RISCV-20 boundary. It stops at a deliberately
+bounded S-mode trap-handler instruction allowance while Linux is handling
+timer/event activity. This phase does not claim successful boot, scheduler
+readiness, or userspace. RISCV-22 should start from this exact handler
+frontier, inspect the active S-mode timer/event handler path and timer/IRQ
+acknowledgement progress, preserve UART/SBI/trap provenance, and adjust only
+the demonstrated safety budget or implement a narrowly evidenced missing
+architectural/platform behavior. Keep a fixed maximum continuation target;
+do not label the handler-budget stop a Linux fault.

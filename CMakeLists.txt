@@ -1145,6 +1145,8 @@ add_test(NAME RiscVBootContractTests
                  ${RISCV_DOMAIN_SUPERVISOR_ELF_COPY}
                  ${RISCV_DOMAIN_DTB_COPY}
                  ${CMAKE_CURRENT_BINARY_DIR}/riscv17-$<CONFIG>-opensbi-domain.trace.log)
+set_tests_properties(RiscVBootContractTests PROPERTIES
+                     DEPENDS RiscVOpenSbiDomainTests)
 
 set(RISCV_PMP_LOCKED_TRANSITION_FIXTURE_DIR
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_pmp_locked_transition)
@@ -1239,6 +1241,23 @@ add_test(NAME RiscVLinuxStartupContinuationTests
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH})
 
+add_executable(test_riscv_linux_console_continuation
+    tests/test_riscv_linux_image_entry.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_console_continuation
+    PRIVATE RISCV_LINUX_STARTUP_CONTINUATION=1 RISCV_LINUX_CONSOLE_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_console_continuation PRIVATE bcrypt)
+add_test(NAME RiscVLinuxConsoleContinuationTests
+         COMMAND test_riscv_linux_console_continuation
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_DTB_COPY}
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv21-artifacts/$<CONFIG>"
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_CONFIG_PATH})
+
 add_executable(test_riscv_linux_trap_continuation
     tests/test_riscv_linux_trap_continuation.cpp
     src/riscv/riscv_cpu.cpp
@@ -1251,6 +1270,7 @@ add_test(NAME RiscVLinuxTrapContinuationTests
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_image_entry
                                 test_riscv_linux_startup_continuation
+                                test_riscv_linux_console_continuation
                                 test_riscv_linux_trap_continuation)
     if(MSVC)
         target_compile_options(${riscv18_target} PRIVATE /W4)

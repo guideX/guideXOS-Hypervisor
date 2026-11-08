@@ -769,6 +769,33 @@ Validation and next target:
   `phase-riscv-19-report.txt` for hashes, exact counters, trap/MMU evidence,
   validation results, and the next frontier recommendation.
 
+--- Phase RISCV-21: authentic Linux console and later initialization ---
+
+- The pinned Linux v6.12 Image and unchanged OpenSBI v1.8.1 reproduce the
+  authentic M-mode-to-S-mode handoff and RISCV-20's exact 20-million
+  post-handoff boundary. Linux continues to 37,098,664 retirements toward the
+  40-million maximum. The bounded S-mode trap-handler instruction allowance
+  is exhausted first; the final PC is 0xffffffff800a5cd0 in `tick_program_event`,
+  S-mode, with Sv39 satp=0x80000000000812ef. This is a safety-budget frontier,
+  not an architectural or Linux boot failure.
+- Pinned-vmlinux observations include returned `setup_arch`, `mem_init`,
+  `sched_init`, `timekeeping_init`, `time_init`, `console_init`, and early
+  8250/earlycon paths. `start_kernel` entry is recorded separately from its
+  completion. The run does not claim full Linux boot or userspace.
+- A bounded read-only observer matched UART TX-buffer growth to actual guest
+  MMIO writes and recorded byte order, UART, PC, privilege, handoff phase, and
+  retirement count. Linux emitted 5,630 bytes through UART0 in S-mode after
+  handoff; the first byte is `[` at 2,028,672 retirements and PC
+  0xffffffff80449314. UART1 emitted zero bytes. OpenSBI emitted 4,349 UART0
+  bytes before handoff; no post-handoff M-mode output was recorded. The
+  observer retained 9,979 events with zero drops or attribution failures.
+- The final run recorded 1,275 successful SBI calls, 627 machine timer
+  events, and 627 supervisor timer events. Trap accounting retained 6,563
+  events, with maximum nesting depth 2 and no dropped event details. The
+  synthetic observer guest passed 62 checks. See `phase-riscv-21-report.txt`
+  for the stage table, exact provenance hashes, function observations, UART
+  evidence, Debug/Release matrix, artifact directories, and RISCV-22 scope.
+
 --- Phase RISCV-20: trap accounting and 20-million continuation ---
 
 - The pinned Linux v6.12 Image and OpenSBI v1.8.1 artifacts remain unchanged.
