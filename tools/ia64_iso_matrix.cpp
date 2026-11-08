@@ -1216,6 +1216,7 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 std::ostringstream probeLine;
                 probeLine << "[IA64-PROBE] ip=0x" << std::hex << probe
                           << " slot=" << std::dec << slot
+                          << " cycle=" << globalCycle
                           << " itc=0x" << std::hex << cpu.GetAR(44);
                 for (size_t reg = 1; reg < 64; ++reg) {
                     probeLine << " r" << std::dec << reg << "=0x" << std::hex
@@ -1236,6 +1237,7 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                 std::ostringstream probeLine;
                 probeLine << "[IA64-PROBE-ALL] ip=0x" << std::hex << probe
                           << " slot=" << std::dec << slot
+                          << " cycle=" << globalCycle
                           << " itc=0x" << std::hex << cpu.GetAR(44);
                 uint64_t predicateMask = 0;
                 for (size_t predicate = 0; predicate < 64; ++predicate) {
