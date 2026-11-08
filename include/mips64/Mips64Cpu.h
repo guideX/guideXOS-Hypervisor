@@ -441,6 +441,8 @@ enum class Mips64Op : uint8_t {
     JrHb, JalrHb,
     // MIPS64 Release 2 doubleword extract bit field.
     Dext,
+    // MIPS64 Release 2 doubleword variable shift-left, appended for ABI stability.
+    Dsllv,
 };
 
 struct Mips64ReservationState {

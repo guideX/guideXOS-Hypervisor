@@ -1237,3 +1237,19 @@ else()
     target_compile_options(test_mips64_dext PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64DextTests COMMAND test_mips64_dext)
+
+# MIPS64-21 architectural qualification for Release 2 DSLLV and the
+# authenticated OpenWrt branch-delay-slot continuation.
+add_executable(test_mips64_dsllv
+    tests/test_mips64_dsllv.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_dsllv PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_dsllv PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_dsllv PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64DsllvTests COMMAND test_mips64_dsllv)

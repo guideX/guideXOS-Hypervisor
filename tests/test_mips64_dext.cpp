@@ -207,17 +207,19 @@ void testNeighboringSpecial3FunctionsStayUnsupported() {
     CHECK(reserved.fault == Mips64Fault::ReservedInstruction);
 }
 
-void testAuthenticNextSpecialInstructionRemainsUnsupported() {
+void testAuthenticNextSpecialInstructionDecodesAsDsllv() {
     constexpr uint32_t authenticNextWord = 0x00832014U; // dsllv $4,$3,$4
     const Mips64Decoded decoded = decodeInstruction(authenticNextWord);
-    CHECK(!decoded.valid);
-    CHECK(decoded.fault == Mips64Fault::UnsupportedInstruction);
+    CHECK(decoded.valid);
+    CHECK(decoded.op == Mips64Op::Dsllv);
+    CHECK(decoded.fault == Mips64Fault::None);
     CHECK(decoded.raw == authenticNextWord);
     CHECK(decoded.rs == 4);
     CHECK(decoded.rt == 3);
     CHECK(decoded.rd == 4);
     CHECK(decoded.sa == 0);
     CHECK((authenticNextWord & 0x3FU) == 0x14U);
+    CHECK(Mips64Cpu{}.disassemble(decoded) == "dsllv $4, $3, $4");
 }
 
 void testDefinedOperandBoundariesAndIndependentResults() {
@@ -423,7 +425,7 @@ void testProductionVmSnapshotReplayWithActiveReservation() {
 int main() {
     testAuthenticWordDecodeAndDisassembly();
     testNeighboringSpecial3FunctionsStayUnsupported();
-    testAuthenticNextSpecialInstructionRemainsUnsupported();
+    testAuthenticNextSpecialInstructionDecodesAsDsllv();
     testDefinedOperandBoundariesAndIndependentResults();
     testDextInBranchDelaySlot();
     testCpuSerializationReplay();
