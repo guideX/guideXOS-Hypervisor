@@ -859,10 +859,13 @@ struct AuthenticReplay {
     bool stoppedOnUnsupported = false;
     bool extswFetched = false;
     bool extswRetired = false;
+    bool rldicFetched = false;
+    bool rldicRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
     uint64_t totalRetiredBeforeExtsw = 0;
+    uint64_t rldicPostRetired = 0;
     uint64_t lastSuccessfulNip = 0;
     uint64_t pacaBacking = 0;
     uint64_t pacaBytesHash = 0;
@@ -874,6 +877,7 @@ struct AuthenticReplay {
     bool sprg1ReadbackCorrect = true;
     uint32_t rawWord = 0;
     uint32_t extswRawWord = 0;
+    uint32_t rldicRawWord = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
     uint64_t stopBackingAddress = 0;
@@ -883,6 +887,37 @@ struct AuthenticReplay {
     uint16_t extswLPID = 0;
     uint64_t extswRamBefore = 0;
     uint64_t extswRamAfter = 0;
+    uint64_t rldicNip = 0;
+    uint64_t rldicGuestRealAddress = 0;
+    uint64_t rldicFetchBackingAddress = 0;
+    uint64_t rldicTagLoadEffectiveAddress = 0;
+    uint64_t rldicTagLoadGuestRealAddress = 0;
+    uint64_t rldicTagLoadBackingAddress = 0;
+    uint64_t rldicJumpTableEffectiveAddress = 0;
+    uint64_t rldicJumpTableGuestRealAddress = 0;
+    uint64_t rldicJumpTableBackingAddress = 0;
+    uint64_t rldicCyclesBefore = 0;
+    uint64_t rldicCyclesAfter = 0;
+    uint64_t rldicTimebaseBefore = 0;
+    uint64_t rldicTimebaseAfter = 0;
+    uint16_t rldicLPID = 0;
+    bool rldicFetchTranslated = false;
+    bool rldicFetchExecuteAllowed = false;
+    bool rldicTagLoadTranslated = false;
+    bool rldicJumpTableTranslated = false;
+    uint32_t rldicTagLoadValue = 0;
+    uint32_t rldicJumpTableRaw = 0;
+    int32_t rldicJumpTableOffset = 0;
+    uint64_t rldicRamBefore = 0;
+    uint64_t rldicRamAfter = 0;
+    uint64_t fdtBase = 0;
+    uint64_t fdtSize = 0;
+    uint64_t fdtBackingAddress = 0;
+    uint64_t fdtBackingHashBeforeRldic = 0;
+    uint64_t fdtBackingHashAfterRldic = 0;
+    bool fdtBackingMapped = false;
+    bool fdtBackingMatches = false;
+    bool fdtBackingPreservedByRldic = false;
     uint64_t msrAtFrontier = 0;
     uint32_t crAtFrontier = 0;
     uint32_t xerAtFrontier = 0;
@@ -890,16 +925,22 @@ struct AuthenticReplay {
     uint64_t initialSprg1 = 0;
     uint64_t finalSprg1 = 0;
     uint64_t extswContextFollowing = 0;
+    uint64_t rldicContextFollowing = 0;
     std::string decode;
     std::string extswDecode;
+    std::string rldicDecode;
     std::string stopClass;
     std::string stopDisassembly;
     std::vector<std::string> extswContext;
+    std::vector<std::string> rldicContext;
+    std::vector<std::string> rldicContinuationTrace;
     std::string error;
     PPC64RegisterView before{};
     PPC64RegisterView after{};
     PPC64RegisterView extswBefore{};
     PPC64RegisterView extswAfter{};
+    PPC64RegisterView rldicBefore{};
+    PPC64RegisterView rldicAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -915,7 +956,9 @@ void addDigest(uint64_t& digest, uint64_t value) {
 AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  const std::vector<uint8_t>& referenceFdt,
                                  const LinuxElfEvidence& elfEvidence,
-                                 bool stopAtExtsw = true) {
+                                 bool stopAtExtsw = true,
+                                 bool stopAtRldic = false,
+                                 uint64_t rldicContinuationBudget = 0) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -944,6 +987,28 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
     if (!result.fdtMatches) {
         result.error = "loaded FDT differs from the authenticated reference FDT";
         return result;
+    }
+    const PPC64PlatformSnapshot platformSnapshot = vm.getPPC64PlatformSnapshot();
+    result.fdtBase = platformSnapshot.memoryLayout.fdtBase;
+    result.fdtSize = platformSnapshot.memoryLayout.fdtSize;
+    const auto fdtTranslation = PPC64PartitionMMU::translateGuestReal(
+        vm.getMemory(), *partition, result.fdtBase & kGuestRealMask,
+        PPC64TranslationAccess::READ);
+    result.fdtBackingMapped = fdtTranslation.success &&
+        fdtTranslation.readAllowed &&
+        fdtTranslation.hostBackingAddress <= kLinuxRamSize &&
+        referenceFdt.size() <= kLinuxRamSize - fdtTranslation.hostBackingAddress;
+    std::vector<uint8_t> fdtBackingBefore;
+    if (result.fdtBackingMapped) {
+        result.fdtBackingAddress = fdtTranslation.hostBackingAddress;
+        fdtBackingBefore.resize(referenceFdt.size());
+        memory->ReadGuestReal(result.fdtBackingAddress, fdtBackingBefore.data(),
+                              fdtBackingBefore.size());
+        result.fdtBackingMatches = fdtBackingBefore == referenceFdt;
+        for (uint8_t byte : fdtBackingBefore) {
+            result.fdtBackingHashBeforeRldic ^= byte;
+            result.fdtBackingHashBeforeRldic *= 1099511628211ULL;
+        }
     }
 
     while (cpu->getNIP() != elfEvidence.sprg1Nip &&
@@ -1082,9 +1147,18 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
     const std::array<uint64_t, 5> stageBudgets{1U, 128U, 1024U, 16384U,
                                                kLinuxBudget};
     std::deque<std::string> lastInstructions;
+    std::deque<std::array<uint64_t, 32>> lastGprs;
     bool stopped = false;
-    for (uint64_t budget : stageBudgets) {
-        while (!stopped && result.continuationRetired < budget) {
+    std::vector<uint64_t> activeStageBudgets(stageBudgets.begin(),
+                                             stageBudgets.end());
+    if (rldicContinuationBudget != 0U) {
+        activeStageBudgets = {1U, 128U, 1024U, 16384U,
+                              rldicContinuationBudget};
+    }
+    for (uint64_t budget : activeStageBudgets) {
+        while (!stopped && (rldicContinuationBudget != 0U
+            ? (!result.rldicRetired || result.rldicPostRetired < budget)
+            : result.continuationRetired < budget)) {
             const PPC64RegisterView before = vm.getPPC64RegisterView();
             cpu->clearFault();
             const ISADecodeResult next = cpu->decode(vm.getMemory());
@@ -1107,6 +1181,104 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             const auto& following =
                 *static_cast<const DecodedInstruction*>(next.internalData);
+            if (result.rldicRetired &&
+                following.kind == DecodedKind::LWAX &&
+                following.rt == 9U && following.ra == 8U &&
+                following.rb == 9U &&
+                result.rldicJumpTableEffectiveAddress == 0U) {
+                result.rldicJumpTableEffectiveAddress =
+                    before.gpr[following.ra] + before.gpr[following.rb];
+                result.rldicJumpTableGuestRealAddress =
+                    result.rldicJumpTableEffectiveAddress & kGuestRealMask;
+                const auto tableTranslation =
+                    PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition,
+                        result.rldicJumpTableGuestRealAddress,
+                        PPC64TranslationAccess::READ);
+                result.rldicJumpTableTranslated = tableTranslation.success &&
+                    tableTranslation.readAllowed &&
+                    tableTranslation.hostBackingAddress <= kLinuxRamSize - 4U;
+                if (result.rldicJumpTableTranslated) {
+                    result.rldicJumpTableBackingAddress =
+                        tableTranslation.hostBackingAddress;
+                    std::array<uint8_t, 4> tableBytes{};
+                    memory->ReadGuestReal(result.rldicJumpTableBackingAddress,
+                                          tableBytes.data(), tableBytes.size());
+                    result.rldicJumpTableRaw = readBE32(tableBytes.data());
+                    result.rldicJumpTableOffset =
+                        static_cast<int32_t>(result.rldicJumpTableRaw);
+                }
+            }
+            if (following.kind == DecodedKind::RLDIC &&
+                !result.rldicFetched) {
+                result.rldicFetched = true;
+                result.rldicNip = before.nip;
+                result.rldicRawWord = following.raw;
+                result.rldicDecode = next.disassembly;
+                result.rldicBefore = before;
+                result.rldicLPID = cpu->getActiveLPID();
+                result.rldicGuestRealAddress = before.nip & kGuestRealMask;
+                const auto rldicFetch = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, result.rldicGuestRealAddress,
+                    PPC64TranslationAccess::FETCH);
+                result.rldicFetchTranslated = rldicFetch.success;
+                result.rldicFetchExecuteAllowed = rldicFetch.executeAllowed;
+                result.rldicFetchBackingAddress =
+                    rldicFetch.hostBackingAddress;
+                result.rldicTagLoadEffectiveAddress = before.gpr[3];
+                result.rldicTagLoadGuestRealAddress =
+                    before.gpr[3] & kGuestRealMask;
+                const auto tagTranslation =
+                    PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition,
+                        result.rldicTagLoadGuestRealAddress,
+                        PPC64TranslationAccess::READ);
+                result.rldicTagLoadTranslated = tagTranslation.success &&
+                    tagTranslation.readAllowed &&
+                    tagTranslation.hostBackingAddress <= kLinuxRamSize - 4U;
+                if (result.rldicTagLoadTranslated) {
+                    result.rldicTagLoadBackingAddress =
+                        tagTranslation.hostBackingAddress;
+                    std::array<uint8_t, 4> tagBytes{};
+                    memory->ReadGuestReal(result.rldicTagLoadBackingAddress,
+                                          tagBytes.data(), tagBytes.size());
+                    result.rldicTagLoadValue = readBE32(tagBytes.data());
+                }
+                result.rldicCyclesBefore = vm.getCyclesExecuted();
+                result.rldicTimebaseBefore = vm.getPPC64Timebase();
+                result.rldicRamBefore = fingerprintRam(*memory);
+                const size_t contextStart = lastInstructions.size() > 16U
+                    ? lastInstructions.size() - 16U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                    << hex(lastGprs[index][reg])
+                                    << (reg + 1U == lastGprs[index].size()
+                                        ? "" : ",");
+                        }
+                    }
+                    result.rldicContext.push_back(context.str());
+                }
+                if (stopAtRldic) {
+                    result.stopClass = "phase34-rldic-frontier";
+                    result.stopNip = before.nip;
+                    result.stopWord = following.raw;
+                    result.stopDisassembly = next.disassembly;
+                    const uint64_t gra = before.nip & kGuestRealMask;
+                    const auto translation = PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition, gra,
+                        PPC64TranslationAccess::FETCH);
+                    result.stopFetchTranslated = translation.success;
+                    result.stopFetchExecuteAllowed = translation.executeAllowed;
+                    result.stopBackingAddress = translation.hostBackingAddress;
+                    stopped = true;
+                    break;
+                }
+            }
             if (following.kind == DecodedKind::MFSPR && following.sprn == SPR_SPRG1) {
                 ++result.sprg1Reads;
             }
@@ -1161,12 +1333,37 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             ++result.continuationRetired;
             result.lastSuccessfulNip = before.nip;
+            if (result.rldicRetired) {
+                ++result.rldicPostRetired;
+            }
             if (following.kind == DecodedKind::EXTSW &&
                 result.extswFetched && before.nip == result.extswNip &&
                 !result.extswRetired) {
                 result.extswAfter = after;
                 result.extswRetired = after.nip == before.nip + 4U;
                 result.extswRamAfter = fingerprintRam(*memory);
+            }
+            if (following.kind == DecodedKind::RLDIC &&
+                result.rldicFetched && before.nip == result.rldicNip &&
+                !result.rldicRetired) {
+                result.rldicAfter = after;
+                result.rldicRetired = after.nip == before.nip + 4U;
+                result.rldicCyclesAfter = vm.getCyclesExecuted();
+                result.rldicTimebaseAfter = vm.getPPC64Timebase();
+                result.rldicRamAfter = fingerprintRam(*memory);
+                if (result.fdtBackingMapped) {
+                    std::vector<uint8_t> fdtBackingAfter(referenceFdt.size());
+                    memory->ReadGuestReal(result.fdtBackingAddress,
+                                          fdtBackingAfter.data(),
+                                          fdtBackingAfter.size());
+                    result.fdtBackingPreservedByRldic =
+                        fdtBackingAfter == fdtBackingBefore &&
+                        fdtBackingAfter == referenceFdt;
+                    for (uint8_t byte : fdtBackingAfter) {
+                        result.fdtBackingHashAfterRldic ^= byte;
+                        result.fdtBackingHashAfterRldic *= 1099511628211ULL;
+                    }
+                }
             }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
                 following.kind == DecodedKind::BCLR && after.nip == before.lr) {
@@ -1188,14 +1385,31 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                  << " r4=" << hex(before.gpr[4])
                  << " r5=" << hex(before.gpr[5])
                  << " r31=" << hex(before.gpr[31]);
+            if (result.rldicRetired && before.nip != result.rldicNip) {
+                result.rldicContinuationTrace.push_back(line.str());
+            }
             if (result.extswFetched && result.extswContextFollowing < 16U) {
                 result.extswContext.push_back(line.str());
                 if (before.nip != result.extswNip) {
                     ++result.extswContextFollowing;
                 }
             }
+            if (result.rldicFetched && result.rldicContextFollowing < 16U) {
+                std::ostringstream context;
+                context << line.str() << " gprs=";
+                for (size_t reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(before.gpr[reg])
+                            << (reg + 1U == 32U ? "" : ",");
+                }
+                result.rldicContext.push_back(context.str());
+                ++result.rldicContextFollowing;
+            }
             if (lastInstructions.size() == 64U) lastInstructions.pop_front();
+            if (lastGprs.size() == 64U) lastGprs.pop_front();
             lastInstructions.push_back(line.str());
+            std::array<uint64_t, 32> gprSnapshot{};
+            std::copy_n(before.gpr, gprSnapshot.size(), gprSnapshot.begin());
+            lastGprs.push_back(gprSnapshot);
             if (result.continuationRetired <= 128U ||
                 (result.continuationRetired % 1024U) == 0U) {
                 trace << line.str() << "\n";
@@ -1238,6 +1452,16 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         trace << "authentic_extsw_dataflow_context_begin\n";
         for (const auto& line : result.extswContext) trace << line << "\n";
         trace << "authentic_extsw_dataflow_context_end\n";
+    }
+    if (result.rldicFetched) {
+        trace << "authentic_rldic_dataflow_context_begin\n";
+        for (const auto& line : result.rldicContext) trace << line << "\n";
+        trace << "authentic_rldic_dataflow_context_end\n";
+        trace << "authentic_rldic_continuation_trace_begin\n";
+        for (const auto& line : result.rldicContinuationTrace) {
+            trace << line << "\n";
+        }
+        trace << "authentic_rldic_continuation_trace_end\n";
     }
     result.trace = trace.str();
     return result;

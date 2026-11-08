@@ -390,7 +390,15 @@ void testDecoder() {
                                              : DecodedKind::RLDICR));
         CHECK(other.kind != DecodedKind::RLDIMI);
     }
-    for (unsigned operation : {2U, 4U, 5U, 6U, 7U}) {
+    const uint32_t rldicWord = (30U << 26U) | (11U << 21U) |
+        (10U << 16U) | (7U << 11U) | (5U << 6U) | (2U << 2U);
+    const auto rldic = PPC64ISAPlugin::decodeWord(rldicWord);
+    CHECK(rldic.supported && rldic.kind == DecodedKind::RLDIC &&
+          rldic.rt == 11U && rldic.ra == 10U && rldic.sh == 7U &&
+          rldic.mb == 5U && !rldic.rc &&
+          PPC64ISAPlugin::disassembleDecoded(rldic, 0) ==
+              "rldic r10,r11,7,5");
+    for (unsigned operation : {4U, 5U, 6U, 7U}) {
         const uint32_t reservedOrOutOfScope = (30U << 26U) |
             (11U << 21U) | (10U << 16U) | (operation << 2U);
         const auto other = PPC64ISAPlugin::decodeWord(reservedOrOutOfScope);

@@ -439,7 +439,10 @@ void testDecoder() {
         unsupported[operation] = (30U << 26) | (4U << 21) | (5U << 16) |
                                 (6U << 11) | (7U << 6) | (operation << 2);
         const auto decoded = PPC64ISAPlugin::decodeWord(unsupported[operation]);
-        if (operation == 3) {
+        if (operation == 2) {
+            CHECK(decoded.kind == DecodedKind::RLDIC && decoded.supported &&
+                  decoded.sh == 6 && decoded.mb == 7);
+        } else if (operation == 3) {
             CHECK(decoded.kind == DecodedKind::RLDIMI && decoded.supported &&
                   decoded.sh == 6 && decoded.mb == 7);
         } else {

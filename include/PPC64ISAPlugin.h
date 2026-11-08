@@ -440,6 +440,7 @@ enum class DecodedKind {
     RLWINM,     // rlwinm[.] (M-form, primary opcode 21)
     RLDICL,     // rldicl[.] (MD-form, primary opcode 30, MD XO 0)
     RLDICR,     // rldicr[.] (MD-form, primary opcode 30, MD XO 1)
+    RLDIC,      // rldic[.] (MD-form, primary opcode 30, MD XO 2)
     RLDIMI,     // rldimi[.] (MD-form, primary opcode 30, MD XO 3)
     CMP,        // cmp        (X-form, XO 0; signed, L selects 32/64-bit)
     CMPL,       // cmpl       (X-form, XO 32; unsigned, L selects 32/64-bit)

@@ -1357,6 +1357,27 @@ endif()
 add_test(NAME PPC64Phase34Tests COMMAND test_ppc64_phase34)
 set_tests_properties(PPC64Phase34Tests PROPERTIES TIMEOUT 1800)
 
+# PPC64 RLDIC semantics, exhaustive MD-immediate qualification, and
+# authenticated Linux FDT-parser continuation.
+add_executable(test_ppc64_phase35
+    tests/test_ppc64_phase35.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase35 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase35 PRIVATE
+    PPC64_PHASE33_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase35 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase35 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase35Tests COMMAND test_ppc64_phase35)
+set_tests_properties(PPC64Phase35Tests PROPERTIES TIMEOUT 1800)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

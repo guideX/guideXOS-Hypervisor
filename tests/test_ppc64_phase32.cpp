@@ -1469,16 +1469,16 @@ void testAuthenticLinux() {
           second.postSprg1.cr == second.preSprg1.cr &&
           second.postSprg1.xer == second.preSprg1.xer &&
           second.postSprg1.msr == second.preSprg1.msr);
-    CHECK(first.totalRetired == 2'651'354ULL &&
+    CHECK(first.totalRetired == 2'652'206ULL &&
           second.totalRetired == first.totalRetired);
     CHECK(first.totalRetired == second.totalRetired);
     CHECK(first.retiredAfterTdi == second.retiredAfterTdi);
     CHECK(first.stopClass == second.stopClass);
     CHECK(first.final.nip != kSubfeNip && second.final.nip == first.final.nip);
-    CHECK(first.retiredAfterTdi == 10'295ULL);
+    CHECK(first.retiredAfterTdi == 11'147ULL);
     CHECK(first.stopClass == "unsupported-or-invalid-instruction");
-    CHECK(first.final.nip == 0xC00000000138A414ULL);
-    CHECK(first.stopWord == 0x7CA507B4U);
+    CHECK(first.final.nip == 0xC000000000170424ULL);
+    CHECK(first.stopWord == 0x7C001A2CU);
     CHECK(first.stopDisassembly == "<unsupported ppc64 opcode 31>");
     CHECK(first.continuationTrace.find(
         "nip=0xc000000001eaa5c0 raw=0x0b090000 instruction=tdi 24,r9,0 retired=1 next=0xc000000001eaa5c4") !=

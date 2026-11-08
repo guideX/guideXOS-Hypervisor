@@ -1477,6 +1477,16 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                                                 (((word >> 5) & 1U) << 5));
                 instr.rc = (word & 1U) != 0;
                 instr.supported = true;
+            } else if (mdOperation == 2U) {  // rldic
+                instr.kind = DecodedKind::RLDIC;
+                instr.rt = static_cast<uint8_t>((word >> 21) & 0x1FU); // RS
+                instr.ra = static_cast<uint8_t>((word >> 16) & 0x1FU); // RA
+                instr.sh = static_cast<uint8_t>(((word >> 11) & 0x1FU) |
+                                                (((word >> 1) & 1U) << 5));
+                instr.mb = static_cast<uint8_t>(((word >> 6) & 0x1FU) |
+                                                (((word >> 5) & 1U) << 5));
+                instr.rc = (word & 1U) != 0;
+                instr.supported = true;
             } else if (mdOperation == 3U) {  // rldimi
                 instr.kind = DecodedKind::RLDIMI;
                 instr.rt = static_cast<uint8_t>((word >> 21) & 0x1FU); // RS
@@ -2002,6 +2012,13 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (instr.rc) {
                 out << ".";
             }
+            break;
+        case DecodedKind::RLDIC:
+            out << "rldic" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt)
+                << "," << static_cast<unsigned>(instr.sh)
+                << "," << static_cast<unsigned>(instr.mb);
             break;
         case DecodedKind::RLDICL:
             out << "rldicl" << (instr.rc ? "." : "")
@@ -3737,6 +3754,21 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t source = state_.gpr[instr.rt];
             const uint64_t result = rotateLeft64(source, instr.sh) &
                                     maskPowerBits(instr.mb, 63U);
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::RLDIC: {
+            // RLDIC clears every destination bit outside MASK(MB, 63-SH).
+            // Read RS before writing RA so the aliased form uses the original
+            // 64-bit source, just as the distinct-register form does.
+            const uint64_t source = state_.gpr[instr.rt];
+            const unsigned maskEnd = 63U - static_cast<unsigned>(instr.sh);
+            const uint64_t result = rotateLeft64(source, instr.sh) &
+                                    maskPowerBits(instr.mb, maskEnd);
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);

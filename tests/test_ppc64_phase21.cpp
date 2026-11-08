@@ -255,7 +255,7 @@ void testRecordFormAndXerPreservation() {
 
 void testDecodeIsolation() {
     std::puts("[phase21-md-mds-isolation]");
-    // Phase 25 now assigns operation 0 to RLDICL; RLDICR remains operation 1.
+    // RLDICL, RLDICR, RLDIC, and RLDIMI have distinct MD operation values.
     const auto rldicl = PPC64ISAPlugin::decodeWord(
         encodeRldicr(3, 4, 5, 6, false, 0));
     CHECK(rldicl.kind == DecodedKind::RLDICL);
@@ -264,7 +264,10 @@ void testDecodeIsolation() {
                               uint8_t{5}, uint8_t{6}, uint8_t{7}}) {
         const auto decoded = PPC64ISAPlugin::decodeWord(
             encodeRldicr(3, 4, 5, 6, false, operation));
-        if (operation == 3) {
+        if (operation == 2) {
+            CHECK(decoded.kind == DecodedKind::RLDIC);
+            CHECK(decoded.supported && decoded.sh == 5 && decoded.mb == 6);
+        } else if (operation == 3) {
             CHECK(decoded.kind == DecodedKind::RLDIMI);
             CHECK(decoded.supported && decoded.sh == 5 && decoded.mb == 6);
         } else {

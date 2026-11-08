@@ -843,13 +843,15 @@ void testAuthenticLinux() {
     CHECK(first.totalRetired == second.totalRetired);
     CHECK(first.retiredAfterTdi == second.retiredAfterTdi);
     CHECK(first.stopClass == second.stopClass);
-    CHECK(first.stopWord == 0x7C7143A6U && second.stopWord == first.stopWord);
-    CHECK(first.stopDisassembly == "mtspr 273,r3 ; unsupported SPR" &&
+    CHECK(first.stopWord == 0x7C001A2CU && second.stopWord == first.stopWord);
+    CHECK(first.stopDisassembly == "<unsupported ppc64 opcode 31>" &&
           second.stopDisassembly == first.stopDisassembly);
-    CHECK(first.retiredAfterTdi == 11U &&
+    // Current PPC64 sources include the later SPRG1, EXTSW, and RLDIC
+    // implementations, so this entry replay reaches the new opcode-31 frontier.
+    CHECK(first.retiredAfterTdi == 11'147U &&
           second.retiredAfterTdi == first.retiredAfterTdi);
-    CHECK(first.totalRetired == 2'641'070ULL);
-    CHECK(first.final.nip == 0xC000000000034D48ULL &&
+    CHECK(first.totalRetired == 2'652'206ULL);
+    CHECK(first.final.nip == 0xC000000000170424ULL &&
           second.final.nip == first.final.nip);
     CHECK(sameState(first.preTdi, second.preTdi));
     CHECK(sameState(first.postTdi, second.postTdi));

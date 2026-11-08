@@ -8,6 +8,8 @@ namespace {
 
 constexpr uint32_t kExtswLinuxWord = 0x7CA507B4U;
 constexpr uint64_t kExtswLinuxNip = 0xC00000000138A414ULL;
+constexpr uint64_t kRldicLinuxNip = 0xC000000001388490ULL;
+constexpr uint32_t kRldicLinuxWord = 0x7BA91788U;
 constexpr uint32_t kExtswReservedMask = 0x0000F800U;
 
 uint32_t encodeExtsw(uint8_t ra, uint8_t rs, bool record = false,
@@ -398,8 +400,10 @@ void testAuthenticLinuxExtsw() {
           std::string::npos);
 
     if (kernel.empty() || fdt.empty()) return;
-    AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence, false);
-    AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence, false);
+    AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
+                                               false, true);
+    AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
+                                                false, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -445,6 +449,20 @@ void testAuthenticLinuxExtsw() {
     CHECK(first.extswRamBefore == first.extswRamAfter &&
           second.extswRamBefore == second.extswRamAfter);
     CHECK(first.lpidAtFrontier == 1U && second.lpidAtFrontier == 1U);
+    CHECK(first.rldicFetched && second.rldicFetched);
+    CHECK(!first.rldicRetired && !second.rldicRetired);
+    CHECK(first.rldicNip == kRldicLinuxNip &&
+          second.rldicNip == first.rldicNip);
+    CHECK(first.rldicRawWord == kRldicLinuxWord &&
+          second.rldicRawWord == first.rldicRawWord);
+    CHECK(first.rldicDecode == "rldic r9,r29,2,30" &&
+          second.rldicDecode == first.rldicDecode);
+    CHECK(first.rldicLPID == 1U && second.rldicLPID == first.rldicLPID);
+    CHECK(first.rldicBefore.gpr[29] == second.rldicBefore.gpr[29]);
+    CHECK(first.rldicBefore.gpr[9] == second.rldicBefore.gpr[9]);
+    CHECK(first.stopNip == kRldicLinuxNip &&
+          first.stopWord == kRldicLinuxWord &&
+          first.stopClass == "phase34-rldic-frontier");
     CHECK(first.continuationRetired > 10'284ULL &&
           second.continuationRetired == first.continuationRetired);
     CHECK(first.totalRetired == second.totalRetired);
