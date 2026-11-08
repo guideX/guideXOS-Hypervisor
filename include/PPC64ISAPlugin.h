@@ -252,6 +252,7 @@ constexpr uint16_t XO_XOR = 316;   // no OE form
 constexpr uint16_t XO_CMP = 0;     // Rc must be 0
 constexpr uint16_t XO_CMPL = 32;   // Rc must be 0
 constexpr uint16_t XO_EXTSW = 986; // extend sign word, Rc selects CR0 update
+constexpr uint16_t XO_SLD = 27;    // shift left doubleword, 64-bit facility
 
 // X-form/XFX 10-bit combined extended opcode ((word >> 1) & 0x3FF).
 constexpr uint16_t XO_MFSPR = 339;
@@ -492,6 +493,7 @@ enum class DecodedKind {
     STWCX,      // stwcx. (X-form, opcode 31 XO 150, Rc=1 required)
     STDCX,      // stdcx. (X-form, opcode 31 XO 214, Rc=1 required)
     DCBT,       // dcbt (X-form, opcode 31 XO 278; optional cache hint)
+    SLD,        // sld[.] (X-form, opcode 31 XO 27; 64-bit variable shift)
     SYNC,       // sync / lwsync (opcode 31 XO 598; exact encodings only)
     ISYNC,      // isync (XL-form, opcode 19 XO 150; exact encoding only)
     EIEIO,      // eieio (X-form, opcode 31 XO 854; exact encoding only)

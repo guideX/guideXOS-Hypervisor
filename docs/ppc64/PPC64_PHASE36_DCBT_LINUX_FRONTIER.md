@@ -61,7 +61,7 @@ Checkpoint state remains version 6 and no CPU-state or checkpoint field was adde
 The artifact verifier passed for the original, unmodified guest:
 
 - Kernel SHA-256: `c3baf4467971e47dc8737780a17910349d6754b5c771b92d665ba12fccee50fd`.
-- Configuration SHA-256: `592aabf1a65d0ca6b112921a1e323543727466fc394e312a1ea938d30b5b8bfa`.
+- Configuration SHA-256: `592aabf1a65d0ca6b112921a7e323543727466fc394e312a1ea938d30b5b8bfa`.
 - FDT SHA-256: `780eac480de5f11773fded8b3bbd959859af9d8c508b10dded7b2243eb165c37`.
 - CPU PVR: `0x004E1200`; LPID: 1; original ELF placement, entry registers, partition radix context, guest-real mode, SPRG1/PACA state, RTAS-disabled probe, and memory protections were preserved.
 

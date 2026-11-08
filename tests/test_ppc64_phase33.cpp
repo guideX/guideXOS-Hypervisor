@@ -863,6 +863,8 @@ struct AuthenticReplay {
     bool rldicRetired = false;
     bool dcbtFetched = false;
     bool dcbtRetired = false;
+    bool sldFetched = false;
+    bool sldRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
@@ -870,6 +872,16 @@ struct AuthenticReplay {
     uint64_t rldicPostRetired = 0;
     uint64_t dcbtEffectiveAddress = 0;
     uint64_t dcbtStorageEffectiveAddress = 0;
+    uint64_t sldShiftCount = 0;
+    uint64_t sldExpected = 0;
+    uint64_t sldCyclesBefore = 0;
+    uint64_t sldCyclesAfter = 0;
+    uint64_t sldTimebaseBefore = 0;
+    uint64_t sldTimebaseAfter = 0;
+    uint64_t sldRamBefore = 0;
+    uint64_t sldRamAfter = 0;
+    uint16_t sldLPID = 0;
+    uint64_t sldContextFollowing = 0;
     uint64_t dcbtCyclesBefore = 0;
     uint64_t dcbtCyclesAfter = 0;
     uint64_t dcbtTimebaseBefore = 0;
@@ -892,6 +904,7 @@ struct AuthenticReplay {
     uint64_t ramBeforeSPRG1 = 0;
     uint64_t ramAfterSPRG1 = 0;
     uint64_t finalRam = 0;
+    uint64_t prefixTraceDigest = 14695981039346656037ULL;
     uint64_t traceDigest = 14695981039346656037ULL;
     uint64_t sprg1Reads = 0;
     bool sprg1ReadbackCorrect = true;
@@ -899,6 +912,7 @@ struct AuthenticReplay {
     uint32_t extswRawWord = 0;
     uint32_t rldicRawWord = 0;
     uint32_t dcbtRawWord = 0;
+    uint32_t sldRawWord = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
     uint64_t stopBackingAddress = 0;
@@ -910,6 +924,7 @@ struct AuthenticReplay {
     uint64_t extswRamAfter = 0;
     uint64_t rldicNip = 0;
     uint64_t dcbtNip = 0;
+    uint64_t sldNip = 0;
     uint64_t rldicGuestRealAddress = 0;
     uint64_t rldicFetchBackingAddress = 0;
     uint64_t rldicTagLoadEffectiveAddress = 0;
@@ -952,12 +967,15 @@ struct AuthenticReplay {
     std::string extswDecode;
     std::string rldicDecode;
     std::string dcbtDecode;
+    std::string sldDecode;
     std::string stopClass;
     std::string stopDisassembly;
     std::vector<std::string> extswContext;
     std::vector<std::string> rldicContext;
     std::vector<std::string> rldicContinuationTrace;
     std::vector<std::string> dcbtPrecedingInstructions;
+    std::vector<std::string> sldPrecedingInstructions;
+    std::vector<std::string> sldFollowingInstructions;
     std::string error;
     PPC64RegisterView before{};
     PPC64RegisterView after{};
@@ -967,6 +985,8 @@ struct AuthenticReplay {
     PPC64RegisterView rldicAfter{};
     PPC64RegisterView dcbtBefore{};
     PPC64RegisterView dcbtAfter{};
+    PPC64RegisterView sldBefore{};
+    PPC64RegisterView sldAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -985,7 +1005,8 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  bool stopAtExtsw = true,
                                  bool stopAtRldic = false,
                                  uint64_t rldicContinuationBudget = 0,
-                                 bool stopAtDcbt = false) {
+                                 bool stopAtDcbt = false,
+                                 bool stopAtSld = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1042,6 +1063,7 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
     while (cpu->getNIP() != elfEvidence.sprg1Nip &&
            result.prefixRetired < 3'000'000ULL) {
         const uint64_t before = cpu->getNIP();
+        addDigest(result.prefixTraceDigest, before);
         const uint64_t msrBefore = cpu->getMSR();
         const ISADecodeResult branchDecode =
             before == elfEvidence.hvBranchNip ? cpu->decode(vm.getMemory()) :
@@ -1197,6 +1219,21 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.stopDisassembly = next.disassembly;
                 result.stopWord = cpu->hasFault() && cpu->getLastFault().hasRaw
                     ? cpu->getLastFault().raw : 0U;
+                if (result.sldRetired &&
+                    result.sldFollowingInstructions.empty()) {
+                    std::ostringstream attempted;
+                    attempted << "nip=" << hex(before.nip)
+                              << " raw=" << wordHex(result.stopWord)
+                              << " instruction=" << next.disassembly
+                              << " retired=0 R9_input=" << hex(before.gpr[9])
+                              << " R6_input=" << hex(before.gpr[6])
+                              << " gprs=";
+                    for (size_t reg = 0; reg < 32U; ++reg) {
+                        attempted << "r" << reg << "=" << hex(before.gpr[reg])
+                                  << (reg + 1U == 32U ? "" : ",");
+                    }
+                    result.sldFollowingInstructions.push_back(attempted.str());
+                }
                 const uint64_t gra = before.nip & kGuestRealMask;
                 const auto translation = PPC64PartitionMMU::translateGuestReal(
                     vm.getMemory(), *partition, gra,
@@ -1364,6 +1401,51 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 stopped = true;
                 break;
             }
+            if (following.kind == DecodedKind::SLD && !result.sldFetched) {
+                result.sldFetched = true;
+                result.sldNip = before.nip;
+                result.sldRawWord = following.raw;
+                result.sldDecode = next.disassembly;
+                result.sldBefore = before;
+                result.sldLPID = cpu->getActiveLPID();
+                result.sldShiftCount = before.gpr[following.rb] & 0x7FULL;
+                result.sldExpected = result.sldShiftCount < 64U
+                    ? before.gpr[following.rt] << result.sldShiftCount : 0U;
+                result.sldCyclesBefore = vm.getCyclesExecuted();
+                result.sldTimebaseBefore = vm.getPPC64Timebase();
+                result.sldRamBefore = fingerprintRam(*memory);
+                const size_t contextStart = lastInstructions.size() > 16U
+                    ? lastInstructions.size() - 16U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                    << hex(lastGprs[index][reg])
+                                    << (reg + 1U == lastGprs[index].size()
+                                        ? "" : ",");
+                        }
+                    }
+                    result.sldPrecedingInstructions.push_back(context.str());
+                }
+                if (stopAtSld) {
+                    result.stopClass = "phase36-sld-boundary";
+                    result.stopNip = before.nip;
+                    result.stopWord = following.raw;
+                    result.stopDisassembly = next.disassembly;
+                    const uint64_t gra = before.nip & kGuestRealMask;
+                    const auto translation = PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition, gra,
+                        PPC64TranslationAccess::FETCH);
+                    result.stopFetchTranslated = translation.success;
+                    result.stopFetchExecuteAllowed = translation.executeAllowed;
+                    result.stopBackingAddress = translation.hostBackingAddress;
+                    stopped = true;
+                    break;
+                }
+            }
             if (following.kind == DecodedKind::MFSPR && following.sprn == SPR_SPRG1) {
                 ++result.sprg1Reads;
             }
@@ -1474,6 +1556,14 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         dcbtFdtBackingAfter == referenceFdt;
                 }
             }
+            if (following.kind == DecodedKind::SLD && result.sldFetched &&
+                before.nip == result.sldNip && !result.sldRetired) {
+                result.sldAfter = after;
+                result.sldRetired = after.nip == before.nip + 4U;
+                result.sldCyclesAfter = vm.getCyclesExecuted();
+                result.sldTimebaseAfter = vm.getPPC64Timebase();
+                result.sldRamAfter = fingerprintRam(*memory);
+            }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
                 following.kind == DecodedKind::BCLR && after.nip == before.lr) {
                 result.setupPacaReturned = true;
@@ -1512,6 +1602,17 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 }
                 result.rldicContext.push_back(context.str());
                 ++result.rldicContextFollowing;
+            }
+            if (result.sldFetched && result.sldContextFollowing < 24U &&
+                before.nip != result.sldNip) {
+                std::ostringstream context;
+                context << line.str() << " gprs=";
+                for (size_t reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(before.gpr[reg])
+                            << (reg + 1U == 32U ? "" : ",");
+                }
+                result.sldFollowingInstructions.push_back(context.str());
+                ++result.sldContextFollowing;
             }
             if (lastInstructions.size() == 64U) lastInstructions.pop_front();
             if (lastGprs.size() == 64U) lastGprs.pop_front();
@@ -1578,6 +1679,18 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             trace << line << "\n";
         }
         trace << "authentic_dcbt_dataflow_context_end\n";
+    }
+    if (result.sldFetched) {
+        trace << "authentic_sld_preceding_context_begin\n";
+        for (const auto& line : result.sldPrecedingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_sld_preceding_context_end\n";
+        trace << "authentic_sld_following_context_begin\n";
+        for (const auto& line : result.sldFollowingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_sld_following_context_end\n";
     }
     result.trace = trace.str();
     return result;

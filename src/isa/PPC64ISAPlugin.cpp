@@ -1655,6 +1655,12 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 // operation is available in both modes of this PPC64 CPU.
                 instr.kind = DecodedKind::DIVD;
                 instr.supported = true;
+            } else if (combined == XO_SLD) {
+                // SLD is a 64-bit-implementation facility; SF controls the
+                // current execution mode, not whether this POWER9 CPU has
+                // the instruction. RB[57:63] supplies the full 7-bit count.
+                instr.kind = DecodedKind::SLD;
+                instr.supported = true;
             } else if (base == XO_ADDC && !oe) {
                 instr.kind = DecodedKind::ADDC;
                 instr.supported = true;
@@ -2302,6 +2308,12 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (!instr.supported) {
                 out << " ; invalid encoding";
             }
+            break;
+        case DecodedKind::SLD:
+            out << "sld" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt)
+                << ",r" << static_cast<unsigned>(instr.rb);
             break;
         case DecodedKind::SYNC:
             out << (instr.raw == ENCODING_LWSYNC ? "lwsync" : "sync");
@@ -3417,6 +3429,20 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             // become a guest load: do not translate or dereference its EA.
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
+        case DecodedKind::SLD: {
+            // Read both operands before writing RA so every source/count
+            // alias is handled architecturally. Avoid host shifts >= 64.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t countRegister = state_.gpr[instr.rb];
+            const unsigned shift = static_cast<unsigned>(countRegister & 0x7FULL);
+            const uint64_t result = shift < 64U ? source << shift : 0U;
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
         case DecodedKind::TDI:
         {
             const uint64_t operand = state_.gpr[instr.ra];
@@ -5476,6 +5502,9 @@ std::string PPC64ISAPlugin::disassemble(IMemory& memory, uint64_t address) {
 }
 
 bool PPC64ISAPlugin::hasFeature(const std::string& feature) const {
+    if (feature == "sld") {
+        return true;
+    }
     if (feature == "dcbt") {
         return true;
     }

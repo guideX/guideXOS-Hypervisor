@@ -40,6 +40,10 @@ def disassemble(word: int, address: int) -> str:
         return f"or{' .' if rc else ''} r{ra},r{rt},r{rb}"
     if opcode == 31 and xo == 40:
         return f"subf{' .' if rc else ''} r{rt},r{ra},r{rb}"
+    if opcode == 31 and xo == 27:
+        return f"sld{' .' if rc else ''} r{ra},r{rt},r{rb}"
+    if opcode == 31 and xo == 539:
+        return f"srd{' .' if rc else ''} r{ra},r{rt},r{rb}"
     if opcode == 31 and xo == 467:
         return f"mtspr/XFX raw=0x{word:08x}"
     if opcode == 31 and xo == 339:
@@ -159,6 +163,10 @@ def inspect(kernel: Path, frontier: int | None) -> str:
         "attribution_symbol=" + (containing[0][0] if containing else "unknown"),
         "attribution_symbol_offset=" + (f"0x{address - containing[0][1]:x}"
                                          if containing else "unknown"),
+        "attribution_symbol_address=" +
+            (f"0x{containing[0][1]:016x}" if containing else "unknown"),
+        "attribution_symbol_size=" +
+            (f"0x{containing[0][2]:x}" if containing else "unknown"),
         "caller_symbol=" + (caller[0][0] if caller else "unknown"),
         "caller_symbol_address=" + (f"0x{caller[0][1]:016x}" if caller else "unknown"),
         "caller_callsite=0xc000000001f22568",
@@ -182,6 +190,11 @@ def inspect(kernel: Path, frontier: int | None) -> str:
         lines.append(f"frontier_word=0x{frontier_word:08x}")
         lines.append("frontier_independent_decode=" +
                      disassemble(frontier_word, frontier))
+        lines.append("frontier_static_context_begin")
+        for pc in range(frontier - 0x40, frontier + 0x44, 4):
+            word = word_at(pc)
+            lines.append(f"  0x{pc:016x}: 0x{word:08x}  {disassemble(word, pc)}")
+        lines.append("frontier_static_context_end")
 
     # Find the real caller branch to this function's ELFv2 local entry.
     local_entry = target[1] + 8

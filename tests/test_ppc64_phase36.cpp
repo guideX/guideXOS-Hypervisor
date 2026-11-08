@@ -509,9 +509,9 @@ void testAuthenticLinuxDcbt36() {
     if (kernel.empty() || fdt.empty()) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-                                               false, false, 65'536U);
+                                               false, false, 65'536U, false, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-                                                false, false, 65'536U);
+                                                false, false, 65'536U, false, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -527,6 +527,10 @@ void testAuthenticLinuxDcbt36() {
     CHECK(first.rldicPostRetired >= 610U &&
           second.rldicPostRetired == first.rldicPostRetired);
     CHECK(first.dcbtFetched && second.dcbtFetched);
+    CHECK(first.sldFetched && second.sldFetched);
+    CHECK(!first.sldRetired && !second.sldRetired);
+    CHECK(first.sldNip == 0xC000000000170884ULL &&
+          second.sldNip == first.sldNip);
     CHECK(first.dcbtNip == kDcbtLinuxNip36 &&
           second.dcbtNip == first.dcbtNip);
     CHECK(first.dcbtRawWord == kDcbtLinuxWord36 &&
@@ -564,7 +568,8 @@ void testAuthenticLinuxDcbt36() {
           first.finalSprg1 == second.finalSprg1);
     CHECK(sameRegisters(first.final, second.final));
     CHECK(first.totalRetired == second.totalRetired);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" ||
+    CHECK(first.stopClass == "phase36-sld-boundary" ||
+          first.stopClass == "unsupported-or-invalid-instruction" ||
           first.stopClass == "bounded-continuation-limit");
     CHECK(first.totalRetired >= 2'652'207ULL);
     CHECK(first.stopNip != kDcbtLinuxNip36);
