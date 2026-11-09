@@ -1,5 +1,6 @@
 #include "VMManager.h"
 #include "IA64ISAPlugin.h"
+#include "InterruptController.h"
 #include "ProcessorInterruptBlock.h"
 #include "decoder.h"
 #include "logger.h"
@@ -1240,11 +1241,20 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                           << " cycle=" << globalCycle
                           << " itc=0x" << std::hex << cpu.GetAR(44);
                 uint64_t predicateMask = 0;
+                uint64_t grNaTMask = 0;
                 for (size_t predicate = 0; predicate < 64; ++predicate) {
                     if (cpu.GetPR(predicate)) {
                         predicateMask |= uint64_t{1} << predicate;
                     }
                 }
+                for (size_t reg = 1; reg < 64; ++reg) {
+                    if (cpu.GetGRNaT(reg)) {
+                        grNaTMask |= uint64_t{1} << reg;
+                    }
+                }
+                const uint64_t psr = cpu.GetPSR();
+                const ia64::BasicInterruptController* interruptController =
+                    vm.getInterruptController();
                 probeLine << " cfm=0x" << cpu.GetCFM()
                           << " pfs=0x" << cpu.GetPFS()
                           << " rsc=0x" << cpu.GetRSC()
@@ -1253,7 +1263,19 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                           << " rnat=0x" << cpu.GetRNAT()
                           << " ar_lc=0x" << cpu.GetAR(65)
                           << " ar_ec=0x" << cpu.GetAR(66)
+                          << " psr=0x" << psr
+                          << " psr_i=" << ((psr >> 13) & 1ULL)
+                          << " ipsr=0x" << cpu.GetCR(ia64::IA64_CR_IPSR)
+                          << " isr=0x" << cpu.GetCR(ia64::IA64_CR_ISR)
+                          << " interrupt_controller_pending="
+                          << (interruptController != nullptr &&
+                                      interruptController->HasPendingInterrupt()
+                                  ? 1
+                                  : 0)
+                          << " interrupt_in_service_vector=0x"
+                          << (plugin != nullptr ? plugin->getInServiceVector() : 0xff)
                           << " predicate_mask=0x" << predicateMask
+                          << " gr_nat_mask=0x" << grNaTMask
                           << " b0=0x" << cpu.GetBR(0);
                 for (size_t reg = 1; reg < 64; ++reg) {
                     probeLine << " r" << std::dec << reg << "=0x" << std::hex
