@@ -26,7 +26,7 @@ Outcome F is a scheduler-frontier result, not Phase 9 acceptance. The phase mark
 - Documentation commit: the R27 report commit; its exact Git SHA is reported in the closeout response because a commit cannot contain its own hash.
 - Expected final tracked state: clean. The existing `evidence-9r23/` through `evidence-9r27/` directories remain untracked and preserved; ignored build directories were preserved. No evidence or build output was staged. No push was performed.
 
-The local branch is two commits ahead of `origin/IA64` after the documentation commit. No remote operation was performed.
+The local branch is three commits ahead of `origin/IA64` after the documentation commit. No remote operation was performed.
 
 ## R26 accepted baseline and artifacts
 
@@ -209,4 +209,3 @@ Recommended R28 scope:
 - Linux v3.2 `include/linux/nodemask.h`: [`for_each_node` / `N_POSSIBLE`](https://github.com/torvalds/linux/blob/v3.2/include/linux/nodemask.h).
 - Linux v3.2 `lib/find_next_bit.c`: [generic bit-scan contract](https://github.com/torvalds/linux/blob/v3.2/lib/find_next_bit.c).
 - Intel, *Itanium Architecture Software Developer's Manual*, Volume 2: [instruction semantics](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/itanium-architecture-software-developer-rev-2-3-vol-2-manual.pdf).
-
