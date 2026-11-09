@@ -196,6 +196,7 @@ constexpr int MAX_NESTED_EXCEPTIONS = 16;
 
 // Primary opcodes (bits 26-31) covered by Phase 1 + Phase 2.
 constexpr uint8_t OPCODE_TDI = 2;
+constexpr uint8_t OPCODE_SUBFIC = 8;
 constexpr uint8_t OPCODE_ADDI = 14;
 constexpr uint8_t OPCODE_ADDIS = 15;
 constexpr uint8_t OPCODE_ORI = 24;
@@ -426,6 +427,7 @@ enum class DecodedKind {
     SUBF,       // subf[o][.] (X-form, XO9 20; RT := RB - RA)
     ADDIC,      // addic      (D-form opcode 12; CA update, no CR0)
     ADDIC_DOT,  // addic.     (D-form opcode 13; CA + CR0 update)
+    SUBFIC,     // subfic     (D-form opcode 8; CA/CA32 update, no carry-in)
     ADDC,       // addc[.]    (X-form, XO9 5; CA update; OE=1 rejected)
     ADDE,       // adde[.]    (X-form, XO9 69; CA in/out; OE=1 rejected)
     SUBFC,      // subfc[.]   (X-form, XO9 4; CA update; OE=1 rejected)

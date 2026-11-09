@@ -458,9 +458,14 @@ void testAuthenticLinuxSld37() {
           first.stopNip == second.stopNip && first.stopWord == second.stopWord);
     CHECK(first.stopWord != first.srdRawWord &&
           PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
-              DecodedKind::UNSUPPORTED);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" ||
-          first.stopClass == "bounded-continuation-limit");
+              DecodedKind::SUBFIC &&
+          PPC64ISAPlugin::decodeWord(first.stopWord).supported);
+    CHECK(first.subficFetched && second.subficFetched &&
+          !first.subficRetired && !second.subficRetired &&
+          first.stopNip == 0xC00000000017089CULL &&
+          first.stopWord == 0x20C60008U &&
+          first.subficDecode == "subfic r6,r6,8");
+    CHECK(first.stopClass == "phase39-subfic-frontier");
     CHECK(first.stopClass == second.stopClass &&
           first.traceDigest == second.traceDigest);
     CHECK(first.totalRetired == second.totalRetired &&

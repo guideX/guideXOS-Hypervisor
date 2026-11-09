@@ -338,6 +338,35 @@ void testAuthenticLinuxSrd38() {
         false, false, 65'536U, false, false);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
         false, false, 65'536U, false, false);
+    if (const char* preflightPath = std::getenv(
+            "GUIDEXOS_PPC64_PHASE39_PREFLIGHT_PATH")) {
+        std::ostringstream snapshot;
+        snapshot << "capture=pre-implementation Phase 38 VM replay"
+            << "\nNIP=" << hex(first.final.nip)
+            << "\nraw=" << wordHex(first.stopWord)
+            << "\nstop_class=" << first.stopClass
+            << "\nR6=" << hex(first.final.gpr[6])
+            << "\nCR=" << hex(first.final.cr)
+            << "\nXER=" << wordHex(first.final.xer)
+            << "\nCA=" << ((first.final.xer & XER_CA) != 0U)
+            << "\nCA32=" << ((first.final.xer & XER_CA32) != 0U)
+            << "\nOV=" << ((first.final.xer & XER_OV) != 0U)
+            << "\nSO=" << ((first.final.xer & XER_SO) != 0U)
+            << "\nMSR=" << hex(first.final.msr)
+            << "\nSPRG1=" << hex(first.final.sprg1)
+            << "\nLPID=" << first.lpidAtFrontier
+            << "\nRAM_fingerprint=" << hex(first.finalRam)
+            << "\ntotal_retired=" << first.totalRetired
+            << "\ntrace_digest=" << hex(first.traceDigest)
+            << "\nrun2_same_registers=" << sameRegisters(first.final, second.final)
+            << "\nrun2_same_ram=" << (first.finalRam == second.finalRam)
+            << "\nrun2_same_trace=" << (first.traceDigest == second.traceDigest)
+            << "\n";
+        CHECK(writeText(preflightPath, snapshot.str()));
+        CHECK(first.final.nip == 0xC00000000017089CULL);
+        CHECK(first.stopWord == 0x20C60008U);
+        CHECK(first.final.gpr[6] == 4U);
+    }
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.prefixRetired == 2'641'070ULL &&
@@ -401,13 +430,22 @@ void testAuthenticLinuxSrd38() {
           first.stopWord == second.stopWord);
     CHECK(first.stopWord != kSrdLinuxWord38 &&
           PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
-              DecodedKind::UNSUPPORTED);
+              DecodedKind::SUBFIC &&
+          PPC64ISAPlugin::decodeWord(first.stopWord).supported);
     CHECK(first.stopNip == 0xC00000000017089CULL &&
           first.stopWord == 0x20C60008U &&
           ((first.stopWord >> 26U) & 0x3FU) == 8U &&
           ((first.stopWord >> 21U) & 0x1FU) == 6U &&
           ((first.stopWord >> 16U) & 0x1FU) == 6U &&
           (first.stopWord & 0xFFFFU) == 8U);
+    CHECK(first.subficFetched && second.subficFetched &&
+          !first.subficRetired && !second.subficRetired);
+    CHECK(first.subficNip == first.stopNip &&
+          first.subficRawWord == first.stopWord &&
+          first.subficDecode == "subfic r6,r6,8");
+    CHECK(first.subficBefore.gpr[6] == 4U &&
+          first.subficBefore.xer == first.final.xer &&
+          first.subficLPID == 1U);
     CHECK(first.stopClass == second.stopClass &&
           first.traceDigest == second.traceDigest);
     CHECK(first.totalRetired == second.totalRetired &&

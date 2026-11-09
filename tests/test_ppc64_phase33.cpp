@@ -867,6 +867,8 @@ struct AuthenticReplay {
     bool sldRetired = false;
     bool srdFetched = false;
     bool srdRetired = false;
+    bool subficFetched = false;
+    bool subficRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
@@ -884,6 +886,15 @@ struct AuthenticReplay {
     uint64_t srdTimebaseAfter = 0;
     uint64_t srdRamBefore = 0;
     uint64_t srdRamAfter = 0;
+    uint64_t subficCyclesBefore = 0;
+    uint64_t subficCyclesAfter = 0;
+    uint64_t subficTimebaseBefore = 0;
+    uint64_t subficTimebaseAfter = 0;
+    uint64_t subficRamBefore = 0;
+    uint64_t subficRamAfter = 0;
+    uint16_t subficLPID = 0;
+    uint64_t subficRetiredAtContinuation = 0;
+    uint16_t stopLPID = 0;
     uint64_t sldCyclesBefore = 0;
     uint64_t sldCyclesAfter = 0;
     uint64_t sldTimebaseBefore = 0;
@@ -925,6 +936,7 @@ struct AuthenticReplay {
     uint32_t dcbtRawWord = 0;
     uint32_t sldRawWord = 0;
     uint32_t srdRawWord = 0;
+    uint32_t subficRawWord = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
     uint64_t stopBackingAddress = 0;
@@ -938,6 +950,7 @@ struct AuthenticReplay {
     uint64_t dcbtNip = 0;
     uint64_t sldNip = 0;
     uint64_t srdNip = 0;
+    uint64_t subficNip = 0;
     uint64_t rldicGuestRealAddress = 0;
     uint64_t rldicFetchBackingAddress = 0;
     uint64_t rldicTagLoadEffectiveAddress = 0;
@@ -982,6 +995,7 @@ struct AuthenticReplay {
     std::string dcbtDecode;
     std::string sldDecode;
     std::string srdDecode;
+    std::string subficDecode;
     std::string stopClass;
     std::string stopDisassembly;
     std::vector<std::string> extswContext;
@@ -1003,6 +1017,8 @@ struct AuthenticReplay {
     PPC64RegisterView sldAfter{};
     PPC64RegisterView srdBefore{};
     PPC64RegisterView srdAfter{};
+    PPC64RegisterView subficBefore{};
+    PPC64RegisterView subficAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1022,7 +1038,8 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  bool stopAtRldic = false,
                                  uint64_t rldicContinuationBudget = 0,
                                  bool stopAtDcbt = false,
-                                 bool stopAtSld = false) {
+                                 bool stopAtSld = false,
+                                 bool retireSubfic = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1221,10 +1238,16 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         activeStageBudgets = {1U, 128U, 1024U, 16384U,
                               rldicContinuationBudget};
     }
+    if (retireSubfic) {
+        activeStageBudgets = {1U, 256U, 4096U, 16384U, 65536U};
+    }
     for (uint64_t budget : activeStageBudgets) {
-        while (!stopped && (rldicContinuationBudget != 0U
-            ? (!result.rldicRetired || result.rldicPostRetired < budget)
-            : result.continuationRetired < budget)) {
+        while (!stopped && (retireSubfic
+            ? (!result.subficRetired || result.continuationRetired <
+               result.subficRetiredAtContinuation + budget)
+            : (rldicContinuationBudget != 0U
+                ? (!result.rldicRetired || result.rldicPostRetired < budget)
+                : result.continuationRetired < budget))) {
             const PPC64RegisterView before = vm.getPPC64RegisterView();
             cpu->clearFault();
             const ISADecodeResult next = cpu->decode(vm.getMemory());
@@ -1235,6 +1258,7 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.stopDisassembly = next.disassembly;
                 result.stopWord = cpu->hasFault() && cpu->getLastFault().hasRaw
                     ? cpu->getLastFault().raw : 0U;
+                result.stopLPID = cpu->getActiveLPID();
                 if (result.sldRetired &&
                     result.sldFollowingInstructions.empty()) {
                     std::ostringstream attempted;
@@ -1262,6 +1286,34 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             const auto& following =
                 *static_cast<const DecodedInstruction*>(next.internalData);
+            if (following.kind == DecodedKind::SUBFIC &&
+                !result.subficFetched) {
+                result.subficFetched = true;
+                result.subficNip = before.nip;
+                result.subficRawWord = following.raw;
+                result.subficDecode = next.disassembly;
+                result.subficBefore = before;
+                result.subficLPID = cpu->getActiveLPID();
+                result.subficCyclesBefore = vm.getCyclesExecuted();
+                result.subficTimebaseBefore = vm.getPPC64Timebase();
+                result.subficRamBefore = fingerprintRam(*memory);
+                if (!retireSubfic) {
+                    result.stopClass = "phase39-subfic-frontier";
+                    result.stopNip = before.nip;
+                    result.stopWord = following.raw;
+                    result.stopDisassembly = next.disassembly;
+                    result.stopLPID = cpu->getActiveLPID();
+                    const uint64_t gra = before.nip & kGuestRealMask;
+                    const auto translation = PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition, gra,
+                        PPC64TranslationAccess::FETCH);
+                    result.stopFetchTranslated = translation.success;
+                    result.stopFetchExecuteAllowed = translation.executeAllowed;
+                    result.stopBackingAddress = translation.hostBackingAddress;
+                    stopped = true;
+                    break;
+                }
+            }
             if (result.rldicRetired &&
                 following.kind == DecodedKind::LWAX &&
                 following.rt == 9U && following.ra == 8U &&
@@ -1410,6 +1462,7 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.stopNip = before.nip;
                 result.stopWord = following.raw;
                 result.stopDisassembly = next.disassembly;
+                result.stopLPID = cpu->getActiveLPID();
                 result.stopFetchTranslated = result.dcbtFetchTranslated;
                 result.stopFetchExecuteAllowed =
                     result.dcbtFetchExecuteAllowed;
@@ -1535,6 +1588,10 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             ++result.continuationRetired;
             result.lastSuccessfulNip = before.nip;
+            if (following.kind == DecodedKind::SUBFIC &&
+                result.subficRetired && before.nip == result.subficNip) {
+                result.subficRetiredAtContinuation = result.continuationRetired;
+            }
             if (result.rldicRetired) {
                 ++result.rldicPostRetired;
             }
@@ -1606,6 +1663,15 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.srdCyclesAfter = vm.getCyclesExecuted();
                 result.srdTimebaseAfter = vm.getPPC64Timebase();
                 result.srdRamAfter = fingerprintRam(*memory);
+            }
+            if (following.kind == DecodedKind::SUBFIC &&
+                result.subficFetched && before.nip == result.subficNip &&
+                !result.subficRetired) {
+                result.subficAfter = after;
+                result.subficRetired = after.nip == before.nip + 4U;
+                result.subficCyclesAfter = vm.getCyclesExecuted();
+                result.subficTimebaseAfter = vm.getPPC64Timebase();
+                result.subficRamAfter = fingerprintRam(*memory);
             }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
                 following.kind == DecodedKind::BCLR && after.nip == before.lr) {
@@ -1682,6 +1748,7 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
     if (!stopped) {
         result.stopClass = "bounded-continuation-limit";
         result.stopNip = result.final.nip;
+        result.stopLPID = cpu->getActiveLPID();
         const uint64_t gra = result.stopNip & kGuestRealMask;
         const auto translation = PPC64PartitionMMU::translateGuestReal(
             vm.getMemory(), *partition, gra, PPC64TranslationAccess::FETCH);
@@ -1765,6 +1832,32 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
               << " LPID=" << std::dec << result.srdLPID
               << " RAM_before_after=" << hex(result.srdRamBefore) << "/"
               << hex(result.srdRamAfter) << "\n";
+    }
+    if (result.subficFetched) {
+        trace << "authentic_subfic_retirement nip=" << hex(result.subficNip)
+              << " raw=" << wordHex(result.subficRawWord)
+              << " instruction=" << result.subficDecode
+              << " R6_before=" << hex(result.subficBefore.gpr[6])
+              << " R6_after=" << hex(result.subficAfter.gpr[6])
+              << " CA_before_after="
+              << ((result.subficBefore.xer & XER_CA) != 0U) << "/"
+              << ((result.subficAfter.xer & XER_CA) != 0U)
+              << " CA32_before_after="
+              << ((result.subficBefore.xer & XER_CA32) != 0U) << "/"
+              << ((result.subficAfter.xer & XER_CA32) != 0U)
+              << " post_NIP=" << hex(result.subficAfter.nip)
+              << " retired=" << result.subficRetired
+              << " CR_before_after=0x" << std::hex
+              << result.subficBefore.cr << "/0x" << result.subficAfter.cr
+              << " XER_before_after=0x" << result.subficBefore.xer << "/0x"
+              << result.subficAfter.xer
+              << " MSR_before_after=" << hex(result.subficBefore.msr) << "/"
+              << hex(result.subficAfter.msr)
+              << " SPRG1_before_after=" << hex(result.subficBefore.sprg1) << "/"
+              << hex(result.subficAfter.sprg1)
+              << " LPID=" << std::dec << result.subficLPID
+              << " RAM_before_after=" << hex(result.subficRamBefore) << "/"
+              << hex(result.subficRamAfter) << "\n";
     }
     result.trace = trace.str();
     return result;

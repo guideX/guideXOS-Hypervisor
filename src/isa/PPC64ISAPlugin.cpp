@@ -1406,6 +1406,14 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 static_cast<uint16_t>(word & 0xFFFFU));
             instr.supported = true;
             break;
+        case OPCODE_SUBFIC:
+            instr.kind = DecodedKind::SUBFIC;
+            instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
+            instr.ra = static_cast<uint8_t>((word >> 16) & 0x1F);
+            instr.simm = signExtendImmediate16(
+                static_cast<uint16_t>(word & 0xFFFFU));
+            instr.supported = true;
+            break;
         case OPCODE_ADDIC_DOT:
             instr.kind = DecodedKind::ADDIC_DOT;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
@@ -1933,6 +1941,11 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             break;
         case DecodedKind::ADDIC_DOT:
             out << "addic. r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra)
+                << "," << instr.simm;
+            break;
+        case DecodedKind::SUBFIC:
+            out << "subfic r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.ra)
                 << "," << instr.simm;
             break;
@@ -3632,6 +3645,29 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             if (instr.kind == DecodedKind::ADDIC_DOT) {
                 updateCR0(state_, result);
             }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::SUBFIC: {
+            // SUBFIC is ~RA + EXTS(SI) + 1.  Capture RA before writing RT so
+            // RT=RA and the architectural GPR0 operand both work normally.
+            const uint64_t source = state_.gpr[instr.ra];
+            const uint64_t immediate =
+                static_cast<uint64_t>(signExtend16(instr.simm));
+            const uint64_t result = immediate - source;
+
+            // POWER uses no-borrow carry-out for subtraction. CA32 is the
+            // independent carry at the low-word boundary on this POWER9
+            // profile. In SF=0 mode CA follows that same 32-bit boundary,
+            // while the destination retains the full target-width result.
+            const bool carry32 =
+                static_cast<uint32_t>(immediate) >=
+                static_cast<uint32_t>(source);
+            const bool is64BitMode = (state_.msr & MSR_SF) != 0;
+            const bool carry64 = immediate >= source;
+            state_.gpr[instr.rt] = result;
+            setXERCA(state_, is64BitMode ? carry64 : carry32);
+            setXERCA32(state_, carry32);
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
