@@ -443,6 +443,8 @@ enum class Mips64Op : uint8_t {
     Dext,
     // MIPS64 Release 2 doubleword variable shift-left, appended for ABI stability.
     Dsllv,
+    // MIPS64 Release 2 doubleword variable logical shift-right.
+    Dsrlv,
 };
 
 struct Mips64ReservationState {

@@ -74,6 +74,7 @@ bool supportsMips64LlScCacheAttribute(uint8_t cca) {
 constexpr uint8_t kFnSll = 0x00;
 constexpr uint8_t kFnSllv = 0x04;
 constexpr uint8_t kFnDsllv = 0x14;
+constexpr uint8_t kFnDsrlv = 0x16;
 constexpr uint8_t kFnSrl = 0x02;
 constexpr uint8_t kFnSra = 0x03;
 constexpr uint8_t kFnJr = 0x08;
@@ -309,6 +310,20 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                                     "reserved SPECIAL shift amount for DSLLV");
                     }
                     mapped = Mips64Op::Dsllv;
+                    break;
+                case kFnDsrlv:
+                    // Release 2 uses sa=1 for DROTRV. Keep that legal rotate
+                    // encoding distinct and unsupported; only other nonzero
+                    // sa values are reserved.
+                    if (decoded.sa == 0) {
+                        mapped = Mips64Op::Dsrlv;
+                    } else if (decoded.sa == 1) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                    "valid DROTRV encoding outside the implemented subset");
+                    } else {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved SPECIAL shift/rotate sa encoding");
+                    }
                     break;
                 case kFnSrl: mapped = Mips64Op::Srl; break;
                 case kFnSra: mapped = Mips64Op::Sra; break;
@@ -1540,6 +1555,16 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rd, source << shift);
             break;
         }
+        case Mips64Op::Dsrlv: {
+            // DSRLV performs an unsigned logical shift of the full doubleword.
+            // Read both operands before rd so every register alias uses the
+            // pre-instruction values; mask GPR[rs] to the architectural 6 bits.
+            const uint64_t source = readGpr(decoded.rt);
+            const uint64_t shiftRegister = readGpr(decoded.rs);
+            const unsigned shift = static_cast<unsigned>(shiftRegister & 0x3FULL);
+            writeGpr(decoded.rd, source >> shift);
+            break;
+        }
         case Mips64Op::Srl:
             writeGpr(decoded.rd, signExtend32(low32(readGpr(decoded.rt)) >> decoded.sa));
             break;
@@ -2410,6 +2435,7 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
                           decoded.rd, decoded.rt, decoded.rs);
             break;
         case Mips64Op::Dsllv:
+        case Mips64Op::Dsrlv:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, $%u", name,
                           decoded.rd, decoded.rt, decoded.rs);
             break;
@@ -3082,6 +3108,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Sllv: return "sllv";
         case Mips64Op::Dext: return "dext";
         case Mips64Op::Dsllv: return "dsllv";
+        case Mips64Op::Dsrlv: return "dsrlv";
         default: return "invalid";
     }
 }

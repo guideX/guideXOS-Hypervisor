@@ -258,8 +258,12 @@ void testDecodeAndDisassembly() {
     CHECK(malformed.fault == Mips64Fault::ReservedInstruction);
     CHECK(malformed.error.find("shift amount") != std::string::npos);
     const Mips64Decoded dsrlv = decodeInstruction(encodeR(4, 3, 4, 0, 0x16));
+    const Mips64Decoded drotrv = decodeInstruction(encodeR(4, 3, 4, 1, 0x16));
     const Mips64Decoded dsrav = decodeInstruction(encodeR(4, 3, 4, 0, 0x17));
-    CHECK(!dsrlv.valid && dsrlv.fault == Mips64Fault::UnsupportedInstruction);
+    CHECK(dsrlv.valid && dsrlv.op == Mips64Op::Dsrlv);
+    CHECK(Mips64Cpu{}.disassemble(dsrlv) == "dsrlv $4, $3, $4");
+    CHECK(!drotrv.valid && drotrv.fault == Mips64Fault::UnsupportedInstruction);
+    CHECK(drotrv.error.find("DROTRV") != std::string::npos);
     CHECK(!dsrav.valid && dsrav.fault == Mips64Fault::UnsupportedInstruction);
 }
 
