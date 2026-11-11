@@ -1285,3 +1285,19 @@ else()
     target_compile_options(test_mips64_dsll32 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64Dsll32Tests COMMAND test_mips64_dsll32)
+
+# MIPS64-24 architectural qualification for Release 2 DSRA32 and the
+# authenticated OpenWrt continuation.
+add_executable(test_mips64_dsra32
+    tests/test_mips64_dsra32.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_dsra32 PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_dsra32 PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_dsra32 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64Dsra32Tests COMMAND test_mips64_dsra32)

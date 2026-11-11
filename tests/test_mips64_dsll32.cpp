@@ -291,10 +291,11 @@ void testExactEncodingAndNeighborClassification() {
     CHECK(dsll.valid && dsll.op == Mips64Op::Dsll);
     CHECK(dsllv.valid && dsllv.op == Mips64Op::Dsllv);
     CHECK(dsrl32.valid && dsrl32.op == Mips64Op::Dsrl32);
-    CHECK(!dsra32.valid && dsra32.fault == Mips64Fault::UnsupportedInstruction);
+    CHECK(dsra32.valid && dsra32.op == Mips64Op::Dsra32);
     CHECK(Mips64Cpu{}.disassemble(dsll) == "dsll $5, $7, 16");
     CHECK(Mips64Cpu{}.disassemble(dsllv) == "dsllv $5, $7, $6");
     CHECK(Mips64Cpu{}.disassemble(dsrl32) == "dsrl32 $5, $7, 16");
+    CHECK(Mips64Cpu{}.disassemble(dsra32) == "dsra32 $5, $7, 16");
 
     // These valid neighboring encodings remain distinct and unsupported.
     const Mips64Decoded drotr32 = decodeInstruction(encodeR(1, 7, 5, 16, 0x3E));

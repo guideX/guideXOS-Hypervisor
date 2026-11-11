@@ -447,6 +447,8 @@ enum class Mips64Op : uint8_t {
     Dsrlv,
     // MIPS64 fixed doubleword left shift by 32..63 bits.
     Dsll32,
+    // MIPS64 Release 2 fixed doubleword arithmetic right shift by 32..63 bits.
+    Dsra32,
 };
 
 struct Mips64ReservationState {

@@ -113,6 +113,7 @@ constexpr uint8_t kFnDsrl = 0x3A;
 constexpr uint8_t kFnDsra = 0x3B;
 constexpr uint8_t kFnDsll32 = 0x3C;
 constexpr uint8_t kFnDsrl32 = 0x3E;
+constexpr uint8_t kFnDsra32 = 0x3F;
 constexpr uint8_t kFnDext = 0x03;
 
 // -- REGIMM rt field ------------------------------------------------------------
@@ -382,6 +383,14 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                                     "reserved SPECIAL rs encoding for DSLL32");
                     }
                     mapped = Mips64Op::Dsll32;
+                    break;
+                case kFnDsra32:
+                    // DSRA32 has the canonical SPECIAL rs=0 encoding.
+                    if (decoded.rs != 0) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved SPECIAL rs encoding for DSRA32");
+                    }
+                    mapped = Mips64Op::Dsra32;
                     break;
                 case kFnDsrl32:
                     // MIPS64r2 overloads SPECIAL/0x3E: rs=0 is DSRL32,
@@ -1606,6 +1615,19 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rd, source << shift);
             break;
         }
+        case Mips64Op::Dsra32: {
+            // Use unsigned operations so sign extension is portable and the
+            // complete 64-bit source is retained. The encoded five-bit sa
+            // produces a valid shift in the range 32..63.
+            const uint64_t source = readGpr(decoded.rt);
+            const unsigned shift = static_cast<unsigned>(decoded.sa) + 32U;
+            uint64_t result = source >> shift;
+            if ((source & (uint64_t{1} << 63)) != 0) {
+                result |= UINT64_MAX << (64U - shift);
+            }
+            writeGpr(decoded.rd, result);
+            break;
+        }
         case Mips64Op::Dext: {
             // DEXT reads a full 64-bit source, extracts [pos + size - 1:pos],
             // and writes a right-justified zero-extended result to RT. The
@@ -2470,6 +2492,7 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Dsra:
         case Mips64Op::Dsll32:
         case Mips64Op::Dsrl32:
+        case Mips64Op::Dsra32:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u", name, decoded.rd,
                           decoded.rt, decoded.sa);
             break;
@@ -3129,6 +3152,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
         case Mips64Op::Dsll32: return "dsll32";
+        case Mips64Op::Dsra32: return "dsra32";
         default: return "invalid";
     }
 }
