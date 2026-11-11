@@ -1,0 +1,12 @@
+EFI ACPI 2.0 config table: GUID=71e86888f1e4d311bc220080c73c8881 RSDP=0x1fdb3000
+RSDP: revision=2 length=36 RSDT=0x1fdb3040 XSDT=0x1fdb30c0 checksums=PASS
+RSDT: 0x1fdb3040 length=44 entries=['0x1fdb3080', '0x1fdb3100'] checksum=PASS
+XSDT: 0x1fdb30c0 length=52 entries=['0x1fdb3080', '0x1fdb3100'] checksum=PASS
+MADT: 0x1fdb3080 length=60 checksum=PASS
+FADT: 0x1fdb3100 revision=3 length=244 checksum=PASS FACS=0x1fdb4000 DSDT=0x1fdb3200
+DSDT: 0x1fdb3200 length=54 AML=084f454d300d677569646558204941363400 checksum=PASS
+FACS: 0x1fdb4000 length=64 version=1 no_checksum=EXPECTED global_lock=0x0 flags=0x0
+ACPICA FACS descriptor index=1 address=0x1fdb4000 length=64 origin_flags=0x1 pointer=0x0
+ACPICA globals: DSDT=0xc00000001fdb3200 FACS=0x0
+Physical ranges: ACPI reclaim=[0x1fdb3000,0x1fdb4000) NVS=[0x1fdb4000,0x1fdb5000)
+Independent guest-RAM ACPI validation: PASS

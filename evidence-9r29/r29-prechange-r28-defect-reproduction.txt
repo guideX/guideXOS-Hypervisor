@@ -1,0 +1,109 @@
+IA64-POST-MADT-9R29 pre-change ACPI reproduction
+
+Repository state before production edits
+----------------------------------------
+Repository: D:\dev\guideXOS_Hypervisor_IA64
+Branch: IA64
+HEAD: 88c641e1ee8c35d9ca6fce90ec2cee44d4adfae4
+Parent: fcfd03a3fd9e1860258e34a2c40a0ce5f1cce0dc (R28 evidence)
+Phase: last_completed=IA64-POST-MADT-8; next_expected=IA64-POST-MADT-9
+Tracked worktree: clean before this R29 evidence directory was created.
+R28 divergence: 5 ahead, 0 behind origin/IA64 (tracking ref only; no fetch).
+
+R28 evidence integrity
+----------------------
+All 61 rows in evidence-9r28/r28-evidence-manifest.txt were present and
+matched both recorded byte counts and SHA-256 values. Manifest SHA-256:
+67833AE542D8F493F51B5C9EA7A7590541F7E213F6DBF2A2699838598F3A079A.
+The manifest and all historical evidence remain unchanged.
+
+Authenticated guest inputs present locally
+------------------------------------------
+ISO: build-9r9/authentic-reconstructed.iso; 4695296000 bytes;
+  SHA-256 6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E
+LINUX.gz: build-9r9/inspection/reconstructed-LINUX.gz; 4530130 bytes;
+  SHA-256 F16B5547BF5944F2E8BC2A41FABC3047D921B4C3B94572792F5002A7087CDD2C
+INITRD.GZ: build-9r9/inspection/fat-files/INITRD.GZ; 9077124 bytes;
+  SHA-256 D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B
+BOOTIA64.EFI: build-9r9/inspection/extracted-boot-fat/EFI/BOOT/BOOTIA64.EFI;
+  378664 bytes; SHA-256 D1AE6A8433971EC191B86D40371CDD1CD27E4EB360B5B487089593FC394245DA
+elilo.conf: build-9r9/inspection/extracted-boot-fat/EFI/BOOT/elilo.conf;
+  518 bytes; SHA-256 4FDF8E74D6857B120327A9F8AAAFFD0DBB9ADE32027519D1AA66A93DBCCB4C70
+System.map: build-9r18/linux-symbols/data/boot/System.map-3.2.0-4-itanium;
+  1595223 bytes; SHA-256 A1ED660417EE3F5BF0B3701572280F8169131DE470EC94212FB97F192AB4E144
+Decompressed kernel ELF: evidence-9r27/r27-authenticated-linux.elf; 13035024 bytes;
+  SHA-256 F2C573C29DBBC030E9F93A18A97CAE3E62023A8A6F80C7CA0035E5A13DB2A483
+The relocated E:\CodexArtifacts\guideXOS_Hypervisor archive was inspected
+first; it contains no IA-64 boot media or R24 checkpoint. The authoritative
+preserved inputs are the local files listed above.
+
+Checkpoint compatibility and actual serialized table bytes
+-----------------------------------------------------------
+R24 checkpoint:
+  build-9r24-release/r24-authentic-ehandoff-firmware-fix-cold-final2.gxcp
+  574309167 bytes; SHA-256
+  EF90139582139E419A32F6004B402297EB9C2581ACE2F3E784417287DBA1C367
+Manifest identifies it as an after-ExitBootServices kernel handoff at cycle
+778197459, with 512 MiB RAM and one IA-64 vCPU.
+
+Before any production firmware edit, build-9r26-assert/bin/ia64_iso_matrix.exe
+strictly restored that checkpoint using the exact R28 guest identity, executed
+one instruction slot, and read guest RAM without editing it. The saved 4096-byte
+page is evidence-9r29/r29-r24-prechange-acpi-page-one-step.bin, SHA-256
+0A1044088FB07048531516FA8CD2DCE79C86915539DADC58C3E3D12A5276841D. A second
+read-only capture after the bounded 59,000,000-slot R28 reproduction has the
+same SHA-256. This proves restore preserves the pre-R29 table bytes; this
+checkpoint cannot qualify the corrected firmware and is not used for R29 boot.
+
+At 512 MiB, the existing handoff layout base is 0x1FDB0000. The preserved page
+contains the EFI ACPI 2.0 configuration-table GUID at PA 0x1FDB2018, whose
+pointer is RSDP PA 0x1FDB2200. RSDP is revision 2, length 36, with both the
+20-byte and extended checksums equal to zero. It points to RSDT PA 0x1FDB2240
+and XSDT PA 0x1FDB22C0. The RSDT is length 40 with one entry, MADT PA
+0x1FDB2280. The XSDT is length 44 with one entry, the same MADT. Both root
+checksums and the MADT checksum are zero. MADT signature is APIC, length 60;
+its existing type-7 Processor Local SAPIC record is preserved. There is no
+FADT root entry, so this firmware set contains no FADT pointer to FACS or DSDT;
+the old root contains neither a FACS nor a DSDT substitute.
+
+Live ACPICA failure reproduced before the change
+------------------------------------------------
+Using the unchanged R28 firmware build, the same authenticated ISO, and the
+R24 checkpoint, a bounded strict continuation of 59,000,000 successful slots
+ended at cycle 837197459. The output is
+evidence-9r29/r29-r28-original-repro-59m.console.log. It observes DOEXIT after
+the same Linux init-task BUG path; panic is not claimed within this 59M window.
+The ACPI root page at that boundary is
+evidence-9r29/r29-r28-original-acpi-page-59m.bin and has the same bytes/hash as
+the one-slot restore snapshot.
+
+The existing authenticated R28 probes identify the failing chain and live
+object: acpi_tb_initialize_facs -> acpi_get_table_by_index(index 1,
+ACPI_TABLE_INDEX_FACS) -> acpi_tb_verify_table at descriptor VA
+0xE000000000B29360. The table descriptor's 32 bytes were read at the matching
+IA-64 kernel linear-map physical address 0x00B29360 after the bounded replay;
+evidence-9r29/r29-r28-original-facs-descriptor-59m.bin is 32 zero bytes,
+SHA-256 66687AADF862BD776C8FC18B8E9F8E20089714856EE233B3902A591D0D5F2925.
+With the Linux v3.2 descriptor layout, address at +0 is 0, table pointer at +8
+is null, length at +16 is 0, and origin flags at +25 are 0. The guest trace
+also reads the null pointer and flags at the authenticated caller site. No
+acpi_os_map_memory call occurs for this lookup. acpi_tb_verify_table returns
+status 4 (AE_NO_MEMORY) at cycle 836763185; acpi_enable_subsystem propagates it
+at cycle 836763350. This is the empty descriptor path, not evidence of RAM
+exhaustion or an attempted mapping failure.
+
+R28 then aborts ACPI initialization; acpi_bus_type.p remains null. The later
+acpi_pci_root_driver registration reaches Linux's real driver_register BUG_ON,
+followed by die(), do_exit(SIGSEGV), and the init-task panic. The complete
+accepted trace/disassembly remains in evidence-9r28 and is cross-indexed by its
+verified manifest.
+
+Old EFI memory-map classification
+---------------------------------
+R24's preserved EFI evidence reports [0x1FDB2000, 0x1FDB3000) as the PAL-code
+page. The old RSDP, RSDT, XSDT, MADT, SAL structures and EFI configuration
+entries shared that page. R29 therefore moves ACPI tables to dedicated pages:
+ACPI reclaim for RSDP/root/MADT/FADT/DSDT, and ACPI NVS for the writable FACS.
+
+No checkpoint was modified. This reproduction was completed before R29
+production source changes.

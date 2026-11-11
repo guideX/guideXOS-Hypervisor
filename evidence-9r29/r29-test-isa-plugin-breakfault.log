@@ -1,0 +1,7 @@
+Registered ISA plugin: IA-64
+=== ISA Plugin Architecture Tests ===
+
+[2026-11-11T08:49:14] native stdout logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-20261111-084914.log
+[2026-11-11T08:49:14] native stderr logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-error-20261111-084914.log

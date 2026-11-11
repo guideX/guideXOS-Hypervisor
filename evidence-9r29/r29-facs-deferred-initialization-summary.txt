@@ -1,0 +1,21 @@
+R29 deferred FACS initializer branch evidence
+
+Source/ABI evidence
+------------------
+The matching Linux v3.2 `acpi_enable_subsystem()` disassembly is in `r29-reference-acpi-enable-subsystem-ia64-objdump.txt`. At canonical VA 0xa0000001004dc0f6 it tests argument bit 7; when bit 7 is set, the branch at 0xa0000001004dc0fc goes to 0xa0000001004dc180. The alternative path at bundle 0xa0000001004dc100 contains the `br.call` to `acpi_tb_initialize_facs` at 0xa0000001004d6870.
+
+Fresh R29 runtime capture
+-------------------------
+* `acpi_enable_subsystem` entry at cycle 828814642 received flags 0xffffffffffffffef (bit 7 set).
+* The `0x4dc0f0` probe hit; the `0x4dc180` skip-path probe hit.
+* The `0x4dc100` call bundle and the `acpi_tb_initialize_facs` entry probe were not hit.
+* The normal exit bundle probe at `0x4dc210` observed r8=0 (AE_OK).
+* In the extended 480M restore, the sole `acpi_enable_subsystem` probe remained the same cycle 828814642 hit; no later call was observed through cycle 1258197459.
+* The table array already contains a FACS descriptor at index 1, physical address 0x1fdb4000, length 64, low origin flags 0x1. At the final dump, descriptor pointer and `acpi_gbl_FACS` are both zero. Therefore the ordinary FACS mapping stage remains unobserved; this capture does not establish successful FACS initialization.
+
+Supporting files
+----------------
+* `r29-fresh-acpi-facs-60m.console.log`: exact flags and executed branch probes.
+* `r29-fresh-facs-480m.console.log` and `.progress.txt`: extended restore, no later enable call, no panic, and endpoint trace.
+* `r29-fresh-acpi-pages-480m.bin`, `r29-fresh-acpi-pointers-480m.bin`, and `r29-fresh-acpi-descriptors-480m.bin`: endpoint guest-RAM state.
+* `r29-reference-acpi-initialize-facs-ia64-objdump.txt`, `r29-reference-acpi-get-table-by-index-ia64-objdump.txt`, and `r29-reference-acpi-tb-verify-table-ia64-objdump.txt`: matching call and descriptor handling instructions from the accepted R28 analysis.

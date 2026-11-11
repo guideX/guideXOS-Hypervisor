@@ -1,0 +1,36 @@
+R29 authentic Linux ACPI continuation frontier
+
+Fresh source
+------------
+Checkpoint: build-9r26-assert/r29-authentic-corrected-firmware-cold.gxcp
+Checkpoint SHA-256: F3233FA4DB2067720FBD91627BCB677DB696D8957D945F7A369440615DF6B592
+Checkpoint size: 574309223 bytes
+Checkpoint kind: after ExitBootServices, written from fresh authentic ISO boot
+Guest identity: R16-q6, ISO/LINUX.gz/INITRD.GZ hashes recorded in r29-fresh-checkpoint.manifest.txt
+Restore method: strict checkpoint read; no guest-memory writes or Linux/ACPICA patches
+
+480M restore
+------------
+Guest cycles: 778197459 -> 1258197459
+Attempted and successful slots: 480000000 / 480000000
+Failed slots: 0
+Unique instruction addresses / bundles: 104269 / 35022
+Terminal VM state: RUNNING; panic=no
+
+Authenticated ACPICA path
+-------------------------
+* EFI ACPI 2.0 configuration table points to RSDP 0x1fdb3000.
+* RSDP points to RSDT 0x1fdb3040 and XSDT 0x1fdb30c0.
+* Both roots contain MADT 0x1fdb3080 and FADT 0x1fdb3100.
+* ACPICA installs DSDT 0x1fdb3200 and FACS 0x1fdb4000 descriptors. The FACS descriptor is index 1, length 64, and has low origin flags 0x1.
+* DSDT verification returned 0; acpi_ns_load_table was reached.
+* acpi_enable_subsystem was observed once with flags 0xffffffffffffffef. The authenticated branch probes show this early call skips acpi_tb_initialize_facs; the function returned 0.
+* No acpi_tb_initialize_facs probe was hit by cycle 1258197459. The final captured acpi_get_table_by_index probe had r32=0 (table index 0).
+* Endpoint memory shows acpi_gbl_DSDT=0xc00000001fdb3200, acpi_gbl_FACS=0, and the ACPICA FACS descriptor pointer=0. The firmware address and mapped-origin descriptor flag are present; the actual ACPICA FACS mapping is not yet demonstrated.
+
+Former obstruction and frontier
+-------------------------------
+* driver_register entry was reached at cycle 832720368; the exact old BUG site 0xa000000100580f10 was not executed in this 480M window.
+* acpi_init, acpi_scan_init, acpi_bus_scan, and init_post probes were not reached.
+* kernel_init was entered at cycle 828870466. At the endpoint, execution was in the matching System.map default_idle range via a short memcpy call. The trace establishes an idle-path endpoint, not why PID 1 stopped advancing.
+* Outcome: B — firmware tables are independently qualified, while authentic FACS initialization and later Linux continuation remain incomplete.

@@ -1,0 +1,8 @@
+Registered ISA plugin: IA-64
+[IA64-CHECKPOINT] equivalence controlCycles=3200000 restoreCycles=3200000 firstIPControl=0x1fd55490 firstIPRestore=0x1fd55490 instructionTrace=equal cpu=equal ram=equal framebuffer=equal console=equal result=PASS strictRecovery=1
+[INFO ] VMManager shutting down...
+[INFO ] Stopping VM: ia64-iso-matrix-000000
+[INFO ] Halting VirtualMachine execution
+[INFO ] VM stopped: ia64-iso-matrix-000000
+[INFO ] VirtualMachine destroyed
+\[INFO ] VMManager destroyed

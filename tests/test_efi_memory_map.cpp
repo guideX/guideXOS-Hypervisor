@@ -1,4 +1,5 @@
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -201,6 +202,86 @@ void testTextOutputQueryModeLayout() {
     require(layout.textOutputQueryModeStubCodeAddr >= layout.base &&
                 layout.textOutputQueryModeStubDescAddr < layout.end,
             "QueryMode stub must remain inside the EFI handoff region");
+}
+
+void testAcpiReclaimAndNvsMemoryOwnership() {
+    constexpr uint64_t memorySize = 512ULL * 1024ULL * 1024ULL;
+    ia64::EfiHandoffLayout layout{};
+    require(ia64::tryComputeEfiHandoffLayout(memorySize, layout),
+            "512 MiB ACPI handoff layout must be computable");
+
+    std::vector<ia64::EfiMemoryDescriptor> map = {
+        {7, 0, memorySize / ia64::kEfiPalMemoryPageSize,
+         ia64::kEfiMemoryWriteBack}
+    };
+    require(ia64::overlayEfiMemoryMapRange(
+                map, memorySize, layout.base, layout.end, 4, 0xFULL),
+            "the full handoff must first be firmware-owned");
+    require(ia64::reserveIa64AcpiFirmwareMemory(
+                map, memorySize, layout, 0xFULL),
+            "the firmware map must reserve separate ACPI reclaim and NVS pages");
+
+    ia64::EfiMemoryDescriptor palCode{};
+    require(ia64::makeEfiPalCodeDescriptor(
+                layout.palProcedureCodeAddr, layout.base, layout.end,
+                ia64::kEfiMemoryWriteBack, palCode),
+            "the PAL code page must remain identifiable");
+    require(ia64::overlayEfiMemoryMapRange(
+                map, memorySize, palCode.physicalStart,
+                palCode.physicalStart + ia64::kEfiPalMemoryPageSize,
+                palCode.type, palCode.attributes),
+            "PAL code must retain its existing EFI classification");
+
+    const auto findStart = [&](uint64_t physicalStart)
+        -> const ia64::EfiMemoryDescriptor* {
+        const auto found = std::find_if(map.begin(), map.end(),
+            [&](const ia64::EfiMemoryDescriptor& descriptor) {
+                return descriptor.physicalStart == physicalStart;
+            });
+        return found == map.end() ? nullptr : &*found;
+    };
+    const auto* reclaim = findStart(layout.acpiReclaimBase);
+    const auto* nvs = findStart(layout.acpiNvsBase);
+    const auto* pal = findStart(palCode.physicalStart);
+    require(reclaim != nullptr && reclaim->type == ia64::kEfiAcpiReclaimMemoryType &&
+                reclaim->numberOfPages == 1 && reclaim->attributes == 0xFULL,
+            "RSDP, root tables, MADT, FADT and DSDT must be ACPI reclaim memory");
+    require(nvs != nullptr && nvs->type == ia64::kEfiAcpiNvsMemoryType &&
+                nvs->numberOfPages == 1 && nvs->attributes == 0xFULL,
+            "the writable FACS page must be ACPI NVS");
+    require(pal != nullptr && pal->type == ia64::kEfiPalCodeMemoryType &&
+                pal->numberOfPages == 1,
+            "ACPI reservations must not overwrite the accepted PAL page");
+    require(layout.rsdpAddr >= layout.acpiReclaimBase &&
+                layout.dsdtAddr < layout.acpiReclaimEnd &&
+                layout.facsAddr == layout.acpiNvsBase,
+            "table bytes must fit their assigned EFI memory classifications");
+    require(layout.acpiReclaimBase >= 0x1fcf6000ULL &&
+                layout.acpiNvsEnd <= memorySize,
+            "ACPI pages must not overlap the accepted initrd range or RAM end");
+    require(!ia64::isLinuxIa64AvailableEfiMemory(*reclaim) &&
+                !ia64::isLinuxIa64AvailableEfiMemory(*nvs),
+            "Linux must not allocate ACPI table backing before use");
+
+    uint64_t previousEnd = 0;
+    for (size_t index = 0; index < map.size(); ++index) {
+        const auto& descriptor = map[index];
+        const uint64_t end = descriptor.physicalStart +
+            descriptor.numberOfPages * ia64::kEfiPalMemoryPageSize;
+        require(index == 0 || descriptor.physicalStart >= previousEnd,
+                "ACPI and PAL overlays must preserve an ordered non-overlapping map");
+        previousEnd = end;
+    }
+
+    auto invalidLayout = layout;
+    invalidLayout.facsAddr = invalidLayout.acpiNvsEnd;
+    const auto before = map;
+    require(!ia64::reserveIa64AcpiFirmwareMemory(
+                map, memorySize, invalidLayout, 0xFULL),
+            "the EFI map helper must reject a FACS outside its NVS page");
+    require(map.size() == before.size(),
+            "a failed ACPI reservation must leave the original EFI map intact");
+    std::cout << "testAcpiReclaimAndNvsMemoryOwnership PASSED\n";
 }
 
 void testPalCodeDescriptorOwnershipAndLinuxDiscovery() {
@@ -413,6 +494,7 @@ int main() {
         testHistoricalDescriptorAbiAndStride();
         testGenericEliloSearchAndMapInvariants();
         testTextOutputQueryModeLayout();
+        testAcpiReclaimAndNvsMemoryOwnership();
         testPalCodeDescriptorOwnershipAndLinuxDiscovery();
         testExitBootServicesLifecycleValidation();
         testSystemTableExitTransitionAndCrc();

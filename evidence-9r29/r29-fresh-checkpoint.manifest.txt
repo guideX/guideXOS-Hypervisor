@@ -1,0 +1,15 @@
+format_version=1
+architecture=IA-64
+checkpoint_kind=after-ExitBootServices-kernel-handoff
+build_identity=guideXOS-Hypervisor/IA64-checkpoint-v1
+guest_identity=R16-q6-ISO-sha256=6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E;LINUX.gz=F16B5547BF5944F2E8BC2A41FABC3047D921B4C3B94572792F5002A7087CDD2C;INITRD.GZ=D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B
+checkpoint_cycle=778197459
+checkpoint_itc=0x2e6259d3
+caller_raw_ip=0x1fd55480
+caller_canonical_vma=0x1fd55480
+caller_slot=2
+raw_target=0x1fd55490
+checkpoint_raw_ip=0x1fd55490
+checkpoint_canonical_vma=0x1fd55490
+checkpoint_slot=0
+file_size=574309223

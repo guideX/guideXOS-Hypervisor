@@ -6,9 +6,13 @@
 #include <span>
 #include <vector>
 
+#include "IA64EfiHandoffLayout.h"
+
 namespace ia64 {
 
 constexpr uint32_t kEfiPalCodeMemoryType = 13;
+constexpr uint32_t kEfiAcpiReclaimMemoryType = 9;
+constexpr uint32_t kEfiAcpiNvsMemoryType = 10;
 constexpr uint64_t kEfiPalMemoryPageSize = 0x1000ULL;
 constexpr uint64_t kEfiMemoryWriteBack = 0x8ULL;
 
@@ -149,6 +153,34 @@ inline bool overlayEfiMemoryMapRange(std::vector<EfiMemoryDescriptor>& map,
     }
 
     map.swap(merged);
+    return true;
+}
+
+inline bool reserveIa64AcpiFirmwareMemory(
+    std::vector<EfiMemoryDescriptor>& map,
+    uint64_t physicalLimit,
+    const EfiHandoffLayout& layout,
+    uint64_t attributes) {
+    if (layout.acpiReclaimBase != layout.base + kEfiAcpiReclaimOffset ||
+        layout.acpiReclaimEnd != layout.acpiReclaimBase + kEfiAcpiReclaimSize ||
+        layout.acpiNvsBase != layout.base + kEfiAcpiNvsOffset ||
+        layout.acpiNvsEnd != layout.acpiNvsBase + kEfiAcpiNvsSize ||
+        layout.acpiReclaimBase < layout.base ||
+        layout.acpiNvsEnd > layout.end ||
+        layout.facsAddr != layout.acpiNvsBase) {
+        return false;
+    }
+
+    auto replacement = map;
+    if (!overlayEfiMemoryMapRange(replacement, physicalLimit,
+                                  layout.acpiReclaimBase, layout.acpiReclaimEnd,
+                                  kEfiAcpiReclaimMemoryType, attributes) ||
+        !overlayEfiMemoryMapRange(replacement, physicalLimit,
+                                  layout.acpiNvsBase, layout.acpiNvsEnd,
+                                  kEfiAcpiNvsMemoryType, attributes)) {
+        return false;
+    }
+    map.swap(replacement);
     return true;
 }
 

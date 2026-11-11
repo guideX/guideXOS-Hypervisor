@@ -1,0 +1,43 @@
+Registered ISA plugin: IA-64
+[2026-11-11T08:49:14] native stdout logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-20261111-084914.log
+[2026-11-11T08:49:14] native stderr logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-error-20261111-084914.log
+[INFO ] Created CPU 0 with ISA: IA-64 (using plugin)
+[INFO ] VirtualMachine created with 1048576 bytes of memory, 1 CPU(s), ISA: IA-64
+[INFO ] Initializing VirtualMachine...
+[INFO ] VirtualMachine initialized successfully
+[IA64-RSE] alloc ip=0x12000 dst=r37 oldCFM=0x2 oldPFS=0x206 sof=6 sol=4 sor=0 newCFM=0x206
+[IA64-RSE] alloc ip=0x13000 dst=r40 oldCFM=0x2 oldPFS=0x206 sof=40 sol=32 sor=0 newCFM=0x1028
+[IA64-RSE] alloc ip=0x12000 dst=r37 oldCFM=0x2 oldPFS=0x206 sof=6 sol=4 sor=0 newCFM=0x206
+[IA64-RSE] alloc ip=0x13000 dst=r40 oldCFM=0x2 oldPFS=0x206 sof=40 sol=32 sor=0 newCFM=0x1028
+[IA64-RSE] alloc ip=0x12000 dst=r37 oldCFM=0x2 oldPFS=0x206 sof=6 sol=4 sor=0 newCFM=0x206
+[IA64-RSE] alloc ip=0x13000 dst=r40 oldCFM=0x2 oldPFS=0x206 sof=40 sol=32 sor=0 newCFM=0x1028
+[IA64-RSE] alloc ip=0x12000 dst=r37 oldCFM=0x2 oldPFS=0x206 sof=6 sol=4 sor=0 newCFM=0x206
+[IA64-RSE] alloc ip=0x13000 dst=r40 oldCFM=0x2 oldPFS=0x206 sof=40 sol=32 sor=0 newCFM=0x1028
+single-CPU guest context switch test passed: A -> B -> A -> B -> A, one persistent VM CPUState, shared return target=0x0000000000012060, trace instructions=864
+[INFO ] Halting VirtualMachine execution
+[INFO ] VirtualMachine destroyed
+[INFO ] Created CPU 0 with ISA: IA-64 (using plugin)
+[INFO ] VirtualMachine created with 1048576 bytes of memory, 1 CPU(s), ISA: IA-64
+[INFO ] Initializing VirtualMachine...
+[INFO ] VirtualMachine initialized successfully
+[IA64-RSE] alloc ip=0x15000 dst=r40 oldCFM=0x0 oldPFS=0x2040 sof=64 sol=64 sor=0 newCFM=0x2040
+[IA64-RSE] alloc ip=0x16000 dst=r41 oldCFM=0x0 oldPFS=0x2040 sof=64 sol=64 sor=0 newCFM=0x2040
+automatic RSE pressure probe passed: spill and return fill restored the two distinguished caller registers
+[INFO ] Halting VirtualMachine execution
+[INFO ] VirtualMachine destroyed
+[INFO ] Created CPU 0 with ISA: IA-64 (using plugin)
+[INFO ] VirtualMachine created with 1048576 bytes of memory, 1 CPU(s), ISA: IA-64
+[INFO ] Initializing VirtualMachine...
+[INFO ] VirtualMachine initialized successfully
+[IA64-RSE] alloc ip=0x17000 dst=r40 oldCFM=0x0 oldPFS=0x2040 sof=64 sol=64 sor=0 newCFM=0x2040
+[IA64-RSE] alloc ip=0x17100 dst=r41 oldCFM=0x0 oldPFS=0x2040 sof=64 sol=64 sor=0 newCFM=0x2040
+[IA64-RSE] alloc ip=0x13000 dst=r40 oldCFM=0x0 oldPFS=0x2040 sof=40 sol=32 sor=0 newCFM=0x1028
+[IA64-RSE] alloc ip=0x13000 dst=r40 oldCFM=0x2 oldPFS=0x206 sof=40 sol=32 sor=0 newCFM=0x1028
+pressure context switch passed: A spilled, guest-switched to B, resumed from A backing memory, and unwound
+[INFO ] Halting VirtualMachine execution
+[INFO ] VirtualMachine destroyed
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x100000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x100000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x100000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000

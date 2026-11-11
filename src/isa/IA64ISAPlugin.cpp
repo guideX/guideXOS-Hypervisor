@@ -2,6 +2,7 @@
 #include "IA64AddressTranslation.h"
 #include "IA64EfiBootLifecycle.h"
 #include "IA64EfiHandoffLayout.h"
+#include "IA64AcpiFirmware.h"
 #include "IA64SalFirmware.h"
 #include "SyscallDispatcher.h"
 #include "Profiler.h"
@@ -254,8 +255,6 @@ constexpr uint32_t EFI_MEMORY_RUNTIME_CODE = 5U;
 constexpr uint32_t EFI_MEMORY_RUNTIME_DATA = 6U;
 constexpr uint32_t EFI_MEMORY_CONVENTIONAL = 7U;
 constexpr uint32_t EFI_MEMORY_UNUSABLE = 8U;
-constexpr uint32_t EFI_MEMORY_ACPI_RECLAIM = 9U;
-constexpr uint32_t EFI_MEMORY_ACPI_NVS = 10U;
 constexpr uint32_t EFI_MEMORY_MMIO = 11U;
 constexpr uint32_t EFI_MEMORY_MMIO_PORT = 12U;
 constexpr uint32_t EFI_MEMORY_PAL_CODE = 13U;
@@ -280,7 +279,11 @@ uint64_t EFI_PAL_PROCEDURE_CODE_ADDR = EFI_HANDOFF_REGION_BASE + kEfiPalProcedur
 uint64_t EFI_SAL_GLOBAL_POINTER_ADDR = EFI_HANDOFF_REGION_BASE + kEfiSalGlobalPointerOffset;
 uint64_t EFI_RSDP_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRsdpOffset;
 uint64_t EFI_RSDT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRsdtOffset;
+uint64_t EFI_XSDT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiXsdtOffset;
 uint64_t EFI_MADT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiMadtOffset;
+uint64_t EFI_FADT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFadtOffset;
+uint64_t EFI_FACS_ADDR = EFI_HANDOFF_REGION_BASE + kEfiFacsOffset;
+uint64_t EFI_DSDT_ADDR = EFI_HANDOFF_REGION_BASE + kEfiDsdtOffset;
 uint64_t EFI_RUNTIME_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiRuntimeServicesOffset;
 uint64_t EFI_BOOT_SERVICES_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootServicesOffset;
 uint64_t EFI_BOOT_IMAGE_METADATA_ADDR = EFI_HANDOFF_REGION_BASE + kEfiBootImageMetadataOffset;
@@ -614,7 +617,11 @@ void applyEfiHandoffLayoutBase(uint64_t base) {
     EFI_SAL_GLOBAL_POINTER_ADDR = base + kEfiSalGlobalPointerOffset;
     EFI_RSDP_ADDR = base + kEfiRsdpOffset;
     EFI_RSDT_ADDR = base + kEfiRsdtOffset;
+    EFI_XSDT_ADDR = base + kEfiXsdtOffset;
     EFI_MADT_ADDR = base + kEfiMadtOffset;
+    EFI_FADT_ADDR = base + kEfiFadtOffset;
+    EFI_FACS_ADDR = base + kEfiFacsOffset;
+    EFI_DSDT_ADDR = base + kEfiDsdtOffset;
     EFI_RUNTIME_SERVICES_ADDR = base + kEfiRuntimeServicesOffset;
     EFI_BOOT_SERVICES_ADDR = base + kEfiBootServicesOffset;
     EFI_BOOT_IMAGE_METADATA_ADDR = base + kEfiBootImageMetadataOffset;
@@ -1241,14 +1248,26 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
     if (overlaps(EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize)) {
         append("SAL.SystemTable");
     }
-    if (overlaps(EFI_RSDP_ADDR, 36ULL)) {
+    if (overlaps(EFI_RSDP_ADDR, acpi::kRsdpSizeAcpi2)) {
         append("ACPI.RSDP");
     }
-    if (overlaps(EFI_RSDT_ADDR, 40ULL)) {
+    if (overlaps(EFI_RSDT_ADDR, acpi::kRsdtSize)) {
         append("ACPI.RSDT");
     }
-    if (overlaps(EFI_MADT_ADDR, 60ULL)) {
+    if (overlaps(EFI_XSDT_ADDR, acpi::kXsdtSize)) {
+        append("ACPI.XSDT");
+    }
+    if (overlaps(EFI_MADT_ADDR, acpi::kMadtSize)) {
         append("ACPI.MADT");
+    }
+    if (overlaps(EFI_FADT_ADDR, acpi::kFadtV3Size)) {
+        append("ACPI.FADT");
+    }
+    if (overlaps(EFI_FACS_ADDR, acpi::kFacsSize)) {
+        append("ACPI.FACS");
+    }
+    if (overlaps(EFI_DSDT_ADDR, acpi::kDsdtSize)) {
+        append("ACPI.DSDT");
     }
 
     if (first) {
@@ -1276,12 +1295,20 @@ std::string describeEfiHandoffAccessMeaning(uint64_t address, size_t size, IMemo
         oss << "EFI configuration table";
     } else if (overlaps(EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize)) {
         oss << "SAL System Table";
-    } else if (overlaps(EFI_RSDP_ADDR, 36ULL)) {
+    } else if (overlaps(EFI_RSDP_ADDR, acpi::kRsdpSizeAcpi2)) {
         oss << "ACPI RSDP";
-    } else if (overlaps(EFI_RSDT_ADDR, 40ULL)) {
+    } else if (overlaps(EFI_RSDT_ADDR, acpi::kRsdtSize)) {
         oss << "ACPI RSDT";
-    } else if (overlaps(EFI_MADT_ADDR, 60ULL)) {
+    } else if (overlaps(EFI_XSDT_ADDR, acpi::kXsdtSize)) {
+        oss << "ACPI XSDT";
+    } else if (overlaps(EFI_MADT_ADDR, acpi::kMadtSize)) {
         oss << "ACPI MADT";
+    } else if (overlaps(EFI_FADT_ADDR, acpi::kFadtV3Size)) {
+        oss << "ACPI FADT";
+    } else if (overlaps(EFI_FACS_ADDR, acpi::kFacsSize)) {
+        oss << "ACPI FACS";
+    } else if (overlaps(EFI_DSDT_ADDR, acpi::kDsdtSize)) {
+        oss << "ACPI DSDT";
     }
     return oss.str();
 }
@@ -1314,15 +1341,24 @@ void logEfiHandoffAccess(const char* phase,
     const bool overlapsSalSystemTable =
         rangesOverlap(address, size, EFI_SAL_SYSTEM_TABLE_ADDR, sal::kSalSystemTableSize);
     const bool overlapsRsdp =
-        rangesOverlap(address, size, EFI_RSDP_ADDR, 36ULL);
+        rangesOverlap(address, size, EFI_RSDP_ADDR, acpi::kRsdpSizeAcpi2);
     const bool overlapsRsdt =
-        rangesOverlap(address, size, EFI_RSDT_ADDR, 40ULL);
+        rangesOverlap(address, size, EFI_RSDT_ADDR, acpi::kRsdtSize);
+    const bool overlapsXsdt =
+        rangesOverlap(address, size, EFI_XSDT_ADDR, acpi::kXsdtSize);
     const bool overlapsMadt =
-        rangesOverlap(address, size, EFI_MADT_ADDR, 60ULL);
+        rangesOverlap(address, size, EFI_MADT_ADDR, acpi::kMadtSize);
+    const bool overlapsFadt =
+        rangesOverlap(address, size, EFI_FADT_ADDR, acpi::kFadtV3Size);
+    const bool overlapsFacs =
+        rangesOverlap(address, size, EFI_FACS_ADDR, acpi::kFacsSize);
+    const bool overlapsDsdt =
+        rangesOverlap(address, size, EFI_DSDT_ADDR, acpi::kDsdtSize);
     if (!overlapsLoadedImage && !overlapsFilePath && !overlapsSimpleFs &&
         !overlapsOpenVolumeDescriptor && !overlapsLocalBuffer &&
         !overlapsConfigurationTable && !overlapsSalSystemTable &&
-        !overlapsRsdp && !overlapsRsdt && !overlapsMadt) {
+        !overlapsRsdp && !overlapsRsdt && !overlapsXsdt && !overlapsMadt &&
+        !overlapsFadt && !overlapsFacs && !overlapsDsdt) {
         return;
     }
 
@@ -9202,6 +9238,14 @@ bool IA64ISAPlugin::ensureEfiMemoryMap(IMemory& memory) {
     markRange(EFI_HANDOFF_REGION_BASE, EFI_HANDOFF_REGION_END,
               EFI_MEMORY_BOOT_SERVICES_DATA);
 
+    EfiHandoffLayout acpiLayout{};
+    if (!tryComputeEfiHandoffLayout(memorySize, acpiLayout) ||
+        acpiLayout.base != EFI_HANDOFF_REGION_BASE ||
+        !reserveIa64AcpiFirmwareMemory(efiMemoryMap_, physicalEnd,
+                                       acpiLayout, EFI_MEMORY_ATTRIBUTES)) {
+        return false;
+    }
+
     ia64::EfiMemoryDescriptor palCodeDescriptor{};
     if (!ia64::makeEfiPalCodeDescriptor(
             EFI_PAL_PROCEDURE_CODE_ADDR,
@@ -9896,9 +9940,13 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
              rangesOverlap(loadAddress, loadSize, EFI_CONFIGURATION_TABLE_ADDR, 48ULL) ||
              rangesOverlap(loadAddress, loadSize, EFI_SAL_SYSTEM_TABLE_ADDR,
                            sal::kSalSystemTableSize) ||
-             rangesOverlap(loadAddress, loadSize, EFI_RSDP_ADDR, 36ULL) ||
-             rangesOverlap(loadAddress, loadSize, EFI_RSDT_ADDR, 40ULL) ||
-             rangesOverlap(loadAddress, loadSize, EFI_MADT_ADDR, 60ULL));
+             rangesOverlap(loadAddress, loadSize, EFI_RSDP_ADDR, acpi::kRsdpSizeAcpi2) ||
+             rangesOverlap(loadAddress, loadSize, EFI_RSDT_ADDR, acpi::kRsdtSize) ||
+             rangesOverlap(loadAddress, loadSize, EFI_XSDT_ADDR, acpi::kXsdtSize) ||
+             rangesOverlap(loadAddress, loadSize, EFI_MADT_ADDR, acpi::kMadtSize) ||
+             rangesOverlap(loadAddress, loadSize, EFI_FADT_ADDR, acpi::kFadtV3Size) ||
+             rangesOverlap(loadAddress, loadSize, EFI_FACS_ADDR, acpi::kFacsSize) ||
+             rangesOverlap(loadAddress, loadSize, EFI_DSDT_ADDR, acpi::kDsdtSize));
         const bool traceEfiHandoffStore =
             emitLegacyEfiAccessTrace && storeSize != 0 &&
             (rangesOverlap(storeAddress, storeSize, EFI_LOADED_IMAGE_PROTOCOL_ADDR, 0x70ULL) ||
@@ -9908,9 +9956,13 @@ bool IA64ISAPlugin::executeInstruction(IMemory& memory, const InstructionEx& ins
              rangesOverlap(storeAddress, storeSize, EFI_CONFIGURATION_TABLE_ADDR, 48ULL) ||
              rangesOverlap(storeAddress, storeSize, EFI_SAL_SYSTEM_TABLE_ADDR,
                            sal::kSalSystemTableSize) ||
-             rangesOverlap(storeAddress, storeSize, EFI_RSDP_ADDR, 36ULL) ||
-             rangesOverlap(storeAddress, storeSize, EFI_RSDT_ADDR, 40ULL) ||
-             rangesOverlap(storeAddress, storeSize, EFI_MADT_ADDR, 60ULL));
+             rangesOverlap(storeAddress, storeSize, EFI_RSDP_ADDR, acpi::kRsdpSizeAcpi2) ||
+             rangesOverlap(storeAddress, storeSize, EFI_RSDT_ADDR, acpi::kRsdtSize) ||
+             rangesOverlap(storeAddress, storeSize, EFI_XSDT_ADDR, acpi::kXsdtSize) ||
+             rangesOverlap(storeAddress, storeSize, EFI_MADT_ADDR, acpi::kMadtSize) ||
+             rangesOverlap(storeAddress, storeSize, EFI_FADT_ADDR, acpi::kFadtV3Size) ||
+             rangesOverlap(storeAddress, storeSize, EFI_FACS_ADDR, acpi::kFacsSize) ||
+             rangesOverlap(storeAddress, storeSize, EFI_DSDT_ADDR, acpi::kDsdtSize));
         if (traceBootLocalLoad) {
             logBootLocalAccess("pre-read", cpu, state_.currentSlot_, instr,
                                loadAddress, loadSize, instr.GetDst(),

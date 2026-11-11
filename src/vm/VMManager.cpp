@@ -1436,19 +1436,9 @@ bool VMManager::startVM(const std::string& vmId) {
 
             WriteIa64SalFirmware(memory, layout);
 
-            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr, layout.xsdtAddr);
-            const auto rsdt = acpi::buildRsdt(layout.madtAddr);
-            const auto xsdt = acpi::buildXsdt(layout.madtAddr);
-            const auto madt = acpi::buildMadt(0, 0, 0,
-                                              acpi::kMadtFlagEnabled, 0);
-            memory.Write(layout.rsdpAddr, rsdp.bytes.data(), rsdp.bytes.size());
-            memory.Write(layout.rsdtAddr, rsdt.bytes.data(), rsdt.bytes.size());
-            memory.Write(layout.xsdtAddr, xsdt.bytes.data(), xsdt.bytes.size());
-            memory.Write(layout.madtAddr, madt.bytes.data(), madt.bytes.size());
-
-            const auto acpiEntry = acpi::buildEfiConfigurationTableEntry(layout.rsdpAddr);
-            memory.Write(layout.configurationTableAddr + 24,
-                         acpiEntry.data(), acpiEntry.size());
+            if (!acpi::publishAcpiFirmwareTables(memory, layout)) {
+                throw std::runtime_error("Unable to publish IA-64 ACPI tables");
+            }
             WriteIa64Bundle(instance, layout.salProcedureCodeAddr, 0x10,
                             nopM, nopI, brRetB0);
             WriteIa64Bundle(instance, layout.palProcedureCodeAddr, 0x10,
@@ -2299,18 +2289,9 @@ bool VMManager::startVM(const std::string& vmId) {
 
             WriteIa64SalFirmware(instance->vm->getMemory(), layout);
 
-            const auto rsdp = acpi::buildRsdp(layout.rsdtAddr, layout.xsdtAddr);
-            const auto rsdt = acpi::buildRsdt(layout.madtAddr);
-            const auto xsdt = acpi::buildXsdt(layout.madtAddr);
-            const auto madt = acpi::buildMadt(0, 0, 0,
-                                              acpi::kMadtFlagEnabled, 0);
-            instance->vm->getMemory().Write(layout.rsdpAddr, rsdp.bytes.data(), rsdp.bytes.size());
-            instance->vm->getMemory().Write(layout.rsdtAddr, rsdt.bytes.data(), rsdt.bytes.size());
-            instance->vm->getMemory().Write(layout.xsdtAddr, xsdt.bytes.data(), xsdt.bytes.size());
-            instance->vm->getMemory().Write(layout.madtAddr, madt.bytes.data(), madt.bytes.size());
-            const auto acpiEntry = acpi::buildEfiConfigurationTableEntry(layout.rsdpAddr);
-            instance->vm->getMemory().Write(layout.configurationTableAddr + 24,
-                                            acpiEntry.data(), acpiEntry.size());
+            if (!acpi::publishAcpiFirmwareTables(instance->vm->getMemory(), layout)) {
+                throw std::runtime_error("Unable to publish IA-64 ACPI tables");
+            }
 
             constexpr uint64_t NOP_M = 1ULL << 27;
             constexpr uint64_t NOP_I = 0x4000000000ULL;

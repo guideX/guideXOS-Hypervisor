@@ -1,0 +1,2 @@
+snapshot=evidence-9r23\r23-frontier-5000k-bootmem-node.bin capture_bytes=262144 bitmap_byte_range=[0x0,0x1000) node_low_pfn=0x8000 bitmap_bytes=4096 free_pfn_bits=30761 mismatches=0
+bootmem_bitmap=PASS

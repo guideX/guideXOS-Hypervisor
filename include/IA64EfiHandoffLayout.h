@@ -16,6 +16,13 @@ struct EfiHandoffLayout {
     uint64_t rsdtAddr = 0;
     uint64_t xsdtAddr = 0;
     uint64_t madtAddr = 0;
+    uint64_t fadtAddr = 0;
+    uint64_t facsAddr = 0;
+    uint64_t dsdtAddr = 0;
+    uint64_t acpiReclaimBase = 0;
+    uint64_t acpiReclaimEnd = 0;
+    uint64_t acpiNvsBase = 0;
+    uint64_t acpiNvsEnd = 0;
     uint64_t runtimeServicesAddr = 0;
     uint64_t bootServicesAddr = 0;
     uint64_t firmwareVendorAddr = 0;
@@ -102,10 +109,20 @@ constexpr uint64_t kEfiSalSystemTableOffset = 0x2040ULL;
 constexpr uint64_t kEfiSalProcedureCodeOffset = 0x2140ULL;
 constexpr uint64_t kEfiPalProcedureCodeOffset = 0x2180ULL;
 constexpr uint64_t kEfiSalGlobalPointerOffset = 0x21C0ULL;
-constexpr uint64_t kEfiRsdpOffset = 0x2200ULL;
-constexpr uint64_t kEfiRsdtOffset = 0x2240ULL;
-constexpr uint64_t kEfiXsdtOffset = 0x22C0ULL;
-constexpr uint64_t kEfiMadtOffset = 0x2280ULL;
+// ACPI reclaimable table bytes occupy their own page, separate from the
+// PAL/SAL and EFI configuration-table page. The mutable FACS has an ACPI NVS
+// page so it remains available after EFI boot services exit.
+constexpr uint64_t kEfiAcpiReclaimOffset = 0x3000ULL;
+constexpr uint64_t kEfiAcpiReclaimSize = kEfiPageSize;
+constexpr uint64_t kEfiAcpiNvsOffset = 0x4000ULL;
+constexpr uint64_t kEfiAcpiNvsSize = kEfiPageSize;
+constexpr uint64_t kEfiRsdpOffset = kEfiAcpiReclaimOffset;
+constexpr uint64_t kEfiRsdtOffset = 0x3040ULL;
+constexpr uint64_t kEfiMadtOffset = 0x3080ULL;
+constexpr uint64_t kEfiXsdtOffset = 0x30C0ULL;
+constexpr uint64_t kEfiFadtOffset = 0x3100ULL;
+constexpr uint64_t kEfiDsdtOffset = 0x3200ULL;
+constexpr uint64_t kEfiFacsOffset = kEfiAcpiNvsOffset;
 constexpr uint64_t kEfiBootImageMetadataOffset = 0x1D00ULL;
 constexpr uint64_t kEfiOpenVolumeStubCodeOffset = 0xC80ULL;
 constexpr uint64_t kEfiOpenVolumeStubDescOffset = 0xCC0ULL;
@@ -223,6 +240,13 @@ inline bool tryComputeEfiHandoffLayout(uint64_t guestMemorySize, EfiHandoffLayou
     layout.rsdtAddr = base + kEfiRsdtOffset;
     layout.xsdtAddr = base + kEfiXsdtOffset;
     layout.madtAddr = base + kEfiMadtOffset;
+    layout.fadtAddr = base + kEfiFadtOffset;
+    layout.facsAddr = base + kEfiFacsOffset;
+    layout.dsdtAddr = base + kEfiDsdtOffset;
+    layout.acpiReclaimBase = base + kEfiAcpiReclaimOffset;
+    layout.acpiReclaimEnd = layout.acpiReclaimBase + kEfiAcpiReclaimSize;
+    layout.acpiNvsBase = base + kEfiAcpiNvsOffset;
+    layout.acpiNvsEnd = layout.acpiNvsBase + kEfiAcpiNvsSize;
     layout.runtimeServicesAddr = base + kEfiRuntimeServicesOffset;
     layout.bootServicesAddr = base + kEfiBootServicesOffset;
     layout.firmwareVendorAddr = base + kEfiFirmwareVendorOffset;
