@@ -871,6 +871,14 @@ struct AuthenticReplay {
     bool subficRetired = false;
     bool mtocrfFetched = false;
     bool mtocrfRetired = false;
+    bool negFetched = false;
+    bool negRetired = false;
+    bool negFetchTranslated = false;
+    bool negFetchExecuteAllowed = false;
+    bool negAlignmentFetched = false;
+    bool negAlignmentRetired = false;
+    bool negDcbtFetched = false;
+    bool negDcbtRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
@@ -900,7 +908,19 @@ struct AuthenticReplay {
     uint64_t mtocrfTimebaseAfter = 0;
     uint64_t mtocrfRamBefore = 0;
     uint64_t mtocrfRamAfter = 0;
+    uint64_t negNip = 0;
+    uint64_t negCyclesBefore = 0;
+    uint64_t negCyclesAfter = 0;
+    uint64_t negTimebaseBefore = 0;
+    uint64_t negTimebaseAfter = 0;
+    uint64_t negRamBefore = 0;
+    uint64_t negRamAfter = 0;
+    uint64_t negFetchBackingAddress = 0;
+    uint64_t negAlignmentNip = 0;
+    uint64_t negDcbtNip = 0;
+    uint64_t negDcbtEffectiveAddress = 0;
     uint16_t mtocrfLPID = 0;
+    uint16_t negLPID = 0;
     uint64_t mtocrfFetchBackingAddress = 0;
     bool mtocrfFetchTranslated = false;
     bool mtocrfFetchExecuteAllowed = false;
@@ -954,6 +974,9 @@ struct AuthenticReplay {
     uint32_t srdRawWord = 0;
     uint32_t subficRawWord = 0;
     uint32_t mtocrfRawWord = 0;
+    uint32_t negRawWord = 0;
+    uint32_t negAlignmentRawWord = 0;
+    uint32_t negDcbtRawWord = 0;
     uint8_t mtocrfFXM = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
@@ -1016,6 +1039,7 @@ struct AuthenticReplay {
     std::string srdDecode;
     std::string subficDecode;
     std::string mtocrfDecode;
+    std::string negDecode;
     std::string mtocrfFirstBranch;
     std::string stopClass;
     std::string stopDisassembly;
@@ -1027,6 +1051,7 @@ struct AuthenticReplay {
     std::vector<std::string> sldFollowingInstructions;
     std::vector<std::string> mtocrfPrecedingInstructions;
     std::vector<std::string> mtocrfCR7BranchOutcomes;
+    std::vector<std::string> negContinuationTrace;
     std::string error;
     PPC64RegisterView before{};
     PPC64RegisterView after{};
@@ -1044,6 +1069,12 @@ struct AuthenticReplay {
     PPC64RegisterView subficAfter{};
     PPC64RegisterView mtocrfBefore{};
     PPC64RegisterView mtocrfAfter{};
+    PPC64RegisterView negBefore{};
+    PPC64RegisterView negAfter{};
+    PPC64RegisterView negAlignmentBefore{};
+    PPC64RegisterView negAlignmentAfter{};
+    PPC64RegisterView negDcbtBefore{};
+    PPC64RegisterView negDcbtAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1064,7 +1095,8 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  uint64_t rldicContinuationBudget = 0,
                                  bool stopAtDcbt = false,
                                  bool stopAtSld = false,
-                                 bool retireSubfic = false) {
+                                 bool retireSubfic = false,
+                                 bool stopAtNeg = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1311,6 +1343,40 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             const auto& following =
                 *static_cast<const DecodedInstruction*>(next.internalData);
+            if (following.kind == DecodedKind::NEG &&
+                !result.negFetched) {
+                result.negFetched = true;
+                result.negNip = before.nip;
+                result.negRawWord = following.raw;
+                result.negDecode = next.disassembly;
+                result.negBefore = before;
+                result.negLPID = cpu->getActiveLPID();
+                result.negCyclesBefore = vm.getCyclesExecuted();
+                result.negTimebaseBefore = vm.getPPC64Timebase();
+                result.negRamBefore = fingerprintRam(*memory);
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.negFetchTranslated = translation.success;
+                result.negFetchExecuteAllowed = translation.executeAllowed;
+                result.negFetchBackingAddress =
+                    translation.hostBackingAddress;
+                if (stopAtNeg) {
+                    result.stopClass = "phase41-neg-checkpoint";
+                    result.stopNip = before.nip;
+                    result.stopWord = following.raw;
+                    result.stopDisassembly = next.disassembly;
+                    result.stopLPID = cpu->getActiveLPID();
+                    result.stopFetchTranslated = translation.success;
+                    result.stopFetchExecuteAllowed =
+                        translation.executeAllowed;
+                    result.stopBackingAddress =
+                        translation.hostBackingAddress;
+                    stopped = true;
+                    break;
+                }
+            }
             if (following.kind == DecodedKind::MTOCRF &&
                 !result.mtocrfFetched) {
                 result.mtocrfFetched = true;
@@ -1376,6 +1442,23 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                     stopped = true;
                     break;
                 }
+            }
+            if (result.negRetired && !result.negAlignmentFetched &&
+                following.kind == DecodedKind::ANDI_DOT) {
+                result.negAlignmentFetched = true;
+                result.negAlignmentNip = before.nip;
+                result.negAlignmentRawWord = following.raw;
+                result.negAlignmentBefore = before;
+            }
+            if (result.negRetired && !result.negDcbtFetched &&
+                following.kind == DecodedKind::DCBT) {
+                result.negDcbtFetched = true;
+                result.negDcbtNip = before.nip;
+                result.negDcbtRawWord = following.raw;
+                result.negDcbtBefore = before;
+                result.negDcbtEffectiveAddress =
+                    (following.ra == 0U ? 0U : before.gpr[following.ra]) +
+                    before.gpr[following.rb];
             }
             if (result.rldicRetired &&
                 following.kind == DecodedKind::LWAX &&
@@ -1774,6 +1857,27 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.subficTimebaseAfter = vm.getPPC64Timebase();
                 result.subficRamAfter = fingerprintRam(*memory);
             }
+            if (following.kind == DecodedKind::NEG && result.negFetched &&
+                before.nip == result.negNip && !result.negRetired) {
+                result.negAfter = after;
+                result.negRetired = after.nip == before.nip + 4U;
+                result.negCyclesAfter = vm.getCyclesExecuted();
+                result.negTimebaseAfter = vm.getPPC64Timebase();
+                result.negRamAfter = fingerprintRam(*memory);
+            }
+            if (following.kind == DecodedKind::ANDI_DOT &&
+                result.negAlignmentFetched &&
+                before.nip == result.negAlignmentNip &&
+                !result.negAlignmentRetired) {
+                result.negAlignmentAfter = after;
+                result.negAlignmentRetired = after.nip == before.nip + 4U;
+            }
+            if (following.kind == DecodedKind::DCBT &&
+                result.negDcbtFetched && before.nip == result.negDcbtNip &&
+                !result.negDcbtRetired) {
+                result.negDcbtAfter = after;
+                result.negDcbtRetired = after.nip == before.nip + 4U;
+            }
             if (following.kind == DecodedKind::MTOCRF &&
                 result.mtocrfFetched && before.nip == result.mtocrfNip &&
                 !result.mtocrfRetired) {
@@ -1803,6 +1907,14 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                  << " r4=" << hex(before.gpr[4])
                  << " r5=" << hex(before.gpr[5])
                  << " r31=" << hex(before.gpr[31]);
+            if (result.negFetched) {
+                line << " r6_before=" << hex(before.gpr[6])
+                     << " r6_after=" << hex(after.gpr[6]);
+            }
+            if (result.negRetired && before.nip != result.negNip &&
+                result.negContinuationTrace.size() < 32U) {
+                result.negContinuationTrace.push_back(line.str());
+            }
             if (result.rldicRetired && before.nip != result.rldicNip) {
                 result.rldicContinuationTrace.push_back(line.str());
             }
@@ -2020,6 +2132,30 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         }
         for (const auto& branch : result.mtocrfCR7BranchOutcomes) {
             trace << "authentic_mtocrf_cr7_branch=" << branch << "\n";
+        }
+    }
+    if (result.negFetched) {
+        trace << "authentic_neg_nip=" << hex(result.negNip)
+              << " raw=" << wordHex(result.negRawWord)
+              << " decode=" << result.negDecode
+              << " retired=" << result.negRetired
+              << " r3=" << hex(result.negBefore.gpr[3])
+              << " r6_before=" << hex(result.negBefore.gpr[6])
+              << " r6_after=" << hex(result.negAfter.gpr[6])
+              << " post_nip=" << hex(result.negAfter.nip)
+              << " lpid=" << result.negLPID
+              << " fetch_translated=" << result.negFetchTranslated
+              << " fetch_execute_allowed="
+              << result.negFetchExecuteAllowed
+              << " backing=" << hex(result.negFetchBackingAddress)
+              << " cycles=" << result.negCyclesBefore << "/"
+              << result.negCyclesAfter
+              << " timebase=" << result.negTimebaseBefore << "/"
+              << result.negTimebaseAfter
+              << " ram=" << hex(result.negRamBefore) << "/"
+              << hex(result.negRamAfter) << "\n";
+        for (const auto& line : result.negContinuationTrace) {
+            trace << "neg_continuation " << line << "\n";
         }
     }
     result.trace = trace.str();

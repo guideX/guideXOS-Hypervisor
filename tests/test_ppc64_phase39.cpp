@@ -348,9 +348,9 @@ void testAuthenticLinuxSubfic39() {
     if (kernel.empty() || fdt.empty()) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true);
+        false, false, 65'536U, false, false, true, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true);
+        false, false, 65'536U, false, false, true, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -413,14 +413,15 @@ void testAuthenticLinuxSubfic39() {
           first.subficBefore.xer == second.subficBefore.xer &&
           first.subficAfter.xer == second.subficAfter.xer);
 
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.stopClass == "phase41-neg-checkpoint" &&
           second.stopClass == first.stopClass);
     CHECK(first.stopNip == second.stopNip && first.stopNip > first.subficAfter.nip);
     CHECK(first.final.nip == first.stopNip && second.final.nip == second.stopNip);
     CHECK(first.stopLPID == 1U && second.stopLPID == first.stopLPID);
     CHECK(first.stopWord == second.stopWord && first.stopWord != 0U);
     CHECK(PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
-          DecodedKind::UNSUPPORTED);
+          DecodedKind::NEG &&
+          PPC64ISAPlugin::decodeWord(first.stopWord).supported);
     CHECK(first.stopNip == 0xC000000000180294ULL &&
           first.stopWord == 0x7CC300D0U);
     CHECK(independentFrontierDecode39(first.stopWord) == "neg r6,r3");

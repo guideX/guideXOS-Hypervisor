@@ -402,9 +402,9 @@ void testAuthenticMtocrfLinux40() {
     if (kernel.empty() || fdt.empty()) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true);
+        false, false, 65'536U, false, false, true, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true);
+        false, false, 65'536U, false, false, true, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -491,7 +491,8 @@ void testAuthenticMtocrfLinux40() {
     CHECK(first.stopNip == kNextFrontierNip40 &&
           first.stopWord == kNextFrontierWord40);
     CHECK(PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
-          DecodedKind::UNSUPPORTED);
+          DecodedKind::NEG &&
+          PPC64ISAPlugin::decodeWord(first.stopWord).supported);
     CHECK(independentFrontierDecode40(first.stopWord) == "neg r6,r3");
     CHECK(((first.stopWord >> 26U) & 63U) == 31U &&
           ((first.stopWord >> 21U) & 31U) == 6U &&
@@ -657,6 +658,7 @@ void testAuthenticMtocrfLinux40() {
 
 } // namespace
 
+#ifndef PPC64_PHASE40_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -689,3 +691,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

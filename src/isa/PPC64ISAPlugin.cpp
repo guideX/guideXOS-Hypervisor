@@ -1667,6 +1667,12 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 const bool power9Th = instr.th <= 8U || instr.th == 10U ||
                     instr.th == 11U || instr.th == 16U || instr.th == 17U;
                 instr.supported = !rc && power9Th;
+            } else if (base == XO_NEG) {
+                // NEG/NEGO use the XO-form OE/Rc bits, while bits 11-15 are
+                // reserved. Reject those encodings instead of treating the
+                // reserved field as an operand or another operation.
+                instr.kind = DecodedKind::NEG;
+                instr.supported = instr.rb == 0U;
             } else if (base == XO_ADD) {
                 instr.kind = DecodedKind::ADD;
                 instr.supported = true;
@@ -1941,6 +1947,14 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << " r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.ra)
                 << ",r" << static_cast<int>(instr.rb);
+            break;
+        case DecodedKind::NEG:
+            out << (instr.oe ? "nego" : "neg");
+            if (instr.rc) {
+                out << ".";
+            }
+            out << " r" << static_cast<int>(instr.rt)
+                << ",r" << static_cast<int>(instr.ra);
             break;
         case DecodedKind::DIVD:
             out << (instr.oe ? "divdo" : "divd");
@@ -3604,6 +3618,41 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             if (instr.rc) {
                 updateCR0(state_, result);
             }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::NEG: {
+            // Read RA before writing RT so RT=RA uses the original source.
+            // Unsigned subtraction defines the full 64-bit modular result in
+            // both SF modes without host signed-overflow undefined behavior.
+            const uint64_t source = state_.gpr[instr.ra];
+            const uint64_t result = uint64_t{0} - source;
+            state_.gpr[instr.rt] = result;
+
+            if (instr.oe) {
+                const bool overflow64 = source == 0x8000000000000000ULL;
+                const bool overflow32 =
+                    static_cast<uint32_t>(source) == 0x80000000U;
+                const bool is64BitMode = (state_.msr & MSR_SF) != 0;
+                setXEROverflow(state_, is64BitMode ? overflow64 : overflow32);
+                // POWER9 / ISA 3.0 reports the low-word overflow separately
+                // in 64-bit mode, and mirrors active word overflow in SF=0.
+                setXEROverflow32(state_, overflow32);
+            }
+
+            if (instr.rc) {
+                if ((state_.msr & MSR_SF) != 0) {
+                    updateCR0(state_, result);
+                } else {
+                    const uint32_t wordResult = static_cast<uint32_t>(result);
+                    const uint64_t signExtendedWord =
+                        (wordResult & 0x80000000U) != 0U
+                            ? (0xFFFFFFFF00000000ULL | wordResult)
+                            : wordResult;
+                    updateCR0(state_, signExtendedWord);
+                }
+            }
+
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
