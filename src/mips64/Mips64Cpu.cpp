@@ -115,6 +115,7 @@ constexpr uint8_t kFnDsll32 = 0x3C;
 constexpr uint8_t kFnDsrl32 = 0x3E;
 constexpr uint8_t kFnDsra32 = 0x3F;
 constexpr uint8_t kFnDext = 0x03;
+constexpr uint8_t kFnDextm = 0x01;
 
 // -- REGIMM rt field ------------------------------------------------------------
 constexpr uint8_t kRiBltz = 0x00;
@@ -421,6 +422,20 @@ Mips64Decoded decodeInstruction(uint32_t word) {
         }
         case kOpSpecial3: {
             const uint8_t funct = static_cast<uint8_t>(word & 0x3FU);
+            if (funct == kFnDextm) {
+                // DEXTM stores msbd-32 in bits 15:11; the architectural
+                // field width is encoded value + 33. Values crossing bit 63
+                // are UNPREDICTABLE, so stop as unsupported without RI entry.
+                const unsigned pos = decoded.sa;
+                const unsigned size = static_cast<unsigned>(decoded.rd) + 33U;
+                if (pos + size > 64U) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                "UNPREDICTABLE DEXTM field (position + size exceeds 64)");
+                }
+                decoded.op = Mips64Op::Dextm;
+                decoded.valid = true;
+                return decoded;
+            }
             if (funct == kFnDext) {
                 // In this format bits 15:11 are MSBD and bits 10:6 are LSB.
                 // The generic rd/sa fields already contain those values;
@@ -1641,6 +1656,22 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rt, result);
             break;
         }
+        case Mips64Op::Dextm: {
+            const unsigned pos = decoded.sa;
+            const unsigned size = static_cast<unsigned>(decoded.rd) + 33U;
+            if (pos >= 32U || size < 33U || size > 64U || pos + size > 64U) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE DEXTM field (position + size exceeds 64)");
+                return Mips64StepResult::Fault;
+            }
+            const uint64_t source = readGpr(decoded.rs);
+            const uint64_t mask = size == 64U
+                ? UINT64_MAX
+                : ((uint64_t{1} << size) - 1U);
+            const uint64_t result = (source >> pos) & mask;
+            writeGpr(decoded.rt, result);
+            break;
+        }
         case Mips64Op::Dsra: {
             const int64_t value = static_cast<int64_t>(readGpr(decoded.rt));
             writeGpr(decoded.rd, static_cast<uint64_t>(value >> decoded.sa));
@@ -2484,6 +2515,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
                           decoded.rt, decoded.rs, decoded.sa,
                           static_cast<unsigned>(decoded.rd) + 1U);
             break;
+        case Mips64Op::Dextm:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u, %u", name,
+                          decoded.rt, decoded.rs, decoded.sa,
+                          static_cast<unsigned>(decoded.rd) + 33U);
+            break;
         case Mips64Op::Sll:
         case Mips64Op::Srl:
         case Mips64Op::Sra:
@@ -3149,6 +3185,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dsrl32: return "dsrl32";
         case Mips64Op::Sllv: return "sllv";
         case Mips64Op::Dext: return "dext";
+        case Mips64Op::Dextm: return "dextm";
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
         case Mips64Op::Dsll32: return "dsll32";

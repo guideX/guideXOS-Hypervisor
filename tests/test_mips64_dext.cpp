@@ -189,8 +189,13 @@ void testAuthenticWordDecodeAndDisassembly() {
     CHECK(Mips64Cpu::opName(Mips64Op::Dext) == std::string("dext"));
 }
 
-void testNeighboringSpecial3FunctionsStayUnsupported() {
-    for (uint8_t funct : {uint8_t{0x00}, uint8_t{0x01}, uint8_t{0x02},
+void testNeighboringSpecial3FunctionsRemainDistinct() {
+    const Mips64Decoded dextm = decodeInstruction(0x7E31E801U);
+    CHECK(dextm.valid && dextm.op == Mips64Op::Dextm);
+    CHECK(dextm.rs == 17 && dextm.rt == 17 && dextm.rd == 29 && dextm.sa == 0);
+    CHECK(Mips64Cpu{}.disassemble(dextm) == "dextm $17, $17, 0, 62");
+
+    for (uint8_t funct : {uint8_t{0x00}, uint8_t{0x02},
                           uint8_t{0x04}, uint8_t{0x05}, uint8_t{0x06},
                           uint8_t{0x07}, uint8_t{0x19}, uint8_t{0x20},
                           uint8_t{0x24}, uint8_t{0x25}, uint8_t{0x26},
@@ -424,7 +429,7 @@ void testProductionVmSnapshotReplayWithActiveReservation() {
 
 int main() {
     testAuthenticWordDecodeAndDisassembly();
-    testNeighboringSpecial3FunctionsStayUnsupported();
+    testNeighboringSpecial3FunctionsRemainDistinct();
     testAuthenticNextSpecialInstructionDecodesAsDsllv();
     testDefinedOperandBoundariesAndIndependentResults();
     testDextInBranchDelaySlot();

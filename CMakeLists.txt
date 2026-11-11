@@ -1301,3 +1301,19 @@ else()
     target_compile_options(test_mips64_dsra32 PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64Dsra32Tests COMMAND test_mips64_dsra32)
+
+# MIPS64-25 architectural qualification for Release 2 DEXTM and the
+# authenticated OpenWrt Linux continuation.
+add_executable(test_mips64_dextm
+    tests/test_mips64_dextm.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_dextm PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_dextm PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_dextm PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64DextmTests COMMAND test_mips64_dextm)
