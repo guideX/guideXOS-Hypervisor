@@ -25,6 +25,8 @@
 //   - LDR/STR pre-index and post-index (imm9 signed, writeback on success).
 //   - Logical (immediate) AND/ORR/EOR/ANDS plus the TST and MOV aliases,
 //     with the ARM DecodeBitMasks algorithm and reserved-encoding rejection.
+//   - Logical shifted-register AND/ORR/EOR/ANDS families, including operand
+//     inversion, LSL/LSR/ASR/ROR, and W/X zero-register behavior.
 //   - CSEL/CSINC conditional selection (and the CSET/CINC aliases).
 //   - A three-level nested compiler-style call chain (stp/ldp frames).
 // SCOPE (Phase AARCH64-5/6, additive): EL0/EL1 synchronous exceptions,
@@ -164,6 +166,12 @@ enum class Op {
     AddsImm,  // ADDS (immediate): flag-setting add
     SubsImm,  // SUBS (immediate): flag-setting subtract
     CmpImm,   // CMP (immediate): SUBS with XZR/WZR destination (alias)
+    CcmpImm,  // CCMP (immediate): conditional compare, otherwise fallback NZCV
+    CcmnImm,  // CCMN (immediate): conditional compare-negative
+    CcmpReg,  // CCMP (register): conditional compare, otherwise fallback NZCV
+    CcmnReg,  // CCMN (register): conditional compare-negative
+    Tbz,      // Test a general-purpose register bit and branch if zero
+    Tbnz,     // Test a general-purpose register bit and branch if nonzero
     BCond,    // B.<cond>: conditional branch on NZCV
     Adr,      // ADR: Xd = PC + SEx(imm21) (Rd==31 is XZR, never SP)
     Adrp,     // ADRP: Xd = (PC & ~0xFFF) + SEx(imm21)*4096 (Rd==31 is XZR)
@@ -180,6 +188,7 @@ enum class Op {
     OrrImm,   // ORR (immediate): bitmask immediate (MOV alias when Rn==31)
     EorImm,   // EOR (immediate): bitmask immediate
     AndsImm,  // ANDS (immediate): bitmask immediate (TST alias when Rd==31)
+    LogicalReg, // Logical shifted-register AND/ORR/EOR/ANDS family
     Csel,     // CSEL: conditional select
     Csinc,    // CSINC: conditional select increment (CINC/CSET aliases)
     Mrs,      // MRS Xt, system register
@@ -188,6 +197,7 @@ enum class Op {
     Svc,      // SVC #imm16: synchronous exception to EL1
     Brk,      // BRK #imm16: breakpoint instruction exception
     Eret,     // ERET: restore PSTATE from SPSR_EL1 and PC from ELR_EL1
+    BtiHint,  // BTI landing-pad hint, NOP when FEAT_BTI is not implemented
     Dsb,      // DSB: ordered single-CPU memory operation
     Dmb,      // DMB: ordered single-CPU memory operation
     Isb,      // ISB: instruction context synchronization event
@@ -228,6 +238,9 @@ struct Decoded {
     uint32_t imms = 0;         // mask length/element selector (6 bits)
     uint32_t immN = 0;         // N bit (64-bit element selector)
     uint64_t logicalImm = 0;   // decoded bitmask immediate
+    uint8_t logicalOpcode = 0; // Shifted-register opc: AND/ORR/EOR/ANDS
+    uint8_t logicalShift = 0;  // Logical shifted-register shift type: LSL/LSR/ASR/ROR
+    bool invertRm = false;     // Logical shifted-register N bit (BIC/ORN/EON/BICS)
     bool setsFlags = false;    // ANDS/TST (sets N,Z; clears C,V)
     int64_t pcOffset = 0;      // ADR/ADRP/LDR-literal signed byte displacement
                                // from the current instruction address, fully
@@ -235,6 +248,7 @@ struct Decoded {
                                // ADR/ADRP/LDR-literal only; branches use
                                // branchOffset, LDR/STR-imm use memOffset.
     uint8_t cond = 0;          // B.cond 4-bit condition code (bits [3:0])
+    uint8_t fallbackNzcv = 0;  // CCMP/CCMN alternate NZCV value when cond is false
     uint8_t sysOp0 = 0;        // System-register encoding fields
     uint8_t sysOp1 = 0;
     uint8_t sysCrn = 0;

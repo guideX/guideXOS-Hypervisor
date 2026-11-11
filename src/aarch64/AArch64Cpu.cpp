@@ -1132,6 +1132,63 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
     }
 
+    // Logical (shifted register): sf[31] opc[30:29] 01010 shift[23:22]
+    // N[21] Rm[20:16] imm6[15:10] Rn[9:5] Rd[4:0].  The N bit inverts
+    // operand Rm (BIC/ORN/EON/BICS); register 31 is always XZR/WZR here.
+    if ((word & 0x1F000000u) == 0x0A000000u) {
+        const bool sf = (word & 0x80000000u) != 0;
+        const uint32_t opc = (word >> 29) & 3u;
+        const uint32_t shiftType = (word >> 22) & 3u;
+        const uint32_t amount = (word >> 10) & 0x3Fu;
+        if ((!sf && (amount & 0x20u) != 0) || shiftType > 3u) {
+            return invalid(word, address, Fault::UnallocatedEncoding,
+                           "logical shifted-register encoding has an invalid shift amount");
+        }
+        Decoded d;
+        d.op = Op::LogicalReg;
+        d.valid = true;
+        d.sf64 = sf;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+        d.rm = static_cast<uint8_t>((word >> 16) & 31u);
+        d.logicalOpcode = static_cast<uint8_t>(opc);
+        d.logicalShift = static_cast<uint8_t>(shiftType);
+        d.shift = static_cast<uint8_t>(amount);
+        d.invertRm = (word & 0x00200000u) != 0;
+        d.setsFlags = opc == 3u;
+        char buf[128];
+        const char* baseMnemonic = (opc == 0u) ? (d.invertRm ? "bic" : "and")
+                                    : (opc == 1u) ? (d.invertRm ? "orn" : "orr")
+                                    : (opc == 2u) ? (d.invertRm ? "eon" : "eor")
+                                                  : (d.invertRm ? "bics" : "ands");
+        const std::string rdName = d.rd == 31 ? std::string(sf ? "xzr" : "wzr")
+                                               : regName(sf, d.rd);
+        const std::string rnName = d.rn == 31 ? std::string(sf ? "xzr" : "wzr")
+                                               : regName(sf, d.rn);
+        const std::string rmName = d.rm == 31 ? std::string(sf ? "xzr" : "wzr")
+                                               : regName(sf, d.rm);
+        static const char* shiftNames[] = {"lsl", "lsr", "asr", "ror"};
+        if (opc == 1u && !d.invertRm && d.rn == 31) {
+            if (amount == 0u) {
+                std::snprintf(buf, sizeof(buf), "mov %s, %s", rdName.c_str(), rmName.c_str());
+            } else {
+                std::snprintf(buf, sizeof(buf), "mov %s, %s, %s #%u", rdName.c_str(),
+                              rmName.c_str(), shiftNames[shiftType], amount);
+            }
+        } else if (amount == 0u) {
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, %s", baseMnemonic,
+                          rdName.c_str(), rnName.c_str(), rmName.c_str());
+        } else {
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, %s, %s #%u", baseMnemonic,
+                          rdName.c_str(), rnName.c_str(), rmName.c_str(),
+                          shiftNames[shiftType], amount);
+        }
+        d.disassembly = buf;
+        return d;
+    }
+
     // Logical (immediate): sf[31] opc[30:29] 010010 N[22] immr[21:16]
     // imms[15:10] Rn[9:5] Rd[4:0]. opc 00 = AND, 01 = ORR, 10 = EOR,
     // 11 = ANDS. bits[28:23] = 100100 selects the family; bit22 = N.
@@ -1186,6 +1243,55 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
         d.disassembly = buf;
         return d;
+    }
+
+    // CCMP/CCMN (immediate and register): scalar conditional compare forms
+    // from the baseline A64 integer instruction set. Bits[30:21] distinguish
+    // subtract (CCMP) from add (CCMN); bits[11:10] select the source form.
+    {
+        const uint32_t fixed = word & 0x7FE00000u;
+        if (fixed == 0x7A400000u || fixed == 0x3A400000u) {
+            const uint32_t sourceForm = word & 0xC00u;
+            if ((word & 0x10u) != 0 || (sourceForm != 0 && sourceForm != 0x800u)) {
+                return invalid(word, address, Fault::UnallocatedEncoding,
+                               "conditional-compare encoding has reserved fixed bits");
+            }
+            const bool isCompare = fixed == 0x7A400000u;
+            const bool isImmediate = sourceForm == 0x800u;
+            const bool sf = (word & 0x80000000u) != 0;
+            Decoded d;
+            d.op = isCompare
+                ? (isImmediate ? Op::CcmpImm : Op::CcmpReg)
+                : (isImmediate ? Op::CcmnImm : Op::CcmnReg);
+            d.valid = true;
+            d.sf64 = sf;
+            d.word = word;
+            d.address = address;
+            d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+            d.cond = static_cast<uint8_t>((word >> 12) & 15u);
+            d.fallbackNzcv = static_cast<uint8_t>(word & 15u);
+            if (isImmediate) {
+                d.imm12 = static_cast<uint16_t>((word >> 16) & 31u);
+            } else {
+                d.rm = static_cast<uint8_t>((word >> 16) & 31u);
+            }
+            const std::string rnName = d.rn == 31
+                ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rn);
+            char buf[128];
+            if (isImmediate) {
+                std::snprintf(buf, sizeof(buf), "%s %s, #%u, #0x%x, %s",
+                    isCompare ? "ccmp" : "ccmn", rnName.c_str(),
+                    d.imm12, d.fallbackNzcv, condName(d.cond));
+            } else {
+                const std::string rmName = d.rm == 31
+                    ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rm);
+                std::snprintf(buf, sizeof(buf), "%s %s, %s, #0x%x, %s",
+                    isCompare ? "ccmp" : "ccmn", rnName.c_str(), rmName.c_str(),
+                    d.fallbackNzcv, condName(d.cond));
+            }
+            d.disassembly = buf;
+            return d;
+        }
     }
 
     // CSEL/CSINC: sf[31] op[30]=0 S[29]=0 11010100[28:21] Rm[20:16]
@@ -1417,6 +1523,34 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
     }
 
+    // TBZ/TBNZ: b5[31] 011011 op[24] b40[23:19] imm14[18:5] Rt[4:0].
+    if ((word & 0x7E000000u) == 0x36000000u) {
+        const bool bit32Plus = (word & 0x80000000u) != 0;
+        const bool isTbnz = (word & 0x01000000u) != 0;
+        const uint32_t testedBit = (bit32Plus ? 32u : 0u) |
+                                   ((word >> 19) & 31u);
+        const uint32_t imm14 = (word >> 5) & 0x3FFFu;
+        Decoded d;
+        d.op = isTbnz ? Op::Tbnz : Op::Tbz;
+        d.valid = true;
+        d.sf64 = bit32Plus;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        d.imm12 = static_cast<uint16_t>(testedBit);
+        d.branchOffset = signExtend(imm14, 14) * 4;
+        const std::string registerName = d.rd == 31
+            ? std::string(bit32Plus ? "xzr" : "wzr")
+            : regName(bit32Plus, d.rd);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s %s, #%u, #0x%llx",
+                      isTbnz ? "tbnz" : "tbz", registerName.c_str(),
+                      testedBit,
+                      static_cast<unsigned long long>(address + d.branchOffset));
+        d.disassembly = buf;
+        return d;
+    }
+
     // CBZ/CBNZ: sf[31] 011010 op[24] imm19[23:5] Rt[4:0].
     if ((word & 0x7F000000u) == 0x34000000u || (word & 0x7F000000u) == 0x35000000u) {
         const bool sf = (word & 0x80000000u) != 0;
@@ -1457,8 +1591,24 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         d.disassembly = buf;
         return d;
     }
-    // Exactly one HINT encoding is implemented. Anything else that looks
-    // like a HINT/system instruction is explicitly unsupported, never a NOP.
+    // BTI encodings occupy a HINT space. This CPU profile does not implement
+    // FEAT_BTI or its control state, so these architecturally defined hints
+    // have no landing-pad effect and retire as NOPs.
+    if ((word & 0xFFFFFF3Fu) == 0xD503241Fu) {
+        static const char* const btiNames[] = {"bti", "bti c", "bti j", "bti jc"};
+        Decoded d;
+        d.op = Op::BtiHint;
+        d.valid = true;
+        d.sf64 = true;
+        d.word = word;
+        d.address = address;
+        d.disassembly = btiNames[(word >> 6) & 3u];
+        return d;
+    }
+
+    // Exactly one generic HINT encoding is implemented. Anything else that
+    // looks like a HINT/system instruction is explicitly unsupported, never
+    // silently treated as a NOP.
     if (word == kNopEncoding) {
         Decoded d;
         d.op = Op::Nop;
@@ -1986,6 +2136,7 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
     exceptionVectorPending_ = false;
     switch (decoded.op) {
     case Op::Nop:
+    case Op::BtiHint:
         pc_ += kInstructionSize;
         break;
     case Op::Dsb:
@@ -2326,6 +2477,19 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         }
         break;
     }
+    case Op::Tbz:
+    case Op::Tbnz: {
+        // TBZ/TBNZ read XZR/WZR for Rt==31 and do not modify NZCV.
+        const uint64_t test = decoded.rd == 31 ? 0 : x_[decoded.rd];
+        const bool bitSet = ((test >> decoded.imm12) & 1u) != 0;
+        const bool taken = decoded.op == Op::Tbz ? !bitSet : bitSet;
+        if (taken) {
+            pc_ = static_cast<uint64_t>(static_cast<int64_t>(pc_) + decoded.branchOffset);
+        } else {
+            pc_ += kInstructionSize;
+        }
+        break;
+    }
     case Op::AddsImm:
     case Op::SubsImm:
     case Op::CmpImm: {
@@ -2346,6 +2510,34 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             // ADDS/SUBS to XZR/WZR: result discarded, flags still updated.
         }
         setNzcv(flags.n, flags.z, flags.c, flags.v);
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::CcmpImm:
+    case Op::CcmnImm:
+    case Op::CcmpReg:
+    case Op::CcmnReg: {
+        const bool isCompare = decoded.op == Op::CcmpImm || decoded.op == Op::CcmpReg;
+        const bool isImmediate = decoded.op == Op::CcmpImm || decoded.op == Op::CcmnImm;
+        if (conditionHolds(decoded.cond, flagN(), flagZ(), flagC(), flagV())) {
+            const auto readOperand = [&](uint8_t index) {
+                if (index == 31) return uint64_t{0}; // CCMP/CCMN use XZR/WZR.
+                return decoded.sf64 ? x_[index]
+                    : static_cast<uint64_t>(static_cast<uint32_t>(x_[index]));
+            };
+            const uint64_t operand1 = readOperand(decoded.rn);
+            const uint64_t operand2 = isImmediate
+                ? static_cast<uint64_t>(decoded.imm12) : readOperand(decoded.rm);
+            const AddSubFlags flags = isCompare
+                ? subFlags(decoded.sf64, operand1, operand2)
+                : addFlags(decoded.sf64, operand1, operand2);
+            setNzcv(flags.n, flags.z, flags.c, flags.v);
+        } else {
+            setNzcv((decoded.fallbackNzcv & 8u) != 0,
+                    (decoded.fallbackNzcv & 4u) != 0,
+                    (decoded.fallbackNzcv & 2u) != 0,
+                    (decoded.fallbackNzcv & 1u) != 0);
+        }
         pc_ += kInstructionSize;
         break;
     }
@@ -2634,6 +2826,64 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             activeSpRef() = wb;
         } else {
             x_[decoded.rn] = wb;
+        }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::LogicalReg: {
+        // Logical shifted-register instructions use XZR/WZR for all register
+        // 31 operands and preserve NZCV except for ANDS/BICS (opc == 3).
+        const uint64_t widthMask = decoded.sf64 ? UINT64_MAX : 0xFFFFFFFFULL;
+        const uint64_t left = decoded.rn == 31 ? 0 : (x_[decoded.rn] & widthMask);
+        const uint64_t source = decoded.rm == 31 ? 0 : (x_[decoded.rm] & widthMask);
+        const unsigned width = decoded.sf64 ? 64u : 32u;
+        const unsigned amount = decoded.shift;
+        uint64_t right = source;
+        if (amount != 0u) {
+            switch (decoded.logicalShift) {
+            case 0: // LSL
+                right = (source << amount) & widthMask;
+                break;
+            case 1: // LSR
+                right = source >> amount;
+                break;
+            case 2: // ASR, with explicit sign fill to avoid signed-shift assumptions.
+                right = source >> amount;
+                if ((source & (1ULL << (width - 1u))) != 0) {
+                    right |= widthMask << (width - amount);
+                }
+                right &= widthMask;
+                break;
+            case 3: // ROR
+                right = ((source >> amount) | (source << (width - amount))) & widthMask;
+                break;
+            default:
+                lastFault_ = Fault::UnallocatedEncoding;
+                lastError_ = "logical shifted-register has an invalid shift type";
+                return lastFault_;
+            }
+        }
+        if (decoded.invertRm) {
+            right = (~right) & widthMask;
+        }
+        uint64_t result = 0;
+        switch (decoded.logicalOpcode) {
+        case 0: result = left & right; break; // AND/BIC
+        case 1: result = left | right; break; // ORR/ORN
+        case 2: result = left ^ right; break; // EOR/EON
+        case 3: result = left & right; break; // ANDS/BICS
+        default:
+            lastFault_ = Fault::UnallocatedEncoding;
+            lastError_ = "logical shifted-register has an invalid opc field";
+            return lastFault_;
+        }
+        result &= widthMask;
+        if (decoded.logicalOpcode == 3u) {
+            const bool negative = (result & (1ULL << (width - 1u))) != 0;
+            setNzcv(negative, result == 0, false, false);
+        }
+        if (decoded.rd != 31) {
+            x_[decoded.rd] = result;
         }
         pc_ += kInstructionSize;
         break;

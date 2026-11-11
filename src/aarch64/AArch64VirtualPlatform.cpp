@@ -4,6 +4,7 @@
 #include "aarch64/AArch64DeviceTree.h"
 #include "aarch64/AArch64GICv3.h"
 #include "aarch64/AArch64GenericTimer.h"
+#include "aarch64/AArch64LinuxImage.h"
 #include "aarch64/AArch64PL011.h"
 
 #include <algorithm>
@@ -331,6 +332,72 @@ bool AArch64VirtualPlatform::loadRawGuestImage(
     guestEntry_ = entryPc;
     imageLoaded_ = true;
     return prepareEntry(guestEntry_, error);
+}
+
+bool AArch64VirtualPlatform::loadLinuxImage(
+    const std::vector<uint8_t>& image, uint64_t placementBase,
+    AArch64LinuxImageInfo* imageInfo, std::string* error) {
+    AArch64LinuxImageInfo parsed;
+    AArch64LinuxImagePlan plan;
+    if (!inspectAArch64LinuxImage(image, parsed, error) ||
+        !planAArch64LinuxImage(parsed, image.size(), placementBase,
+            config_.ramBase, config_.ramBytes, 4096, plan, error)) return false;
+
+    if (parsed.effectiveImageSize > config_.guestImageCapacity ||
+        image.size() > config_.guestImageCapacity) {
+        setError(error, "ARM64 Linux Image exceeds its configured guest-image reservation");
+        return false;
+    }
+    const std::array<Region, 5> reserved{{
+        {"exception vectors", config_.exceptionVectorBase,
+         config_.exceptionVectorBytes, config_.exceptionVectorBase + config_.exceptionVectorBytes},
+        {"guest data", config_.guestDataBase,
+         config_.guestDataBytes, config_.guestDataBase + config_.guestDataBytes},
+        {"page tables", config_.pageTableBase,
+         config_.pageTableBytes, config_.pageTableBase + config_.pageTableBytes},
+        {"DTB", config_.dtbBase, config_.dtbMaxBytes,
+         config_.dtbBase + config_.dtbMaxBytes},
+        {"stack", config_.stackBase, config_.stackBytes,
+         config_.stackBase + config_.stackBytes},
+    }};
+    for (const Region& region : reserved) {
+        if (plan.imageAddress < region.end && region.base < plan.effectiveImageEnd) {
+            setError(error, std::string("ARM64 Linux Image effective range overlaps ") + region.name);
+            return false;
+        }
+    }
+    if (plan.imageAddress != config_.guestImageBase ||
+        plan.imageAddress != config_.guestEntry) {
+        setError(error, "ARM64 Linux Image address must match the configured image base and EL1 entry");
+        return false;
+    }
+
+    std::vector<uint8_t> stagedImage;
+    try {
+        stagedImage = image;
+    } catch (...) {
+        setError(error, "unable to stage bounded ARM64 Linux Image");
+        return false;
+    }
+    std::string resetError;
+    if (!devices_.resetAll(&resetError)) {
+        setError(error, "unable to reset devices before Linux Image load: " + resetError);
+        return false;
+    }
+    try {
+        ram_.Clear();
+        bus_.loadBuffer(plan.imageAddress, stagedImage);
+        bus_.loadBuffer(config_.dtbBase, dtb_);
+    } catch (const std::exception& exception) {
+        setError(error, std::string("unable to install ARM64 Linux Image: ") + exception.what());
+        return false;
+    }
+    guestImage_ = std::move(stagedImage);
+    guestEntry_ = plan.imageAddress;
+    imageLoaded_ = true;
+    if (!prepareEntry(guestEntry_, error)) return false;
+    if (imageInfo != nullptr) *imageInfo = parsed;
+    return true;
 }
 
 bool AArch64VirtualPlatform::reset(std::string* error) {

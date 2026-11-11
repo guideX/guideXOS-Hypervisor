@@ -14,6 +14,7 @@ namespace aarch64 {
 class AArch64GICv3;
 class AArch64GenericTimer;
 class AArch64PL011;
+struct AArch64LinuxImageInfo;
 
 struct AArch64PlatformConfig {
     uint32_t version = 1;
@@ -86,6 +87,11 @@ public:
     // the supplied aligned address its EL1 entry point.
     bool loadRawGuestImage(const std::vector<uint8_t>& image, uint64_t entryPc,
                            std::string* error = nullptr);
+    // Loads a validated, uncompressed ARM64 Linux Image at the protocol
+    // address placementBase + text_offset and prepares the EL1 boot contract.
+    bool loadLinuxImage(const std::vector<uint8_t>& image, uint64_t placementBase,
+                        AArch64LinuxImageInfo* imageInfo = nullptr,
+                        std::string* error = nullptr);
     bool reset(std::string* error = nullptr);
 
     // Runs real CPU steps through the physical bus until the guest reaches a

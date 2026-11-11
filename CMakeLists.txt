@@ -695,10 +695,12 @@ add_test(NAME AArch64PL011Tests COMMAND test_aarch64_pl011)
 add_test(NAME AArch64GenericTimerTests COMMAND test_aarch64_generic_timer)
 add_test(NAME AArch64GICv3Tests COMMAND test_aarch64_gicv3)
 add_test(NAME AArch64PlatformTests COMMAND test_aarch64_platform)
+add_test(NAME AArch64LinuxBootTests COMMAND test_aarch64_linux_boot)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
 set_tests_properties(AArch64GICv3Tests PROPERTIES TIMEOUT 120)
 set_tests_properties(AArch64PlatformTests PROPERTIES TIMEOUT 120)
+set_tests_properties(AArch64LinuxBootTests PROPERTIES TIMEOUT 120)
 
 # Installation rules (optional)
 install(TARGETS ia64emu DESTINATION bin)
@@ -954,6 +956,28 @@ add_executable(test_aarch64_platform
     src/aarch64/AArch64GenericTimer.cpp
     src/aarch64/AArch64GICv3.cpp
     src/aarch64/AArch64DeviceTree.cpp
+    src/aarch64/AArch64LinuxImage.cpp
+    src/aarch64/AArch64VirtualPlatform.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
+# AARCH64-14: ARM64 Linux Image header and placement qualification. The normal
+# CTest run is artifact-independent; pass --frontier Image out-dir to run the
+# optional provenance-pinned Linux instruction frontier through the same
+# production platform.
+add_executable(test_aarch64_linux_boot
+    tests/test_aarch64_linux_boot.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    src/aarch64/AArch64DeviceState.cpp
+    src/aarch64/AArch64DeviceSnapshot.cpp
+    src/aarch64/AArch64PhysicalBus.cpp
+    src/aarch64/AArch64PL011.cpp
+    src/aarch64/AArch64GenericTimer.cpp
+    src/aarch64/AArch64GICv3.cpp
+    src/aarch64/AArch64DeviceTree.cpp
+    src/aarch64/AArch64LinuxImage.cpp
     src/aarch64/AArch64VirtualPlatform.cpp
     ${AARCH64_SOURCES}
     ${ALL_SOURCES}
@@ -967,6 +991,7 @@ if(WIN32)
     target_link_libraries(test_aarch64_generic_timer PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_gicv3 PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_platform PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_linux_boot PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)
@@ -986,6 +1011,7 @@ if(MSVC)
     target_compile_options(test_aarch64_generic_timer PRIVATE /W4)
     target_compile_options(test_aarch64_gicv3 PRIVATE /W4)
     target_compile_options(test_aarch64_platform PRIVATE /W4)
+    target_compile_options(test_aarch64_linux_boot PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
@@ -993,6 +1019,7 @@ else()
     target_compile_options(test_aarch64_generic_timer PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_gicv3 PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_platform PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_linux_boot PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
