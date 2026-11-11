@@ -111,6 +111,7 @@ constexpr uint8_t kFnDsubu = 0x2F;
 constexpr uint8_t kFnDsll = 0x38;
 constexpr uint8_t kFnDsrl = 0x3A;
 constexpr uint8_t kFnDsra = 0x3B;
+constexpr uint8_t kFnDsll32 = 0x3C;
 constexpr uint8_t kFnDsrl32 = 0x3E;
 constexpr uint8_t kFnDext = 0x03;
 
@@ -374,6 +375,14 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                 case kFnDsll: mapped = Mips64Op::Dsll; break;
                 case kFnDsrl: mapped = Mips64Op::Dsrl; break;
                 case kFnDsra: mapped = Mips64Op::Dsra; break;
+                case kFnDsll32:
+                    // DSLL32 uses the canonical SPECIAL rs=0 encoding.
+                    if (decoded.rs != 0) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved SPECIAL rs encoding for DSLL32");
+                    }
+                    mapped = Mips64Op::Dsll32;
+                    break;
                 case kFnDsrl32:
                     // MIPS64r2 overloads SPECIAL/0x3E: rs=0 is DSRL32,
                     // rs=1 is DROTR32, and rs[4:1] must be zero.
@@ -1588,6 +1597,15 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rd, source >> shift);
             break;
         }
+        case Mips64Op::Dsll32: {
+            // The five-bit sa field is supplemented by 32, producing a
+            // defined unsigned uint64_t shift in the architectural range 32..63.
+            // Read the complete source before writing rd for aliasing.
+            const uint64_t source = readGpr(decoded.rt);
+            const unsigned shift = static_cast<unsigned>(decoded.sa) + 32U;
+            writeGpr(decoded.rd, source << shift);
+            break;
+        }
         case Mips64Op::Dext: {
             // DEXT reads a full 64-bit source, extracts [pos + size - 1:pos],
             // and writes a right-justified zero-extended result to RT. The
@@ -2450,6 +2468,7 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Dsll:
         case Mips64Op::Dsrl:
         case Mips64Op::Dsra:
+        case Mips64Op::Dsll32:
         case Mips64Op::Dsrl32:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u", name, decoded.rd,
                           decoded.rt, decoded.sa);
@@ -3109,6 +3128,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dext: return "dext";
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
+        case Mips64Op::Dsll32: return "dsll32";
         default: return "invalid";
     }
 }
