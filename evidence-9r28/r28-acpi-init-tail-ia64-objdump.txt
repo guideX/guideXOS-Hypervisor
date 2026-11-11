@@ -1,0 +1,292 @@
+
+/mnt/d/dev/guideXOS_Hypervisor_IA64/evidence-9r27/r27-authenticated-linux.elf:     file format elf64-ia64-little
+
+
+Disassembly of section .init.text:
+
+a000000100a3d9b0 <.init.text+0x3d9b0>:
+a000000100a3d9b0:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3d9b6:	d0 c1 15 46 4c 00 	            addl r29=-2027080,r1
+a000000100a3d9bc:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3d9c0:	11 20 01 3a 18 10 	[MIB]       ld8 r36=[r29]
+a000000100a3d9c6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3d9cc:	78 d6 dd 58       	            br.call.sptk.many b0=0xa00000010081b030;;
+a000000100a3d9d0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3d9d6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3d9dc:	28 fb ff 58       	            br.call.sptk.many b0=0xa000000100a3d4f0;;
+a000000100a3d9e0:	08 28 01 00 00 21 	[MMI]       mov r37=r0
+a000000100a3d9e6:	00 00 00 02 00 80 	            nop.m 0x0
+a000000100a3d9ec:	04 18 01 84       	            mov r36=r35
+a000000100a3d9f0:	19 30 61 00 00 24 	[MMB]       mov r38=24
+a000000100a3d9f6:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3d9fc:	38 ad 9a 58       	            br.call.sptk.many b0=0xa0000001003e8720;;
+a000000100a3da00:	09 00 c1 0a 38 27 	[MMI]       addl r32=-1991632,r1
+a000000100a3da06:	c0 09 00 00 48 60 	            mov r28=1
+a000000100a3da0c:	83 61 00 84       	            adds r27=24,r12;;
+a000000100a3da10:	08 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3da16:	80 e0 6c 20 2b 00 	            st4 [r27]=r28,8
+a000000100a3da1c:	00 00 04 00       	            nop.i 0x0
+a000000100a3da20:	0b 00 70 46 90 11 	[MMI]       st4 [r35]=r28;;
+a000000100a3da26:	00 18 6d 30 23 00 	            st8 [r27]=r35
+a000000100a3da2c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3da30:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3da36:	e0 00 80 20 20 00 	            ld4 r14=[r32]
+a000000100a3da3c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3da40:	11 30 04 1c 87 39 	[MIB]       cmp4.eq p6,p7=1,r14
+a000000100a3da46:	00 00 00 02 00 03 	            nop.i 0x0
+a000000100a3da4c:	d0 00 00 43       	      (p06) br.cond.dpnt.few 0xa000000100a3db10;;
+a000000100a3da50:	0b 30 00 1c 87 b9 	[MMI]       cmp4.eq p6,p7=0,r14;;
+a000000100a3da56:	51 82 17 44 4c 00 	      (p06) addl r37=-2027152,r1
+a000000100a3da5c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3da60:	d0 28 01 4a 18 10 	[MIB] (p06) ld8 r37=[r37]
+a000000100a3da66:	00 00 00 02 00 03 	            nop.i 0x0
+a000000100a3da6c:	d0 00 00 42       	      (p06) br.cond.dptk.few 0xa000000100a3db30
+a000000100a3da70:	11 30 08 1c 87 39 	[MIB]       cmp4.eq p6,p7=2,r14
+a000000100a3da76:	00 00 00 02 00 03 	            nop.i 0x0
+a000000100a3da7c:	40 00 00 43       	      (p06) br.cond.dpnt.few 0xa000000100a3dab0;;
+a000000100a3da80:	0b 30 0c 1c 87 f9 	[MMI]       cmp4.eq p6,p7=3,r14;;
+a000000100a3da86:	41 02 16 46 4c 00 	      (p07) addl r36=-2027072,r1
+a000000100a3da8c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3da90:	f0 20 01 48 18 10 	[MIB] (p07) ld8 r36=[r36]
+a000000100a3da96:	00 00 00 02 80 03 	            nop.i 0x0
+a000000100a3da9c:	60 00 00 42       	      (p07) br.cond.dptk.few 0xa000000100a3daf0
+a000000100a3daa0:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3daa6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3daac:	30 00 00 40       	            br.few 0xa000000100a3dad0
+a000000100a3dab0:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3dab6:	e0 01 14 46 4c 00 	            addl r30=-2027136,r1
+a000000100a3dabc:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dac0:	10 28 01 3c 18 10 	[MIB]       ld8 r37=[r30]
+a000000100a3dac6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dacc:	70 00 00 40       	            br.few 0xa000000100a3db30
+a000000100a3dad0:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3dad6:	f0 41 14 46 4c 00 	            addl r31=-2027128,r1
+a000000100a3dadc:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dae0:	10 28 01 3e 18 10 	[MIB]       ld8 r37=[r31]
+a000000100a3dae6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3daec:	50 00 00 40       	            br.few 0xa000000100a3db30
+a000000100a3daf0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3daf6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dafc:	48 d5 dd 58       	            br.call.sptk.many b0=0xa00000010081b030;;
+a000000100a3db00:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3db06:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3db0c:	a0 01 00 40       	            br.few 0xa000000100a3dca0
+a000000100a3db10:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3db16:	60 42 16 08 4c 00 	            addl r38=-2031032,r1
+a000000100a3db1c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3db20:	08 28 01 4c 18 10 	[MMI]       ld8 r37=[r38]
+a000000100a3db26:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3db2c:	00 00 04 00       	            nop.i 0x0
+a000000100a3db30:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3db36:	80 40 16 46 4c 00 	            addl r8=-2027064,r1
+a000000100a3db3c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3db40:	11 20 01 10 18 10 	[MIB]       ld8 r36=[r8]
+a000000100a3db46:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3db4c:	f8 d4 dd 58       	            br.call.sptk.many b0=0xa00000010081b030;;
+a000000100a3db50:	08 28 41 0b 23 26 	[MMI]       addl r37=-2027056,r1
+a000000100a3db56:	30 00 80 20 20 00 	            ld4 r3=[r32]
+a000000100a3db5c:	00 00 04 00       	            nop.i 0x0
+a000000100a3db60:	09 20 c1 18 00 21 	[MMI]       adds r36=48,r12
+a000000100a3db66:	60 c2 30 00 42 e0 	            adds r38=24,r12
+a000000100a3db6c:	04 00 00 84       	            mov r39=r0;;
+a000000100a3db70:	08 00 0c 48 98 11 	[MMI]       st8 [r36]=r3
+a000000100a3db76:	50 02 94 30 20 80 	            ld8 r37=[r37]
+a000000100a3db7c:	04 00 00 84       	            mov r36=r0
+a000000100a3db80:	19 00 00 00 01 00 	[MMB]       nop.m 0x0
+a000000100a3db86:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3db8c:	68 48 a8 58       	            br.call.sptk.many b0=0xa0000001004c23e0;;
+a000000100a3db90:	09 48 14 10 88 39 	[MMI]       cmp4.eq p9,p8=5,r8
+a000000100a3db96:	70 00 20 0c 73 c0 	            cmp4.eq p7,p6=0,r8
+a000000100a3db9c:	04 40 00 84       	            mov r38=r8;;
+a000000100a3dba0:	09 11 04 00 00 24 	[MMI] (p08) mov r2=1
+a000000100a3dba6:	00 00 00 02 00 c3 	            nop.m 0x0
+a000000100a3dbac:	11 00 00 90       	      (p06) mov r14=1;;
+a000000100a3dbb0:	e3 70 00 00 00 61 	[MII] (p07) mov r14=r0
+a000000100a3dbb6:	22 00 00 00 42 e0 	      (p09) mov r2=r0;;
+a000000100a3dbbc:	e4 10 30 80       	            and r39=r14,r2;;
+a000000100a3dbc0:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dbc6:	60 00 9c 0e 73 03 	            cmp4.eq p6,p7=0,r39
+a000000100a3dbcc:	20 01 00 42       	      (p06) br.cond.dptk.few 0xa000000100a3dce0
+a000000100a3dbd0:	09 48 60 0b 23 26 	[MMI]       addl r9=-2027048,r1
+a000000100a3dbd6:	40 42 17 b4 4e a0 	            addl r36=-1987224,r1
+a000000100a3dbdc:	34 05 18 90       	            mov r37=851;;
+a000000100a3dbe0:	11 38 01 12 18 10 	[MIB]       ld8 r39=[r9]
+a000000100a3dbe6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dbec:	a8 3f aa 58       	            br.call.sptk.many b0=0xa0000001004e1b80;;
+a000000100a3dbf0:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dbf6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dbfc:	b0 00 00 40       	            br.few 0xa000000100a3dca0
+a000000100a3dc00:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3dc06:	f0 00 17 46 4c 00 	            addl r15=-2027040,r1
+a000000100a3dc0c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dc10:	10 20 01 1e 18 10 	[MIB]       ld8 r36=[r15]
+a000000100a3dc16:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dc1c:	e0 fe ff 48       	            br.few 0xa000000100a3daf0
+a000000100a3dc20:	09 58 40 0a 23 26 	[MMI]       addl r11=-2027120,r1
+a000000100a3dc26:	00 00 00 02 00 a0 	            nop.m 0x0
+a000000100a3dc2c:	04 00 00 84       	            mov r37=r0;;
+a000000100a3dc30:	11 20 01 16 18 10 	[MIB]       ld8 r36=[r11]
+a000000100a3dc36:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dc3c:	48 ea 87 58       	            br.call.sptk.many b0=0xa0000001002bc670;;
+a000000100a3dc40:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3dc46:	a0 c0 15 24 4f 00 	            addl r10=-1980104,r1
+a000000100a3dc4c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dc50:	11 00 20 14 98 11 	[MIB]       st8 [r10]=r8
+a000000100a3dc56:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dc5c:	58 03 00 50       	            br.call.sptk.many b0=0xa000000100a3dfa0;;
+a000000100a3dc60:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dc66:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dc6c:	58 10 00 50       	            br.call.sptk.many b0=0xa000000100a3ecb0;;
+a000000100a3dc70:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dc76:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dc7c:	28 21 00 50       	            br.call.sptk.many b0=0xa000000100a3fd90;;
+a000000100a3dc80:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dc86:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dc8c:	58 f7 ff 58       	            br.call.sptk.many b0=0xa000000100a3d3d0;;
+a000000100a3dc90:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dc96:	80 00 00 00 42 00 	            mov r8=r0
+a000000100a3dc9c:	30 00 00 40       	            br.few 0xa000000100a3dcc0
+a000000100a3dca0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dca6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dcac:	b8 e7 a9 58       	            br.call.sptk.many b0=0xa0000001004dc450;;
+a000000100a3dcb0:	08 40 b4 f9 ff 27 	[MMI]       mov r8=-19
+a000000100a3dcb6:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3dcbc:	00 00 04 00       	            nop.i 0x0
+a000000100a3dcc0:	02 00 00 00 01 00 	[MII]       nop.m 0x0
+a000000100a3dcc6:	00 10 01 55 00 00 	            mov.i ar.pfs=r34;;
+a000000100a3dccc:	10 0a 00 07       	            mov b0=r33
+a000000100a3dcd0:	18 00 00 00 01 00 	[MMB]       nop.m 0x0
+a000000100a3dcd6:	c0 80 32 00 42 80 	            adds r12=80,r12
+a000000100a3dcdc:	08 00 84 00       	            br.ret.sptk.many b0
+a000000100a3dce0:	08 80 20 02 6d 27 	[MMI]       addl r16=-2050424,r1
+a000000100a3dce6:	00 00 00 02 00 80 	            nop.m 0x0
+a000000100a3dcec:	f4 e7 ff 9f       	            mov r36=-1
+a000000100a3dcf0:	09 28 05 00 00 24 	[MMI]       mov r37=1
+a000000100a3dcf6:	00 00 00 02 00 e0 	            nop.m 0x0
+a000000100a3dcfc:	04 00 00 84       	            mov r39=r0;;
+a000000100a3dd00:	11 30 01 20 18 10 	[MIB]       ld8 r38=[r16]
+a000000100a3dd06:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dd0c:	88 b5 a6 58       	            br.call.sptk.many b0=0xa0000001004a9280;;
+a000000100a3dd10:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dd16:	70 00 20 0c f3 03 	            cmp4.eq p7,p6=0,r8
+a000000100a3dd1c:	10 ff ff 48       	      (p07) br.cond.sptk.few 0xa000000100a3dc20
+a000000100a3dd20:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dd26:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dd2c:	e0 fe ff 48       	            br.few 0xa000000100a3dc00;;
+a000000100a3dd30:	09 08 15 06 80 05 	[MMI]       alloc r33=ar.pfs,5,3,0
+a000000100a3dd36:	20 80 17 46 4c 00 	            addl r2=-2027024,r1
+a000000100a3dd3c:	04 00 c4 00       	            mov r32=b0;;
+a000000100a3dd40:	04 18 01 04 18 10 	[MLX]       ld8 r35=[r2]
+a000000100a3dd46:	20 00 00 00 00 80 	            movl r36=0x20110623
+a000000100a3dd4c:	34 22 32 60
+a000000100a3dd50:	19 00 00 00 01 00 	[MMB]       nop.m 0x0
+a000000100a3dd56:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3dd5c:	e8 d2 dd 58       	            br.call.sptk.many b0=0xa00000010081b030;;
+a000000100a3dd60:	09 70 c0 0a 92 27 	[MMI]       addl r14=-1980112,r1
+a000000100a3dd66:	f0 08 00 00 48 60 	            mov r15=1
+a000000100a3dd6c:	84 28 40 9b       	            addl r35=-2004984,r1;;
+a000000100a3dd70:	08 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3dd76:	30 02 8c 30 20 00 	            ld8 r35=[r35]
+a000000100a3dd7c:	00 00 04 00       	            nop.i 0x0
+a000000100a3dd80:	19 00 3c 1c 80 11 	[MMB]       st1 [r14]=r15
+a000000100a3dd86:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3dd8c:	28 b4 b8 58       	            br.call.sptk.many b0=0xa0000001005c91a0;;
+a000000100a3dd90:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dd96:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3dd9c:	98 76 a9 58       	            br.call.sptk.many b0=0xa0000001004d5420;;
+a000000100a3dda0:	0b 30 00 10 87 f9 	[MMI]       cmp4.eq p6,p7=0,r8;;
+a000000100a3dda6:	31 c2 17 46 4c 00 	      (p07) addl r35=-2027016,r1
+a000000100a3ddac:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3ddb0:	f1 18 01 46 18 10 	[MIB] (p07) ld8 r35=[r35]
+a000000100a3ddb6:	00 00 00 02 80 03 	            nop.i 0x0
+a000000100a3ddbc:	b0 00 00 43       	      (p07) br.cond.dpnt.few 0xa000000100a3de60;;
+a000000100a3ddc0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3ddc6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3ddcc:	38 33 00 50       	            br.call.sptk.many b0=0xa000000100a410f0;;
+a000000100a3ddd0:	0b 30 00 10 87 f9 	[MMI]       cmp4.eq p6,p7=0,r8;;
+a000000100a3ddd6:	31 02 14 48 4c 00 	      (p07) addl r35=-2027008,r1
+a000000100a3dddc:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dde0:	f1 18 01 46 18 10 	[MIB] (p07) ld8 r35=[r35]
+a000000100a3dde6:	00 00 00 02 80 03 	            nop.i 0x0
+a000000100a3ddec:	80 00 00 41       	      (p07) br.cond.spnt.few 0xa000000100a3de60;;
+a000000100a3ddf0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3ddf6:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3ddfc:	b8 68 a9 58       	            br.call.sptk.many b0=0xa0000001004d46a0;;
+a000000100a3de00:	0b 30 00 10 87 f9 	[MMI]       cmp4.eq p6,p7=0,r8;;
+a000000100a3de06:	31 42 14 48 4c 00 	      (p07) addl r35=-2027000,r1
+a000000100a3de0c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3de10:	f1 18 01 46 18 10 	[MIB] (p07) ld8 r35=[r35]
+a000000100a3de16:	00 00 00 02 80 03 	            nop.i 0x0
+a000000100a3de1c:	50 00 00 41       	      (p07) br.cond.spnt.few 0xa000000100a3de60;;
+a000000100a3de20:	11 18 bd f9 ff 27 	[MIB]       mov r35=-17
+a000000100a3de26:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3de2c:	58 e2 a9 58       	            br.call.sptk.many b0=0xa0000001004dc070;;
+a000000100a3de30:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3de36:	60 00 20 0e 73 03 	            cmp4.eq p6,p7=0,r8
+a000000100a3de3c:	50 00 00 40       	      (p06) br.cond.sptk.few 0xa000000100a3de80
+a000000100a3de40:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3de46:	30 80 14 48 4c 00 	            addl r3=-2026992,r1
+a000000100a3de4c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3de50:	08 18 01 06 18 10 	[MMI]       ld8 r35=[r3]
+a000000100a3de56:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3de5c:	00 00 04 00       	            nop.i 0x0
+a000000100a3de60:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3de66:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3de6c:	d8 d1 dd 58       	            br.call.sptk.many b0=0xa00000010081b030;;
+a000000100a3de70:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3de76:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3de7c:	20 00 00 40       	            br.few 0xa000000100a3de90
+a000000100a3de80:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3de86:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3de8c:	88 f3 ab 58       	            br.call.sptk.many b0=0xa0000001004fd200;;
+a000000100a3de90:	01 00 00 00 01 00 	[MII]       nop.m 0x0
+a000000100a3de96:	00 08 01 55 00 00 	            mov.i ar.pfs=r33
+a000000100a3de9c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dea0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3dea6:	00 00 05 80 03 80 	            mov b0=r32
+a000000100a3deac:	08 00 84 00       	            br.ret.sptk.many b0;;
+a000000100a3deb0:	18 08 11 06 80 05 	[MMB]       alloc r33=ar.pfs,4,3,0
+a000000100a3deb6:	f0 40 15 3a 4f 00 	            addl r15=-1978712,r1
+a000000100a3debc:	00 00 00 20       	            nop.b 0x0
+a000000100a3dec0:	09 10 80 0a 9d 27 	[MMI]       addl r2=-1978720,r1
+a000000100a3dec6:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3decc:	04 00 c4 00       	            mov r32=b0;;
+a000000100a3ded0:	0b 00 00 00 01 00 	[MMI]       nop.m 0x0;;
+a000000100a3ded6:	e0 00 3c 30 20 00 	            ld8 r14=[r15]
+a000000100a3dedc:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3dee0:	08 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3dee6:	70 00 38 0c 72 00 	            cmp.eq p7,p6=0,r14
+a000000100a3deec:	00 00 04 00       	            nop.i 0x0
+a000000100a3def0:	19 70 00 04 00 21 	[MMB]       mov r14=r2
+a000000100a3def6:	00 00 00 02 00 03 	            nop.m 0x0
+a000000100a3defc:	30 00 00 41       	      (p06) br.cond.spnt.few 0xa000000100a3df20;;
+a000000100a3df00:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3df06:	00 01 38 30 20 00 	            ld8 r16=[r14]
+a000000100a3df0c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3df10:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3df16:	60 00 40 0e 72 03 	            cmp.eq p6,p7=0,r16
+a000000100a3df1c:	40 00 00 40       	      (p06) br.cond.sptk.few 0xa000000100a3df50
+a000000100a3df20:	09 00 00 00 01 00 	[MMI]       nop.m 0x0
+a000000100a3df26:	30 42 16 48 4c 00 	            addl r35=-2026936,r1
+a000000100a3df2c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3df30:	11 18 01 46 18 10 	[MIB]       ld8 r35=[r35]
+a000000100a3df36:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3df3c:	08 d1 dd 58       	            br.call.sptk.many b0=0xa00000010081b030;;
+a000000100a3df40:	10 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3df46:	00 00 00 02 00 00 	            nop.i 0x0
+a000000100a3df4c:	40 00 00 40       	            br.few 0xa000000100a3df80
+a000000100a3df50:	09 50 00 02 da 27 	[MMI]       addl r10=-2036480,r1
+a000000100a3df56:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3df5c:	81 0e bc 9d       	            addl r8=-2050072,r1;;
+a000000100a3df60:	09 48 00 14 18 10 	[MMI]       ld8 r9=[r10]
+a000000100a3df66:	30 00 20 30 20 00 	            ld8 r3=[r8]
+a000000100a3df6c:	00 00 04 00       	            nop.i 0x0;;
+a000000100a3df70:	08 00 24 1e 98 11 	[MMI]       st8 [r15]=r9
+a000000100a3df76:	00 18 38 30 23 00 	            st8 [r14]=r3
+a000000100a3df7c:	00 00 04 00       	            nop.i 0x0
+a000000100a3df80:	09 40 00 00 00 21 	[MMI]       mov r8=r0
+a000000100a3df86:	00 00 00 02 00 00 	            nop.m 0x0
+a000000100a3df8c:	10 02 aa 00       	            mov.i ar.pfs=r33;;
+a000000100a3df90:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a000000100a3df96:	00 00 05 80 03 80 	            mov b0=r32
+a000000100a3df9c:	08 00 84 00       	            br.ret.sptk.many b0;;

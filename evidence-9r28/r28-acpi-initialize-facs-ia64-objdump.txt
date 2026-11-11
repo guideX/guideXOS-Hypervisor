@@ -1,0 +1,22 @@
+
+/mnt/d/dev/guideXOS_Hypervisor_IA64/evidence-9r27/r27-authenticated-linux.elf:     file format elf64-ia64-little
+
+
+Disassembly of section .text:
+
+a0000001004d6870 <.text+0x4d6870>:
+a0000001004d6870:	01 08 15 06 80 05 	[MII]       alloc r33=ar.pfs,5,3,0
+a0000001004d6876:	00 02 00 62 00 80 	            mov r32=b0
+a0000001004d687c:	04 2b 58 9e       	            addl r36=-1979600,r1;;
+a0000001004d6880:	08 00 00 00 01 00 	[MMI]       nop.m 0x0
+a0000001004d6886:	30 0a 00 00 48 00 	            mov r35=1
+a0000001004d688c:	00 00 04 00       	            nop.i 0x0
+a0000001004d6890:	19 00 00 00 01 00 	[MMB]       nop.m 0x0
+a0000001004d6896:	00 00 00 02 00 00 	            nop.m 0x0
+a0000001004d689c:	f8 e3 ff 58       	            br.call.sptk.many b0=0xa0000001004d4c80;;
+a0000001004d68a0:	01 00 00 00 01 00 	[MII]       nop.m 0x0
+a0000001004d68a6:	00 08 01 55 00 00 	            mov.i ar.pfs=r33
+a0000001004d68ac:	00 00 04 00       	            nop.i 0x0;;
+a0000001004d68b0:	11 00 00 00 01 00 	[MIB]       nop.m 0x0
+a0000001004d68b6:	00 00 05 80 03 80 	            mov b0=r32
+a0000001004d68bc:	08 00 84 00       	            br.ret.sptk.many b0;;

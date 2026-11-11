@@ -1,0 +1,8 @@
+25m: PASS used=559/1024 free=238348 allocated=23796 extent=262144 free_blocks=1 allocated_blocks=558 base=0xe000000000200000 map=0xe000000008df8000 data=0x0 immutable=1
+25m005k: PASS used=559/1024 free=238348 allocated=23796 extent=262144 free_blocks=1 allocated_blocks=558 base=0xe000000000200000 map=0xe000000008df8000 data=0x0 immutable=1
+25m050k: PASS used=561/1024 free=238340 allocated=23804 extent=262144 free_blocks=1 allocated_blocks=560 base=0xe000000000200000 map=0xe000000008df8000 data=0x0 immutable=1
+30m: PASS used=757/1024 free=237556 allocated=24588 extent=262144 free_blocks=1 allocated_blocks=756 base=0xe000000000200000 map=0xe000000008df8000 data=0x0 immutable=1
+pre-extension: PASS used=1023/1024 free=236492 allocated=25652 extent=262144 free_blocks=1 allocated_blocks=1022 base=0xe000000000200000 map=0xe000000008df8000 data=0x0 immutable=1
+40m-post-extension: PASS used=1026/2048 free=236480 allocated=25664 extent=262144 free_blocks=1 allocated_blocks=1025 base=0xe000000000200000 map=0xe000000008dfc000 data=0x0 immutable=1
+50m: PASS used=1063/2048 free=236056 allocated=26088 extent=262144 free_blocks=1 allocated_blocks=1062 base=0xe000000000200000 map=0xe000000008dfc000 data=0x0 immutable=1
+extension: PASS copied_prefix_preserved=1 capacity=1024->2048 used=1023->1026 allocations=3x4 free=236492->236480

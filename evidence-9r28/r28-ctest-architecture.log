@@ -1,0 +1,23 @@
+Test project D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert
+    Start  2: NewInstructionTests
+1/9 Test  #2: NewInstructionTests ......................   Passed    1.76 sec
+    Start  3: IA64XUnitDecodeTests
+2/9 Test  #3: IA64XUnitDecodeTests .....................   Passed    0.31 sec
+    Start  4: EfiMemoryMapTests
+3/9 Test  #4: EfiMemoryMapTests ........................   Passed    0.19 sec
+    Start  5: IA64SalTests
+4/9 Test  #5: IA64SalTests .............................   Passed    0.14 sec
+    Start  6: VMCheckpointTests
+5/9 Test  #6: VMCheckpointTests ........................   Passed    3.10 sec
+    Start  7: IA64CheckpointContextContinuationTests
+6/9 Test  #7: IA64CheckpointContextContinuationTests ...   Passed    2.00 sec
+    Start  8: IA64RSEFaultRestartTests
+7/9 Test  #8: IA64RSEFaultRestartTests .................   Passed    2.35 sec
+    Start  9: IA64CallFrameReturnTests
+8/9 Test  #9: IA64CallFrameReturnTests .................   Passed    1.52 sec
+    Start 15: IA64AutomaticRSEPressureTests
+9/9 Test #15: IA64AutomaticRSEPressureTests ............   Passed    1.52 sec
+
+100% tests passed, 0 tests failed out of 9
+
+Total Test time (real) =  13.04 sec

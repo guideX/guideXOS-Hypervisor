@@ -1,0 +1,44 @@
+R28 authenticated FACS descriptor failure summary
+
+Replay identity
+---------------
+Source checkpoint: build-9r24-release/r24-authentic-ehandoff-firmware-fix-cold-final2.gxcp
+Checkpoint SHA-256: EF90139582139E419A32F6004B402297EB9C2581ACE2F3E784417287DBA1C367
+Checkpoint cycle: 778197459; guest RAM: 512 MiB; vCPUs: 1
+Restore: strict recovery; no guest-memory edits
+Replay: 59000000 successful instruction slots; cycles 778197459..837197459
+Observed unique instructions/bundles: 102746 / 34527
+Guest identity: R16-q6-ISO-sha256=6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E;LINUX.gz=F16B5547BF5944F2E8BC2A41FABC3047D921B4C3B94572792F5002A7087CDD2C;INITRD.GZ=D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B
+
+Live table lookup
+-----------------
+* acpi_init entered at cycle 836538925 with r13=kernel_init task 0xe000000008ec0000.
+* acpi_enable_subsystem entered at cycle 836762931 with flags argument 0x10.
+* acpi_tb_initialize_facs calls acpi_get_table_by_index with ACPI_TABLE_INDEX_FACS = 1. The dynamic acpi_get_table_by_index entry sees r32=1 and output pointer r33=0xa000000100cbf060.
+* acpi_tb_verify_table receives table descriptor 0xe000000000b29360 at cycle 836763152. Its descriptor pointer field (offset +8) is null (r14=0 at 0x...4d5570).
+* The descriptor origin byte at offset +25 is 0 (r3=0); flags & 7 therefore equals 0, not ACPI_TABLE_ORIGIN_MAPPED (1). The conditional mapping path is skipped. No acpi_os_map_memory call occurs for this FACS lookup.
+* At 0x...4d55e0 the descriptor pointer is reloaded as zero (r10=0). The matching authenticated instructions set status r8=4 (AE_NO_MEMORY) on the null-pointer path. acpi_get_table_by_index returns r8=4 at cycle 836763185; acpi_enable_subsystem returns the same status at cycle 836763350.
+
+Interpretation
+--------------
+In Linux v3.2 ACPICA, AE_NO_MEMORY is the return used by acpi_tb_verify_table when the descriptor has no pointer and is not marked as a firmware-mapped table. This trace does not show memory exhaustion or a failed ioremap: the FACS mapping routine is not called. The local EFI ACPI generator in src/vm/IA64AcpiFirmware.cpp emits an RSDT and XSDT with a single MADT entry and has no FADT, FACS, or DSDT builder. The FACS descriptor is therefore unpopulated in the firmware table set used by this boot.
+
+acpi_init takes its cleanup path, calls acpi_terminate, and returns -ENODEV. acpi_scan_init and ACPI bus registration are not reached. The ACPI bus private pointer remains zero. Later, acpi_pci_root_init reaches driver_register with acpi_bus_type but its bus->p field is null. Linux's BUG_ON emits the first guest BREAK at driver_register+0x70 (canonical IP 0xa000000100580f10), cycle 837060247. The M-unit break is delivered to ia64_bad_break, followed by die(), do_exit(SIGSEGV=11), and the init-child-reaper panic "Attempted to kill init!".
+
+R28 classification: missing ACPI firmware prerequisite (FADT/FACS), not a demonstrated IA-64 execution or scheduler defect. No CPU, firmware, or guest code was changed in R28. Scheduler qualification remains incomplete.
+
+Supporting evidence
+-------------------
+* r28-acpi-facs-descriptor.console.log: full register probes at the live table-index, descriptor, return, and subsystem-status branches.
+* r28-acpi-facs-map.console.log: mapper-entry probes; none occur during the FACS table lookup.
+* r28-acpi-tb-verify-table-ia64-objdump.txt: authenticated instructions for the descriptor-origin and AE_NO_MEMORY branches.
+* r28-acpi-initialize-facs-ia64-objdump.txt, r28-acpi-get-table-by-index-ia64-objdump.txt, r28-acpi-enable-subsystem-ia64-objdump.txt: authenticated caller chain.
+* r28-driver-register-ia64-objdump.txt, r28-driver-register-guard-summary.txt, r28-acpi-bus-private-final.bin: null ACPI bus-private field and the Linux BUG path.
+* r28-init-exit-path.diepath.log, r28-init-exit-path.faulttrace.log, r28-init-exit-path.panicpath.log: downstream die/exit/panic provenance.
+
+Source cross-checks
+-------------------
+Linux v3.2 ACPICA source: https://github.com/torvalds/linux/blob/v3.2/drivers/acpi/acpica/tbinstal.c
+Linux v3.2 table-index lookup: https://github.com/torvalds/linux/blob/v3.2/drivers/acpi/acpica/tbxface.c
+Linux v3.2 FACS initialization: https://github.com/torvalds/linux/blob/v3.2/drivers/acpi/acpica/tbutils.c
+Linux v3.2 AE_NO_MEMORY status value: https://github.com/torvalds/linux/blob/v3.2/include/acpi/acexcep.h

@@ -1,0 +1,14 @@
+PASS offset-zero-first-bit: result=0
+PASS offset-at-size: result=0
+PASS offset-past-size: result=8
+PASS word-boundary: result=64
+PASS inside-word: result=63
+PASS last-partial-word: result=129
+PASS no-set-bit-in-range: result=8
+PASS first-at-offset: result=65
+PASS last-valid-position: result=126
+PASS mask-outside-size: result=129
+PASS synthetic-vectors: 10
+bitmap=evidence-9r27\r27-find-next-bit-50m-plus60.bin capture_bytes=128 bitmap_byte_range=[0,32) declared_bits=256 offset=148 bitmap_hex=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+word[2]_little_endian=0xffffffffffffffff
+reference_result=148

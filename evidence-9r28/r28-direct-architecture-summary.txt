@@ -1,0 +1,5 @@
+test_ia64_interrupt_controller: exit_code=0 log=evidence-9r28\test_ia64_interrupt_controller.log
+test_ia64_processor_interrupt_block: exit_code=0 log=evidence-9r28\test_ia64_processor_interrupt_block.log
+test_ia64_single_cpu_context_switch: exit_code=0 log=evidence-9r28\test_ia64_single_cpu_context_switch.log
+test_isa_plugin-full: exit_code=0 log=evidence-9r28\test_isa_plugin-full.log
+test_isa_plugin-breakfault: exit_code=0 log=evidence-9r28\test_isa_plugin-breakfault.log
