@@ -816,3 +816,35 @@ Validation and next target:
   No decoder or production CPU change was needed, and the result does not claim
   successful Linux boot. See `phase-riscv-20-report.txt` and its Debug/Release
   artifact bundles for exact counts and evidence.
+
+--- Phase RISCV-22: authentic Linux console, timer accounting, and 40-million continuation ---
+
+- Fresh Linux v6.12/OpenSBI v1.8.1 execution exactly reproduces the
+  RISCV-21 37,098,664-instruction S-mode timer-handler budget frontier and all
+  28 common retained Release artifacts. The 5,630-byte Linux UART0 transcript
+  is hash-identical; it has 76 complete lines, no partial line, and no warning,
+  BUG, Oops, or panic marker. The guest reports earlycon/bootconsole, memory
+  layout, `riscv-intc`, `riscv_clocksource`, and later subsystem initialization.
+- The old 2M S-mode handler allowance counted cumulative cause-5 STIP work
+  across 627 handlers, not one long handler. Each handler used at most 5,943
+  instructions; the last was active at the old stop. Dynamic call-site
+  evidence ties `tick_program_event` to `hrtimer_interrupt` and
+  `retrigger_next_event.constprop.0`.
+- With a bounded 3M cumulative S-handler allowance and all other safety
+  controls retained, the guest reached exactly 40,000,000 post-handoff
+  retirements. This comprises 34,707,123 normal S-mode instructions,
+  2,244,333 S-mode timer-handler instructions, and 3,048,544 M-mode OpenSBI
+  instructions. All S-handler instructions belong to 699 STIP handlers;
+  all 1,401 SBI TIME requests succeeded, with no expired-at-request deadline
+  and one future deadline left pending at the cap. The final frontier is an
+  unexecuted branch in `kmem_cache_alloc_noprof`, not an architectural fault
+  or a completed-boot claim.
+- Validation: all 31 RISC-V CTest suites passed in Debug (13,633.75 seconds)
+  and Release. The 25 `riscv22-*` Debug and Release evidence files match
+  byte-for-byte; the fresh Debug RISCV-21 replay matches all 28 common files
+  in its retained Debug bundle. EFI memory-map and IA-64 SAL CTests passed
+  2/2 in both configurations; direct IA-64 ACPI, interrupt-controller, and
+  processor-interrupt-block regressions passed 3/3 in both configurations.
+- See `phase-riscv-22-report.txt` for the transcript analysis, returned Linux
+  initialization paths, exact timer/SBI correlation, final architectural
+  state, artifacts, and Debug/Release and IA-64 validation results.

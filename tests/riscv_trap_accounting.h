@@ -257,6 +257,12 @@ public:
     const TrapAccountingCounters& counters() const { return counters_; }
     const std::vector<TrapAccountingEvent>& events() const { return events_; }
     size_t activeHandlerInvocations() const { return active_.size(); }
+    uint64_t activeHandlerEventId() const {
+        return active_.empty() ? UINT64_MAX : active_.back().eventId;
+    }
+    riscv::PrivilegeMode activeHandlerTarget() const {
+        return active_.empty() ? riscv::PrivilegeMode::User : active_.back().target;
+    }
     bool lifetimesUncertain() const { return uncertain_; }
 
 private:

@@ -1,12 +1,14 @@
 #define RISCV_OPENSBI_FWJUMP_HELPERS_ONLY
 #include "test_riscv_opensbi_fw_jump.cpp"
 #include "riscv_linux_test_helpers.h"
+#include "riscv_linux_console_transcript.h"
 #include "riscv_trap_accounting.h"
 #include "riscv_uart_tx_observer.h"
 
 #include <cctype>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -451,6 +453,45 @@ struct LinuxSymbolVisit {
     bool functionCompletionDemonstrated = false;
 };
 
+struct LinuxTimerEvent {
+    uint64_t eventId = 0;
+    uint64_t parentId = UINT64_MAX;
+    std::string kind;
+    uint64_t pc = 0;
+    uint64_t vector = 0;
+    uint64_t cause = 0;
+    uint64_t totalRetiredAtTrap = 0;
+    uint64_t totalRetiredAtReturn = 0;
+    uint64_t mtimeAtTrap = 0;
+    uint64_t mtimecmpAtTrap = UINT64_MAX;
+    uint64_t mtimeAtReturn = 0;
+    uint64_t mtimecmpAtReturn = UINT64_MAX;
+    uint64_t eid = 0;
+    uint64_t fid = 0;
+    uint64_t requestedDeadline = 0;
+    uint64_t sbiError = 0;
+    uint64_t sbiValue = 0;
+    uint64_t instructionsSincePriorTimeRequest = 0;
+    uint64_t subsequentMachineTimerEventId = UINT64_MAX;
+    uint64_t subsequentSupervisorTimerEventId = UINT64_MAX;
+    std::array<uint64_t, riscv_test::kTrapAccountingHandlerPathLimit> handlerPcPrefix{};
+    size_t handlerPcPrefixSize = 0;
+    bool returned = false;
+    bool resumed = false;
+    bool resultCaptured = false;
+};
+
+struct LinuxTickProgramCallSite {
+    uint64_t entryPc = 0;
+    uint64_t callSitePc = 0;
+    uint64_t returnAddress = 0;
+    uint32_t rawInstruction = 0;
+    uint64_t retired = 0;
+    uint64_t activeHandlerEventId = UINT64_MAX;
+    bool callSiteInstructionRead = false;
+    std::string callerSymbol;
+};
+
 struct Sv39WalkLevel {
     unsigned level = 0;
     uint64_t tableAddress = 0;
@@ -500,6 +541,12 @@ struct ContinuationEvidence {
     std::vector<LinuxTrapEvent> traps;
     std::vector<LinuxStage> stages;
     std::vector<LinuxSymbolVisit> symbolVisits;
+    std::vector<LinuxTimerEvent> timerEvents;
+    std::unordered_map<uint64_t, size_t> timerEventIndexById;
+    std::map<std::string, uint64_t> supervisorHandlerSymbolInstructions;
+    std::map<uint64_t, std::map<std::string, uint64_t>> supervisorHandlerInstructionsByEvent;
+    std::map<std::string, uint64_t> tickProgramCallerCounts;
+    std::vector<LinuxTickProgramCallSite> tickProgramCallSites;
     std::unordered_set<std::string> seenLinuxSymbols;
     uint64_t uniqueLinuxSymbols = 0;
     uint64_t droppedSymbolVisitDetails = 0;
@@ -610,6 +657,25 @@ std::string FunctionContaining(const std::vector<ElfFunctionSymbol>& functions,
             (match == nullptr || function.size < match->size)) match = &function;
     }
     return match != nullptr ? match->name : std::string{};
+}
+
+const ElfFunctionSymbol* FunctionAtAddress(
+    const std::vector<ElfFunctionSymbol>& sortedFunctions, uint64_t address) {
+    auto current = std::upper_bound(sortedFunctions.begin(), sortedFunctions.end(), address,
+        [](uint64_t value, const ElfFunctionSymbol& function) {
+            return value < function.address;
+        });
+    const ElfFunctionSymbol* match = nullptr;
+    while (current != sortedFunctions.begin()) {
+        --current;
+        if (address < current->address) continue;
+        if (address - current->address < current->size &&
+            (match == nullptr || current->size < match->size)) {
+            match = &*current;
+        }
+        if (match != nullptr && address - current->address >= match->size) break;
+    }
+    return match;
 }
 
 LinuxSymbols ParseLinuxVmlinux(const std::vector<uint8_t>& elf) {
@@ -1263,12 +1329,15 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
     static constexpr std::array<uint64_t, 7> kTotalBudgets{{
         250000, 1000000, 5000000, 20000000, 25000000, 30000000, 40000000}};
-    // At 20M, authentic firmware retired 2.57M instructions and S-mode
-    // handlers retired 0.55M. These independent bounded limits preserve
-    // headroom for a 40M run while remaining below an unbounded firmware loop.
     static constexpr uint64_t kMachineInstructionBudget = 8000000;
     static constexpr uint64_t kMachineHandlerInstructionBudget = 7000000;
+    // RISCV-21 reached 2M in valid timer-handler work near the 37.1M frontier.
+    // The corrected accounting and per-invocation cap justify this bounded 3M limit.
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 3000000;
+#else
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 2000000;
+#endif
 #else
     static constexpr std::array<uint64_t, 4> kTotalBudgets{{
         250000, 1000000, 5000000, 20000000}};
@@ -1285,7 +1354,14 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
     std::unordered_map<uint64_t, std::pair<uint64_t, uint32_t>> repeatedStates;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
     std::unordered_map<uint64_t, const ElfFunctionSymbol*> linuxFunctionsAtEntry;
+    std::vector<ElfFunctionSymbol> linuxFunctionsByAddress;
     if (linuxFunctions != nullptr) {
+        linuxFunctionsByAddress = *linuxFunctions;
+        std::sort(linuxFunctionsByAddress.begin(), linuxFunctionsByAddress.end(),
+            [](const ElfFunctionSymbol& left, const ElfFunctionSymbol& right) {
+                if (left.address != right.address) return left.address < right.address;
+                return left.size > right.size;
+            });
         linuxFunctionsAtEntry.reserve(linuxFunctions->size() * 2U);
         for (const ElfFunctionSymbol& function : *linuxFunctions) {
             linuxFunctionsAtEntry.emplace(function.address, &function);
@@ -1310,6 +1386,10 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
     (void)linuxFunctions;
 #endif
     uint64_t lastStageTarget = run.retired;
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    uint64_t previousTimeRequestRetired = 0;
+    bool sawPreviousTimeRequest = false;
+#endif
     run.reachedFrontier = false;
     run.stopReason.clear();
     for (const uint64_t target : kTotalBudgets) {
@@ -1331,12 +1411,56 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
             const uint64_t a3Before = cpu.readGR(13);
             const uint64_t a4Before = cpu.readGR(14);
             const PrivilegeMode privilegeBefore = cpu.privilege();
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+            const uint64_t mtimeBeforeStep = cpu.mtime();
+            const uint64_t mtimecmpBeforeStep = cpu.mtimecmp();
+            const uint64_t activeSupervisorHandlerEventId =
+                privilegeBefore == PrivilegeMode::Supervisor &&
+                evidence.accounting.activeHandlerTarget() == PrivilegeMode::Supervisor
+                    ? evidence.accounting.activeHandlerEventId() : UINT64_MAX;
+#endif
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
             if (privilegeBefore == PrivilegeMode::Supervisor) {
                 const auto function = linuxFunctionsAtEntry.find(pcBefore);
                 if (function != linuxFunctionsAtEntry.end())
                     RecordLinuxSymbolVisit(evidence, stage, *function->second, pcBefore,
                                            run.retired, privilegeBefore, cpu);
+            }
+#endif
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+            const auto entryFunction = linuxFunctionsAtEntry.find(pcBefore);
+            if (entryFunction != linuxFunctionsAtEntry.end() &&
+                entryFunction->second->name == "tick_program_event") {
+                const uint64_t returnAddress = cpu.readGR(1);
+                const uint64_t callSitePc = returnAddress >= 4 ? returnAddress - 4 : 0;
+                const ElfFunctionSymbol* caller =
+                    FunctionAtAddress(linuxFunctionsByAddress, callSitePc);
+                const std::string callerName = caller == nullptr
+                    ? "<unresolved>" : caller->name;
+                ++evidence.tickProgramCallerCounts[
+                    callerName + "@" + Hex(callSitePc)];
+                if (evidence.tickProgramCallSites.size() < 2048) {
+                    LinuxTickProgramCallSite site;
+                    site.entryPc = pcBefore;
+                    site.callSitePc = callSitePc;
+                    site.returnAddress = returnAddress;
+                    site.retired = run.retired;
+                    site.activeHandlerEventId = activeSupervisorHandlerEventId;
+                    site.callerSymbol = callerName;
+                    if (callSitePc != 0) {
+                        const Sv39Translation translation = cpu.translateFetch(callSitePc, 4);
+                        std::array<uint8_t, 4> bytes{};
+                        if (translation.ok && cpu.readPhysical(translation.paddr,
+                                                               bytes.data(), bytes.size())) {
+                            site.rawInstruction = static_cast<uint32_t>(bytes[0]) |
+                                (static_cast<uint32_t>(bytes[1]) << 8) |
+                                (static_cast<uint32_t>(bytes[2]) << 16) |
+                                (static_cast<uint32_t>(bytes[3]) << 24);
+                            site.callSiteInstructionRead = true;
+                        }
+                    }
+                    evidence.tickProgramCallSites.push_back(std::move(site));
+                }
             }
 #endif
             uint16_t csrAddressBefore = 0;
@@ -1377,6 +1501,73 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 evidence.accounting.observe(privilegeBefore, step, cpu.privilege(), cpu,
                                             !sv39RelocationTransition);
             synchronizeAccounting();
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+            if (step.outcome == StepOutcome::Ok &&
+                activeSupervisorHandlerEventId != UINT64_MAX) {
+                const ElfFunctionSymbol* function =
+                    FunctionAtAddress(linuxFunctionsByAddress, pcBefore);
+                const std::string symbol = function == nullptr
+                    ? "<unresolved>" : function->name;
+                ++evidence.supervisorHandlerSymbolInstructions[symbol];
+                ++evidence.supervisorHandlerInstructionsByEvent[
+                    activeSupervisorHandlerEventId][symbol];
+            }
+            if (accountingDelta.trapEntered &&
+                accountingDelta.enteredEventIndex < evidence.accounting.events().size()) {
+                const riscv_test::TrapAccountingEvent& event =
+                    evidence.accounting.events()[accountingDelta.enteredEventIndex];
+                LinuxTimerEvent timerEvent;
+                bool retainTimerEvent = false;
+                if (event.sbiCall && event.sbiEid == 0x54494D45ULL && event.sbiFid == 0) {
+                    timerEvent.kind = "sbi_time";
+                    timerEvent.eid = event.sbiEid;
+                    timerEvent.fid = event.sbiFid;
+                    timerEvent.requestedDeadline = event.sbiArgs[0];
+                    timerEvent.instructionsSincePriorTimeRequest = sawPreviousTimeRequest
+                        ? event.totalRetiredAtTrap - previousTimeRequestRetired : 0;
+                    previousTimeRequestRetired = event.totalRetiredAtTrap;
+                    sawPreviousTimeRequest = true;
+                    retainTimerEvent = true;
+                } else if (event.interrupt && event.target == PrivilegeMode::Machine &&
+                           event.cause == 7) {
+                    timerEvent.kind = "machine_timer_interrupt";
+                    retainTimerEvent = true;
+                } else if (event.interrupt && event.target == PrivilegeMode::Supervisor &&
+                           event.cause == 5) {
+                    timerEvent.kind = "supervisor_timer_interrupt";
+                    retainTimerEvent = true;
+                }
+                if (retainTimerEvent) {
+                    timerEvent.eventId = event.id;
+                    timerEvent.parentId = event.parentId;
+                    timerEvent.pc = event.pc;
+                    timerEvent.vector = event.vector;
+                    timerEvent.cause = event.cause;
+                    timerEvent.totalRetiredAtTrap = event.totalRetiredAtTrap;
+                    timerEvent.mtimeAtTrap = mtimeBeforeStep;
+                    timerEvent.mtimecmpAtTrap = mtimecmpBeforeStep;
+                    evidence.timerEventIndexById.emplace(
+                        event.id, evidence.timerEvents.size());
+                    evidence.timerEvents.push_back(std::move(timerEvent));
+                }
+            }
+            if (accountingDelta.trapReturned &&
+                accountingDelta.returnedEventIndex < evidence.accounting.events().size()) {
+                const riscv_test::TrapAccountingEvent& event =
+                    evidence.accounting.events()[accountingDelta.returnedEventIndex];
+                const auto timerIndex = evidence.timerEventIndexById.find(event.id);
+                if (timerIndex != evidence.timerEventIndexById.end()) {
+                    LinuxTimerEvent& timerEvent = evidence.timerEvents[timerIndex->second];
+                    timerEvent.totalRetiredAtReturn = event.totalRetiredAtReturn;
+                    timerEvent.mtimeAtReturn = cpu.mtime();
+                    timerEvent.mtimecmpAtReturn = cpu.mtimecmp();
+                    timerEvent.returned = event.returned;
+                    timerEvent.resultCaptured = event.sbiResultCaptured;
+                    timerEvent.sbiError = event.sbiError;
+                    timerEvent.sbiValue = event.sbiValue;
+                }
+            }
+#endif
             if (uartObserver != nullptr) {
                 const size_t newTxBytes = uartObserver->observeAfterStep(
                     cpu, step, privilegeBefore,
@@ -1655,7 +1846,11 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         evidence.stages.push_back(stage);
         lastStageTarget = target;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+        std::cout << "RISCV-22 stage target=" << stage.targetRetired
+#else
         std::cout << "RISCV-21 stage target=" << stage.targetRetired
+#endif
                   << " actual=" << stage.actualRetired
                   << " S=" << stage.sModeRetired
                   << " M=" << stage.mModeRetired
@@ -1707,15 +1902,28 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                                 const ContinuationEvidence& evidence,
                                 const RV64CPU& cpu,
                                 const riscv_test::UartTxObserver* uartObserver,
+                                const std::vector<uint8_t>* originalLinuxConsole,
                                 const std::string& handoffUart0,
                                 const std::string& handoffUart1) {
+#if !defined(RISCV_LINUX_BOOT_CONTINUATION)
+    (void)originalLinuxConsole;
+#endif
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    const std::string phasePrefix = "riscv22";
+    const std::string phaseName = "RISCV-22";
+    constexpr uint64_t totalRetiredBudget = 40000000;
+    constexpr uint64_t machineRetiredBudget = 8000000;
+    constexpr uint64_t machineHandlerInstructionBudget = 7000000;
+    constexpr uint64_t supervisorHandlerInstructionBudget = 3000000;
+#else
     const std::string phasePrefix = "riscv21";
     const std::string phaseName = "RISCV-21";
     constexpr uint64_t totalRetiredBudget = 40000000;
     constexpr uint64_t machineRetiredBudget = 8000000;
     constexpr uint64_t machineHandlerInstructionBudget = 7000000;
     constexpr uint64_t supervisorHandlerInstructionBudget = 2000000;
+#endif
 #else
     const std::string phasePrefix = "riscv20";
     const std::string phaseName = "RISCV-20";
@@ -2110,6 +2318,269 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         }
         out << "\n  ]\n}\n";
     }
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    {
+        uint64_t disabledRequests = 0;
+        uint64_t alreadyExpiredRequests = 0;
+        uint64_t futureRequests = 0;
+        uint64_t activeDeadlineDecreases = 0;
+        uint64_t previousActiveDeadline = 0;
+        bool sawPreviousActiveDeadline = false;
+        uint64_t sbiTimeRequestCount = 0;
+        uint64_t returnedRequests = 0;
+        uint64_t successfulRequests = 0;
+        uint64_t matchedMachineTimers = 0;
+        std::map<uint64_t, uint64_t> sbiToMachineTimer;
+        std::map<uint64_t, uint64_t> machineToSupervisorTimer;
+
+        for (size_t index = 0; index < evidence.timerEvents.size(); ++index) {
+            const LinuxTimerEvent& event = evidence.timerEvents[index];
+            if (event.kind == "sbi_time") {
+                ++sbiTimeRequestCount;
+                const riscv_test::TrapAccountingEvent& tracked =
+                    accounting.events()[static_cast<size_t>(event.eventId)];
+                if (tracked.returned && tracked.resumed) ++returnedRequests;
+                if (tracked.returned && tracked.resumed && tracked.sbiResultCaptured &&
+                    tracked.sbiError == 0) ++successfulRequests;
+                if (event.requestedDeadline == UINT64_MAX) {
+                    ++disabledRequests;
+                    continue;
+                }
+                if (sawPreviousActiveDeadline &&
+                    event.requestedDeadline < previousActiveDeadline)
+                    ++activeDeadlineDecreases;
+                previousActiveDeadline = event.requestedDeadline;
+                sawPreviousActiveDeadline = true;
+                if (event.requestedDeadline <= event.mtimeAtTrap)
+                    ++alreadyExpiredRequests;
+                else
+                    ++futureRequests;
+
+                uint64_t nextTimeRequestId = UINT64_MAX;
+                for (size_t next = index + 1; next < evidence.timerEvents.size(); ++next) {
+                    if (evidence.timerEvents[next].kind == "sbi_time") {
+                        nextTimeRequestId = evidence.timerEvents[next].eventId;
+                        break;
+                    }
+                }
+                for (size_t next = index + 1; next < evidence.timerEvents.size(); ++next) {
+                    const LinuxTimerEvent& candidate = evidence.timerEvents[next];
+                    if (candidate.eventId >= nextTimeRequestId) break;
+                    if (candidate.kind == "machine_timer_interrupt" &&
+                        candidate.mtimecmpAtTrap == event.requestedDeadline &&
+                        candidate.mtimeAtTrap >= event.requestedDeadline) {
+                        sbiToMachineTimer.emplace(event.eventId, candidate.eventId);
+                        ++matchedMachineTimers;
+                        break;
+                    }
+                }
+            } else if (event.kind == "machine_timer_interrupt") {
+                uint64_t nextMachineTimerId = UINT64_MAX;
+                for (size_t next = index + 1; next < evidence.timerEvents.size(); ++next) {
+                    if (evidence.timerEvents[next].kind == "machine_timer_interrupt") {
+                        nextMachineTimerId = evidence.timerEvents[next].eventId;
+                        break;
+                    }
+                }
+                for (size_t next = index + 1; next < evidence.timerEvents.size(); ++next) {
+                    const LinuxTimerEvent& candidate = evidence.timerEvents[next];
+                    if (candidate.eventId >= nextMachineTimerId) break;
+                    if (candidate.kind == "supervisor_timer_interrupt") {
+                        machineToSupervisorTimer.emplace(event.eventId, candidate.eventId);
+                        break;
+                    }
+                }
+            }
+        }
+
+        std::ofstream out(dir / "riscv22-linux-timer-events.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": \"RISCV-22\",\n"
+            << "  \"virtualTimebaseHz\": 10000000,\n"
+            << "  \"mtimeAdvancesOneTickPerRetiredGuestInstruction\": true,\n"
+            << "  \"sbiTimeRequests\": " << sbiTimeRequestCount << ",\n"
+            << "  \"disabledDeadlineRequests\": " << disabledRequests << ",\n"
+            << "  \"alreadyExpiredAtRequest\": " << alreadyExpiredRequests << ",\n"
+            << "  \"futureDeadlineRequests\": " << futureRequests << ",\n"
+            << "  \"activeDeadlineDecreases\": " << activeDeadlineDecreases << ",\n"
+            << "  \"returnedAndResumedRequests\": " << returnedRequests << ",\n"
+            << "  \"successfulRequests\": " << successfulRequests << ",\n"
+            << "  \"requestsAssociatedWithSubsequentMtip\": " << matchedMachineTimers << ",\n"
+            << "  \"timerEvents\": [\n";
+        for (size_t index = 0; index < evidence.timerEvents.size(); ++index) {
+            const LinuxTimerEvent& event = evidence.timerEvents[index];
+            const auto& tracked = accounting.events()[static_cast<size_t>(event.eventId)];
+            uint64_t machineTimerId = UINT64_MAX;
+            uint64_t supervisorTimerId = UINT64_MAX;
+            if (const auto it = sbiToMachineTimer.find(event.eventId); it != sbiToMachineTimer.end())
+                machineTimerId = it->second;
+            if (const auto it = machineToSupervisorTimer.find(event.eventId); it != machineToSupervisorTimer.end())
+                supervisorTimerId = it->second;
+            out << "    {\"eventId\":" << event.eventId
+                << ",\"parentId\":";
+            if (event.parentId == UINT64_MAX) out << "null";
+            else out << event.parentId;
+            out << ",\"kind\":" << JsonQuote(event.kind)
+                << ",\"interruptedPc\":" << JsonQuote(Hex(event.pc))
+                << ",\"vector\":" << JsonQuote(Hex(event.vector))
+                << ",\"cause\":" << event.cause
+                << ",\"retiredAtTrap\":" << event.totalRetiredAtTrap
+                << ",\"mtimeAtTrap\":" << JsonQuote(Hex(event.mtimeAtTrap))
+                << ",\"mtimecmpAtTrap\":" << JsonQuote(Hex(event.mtimecmpAtTrap));
+            if (event.kind == "sbi_time") {
+                out << ",\"callerSymbol\":" << JsonQuote(FunctionContaining(linuxFunctions, event.pc))
+                    << ",\"eid\":" << JsonQuote(Hex(event.eid))
+                    << ",\"fid\":" << JsonQuote(Hex(event.fid))
+                    << ",\"requestedDeadline\":" << JsonQuote(Hex(event.requestedDeadline))
+                    << ",\"deadlineDisabled\":"
+                    << (event.requestedDeadline == UINT64_MAX ? "true" : "false")
+                    << ",\"deadlineAlreadyExpiredAtRequest\":"
+                    << (event.requestedDeadline != UINT64_MAX &&
+                        event.requestedDeadline <= event.mtimeAtTrap ? "true" : "false")
+                    << ",\"instructionsSincePreviousTimeRequest\":"
+                    << event.instructionsSincePriorTimeRequest
+                    << ",\"sbiError\":" << JsonQuote(Hex(tracked.sbiError))
+                    << ",\"sbiValue\":" << JsonQuote(Hex(tracked.sbiValue))
+                    << ",\"subsequentMachineTimerEventId\":";
+                if (machineTimerId == UINT64_MAX) out << "null";
+                else out << machineTimerId;
+            }
+            out << ",\"returned\":" << (tracked.returned ? "true" : "false")
+                << ",\"resumed\":" << (tracked.resumed ? "true" : "false")
+                << ",\"handlerInstructions\":" << tracked.handlerInstructions
+                << ",\"returnInstructionPc\":" << JsonQuote(Hex(tracked.returnInstructionPc))
+                << ",\"returnTargetPc\":" << JsonQuote(Hex(tracked.returnTargetPc))
+                << ",\"retiredAtReturn\":" << tracked.totalRetiredAtReturn
+                << ",\"mtimeAtReturn\":" << JsonQuote(Hex(event.mtimeAtReturn))
+                << ",\"mtimecmpAtReturn\":" << JsonQuote(Hex(event.mtimecmpAtReturn));
+            if (event.kind == "machine_timer_interrupt") {
+                out << ",\"openSbiEntrySymbol\":"
+                    << JsonQuote(FunctionContaining(firmwareFunctions, tracked.vector))
+                    << ",\"subsequentSupervisorTimerEventId\":";
+                if (supervisorTimerId == UINT64_MAX) out << "null";
+                else out << supervisorTimerId;
+            }
+            if (event.kind != "sbi_time") {
+                out << ",\"handlerPcPrefix\":[";
+                for (size_t pc = 0; pc < tracked.handlerPcPrefixSize; ++pc)
+                    out << (pc == 0 ? "" : ",")
+                        << "{\"pc\":" << JsonQuote(Hex(tracked.handlerPcPrefix[pc]))
+                        << ",\"symbol\":" << JsonQuote(event.kind == "machine_timer_interrupt"
+                            ? FunctionContaining(firmwareFunctions, tracked.handlerPcPrefix[pc])
+                            : FunctionContaining(linuxFunctions, tracked.handlerPcPrefix[pc])) << "}";
+                out << "]";
+            }
+            out << "}" << (index + 1 == evidence.timerEvents.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+
+        const riscv_test::TrapAccountingEvent* largestCompletedSupervisorHandler = nullptr;
+        const riscv_test::TrapAccountingEvent* largestSupervisorHandler = nullptr;
+        for (const auto& event : accounting.events()) {
+            if (!event.handlerInvocation || event.target != PrivilegeMode::Supervisor) continue;
+            if (largestSupervisorHandler == nullptr ||
+                event.handlerInstructions > largestSupervisorHandler->handlerInstructions)
+                largestSupervisorHandler = &event;
+            if (event.returned && (largestCompletedSupervisorHandler == nullptr ||
+                event.handlerInstructions > largestCompletedSupervisorHandler->handlerInstructions))
+                largestCompletedSupervisorHandler = &event;
+        }
+        std::vector<std::pair<std::string, uint64_t>> topSymbols(
+            evidence.supervisorHandlerSymbolInstructions.begin(),
+            evidence.supervisorHandlerSymbolInstructions.end());
+        std::sort(topSymbols.begin(), topSymbols.end(), [](const auto& left, const auto& right) {
+            if (left.second != right.second) return left.second > right.second;
+            return left.first < right.first;
+        });
+        std::ofstream statsOut(dir / "riscv22-linux-handler-statistics.json",
+                              std::ios::out | std::ios::trunc);
+        statsOut << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": \"RISCV-22\",\n"
+            << "  \"cumulativeSModeHandlerInstructions\": "
+            << trapCounts.supervisorHandlerInstructions << ",\n"
+            << "  \"entryCount\": " << trapCounts.handlerEntries << ",\n"
+            << "  \"returnCount\": " << trapCounts.handlerReturns << ",\n"
+            << "  \"activeAtStop\": " << accounting.activeHandlerInvocations() << ",\n"
+            << "  \"maximumNestingDepth\": " << trapCounts.maxNestingDepth << ",\n"
+            << "  \"individualHandlerInstructionLimit\": 200000,\n"
+            << "  \"maximumIndividualHandlerInstructions\": "
+            << trapCounts.largestHandlerInvocation << ",\n"
+            << "  \"largestSupervisorHandler\": ";
+        if (largestSupervisorHandler == nullptr) {
+            statsOut << "null";
+        } else {
+            statsOut << "{\"eventId\":" << largestSupervisorHandler->id
+                << ",\"pc\":" << JsonQuote(Hex(largestSupervisorHandler->pc))
+                << ",\"cause\":" << largestSupervisorHandler->cause
+                << ",\"instructions\":" << largestSupervisorHandler->handlerInstructions
+                << ",\"returned\":" << (largestSupervisorHandler->returned ? "true" : "false")
+                << ",\"returnPc\":" << JsonQuote(Hex(largestSupervisorHandler->returnTargetPc))
+                << ",\"returnInstructionPc\":"
+                << JsonQuote(Hex(largestSupervisorHandler->returnInstructionPc)) << "}";
+        }
+        statsOut << ",\n  \"largestCompletedSupervisorHandler\": ";
+        if (largestCompletedSupervisorHandler == nullptr) {
+            statsOut << "null";
+        } else {
+            statsOut << "{\"eventId\":" << largestCompletedSupervisorHandler->id
+                << ",\"pc\":" << JsonQuote(Hex(largestCompletedSupervisorHandler->pc))
+                << ",\"cause\":" << largestCompletedSupervisorHandler->cause
+                << ",\"instructions\":" << largestCompletedSupervisorHandler->handlerInstructions
+                << ",\"returnPc\":" << JsonQuote(Hex(largestCompletedSupervisorHandler->returnTargetPc))
+                << ",\"returnInstructionPc\":"
+                << JsonQuote(Hex(largestCompletedSupervisorHandler->returnInstructionPc)) << "}";
+        }
+        statsOut << ",\n  \"supervisorHandlerEntriesByCause\": {\n"
+            << "    \"stipCause5\":" << trapCounts.supervisorTimerInterrupts << ",\n"
+            << "    \"otherSupervisorHandlerEntries\":"
+            << (largestSupervisorHandler == nullptr ? 0 : static_cast<uint64_t>(std::count_if(
+                accounting.events().begin(), accounting.events().end(), [](const auto& event) {
+                    return event.handlerInvocation && event.target == PrivilegeMode::Supervisor &&
+                        !(event.interrupt && event.cause == 5);
+                }))) << "\n  },\n"
+            << "  \"instructionsByLinuxSymbol\": [\n";
+        for (size_t index = 0; index < topSymbols.size(); ++index)
+            statsOut << "    {\"symbol\":" << JsonQuote(topSymbols[index].first)
+                << ",\"instructions\":" << topSymbols[index].second << "}"
+                << (index + 1 == topSymbols.size() ? "\n" : ",\n");
+        statsOut << "  ],\n  \"tickProgramEventCallSites\": {\n"
+            << "    \"totalObservedEntries\":";
+        uint64_t totalCallSites = 0;
+        for (const auto& [callSite, count] : evidence.tickProgramCallerCounts) {
+            (void)callSite;
+            totalCallSites += count;
+        }
+        statsOut << totalCallSites << ",\n    \"byCallerAndCallSite\":[\n";
+        size_t callerIndex = 0;
+        for (const auto& [callSite, count] : evidence.tickProgramCallerCounts) {
+            const size_t separator = callSite.rfind('@');
+            statsOut << "      {\"callerSymbol\":"
+                << JsonQuote(separator == std::string::npos ? callSite : callSite.substr(0, separator))
+                << ",\"callSitePc\":"
+                << JsonQuote(separator == std::string::npos ? "0x0" : callSite.substr(separator + 1))
+                << ",\"entries\":" << count << "}"
+                << (++callerIndex == evidence.tickProgramCallerCounts.size() ? "\n" : ",\n");
+        }
+        statsOut << "    ]\n  },\n  \"tickProgramEventEntrySamples\": [\n";
+        for (size_t index = 0; index < evidence.tickProgramCallSites.size(); ++index) {
+            const LinuxTickProgramCallSite& site = evidence.tickProgramCallSites[index];
+            statsOut << "    {\"entryPc\":" << JsonQuote(Hex(site.entryPc))
+                << ",\"callerSymbol\":" << JsonQuote(site.callerSymbol)
+                << ",\"callSitePc\":" << JsonQuote(Hex(site.callSitePc))
+                << ",\"callInstructionRaw\":" << JsonQuote(Hex(site.rawInstruction))
+                << ",\"returnAddress\":" << JsonQuote(Hex(site.returnAddress))
+                << ",\"retired\":" << site.retired
+                << ",\"activeHandlerEventId\":";
+            if (site.activeHandlerEventId == UINT64_MAX) statsOut << "null";
+            else statsOut << site.activeHandlerEventId;
+            statsOut << ",\"callSiteInstructionRead\":"
+                << (site.callSiteInstructionRead ? "true" : "false")
+                << "}" << (index + 1 == evidence.tickProgramCallSites.size() ? "\n" : ",\n");
+        }
+        statsOut << "  ]\n}\n";
+    }
+#endif
     {
         std::ofstream out(dir / (phasePrefix + "-linux-frontier.json"), std::ios::out | std::ios::trunc);
         const StepResult& step = run.frontier;
@@ -2252,9 +2723,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
     }
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
     {
-        std::ofstream out(dir / "riscv21-linux-progress-stages.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-progress-stages.json"),
                           std::ios::out | std::ios::trunc);
-        out << "{\n  \"schemaVersion\": 1,\n  \"phase\": \"RISCV-21\",\n"
+        out << "{\n  \"schemaVersion\": 1,\n  \"phase\": "
+            << JsonQuote(phaseName) << ",\n"
             << "  \"stages\": [\n";
         for (size_t index = 0; index < evidence.stages.size(); ++index) {
             const LinuxStage& stage = evidence.stages[index];
@@ -2289,7 +2761,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "  ]\n}\n";
     }
     {
-        std::ofstream out(dir / "riscv21-linux-symbol-visits.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-symbol-visits.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 1,\n"
             << "  \"uniqueFunctionEntries\": " << evidence.uniqueLinuxSymbols << ",\n"
@@ -2318,7 +2790,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
     }
     if (uartObserver != nullptr) {
         std::array<std::array<std::string, 2>, 3> retainedByOrigin;
-        std::ofstream eventsOut(dir / "riscv21-linux-uart-events.json",
+        std::ofstream eventsOut(dir / (phasePrefix + "-linux-uart-events.json"),
                                 std::ios::out | std::ios::trunc);
         const auto& observations = uartObserver->observations();
         const auto& byteCounts = uartObserver->outputByteCounts();
@@ -2373,13 +2845,13 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             const std::vector<uint8_t> binary(bytes.begin(), bytes.end());
             WriteBytes(dir / name, binary);
         };
-        writeUartCapture("riscv21-opensbi-pre-handoff-uart0.bin", handoffUart0);
-        writeUartCapture("riscv21-opensbi-pre-handoff-uart1.bin", handoffUart1);
-        writeUartCapture("riscv21-opensbi-post-handoff-uart0-retained.bin", retainedByOrigin[2][0]);
-        writeUartCapture("riscv21-opensbi-post-handoff-uart1-retained.bin", retainedByOrigin[2][1]);
-        writeUartCapture("riscv21-linux-s-mode-uart0-retained.bin", retainedByOrigin[1][0]);
-        writeUartCapture("riscv21-linux-s-mode-uart1-retained.bin", retainedByOrigin[1][1]);
-        std::ofstream consoleOut(dir / "riscv21-linux-console-observation.json",
+        writeUartCapture(phasePrefix + "-opensbi-pre-handoff-uart0.bin", handoffUart0);
+        writeUartCapture(phasePrefix + "-opensbi-pre-handoff-uart1.bin", handoffUart1);
+        writeUartCapture(phasePrefix + "-opensbi-post-handoff-uart0-retained.bin", retainedByOrigin[2][0]);
+        writeUartCapture(phasePrefix + "-opensbi-post-handoff-uart1-retained.bin", retainedByOrigin[2][1]);
+        writeUartCapture(phasePrefix + "-linux-s-mode-uart0-retained.bin", retainedByOrigin[1][0]);
+        writeUartCapture(phasePrefix + "-linux-s-mode-uart1-retained.bin", retainedByOrigin[1][1]);
+        std::ofstream consoleOut(dir / (phasePrefix + "-linux-console-observation.json"),
                                  std::ios::out | std::ios::trunc);
         consoleOut << "{\n  \"schemaVersion\": 1,\n"
             << "  \"capturedPostHandoffWritesComplete\": "
@@ -2394,12 +2866,67 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"uart1OpenSbiPostHandoffBytes\": " << originByteCounts[2][1] << ",\n"
             << "  \"observerDroppedEvents\": " << uartObserver->droppedEvents() << ",\n"
             << "  \"observerAttributionFailures\": " << uartObserver->attributionFailures() << ",\n"
-            << "  \"binaryCaptures\": [\"riscv21-opensbi-pre-handoff-uart0.bin\","
-            << "\"riscv21-opensbi-pre-handoff-uart1.bin\","
-            << "\"riscv21-opensbi-post-handoff-uart0-retained.bin\","
-            << "\"riscv21-opensbi-post-handoff-uart1-retained.bin\","
-            << "\"riscv21-linux-s-mode-uart0-retained.bin\","
-            << "\"riscv21-linux-s-mode-uart1-retained.bin\"]\n}\n";
+            << "  \"binaryCaptures\": [" << JsonQuote(phasePrefix + "-opensbi-pre-handoff-uart0.bin")
+            << "," << JsonQuote(phasePrefix + "-opensbi-pre-handoff-uart1.bin")
+            << "," << JsonQuote(phasePrefix + "-opensbi-post-handoff-uart0-retained.bin")
+            << "," << JsonQuote(phasePrefix + "-opensbi-post-handoff-uart1-retained.bin")
+            << "," << JsonQuote(phasePrefix + "-linux-s-mode-uart0-retained.bin")
+            << "," << JsonQuote(phasePrefix + "-linux-s-mode-uart1-retained.bin")
+            << "]\n}\n";
+
+        const std::vector<uint8_t> linuxConsoleBytes(
+            retainedByOrigin[1][0].begin(), retainedByOrigin[1][0].end());
+        const auto writeTranscriptArtifacts = [&](const std::string& rawName,
+                                                  const std::string& textName,
+                                                  const std::string& analysisName,
+                                                  const std::vector<uint8_t>& bytes) {
+            Expect(WriteBytes(dir / rawName, bytes),
+                   "raw Linux UART0 console bytes are preserved as a separate artifact");
+            Expect(WriteBytes(dir / textName, bytes),
+                   "readable Linux UART0 transcript retains the exact captured byte stream");
+            const riscv_linux_test::LinuxConsoleTranscript transcript =
+                riscv_linux_test::ParseLinuxConsoleTranscript(bytes);
+            std::ofstream analysisOut(dir / analysisName, std::ios::out | std::ios::trunc);
+            analysisOut << "{\n  \"schemaVersion\": 1,\n"
+                << "  \"source\": \"guest UART0 S-mode MMIO writes after OpenSBI handoff\",\n"
+                << "  \"byteCount\": " << transcript.byteCount << ",\n"
+                << "  \"sha256\": " << JsonQuote(Sha256(bytes)) << ",\n"
+                << "  \"completeLineCount\": " << transcript.completeLines.size() << ",\n"
+                << "  \"firstCompleteLine\": "
+                << JsonQuote(transcript.completeLines.empty() ? "" : transcript.completeLines.front().text)
+                << ",\n  \"lastCompleteLine\": "
+                << JsonQuote(transcript.completeLines.empty() ? "" : transcript.completeLines.back().text)
+                << ",\n  \"partialTrailingLine\": " << JsonQuote(transcript.partialTrailingLine)
+                << ",\n  \"hostInferenceIncluded\": false,\n  \"lines\": [\n";
+            for (size_t index = 0; index < transcript.completeLines.size(); ++index) {
+                const auto& line = transcript.completeLines[index];
+                analysisOut << "    {\"lineNumber\":" << index + 1
+                    << ",\"text\":" << JsonQuote(line.text)
+                    << ",\"guestEmitted\":true,\"initializationEvidence\":"
+                    << JsonQuote(line.initializationEvidence)
+                    << ",\"severity\":" << JsonQuote(line.severity)
+                    << ",\"categories\":[";
+                for (size_t category = 0; category < line.categories.size(); ++category)
+                    analysisOut << (category == 0 ? "" : ",")
+                        << JsonQuote(line.categories[category]);
+                analysisOut << "]}" << (index + 1 == transcript.completeLines.size() ? "\n" : ",\n");
+            }
+            analysisOut << "  ]\n}\n";
+        };
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+        if (originalLinuxConsole != nullptr) {
+            writeTranscriptArtifacts(phasePrefix + "-linux-console-raw.bin",
+                phasePrefix + "-linux-console.txt",
+                phasePrefix + "-linux-console-analysis.json", *originalLinuxConsole);
+            writeTranscriptArtifacts(phasePrefix + "-linux-console-continued-raw.bin",
+                phasePrefix + "-linux-console-continued.txt",
+                phasePrefix + "-linux-console-continued-analysis.json", linuxConsoleBytes);
+        }
+#else
+        writeTranscriptArtifacts(phasePrefix + "-linux-console-raw.bin",
+            phasePrefix + "-linux-console.txt",
+            phasePrefix + "-linux-console-analysis.json", linuxConsoleBytes);
+#endif
     }
 #endif
 }
@@ -2479,7 +3006,10 @@ int main(int argc, char** argv) {
         return g_failures == 0 ? 0 : 1;
     }
 #endif
-#if defined(RISCV_LINUX_STARTUP_CONTINUATION)
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    constexpr int kExpectedArgc = 10;
+    constexpr const char* kUsage = "usage: test_riscv_linux_boot_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config riscv21_linux_uart0.bin";
+#elif defined(RISCV_LINUX_STARTUP_CONTINUATION)
     constexpr int kExpectedArgc = 9;
     constexpr const char* kUsage = "usage: test_riscv_linux_startup_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config";
 #else
@@ -2499,6 +3029,18 @@ int main(int argc, char** argv) {
 #if defined(RISCV_LINUX_STARTUP_CONTINUATION)
     const std::vector<uint8_t> vmlinux = ReadFile(argv[7]);
     const std::vector<uint8_t> config = ReadFile(argv[8]);
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    const std::vector<uint8_t> riscv21Console = ReadFile(argv[9]);
+    const auto baselineTranscript =
+        riscv_linux_test::ParseLinuxConsoleTranscript(riscv21Console);
+    Expect(riscv21Console.size() == 5630 && Sha256(riscv21Console) ==
+               "2E8B68F93E9D799025E4DB52756F79A0C7F74F838B3ABB9B9B48E68FDE4A77BD",
+           "retained RISCV-21 Linux UART0 bytes match the measured 5,630-byte source capture");
+    Expect(baselineTranscript.completeLines.size() >= 1 &&
+           baselineTranscript.completeLines.front().text.rfind("[    0.000000] Linux version 6.12.0", 0) == 0 &&
+           baselineTranscript.partialTrailingLine.empty(),
+           "console transcript parser recognizes the pinned Linux version and complete-line boundary");
+#endif
     const LinuxSymbols symbols = ParseLinuxVmlinux(vmlinux);
     const bool headDisassemblyMatches = VerifyHeadDisassembly(vmlinux, image, symbols);
     const std::string expectedConfigHash = Upper(JsonString(manifest, "configSha256"));
@@ -2798,6 +3340,20 @@ int main(int argc, char** argv) {
            stage20->privilege == PrivilegeMode::Supervisor &&
            stage20->satp == 0x80000000000812EFULL,
            "RISCV-20 20M boundary remains at its accepted PC, retired instruction, mode, and satp");
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    const auto stage30 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 30000000ULL; });
+    const auto stage40 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 40000000ULL; });
+    Expect(stage30 != continuation.stages.end() && stage30->actualRetired == 30000000ULL &&
+           stage30->pc == 0xFFFFFFFF80061550ULL &&
+           stage30->lastRetiredPc == 0xFFFFFFFF8006154CULL,
+           "fresh authentic replay preserves the accepted 30M architectural boundary");
+    Expect(stage40 != continuation.stages.end() && stage40->actualRetired == 40000000ULL &&
+           linuxRun.retired == 40000000ULL && !linuxRun.reachedFrontier &&
+           continuation.stopClassification == "instruction_budget",
+           "bounded continuation reaches exactly 40M post-handoff retirements without a guest fault");
+#endif
     Expect(linuxRun.retired > 20000000ULL,
            "Linux guest retires beyond the preserved 20M continuation boundary");
     const uint64_t observedOutputBytes = uartObserver.outputByteCounts()[0] +
@@ -2832,6 +3388,37 @@ int main(int argc, char** argv) {
     Expect(preHandoffByteCounts[0] == handoffUartOutput.size() &&
            preHandoffByteCounts[1] == handoffUart1Output.size(),
            "captured OpenSBI UART0/1 prefixes equal the firmware bytes emitted before Linux MRET handoff");
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    const std::string& completeUart0 = cpu.machineUartOutput();
+    const std::string newLinuxConsole = completeUart0.size() >= handoffUartOutput.size()
+        ? completeUart0.substr(handoffUartOutput.size()) : std::string{};
+    const bool originalConsolePrefixPreserved = newLinuxConsole.size() >= riscv21Console.size() &&
+        newLinuxConsole.compare(0, riscv21Console.size(), AsString(riscv21Console)) == 0;
+    Expect(originalConsolePrefixPreserved,
+           "all 5,630 accepted RISCV-21 Linux UART bytes remain the unchanged prefix of the continuation");
+    const std::vector<uint8_t> newConsoleBytes(newLinuxConsole.begin(), newLinuxConsole.end());
+    const auto continuedTranscript =
+        riscv_linux_test::ParseLinuxConsoleTranscript(newConsoleBytes);
+    Expect(continuedTranscript.byteCount == newLinuxConsole.size() &&
+           continuedTranscript.completeLines.size() >= baselineTranscript.completeLines.size() &&
+           !continuedTranscript.completeLines.empty() &&
+           continuedTranscript.completeLines.front().text ==
+               baselineTranscript.completeLines.front().text,
+           "continued console transcript parses from authentic bytes without changing its first message");
+    const auto& allOriginBytes = uartObserver.outputByteCountsByOrigin();
+    const auto firstLinuxByte = std::find_if(uartObserver.observations().begin(),
+        uartObserver.observations().end(), [](const auto& event) {
+            return event.origin == riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff;
+        });
+    Expect(allOriginBytes[0][0] == 4349 && allOriginBytes[0][1] == 0 &&
+           allOriginBytes[1][0] == newLinuxConsole.size() && allOriginBytes[1][1] == 0 &&
+           allOriginBytes[2][0] == 0 && allOriginBytes[2][1] == 0 &&
+           uartObserver.droppedEvents() == 0 && uartObserver.attributionFailures() == 0 &&
+           firstLinuxByte != uartObserver.observations().end() && firstLinuxByte->byte == '[' &&
+           firstLinuxByte->guestPc == 0xFFFFFFFF80449314ULL &&
+           firstLinuxByte->postHandoffRetirements == 2028672,
+           "UART0 byte ordering, M/S attribution, first Linux writer PC, and zero-drop provenance reproduce");
+#endif
 #else
     ContinueLinuxInStages(cpu, linuxRun, continuation, symbols);
 #endif
@@ -2847,6 +3434,83 @@ int main(int argc, char** argv) {
             return event.sbiCall && event.sbiEid == 0x54494D45ULL && event.sbiFid == 0 &&
                 event.returned && event.resumed && event.sbiResultCaptured;
         }));
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+    const uint64_t successfulSbiCalls = static_cast<uint64_t>(std::count_if(
+        continuation.accounting.events().begin(), continuation.accounting.events().end(),
+        [](const riscv_test::TrapAccountingEvent& event) {
+            return event.sbiCall && event.returned && event.resumed &&
+                event.sbiResultCaptured && event.sbiError == 0;
+        }));
+    const uint64_t completedSbiCalls = static_cast<uint64_t>(std::count_if(
+        continuation.accounting.events().begin(), continuation.accounting.events().end(),
+        [](const riscv_test::TrapAccountingEvent& event) {
+            return event.sbiCall && event.returned && event.resumed && event.sbiResultCaptured;
+        }));
+    const uint64_t observedTimeCalls = static_cast<uint64_t>(std::count_if(
+        continuation.timerEvents.begin(), continuation.timerEvents.end(),
+        [](const LinuxTimerEvent& event) { return event.kind == "sbi_time"; }));
+    const uint64_t observedMachineTimers = static_cast<uint64_t>(std::count_if(
+        continuation.timerEvents.begin(), continuation.timerEvents.end(),
+        [](const LinuxTimerEvent& event) { return event.kind == "machine_timer_interrupt"; }));
+    const uint64_t observedSupervisorTimers = static_cast<uint64_t>(std::count_if(
+        continuation.timerEvents.begin(), continuation.timerEvents.end(),
+        [](const LinuxTimerEvent& event) { return event.kind == "supervisor_timer_interrupt"; }));
+    uint64_t attributedSupervisorHandlerInstructions = 0;
+    for (const auto& [symbol, instructions] : continuation.supervisorHandlerSymbolInstructions) {
+        (void)symbol;
+        attributedSupervisorHandlerInstructions += instructions;
+    }
+    const uint64_t supervisorHandlerEntries = static_cast<uint64_t>(std::count_if(
+        continuation.accounting.events().begin(), continuation.accounting.events().end(),
+        [](const riscv_test::TrapAccountingEvent& event) {
+            return event.handlerInvocation && event.target == PrivilegeMode::Supervisor;
+        }));
+    const bool observedHrtimerCaller = std::any_of(
+        continuation.tickProgramCallerCounts.begin(),
+        continuation.tickProgramCallerCounts.end(), [](const auto& entry) {
+            return entry.first.rfind("hrtimer_interrupt@", 0) == 0 && entry.second != 0;
+        });
+    const bool observedActualCallInstruction = std::any_of(
+        continuation.tickProgramCallSites.begin(), continuation.tickProgramCallSites.end(),
+        [](const LinuxTickProgramCallSite& site) {
+            if (site.callerSymbol != "hrtimer_interrupt" || !site.callSiteInstructionRead ||
+                site.activeHandlerEventId == UINT64_MAX) return false;
+            const DecodedInstruction call = Decoder().Decode(site.rawInstruction);
+            return (call.mnemonic == Mnemonic::JALR || call.mnemonic == Mnemonic::JAL) &&
+                call.rd == 1;
+        });
+    bool sbiTimeCompareUpdatesMatch = true;
+    for (const auto& event : continuation.timerEvents) {
+        if (event.kind != "sbi_time" || !event.returned) continue;
+        sbiTimeCompareUpdatesMatch = sbiTimeCompareUpdatesMatch &&
+            event.mtimecmpAtReturn == event.requestedDeadline;
+    }
+    const bool machineTimerDeadlinesWereDue = std::all_of(
+        continuation.timerEvents.begin(), continuation.timerEvents.end(),
+        [](const LinuxTimerEvent& event) {
+            return event.kind != "machine_timer_interrupt" ||
+                (event.mtimecmpAtTrap != UINT64_MAX &&
+                 event.mtimeAtTrap >= event.mtimecmpAtTrap);
+        });
+    Expect(successfulSbiCalls == completedSbiCalls && successfulSbiCalls != 0,
+           "every completed guest SBI call returned through OpenSBI, resumed Linux, and reported success");
+    Expect(observedTimeCalls >= returnedTimeCalls &&
+           observedMachineTimers == trapCounts.machineTimerInterrupts &&
+           observedSupervisorTimers == trapCounts.supervisorTimerInterrupts &&
+           observedMachineTimers == observedSupervisorTimers,
+           "SBI TIME, MTIP, and STIP event samples reconcile with trap accounting");
+    Expect(supervisorHandlerEntries == trapCounts.supervisorTimerInterrupts &&
+           attributedSupervisorHandlerInstructions == trapCounts.supervisorHandlerInstructions &&
+           trapCounts.largestHandlerInvocation <= 200000,
+           "cumulative S-mode work is attributed to completed timer handlers within the individual cap");
+    Expect(observedHrtimerCaller && observedActualCallInstruction,
+           "tick_program_event caller resolves to a live hrtimer_interrupt return PC and call instruction");
+    Expect(sbiTimeCompareUpdatesMatch && machineTimerDeadlinesWereDue,
+           "OpenSBI TIME writes the requested mtimecmp and each observed MTIP was due at entry");
+    Expect(continuation.finalMtime >= continuation.handoffMtime &&
+           continuation.finalMtime - continuation.handoffMtime == linuxRun.retired,
+           "virtual mtime advances exactly with post-handoff retired instructions");
+#endif
     Expect(trapCounts.stepCalls == continuation.linuxStepCalls &&
            trapCounts.supervisorRetired + trapCounts.machineRetired + trapCounts.userRetired ==
                trapCounts.totalRetired && !continuation.accounting.lifetimesUncertain(),
@@ -3156,6 +3820,11 @@ int main(int argc, char** argv) {
         finalFdtBytes, symbols, firmwareRun, linuxRun, continuation, cpu,
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
         &uartObserver,
+#else
+        nullptr,
+#endif
+#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+        &riscv21Console,
 #else
         nullptr,
 #endif

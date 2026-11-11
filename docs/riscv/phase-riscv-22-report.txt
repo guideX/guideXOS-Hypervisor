@@ -1,0 +1,339 @@
+guideXOS Hypervisor — Phase RISCV-22 Report
+Authentic Linux Console Analysis, Timer-Handler Accounting, and Bounded Continuation
+Run date: 2026-11-10
+Outcome: A — authentic Linux advanced beyond the RISCV-21 handler-budget
+frontier and reached the bounded 40,000,000 post-handoff retirement cap.
+This is not a claim that Linux boot or userspace completed.
+
+Repository and scope
+--------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV
+Starting HEAD: af18002f3189919b7293edb2520110827c38a685
+Starting origin/RISCV divergence: 1 ahead / 0 behind
+Starting phase marker: RISCV-21 complete; RISCV-22 selected
+
+The pre-existing untracked Testing/ directory and fixture .build/ directories
+for dual-UART, PLIC/UART, and PMP were preserved. RISCV-21 artifact directories
+were preserved byte-for-byte; a fresh Release replay matched all 28 files
+common with the retained RISCV-21 Release bundle. New outputs are under
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv22-artifacts\{Debug,Release}
+and the separate RISCV-21 replay subdirectory. No IA-64 implementation,
+production RISC-V CPU, MMU, PMP, timer, UART, PLIC, Linux, or firmware source
+was changed. No QEMU was run and nothing was pushed.
+
+The implementation adds the focused test target
+test_riscv_linux_boot_continuation, a bounded Linux console transcript parser,
+and read-only S-mode handler/SBI TIME/mtime/mtimecmp/call-site instrumentation.
+The accepted RISC-V test count is now 31 (the prior 30 plus this target).
+The earlier RISCV-21 console test was redirected to the new replay directory
+so the retained RISCV-21 output was never overwritten.
+
+Pinned artifacts and platform
+-----------------------------
+Linux v6.12 commit: adc218676eef25575469234709c2d87185ca223a
+Image SHA-256:
+60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C
+vmlinux SHA-256:
+49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093
+Configuration SHA-256:
+5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB
+
+OpenSBI v1.8.1 source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+fw_jump.bin SHA-256:
+CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+fw_jump.elf SHA-256:
+255C24F037FFAA15A8FB4A3D0447910654E0C39AA98A591FD5A562F567F10FD0
+
+The accepted single-hart RV64IMA_Zicsr/Sv39 profile remains unchanged:
+RAM [0x80000000,0x84000000), Linux entry 0x80200000, FDT 0x82200000,
+StandardPmp16 restricted S-mode domain, UART0 0x10000000, UART1 0x1000A000,
+PLIC 0x0C000000, machine-owned ACLINT timer, and a 10 MHz timebase. Linux
+bootargs remain exactly:
+console=ttyS0,115200 earlycon=uart8250,mmio,0x10000000
+
+OpenSBI performed genuine M-mode initialization and MRET to S-mode Linux at
+PC 0x80200000 with a0=0, a1=0x82200000, and satp=Bare. There was no host SBI
+provider. FDT SHA-256 at handoff remained
+580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475.
+The guest completed the same 44,149 BSS stores over [0x812e5000,0x8133b3a8),
+observed the loop exit, and read the entire range as zero.
+
+RISCV-21 reproduction and stop analysis
+---------------------------------------
+The fresh Release replay exactly reproduced the retained RISCV-21 frontier:
+37,098,664 post-handoff retired instructions; Linux/S-mode 34,118,592,
+including 32,118,591 normal S-mode instructions and 2,000,001 S-mode handler
+instructions; M-mode OpenSBI 2,980,072; final PC 0xffffffff800a5cd0;
+classification s_mode_handler_instruction_budget. All 28 common artifact
+files matched the retained Release bundle byte-for-byte, including the
+5,630-byte Linux UART0 stream, trap records, SBI records, FDT/PMP evidence,
+stage summaries, and final state.
+
+The 2,000,000-instruction S-handler limit was cumulative over many invocations.
+RISCV-21 recorded 627 supervisor timer (STIP, cause 5) handler entries, with
+2,000,001 retired S-handler instructions at the boundary; every one of those
+handler instructions was attributed to cause-5 timer frames. One of the 627
+frames remained active at the stop, with 3,164 instructions in that partial
+frame. The largest individual frame was 5,943 instructions, and maximum
+nesting was 2. A separate initial Sv39 instruction
+page fault at 0x80200098 (cause 12) was a non-handler transition used by the
+kernel's physical-to-virtual alias path; it contributed zero handler
+instructions. This was valid timer-handler work, not one 2,000,000-instruction
+handler loop.
+
+The old frontier's PC 0xffffffff800a5cd0 is the `jalr x0,0(x1)` return at the
+end of `tick_program_event`; x1 was 0xffffffff80095000, the return address in
+`hrtimer_interrupt`. The authenticated dynamic call-site trace shows the
+`hrtimer_interrupt` call at 0xffffffff80094ffc and a second caller,
+`retrigger_next_event.constprop.0`, at 0xffffffff80094864. Both instructions
+were read from guest memory and are `jal ra` calls into
+tick_program_event at 0xffffffff800a5c70. The old stop was therefore on a
+normal return path into the high-resolution timer interrupt routine.
+
+Pinned Linux v6.12 timer source was checked in `kernel/time/tick-oneshot.c`,
+`kernel/time/hrtimer.c`, and `kernel/time/clockevents.c`. The tick path can
+stop a timer for KTIME_MAX and delegates event programming to the clockevent
+device; a past deadline may return -ETIME and the high-resolution handler has
+bounded retry behavior. The captured guest made no already-expired deadline
+request, so no repeated immediate-expiration behavior was observed. Relevant
+pinned source links:
+https://github.com/torvalds/linux/blob/adc218676eef25575469234709c2d87185ca223a/kernel/time/tick-oneshot.c
+https://github.com/torvalds/linux/blob/adc218676eef25575469234709c2d87185ca223a/kernel/time/hrtimer.c
+https://github.com/torvalds/linux/blob/adc218676eef25575469234709c2d87185ca223a/kernel/time/clockevents.c
+OpenSBI's pinned `lib/sbi/sbi_timer.c` programs the machine compare register,
+clears STIP on a new request, and raises STIP while processing MTIP when SSTC
+is unavailable:
+https://github.com/riscv-software-src/opensbi/blob/74434f255873d74e56cc50aa762d1caf24c099f8/lib/sbi/sbi_timer.c
+
+Authentic Linux console transcript
+----------------------------------
+The authoritative raw S-mode UART0 capture is 5,630 bytes with SHA-256
+2E8B68F93E9D799025E4DB52756F79A0C7F74F838B3ABB9B9B48E68FDE4A77BD. The
+parser found 76 complete CR/LF-terminated lines and no partial trailing line.
+The first line reports Linux version 6.12.0 and the pinned RISC-V GCC/binutils
+build. The last complete line is:
+[    1.455534] workingset: timestamp_bits=46 max_order=13 bucket_order=0
+
+The guest prints the exact kernel command line, four reserved-memory ranges
+(including the two OpenSBI regions, slot gap, and FDT), DMA32/Normal zone
+ranges, available-memory summary, 64-bit `riscv_clocksource`, 10 MHz
+`sched_clock`, jiffies clocksource, and the later switch back to
+`riscv_clocksource`. It reports `NR_IRQS: 64` and 64 local interrupts mapped
+by `riscv-intc`. Serial text identifies `earlycon: uart8250` at UART0 and the
+legacy UART8250 bootconsole. `Console: colour dummy device 80x25` is the only
+generic console message; the transcript does not state that a normal ttyS0
+console took over.
+
+Other emitted messages include cache and zonelist setup, SLUB, RCU Tasks
+Trace, BogoMIPS, LSM initialization, devtmpfs, futex, pinctrl, DMA, thermal,
+cpuidle, unaligned-access timing, HugeTLB, IOMMU, USB, ALSA, vgaarb, PCI CLS,
+and workingset initialization. These are guest-emitted messages; the words
+`registered`, `initialized`, `enabled`, and `switched` are only the guest's
+reports for the named subsystem. Console text contains no initcall log, no
+root filesystem mount or init-process result, and no proof of userspace.
+The line `riscv: ELF compat mode unsupported` at 0.124584 seconds is an
+informational architecture message, not a warning or a demonstrated failure.
+The transcript has zero warning/error markers and zero BUG/Oops/panic markers.
+
+The observer retained 9,979 authentic UART TX bytes: 4,349 OpenSBI M-mode
+bytes before handoff and 5,630 Linux S-mode bytes after handoff; UART1 and
+post-handoff OpenSBI output remained zero. There were zero dropped events,
+zero attribution failures, and every output byte matched a guest UART MMIO
+write. Linux's first byte was `[` at global sequence 4,350 and output offset
+4,349, written by S-mode PC 0xffffffff80449314 in
+`early_serial8250_write` after 2,028,672 Linux retirements. The original
+5,630-byte prefix and the full 40M continued capture are stored separately;
+both have the same SHA-256. No additional Linux UART bytes were emitted by
+the 40M continuation. The observer did not provide synthetic output or change
+UART execution semantics.
+
+Linux initialization and execution progress
+-------------------------------------------
+The early milestone trace again proves BSS completion, `setup_vm`, the first
+production satp write, Sv39 alias transition, `soc_early_init`, and entry to
+`start_kernel`; entry is not confused with function completion. Later
+symbol-entry and return observations (all in S-mode with Sv39 active unless
+noted) include:
+
+Symbol                         First PC               Retired     Evidence
+-----------------------------  ---------------------  ----------  -----------------
+register_console               0xffffffff8006a5a8      2,020,400   return observed
+setup_arch                     0xffffffff80804e1c        160,020   return observed
+mem_init                       0xffffffff808078d8      9,598,204   return observed
+sched_init                     0xffffffff8080b9ac     11,059,336   return observed
+timekeeping_init               0xffffffff8080e8a0     11,237,565   return observed
+time_init                      0xffffffff808056a4     11,238,552   return observed
+riscv_timer_init_dt            0xffffffff8083186c     11,274,687   return observed
+clockevents_config_and_register 0xffffffff800a474c    11,328,108   return observed
+console_init                   0xffffffff8080cfdc     11,385,030   return observed
+rest_init                      0xffffffff806716ac     11,990,101   entry only
+kernel_thread                  0xffffffff800133f8     12,038,936   return observed
+kernel_init                    0xffffffff8067178c     12,077,316   entry only
+do_one_initcall                0xffffffff800010f4     12,552,837   return observed
+populate_rootfs                0xffffffff80803390     25,326,062   return observed
+do_populate_rootfs             0xffffffff80803aa0     25,633,415   return observed
+
+The trace records symbol entry, PC, retirement, privilege, satp/sstatus/
+mstatus, and whether a return was observed. It does not capture the return
+status from `do_one_initcall` or establish that all initcalls succeeded.
+Similarly, returning from rootfs population routines does not prove that a
+filesystem was mounted or that an init process was started. The observed
+`sched_init` return proves that this initialization function completed; the
+console and symbol records do not prove completed system boot. At 40M the
+guest was still executing S-mode kernel allocation/work paths, not a reported
+terminal kernel condition.
+
+SBI TIME, mtime, mtimecmp, and timer handlers
+---------------------------------------------
+The authentic M-mode OpenSBI run recorded 1,419 successful SBI calls:
+1,401 TIME EID 0x54494D45/FID 0 and 18 SBI Base calls. Every request captured
+a zero error, matched M-mode return, and observed S-mode resumption. No host
+SBI provider was present. The 10 MHz virtual timebase advances one tick per
+retired guest instruction in this harness.
+
+TIME deadline behavior:
+- 701 calls deliberately requested UINT64_MAX to disable the event.
+- 700 calls installed a future deadline.
+- Zero deadlines were already expired when requested; zero active deadlines
+  decreased; all 1,401 calls returned and resumed.
+- 699 finite requests were followed by MTIP/cause 7 and then a supervisor
+  timer interrupt (STIP/cause 5). The final finite request remained pending
+  at the cap.
+- Guest retirement between recurring TIME requests ranged from 769 to 57,104
+  instructions (median 3,890); future-deadline requests ranged from 782 to
+  4,201 (median 3,198).
+
+For example, at post-handoff retirement 11,329,262, Linux's `__sbi_ecall`
+issued TIME with current mtime 0x1685b91, old mtimecmp UINT64_MAX, and deadline
+0x168f7b0. OpenSBI returned a0=0/a1=0 and installed that exact compare value.
+MTIP arrived when mtime reached the deadline at retirement 11,369,229;
+OpenSBI then delivered STIP, which Linux handled by programming the next
+deadline within the handler before returning. At 40M, the last finite request
+occurred at retirement 39,978,188, leaving mtimecmp=0x31e0f1f. That deadline was still
+14,460 virtual ticks in the future at the 40M boundary, so it correctly had
+no subsequent MTIP in this bounded run.
+
+Across the new run there were 699 M timer interrupts and 699 S timer
+interrupts. All 2,244,333 S-mode handler instructions were spent in the 699
+STIP/cause-5 frames; no other S-mode handler cause retired instructions.
+There were 6,850 matched handler entries/returns, zero active handler frames
+at stop, maximum nesting depth 2, zero unattributed handler instructions, and
+zero dropped trap details. One additional initial cause-12 Sv39 alias fault
+was retained as a non-handler transition. The largest S-mode timer frame was
+5,943 instructions, interrupted `mas_empty_area` at 0xffffffff80641388 and
+returned to that PC via `ret_from_exception` at 0xffffffff8067adc8.
+
+Top S-mode handler instruction totals by pinned Linux symbol were:
+timekeeping_advance 251,355; timekeeping_update 91,307;
+do_raw_spin_unlock 89,726; ktime_get 81,216; do_raw_spin_lock 75,922;
+unresolved 74,094; __hrtimer_run_queues.constprop.0 67,186;
+update_curr 64,566; update_vsyscall 63,146; and __next_base 57,298.
+`hrtimer_interrupt` accounted for 51,450 instructions. The instrumentation
+observed 525 calls to `tick_program_event` from `hrtimer_interrupt` at call
+PC 0xffffffff80094ffc (raw JAL 0x475100ef, return 0xffffffff80095000), and
+one call from `retrigger_next_event.constprop.0` at 0xffffffff80094864 (raw
+JAL 0x40c110ef, return 0xffffffff80094868). These call sites and active
+handler IDs tie timer programming to actual guest interrupt context.
+
+Continuation budget and final frontier
+--------------------------------------
+The cumulative S-mode handler cap was raised from 2,000,000 to 3,000,000
+instructions after the replay showed that the former bound was consumed by
+hundreds of completed timer handlers, not one stuck handler. Independent
+safeguards remain: 40,000,000 total post-handoff retirements, 8,000,000 M-mode
+instructions, 7,000,000 M-mode handler instructions, 200,000 instructions per
+handler, 64 nesting levels, 16,384 trap events, and 8,192 repeated-state
+checks. The run stopped at the 40M total cap before any other limit; the
+largest handler was 5,943 instructions, trap nesting was 2, 6,851 events were
+retained, and there were no dropped details.
+
+The staged total targets were 250,000, 1,000,000, 5,000,000, 20,000,000,
+25,000,000, 30,000,000, and 40,000,000. The exact 20M and 30M boundaries
+were retained. At 40,000,000 the run totals were:
+
+Post-handoff total retired: 40,000,000
+Linux/S-mode retired:       36,951,456
+  normal S-mode Linux:      34,707,123
+  S-mode timer handlers:     2,244,333
+OpenSBI/M-mode retired:      3,048,544
+Step calls:                 40,006,851
+Traps:                           6,851
+SBI calls:                      1,419
+MTIP / STIP:                  699 / 699
+Final privilege / satp:       S / 0x80000000000812ef
+mtime ticks, handoff/final:   12,287,139 / 52,287,139
+Final mtimecmp:               0x31e0f1f
+
+The stop classification is `instruction_budget`, reason
+"40-million post-handoff guest-retirement cap reached with guest forward
+progress". Last retired PC was 0xffffffff801dac14. Next PC is
+0xffffffff801dac18, raw instruction 0x16079063 (`bne x15,x0,352`) in
+`kmem_cache_alloc_noprof`; that instruction was not executed. The guest was
+in S-mode with satp=0x80000000000812ef, no trap was taken at the frontier,
+and no handler was active. A bounded 64-instruction prehistory and GPR/CSR,
+trap, timer, PMP, page-walk, and UART context are retained. This is the
+requested 40M cap, not an architectural failure; the phase did not continue
+to 50M.
+
+Regression validation
+---------------------
+RISC-V CTest registered count: 31.
+Release: 31/31 passed.
+Debug: 31/31 passed (13,633.75 seconds total CTest time).
+The Debug console continuation passed in 11,768.56 seconds; the 40M boot
+continuation passed in 13,173.82 seconds. The completed Debug CTest log is
+archived at
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv22-artifacts\validation\debug-riscv-ctest-LastTest.log.
+Debug CTest log SHA-256:
+71E2D15DE2ECF65E5260DA915EB615FF3068A78CBBABE1E381AA8EC45530ABA7
+EFI memory-map and IA-64 SAL CTests: 2/2 passed in Debug and Release.
+Direct IA-64 ACPI, interrupt-controller, and processor-interrupt-block
+regressions: 3/3 passed in Debug and Release. No IA-64 implementation file
+changed.
+
+A full Debug all-target build was attempted. The unrelated
+test_elf_validation and test_watchpoint targets failed to link with
+unresolved-symbol errors; the RISC-V and requested IA-64 targets built. The
+RISC-V CTest selection does not include either unrelated target. No production
+CPU/device correction was indicated or made.
+
+All 25 `riscv22-*` evidence files are byte-identical between Debug and Release,
+including the console transcript, timer/SBI/handler event streams, milestones,
+run summary, trap accounting, symbols, and final frontier. The fresh Debug
+RISCV-21 replay also matches all 28 common artifacts in its retained Debug
+bundle. No host paths or timestamps are part of the canonical run summary,
+timer, handler, milestone, console, or frontier records. Event storage remains
+bounded; no per-instruction trace was added.
+
+Artifacts and next scope
+------------------------
+Release evidence:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv22-artifacts\Release
+Debug evidence:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv22-artifacts\Debug
+RISCV-21 replay evidence:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv22-artifacts\riscv21-reproduction\{Debug,Release}
+Build trees:
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-debug-build
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv21-release-build
+
+Common Debug/Release SHA-256:
+Linux console raw and continued capture:
+2E8B68F93E9D799025E4DB52756F79A0C7F74F838B3ABB9B9B48E68FDE4A77BD
+run summary:
+97AD82F9BFC3F95F8ED6A6A9C2AFC460889647E7F2E9E43A482A5E8EF48791CC
+handler statistics:
+7AE66A6A7D6370A59B583501714C6A89D53BF6756E83A92F1047A1CA7271E8AA
+timer events:
+A0A086D9DC40AE17C791CBDDF96F53D7D883DEBAD7A29974DD91308FEA7BD542
+frontier:
+1CBADF8C973BC7AE6E19BB548D5D88783DE85FC5CB5AF8BAEA6B553B84395169
+
+RISCV-23 should start from this exact 40M state in a new bounded phase and
+follow `kernel_init`/initcall/rootfs/init-process activity with explicit
+entry, return-status, and console evidence. It should diagnose the first real
+mount/init outcome before considering a root filesystem change. Keep the
+accepted CPU/platform profile and all existing safety limits; do not infer a
+completed boot from the scheduler, clockevent, console, or rootfs function
+observations recorded here.
