@@ -296,6 +296,14 @@ bool inspectAddress39(const std::filesystem::path& kernel,
 std::string independentFrontierDecode39(uint32_t word) {
     const uint32_t primary = word >> 26U;
     const uint32_t xo = (word >> 1U) & 0x3FFU;
+    const uint32_t xo9 = xo & 0x1FFU;
+    const bool oe = ((word >> 10U) & 1U) != 0U;
+    if (primary == 31U && xo9 == 104U && !oe && (word & 1U) == 0U) {
+        std::ostringstream decoded;
+        decoded << "neg r" << ((word >> 21U) & 31U)
+                << ",r" << ((word >> 16U) & 31U);
+        return decoded.str();
+    }
     if (primary == 31U && xo == 144U && (word & 1U) == 0U) {
         std::ostringstream decoded;
         decoded << "mtcrf 0x" << std::hex << std::setw(2)
@@ -413,18 +421,20 @@ void testAuthenticLinuxSubfic39() {
     CHECK(first.stopWord == second.stopWord && first.stopWord != 0U);
     CHECK(PPC64ISAPlugin::decodeWord(first.stopWord).kind ==
           DecodedKind::UNSUPPORTED);
-    CHECK(first.stopNip == 0xC00000000018028CULL &&
-          first.stopWord == 0x7CB01120U);
-    CHECK(independentFrontierDecode39(first.stopWord) == "mtcrf 0x01,r5");
+    CHECK(first.stopNip == 0xC000000000180294ULL &&
+          first.stopWord == 0x7CC300D0U);
+    CHECK(independentFrontierDecode39(first.stopWord) == "neg r6,r3");
     CHECK(((first.stopWord >> 26U) & 63U) == 31U &&
-          ((first.stopWord >> 21U) & 31U) == 5U &&
-          ((first.stopWord >> 1U) & 0x3FFU) == 144U &&
-          ((first.stopWord >> 12U) & 0xFFU) == 1U);
+          ((first.stopWord >> 21U) & 31U) == 6U &&
+          ((first.stopWord >> 16U) & 31U) == 3U &&
+          ((first.stopWord >> 10U) & 1U) == 0U &&
+          ((first.stopWord >> 1U) & 0x1FFU) == 104U &&
+          (first.stopWord & 1U) == 0U);
     CHECK(first.stopFetchTranslated && first.stopFetchExecuteAllowed &&
           second.stopFetchTranslated && second.stopFetchExecuteAllowed);
     CHECK(first.stopBackingAddress == second.stopBackingAddress);
     CHECK(first.totalRetired == second.totalRetired &&
-          first.totalRetired > 2'654'917ULL);
+          first.totalRetired == 2'692'901ULL);
     CHECK(first.traceDigest == second.traceDigest &&
           first.traceDigest != 0x0E8C3428D8FE0D4FULL);
     CHECK(sameRegisters(first.final, second.final) &&
@@ -435,8 +445,16 @@ void testAuthenticLinuxSubfic39() {
 
     CHECK(inspectAddress39(kernelFile, kSubficLinuxNip39,
         runDirectory / "subfic-elf-attribution.txt"));
-    CHECK(inspectAddress39(kernelFile, first.stopNip,
-        runDirectory / "next-frontier-elf-attribution.txt"));
+    std::ostringstream frontierAttribution;
+    frontierAttribution << "kernel_sha256=" << kernelHash
+        << "\nfrontier_nip=" << hex(first.stopNip)
+        << "\nfrontier_word=" << wordHex(first.stopWord)
+        << "\nindependent_decode="
+        << independentFrontierDecode39(first.stopWord)
+        << "\nfunction_symbol=see Phase 40 targeted ELF attribution"
+        << "\nsource=not asserted by this Phase 39 regression\n";
+    CHECK(writeText(runDirectory / "next-frontier-elf-attribution.txt",
+                    frontierAttribution.str()));
     std::ostringstream dataflow;
     dataflow << "authenticated_kernel_sha256=" << kernelHash
         << "\nfdt_sha256=" << fdtHash
@@ -584,6 +602,7 @@ void testAuthenticLinuxSubfic39() {
 
 } // namespace
 
+#ifndef PPC64_PHASE39_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -614,3 +633,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

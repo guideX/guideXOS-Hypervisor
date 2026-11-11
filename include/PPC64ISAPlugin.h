@@ -259,6 +259,7 @@ constexpr uint16_t XO_SRD = 539;   // shift right doubleword, 64-bit facility
 // X-form/XFX 10-bit combined extended opcode ((word >> 1) & 0x3FF).
 constexpr uint16_t XO_MFSPR = 339;
 constexpr uint16_t XO_MTSPR = 467;
+constexpr uint16_t XO_MTOCRF = 144;
 constexpr uint16_t XO_BCLR = 16;
 constexpr uint16_t XO_BCCTR = 528;
 // Phase 4 X-form MSR access (opcode 31) and XL-form return (opcode 19).
@@ -453,6 +454,7 @@ enum class DecodedKind {
     BC,         // bc/bca/bcl/bcla (B-form, opcode 16)
     BCLR,       // bclr/bclrl (XL-form, opcode 19, XO 16; target LR & ~3)
     BCCTR,      // bcctr/bcctrl (XL-form, opcode 19, XO 528; target CTR & ~3)
+    MTOCRF,     // mtocrf (XFX-form, opcode 31, L=1, XO 144)
     MFSPR,      // mfspr (XFX-form, XO 339; bounded SPR set incl. read-only PVR)
     MTSPR,      // mtspr (XFX-form, XO 467; bounded SPR set incl. PVR no-op)
     MFMSR,      // mfmsr (X-form, opcode 31 XO 83, privileged, Phase 4)
@@ -525,7 +527,8 @@ struct DecodedInstruction {
     uint8_t bi = 0;      // B-form/XL-form CR bit selector
     uint16_t bd = 0;     // B-form 14-bit branch displacement field
     uint8_t bf = 0;      // Compare BF field (CR field selector 0-7)
-    bool l = false;      // Compare L bit (false = 32-bit, true = 64-bit)
+    bool l = false;      // Compare L bit; XFX MTOCRF L distinguishes MTCRF
+    uint8_t fxm = 0;     // XFX condition-register field mask (bits 12-19)
     uint16_t sprn = 0;   // XFX-form SPR number
     uint16_t ds = 0;     // DS-form 14-bit displacement field (bits 2-15)
     uint8_t dsXo = 0;    // DS-form 2-bit XO field (word bits 0-1)

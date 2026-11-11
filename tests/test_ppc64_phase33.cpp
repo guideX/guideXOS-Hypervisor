@@ -869,6 +869,8 @@ struct AuthenticReplay {
     bool srdRetired = false;
     bool subficFetched = false;
     bool subficRetired = false;
+    bool mtocrfFetched = false;
+    bool mtocrfRetired = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
@@ -892,6 +894,20 @@ struct AuthenticReplay {
     uint64_t subficTimebaseAfter = 0;
     uint64_t subficRamBefore = 0;
     uint64_t subficRamAfter = 0;
+    uint64_t mtocrfCyclesBefore = 0;
+    uint64_t mtocrfCyclesAfter = 0;
+    uint64_t mtocrfTimebaseBefore = 0;
+    uint64_t mtocrfTimebaseAfter = 0;
+    uint64_t mtocrfRamBefore = 0;
+    uint64_t mtocrfRamAfter = 0;
+    uint16_t mtocrfLPID = 0;
+    uint64_t mtocrfFetchBackingAddress = 0;
+    bool mtocrfFetchTranslated = false;
+    bool mtocrfFetchExecuteAllowed = false;
+    uint64_t mtocrfFirstBranchNip = 0;
+    uint32_t mtocrfFirstBranchRaw = 0;
+    bool mtocrfFirstBranchCaptured = false;
+    bool mtocrfFirstBranchTaken = false;
     uint16_t subficLPID = 0;
     uint64_t subficRetiredAtContinuation = 0;
     uint16_t stopLPID = 0;
@@ -937,6 +953,8 @@ struct AuthenticReplay {
     uint32_t sldRawWord = 0;
     uint32_t srdRawWord = 0;
     uint32_t subficRawWord = 0;
+    uint32_t mtocrfRawWord = 0;
+    uint8_t mtocrfFXM = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
     uint64_t stopBackingAddress = 0;
@@ -951,6 +969,7 @@ struct AuthenticReplay {
     uint64_t sldNip = 0;
     uint64_t srdNip = 0;
     uint64_t subficNip = 0;
+    uint64_t mtocrfNip = 0;
     uint64_t rldicGuestRealAddress = 0;
     uint64_t rldicFetchBackingAddress = 0;
     uint64_t rldicTagLoadEffectiveAddress = 0;
@@ -996,6 +1015,8 @@ struct AuthenticReplay {
     std::string sldDecode;
     std::string srdDecode;
     std::string subficDecode;
+    std::string mtocrfDecode;
+    std::string mtocrfFirstBranch;
     std::string stopClass;
     std::string stopDisassembly;
     std::vector<std::string> extswContext;
@@ -1004,6 +1025,8 @@ struct AuthenticReplay {
     std::vector<std::string> dcbtPrecedingInstructions;
     std::vector<std::string> sldPrecedingInstructions;
     std::vector<std::string> sldFollowingInstructions;
+    std::vector<std::string> mtocrfPrecedingInstructions;
+    std::vector<std::string> mtocrfCR7BranchOutcomes;
     std::string error;
     PPC64RegisterView before{};
     PPC64RegisterView after{};
@@ -1019,6 +1042,8 @@ struct AuthenticReplay {
     PPC64RegisterView srdAfter{};
     PPC64RegisterView subficBefore{};
     PPC64RegisterView subficAfter{};
+    PPC64RegisterView mtocrfBefore{};
+    PPC64RegisterView mtocrfAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1286,6 +1311,44 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             const auto& following =
                 *static_cast<const DecodedInstruction*>(next.internalData);
+            if (following.kind == DecodedKind::MTOCRF &&
+                !result.mtocrfFetched) {
+                result.mtocrfFetched = true;
+                result.mtocrfNip = before.nip;
+                result.mtocrfRawWord = following.raw;
+                result.mtocrfFXM = following.fxm;
+                result.mtocrfDecode = next.disassembly;
+                result.mtocrfBefore = before;
+                result.mtocrfLPID = cpu->getActiveLPID();
+                result.mtocrfCyclesBefore = vm.getCyclesExecuted();
+                result.mtocrfTimebaseBefore = vm.getPPC64Timebase();
+                result.mtocrfRamBefore = fingerprintRam(*memory);
+                const size_t contextStart = lastInstructions.size() > 32U
+                    ? lastInstructions.size() - 32U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                    << hex(lastGprs[index][reg])
+                                    << (reg + 1U == lastGprs[index].size()
+                                        ? "" : ",");
+                        }
+                    }
+                    result.mtocrfPrecedingInstructions.push_back(
+                        context.str());
+                }
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.mtocrfFetchTranslated = translation.success;
+                result.mtocrfFetchExecuteAllowed = translation.executeAllowed;
+                result.mtocrfFetchBackingAddress =
+                    translation.hostBackingAddress;
+            }
             if (following.kind == DecodedKind::SUBFIC &&
                 !result.subficFetched) {
                 result.subficFetched = true;
@@ -1592,6 +1655,44 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.subficRetired && before.nip == result.subficNip) {
                 result.subficRetiredAtContinuation = result.continuationRetired;
             }
+            const bool isConditionalBranch =
+                following.kind == DecodedKind::BC ||
+                following.kind == DecodedKind::BCLR ||
+                following.kind == DecodedKind::BCCTR;
+            if (result.mtocrfRetired && isConditionalBranch &&
+                !result.mtocrfFirstBranchCaptured) {
+                result.mtocrfFirstBranchCaptured = true;
+                result.mtocrfFirstBranchNip = before.nip;
+                result.mtocrfFirstBranchRaw = following.raw;
+                result.mtocrfFirstBranchTaken = after.nip != before.nip + 4U;
+                std::ostringstream branch;
+                branch << "nip=" << hex(before.nip)
+                    << " raw=" << wordHex(following.raw)
+                    << " instruction=" << next.disassembly
+                    << " BO=" << static_cast<unsigned>(following.bo)
+                    << " BI=" << static_cast<unsigned>(following.bi)
+                    << " CR_before=0x" << std::hex << before.cr
+                    << " CR_after=0x" << after.cr
+                    << " taken=" << std::boolalpha
+                    << result.mtocrfFirstBranchTaken
+                    << " next_NIP=" << hex(after.nip);
+                result.mtocrfFirstBranch = branch.str();
+            }
+            if (result.mtocrfRetired && isConditionalBranch &&
+                following.bi >= 28U) {
+                std::ostringstream branch;
+                branch << "nip=" << hex(before.nip)
+                    << " raw=" << wordHex(following.raw)
+                    << " instruction=" << next.disassembly
+                    << " BO=" << static_cast<unsigned>(following.bo)
+                    << " BI=" << static_cast<unsigned>(following.bi)
+                    << " CR_before=0x" << std::hex << before.cr
+                    << " CR_after=0x" << after.cr
+                    << " taken=" << std::boolalpha
+                    << (after.nip != before.nip + 4U)
+                    << " next_NIP=" << hex(after.nip);
+                result.mtocrfCR7BranchOutcomes.push_back(branch.str());
+            }
             if (result.rldicRetired) {
                 ++result.rldicPostRetired;
             }
@@ -1672,6 +1773,15 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.subficCyclesAfter = vm.getCyclesExecuted();
                 result.subficTimebaseAfter = vm.getPPC64Timebase();
                 result.subficRamAfter = fingerprintRam(*memory);
+            }
+            if (following.kind == DecodedKind::MTOCRF &&
+                result.mtocrfFetched && before.nip == result.mtocrfNip &&
+                !result.mtocrfRetired) {
+                result.mtocrfAfter = after;
+                result.mtocrfRetired = after.nip == before.nip + 4U;
+                result.mtocrfCyclesAfter = vm.getCyclesExecuted();
+                result.mtocrfTimebaseAfter = vm.getPPC64Timebase();
+                result.mtocrfRamAfter = fingerprintRam(*memory);
             }
             if (before.nip == elfEvidence.sprg1Nip + 4U &&
                 following.kind == DecodedKind::BCLR && after.nip == before.lr) {
@@ -1858,6 +1968,59 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
               << " LPID=" << std::dec << result.subficLPID
               << " RAM_before_after=" << hex(result.subficRamBefore) << "/"
               << hex(result.subficRamAfter) << "\n";
+    }
+    if (result.mtocrfFetched) {
+        trace << "authentic_mtocrf_retirement nip=" << hex(result.mtocrfNip)
+              << " raw=" << wordHex(result.mtocrfRawWord)
+              << " instruction=" << result.mtocrfDecode
+              << " RS=" << static_cast<unsigned>(
+                     (result.mtocrfRawWord >> 21U) & 31U)
+              << " L=" << ((result.mtocrfRawWord >> 20U) & 1U)
+              << " FXM=0x" << std::hex << static_cast<unsigned>(result.mtocrfFXM)
+              << " XO=" << std::dec << ((result.mtocrfRawWord >> 1U) & 1023U)
+              << " reserved_bit11=" << ((result.mtocrfRawWord >> 11U) & 1U)
+              << " Rc=" << (result.mtocrfRawWord & 1U)
+              << " R5_before=" << hex(result.mtocrfBefore.gpr[5])
+              << " CR_before=0x" << std::hex << result.mtocrfBefore.cr
+              << " CR7_before=0x"
+              << static_cast<unsigned>(
+                     PPC64ISAPlugin::crGetField(result.mtocrfBefore.cr, 7))
+              << " expected_CR7=0x"
+              << static_cast<unsigned>(result.mtocrfBefore.gpr[5] & 0xFU)
+              << " CR_after=0x" << result.mtocrfAfter.cr
+              << " CR7_after=0x"
+              << static_cast<unsigned>(
+                     PPC64ISAPlugin::crGetField(result.mtocrfAfter.cr, 7))
+              << " post_NIP=" << hex(result.mtocrfAfter.nip)
+              << " retired=" << result.mtocrfRetired
+              << " XER_before_after=0x" << result.mtocrfBefore.xer << "/0x"
+              << result.mtocrfAfter.xer
+              << " MSR_before_after=" << hex(result.mtocrfBefore.msr) << "/"
+              << hex(result.mtocrfAfter.msr)
+              << " SPRG1_before_after=" << hex(result.mtocrfBefore.sprg1) << "/"
+              << hex(result.mtocrfAfter.sprg1)
+              << " LPID=" << std::dec << result.mtocrfLPID
+              << " fetch_translated=" << result.mtocrfFetchTranslated
+              << " execute_allowed=" << result.mtocrfFetchExecuteAllowed
+              << " fetch_backing=" << hex(result.mtocrfFetchBackingAddress)
+              << " RAM_before_after=" << hex(result.mtocrfRamBefore) << "/"
+              << hex(result.mtocrfRamAfter)
+              << " cycles_before_after=" << result.mtocrfCyclesBefore << "/"
+              << result.mtocrfCyclesAfter
+              << " timebase_before_after=" << result.mtocrfTimebaseBefore << "/"
+              << result.mtocrfTimebaseAfter << "\n";
+        trace << "authentic_mtocrf_preceding_context_begin\n";
+        for (const auto& line : result.mtocrfPrecedingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_mtocrf_preceding_context_end\n";
+        if (result.mtocrfFirstBranchCaptured) {
+            trace << "authentic_mtocrf_first_following_branch="
+                  << result.mtocrfFirstBranch << "\n";
+        }
+        for (const auto& branch : result.mtocrfCR7BranchOutcomes) {
+            trace << "authentic_mtocrf_cr7_branch=" << branch << "\n";
+        }
     }
     result.trace = trace.str();
     return result;

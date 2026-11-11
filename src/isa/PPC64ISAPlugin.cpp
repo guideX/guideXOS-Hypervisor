@@ -876,6 +876,13 @@ bool PPC64ISAPlugin::isUnimplementedValid(const DecodedInstruction& instr) {
     uint32_t word = instr.raw;
     uint8_t opcode = static_cast<uint8_t>((word >> 26) & 0x3F);
     uint16_t combined = static_cast<uint16_t>((word >> 1) & 0x3FFU);
+    if (opcode == OPCODE_XO && combined == XO_MTOCRF) {
+        // MTCRF (L=0) is a valid instruction outside this phase's scope. Keep
+        // it terminal as an unimplemented valid form, while malformed XFX
+        // reserved bits remain invalid encodings.
+        return ((word >> 20) & 1U) == 0U &&
+            ((word >> 11) & 1U) == 0U && (word & 1U) == 0U;
+    }
     if (opcode == OPCODE_XL) {
         // isync-family words other than the exact isync encoding (XO 150).
         return combined == XO_ISYNC;
@@ -1638,7 +1645,17 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.oe = oe;
             instr.rc = rc;
             // Arithmetic family (OE selects a valid overflow variant).
-            if (combined == 278U) {
+            if (combined == XO_MTOCRF) {
+                // XFX bit 11 is reserved; bit 20 is L. L=0 is MTCRF and is
+                // deliberately left unsupported, while L=1 is the distinct
+                // single-field MTOCRF operation. Rc must be zero for both.
+                instr.l = ((word >> 20) & 1U) != 0U;
+                instr.fxm = static_cast<uint8_t>((word >> 12) & 0xFFU);
+                instr.kind = instr.l ? DecodedKind::MTOCRF
+                                     : DecodedKind::UNSUPPORTED;
+                instr.supported = instr.l && ((word >> 11) & 1U) == 0U &&
+                    !rc;
+            } else if (combined == 278U) {
                 // POWER9 implements ordinary dcbt. The TH field is a hint,
                 // not an RT operand. POWER9 specifies the otherwise-invalid
                 // TH=1..7 forms to behave like TH=0; defined POWER9 TH forms
@@ -1948,6 +1965,12 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << "subfic r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.ra)
                 << "," << instr.simm;
+            break;
+        case DecodedKind::MTOCRF:
+            out << "mtocrf 0x" << std::hex << std::setw(2)
+                << std::setfill('0') << static_cast<unsigned>(instr.fxm)
+                << std::dec << ",r" << static_cast<unsigned>(instr.rt);
+            if (!instr.supported) out << " ; invalid reserved field";
             break;
         case DecodedKind::ADDC:
             out << "addc";
@@ -3668,6 +3691,28 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             state_.gpr[instr.rt] = result;
             setXERCA(state_, is64BitMode ? carry64 : carry32);
             setXERCA32(state_, carry32);
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::MTOCRF: {
+            // Power ISA 3.1C defines the single-field transfer when FXM is
+            // one-hot. A zero or multi-bit FXM makes CR architecturally
+            // undefined; this emulator chooses a deterministic no-op rather
+            // than inventing an exception or treating it as MTCRF.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint8_t fxm = instr.fxm;
+            if (fxm != 0U && (fxm & static_cast<uint8_t>(fxm - 1U)) == 0U) {
+                for (uint8_t field = 0; field < 8U; ++field) {
+                    if (fxm == static_cast<uint8_t>(0x80U >> field)) {
+                        const unsigned sourceShift =
+                            static_cast<unsigned>(4U * (7U - field));
+                        const uint8_t nibble = static_cast<uint8_t>(
+                            (source >> sourceShift) & 0xFU);
+                        state_.cr = crSetField(state_.cr, field, nibble);
+                        break;
+                    }
+                }
+            }
             state_.nip = cia + INSN_WIDTH;
             return ISAExecutionResult::CONTINUE;
         }
