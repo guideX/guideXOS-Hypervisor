@@ -11,6 +11,7 @@ constexpr uint64_t kNegPostNip41 = 0xC000000000180298ULL;
 constexpr uint64_t kAndiPostNip41 = 0xC00000000018029CULL;
 constexpr uint32_t kAndiWord41 = 0x70C60007U;
 constexpr uint32_t kNegWritableXer41 = XER_SO | XER_OV | XER_OV32;
+constexpr uint64_t kFscrLinuxNip42 = 0xC00000000003AD04ULL;
 
 uint32_t encodeNeg41(uint8_t rt, uint8_t ra, bool oe = false,
                      bool rc = false, uint8_t reserved = 0) {
@@ -362,9 +363,11 @@ void testAuthenticLinuxNeg41() {
     if (kernel.empty() || fdt.empty()) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true, false);
+        false, false, 65'536U, false, false, true, false,
+        kFscrLinuxNip42);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true, false);
+        false, false, 65'536U, false, false, true, false,
+        kFscrLinuxNip42);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -439,8 +442,12 @@ void testAuthenticLinuxNeg41() {
           second.totalRetired == first.totalRetired);
     CHECK(first.stopNip == second.stopNip &&
           first.stopWord == second.stopWord && first.stopWord != 0U);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.stopClass == "explicit-authentic-frontier" &&
           second.stopClass == first.stopClass);
+    CHECK(first.stopNip == kFscrLinuxNip42 &&
+          first.stopWord == 0x7D3922A6U &&
+          first.stopDisassembly == "mfspr r9,153" &&
+          first.stopFetchTranslated && first.stopFetchExecuteAllowed);
     CHECK(first.traceDigest == second.traceDigest &&
           first.traceDigest != 0x9CC06A8E2F7637AFULL);
     CHECK(sameRegisters(first.final, second.final) &&
@@ -595,6 +602,7 @@ void testAuthenticLinuxNeg41() {
 
 } // namespace
 
+#ifndef PPC64_PHASE41_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -629,3 +637,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

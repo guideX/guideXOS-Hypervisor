@@ -215,6 +215,7 @@ uint64_t fingerprintRam(const Memory& memory) {
 bool sameRegisters(const PPC64RegisterView& lhs,
                    const PPC64RegisterView& rhs) {
     return lhs.nip == rhs.nip && lhs.sprg1 == rhs.sprg1 &&
+        lhs.fscr == rhs.fscr &&
         std::equal(lhs.gpr, lhs.gpr + 32, rhs.gpr) &&
         lhs.lr == rhs.lr && lhs.ctr == rhs.ctr && lhs.cr == rhs.cr &&
         lhs.xer == rhs.xer && lhs.msr == rhs.msr && lhs.pidr == rhs.pidr &&
@@ -848,6 +849,20 @@ bool configureLinuxPartition(
         plugin->activatePartitionContext(context, reason);
 }
 
+struct AuthenticFscrAccess {
+    bool write = false;
+    bool retired = false;
+    uint64_t nip = 0;
+    uint64_t operand = 0;
+    uint64_t fscrBefore = 0;
+    uint64_t fscrAfter = 0;
+    uint64_t readback = 0;
+    uint32_t raw = 0;
+    uint8_t reg = 0;
+    uint16_t lpid = 0;
+    std::string disassembly;
+};
+
 struct AuthenticReplay {
     bool setup = false;
     bool fetchedFrontier = false;
@@ -879,6 +894,13 @@ struct AuthenticReplay {
     bool negAlignmentRetired = false;
     bool negDcbtFetched = false;
     bool negDcbtRetired = false;
+    bool fscrFetched = false;
+    bool fscrRetired = false;
+    bool fscrWriteFetched = false;
+    bool fscrWriteRetired = false;
+    bool fscrEntryTransferCaptured = false;
+    bool fscrEntryBranchTaken = false;
+    bool fscrEntryBranchLink = false;
     uint64_t prefixRetired = 0;
     uint64_t continuationRetired = 0;
     uint64_t totalRetired = 0;
@@ -977,6 +999,8 @@ struct AuthenticReplay {
     uint32_t negRawWord = 0;
     uint32_t negAlignmentRawWord = 0;
     uint32_t negDcbtRawWord = 0;
+    uint32_t fscrRawWord = 0;
+    uint32_t fscrWriteRawWord = 0;
     uint8_t mtocrfFXM = 0;
     uint32_t stopWord = 0;
     uint64_t stopNip = 0;
@@ -1029,6 +1053,29 @@ struct AuthenticReplay {
     uint64_t lpidAtFrontier = 0;
     uint64_t initialSprg1 = 0;
     uint64_t finalSprg1 = 0;
+    uint64_t fscrNip = 0;
+    uint64_t fscrValueBefore = 0;
+    uint64_t fscrValueAfter = 0;
+    uint64_t fscrCyclesBefore = 0;
+    uint64_t fscrCyclesAfter = 0;
+    uint64_t fscrTimebaseBefore = 0;
+    uint64_t fscrTimebaseAfter = 0;
+    uint64_t fscrRamBefore = 0;
+    uint64_t fscrRamAfter = 0;
+    uint16_t fscrLPID = 0;
+    uint16_t fscrLPIDAfter = 0;
+    uint64_t fscrWriteNip = 0;
+    uint16_t fscrWriteLPID = 0;
+    uint64_t fscrWriteSource = 0;
+    uint64_t fscrWriteValueBefore = 0;
+    uint64_t fscrWriteValueAfter = 0;
+    uint64_t fscrEntryBranchNip = 0;
+    uint64_t fscrEntryTarget = 0;
+    uint64_t fscrEntryCTRBefore = 0;
+    uint64_t fscrEntryCTRAfter = 0;
+    uint64_t fscrEntryLRBefore = 0;
+    uint64_t fscrEntryLRAfter = 0;
+    uint32_t fscrEntryBranchRaw = 0;
     uint64_t extswContextFollowing = 0;
     uint64_t rldicContextFollowing = 0;
     std::string decode;
@@ -1040,6 +1087,11 @@ struct AuthenticReplay {
     std::string subficDecode;
     std::string mtocrfDecode;
     std::string negDecode;
+    std::string fscrDecode;
+    std::string fscrEntryBranchDisassembly;
+    std::vector<std::string> fscrPrecedingInstructions;
+    std::vector<std::string> fscrEntryPrecedingInstructions;
+    std::vector<AuthenticFscrAccess> fscrAccesses;
     std::string mtocrfFirstBranch;
     std::string stopClass;
     std::string stopDisassembly;
@@ -1075,6 +1127,10 @@ struct AuthenticReplay {
     PPC64RegisterView negAlignmentAfter{};
     PPC64RegisterView negDcbtBefore{};
     PPC64RegisterView negDcbtAfter{};
+    PPC64RegisterView fscrBefore{};
+    PPC64RegisterView fscrAfter{};
+    PPC64RegisterView fscrWriteBefore{};
+    PPC64RegisterView fscrWriteAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1096,7 +1152,9 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  bool stopAtDcbt = false,
                                  bool stopAtSld = false,
                                  bool retireSubfic = false,
-                                 bool stopAtNeg = false) {
+                                 bool stopAtNeg = false,
+                                 uint64_t stopAtNip = 0,
+                                 uint64_t fscrFunctionEntryNip = 0) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1343,6 +1401,52 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             const auto& following =
                 *static_cast<const DecodedInstruction*>(next.internalData);
+            if (stopAtNip != 0U && before.nip == stopAtNip) {
+                result.stopClass = "explicit-authentic-frontier";
+                result.stopNip = before.nip;
+                result.stopWord = following.raw;
+                result.stopDisassembly = next.disassembly;
+                result.stopLPID = cpu->getActiveLPID();
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.stopFetchTranslated = translation.success;
+                result.stopFetchExecuteAllowed = translation.executeAllowed;
+                result.stopBackingAddress = translation.hostBackingAddress;
+                stopped = true;
+                break;
+            }
+            if (following.kind == DecodedKind::MFSPR &&
+                following.sprn == SPR_FSCR && !result.fscrFetched) {
+                result.fscrFetched = true;
+                result.fscrNip = before.nip;
+                result.fscrRawWord = following.raw;
+                result.fscrDecode = next.disassembly;
+                result.fscrBefore = before;
+                result.fscrValueBefore = before.fscr;
+                result.fscrCyclesBefore = vm.getCyclesExecuted();
+                result.fscrTimebaseBefore = vm.getPPC64Timebase();
+                result.fscrRamBefore = fingerprintRam(*memory);
+                result.fscrLPID = cpu->getActiveLPID();
+                const size_t contextStart = lastInstructions.size() > 32U
+                    ? lastInstructions.size() - 32U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    result.fscrPrecedingInstructions.push_back(
+                        lastInstructions[index]);
+                }
+            }
+            if (following.kind == DecodedKind::MTSPR &&
+                following.sprn == SPR_FSCR && !result.fscrWriteFetched) {
+                result.fscrWriteFetched = true;
+                result.fscrWriteNip = before.nip;
+                result.fscrWriteLPID = cpu->getActiveLPID();
+                result.fscrWriteRawWord = following.raw;
+                result.fscrWriteSource = before.gpr[following.rt];
+                result.fscrWriteValueBefore = before.fscr;
+                result.fscrWriteBefore = before;
+            }
             if (following.kind == DecodedKind::NEG &&
                 !result.negFetched) {
                 result.negFetched = true;
@@ -1731,6 +1835,64 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.stopBackingAddress = translation.hostBackingAddress;
                 stopped = true;
                 break;
+            }
+            const bool isBranch = following.kind == DecodedKind::B ||
+                following.kind == DecodedKind::BC ||
+                following.kind == DecodedKind::BCLR ||
+                following.kind == DecodedKind::BCCTR;
+            if (fscrFunctionEntryNip != 0U && isBranch &&
+                !result.fscrEntryTransferCaptured &&
+                after.nip == fscrFunctionEntryNip) {
+                result.fscrEntryTransferCaptured = true;
+                result.fscrEntryBranchTaken =
+                    after.nip != before.nip + 4U;
+                result.fscrEntryBranchLink = following.lk;
+                result.fscrEntryBranchNip = before.nip;
+                result.fscrEntryBranchRaw = following.raw;
+                result.fscrEntryTarget = after.nip;
+                result.fscrEntryCTRBefore = before.ctr;
+                result.fscrEntryCTRAfter = after.ctr;
+                result.fscrEntryLRBefore = before.lr;
+                result.fscrEntryLRAfter = after.lr;
+                result.fscrEntryBranchDisassembly = next.disassembly;
+                result.fscrEntryPrecedingInstructions.assign(
+                    lastInstructions.begin(), lastInstructions.end());
+            }
+            if ((following.kind == DecodedKind::MFSPR ||
+                 following.kind == DecodedKind::MTSPR) &&
+                following.sprn == SPR_FSCR) {
+                AuthenticFscrAccess access;
+                access.write = following.kind == DecodedKind::MTSPR;
+                access.retired = after.nip == before.nip + 4U;
+                access.nip = before.nip;
+                access.operand = access.write ? before.gpr[following.rt] : 0U;
+                access.fscrBefore = before.fscr;
+                access.fscrAfter = after.fscr;
+                access.readback = after.gpr[following.rt];
+                access.raw = following.raw;
+                access.reg = following.rt;
+                access.lpid = cpu->getActiveLPID();
+                access.disassembly = next.disassembly;
+                result.fscrAccesses.push_back(std::move(access));
+            }
+            if (following.kind == DecodedKind::MFSPR &&
+                following.sprn == SPR_FSCR && result.fscrFetched &&
+                before.nip == result.fscrNip && !result.fscrRetired) {
+                result.fscrAfter = after;
+                result.fscrValueAfter = after.fscr;
+                result.fscrCyclesAfter = vm.getCyclesExecuted();
+                result.fscrTimebaseAfter = vm.getPPC64Timebase();
+                result.fscrRamAfter = fingerprintRam(*memory);
+                result.fscrLPIDAfter = cpu->getActiveLPID();
+                result.fscrRetired = after.nip == before.nip + 4U;
+            }
+            if (following.kind == DecodedKind::MTSPR &&
+                following.sprn == SPR_FSCR && result.fscrWriteFetched &&
+                before.nip == result.fscrWriteNip &&
+                !result.fscrWriteRetired) {
+                result.fscrWriteAfter = after;
+                result.fscrWriteValueAfter = after.fscr;
+                result.fscrWriteRetired = after.nip == before.nip + 4U;
             }
             ++result.continuationRetired;
             result.lastSuccessfulNip = before.nip;
@@ -2157,6 +2319,49 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
         for (const auto& line : result.negContinuationTrace) {
             trace << "neg_continuation " << line << "\n";
         }
+    }
+    if (!result.fscrAccesses.empty()) {
+        trace << "authentic_fscr_accesses_begin\n";
+        for (const auto& access : result.fscrAccesses) {
+            trace << "kind=" << (access.write ? "mtspr" : "mfspr")
+                  << " nip=" << hex(access.nip)
+                  << " raw=" << wordHex(access.raw)
+                  << " instruction=" << access.disassembly
+                  << " reg=" << static_cast<unsigned>(access.reg)
+                  << " operand=" << hex(access.operand)
+                  << " FSCR_before=" << hex(access.fscrBefore)
+                  << " FSCR_after=" << hex(access.fscrAfter)
+                  << " readback=" << hex(access.readback)
+                  << " LPID=" << access.lpid
+                  << " retired=" << std::boolalpha << access.retired << "\n";
+        }
+        trace << "authentic_fscr_accesses_end\n";
+    }
+    if (result.fscrEntryTransferCaptured) {
+        trace << "authentic_fscr_function_entry_branch="
+              << "nip=" << hex(result.fscrEntryBranchNip)
+              << " raw=" << wordHex(result.fscrEntryBranchRaw)
+              << " instruction=" << result.fscrEntryBranchDisassembly
+              << " taken=" << std::boolalpha
+              << result.fscrEntryBranchTaken
+              << " link=" << result.fscrEntryBranchLink
+              << " target=" << hex(result.fscrEntryTarget)
+              << " CTR_before=" << hex(result.fscrEntryCTRBefore)
+              << " CTR_after=" << hex(result.fscrEntryCTRAfter)
+              << " LR_before=" << hex(result.fscrEntryLRBefore)
+              << " LR_after=" << hex(result.fscrEntryLRAfter) << "\n";
+        trace << "authentic_fscr_function_entry_preceding_context_begin\n";
+        for (const auto& line : result.fscrEntryPrecedingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_fscr_function_entry_preceding_context_end\n";
+    }
+    if (!result.fscrPrecedingInstructions.empty()) {
+        trace << "authentic_fscr_read_preceding_context_begin\n";
+        for (const auto& line : result.fscrPrecedingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_fscr_read_preceding_context_end\n";
     }
     result.trace = trace.str();
     return result;

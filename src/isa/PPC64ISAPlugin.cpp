@@ -214,6 +214,7 @@ void PPC64ISAState::reset() {
     dec = 0;
     decArmed = false;
     sprg1 = 0;
+    fscr = 0;
 }
 
 std::unique_ptr<ISAState> PPC64ISAState::clone() const {
@@ -237,6 +238,7 @@ std::unique_ptr<ISAState> PPC64ISAState::clone() const {
     copy->dec = dec;
     copy->decArmed = decArmed;
     copy->sprg1 = sprg1;
+    copy->fscr = fscr;
     return copy;
 }
 
@@ -249,6 +251,9 @@ void PPC64ISAState::serializeV2(uint8_t* buffer) const {
     }
     if (sprg1 != 0) {
         throw std::invalid_argument("PPC64 serializeV2: nonzero SPRG1 requires v6");
+    }
+    if (fscr != 0) {
+        throw std::invalid_argument("PPC64 serializeV2: nonzero FSCR requires v7");
     }
     size_t offset = 0;
     putU32(buffer + offset, STATE_MAGIC);
@@ -328,6 +333,7 @@ void PPC64ISAState::deserializeV2(const uint8_t* buffer) {
     dec = 0;
     decArmed = false;
     sprg1 = 0;
+    fscr = 0;
 }
 
 void PPC64ISAState::serializeV3(uint8_t* buffer) const {
@@ -453,6 +459,29 @@ void PPC64ISAState::deserializeV6(const uint8_t* buffer) {
     sprg1 = getU64(buffer + STATE_SIZE_V5);
 }
 
+void PPC64ISAState::serializeV7(uint8_t* buffer) const {
+    if (buffer == nullptr) {
+        throw std::invalid_argument("PPC64 serializeV7: null buffer");
+    }
+    PPC64ISAState legacy = *this;
+    legacy.fscr = 0;
+    legacy.serializeV6(buffer);
+    putU32(buffer + 4, STATE_VERSION_V7);
+    putU64(buffer + STATE_SIZE_V6, fscr);
+}
+
+void PPC64ISAState::deserializeV7(const uint8_t* buffer) {
+    if (buffer == nullptr || getU32(buffer) != STATE_MAGIC ||
+        getU32(buffer + 4) != STATE_VERSION_V7) {
+        throw std::invalid_argument("PPC64 deserializeV7: bad magic or version");
+    }
+    std::array<uint8_t, STATE_SIZE_V6> v6{};
+    std::memcpy(v6.data(), buffer, STATE_SIZE_V6);
+    putU32(v6.data() + 4, STATE_VERSION_V6);
+    deserializeV6(v6.data());
+    fscr = getU64(buffer + STATE_SIZE_V6);
+}
+
 void PPC64ISAState::serialize(uint8_t* buffer) const {
     if (buffer == nullptr) {
         throw std::invalid_argument("PPC64 serialize: null buffer");
@@ -462,6 +491,9 @@ void PPC64ISAState::serialize(uint8_t* buffer) const {
     }
     if (sprg1 != 0) {
         throw std::invalid_argument("PPC64 serialize: nonzero SPRG1 requires v6");
+    }
+    if (fscr != 0) {
+        throw std::invalid_argument("PPC64 serialize: nonzero FSCR requires v7");
     }
     size_t offset = 0;
     putU32(buffer + offset, STATE_MAGIC);
@@ -530,6 +562,7 @@ void PPC64ISAState::deserialize(const uint8_t* buffer) {
     dec = 0;
     decArmed = false;
     sprg1 = 0;
+    fscr = 0;
 }
 
 std::string PPC64ISAState::toString() const {
@@ -542,6 +575,7 @@ std::string PPC64ISAState::toString() const {
     out << "  XER: 0x" << std::hex << xer << std::dec << "\n";
     out << "  MSR: 0x" << std::hex << msr << std::dec << "\n";
     out << "  SPRG1: 0x" << std::hex << sprg1 << std::dec << "\n";
+    out << "  FSCR:  0x" << std::hex << fscr << std::dec << "\n";
     out << "  SRR0: 0x" << std::hex << srr0 << std::dec << "\n";
     out << "  SRR1: 0x" << std::hex << srr1 << std::dec << "\n";
     out << "  DAR: 0x" << std::hex << dar << std::dec << "\n";
@@ -1778,6 +1812,7 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                            instr.sprn == SPR_HDSISR || instr.sprn == SPR_HDAR ||
                            instr.sprn == SPR_HSRR0 || instr.sprn == SPR_HSRR1 ||
                            instr.sprn == SPR_SPRG1 ||
+                           instr.sprn == SPR_FSCR ||
                            timeBaseRead) {
                     // Phase 4: XER/LR/CTR remain unprivileged; DSISR/DAR/
                     // SRR0/SRR1 decode as supported here and are privilege-
@@ -4216,6 +4251,8 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 value = state_.hsrr1;
             } else if (instr.sprn == SPR_SPRG1) {
                 value = state_.sprg1;
+            } else if (instr.sprn == SPR_FSCR) {
+                value = state_.fscr;
             } else {
                 recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
                             true, 0, false, PPC64AccessType::NONE, 0,
@@ -4282,6 +4319,14 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
                 state_.hsrr1 = value;
             } else if (instr.sprn == SPR_SPRG1) {
                 state_.sprg1 = value;
+            } else if (instr.sprn == SPR_FSCR) {
+                // Keep the full privileged-state FSCR value, including bits
+                // reserved by this POWER9 profile. Power ISA Book I §1.3.3
+                // permits writes to reserved System Register bits and leaves
+                // a subsequent privileged read of written-one bits undefined;
+                // deterministic raw retention is the selected emulator
+                // behavior. This does not implement any controlled facility.
+                state_.fscr = value;
             } else {
                 recordFault(PPC64FaultCategory::INVALID_ENCODING, cia, instr.raw,
                             true, 0, false, PPC64AccessType::NONE, 0,
@@ -5491,6 +5536,9 @@ std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
     // Preserve legacy layouts until Phase 8 hypervisor architectural state is
     // present. Hypervisor memory mappings and the pending return latch remain
     // host-owned runtime state and are not checkpointed here.
+    if (state_.fscr != 0) {
+        return serialize_state_v7();
+    }
     if (state_.sprg1 != 0) {
         return serialize_state_v6();
     }
@@ -5518,7 +5566,8 @@ std::vector<uint8_t> PPC64ISAPlugin::serialize_state() const {
 bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
     if (data.size() != STATE_SIZE && data.size() != STATE_SIZE_V2 &&
         data.size() != STATE_SIZE_V3 && data.size() != STATE_SIZE_V4 &&
-        data.size() != STATE_SIZE_V5 && data.size() != STATE_SIZE_V6) {
+        data.size() != STATE_SIZE_V5 && data.size() != STATE_SIZE_V6 &&
+        data.size() != STATE_SIZE_V7) {
         return false;
     }
     PPC64ISAState restored;
@@ -5533,8 +5582,10 @@ bool PPC64ISAPlugin::deserialize_state(const std::vector<uint8_t>& data) {
             restored.deserializeV4(data.data());
         } else if (data.size() == STATE_SIZE_V5) {
             restored.deserializeV5(data.data());
-        } else {
+        } else if (data.size() == STATE_SIZE_V6) {
             restored.deserializeV6(data.data());
+        } else {
+            restored.deserializeV7(data.data());
         }
     } catch (...) {
         return false;
@@ -5631,6 +5682,25 @@ bool PPC64ISAPlugin::deserialize_state_v6(const std::vector<uint8_t>& data) {
     PPC64ISAState restored;
     try {
         restored.deserializeV6(data.data());
+    } catch (...) {
+        return false;
+    }
+    return restoreArchitecturalState(restored);
+}
+
+std::vector<uint8_t> PPC64ISAPlugin::serialize_state_v7() const {
+    std::vector<uint8_t> data(STATE_SIZE_V7);
+    state_.serializeV7(data.data());
+    return data;
+}
+
+bool PPC64ISAPlugin::deserialize_state_v7(const std::vector<uint8_t>& data) {
+    if (data.size() != STATE_SIZE_V7) {
+        return false;
+    }
+    PPC64ISAState restored;
+    try {
+        restored.deserializeV7(data.data());
     } catch (...) {
         return false;
     }
