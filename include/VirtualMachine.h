@@ -167,6 +167,7 @@ struct PPC64RegisterView {
     uint32_t pidr = 0;
     uint64_t sprg1 = 0;
     uint64_t fscr = 0;
+    uint64_t mmcra = 0;
     uint64_t srr0 = 0;
     uint64_t srr1 = 0;
     uint64_t dar = 0;

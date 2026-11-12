@@ -579,10 +579,12 @@ void testAuthenticLinuxFscrReplay42() {
     if (kernel.empty() || fdt.empty() || elfWord != 0x7D3922A6U) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true, false, 0,
+        false, false, 65'536U, false, false, true, false,
+        kFscrLinuxNip42 + 28U,
         kFscrPower9EntryNip42);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 65'536U, false, false, true, false, 0,
+        false, false, 65'536U, false, false, true, false,
+        kFscrLinuxNip42 + 28U,
         kFscrPower9EntryNip42);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
@@ -703,9 +705,9 @@ void testAuthenticLinuxFscrReplay42() {
     const auto unsupported = PPC64ISAPlugin::decodeWord(first.stopWord);
     const uint16_t stopLow = static_cast<uint16_t>((first.stopWord >> 16U) & 31U);
     const uint16_t stopHigh = static_cast<uint16_t>((first.stopWord >> 11U) & 31U);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.stopClass == "explicit-authentic-frontier" &&
           first.stopNip == kFscrLinuxNip42 + 28U &&
-          first.stopWord == 0x7D32C3A6U && !unsupported.supported &&
+          first.stopWord == 0x7D32C3A6U && unsupported.supported &&
           unsupported.kind == DecodedKind::MTSPR &&
           unsupported.sprn == static_cast<uint16_t>(
               (stopHigh << 5U) | stopLow) &&
@@ -878,6 +880,7 @@ void testAuthenticLinuxFscrReplay42() {
 
 } // namespace
 
+#ifndef PPC64_PHASE42_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -936,3 +939,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

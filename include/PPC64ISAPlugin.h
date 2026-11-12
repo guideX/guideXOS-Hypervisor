@@ -59,8 +59,8 @@ constexpr size_t INSN_WIDTH = 4;
 // Legacy v1/v2 restores initialize PIDR to zero. serialize_state() preserves
 // the smallest compatible layout, emits v3 for a nonzero PIDR, v4 for
 // hypervisor architectural state, v5 when DEC is armed, v6 when SPRG1 is
-// nonzero, and v7 when FSCR is nonzero. Explicit version APIs select their
-// respective layouts; older readers remain supported.
+// nonzero, v7 when FSCR is nonzero, and v8 when MMCRA is nonzero. Explicit
+// version APIs select their respective layouts; older readers remain supported.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
@@ -78,6 +78,8 @@ constexpr uint32_t STATE_VERSION_V6 = 6;
 constexpr size_t STATE_SIZE_V6 = STATE_SIZE_V5 + 8;
 constexpr uint32_t STATE_VERSION_V7 = 7;
 constexpr size_t STATE_SIZE_V7 = STATE_SIZE_V6 + 8;
+constexpr uint32_t STATE_VERSION_V8 = 8;
+constexpr size_t STATE_SIZE_V8 = STATE_SIZE_V7 + 8;
 
 // ============================================================================
 // PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
@@ -181,6 +183,7 @@ constexpr uint16_t SPR_SPRG1 = 273;
 constexpr uint16_t SPR_SPRG2 = 274;
 constexpr uint16_t SPR_SPRG3 = 275;
 constexpr uint16_t SPR_FSCR = 153;
+constexpr uint16_t SPR_MMCRA = 786;
 constexpr uint16_t SPR_HSPRG0 = 304;
 constexpr uint16_t SPR_HSPRG1 = 305;
 
@@ -597,12 +600,15 @@ public:
     void deserializeV6(const uint8_t* buffer);
     void serializeV7(uint8_t* buffer) const;
     void deserializeV7(const uint8_t* buffer);
+    void serializeV8(uint8_t* buffer) const;
+    void deserializeV8(const uint8_t* buffer);
     static constexpr size_t v2Size() { return STATE_SIZE_V2; }
     static constexpr size_t v3Size() { return STATE_SIZE_V3; }
     static constexpr size_t v4Size() { return STATE_SIZE_V4; }
     static constexpr size_t v5Size() { return STATE_SIZE_V5; }
     static constexpr size_t v6Size() { return STATE_SIZE_V6; }
     static constexpr size_t v7Size() { return STATE_SIZE_V7; }
+    static constexpr size_t v8Size() { return STATE_SIZE_V8; }
 
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
@@ -625,6 +631,9 @@ public:
     bool decArmed = false;
     uint64_t sprg1 = 0;  // SPRG1 (SPR 273), per-vCPU guest architectural state
     uint64_t fscr = 0;   // FSCR (SPR 153), per-vCPU POWER9 architectural state
+    // MMCRA (SPR 786), per-vCPU POWER9 PMU control/sample metadata. The
+    // bounded PMU profile stores and reads this value but does not execute PMU.
+    uint64_t mmcra = 0;
 };
 
 /**
@@ -705,6 +714,7 @@ public:
     uint32_t getDEC() const { return state_.dec; }
     uint64_t getSPRG1() const { return state_.sprg1; }
     uint64_t getFSCR() const { return state_.fscr; }
+    uint64_t getMMCRA() const { return state_.mmcra; }
     void setPIDR(uint32_t value) {
         if (state_.pidr != value) {
             state_.pidr = value;
@@ -818,6 +828,8 @@ public:
     bool deserialize_state_v6(const std::vector<uint8_t>& data);
     std::vector<uint8_t> serialize_state_v7() const;
     bool deserialize_state_v7(const std::vector<uint8_t>& data);
+    std::vector<uint8_t> serialize_state_v8() const;
+    bool deserialize_state_v8(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the
