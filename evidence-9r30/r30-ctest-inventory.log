@@ -1,0 +1,133 @@
+Test project D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert
+  Test  #1: BasicTests
+  Test  #2: NewInstructionTests
+  Test  #3: IA64XUnitDecodeTests
+  Test  #4: EfiMemoryMapTests
+  Test  #5: IA64AcpiFirmwareTests
+  Test  #6: IA64SalTests
+  Test  #7: VMCheckpointTests
+  Test  #8: IA64CheckpointContextContinuationTests
+  Test  #9: IA64RSEFaultRestartTests
+  Test #10: IA64CallFrameReturnTests
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_syscall_dispatcher.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_syscall_dispatcher.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_syscall_dispatcher.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_syscall_dispatcher.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_syscall_dispatcher.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_syscall_dispatcher.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_syscall_dispatcher.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_syscall_dispatcher.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_syscall_dispatcher.exe.exe
+  Test #11: SyscallTests
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_debugger.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_debugger.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_debugger.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_debugger.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_debugger.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_debugger.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_debugger.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_debugger.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_debugger.exe.exe
+  Test #12: DebuggerTests
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_profiler.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_profiler.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_profiler.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_profiler.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_profiler.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_profiler.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_profiler.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_profiler.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_profiler.exe.exe
+  Test #13: ProfilerTests
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_fuzzer.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_fuzzer.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_fuzzer.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_fuzzer.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_fuzzer.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_fuzzer.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_fuzzer.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_fuzzer.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_fuzzer.exe.exe
+  Test #14: FuzzerTests
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_vm_isolation.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_vm_isolation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_vm_isolation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_vm_isolation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_vm_isolation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_vm_isolation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_vm_isolation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_vm_isolation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_vm_isolation.exe.exe
+  Test #15: VMIsolationTests
+  Test #16: IA64AutomaticRSEPressureTests
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_riscv_decoder.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_riscv_decoder.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_riscv_decoder.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_riscv_decoder.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_riscv_decoder.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_riscv_decoder.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_riscv_decoder.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_riscv_decoder.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_riscv_decoder.exe.exe
+  Test #17: RiscVDecoderSmokeTest
+Could not find executable D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_elf_validation.exe
+Looked in the following places:
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/test_elf_validation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Release/test_elf_validation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Debug/test_elf_validation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/MinSizeRel/test_elf_validation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/RelWithDebInfo/test_elf_validation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Deployment/test_elf_validation.exe.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_elf_validation.exe
+D:/dev/guideXOS_Hypervisor_IA64/build-9r26-assert/bin/Development/test_elf_validation.exe.exe
+  Test #18: ELFValidationTests
+
+Total Tests: 18

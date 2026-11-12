@@ -1,0 +1,42 @@
+IA64 POST-MADT R30 validation summary
+
+Build configuration
+- Existing build-9r26-assert configuration: Release, CMAKE_CXX_FLAGS_RELEASE=-O3 -UNDEBUG.
+- No production source changes and no rebuild were needed.
+
+Selected CTest command
+ctest --test-dir build-9r26-assert --output-on-failure -R "NewInstructionTests|IA64XUnitDecodeTests|EfiMemoryMapTests|IA64AcpiFirmwareTests|IA64SalTests|VMCheckpointTests|IA64CheckpointContextContinuationTests|IA64RSEFaultRestartTests|IA64CallFrameReturnTests|IA64AutomaticRSEPressureTests"
+Result: 10/10 passed, 0 failed.
+
+Direct architecture invocations
+1. build-9r26-assert/bin/test_isa_plugin.exe — exit 0, "All tests passed".
+2. build-9r26-assert/bin/test_isa_plugin.exe breakfault — exit 0.
+3. build-9r26-assert/bin/test_ia64_interrupt_controller.exe — exit 0.
+4. build-9r26-assert/bin/test_ia64_processor_interrupt_block.exe — exit 0.
+5. build-9r26-assert/bin/test_ia64_single_cpu_context_switch.exe — exit 0.
+
+Read-only reference checks
+1. tools/ia64_bootmem_reference.py on the R23 5000K node snapshot — PASS,
+   30761 free PFN bits and 0 mismatches.
+2. evidence-9r24/check_bitmap.py — PASS, 30760 free PFNs and 0 mismatches.
+3. evidence-9r26/r26_check_percpu_map.py — PASS, seven snapshots and
+   map-extension relation, 0 mismatches.
+4. tools/ia64_find_next_bit_reference.py on the R27 captured bitmap —
+   PASS, result 148 at offset 148.
+5. tools/ia64_find_next_bit_reference.py --self-test — PASS, 10/10 vectors.
+The full test_isa_plugin text log has only trailing whitespace removed from
+36 empty logger records; all substantive output and the final pass result remain.
+
+Additional evidence checks
+- R29 evidence manifest: 60/60 files matched recorded size and SHA-256.
+- R30 60M ACPI RAM capture: independent table/descriptor/global validator PASS.
+- R30 550M ACPI RAM capture: independent table/descriptor/global validator PASS.
+- R30 evidence manifest: 36 evidence files, each listed with size and SHA-256;
+  manifest excludes itself.
+- git diff --check was run on the staged R30 changes before commit.
+
+Not run
+- Eight of the 18 registered CTests: BasicTests, SyscallTests, DebuggerTests,
+  ProfilerTests, FuzzerTests, VMIsolationTests, RiscVDecoderSmokeTest,
+  ELFValidationTests.
+- test_bootstrap, due to the existing Windows Winsock linkage limitation.

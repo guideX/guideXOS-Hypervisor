@@ -1,0 +1,3 @@
+bitmap=evidence-9r27\r27-find-next-bit-50m-plus60.bin capture_bytes=128 bitmap_byte_range=[0,32) declared_bits=256 offset=148 bitmap_hex=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+word[2]_little_endian=0xffffffffffffffff
+reference_result=148

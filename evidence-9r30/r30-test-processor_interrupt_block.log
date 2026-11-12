@@ -1,0 +1,7 @@
+Registered ISA plugin: IA-64
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[2026-11-11T20:26:29] native stdout logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-20261111-202629.log
+[2026-11-11T20:26:29] native stderr logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-error-20261111-202629.log
+IA-64 Processor Interrupt Block tests passed

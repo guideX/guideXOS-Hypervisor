@@ -1,0 +1,10 @@
+bitmap_bytes=4096 pfn_bits=32768 reserved_bits=2008 free_bits=30760 mismatch_bits=0
+first_mismatch=none
+free=[0x41,0x1000) actual=3513 expected=3513
+free=[0x135e,0x7d13) actual=27061 expected=27061
+free=[0x7f3e,0x7f4c) actual=14 expected=14
+free=[0x7f4f,0x7f6c) actual=29 expected=29
+free=[0x7f6d,0x7ffc) actual=143 expected=143
+pfn=0x7f6b bit=0 state=free
+pfn=0x7f6c bit=1 state=reserved
+pfn=0x7f6d bit=0 state=free

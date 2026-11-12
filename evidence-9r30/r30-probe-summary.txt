@@ -1,0 +1,94 @@
+IA64 POST-MADT R30 bounded ACPICA lifecycle probes
+
+Authenticated baseline
+- R29 post-EBS checkpoint: build-9r26-assert/r29-authentic-corrected-firmware-cold.gxcp
+- Checkpoint cycle 778197459; raw start IP 0x1fd55490; canonical start IP 0x1fd55490.
+- Checkpoint is after ExitBootServices, generated from the corrected R29 ISO. It is not the old R24 checkpoint.
+- Guest: 512 MiB, one IA-64 vCPU, same Debian kernel/initrd/ISO identity recorded in r29-fresh-checkpoint.manifest.txt.
+- R29 60-file evidence manifest revalidated: 60 listed, 0 mismatches.
+
+Replay counters
+- Main continuation: 550000000 attempted instruction slots / guest steps, 0 failed.
+  Guest cycles 778197459 -> 1328197459. Unique instruction addresses 104269;
+  unique bundles 35022. First raw IP 0x1fd55490; final raw IP 0x4012b90,
+  canonical VMA 0xa000000100012b90.
+- Focused lifecycle replay: 60000000 attempted instruction slots / guest steps, 0 failed.
+  Guest cycles 778197459 -> 838197459. Unique instruction addresses 103266;
+  unique bundles 34687. Same first raw IP 0x1fd55490.
+- No separate retired-instruction counter was emitted. These slot/step and cycle
+  values are reported separately from unique address and bundle counts.
+- The 550M run reproduces the R29 480M frontier and advances another 70M slots.
+  Unique address and bundle totals remain equal to the R29 480M totals, so the
+  additional budget records repeated execution, not a newly verified initcall.
+
+Early ACPICA lifecycle, targeted 60M replay
+- acpi_early_init at 0xa000000100a3dd30: cycle 828506275; caller b0
+  0xa000000100a011f0.
+- acpi_initialize_subsystem at 0xa000000100a410f0: cycle 828524296;
+  caller b0 0xa000000100a3ddd0; returned AE_OK (r8=0).
+- acpi_load_tables at 0xa0000001004d46a0: cycle 828748422;
+  caller b0 0xa000000100a3de00; returned AE_OK (r8=0).
+- acpi_enable_subsystem at 0xa0000001004dc070: cycle 828814642;
+  caller b0 0xa000000100a3de30 (acpi_early_init+0x100);
+  flags argument r32=0xffffffffffffffef, equal to ~ACPI_NO_ACPI_ENABLE.
+- The exact matching binary calls acpi_hw_get_mode at 0xa0000001004bcf00.
+  Return was mode 1 (ACPI mode) at bundle 0xa0000001004dc0a0, cycle 828814690.
+- acpi_enable entry 0xa0000001004a7340 at cycle 828814696. Its return is
+  captured after the call at 0xa0000001004dc0c0: r8=0 (AE_OK), cycle 828814776.
+- The bit-7 test is bundle 0xa0000001004dc0f0. With flags bit 7 set,
+  the p6 branch at 0xa0000001004dc0fc is taken to 0xa0000001004dc180.
+  The skipped FACS-call bundle 0xa0000001004dc100 has zero hits, and
+  acpi_tb_initialize_facs at 0xa0000001004d6870 has zero hits.
+- acpi_enable_subsystem returned AE_OK at 0xa0000001004dc210, cycle 828814797.
+- This is an explicit compiled guard skip, not a replay cutoff and not an
+  early error return. Debian stable ACPICA defines ACPI_NO_FACS_INIT=0x80;
+  the actual binary tests bit 7 and skips the FACS initializer when it is set.
+
+Descriptor and map state
+- Independent reference validation passed for both R30 snapshots.
+- FACS descriptor index 1: physical address 0x1fdb4000, length 64,
+  origin flags 0x1 (mapped origin), descriptor pointer 0.
+- FACS bytes at 0x1fdb4000 have signature FACS, length 64, version 1.
+  Guest backing lies in ACPI NVS [0x1fdb4000,0x1fdb5000), reserved across EBS.
+- DSDT global is 0xc00000001fdb3200; acpi_gbl_FACS is null (0).
+- The early table lookup/verification/map probes include normal roots and DSDT.
+  No FACS-index lookup, FACS verification, or FACS OSL mapping call occurred,
+  because the binary never called acpi_tb_initialize_facs.
+- FACS mapping remains unverified. A null pointer here is the expected pre-lazy-map
+  state; it is not evidence of a failed mapping.
+
+Later init and failure-path probes
+- acpi_init at 0xa000000100a3d710: 0 hits.
+- acpi_scan_init at 0xa000000100a3dfa0: 0 hits.
+- No standalone acpi_bus_init symbol exists in this matching System.map.
+- kernel_init at 0xa000000100a01220: entered at cycle 828870464;
+  r13 task pointer 0xe000000008ec0000.
+- driver_register at 0xa000000100580ea0: entered at cycle 832720366.
+- Former R28 BUG instruction 0xa000000100580f10: 0 hits.
+- init_post at 0xa00000010081a1f0: 0 hits. No userspace-init attempt is shown.
+- default_idle at 0xa0000001000133c0 was observed at cycle 1129581006.
+  Final 550M IP 0xa000000100012b90 resolves to ia64_pal_call_static+0x70.
+- Main 550M endpoint: guest remains RUNNING; panic=0; 1696 timer compare events
+  and 1696 timer interrupt entries; guest console delta is 0 bytes.
+
+Targeted do_exit context (60M replay)
+- Summary counter IA64-DOEXIT recorded one event with caller
+  0xa0000001000c7820 = kthread+0x140, task pointer 0xe000000008f28000.
+- Slot-level probes also saw do_exit at 0xa0000001000929a0 from
+  die+0x300 at cycles 831615493 (same task pointer) and 836295972
+  (task pointer 0xe000000008ee8000). kernel_init's observed r13 pointer was
+  0xe000000008ec0000, distinct from both.
+- The bounded diepath stream ends through ia64_do_page_fault+0x980 into die.
+  The initiating fault/task identity was not fully decoded; these events are
+  not evidence of the R28 init-task panic or an ACPI/FACS failure.
+- Panic counter remained zero and VM terminal state remained RUNNING.
+
+Interpretation
+- Early acpi_enable_subsystem entered and returned AE_OK. acpi_enable returned
+  AE_OK and ACPICA reported ACPI mode. FACS initialization was explicitly
+  disabled for this early call by ACPI_NO_FACS_INIT.
+- The later bus call with ACPI_NO_ACPI_ENABLE (bit 4 set, bit 7 clear) is the
+  call that can initialize FACS; it was not observed because acpi_init did not run.
+- Outcome B: lifecycle cause explained, authentic FACS initialization/mapping
+  pending. The R28 failure chain was not reproduced, but its permanent
+  elimination and successful ACPI bus initialization are not established.

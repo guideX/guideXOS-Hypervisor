@@ -1,0 +1,10 @@
+Command: git diff --cached --check
+Result: PASS, exit code 0.
+
+Command: git diff --check
+Result: PASS, exit code 0.
+
+The full test_isa_plugin output file had 36 empty logger records ending in
+whitespace; those trailing spaces were removed from the captured text log.
+No test output content or result line was removed. The staged check was rerun
+after normalization and passed.

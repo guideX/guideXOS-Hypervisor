@@ -1,0 +1,1336 @@
+Registered ISA plugin: IA-64
+=== ISA Plugin Architecture Tests ===
+
+Testing ISA state serialization...
+  ? IA-64 state serialization works
+  ? Example ISA state serialization works
+[2026-11-11T20:54:51] native stdout logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-20261111-205451.log
+[2026-11-11T20:54:51] native stderr logging started
+Log file: D:\dev\guideXOS_Hypervisor_IA64\build-9r26-assert\bin\logs\native-error-20261111-205451.log
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x2000000000, major=0x1, x3=0x0, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x200000000, major=0x0, x3=0x1, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x10000000, major=0x0, x3=0x0, x6=0x2, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0xe000000000, major=0x7, x3=0x0, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x1c000000000, major=0xe, x3=0x0, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x1e000000000, major=0xf, x3=0x0, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0xc000100000, major=0x6, x3=0x0, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x18000000000, major=0xc, x3=0x0, x6=0x0, path=normal, decoder=X-type
+UNKNOWN IA64 SLOT: IP=0x1000, slot=2, template=0x4(MLX), slotType=X, raw41=0x1a000000000, major=0xd, x3=0x0, x6=0x0, path=normal, decoder=X-type
+[PASS] IA-64 X-unit decode/execution qualification matrix
+
+Testing ISA plugin creation...
+  ? IA-64 plugin created: IA-64 v1.0
+  ? IA-64 plugin reset works
+  ? Example ISA plugin created: Example-ISA v1.0
+
+Testing ISA plugin registry...
+  ? IA-64 is auto-registered
+Registered ISA plugin: Example-ISA
+  ? Example-ISA registered
+  Registered ISAs:
+    - Example-ISA
+    - IA-64
+  ? Created ISA via registry: IA-64
+
+Testing ISA features...
+  ? IA-64 features:
+    - predication: 1
+    - register_rotation: 1
+    - bundles: 1
+  ? Example ISA features:
+    - simple: 1
+    - fixed_width: 1
+
+Testing Example ISA execution...
+[PC=0x0] nop
+  ? NOP executed, PC advanced to 4
+[PC=0x4] add r1, r0, r0
+  ? ADD executed, PC advanced to 8
+[PC=0x8] halt
+  ? HALT executed, execution stopped
+
+Testing IA-64 predicated branch execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? False-predicated branch falls through; true predicate branches
+
+Testing IA-64 counted loop branch execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? br.cloop decrements ar.lc and falls through at zero
+Testing IA-64 immediate move to application register decode...
+  ? authentic MMI_STOP slot 2 decodes as mov.i ar.lc = 15
+  ? signed IMM8 values 0, 1, 15, 31, 127, -128, -1 decode correctly
+  ? predicate qp is preserved and gates immediate execution
+  ? immediate execution sets ar.lc to 15
+Testing IA-64 immediate ar.lc plus br.cloop execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? ar.lc=15 executes the loop body 16 times and br.cloop falls through at zero
+
+Testing IA-64 call-decoded counted loop execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? backward/self br.call b5 uses ar.lc and does not link
+
+Testing IA-64 branch predicate visibility across instruction groups...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? Same-group predicate write is visible to branches with or without a stop
+
+Testing IA-64 non-branch predicate visibility across instruction groups...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? Same-group predicate write is deferred for stores; stop makes it visible
+
+Testing IA-64 add imm22 decode...
+  ? add imm22 raw boot slot decodes and executes
+
+Testing IA-64 addl imm22 source decode...
+  ? real modern-loader addl slots decode and execute
+
+Testing IA-64 addl imm22 field reconstruction and sign extension...
+  ? distributed addl fields, signed limits, and unrelated fields pass
+
+Testing IA-64 A1 addp4 in M and I slots...
+  ? raw 0x1004001e440 routes through A decoding in M/I slots and executes architecturally
+
+Testing IA-64 XMA and immediate ADDP4 regressions...
+  ? raw XMA, XMA.H/XMA.HU, and immediate ADDP4 regressions pass
+
+Testing IA-64 F1 FNMA regression...
+  ? raw 0x184509022c6 decodes, predicates, propagates NaTVal, and executes FNMA
+
+Testing IA-64 FRCPA/FRSQRTA regressions...
+  ? exact Debian FRCPA and independent FRSQRTA decode/execution regressions pass
+
+Testing IA-64 Gentoo variable-SHL regression...
+  ? raw variable SHL, unsigned counts, aliasing, predicates, NaT, and GR0 pass
+
+Testing IA-64 plugin indirect br.call through b0 transfers to the target bundle...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x2408 target=0x2408 interpretedAs=invalid descriptor=0x2408 readable=no descriptorCode=0x0 resolvedCode=0x2408 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=image-or-guest ip=0x1000 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x2408 br6=0x0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+  ? br.call b4 = b0 reaches the target bundle and does not fall through
+
+Testing IA-64 return branch decode...
+  ? raw boot return branch decodes as br.ret b0
+
+Testing IA-64 indirect call decode...
+  ? raw boot indirect service call decodes through b6 and links b0
+
+Testing IA-64 indirect conditional branch decode...
+  ? raw br.cond b6 preserves register-target semantics
+
+Testing IA-64 hinted indirect self-call decode...
+  ? raw boot hinted br.call b0 = b0 decodes as call, not cond
+
+Testing IA-64 nop decode variants...
+  ? raw boot NOP slot decodes on I and B units
+
+Testing IA-64 move from branch register decode...
+  ? raw boot branch-register move decodes as mov r62 = b0
+
+Testing IA-64 move to application register decode...
+  ? register-source mov ar.lc = r14 decodes and updates ar.lc
+
+Testing IA-64 move to rotating predicate decode...
+  ? memcpy bundle slot 2 decodes as mov pr.rot and writes the rotating predicate window
+
+Testing IA-64 adds imm14 decode...
+  ? raw boot stack adjustment decodes and executes
+
+Testing IA-64 MLX movl boot bundle decode...
+  ? raw boot MLX bundle decodes movl r36 = -0x238000
+
+Testing IA-64 legacy call output/input register bridge...
+[IA64-RSE] alloc ip=0x2000 dst=r60 oldCFM=0x2 oldPFS=0x206 sof=36 sol=31 sor=0 newCFM=0xfa4
+  ? caller outputs become callee input registers after alloc
+
+Testing IA-64 alloc preserves AR.PFS and updates CFM...
+[IA64-RSE] alloc ip=0x0 dst=r60 oldCFM=0x206 oldPFS=0x123456789abcdef0 sof=10 sol=5 sor=2 newCFM=0x828a
+  ? alloc preserves ar.pfs and updates the current frame
+
+Testing IA-64 legacy alloc rejects invalid frame sizes...
+[WARN ] [EXEC-ERR] Exception at IP=0x0 Slot=0 (alloc r60 = ar.pfs, 10, 12, 2): ALLOC frame size invalid
+[EXEC-ERR] Exception at IP=0x0 Slot=0 (alloc r60 = ar.pfs, 10, 12, 2): ALLOC frame size invalid
+  ? invalid alloc frame sizes fail safely
+
+Testing IA-64 legacy call-decoded counted loop execution...
+[IP=0x1000, Slot=0] br.call b5 = 0xfe0
+[IP=0x1000, Slot=0] br.call b5 = 0xfe0
+[IP=0x1000, Slot=0] br.call b5 = 0x1000
+[IP=0x1000, Slot=0] br.call b5 = 0x1000
+  ? legacy backward/self br.call b5 uses ar.lc and does not link
+
+Testing IA-64 legacy indirect branch execution...
+[IP=0x1000, Slot=0] br.cond 0x2408
+  ? legacy br.cond b6 enters at the target bundle boundary
+
+Testing IA-64 legacy indirect call execution...
+  ? legacy br.call b0 = b6 links b0 and enters at the target bundle boundary
+
+Testing IA-64 plugin call output/input register bridge...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-RSE] alloc ip=0x2000 dst=r60 oldCFM=0x2 oldPFS=0x206 sof=36 sol=31 sor=0 newCFM=0xfa4
+  ? plugin br.call passes inputs and br.ret restores caller frame
+
+Testing IA-64 plugin nested call frames restore through AR.PFS...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-RSE] alloc ip=0x2000 dst=r50 oldCFM=0x2 oldPFS=0x206 sof=8 sol=6 sor=0 newCFM=0x308
+[IA64-RSE] alloc ip=0x3000 dst=r51 oldCFM=0x2 oldPFS=0x308 sof=5 sol=3 sor=0 newCFM=0x185
+  ? nested return restores the outer CFM from its saved AR.PFS
+  ? outer return restores the entry CFM and stacked argument register
+Testing IA-64 canonical return restores a flat call frame...
+[IA64-RSE] alloc ip=0x4002000 dst=r50 oldCFM=0x2 oldPFS=0x206 sof=8 sol=6 sor=0 newCFM=0x308
+  ? canonical IA-64 return aliases restore the saved flat call frame
+Testing IA-64 plugin call frames across long sequential calls...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-RSE] alloc ip=0x2000 dst=r50 oldCFM=0x2 oldPFS=0x206 sof=8 sol=6 sor=0 newCFM=0x308
+  ? 301 completed calls return through AR.PFS/BSP without host frame history
+
+Testing IA-64 plugin indirect branch execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? plugin br.cond b6 enters at the target bundle boundary
+
+Testing IA-64 plugin canonical kernel branch translation...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x5000000 base=0x4db0000 end=0x4fb0000 loadedImage=0x4db0d00 filePath=0x4db1300
+  ? canonical region-5 kernel branch enters its flat physical bundle
+
+Testing IA-64 plugin EFI service thunk return link...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-BR] thunk br.cond b6 resolved via b6=0x1fe00f80 callerIP=0x1990
+  ? plugin EFI br.cond b6 thunk links b0 for service return
+
+Testing IA-64 plugin EFI thunk return preserves outer call frame...
+[IA64-BR] thunk br.cond b6 resolved via b6=0x1fe00f80 callerIP=0x1990
+  ? EFI service br.ret does not restore an unrelated br.call frame
+
+Testing IA-64 plugin indirect call execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x2408 target=0x2408 interpretedAs=invalid descriptor=0x2408 readable=no descriptorCode=0x0 resolvedCode=0x2408 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=image-or-guest ip=0x1000 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x2408 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+  ? plugin br.call b0 = b6 links b0 and enters at the target bundle boundary
+
+Testing IA-64 stacked PAL_BRAND_INFO dispatch and state preservation...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-PAL] convention=stacked function=0x112 stackedIndex=0x112 args=[0x0,0x7000,0x0] status=-1 v0=0x0 v1=0x0 v2=0x0 target=0xe00000001fdb2180 return=0x1010
+  ? stacked PAL call returns -1, preserves its frame, and leaves the guest buffer untouched
+
+Testing stacked PAL entry through br.cond retains genuine guest control flow...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+  ? stacked PAL indices are dispatched only by the stacked br.call convention
+
+Testing IA-64 plugin direct br.call return branch selection...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? direct br.call writes the chosen return branch register b4
+
+Testing IA-64 plugin indirect br.call through b0...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x2408 target=0x2408 interpretedAs=invalid descriptor=0x2408 readable=no descriptorCode=0x0 resolvedCode=0x2408 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=image-or-guest ip=0x1000 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x2408 br6=0x0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+  ? indirect br.call b4 = b0 uses b0 as target and links b4
+
+Testing IA-64 plugin null indirect br.call ignores unrelated descriptor data...
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x0 target=0x0 interpretedAs=null descriptor=0x0 readable=no descriptorCode=0x0 resolvedCode=0x0 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=unknown ip=0x1000 r1_gp=0x0 r8_ret=0x4008 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+  ? null indirect br.call reaches zero without probing unrelated descriptor data
+
+Testing IA-64 plugin generic success stub avoids r8 descriptor probing...
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b0 srcValue=0x1fe00f80 target=0x1fe00f80 interpretedAs=known-stub-code descriptor=0x1fe00fc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00f80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b4 region=efi-table ip=0x1000 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00F80 br6=0x0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+[EFI-STUB] generic success service callsite=0x1000 target=0x1fe00f80 descriptorCandidate=0x1fe00fc0 [Success descriptor] slotCandidate[r9]=0x0 receiver[r32]=0x0 r14=0x0 -> EFI_SUCCESS
+[EFI-CALL] service=EFI.GenericSuccess cycle=0x0 callerIP=0x1000 descriptor=0x1fe00fc0 code=0x1fe00f80 gp(r1)=0x0 args=[0x0,0x0,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Success descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? generic EFI success stub uses the actual stub descriptor, not r8-derived bytes
+
+Testing IA-64 plugin branch-register move round trip...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+  ? mov bN = rN and mov rN = bN preserve exact 64-bit values
+
+Testing IA-64 plugin indirect call through function descriptor...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x4000 target=0x4000 interpretedAs=descriptor descriptor=0x4000 readable=yes descriptorCode=0x2000 resolvedCode=0x2000 descriptorGp=0x238000 oldR1=0x185 newR1=0x238000 returnBR=b0 region=image-or-guest ip=0x1000 r1_gp=0x238000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x4000 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:95,clean:0,dirty:1,current:0}
+  ? indirect br.call resolves IA-64 function descriptors to code and gp
+
+Testing IA-64 synthetic EFI plabel return preserves r38...
+[IA64-DESC] indirect br.call callerIP=0x1010 srcBR=b6 srcValue=0x1fe00fc0 target=0x1fe00fc0 interpretedAs=descriptor descriptor=0x1fe00fc0 readable=yes descriptorCode=0x1fe00f80 resolvedCode=0x1fe00f80 descriptorGp=0x2222222222222222 oldR1=0x1111111111111111 newR1=0x2222222222222222 returnBR=b0 region=efi-table ip=0x1010 r1_gp=0x2222222222222222 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FE00FC0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:94,clean:0,dirty:2,current:0}
+[EFI-STUB] generic success service callsite=0x1010 target=0x1fe00fc0 descriptorCandidate=0x0 slotCandidate[r9]=0x0 receiver[r32]=0x0 r14=0x0 -> EFI_SUCCESS
+[EFI-CALL] service=EFI.GenericSuccess cycle=0x0 callerIP=0x1010 descriptor=0x0 code=0x1fe00fc0 gp(r1)=0x2222222222222222 args=[0x0,0x0,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorBytes=
+  ? synthetic EFI plabel service returns EFI_SUCCESS and never branches to its GP
+
+Testing IA-64 nested LocateProtocol preserves protocol argument...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-RSE] alloc ip=0x2000 dst=r35 oldCFM=0x4 oldPFS=0x30a sof=9 sol=6 sor=0 newCFM=0x309
+[IA64-DESC] indirect br.call callerIP=0x2060 srcBR=b6 srcValue=0x1fdb1780 target=0x1fdb1780 interpretedAs=known-stub-code descriptor=0x1fdb17c0 readable=yes descriptorCode=0x1fdb1780 resolvedCode=0x1fdb1780 descriptorGp=0x1fdb0000 oldR1=0x1111111111111111 newR1=0x1fdb0000 returnBR=b0 region=efi-table ip=0x2060 r1_gp=0x1FDB0000 r8_ret=0x0 r12_sp=0x0 r32=0x3000 r33=0x0 br0=0x1010 br6=0x1FDB1780 cfm=0x309 psr=0x100000000000 rsc=0x0 bsp=0x30 bspstore=0x0 rnat=0x0 pfs=0x30A bspLoad=0x30 rseRing={bof:6,store:0,load:0,sof:9,sol:6,sor:0} rsePartitions={invalid:81,clean:0,dirty:10,current:5}
+[EFI-CALL] service=BootServices.LocateProtocol cycle=0x0 callerIP=0x2060 descriptor=0x1fdb17c0 code=0x1fdb1780 gp(r1)=0x1fdb0000 args=[0x3000,0x0,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.LocateProtocol descriptor" descriptorBytes=80 17 db 1f 00 00 00 00 00 00 db 1f 00 00 00 00
+  ? nested EFI LocateProtocol sees the original GUID pointer and writes its interface
+
+Testing IA-64 GetMemoryMap output widths and canaries...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x1010 srcBR=b6 srcValue=0x1fdb1840 target=0x1fdb1840 interpretedAs=descriptor descriptor=0x1fdb1840 readable=yes descriptorCode=0x1fdb1800 resolvedCode=0x1fdb1800 descriptorGp=0x4444444444444444 oldR1=0x1111111111111111 newR1=0x4444444444444444 returnBR=b0 region=efi-table ip=0x1010 r1_gp=0x4444444444444444 r8_ret=0x0 r12_sp=0x0 r32=0x8000 r33=0xA000 br0=0x0 br6=0x1FDB1840 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=9 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x1fcb0 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-MILESTONE] GetMemoryMap returned descriptors=9 size=0x168 key=1
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0x1010 descriptor=0x1fdb1840 code=0x1fdb1840 gp(r1)=0x4444444444444444 args=[0x8000,0xa000,0x8020,0x8040,0x8060,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 18 db 1f 00 00 00 00 44 44 44 44 44 44 44 44
+  ? UINTN outputs use 8 bytes and DescriptorVersion preserves its upper canary
+
+Testing IA-64 plugin indirect call ignores invalid descriptor GP...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x4000 target=0x4000 interpretedAs=invalid descriptor=0x4000 readable=no descriptorCode=0x0 resolvedCode=0x4000 descriptorGp=0x1234567890abcdef oldR1=0x185 newR1=0x185 returnBR=b0 region=image-or-guest ip=0x1000 r1_gp=0x185 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x4000 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:95,clean:0,dirty:1,current:0}
+  ? invalid descriptor probes no longer clobber GP
+
+Testing IA-64 plugin direct call to function descriptor...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] direct branch target descriptor=0x4000 resolvedCode=0x2000 descriptorGp=0x238000 oldR1=0x185 newR1=0x238000
+  ? direct br.call resolves IA-64 function descriptors to code and gp
+
+Testing IA-64 plugin fetch bundle redirect from function descriptor...
+[IA64-DESC] fetch bundle descriptor ip=0x2000 resolvedCode=0x2000 descriptorGp=0x238000 oldR1=0x185 newR1=0x238000
+  ? fetchBundle redirects descriptor bundles to executable code and gp
+
+Testing IA-64 plugin fetch preserves synthetic firmware bundles...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+  ? executable synthetic EFI bundles are not probed as descriptors
+
+Testing IA-64 plugin zero-filled firmware call handling...
+[IA64-DESC] indirect br.call callerIP=0x1000 srcBR=b6 srcValue=0x1ff92fa8 target=0x1ff92fa8 interpretedAs=invalid descriptor=0x1ff92fa8 readable=no descriptorCode=0x0 resolvedCode=0x1ff92fa8 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1000 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FF92FA8 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+[EFI-STUB] indirect br.call target 0x1ff92fa8 is zero-filled handoff memory; returning EFI_SUCCESS
+  ? zero-filled high-memory br.call returns EFI_SUCCESS instead of exiting or walking NOPs
+
+Testing IA-64 plugin null firmware call target...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x80000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x0 target=0x0 interpretedAs=null descriptor=0x0 readable=no descriptorCode=0x0 resolvedCode=0x0 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=image-or-guest ip=0x30E40 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+  ? null indirect br.call branches to zero without synthesizing EFI_SUCCESS
+
+Testing IA-64 EFI ConsoleIn protocol relationships and plabel dispatch...
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x0 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:2,current:4}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x8000000000000006 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1e unicode=0x61 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01c40 target=0x1fe01c40 interpretedAs=descriptor descriptor=0x1fe01c40 readable=yes descriptorCode=0x1fe01c00 resolvedCode=0x1fe01c00 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01C40 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x0 unicode=0x62 callerIP=0x30e40 extended=true
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x0 unicode=0xd callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01d80 target=0x1fe01d80 interpretedAs=descriptor descriptor=0x1fe01d80 readable=yes descriptorCode=0x1fe01d40 resolvedCode=0x1fe01d40 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x8000000000000006 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01D80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01e00 target=0x1fe01e00 interpretedAs=descriptor descriptor=0x1fe01e00 readable=yes descriptorCode=0x1fe01dc0 resolvedCode=0x1fe01dc0 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01E00 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2 unicode=0x0 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01e00 target=0x1fe01e00 interpretedAs=descriptor descriptor=0x1fe01e00 readable=yes descriptorCode=0x1fe01dc0 resolvedCode=0x1fe01dc0 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01E00 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01b40 target=0x1fe01b40 interpretedAs=descriptor descriptor=0x1fe01b40 readable=yes descriptorCode=0x1fe01b00 resolvedCode=0x1fe01b00 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x8000000000000006 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01B40 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x0 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:2,current:4}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x8000000000000002 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x8000000000000002 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1234 unicode=0x5a callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x0 unicode=0x41 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1 unicode=0x42 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2 unicode=0x43 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3 unicode=0x44 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x4 unicode=0x45 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x5 unicode=0x46 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x6 unicode=0x47 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x7 unicode=0x48 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x8 unicode=0x49 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x9 unicode=0x4a callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0xa unicode=0x4b callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0xb unicode=0x4c callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0xc unicode=0x4d callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0xd unicode=0x4e callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0xe unicode=0x4f callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0xf unicode=0x50 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x10 unicode=0x51 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x11 unicode=0x52 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x12 unicode=0x53 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x13 unicode=0x54 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b0 srcValue=0x1fe01bc0 target=0x1fe01bc0 interpretedAs=descriptor descriptor=0x1fe01bc0 readable=yes descriptorCode=0x1fe01b80 resolvedCode=0x1fe01b80 descriptorGp=0x1fe00000 oldR1=0x1fe00000 newR1=0x1fe00000 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x1FE00000 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE01BC0 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:3,current:4}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x14 unicode=0x55 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x15 unicode=0x56 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x16 unicode=0x57 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x17 unicode=0x58 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x18 unicode=0x59 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x19 unicode=0x5a callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1a unicode=0x41 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1b unicode=0x42 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1c unicode=0x43 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1d unicode=0x44 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1e unicode=0x45 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x1f unicode=0x46 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x20 unicode=0x47 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x21 unicode=0x48 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x22 unicode=0x49 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x23 unicode=0x4a callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1A50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [c1:77:74:38:c7:69:d2:11:8e:39:00:a0:c9:69:72:3b] returned InstalledProtocol=0x1fe01a80 via out=0x4000 outValue=0x1fe01a80 outBytes=80 1a e0 1f 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x41 slot=0 callsite=0x1a50 returnAddress=0x1fe00e80 r8=0x0 argRegs=[r32=0x41,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=false
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1a50 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x41,0x3000,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1A50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [34:75:9e:dd:62:77:98:46:8c:14:f5:85:17:a6:25:aa] returned InstalledProtocol=0x1fe01aa0 via out=0x4000 outValue=0x1fe01aa0 outBytes=a0 1a e0 1f 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x41 slot=0 callsite=0x1a50 returnAddress=0x1fe00e80 r8=0x0 argRegs=[r32=0x41,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=false
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1a50 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x41,0x3000,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1A50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [82:77:2f:f4:2e:01:12:4c:99:56:49:f9:43:04:f7:21] -> EFI_NOT_FOUND via out=0x4000 outValue=0x0 outBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x41 slot=0 callsite=0x1a50 returnAddress=0x1fe00e80 r8=0x800000000000000e argRegs=[r32=0x41,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=false statusIsError=true statusCmpEqZero=false statusCmpLtZero=true interfaceOutReadable=true interfaceOutMatchesExpected=false
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1a50 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x41,0x3000,0x4000,0x0,0x0,0x0] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? SystemTable->ConIn->ReadKeyStroke uses a real IA-64 plabel, empty input is EFI_NOT_READY, Enter is delivered as CR, both input protocols register, and ConsoleControl remains EFI_NOT_FOUND
+
+Testing IA-64 plugin HandleProtocol firmware stub...
+[EFI-INPUT] ReadKeyStroke delivered scan=0x24 unicode=0x4b callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x25 unicode=0x4c callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x26 unicode=0x4d callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x27 unicode=0x4e callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x28 unicode=0x4f callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x29 unicode=0x50 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2a unicode=0x51 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2b unicode=0x52 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2c unicode=0x53 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2d unicode=0x54 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2e unicode=0x55 callerIP=0x30e40 extended=false
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1A50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-INPUT] ReadKeyStroke delivered scan=0x2f unicode=0x56 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x30 unicode=0x57 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x31 unicode=0x58 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x32 unicode=0x59 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x33 unicode=0x5a callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x34 unicode=0x41 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x35 unicode=0x42 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x36 unicode=0x43 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x37 unicode=0x44 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x38 unicode=0x45 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x39 unicode=0x46 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3a unicode=0x47 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3b unicode=0x48 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3c unicode=0x49 callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3d unicode=0x4a callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3e unicode=0x4b callerIP=0x30e40 extended=false
+[EFI-INPUT] ReadKeyStroke delivered scan=0x3f unicode=0x4c callerIP=0x30e40 extended=false
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [a1:31:1b:5b:62:95:d2:11:8e:3f:00:a0:c9:69:72:3b] returned InstalledProtocol=0x1fe00d00 via out=0x4000 outValue=0x1fe00d00 outBytes=00 0d e0 1f 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x1 slot=0 callsite=0x1a50 returnAddress=0x1fe00e80 r8=0x0 argRegs=[r32=0x1,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=false LoadedImage{addr=0x1fe00d00 Revision=0x0 ParentHandle=0x0 SystemTable=0x0 DeviceHandle=0x0 FilePath=0x0 FilePathBytes= LoadOptionsSize=0x0 LoadOptions=0x0 ImageBase=0x0 ImageSize=0x0 CodeType=0x0 DataType=0x0 Unload=0x0 Ext60=0x0 Ext68=0x0 FilePathNodes=null LoadOptions=empty}
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1a50 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x1,0x3000,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? HandleProtocol writes a minimal LoadedImageProtocol pointer and returns EFI_SUCCESS
+
+Testing IA-64 plugin HandleProtocol SimpleFileSystem stub...
+[IA64-DESC] indirect br.call callerIP=0x1cc0 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1CC0 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:2,current:4}
+[EFI-STUB] SimpleFS.HandleProtocol restored adjacent LoadedImage context slot=0x4008 value=0x1fe00d00 interfaceOut=0x4000
+[EFI-HP-CALL] callsite=0x1cc0 slot=0 callBR=b0 target=0x1fe00e80 preB0=0x1fe00e80 b6=0x1fe00e80 gp=0x0 sp=0x0 r8=0xffffffffffffffff predicates=p0=1 p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 r32-r39=r32=0x0 r33=0x0 r34=0x0 r35=0x0 r36=0x3000 r37=0x4000 r38=0x0 r39=0x0 interfaceOut=0x4000 interfaceOutReadable=true interfaceOutValue=0x1FE01000 interfaceOutBytes=00 10 e0 1f 00 00 00 00 00 0d e0 1f 00 00 00 00 simpleFs=SimpleFS{addr=0x1fe01000 Revision=0x0 OpenVolume=0x0}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [22:5b:4e:96:59:64:d2:11:8e:39:00:a0:c9:69:72:3b] returned SimpleFileSystemProtocol=0x1fe01000 via out=0x4000 outValue=0x1fe01000 outBytes=00 10 e0 1f 00 00 00 00 00 0d e0 1f 00 00 00 00 handle=0x0 slot=0 callsite=0x1cc0 returnAddress=0x1fe00e80 r8=0x0 argRegs=[r32=0x0,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=true SimpleFS{addr=0x1fe01000 Revision=0x0 OpenVolume=0x0} latestLoadedImage=LoadedImage{addr=0x1fe00d00 Revision=0x0 ParentHandle=0x0 SystemTable=0x0 DeviceHandle=0x0 FilePath=0x0 FilePathBytes= LoadOptionsSize=0x0 LoadOptions=0x0 ImageBase=0x0 ImageSize=0x0 CodeType=0x0 DataType=0x0 Unload=0x0 Ext60=0x0 Ext68=0x0 FilePathNodes=null LoadOptions=empty} expectedSimpleFsTable=0x534777856 simpleFsTableBytes32=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 expectedOpenVolumeDescriptor=0x534777024 openVolumeDescriptorBytes32=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 lastIndirectDescriptor=0x534777536 lastIndirectDescriptorBytes32=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1cc0 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x0,0x3000,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-HP-RET] normalizedNextIP=0x1cd0 rawNextIP=0x1cd0 b0_before=0x1fe00e80 b0_after=0x1cd0 b6=0x0 gp=0x0 sp=0x0 r8=0x0 predicates=p0=1 p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 r32-r39=r32=0x0 r33=0x0 r34=0x0 r35=0x0 r36=0x3000 r37=0x4000 r38=0x0 r39=0x0 interfaceOut=0x4000 interfaceOutValue=0x1FE01000 interfaceOutBytes=00 10 e0 1f 00 00 00 00 00 0d e0 1f 00 00 00 00 simpleFs=SimpleFS{addr=0x1fe01000 Revision=0x0 OpenVolume=0x0} nextTraceBundles=20
+  ? HandleProtocol writes a minimal SimpleFileSystem pointer and returns EFI_SUCCESS
+
+Testing IA-64 plugin HandleProtocol zero-GUID boot fallbacks...
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1A50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [a1:31:1b:5b:62:95:d2:11:8e:3f:00:a0:c9:69:72:3b] returned InstalledProtocol=0x1fe00d00 via out=0x4000 outValue=0x1fe00d00 outBytes=00 0d e0 1f 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x1 slot=0 callsite=0x1a50 returnAddress=0x1fe00e80 r8=0x0 argRegs=[r32=0x1,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=false repairedZeroGuidAs=LoadedImageProtocol LoadedImage{addr=0x1fe00d00 Revision=0x0 ParentHandle=0x0 SystemTable=0x0 DeviceHandle=0x0 FilePath=0x0 FilePathBytes= LoadOptionsSize=0x0 LoadOptions=0x0 ImageBase=0x0 ImageSize=0x0 CodeType=0x0 DataType=0x0 Unload=0x0 Ext60=0x0 Ext68=0x0 FilePathNodes=null LoadOptions=empty}
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1a50 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x1,0x3000,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x1cc0 srcBR=b0 srcValue=0x1fe00e80 target=0x1fe00e80 interpretedAs=known-stub-code descriptor=0x1fe00ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1CC0 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x1FE00E80 br6=0x0 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-STUB] SimpleFS.HandleProtocol restored adjacent LoadedImage context slot=0x4008 value=0x1fe00d00 interfaceOut=0x4000
+[EFI-HP-CALL] callsite=0x1cc0 slot=0 callBR=b0 target=0x1fe00e80 preB0=0x1fe00e80 b6=0x1fe00e80 gp=0x0 sp=0x0 r8=0xffffffffffffffff predicates=p0=1 p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 r32-r39=r32=0x0 r33=0x0 r34=0x0 r35=0x1 r36=0x3000 r37=0x4000 r38=0x0 r39=0x0 interfaceOut=0x4000 interfaceOutReadable=true interfaceOutValue=0x1FE01000 interfaceOutBytes=00 10 e0 1f 00 00 00 00 00 0d e0 1f 00 00 00 00 simpleFs=SimpleFS{addr=0x1fe01000 Revision=0x0 OpenVolume=0x0}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [22:5b:4e:96:59:64:d2:11:8e:39:00:a0:c9:69:72:3b] returned SimpleFileSystemProtocol=0x1fe01000 via out=0x4000 outValue=0x1fe01000 outBytes=00 10 e0 1f 00 00 00 00 00 0d e0 1f 00 00 00 00 handle=0x1 slot=0 callsite=0x1cc0 returnAddress=0x1fe00e80 r8=0x0 argRegs=[r32=0x1,r33=0x3000,r34=0x4000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=true repairedZeroGuidAs=SimpleFileSystemProtocol SimpleFS{addr=0x1fe01000 Revision=0x0 OpenVolume=0x0} latestLoadedImage=LoadedImage{addr=0x1fe00d00 Revision=0x0 ParentHandle=0x0 SystemTable=0x0 DeviceHandle=0x0 FilePath=0x0 FilePathBytes= LoadOptionsSize=0x0 LoadOptions=0x0 ImageBase=0x0 ImageSize=0x0 CodeType=0x0 DataType=0x0 Unload=0x0 Ext60=0x0 Ext68=0x0 FilePathNodes=null LoadOptions=empty} expectedSimpleFsTable=0x534777856 simpleFsTableBytes32=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 expectedOpenVolumeDescriptor=0x534777024 openVolumeDescriptorBytes32=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 lastIndirectDescriptor=0x534777536 lastIndirectDescriptorBytes32=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1cc0 descriptor=0x1fe00ec0 code=0x1fe00e80 gp(r1)=0x0 args=[0x1,0x3000,0x4000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-HP-RET] normalizedNextIP=0x1cd0 rawNextIP=0x1cd0 b0_before=0x1fe00e80 b0_after=0x1cd0 b6=0x0 gp=0x0 sp=0x0 r8=0x0 predicates=p0=1 p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 r32-r39=r32=0x0 r33=0x0 r34=0x0 r35=0x1 r36=0x3000 r37=0x4000 r38=0x0 r39=0x0 interfaceOut=0x4000 interfaceOutValue=0x1FE01000 interfaceOutBytes=00 10 e0 1f 00 00 00 00 00 0d e0 1f 00 00 00 00 simpleFs=SimpleFS{addr=0x1fe01000 Revision=0x0 OpenVolume=0x0} nextTraceBundles=20
+  ? zeroed protocol GUIDs at known boot call sites are repaired and map to the expected safe stubs
+
+Testing IA-64 plugin SimpleFileSystem OpenVolume stub...
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe00c80 target=0x1fe00c80 interpretedAs=known-stub-code descriptor=0x1fe00cc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00c80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x5000 br0=0x0 br6=0x1FE00C80 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:94,clean:0,dirty:1,current:1}
+[EFI-MILESTONE] first OpenVolume call callerIP=0x30e40
+[EFI-FILE] OpenVolume metadata snapshot metadata=0x1fe01d00 this=0x5edbf6280 memoryRef=0x5edbf6240 memoryObj=0x0 handoffProvided=no cachedBytes=0x0 signature=0x0 base=0x0 size=0x0
+[EFI-FILE] boot image handoff probe this=0x5edbf6280 memoryRef=0x5edbf6240 memoryObj=0x0 totalSize=0x0 explicitHandoff=no cachedBytes=0x0 metadata=0x1fe01d00
+[EFI-FILE] boot image metadata invalid metadata=0x1fe01d00 signature=0x0 base=0x0 size=0x0 readable=yes
+[EFI-STUB] SimpleFileSystem.OpenVolume rootOut=0x5000 -> FileProtocol=0x1fe01040
+[EFI-CALL] service=SimpleFS.OpenVolume cycle=0x0 callerIP=0x30e40 descriptor=0x1fe00cc0 code=0x1fe00c80 gp(r1)=0x0 args=[0x0,0x5000,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="OpenVolume descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? OpenVolume writes a root FileProtocol pointer and returns EFI_SUCCESS
+
+Testing IA-64 plugin boot-image handoff into OpenVolume/FileProtocol.Open...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20050000 base=0x1fe00000 end=0x20000000 loadedImage=0x1fe00d00 filePath=0x1fe01300
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe00c80 target=0x1fe00c80 interpretedAs=known-stub-code descriptor=0x1fe00cc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00c80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x5000 br0=0x0 br6=0x1FE00C80 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:94,clean:0,dirty:1,current:1}
+[EFI-MILESTONE] first OpenVolume call callerIP=0x30e40
+[EFI-FILE] OpenVolume metadata snapshot metadata=0x1fe01d00 this=0x5edbf6280 memoryRef=0x5edbf6240 memoryObj=0x0 handoffProvided=yes cachedBytes=0x1000 signature=0x0 base=0x0 size=0x0
+[EFI-FILE] boot image handoff probe this=0x5edbf6280 memoryRef=0x5edbf6240 memoryObj=0x0 totalSize=0x20050000 explicitHandoff=yes cachedBytes=0x1000 metadata=0x1fe01d00
+[INFO ] FAT filesystem parsed successfully
+[INFO ]   Type: FAT12
+[INFO ]   Bytes per cluster: 512
+[INFO ]   Total clusters: 5
+[EFI-MILESTONE] EFI FileProtocol backing FAT boot image is available source=vmmanager-handoff this=0x5edbf6280 bytes=0x1000
+[EFI-STUB] SimpleFileSystem.OpenVolume rootOut=0x5000 -> FileProtocol=0x1fe01040
+[EFI-CALL] service=SimpleFS.OpenVolume cycle=0x0 callerIP=0x30e40 descriptor=0x1fe00cc0 code=0x1fe00c80 gp(r1)=0x0 args=[0x0,0x5000,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="OpenVolume descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01400 target=0x1fe01400 interpretedAs=known-stub-code descriptor=0x1fe01440 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01400 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x1FE01040 r33=0x5000 br0=0x30E50 br6=0x1FE01400 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-MILESTONE] possible kernel/config filename requested path="\EFI\BOOT\BOOTIA64.EFI" parent=0x1fe01040 mode=0x1 attrs=0x0
+[EFI-MEMORY-MAP] initialized memory=0x20050000 descriptors=11 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x17f00 end=0x18000000 attributes=0xf
+[EFI-MEMORY-MAP] type=3 start=0x18000000 pages=0x1 end=0x18001000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x18001000 pages=0x7dff end=0x1fe00000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fe00000 pages=0x2 end=0x1fe02000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fe02000 pages=0x1 end=0x1fe03000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fe03000 pages=0x1 end=0x1fe04000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fe04000 pages=0x1 end=0x1fe05000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fe05000 pages=0x1fb end=0x20000000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x20000000 pages=0x40 end=0x20040000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x20040000 pages=0x10 end=0x20050000 attributes=0xf
+[EFI-POOL] AllocatePool type=4 size=0x60 pages=0x1 base=0x1fdff000 end=0x1fe00000 mapKey=2
+[EFI-MILESTONE] first successful file Open path="EFI/BOOT/BOOTIA64.EFI" handle=0x1fdff000
+[EFI-FILE] Open path="EFI/BOOT/BOOTIA64.EFI" -> handle=0x1fdff000 [FILE] size=8 -> EFI_SUCCESS
+[EFI-CALL] service=FileProtocol.Open cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01440 code=0x1fe01400 gp(r1)=0x0 args=[0x1fe01040,0x5000,0x6000,0x1,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="FileProtocol.Open descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? Explicit boot-image handoff keeps OpenVolume/FileProtocol.Open on the success path
+
+Testing IA-64 plugin BootServices LocateHandle semantics...
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3000 br0=0x0 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x2,0x3000,0x0,0x5000,0x0,0x0] status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3000 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x2,0x3000,0x0,0x5000,0x6000,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x0,0x0,0x0,0x5000,0x0,0x0] status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x0,0x0,0x0,0x5000,0x6000,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3010 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x2,0x3010,0x0,0x5000,0x0,0x0] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x0 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x2,0x0,0x0,0x5000,0x0,0x0] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x3 r33=0x3000 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x3,0x3000,0x0,0x5000,0x0,0x0] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3000 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x2,0x3000,0x0,0x5000,0x6000,0x0] status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01700 target=0x1fe01700 interpretedAs=known-stub-code descriptor=0x1fe01740 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3000 br0=0x30E50 br6=0x1FE01700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:6,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01740 code=0x1fe01700 gp(r1)=0x0 args=[0x2,0x3000,0x0,0x5000,0x0,0x0] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? LocateHandle decodes all five ABI arguments and implements probe/retry, NOT_FOUND, and validation semantics
+
+Testing IA-64 plugin InstallProtocolInterface shared registry semantics...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3000 br0=0x0 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:90,clean:0,dirty:5,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x3000,0x0,0x6000,0x0,0x1fdb0880] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x0 (EFI_SUCCESS)
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x1fdb0e80 target=0x1fdb0e80 interpretedAs=known-stub-code descriptor=0x1fdb0ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1A50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3000 br0=0x1FDB0E80 br6=0x1FDB0F00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-STUB] BootServices.HandleProtocol guid=0x3000 [10:32:54:76:98:ba:dc:fe:01:23:45:67:89:ab:cd:ef] returned InstalledProtocol=0x6000 via out=0x7000 outValue=0x6000 outBytes=00 60 00 00 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x42 slot=0 callsite=0x1a50 returnAddress=0x1fdb0e80 r8=0x0 argRegs=[r32=0x42,r33=0x3000,r34=0x7000,r35=0x0,r36=0x0,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=false
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x1a50 descriptor=0x1fdb0ec0 code=0x1fdb0e80 gp(r1)=0x0 args=[0x42,0x3000,0x7000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb1700 target=0x1fdb1700 interpretedAs=known-stub-code descriptor=0x1fdb1740 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3000 br0=0x1A60 br6=0x1FDB1700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb1740 code=0x1fdb1700 gp(r1)=0x0 args=[0x2,0x3000,0x0,0x5008,0x0,0x0] status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb1700 target=0x1fdb1700 interpretedAs=known-stub-code descriptor=0x1fdb1740 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1700 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x3000 br0=0x30E50 br6=0x1FDB1700 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-CALL] service=BootServices.LocateHandle cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb1740 code=0x1fdb1700 gp(r1)=0x0 args=[0x2,0x3000,0x0,0x5008,0x7010,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.LocateHandle descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3010 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x3010,0x0,0x6010,0x7010,0x1fdb0880] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x0 (EFI_SUCCESS)
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3000 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x3000,0x0,0x6000,0x7010,0x1fdb0880] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x8000000000000002 (EFI_INVALID_PARAMETER)
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3010 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x3010,0x0,0x6010,0x7010,0x1fdb0880] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x0 (EFI_SUCCESS)
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x3000 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x0,0x3000,0x0,0x6000,0x7010,0x1fdb0880] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x8000000000000002 (EFI_INVALID_PARAMETER)
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x0 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x0,0x0,0x6000,0x7010,0x1fdb0880] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x8000000000000002 (EFI_INVALID_PARAMETER)
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3000 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x3000,0x1,0x6000,0x7010,0x1fdb0880] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x8000000000000002 (EFI_INVALID_PARAMETER)
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5000 r33=0x3010 br0=0x30E50 br6=0x1FDB0F00 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:6,current:1}
+[EFI-CALL] service=BootServices.InstallProtocolInterface cycle=0x0 callerIP=0x30e40 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x5000,0x3010,0x0,0x6010,0x7010,0x1fdb0880] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-STUB] BootServices.InstallProtocolInterface -> status=0x8000000000000002 (EFI_INVALID_PARAMETER)
+  ? InstallProtocolInterface creates 0x42, HandleProtocol and LocateHandle share it, and duplicate/invalid registrations return EFI_INVALID_PARAMETER
+
+Testing IA-64 plugin FileProtocol Open without backing media...
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01400 target=0x1fe01400 interpretedAs=known-stub-code descriptor=0x1fe01440 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01400 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x1FE01040 r33=0x5000 br0=0x0 br6=0x1FE01400 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-MILESTONE] possible kernel/config filename requested path="\EFI\BOOT\BOOTIA64.EFI" parent=0x1fe01040 mode=0x1 attrs=0x0
+[EFI-FILE] boot image handoff probe this=0x5edbf6280 memoryRef=0x5edbf6240 memoryObj=0x0 totalSize=0x0 explicitHandoff=no cachedBytes=0x0 metadata=0x1fe01d00
+[EFI-FILE] boot image metadata invalid metadata=0x1fe01d00 signature=0x0 base=0x0 size=0x0 readable=yes
+[EFI-FILE] FileProtocol.Open returning EFI_NO_MEDIA path="\EFI\BOOT\BOOTIA64.EFI" parent=0x1fe01040 newHandleOut=0x5000 metadata=0x1fe01d00
+[EFI-CALL] service=FileProtocol.Open cycle=0x0 callerIP=0x30e40 descriptor=0x1fe01440 code=0x1fe01400 gp(r1)=0x0 args=[0x1fe01040,0x5000,0x6000,0x1,0x0,0x0] status=0x800000000000000c (EFI_NO_MEDIA) descriptorName="FileProtocol.Open descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? FileProtocol.Open reports EFI_NO_MEDIA without destabilizing the boot stub path
+
+Testing IA-64 plugin SimpleTextOut OutputString stub...
+[IA64-DESC] indirect br.call callerIP=0x30e40 srcBR=b6 srcValue=0x1fe01280 target=0x1fe01280 interpretedAs=known-stub-code descriptor=0x1fe012c0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe01280 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x30E40 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x1FE01200 r33=0x6000 br0=0x0 br6=0x1FE01280 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:94,clean:0,dirty:2,current:0}
+[EFI-STUB] SimpleTextOut.OutputString this=0x1fe01200 string=0x6000 "Boot" utf16=0042 006f 006f 0074 0000 consoleMirror=unavailable mirroredToFramebuffer=0xb8000000 -> EFI_SUCCESS
+[EFI-CALL] service=SimpleTextOut.OutputString cycle=0x0 callerIP=0x30e40 descriptor=0x1fe012c0 code=0x1fe01280 gp(r1)=0x0 args=[0x1fe01200,0x6000,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="SimpleTextOut.OutputString descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? OutputString returns EFI_SUCCESS for safe console diagnostics
+
+Testing IA-64 plugin AllocatePool firmware stub...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=9 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x1fcb0 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-POOL] AllocatePool type=2 size=0x30 pages=0x1 base=0x1fdaf000 end=0x1fdb0000 mapKey=2
+[EFI-STUB] BootServices.AllocatePool size=0x30 -> 0x1fdaf000 via out=0x5000
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x30,0x5000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? AllocatePool writes a zeroed scratch buffer pointer and returns EFI_SUCCESS
+
+Testing IA-64 EFI pool allocation backing, reuse, and exhaustion...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=9 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x1fcb0 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-POOL] AllocatePool type=2 size=0x1000 pages=0x1 base=0x1fdaf000 end=0x1fdb0000 mapKey=2
+[EFI-STUB] BootServices.AllocatePool size=0x1000 -> 0x1fdaf000 via out=0x6000
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x1000,0x6000,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-POOL] AllocatePool type=2 size=0x2000 pages=0x2 base=0x1fdad000 end=0x1fdaf000 mapKey=3
+[EFI-STUB] BootServices.AllocatePool size=0x2000 -> 0x1fdad000 via out=0x6008
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x2000,0x6008,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0f80 target=0x1fdb0f80 interpretedAs=known-stub-code descriptor=0x1fdb0fc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0F80 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:2,current:5}
+[EFI-POOL] FreePool base=0x1fdaf000 end=0x1fdb0000 mapKey=4
+[EFI-CALL] service=BootServices.FreePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0fc0 code=0x1fdb0f80 gp(r1)=0x0 args=[0x1fdaf000,0x2000,0x6008,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Success descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-POOL] AllocatePool type=2 size=0x1000 pages=0x1 base=0x1fdaf000 end=0x1fdb0000 mapKey=5
+[EFI-STUB] BootServices.AllocatePool size=0x1000 -> 0x1fdaf000 via out=0x6010
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x1000,0x6010,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-STUB] BootServices.AllocatePool failed size=0x1000 out=0x6018
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x0,0x1000,0x6018,0x0,0x0,0x0] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-STUB] BootServices.AllocatePool failed size=0x20000000 out=0x6018
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x20000000,0x6018,0x0,0x0,0x0] status=0x8000000000000009 (EFI_OUT_OF_RESOURCES) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0f80 target=0x1fdb0f80 interpretedAs=known-stub-code descriptor=0x1fdb0fc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0F80 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:2,current:5}
+[EFI-CALL] service=BootServices.FreePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0fc0 code=0x1fdb0f80 gp(r1)=0x0 args=[0x12345000,0x20000000,0x6018,0x0,0x0,0x0] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Success descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0f80 target=0x1fdb0f80 interpretedAs=known-stub-code descriptor=0x1fdb0fc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0F80 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:2,current:5}
+[EFI-POOL] FreePool base=0x1fdad000 end=0x1fdaf000 mapKey=6
+[EFI-CALL] service=BootServices.FreePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0fc0 code=0x1fdb0f80 gp(r1)=0x0 args=[0x1fdad000,0x20000000,0x6018,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Success descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:4,current:3}
+[EFI-POOL] AllocatePool type=2 size=0x2010 pages=0x3 base=0x1fdac000 end=0x1fdaf000 mapKey=7
+[EFI-STUB] BootServices.AllocatePool size=0x2010 -> 0x1fdac000 via out=0x6020
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x2010,0x6020,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0f80 target=0x1fdb0f80 interpretedAs=known-stub-code descriptor=0x1fdb0fc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0F80 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:89,clean:0,dirty:2,current:5}
+[EFI-POOL] FreePool base=0x1fdac000 end=0x1fdaf000 mapKey=8
+[EFI-CALL] service=BootServices.FreePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0fc0 code=0x1fdb0f80 gp(r1)=0x0 args=[0x1fdac000,0x2010,0x6020,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Success descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? AllocatePool uses page-backed conventional memory, FreePool reuses it, and genuine exhaustion remains EFI_OUT_OF_RESOURCES
+
+Testing IA-64 EFI LoadImage source-buffer semantics...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[INFO ] COFF Header:
+[INFO ]   Machine: 0x512
+[INFO ]   Number of sections: 4
+[INFO ]   Optional header size: 112
+[INFO ] Optional Header:
+[INFO ]   Magic: 0x20b
+[INFO ]   Entry point RVA: 0x2000
+[INFO ]   Image base: 0x0
+[INFO ]   Section alignment: 4096
+[INFO ]   Subsystem: 10
+[INFO ] Section 0: .text
+[INFO ]   Virtual address: 0x4096
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x512
+[INFO ]   Raw data size: 512
+[INFO ] Section 1: .data
+[INFO ]   Virtual address: 0x8192
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1024
+[INFO ]   Raw data size: 512
+[INFO ] Section 2: .rela
+[INFO ]   Virtual address: 0x12288
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1536
+[INFO ]   Raw data size: 512
+[INFO ] Section 3: .reloc
+[INFO ]   Virtual address: 0x16384
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x2048
+[INFO ]   Raw data size: 512
+[INFO ] PE/COFF image parsed successfully
+[INFO ]   Machine: 0x200
+[INFO ]   Subsystem: 10
+[INFO ]   Image base: 0x0
+[INFO ]   Entry point: 0x2000
+[INFO ]   Sections: 4
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=11 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x100 end=0x200000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x200000 pages=0x5e end=0x25e000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x25e000 pages=0x1fb52 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[INFO ] === PE/COFF Image Loader ===
+[INFO ] Loading EFI executable (IA-64)
+[INFO ] Image metadata:
+[INFO ]   SizeOfImage: 0x5000 (20480 bytes)
+[INFO ]   SizeOfHeaders: 0x200 (512 bytes)
+[INFO ]   ImageBase: 0x0
+[INFO ]   AddressOfEntryPoint: 0x2000
+[INFO ]   Number of sections: 4
+[INFO ]
+[INFO ] Step 1: Allocating image buffer...
+[INFO ]   Allocated 20480 bytes (zero-initialized)
+[INFO ]
+[INFO ] Step 2: Copying PE headers...
+[INFO ]   Copied 0x200 (512) bytes of headers
+[INFO ]
+[INFO ] Step 3: Mapping sections into memory...
+[INFO ]
+[INFO ]   Section 0: .text
+[INFO ]     VirtualAddress (RVA): 0x1000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x200
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0x60000020
+[INFO ]     -> Copied 512 bytes from file offset 0x200 to RVA 0x1000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ]   Section 1: .data
+[INFO ]     VirtualAddress (RVA): 0x2000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x400
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0xc0000040
+[INFO ]     -> Copied 512 bytes from file offset 0x400 to RVA 0x2000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ]   Section 2: .rela
+[INFO ]     VirtualAddress (RVA): 0x3000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x600
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0x40000040
+[INFO ]     -> Copied 512 bytes from file offset 0x600 to RVA 0x3000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ]   Section 3: .reloc
+[INFO ]     VirtualAddress (RVA): 0x4000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x800
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0x40000040
+[INFO ]     -> Copied 512 bytes from file offset 0x800 to RVA 0x4000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ] Step 4: Setting load address and entry point...
+[INFO ]   Load address (ImageBase): 0x1fdab000
+[INFO ]   Entry point: 0x1fdad000
+[INFO ]
+[INFO ] Step 5: Validating entry point...
+[INFO ]   Entry point RVA 0x2000 is in section: .data
+[WARN ]   Section is executable: NO
+[WARN ]   This may be an EFI descriptor - checking for indirect entry point...
+[INFO ]
+[INFO ] Step 5.5: Checking for EFI indirect entry point...
+[INFO ]   Found value at entry point: 0x1000
+[INFO ]   ? This points to executable section: .text (RVA 0x1000)
+[INFO ]   Redirecting entry point to actual code location...
+[INFO ]   Descriptor global pointer: 0x1fdac234
+[WARN ] [EFI-MILESTONE] IA-64 entry descriptor GP=0x1fdac234 is outside SizeOfImage=0x5000; GP-relative loader data may resolve to unmapped zero memory. If EFI protocol GUID pointers are zero/out-of-image next, suspect relocation/GP data addressing before EFI file I/O.
+[INFO ]   New entry point: 0x1fdac000
+[INFO ]
+[INFO ] Step 6: Entry point memory dump...
+[INFO ]   Entry point RVA: 0x1000
+[INFO ]   First 32 bytes at entry point:
+[INFO ]     [0x001000] a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 aa ab ac ad ae af  |................|
+[INFO ]     [0x001010] b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf  |................|
+[INFO ]
+[INFO ]   IA-64 Bundle Analysis (first 16 bytes):
+[INFO ]     Template: 0x0
+[INFO ]     Slot 0: 0x12d251d150d
+[INFO ]     Slot 1: 0xaaa6a29e9a
+[INFO ]     Slot 2: 0x15f5d5b5957
+[INFO ]
+[INFO ] Step 7: Applying relocations...
+[INFO ]
+[INFO ] === Applying PE Relocations ===
+[INFO ] Load address: 0x1fdab000
+[INFO ] Image base: 0x0
+[INFO ] Relocation delta: 0x1fdab000
+[INFO ]
+[INFO ] Step 1: Checking for .reloc section (PE base relocations)...
+[INFO ]   Found .reloc section
+[INFO ]     VirtualAddress: 0x4000
+[INFO ]     Size: 4096 bytes
+[INFO ]   Relocation block at page 0x2000
+[INFO ]     [1] RVA 0x2000: 0x1000 -> 0x1fdac000
+[INFO ]     [2] RVA 0x2008: 0x1234 -> 0x1fdac234
+[INFO ]   Applied 2 PE base relocations
+[INFO ] [EFI-RELOC-AUDIT] PE found relocation types type=0xa count=2
+[INFO ] [EFI-RELOC-AUDIT] PE applied relocation types type=0xa count=2
+[INFO ] [EFI-RELOC-AUDIT] PE skipped relocation types none
+[INFO ] [EFI-RELOC-AUDIT] PE unsupported relocation types none
+[INFO ]
+[INFO ] Step 2: Preserving embedded .rela for IA-64 gnu-efi self-relocation...
+[INFO ]   .rela section retained without host-side writes
+[INFO ]
+[INFO ] === Relocations Applied Successfully ===
+[INFO ]
+[INFO ] === PE/COFF Image Loaded Successfully ===
+[INFO ] Total image size: 0x5000 (20480 bytes)
+[INFO ] Final entry point: 0x1fdac000
+[EFI-POOL] AllocatePool type=4 size=0x60 pages=0x1 base=0x1fdaa000 end=0x1fdab000 mapKey=3
+[EFI-LOADIMAGE] path=<source-buffer> handle=0x42 image=0x1fdab000-0x1fdb0000 entry=0x1fdac000 status=EFI_SUCCESS
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x1,0x0,0x8000,0xa00,0x9000] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e80 target=0x1fdb0e80 interpretedAs=known-stub-code descriptor=0x1fdb0ec0 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB0E80 cfm=0x183 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:3,sol:3,sor:0} rsePartitions={invalid:84,clean:0,dirty:9,current:3}
+[EFI-STUB] BootServices.HandleProtocol guid=0x9100 [a1:31:1b:5b:62:95:d2:11:8e:3f:00:a0:c9:69:72:3b] returned InstalledProtocol=0x1fdaa000 via out=0x9200 outValue=0x1fdaa000 outBytes=00 a0 da 1f 00 00 00 00 00 00 00 00 00 00 00 00 handle=0x42 slot=0 callsite=0x5200 returnAddress=0x1fdb0e80 r8=0x0 argRegs=[r32=0x42,r33=0x9100,r34=0x9200,r35=0x0,r36=0x1,r37=0x0] statusIsSuccess=true statusIsError=false statusCmpEqZero=true statusCmpLtZero=false interfaceOutReadable=true interfaceOutMatchesExpected=false
+[EFI-CALL] service=BootServices.HandleProtocol cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0ec0 code=0x1fdb0e80 gp(r1)=0x0 args=[0x42,0x9100,0x9200,0x0,0x1,0x0] status=0x0 (EFI_SUCCESS) descriptorName="HandleProtocol descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1800 cfm=0x285 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:5,sor:0} rsePartitions={invalid:84,clean:0,dirty:7,current:5}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=13 size=0x208 key=3
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x9300,0x9400,0x9310,0x9318,0x9320,0xa00] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x40,0x0,0x8000,0xa00,0x9008] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x1,0x0,0x8000,0xa00,0x0] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x999,0x0,0x8000,0xa00,0x9008] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x1,0xa000,0x0,0x0,0x9008] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[ERROR] Invalid PE image data
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x1,0x0,0xb000,0x4,0x9008] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x5210 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[INFO ] COFF Header:
+[INFO ]   Machine: 0x34404
+[INFO ]   Number of sections: 4
+[INFO ]   Optional header size: 112
+[INFO ] Optional Header:
+[INFO ]   Magic: 0x20b
+[INFO ]   Entry point RVA: 0x2000
+[INFO ]   Image base: 0x0
+[INFO ]   Section alignment: 4096
+[INFO ]   Subsystem: 10
+[INFO ] Section 0: .text
+[INFO ]   Virtual address: 0x4096
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x512
+[INFO ]   Raw data size: 512
+[INFO ] Section 1: .data
+[INFO ]   Virtual address: 0x8192
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1024
+[INFO ]   Raw data size: 512
+[INFO ] Section 2: .rela
+[INFO ]   Virtual address: 0x12288
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1536
+[INFO ]   Raw data size: 512
+[INFO ] Section 3: .reloc
+[INFO ]   Virtual address: 0x16384
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x2048
+[INFO ]   Raw data size: 512
+[INFO ] PE/COFF image parsed successfully
+[INFO ]   Machine: 0x8664
+[INFO ]   Subsystem: 10
+[INFO ]   Image base: 0x0
+[INFO ]   Entry point: 0x2000
+[INFO ]   Sections: 4
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x1,0x0,0xc000,0xa00,0x9008] status=0x8000000000000003 (EFI_UNSUPPORTED) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1900 target=0x1fdb1900 interpretedAs=known-stub-code descriptor=0x1fdb1940 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1900 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FDB1900 cfm=0x306 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:6,sor:0} rsePartitions={invalid:84,clean:0,dirty:6,current:6}
+[INFO ] COFF Header:
+[INFO ]   Machine: 0x512
+[INFO ]   Number of sections: 4
+[INFO ]   Optional header size: 112
+[INFO ] Optional Header:
+[INFO ]   Magic: 0x20b
+[INFO ]   Entry point RVA: 0x2000
+[INFO ]   Image base: 0x0
+[INFO ]   Section alignment: 4096
+[INFO ]   Subsystem: 10
+[INFO ] Section 0: .text
+[INFO ]   Virtual address: 0x4096
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x512
+[INFO ]   Raw data size: 512
+[INFO ] Section 1: .data
+[INFO ]   Virtual address: 0x8192
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1024
+[INFO ]   Raw data size: 512
+[INFO ] Section 2: .rela
+[INFO ]   Virtual address: 0x12288
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1536
+[INFO ]   Raw data size: 512
+[INFO ] Section 3: .reloc
+[INFO ]   Virtual address: 0x16384
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x2048
+[INFO ]   Raw data size: 512
+[INFO ] PE/COFF image parsed successfully
+[INFO ]   Machine: 0x200
+[INFO ]   Subsystem: 10
+[INFO ]   Image base: 0x0
+[INFO ]   Entry point: 0x2000
+[INFO ]   Sections: 4
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=8 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x1fdb0 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-CALL] service=BootServices.LoadImage cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1940 code=0x1fdb1900 gp(r1)=0x0 args=[0x0,0x1,0x0,0x8000,0xa00,0x9000] status=0x8000000000000009 (EFI_OUT_OF_RESOURCES) descriptorName="BootServices.LoadImage descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? LoadImage maps sections/relocations, resolves IA-64 entry/GP, creates coherent child metadata without execution, rejects invalid inputs, and reports genuine allocation exhaustion
+
+Testing IA-64 initial EFI image allocation, relocation, and map state...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[INFO ] COFF Header:
+[INFO ]   Machine: 0x512
+[INFO ]   Number of sections: 4
+[INFO ]   Optional header size: 112
+[INFO ] Optional Header:
+[INFO ]   Magic: 0x20b
+[INFO ]   Entry point RVA: 0x2000
+[INFO ]   Image base: 0x0
+[INFO ]   Section alignment: 4096
+[INFO ]   Subsystem: 10
+[INFO ] Section 0: .text
+[INFO ]   Virtual address: 0x4096
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x512
+[INFO ]   Raw data size: 512
+[INFO ] Section 1: .data
+[INFO ]   Virtual address: 0x8192
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1024
+[INFO ]   Raw data size: 512
+[INFO ] Section 2: .rela
+[INFO ]   Virtual address: 0x12288
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x1536
+[INFO ]   Raw data size: 512
+[INFO ] Section 3: .reloc
+[INFO ]   Virtual address: 0x16384
+[INFO ]   Virtual size: 4096
+[INFO ]   Raw data offset: 0x2048
+[INFO ]   Raw data size: 512
+[INFO ] PE/COFF image parsed successfully
+[INFO ]   Machine: 0x200
+[INFO ]   Subsystem: 10
+[INFO ]   Image base: 0x0
+[INFO ]   Entry point: 0x2000
+[INFO ]   Sections: 4
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=11 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x100 end=0x200000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x200000 pages=0x5e end=0x25e000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x25e000 pages=0x1fb52 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[INFO ] === PE/COFF Image Loader ===
+[INFO ] Loading EFI executable (IA-64)
+[INFO ] Image metadata:
+[INFO ]   SizeOfImage: 0x5000 (20480 bytes)
+[INFO ]   SizeOfHeaders: 0x200 (512 bytes)
+[INFO ]   ImageBase: 0x0
+[INFO ]   AddressOfEntryPoint: 0x2000
+[INFO ]   Number of sections: 4
+[INFO ]
+[INFO ] Step 1: Allocating image buffer...
+[INFO ]   Allocated 20480 bytes (zero-initialized)
+[INFO ]
+[INFO ] Step 2: Copying PE headers...
+[INFO ]   Copied 0x200 (512) bytes of headers
+[INFO ]
+[INFO ] Step 3: Mapping sections into memory...
+[INFO ]
+[INFO ]   Section 0: .text
+[INFO ]     VirtualAddress (RVA): 0x1000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x200
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0x60000020
+[INFO ]     -> Copied 512 bytes from file offset 0x200 to RVA 0x1000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ]   Section 1: .data
+[INFO ]     VirtualAddress (RVA): 0x2000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x400
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0xc0000040
+[INFO ]     -> Copied 512 bytes from file offset 0x400 to RVA 0x2000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ]   Section 2: .rela
+[INFO ]     VirtualAddress (RVA): 0x3000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x600
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0x40000040
+[INFO ]     -> Copied 512 bytes from file offset 0x600 to RVA 0x3000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ]   Section 3: .reloc
+[INFO ]     VirtualAddress (RVA): 0x4000
+[INFO ]     VirtualSize: 0x1000 (4096 bytes)
+[INFO ]     PointerToRawData: 0x800
+[INFO ]     SizeOfRawData: 0x200 (512 bytes)
+[INFO ]     Characteristics: 0x40000040
+[INFO ]     -> Copied 512 bytes from file offset 0x800 to RVA 0x4000
+[INFO ]     -> BSS padding: 3584 bytes (already zero-initialized)
+[INFO ]
+[INFO ] Step 4: Setting load address and entry point...
+[INFO ]   Load address (ImageBase): 0x1fdab000
+[INFO ]   Entry point: 0x1fdad000
+[INFO ]
+[INFO ] Step 5: Validating entry point...
+[INFO ]   Entry point RVA 0x2000 is in section: .data
+[WARN ]   Section is executable: NO
+[WARN ]   This may be an EFI descriptor - checking for indirect entry point...
+[INFO ]
+[INFO ] Step 5.5: Checking for EFI indirect entry point...
+[INFO ]   Found value at entry point: 0x1000
+[INFO ]   ? This points to executable section: .text (RVA 0x1000)
+[INFO ]   Redirecting entry point to actual code location...
+[INFO ]   Descriptor global pointer: 0x1fdac234
+[WARN ] [EFI-MILESTONE] IA-64 entry descriptor GP=0x1fdac234 is outside SizeOfImage=0x5000; GP-relative loader data may resolve to unmapped zero memory. If EFI protocol GUID pointers are zero/out-of-image next, suspect relocation/GP data addressing before EFI file I/O.
+[INFO ]   New entry point: 0x1fdac000
+[INFO ]
+[INFO ] Step 6: Entry point memory dump...
+[INFO ]   Entry point RVA: 0x1000
+[INFO ]   First 32 bytes at entry point:
+[INFO ]     [0x001000] a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 aa ab ac ad ae af  |................|
+[INFO ]     [0x001010] b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf  |................|
+[INFO ]
+[INFO ]   IA-64 Bundle Analysis (first 16 bytes):
+[INFO ]     Template: 0x0
+[INFO ]     Slot 0: 0x12d251d150d
+[INFO ]     Slot 1: 0xaaa6a29e9a
+[INFO ]     Slot 2: 0x15f5d5b5957
+[INFO ]
+[INFO ] Step 7: Applying relocations...
+[INFO ]
+[INFO ] === Applying PE Relocations ===
+[INFO ] Load address: 0x1fdab000
+[INFO ] Image base: 0x0
+[INFO ] Relocation delta: 0x1fdab000
+[INFO ]
+[INFO ] Step 1: Checking for .reloc section (PE base relocations)...
+[INFO ]   Found .reloc section
+[INFO ]     VirtualAddress: 0x4000
+[INFO ]     Size: 4096 bytes
+[INFO ]   Relocation block at page 0x2000
+[INFO ]     [1] RVA 0x2000: 0x1000 -> 0x1fdac000
+[INFO ]     [2] RVA 0x2008: 0x1234 -> 0x1fdac234
+[INFO ]   Applied 2 PE base relocations
+[INFO ] [EFI-RELOC-AUDIT] PE found relocation types type=0xa count=2
+[INFO ] [EFI-RELOC-AUDIT] PE applied relocation types type=0xa count=2
+[INFO ] [EFI-RELOC-AUDIT] PE skipped relocation types none
+[INFO ] [EFI-RELOC-AUDIT] PE unsupported relocation types none
+[INFO ]
+[INFO ] Step 2: Preserving embedded .rela for IA-64 gnu-efi self-relocation...
+[INFO ]   .rela section retained without host-side writes
+[INFO ]
+[INFO ] === Relocations Applied Successfully ===
+[INFO ]
+[INFO ] === PE/COFF Image Loaded Successfully ===
+[INFO ] Total image size: 0x5000 (20480 bytes)
+[INFO ] Final entry point: 0x1fdac000
+[EFI-INITIAL-IMAGE] base=0x1fdab000 end=0x1fdb0000 preferred=0x0 pages=0x5 type=1 entry=0x1fdac000 entryRva=0x2000 relocationDelta=0x1fdab000 relocations=2 relocationErrors=0
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FDB1800 cfm=0x285 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:5,sor:0} rsePartitions={invalid:86,clean:0,dirty:5,current:5}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=12 size=0x1e0 key=2
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x9300,0x9400,0x9310,0x9318,0x9320,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? initial image uses allocated nonzero pages, mapped sections, PE-only host relocation, published LoaderCode metadata, and EFI map ownership
+
+Testing IA-64 EFI compatibility-mirror reservation...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0e00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x0 br0=0x0 br6=0x1FDB0E00 cfm=0x186 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:6,sol:3,sor:0} rsePartitions={invalid:90,clean:0,dirty:3,current:3}
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=11 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x100 end=0x200000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x200000 pages=0x5e end=0x25e000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x25e000 pages=0x1fb52 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-POOL] AllocatePool type=2 size=0x2010 pages=0x3 base=0x1fdad000 end=0x1fdb0000 mapKey=2
+[EFI-STUB] BootServices.AllocatePool size=0x2010 -> 0x1fdad000 via out=0x6020
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x0 args=[0x2,0x2010,0x6020,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x2 br0=0x5210 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0x5200 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=2 memoryType=2 pages=1 Memory=0x5000 input=0x200000 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x800000000000000e
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0x5200 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x2,0x2,0x1,0x5000,0x2010,0x1fdb0828] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5200 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x5200 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5100 r33=0x6000 br0=0x5210 br6=0x1FDB1800 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=12 size=0x1e0 key=2
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0x5200 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x5100,0x6000,0x5180,0x5188,0x5190,0x1fdb0828] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? mirror is page-aligned, serialized as EFI_MEMORY_RESERVED, and excluded from AllocatePool/AllocatePages
+
+Testing IA-64 EFI Boot Services table -> plabel -> stub dispatch...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x5040 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x1fdb0f00 resolvedCode=0x1fdb0f00 descriptorGp=0x238000 oldR1=0x1fdb0f00 newR1=0x238000 returnBR=b0 region=efi-table ip=0x5040 r1_gp=0x238000 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x2 br0=0x0 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0x5040 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=2 memoryType=2 pages=1 Memory=0x6000 input=0x2000000 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=9 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x1fcb0 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-ALLOCATEPAGES] success base=0x2000000 end=0x2000fff type=2 pages=1 mapKey=2 output=0x2000000
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x0
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0x5040 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x238000 args=[0x2,0x2,0x1,0x6000,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 0f db 1f 00 00 00 00 00 80 23 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5040 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x1fdb0f00 resolvedCode=0x1fdb0f00 descriptorGp=0x238000 oldR1=0x1fdb0f00 newR1=0x238000 returnBR=b0 region=efi-table ip=0x5040 r1_gp=0x238000 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2000000 r33=0x1 br0=0x5050 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:88,clean:0,dirty:8,current:0}
+[EFI-STUB] unsupported firmware service target 0x1fdb0f00 slot=0x1fdb0830 [BootServices.FreePages] -> EFI_UNSUPPORTED
+[EFI-CALL] service=BootServices.FreePages (unsupported) cycle=0x0 callerIP=0x5040 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x238000 args=[0x2000000,0x1,0x0,0x0,0x0,0x0] status=0x8000000000000003 (EFI_UNSUPPORTED) descriptorName="Unsupported descriptor" descriptorBytes=00 0f db 1f 00 00 00 00 00 80 23 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5040 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x1fdb1800 resolvedCode=0x1fdb1800 descriptorGp=0x238000 oldR1=0x1fdb1800 newR1=0x238000 returnBR=b0 region=efi-table ip=0x5040 r1_gp=0x238000 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x6100 r33=0x7000 br0=0x5050 br6=0x1FDB1800 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:88,clean:0,dirty:8,current:0}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=11 size=0x1b8 key=2
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0x5040 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x238000 args=[0x6100,0x7000,0x6120,0x6130,0x6140,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 18 db 1f 00 00 00 00 00 80 23 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5040 srcBR=b6 srcValue=0x1fdb0e00 target=0x1fdb0e00 interpretedAs=known-stub-code descriptor=0x1fdb0e40 readable=yes descriptorCode=0x1fdb0e00 resolvedCode=0x1fdb0e00 descriptorGp=0x238000 oldR1=0x1fdb0e00 newR1=0x238000 returnBR=b0 region=efi-table ip=0x5040 r1_gp=0x238000 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x20 br0=0x5050 br6=0x1FDB0E00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:88,clean:0,dirty:8,current:0}
+[EFI-POOL] AllocatePool type=2 size=0x20 pages=0x1 base=0x1fdaf000 end=0x1fdb0000 mapKey=3
+[EFI-STUB] BootServices.AllocatePool size=0x20 -> 0x1fdaf000 via out=0x6200
+[EFI-CALL] service=BootServices.AllocatePool cycle=0x0 callerIP=0x5040 descriptor=0x1fdb0e40 code=0x1fdb0e00 gp(r1)=0x238000 args=[0x2,0x20,0x6200,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="AllocatePool descriptor" descriptorBytes=00 0e db 1f 00 00 00 00 00 80 23 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x5040 srcBR=b6 srcValue=0x1fdb0f80 target=0x1fdb0f80 interpretedAs=known-stub-code descriptor=0x1fdb0fc0 readable=yes descriptorCode=0x1fdb0f80 resolvedCode=0x1fdb0f80 descriptorGp=0x238000 oldR1=0x1fdb0f80 newR1=0x238000 returnBR=b0 region=efi-table ip=0x5040 r1_gp=0x238000 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x1FDAF000 r33=0x0 br0=0x5050 br6=0x1FDB0F80 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:88,clean:0,dirty:8,current:0}
+[EFI-POOL] FreePool base=0x1fdaf000 end=0x1fdb0000 mapKey=4
+[EFI-CALL] service=BootServices.FreePool cycle=0x0 callerIP=0x5040 descriptor=0x1fdb0fc0 code=0x1fdb0f80 gp(r1)=0x238000 args=[0x1fdaf000,0x0,0x0,0x0,0x0,0x0] status=0x0 (EFI_SUCCESS) descriptorName="Success descriptor" descriptorBytes=80 0f db 1f 00 00 00 00 00 80 23 00 00 00 00 00
+  ? AllocatePages, FreePages, GetMemoryMap, AllocatePool, and FreePool preserve the historical field offsets and dispatch through IA-64 [code, GP] plabels
+
+Testing IA-64 plugin AllocatePages firmware service...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x2 br0=0x0 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=0 memoryType=2 pages=3 Memory=0x5000 input=0x0 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-MEMORY-MAP] initialized memory=0x20000000 descriptors=9 key=1
+[EFI-MEMORY-MAP] type=0 start=0x0 pages=0x100 end=0x100000 attributes=0xf
+[EFI-MEMORY-MAP] type=7 start=0x100000 pages=0x1fcb0 end=0x1fdb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb0000 pages=0x2 end=0x1fdb2000 attributes=0xf
+[EFI-MEMORY-MAP] type=13 start=0x1fdb2000 pages=0x1 end=0x1fdb3000 attributes=0x8
+[EFI-MEMORY-MAP] type=9 start=0x1fdb3000 pages=0x1 end=0x1fdb4000 attributes=0xf
+[EFI-MEMORY-MAP] type=10 start=0x1fdb4000 pages=0x1 end=0x1fdb5000 attributes=0xf
+[EFI-MEMORY-MAP] type=4 start=0x1fdb5000 pages=0x1fb end=0x1ffb0000 attributes=0xf
+[EFI-MEMORY-MAP] type=2 start=0x1ffb0000 pages=0x40 end=0x1fff0000 attributes=0xf
+[EFI-MEMORY-MAP] type=0 start=0x1fff0000 pages=0x10 end=0x20000000 attributes=0xf
+[EFI-ALLOCATEPAGES] success base=0x1fdad000 end=0x1fdaffff type=2 pages=3 mapKey=2 output=0x1fdad000
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x0
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x0,0x2,0x3,0x5000,0x0,0x1fdb0828] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5100 r33=0x6000 br0=0xA220 br6=0x1FDB1800 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=10 size=0x190 key=2
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0xa210 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x5100,0x6000,0x5180,0x5188,0x5190,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=0 memoryType=2 pages=2 Memory=0x5010 input=0x0 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-ALLOCATEPAGES] success base=0x1fdab000 end=0x1fdacfff type=2 pages=2 mapKey=3 output=0x1fdab000
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x0
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x0,0x2,0x2,0x5010,0x5190,0x1fdb0828] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5100 r33=0x6000 br0=0xA220 br6=0x1FDB1800 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=10 size=0x190 key=3
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0xa210 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x5100,0x6000,0x5180,0x5188,0x5190,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x1 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=1 memoryType=2 pages=6 Memory=0x5020 input=0x1f1000f inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-ALLOCATEPAGES] success base=0x1f0a000 end=0x1f0ffff type=2 pages=6 mapKey=4 output=0x1f0a000
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x0
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x1,0x2,0x6,0x5020,0x5190,0x1fdb0828] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x4 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=2 memoryType=4 pages=2 Memory=0x5030 input=0x2000000 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-ALLOCATEPAGES] success base=0x2000000 end=0x2001fff type=4 pages=2 mapKey=5 output=0x2000000
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x0
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x2,0x4,0x2,0x5030,0x5190,0x1fdb0828] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x1 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=1 memoryType=2 pages=1 Memory=0x5040 input=0x100fff inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-ALLOCATEPAGES] success base=0x100000 end=0x100fff type=2 pages=1 mapKey=6 output=0x100000
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x0
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x1,0x2,0x1,0x5040,0x5190,0x1fdb0828] status=0x0 (EFI_SUCCESS) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5100 r33=0x6000 br0=0xA220 br6=0x1FDB1800 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=15 size=0x258 key=6
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0xa210 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x5100,0x6000,0x5180,0x5188,0x5190,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=0 memoryType=2 pages=1 Memory=0x20000000 input=0x0 inputReadable=no inputAccess=bounds=oob read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x8000000000000002
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x0,0x2,0x1,0x20000000,0x5190,0x1fdb0828] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb1800 target=0x1fdb1800 interpretedAs=known-stub-code descriptor=0x1fdb1840 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb1800 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x5100 r33=0x6000 br0=0xA220 br6=0x1FDB1800 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-MILESTONE] GetMemoryMap returned descriptors=15 size=0x258 key=6
+[EFI-CALL] service=BootServices.GetMemoryMap cycle=0x0 callerIP=0xa210 descriptor=0x1fdb1840 code=0x1fdb1800 gp(r1)=0x0 args=[0x5100,0x6000,0x5180,0x5188,0x5190,0x0] status=0x0 (EFI_SUCCESS) descriptorName="BootServices.GetMemoryMap descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x3 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=3 memoryType=2 pages=1 Memory=0x5050 input=0x0 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x8000000000000002
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x3,0x2,0x1,0x5050,0x5190,0x1fdb0828] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x7 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=0 memoryType=7 pages=1 Memory=0x5060 input=0x0 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x8000000000000002
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x0,0x7,0x1,0x5060,0x5190,0x1fdb0828] status=0x8000000000000002 (EFI_INVALID_PARAMETER) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x0 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=0 memoryType=2 pages=0 Memory=0x5070 input=0x0 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x800000000000000e
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x0,0x2,0x0,0x5070,0x5190,0x1fdb0828] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x2 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=2 memoryType=2 pages=1 Memory=0x5080 input=0x1fe00000 inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x800000000000000e
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x2,0x2,0x1,0x5080,0x5190,0x1fdb0828] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x1 r33=0x2 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:89,clean:0,dirty:7,current:0}
+[EFI-ALLOCATEPAGES] cycle=0x0 callerIP=0xa210 stack=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 type=1 memoryType=2 pages=1 Memory=0x5090 input=0xfff inputReadable=yes inputAccess=bounds=in read=unknown write=unknown
+[EFI-STUB] firmware service target 0x1fdb0f00 slot=0x1fdb0828 [BootServices.AllocatePages] -> status=0x800000000000000e
+[EFI-CALL] service=BootServices.AllocatePages cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x1,0x2,0x1,0x5090,0x5190,0x1fdb0828] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? AllocateAny/Max/Address split one shared EFI map, update MapKey, reject invalid pointers/constraints, and preserve reserved ranges
+
+Testing IA-64 plugin BootServices TPL pair semantics...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x8 r33=0x0 br0=0x0 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:93,clean:0,dirty:2,current:1}
+[EFI-STUB] BootServices.RaiseTPL NewTpl=0x8 PreviousTpl=0x4
+[EFI-CALL] service=BootServices.RaiseTPL cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x8,0x0,0x0,0x0,0x0,0x1fdb0818] status=0x4 (EFI_STATUS_UNKNOWN) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0x4 r12_sp=0x0 r32=0x10 r33=0x0 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:3,current:1}
+[EFI-STUB] BootServices.RaiseTPL NewTpl=0x10 PreviousTpl=0x8
+[EFI-CALL] service=BootServices.RaiseTPL cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x10,0x0,0x0,0x0,0x0,0x1fdb0818] status=0x8 (EFI_STATUS_UNKNOWN) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x8 r33=0x0 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:3,current:1}
+[EFI-CALL] service=BootServices.RestoreTPL callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x8,0x0,0x0,0x0,0x0,0x1fdb0820] return=void descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x10 r33=0x0 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:3,current:1}
+[EFI-STUB] BootServices.RaiseTPL NewTpl=0x10 PreviousTpl=0x8
+[EFI-CALL] service=BootServices.RaiseTPL cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x10,0x0,0x0,0x0,0x0,0x1fdb0818] status=0x8 (EFI_STATUS_UNKNOWN) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x4 r33=0x0 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:3,current:1}
+[EFI-CALL] service=BootServices.RestoreTPL callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x4,0x0,0x0,0x0,0x0,0x1fdb0820] return=void descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0xa210 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x0 resolvedCode=0x1fdb0f00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0xA210 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x8 r33=0x0 br0=0xA220 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:3,current:1}
+[EFI-STUB] BootServices.RaiseTPL NewTpl=0x8 PreviousTpl=0x4
+[EFI-CALL] service=BootServices.RaiseTPL cycle=0x0 callerIP=0xa210 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x0 args=[0x8,0x0,0x0,0x0,0x0,0x1fdb0818] status=0x4 (EFI_STATUS_UNKNOWN) descriptorName="Unsupported descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? RaiseTPL/RestoreTPL preserve VOID return registers, isolate unrelated state, and implement 4 -> 8 -> 16 -> 8 -> 4
+
+Testing IA-64 plugin TPL dispatch from a loaded Boot Services field...
+[EFI-MILESTONE] IA-64 EFI handoff layout configured guestMemorySize=0x20000000 base=0x1fdb0000 end=0x1ffb0000 loadedImage=0x1fdb0d00 filePath=0x1fdb1300
+[IA64-DESC] indirect br.call callerIP=0x5010 srcBR=b6 srcValue=0x1fdb0f00 target=0x1fdb0f00 interpretedAs=known-stub-code descriptor=0x1fdb0f40 readable=yes descriptorCode=0x1fdb0f00 resolvedCode=0x1fdb0f00 descriptorGp=0x238000 oldR1=0x0 newR1=0x238000 returnBR=b0 region=efi-table ip=0x5010 r1_gp=0x238000 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x4 r33=0x0 br0=0x0 br6=0x1FDB0F00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:3,current:1}
+[EFI-CALL] service=BootServices.RestoreTPL callerIP=0x5010 descriptor=0x1fdb0f40 code=0x1fdb0f00 gp(r1)=0x238000 args=[0x4,0x0,0x0,0x0,0x0,0x1234] return=void descriptorName="Unsupported descriptor" descriptorBytes=00 0f db 1f 00 00 00 00 00 80 23 00 00 00 00 00
+  ? RestoreTPL dispatch follows the loaded EFI_BOOT_SERVICES+0x20 field, not an IP or argument-register guess, and preserves VOID r8
+
+Testing IA-64 plugin SetMem firmware stub...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x3e40 srcBR=b6 srcValue=0x1fe01a00 target=0x1fe01a00 interpretedAs=invalid descriptor=0x1fe01a40 readable=no descriptorCode=0x0 resolvedCode=0x1fe01a00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x3E40 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x5004 r33=0x7 br0=0x0 br6=0x1FE01A00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:93,clean:0,dirty:3,current:0}
+[EFI-STUB] BootServices.SetMem Buffer=0x5004 Size=0x7 Value=0xa5 valid=yes completed=yes memorySize=0x10000
+[EFI-CALL] service=BootServices.SetMem callerIP=0x3e40 descriptor=0x1fe01a40 code=0x1fe01a00 gp(r1)=0x0 args=[0x5004,0x7,0xa5,0x0,0x0,0x0] return=void descriptorName="BootServices.SetMem descriptor" descriptorBytes=<unreadable>
+[IA64-DESC] indirect br.call callerIP=0x3e40 srcBR=b6 srcValue=0x1fe01a00 target=0x1fe01a00 interpretedAs=invalid descriptor=0x1fe01a40 readable=no descriptorCode=0x0 resolvedCode=0x1fe01a00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x3E40 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0xFFFF00000000 r33=0x0 br0=0x3E50 br6=0x1FE01A00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:4,current:0}
+[EFI-STUB] BootServices.SetMem Buffer=0xffff00000000 Size=0x0 Value=0x0 valid=yes completed=yes memorySize=0x10000
+[EFI-CALL] service=BootServices.SetMem callerIP=0x3e40 descriptor=0x1fe01a40 code=0x1fe01a00 gp(r1)=0x0 args=[0xffff00000000,0x0,0x0,0x0,0x0,0x0] return=void descriptorName="BootServices.SetMem descriptor" descriptorBytes=<unreadable>
+[IA64-DESC] indirect br.call callerIP=0x3e40 srcBR=b6 srcValue=0x1fe01a00 target=0x1fe01a00 interpretedAs=invalid descriptor=0x1fe01a40 readable=no descriptorCode=0x0 resolvedCode=0x1fe01a00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x3E40 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0x5004 r33=0x7 br0=0x3E50 br6=0x1FE01A00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:4,current:0}
+[EFI-STUB] BootServices.SetMem Buffer=0x5004 Size=0x7 Value=0x0 valid=yes completed=yes memorySize=0x10000
+[EFI-CALL] service=BootServices.SetMem callerIP=0x3e40 descriptor=0x1fe01a40 code=0x1fe01a00 gp(r1)=0x0 args=[0x5004,0x7,0x0,0x0,0x0,0x0] return=void descriptorName="BootServices.SetMem descriptor" descriptorBytes=<unreadable>
+[IA64-DESC] indirect br.call callerIP=0x3e40 srcBR=b6 srcValue=0x1fe01a00 target=0x1fe01a00 interpretedAs=invalid descriptor=0x1fe01a40 readable=no descriptorCode=0x0 resolvedCode=0x1fe01a00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x3E40 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0xFFFC r33=0x4 br0=0x3E50 br6=0x1FE01A00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:4,current:0}
+[EFI-STUB] BootServices.SetMem Buffer=0xfffc Size=0x4 Value=0x5a valid=yes completed=yes memorySize=0x10000
+[EFI-CALL] service=BootServices.SetMem callerIP=0x3e40 descriptor=0x1fe01a40 code=0x1fe01a00 gp(r1)=0x0 args=[0xfffc,0x4,0x5a,0x0,0x0,0x0] return=void descriptorName="BootServices.SetMem descriptor" descriptorBytes=<unreadable>
+[IA64-DESC] indirect br.call callerIP=0x3e40 srcBR=b6 srcValue=0x1fe01a00 target=0x1fe01a00 interpretedAs=invalid descriptor=0x1fe01a40 readable=no descriptorCode=0x0 resolvedCode=0x1fe01a00 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x3E40 r1_gp=0x0 r8_ret=0x1122334455667788 r12_sp=0x0 r32=0xFFFE r33=0x4 br0=0x3E50 br6=0x1FE01A00 cfm=0x2 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:2,sol:0,sor:0} rsePartitions={invalid:92,clean:0,dirty:4,current:0}
+[EFI-STUB] BootServices.SetMem Buffer=0xfffe Size=0x4 Value=0x7e valid=no completed=no memorySize=0x10000
+[EFI-CALL] service=BootServices.SetMem callerIP=0x3e40 descriptor=0x1fe01a40 code=0x1fe01a00 gp(r1)=0x0 args=[0xfffe,0x4,0x7e,0x0,0x0,0x0] return=void descriptorName="BootServices.SetMem descriptor" descriptorBytes=<unreadable>
+  ? SetMem fills exactly, preserves r8 for VOID, handles zero-size, boundary, and invalid ranges
+
+Testing IA-64 plugin GetVariable firmware stub...
+[IA64-DESC] indirect br.call callerIP=0x2ee50 srcBR=b6 srcValue=0x1fe00d80 target=0x1fe00d80 interpretedAs=known-stub-code descriptor=0x1fe00dc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00d80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x2EE50 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x6000 r33=0x7000 br0=0x0 br6=0x1FE00D80 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-STUB] RuntimeServices.GetVariable callerIP=0x2ee50 slot=0 namePtr=0x6000 nameAscii="NoSuch" nameUtf16="NoSuch" nameCodeUnits=[004e 006f 0053 0075 0063 0068 0000] guidPtr=0x7000 guidBytes=[61 df e4 8b ca 93 d2 11 aa 0d 00 e0 98 03 2b 8c] guid=[61:df:e4:8b:ca:93:d2:11:aa:0d:00:e0:98:03:2b:8c] attrOut=0x9000 attrAccess={bounds=unknown read=unknown write=unknown} attrBefore=0xcafebabe attrAfter=0xcafebabe sizeOut=0x8000 sizeAccess={bounds=unknown read=unknown write=unknown} sizeBefore=0x1234 sizeAfter=0x1234 dataOut=0xa000 dataAccess={bounds=unknown read=unknown write=unknown} required=0x0 wroteSize=no wroteAttr=no wroteData=no status=0x800000000000000e (EFI_NOT_FOUND)
+[EFI-CALL] service=RuntimeServices.GetVariable cycle=0x0 callerIP=0x2ee50 descriptor=0x1fe00dc0 code=0x1fe00d80 gp(r1)=0x0 args=[0x6000,0x7000,0x9000,0x8000,0xa000,0x0] status=0x800000000000000e (EFI_NOT_FOUND) descriptorName="GetVariable descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x2ee50 srcBR=b6 srcValue=0x1fe00d80 target=0x1fe00d80 interpretedAs=known-stub-code descriptor=0x1fe00dc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00d80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x2EE50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x6000 r33=0x7000 br0=0x0 br6=0x1FE00D80 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-STUB] RuntimeServices.GetVariable callerIP=0x2ee50 slot=0 namePtr=0x6000 nameAscii="BootCurrent" nameUtf16="BootCurrent" nameCodeUnits=[0042 006f 006f 0074 0043 0075 0072 0072 0065 006e 0074 0000] guidPtr=0x7000 guidBytes=[61 df e4 8b ca 93 d2 11 aa 0d 00 e0 98 03 2b 8c] guid=[61:df:e4:8b:ca:93:d2:11:aa:0d:00:e0:98:03:2b:8c] attrOut=0x9000 attrAccess={bounds=unknown read=unknown write=unknown} attrBefore=0x0 attrAfter=0x7 sizeOut=0x8000 sizeAccess={bounds=unknown read=unknown write=unknown} sizeBefore=0x2 sizeAfter=0x2 dataOut=0xa000 dataAccess={bounds=unknown read=unknown write=unknown} required=0x2 wroteSize=yes wroteAttr=yes wroteData=yes status=0x0 (EFI_SUCCESS)
+[EFI-CALL] service=RuntimeServices.GetVariable cycle=0x0 callerIP=0x2ee50 descriptor=0x1fe00dc0 code=0x1fe00d80 gp(r1)=0x0 args=[0x6000,0x7000,0x9000,0x8000,0xa000,0x0] status=0x0 (EFI_SUCCESS) descriptorName="GetVariable descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x2ee50 srcBR=b6 srcValue=0x1fe00d80 target=0x1fe00d80 interpretedAs=known-stub-code descriptor=0x1fe00dc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00d80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x2EE50 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x6000 r33=0x7000 br0=0x0 br6=0x1FE00D80 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-STUB] RuntimeServices.GetVariable callerIP=0x2ee50 slot=0 namePtr=0x6000 nameAscii="Boot0000" nameUtf16="Boot0000" nameCodeUnits=[0042 006f 006f 0074 0030 0030 0030 0030 0000] guidPtr=0x7000 guidBytes=[61 df e4 8b ca 93 d2 11 aa 0d 00 e0 98 03 2b 8c] guid=[61:df:e4:8b:ca:93:d2:11:aa:0d:00:e0:98:03:2b:8c] attrOut=0x0 attrAccess={null} sizeOut=0x8000 sizeAccess={bounds=unknown read=unknown write=unknown} sizeBefore=0x0 sizeAfter=0x62 dataOut=0x0 dataAccess={null} required=0x62 wroteSize=yes wroteAttr=no wroteData=no status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL)
+[EFI-CALL] service=RuntimeServices.GetVariable cycle=0x0 callerIP=0x2ee50 descriptor=0x1fe00dc0 code=0x1fe00d80 gp(r1)=0x0 args=[0x6000,0x7000,0x0,0x8000,0x0,0x0] status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL) descriptorName="GetVariable descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x2ee50 srcBR=b6 srcValue=0x1fe00d80 target=0x1fe00d80 interpretedAs=known-stub-code descriptor=0x1fe00dc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00d80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x2EE50 r1_gp=0x0 r8_ret=0xFFFFFFFFFFFFFFFF r12_sp=0x0 r32=0x6000 r33=0x7000 br0=0x0 br6=0x1FE00D80 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-STUB] RuntimeServices.GetVariable callerIP=0x2ee50 slot=0 namePtr=0x6000 nameAscii="PlatformLang" nameUtf16="PlatformLang" nameCodeUnits=[0050 006c 0061 0074 0066 006f 0072 006d 004c 0061 006e 0067 0000] guidPtr=0x7000 guidBytes=[61 df e4 8b ca 93 d2 11 aa 0d 00 e0 98 03 2b 8c] guid=[61:df:e4:8b:ca:93:d2:11:aa:0d:00:e0:98:03:2b:8c] attrOut=0x9000 attrAccess={bounds=unknown read=unknown write=unknown} attrBefore=0x0 attrAfter=0x7 sizeOut=0x8000 sizeAccess={bounds=unknown read=unknown write=unknown} sizeBefore=0x6 sizeAfter=0x6 dataOut=0xa000 dataAccess={bounds=unknown read=unknown write=unknown} required=0x6 wroteSize=yes wroteAttr=yes wroteData=yes status=0x0 (EFI_SUCCESS)
+[EFI-CALL] service=RuntimeServices.GetVariable cycle=0x0 callerIP=0x2ee50 descriptor=0x1fe00dc0 code=0x1fe00d80 gp(r1)=0x0 args=[0x6000,0x7000,0x9000,0x8000,0xa000,0x0] status=0x0 (EFI_SUCCESS) descriptorName="GetVariable descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+[IA64-DESC] indirect br.call callerIP=0x1b00 srcBR=b6 srcValue=0x1fe00d80 target=0x1fe00d80 interpretedAs=known-stub-code descriptor=0x1fe00dc0 readable=yes descriptorCode=0x0 resolvedCode=0x1fe00d80 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=efi-table ip=0x1B00 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x6000 r33=0x7000 br0=0x0 br6=0x1FE00D80 cfm=0x5 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:5,sol:0,sor:0} rsePartitions={invalid:91,clean:0,dirty:5,current:0}
+[EFI-STUB] RuntimeServices.GetVariable callerIP=0x1b00 slot=0 namePtr=0x6000 nameAscii="P" nameUtf16="P" nameCodeUnits=[0050 0000] guidPtr=0x7000 guidBytes=[61 df e4 8b ca 93 d2 11 aa 0d 00 e0 98 03 2b 8c] guid=[61:df:e4:8b:ca:93:d2:11:aa:0d:00:e0:98:03:2b:8c] attrOut=0x0 attrAccess={null} sizeOut=0x8000 sizeAccess={bounds=unknown read=unknown write=unknown} sizeBefore=0x1 sizeAfter=0x6 dataOut=0xa000 dataAccess={bounds=unknown read=unknown write=unknown} required=0x6 wroteSize=yes wroteAttr=no wroteData=no status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL)
+[EFI-CALL] service=RuntimeServices.GetVariable cycle=0x0 callerIP=0x1b00 descriptor=0x1fe00dc0 code=0x1fe00d80 gp(r1)=0x0 args=[0x6000,0x7000,0x0,0x8000,0xa000,0x0] status=0x8000000000000005 (EFI_BUFFER_TOO_SMALL) descriptorName="GetVariable descriptor" descriptorBytes=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  ? GetVariable handles unknown variables, boot variables, and language probes
+
+Testing IA-64 plugin top-level EFI return handling...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[EFI-STUB] top-level br.ret b0 reached zero return address; halting EFI app
+[EFI-MILESTONE] EFI app returned before kernel handoff; ConsoleOut.OutputString calls=0, mirroredToVmConsole=0, mirroredToFramebuffer=0, SimpleFS.OpenVolume calls=0, SimpleFS.HandleProtocol returns=0, genericSuccessServices=0, genericUnsupportedServices=0, zeroGuidHandleProtocolCalls=0, HandleProtocol=0, LocateHandle=0, LocateProtocol=0, GetMemoryMap=0, ExitBootServices=0, AllocatePool=0, AllocatePages=0, FreePages=0, FreePool=0, CopyMem=0, LoadImage=0, StartImage=0, SetMem=0, File.Open=0, File.Read=0, File.GetInfo=0, File.Close=0, File.SetPosition=0, File.GetPosition=0, ReadKeyStroke=0 (EFI_NOT_READY=0, EFI_SUCCESS=0), ReadKeyStrokeEx=0 (EFI_NOT_READY=0, EFI_SUCCESS=0), WaitForEvent=0, CheckEvent=0, totalFileBytesRead=0x0, descriptorCalls=0, gpSwitches=0, suspiciousGP=0, unknownRegionCalls=0, recoveredLoadStores=0. Missing next milestone: kernel handoff; if OpenVolume remains 0, the loader is returning before firmware file/block I/O begins; if SimpleFS.HandleProtocol is nonzero while OpenVolume is zero, the fork is after protocol lookup and before volume open, usually LoadedImage FilePath/LoadOptions or device-path parsing; if zeroGuidHandleProtocolCalls is nonzero, protocol GUID data/addressing is suspect before device-path/file I/O.
+  ? br.ret b0 with zero return address halts cleanly
+
+Testing IA-64 plugin out-of-bounds load fault state...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+Error executing instruction at IP=0x1000 Slot=0 raw=0xbadf00d disasm="ld8 r14 = [r8], 8": Memory address 0xffff00000004 out of bounds (size: 0x10000)
+[IA64-MEM-RECOVERY] ip=0x1000 type="ld8 r14 = [r8], 8" targetAddress=0xffff00000004 targetRegister=r14 gp(r1)=0x0 lastEfiCall="" lastEfiIP=0x0 lastDescriptor=0x0 lastDescriptorCode=0x0 lastDescriptorGp=0x0 branchHistory=[] addressHint=totally-invalid strictRecovery=on
+[IA64-FAULT-HISTORY] ip=0x1000 slot=0 disasm="ld8 r14 = [r8], 8" baseBefore=0xffff00000004 r1=0x0 r12=0x0 r14=0xdeadbeefcafebabe r16=0x0 r17=0x0 r18=0x0 r19=0x0 r21=0x0 r22=0x0 r32=0x0 r33=0x0 r34=0x0 r35=0x0 p6=0 p7=0 ar.k7=0x0 cr.ifa=0x0 cr.itir=0x0 psr=0x100000000000
+[IA64-FAULT-HISTORY] recent-instructions: <empty>
+[IA64-FAULT-HISTORY] recent-translation-register-writes: <empty>
+Execution error: Memory address 0xffff00000004 out of bounds (size: 0x10000)
+  ? failed ld8 reports an exception without committing destination, post-increment, or IP
+
+Testing IA-64 plugin out-of-bounds probe load fault state...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+Error executing instruction at IP=0x2000 Slot=0 raw=0x8080e003c0 disasm="ld4 r15 = [r14]": Memory address 0x685421cd4c01b829 out of bounds (size: 0x10000)
+[IA64-MEM-RECOVERY] ip=0x2000 type="ld4 r15 = [r14]" targetAddress=0x685421cd4c01b829 targetRegister=r15 gp(r1)=0x0 lastEfiCall="" lastEfiIP=0x0 lastDescriptor=0x0 lastDescriptorCode=0x0 lastDescriptorGp=0x0 branchHistory=[] addressHint=looks-like-packed-utf16 strictRecovery=on
+[IA64-FAULT-HISTORY] ip=0x2000 slot=0 disasm="ld4 r15 = [r14]" baseBefore=0x685421cd4c01b829 r1=0x0 r12=0x0 r14=0x685421cd4c01b829 r16=0x0 r17=0x0 r18=0x0 r19=0x0 r21=0x0 r22=0x0 r32=0x0 r33=0x0 r34=0x0 r35=0x0 p6=0 p7=0 ar.k7=0x0 cr.ifa=0x0 cr.itir=0x0 psr=0x100000000000
+[IA64-FAULT-HISTORY] recent-instructions: <empty>
+[IA64-FAULT-HISTORY] recent-translation-register-writes: <empty>
+Execution error: Memory address 0x685421cd4c01b829 out of bounds (size: 0x10000)
+  ? failed probe load reports an exception without changing the base, destination, or IP
+
+Testing IA-64 plugin indirect self-call execution...
+[EFI-MILESTONE] Unable to place IA-64 EFI handoff region safely; falling back to default fixed layout guestMemorySize=0x10000 requestedRegionSpan=0x200000 defaultBase=0x1fe00000
+[IA64-DESC] indirect br.call callerIP=0x1a50 srcBR=b0 srcValue=0x2400 target=0x2400 interpretedAs=invalid descriptor=0x2400 readable=no descriptorCode=0x0 resolvedCode=0x2400 descriptorGp=0x0 oldR1=0x0 newR1=0x0 returnBR=b0 region=image-or-guest ip=0x1A50 r1_gp=0x0 r8_ret=0x0 r12_sp=0x0 r32=0x0 r33=0x0 br0=0x2400 br6=0x0 cfm=0x0 psr=0x100000000000 rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0 bspLoad=0x0 rseRing={bof:0,store:0,load:0,sof:0,sol:0,sor:0} rsePartitions={invalid:96,clean:0,dirty:0,current:0}
+  ? plugin br.call b0 = b0 branches through old b0 and links return
+
+Testing IA-64 CPU wrapper delegates state to plugin...
+  ? CPU wrapper register/IP access reaches plugin state
+
+Testing IA-64 memory post-increment execution...
+  ? ld/st immediate forms update the base register after access
+
+Testing IA-64 M-unit boot load/store decode...
+  ? boot M-unit rows distinguish normal stores, normal loads, and immediate-update loads
+
+Testing IA-64 I-unit extend decode...
+  ? extend opcodes decode as SXT4 and ZXT4 instead of UNKNOWN
+
+Testing state dump...
+  ? State dump:
+IA-64 CPU State:
+  IP: 0x5678
+  CFM: 0x0
+  RSE: rsc=0x0 bsp=0x0 bspstore=0x0 rnat=0x0 pfs=0x0
+  PSR: 0x100000000000
+  General Registers:
+    GR0: 0x0
+    GR1: 0x1234
+    GR2: 0x0
+    GR3: 0x0
+    GR4: 0x0
+    GR5: 0x0
+    GR6: 0x0
+    GR7: 0x0
+  Bundle State:
+    Slot: 0
+    Valid: no
+  Interrupts:
+    Pending: 0
+    Vector Base: 0x0
+
+
+Testing shared memory across ISAs...
+  ? Memory is shared across ISAs
+    Wrote: 0xdeadbeefcafebabe
+    Read:  0xdeadbeefcafebabe
+
+
+=== All tests passed! ===

@@ -1,0 +1,11 @@
+PASS offset-zero-first-bit: result=0
+PASS offset-at-size: result=0
+PASS offset-past-size: result=8
+PASS word-boundary: result=64
+PASS inside-word: result=63
+PASS last-partial-word: result=129
+PASS no-set-bit-in-range: result=8
+PASS first-at-offset: result=65
+PASS last-valid-position: result=126
+PASS mask-outside-size: result=129
+PASS synthetic-vectors: 10
