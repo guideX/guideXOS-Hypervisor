@@ -81,6 +81,7 @@ constexpr uint8_t kFnJr = 0x08;
 constexpr uint8_t kFnJalr = 0x09;
 constexpr uint8_t kFnSyscall = 0x0C;
 constexpr uint8_t kFnBreak = 0x0D;
+constexpr uint8_t kFnSync = 0x0F;
 constexpr uint8_t kFnTne = 0x36;
 constexpr uint8_t kFnMfhi = 0x10;
 constexpr uint8_t kFnMthi = 0x11;
@@ -277,6 +278,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
     decoded.rt = static_cast<uint8_t>((word >> 16) & 0x1F);
     decoded.rd = static_cast<uint8_t>((word >> 11) & 0x1F);
     decoded.sa = static_cast<uint8_t>((word >> 6) & 0x1F);
+    decoded.stype = decoded.sa;
     decoded.sel = static_cast<uint8_t>(word & 0x7U);
     decoded.code = static_cast<uint16_t>((word >> 6) & 0x3FFU);
     decoded.imm = static_cast<uint16_t>(word & 0xFFFF);
@@ -347,6 +349,21 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                     break;
                 case kFnSyscall: mapped = Mips64Op::Syscall; break;
                 case kFnBreak: mapped = Mips64Op::Break; break;
+                case kFnSync:
+                    // SYNC fixes rs, rt, and rd to zero. Bits 10:6 are the
+                    // stype field, which MIPS64r2 reserves for future variants.
+                    if (decoded.rs != 0 || decoded.rt != 0 || decoded.rd != 0) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved SYNC register fields must be zero");
+                    }
+                    if (decoded.stype != 0) {
+                        // Keep this recognized as the SYNC family, but do not
+                        // guess the semantics of a future synchronization type.
+                        return fail(Mips64Op::Sync, Mips64Fault::UnsupportedInstruction,
+                                    "SYNC stype is reserved for a future architectural extension");
+                    }
+                    mapped = Mips64Op::Sync;
+                    break;
                 case kFnTne: mapped = Mips64Op::Tne; break;
                 case kFnMfhi: mapped = Mips64Op::Mfhi; break;
                 case kFnMthi: mapped = Mips64Op::Mthi; break;
@@ -1681,6 +1698,19 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             // The in-order interpreter serializes architectural state at
             // every instruction boundary, so EHB has no deferred work.
             break;
+        case Mips64Op::Sync:
+            if (decoded.stype != 0) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "SYNC stype is reserved for a future architectural extension");
+                return Mips64StepResult::Fault;
+            }
+            // stype 0 orders all synchronizable memory transactions. The
+            // supported interpreter completes each load/store inline before
+            // retiring it; the VM schedules one CPU instruction at a time,
+            // and no guest write queue or deferred RAM transaction exists to
+            // drain here. This named architectural barrier is therefore
+            // already satisfied by the memory-execution contract below.
+            break;
         case Mips64Op::Mult: {
             const int64_t lhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rs))));
             const int64_t rhs = static_cast<int64_t>(static_cast<int32_t>(low32(readGpr(decoded.rt))));
@@ -2429,6 +2459,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
     char buffer[128];
     const char* name = opName(decoded.op);
     if (!decoded.valid) {
+        if (decoded.op == Mips64Op::Sync) {
+            std::snprintf(buffer, sizeof(buffer), "sync %u",
+                          static_cast<unsigned>(decoded.stype));
+            return std::string(buffer);
+        }
         std::snprintf(buffer, sizeof(buffer), "<invalid: %s>",
                       decoded.error.empty() ? "unknown" : decoded.error.c_str());
         return std::string(buffer);
@@ -2583,6 +2618,7 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
         case Mips64Op::Tlbwi:
         case Mips64Op::Tlbwr:
         case Mips64Op::Ehb:
+        case Mips64Op::Sync:
             std::snprintf(buffer, sizeof(buffer), "%s", name);
             break;
         case Mips64Op::Tne:
@@ -3186,6 +3222,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Sllv: return "sllv";
         case Mips64Op::Dext: return "dext";
         case Mips64Op::Dextm: return "dextm";
+        case Mips64Op::Sync: return "sync";
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
         case Mips64Op::Dsll32: return "dsll32";

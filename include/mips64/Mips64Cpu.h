@@ -452,6 +452,9 @@ enum class Mips64Op : uint8_t {
     // MIPS64 Release 2 doubleword extraction for fields wider than 32 bits.
     // Appended to preserve every existing serialized/debug operation value.
     Dextm,
+    // MIPS64 shared-memory completion barrier. Appended to retain all prior
+    // operation values used by diagnostics and tests.
+    Sync,
 };
 
 struct Mips64ReservationState {
@@ -472,6 +475,7 @@ struct Mips64Decoded {
     uint8_t rt = 0;
     uint8_t rd = 0;      // DEXT: msbd; DEXTM: msbdminus32, not a GPR
     uint8_t sa = 0;      // DEXT/DEXTM interpret bits 10:6 as position
+    uint8_t stype = 0;   // SYNC synchronization type (bits 10:6)
     uint8_t sel = 0;     // COP0 selector (bits 2:0) for MFC0/MTC0 family
     uint16_t code = 0;   // SPECIAL Trap software code (bits 15:6)
     uint16_t imm = 0;

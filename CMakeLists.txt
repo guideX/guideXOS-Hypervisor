@@ -1317,3 +1317,18 @@ else()
     target_compile_options(test_mips64_dextm PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64DextmTests COMMAND test_mips64_dextm)
+
+# MIPS64-26 explicit shared-memory barrier qualification and Linux continuation.
+add_executable(test_mips64_sync
+    tests/test_mips64_sync.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_sync PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_sync PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_sync PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64SyncTests COMMAND test_mips64_sync)
