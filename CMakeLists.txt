@@ -1254,7 +1254,7 @@ add_test(NAME RiscVLinuxConsoleContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv22-artifacts/riscv21-reproduction/$<CONFIG>"
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv23-artifacts/riscv21-reproduction/$<CONFIG>"
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH})
 
@@ -1273,7 +1273,28 @@ add_test(NAME RiscVLinuxBootContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv22-artifacts/$<CONFIG>"
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv23-artifacts/riscv22-reproduction/$<CONFIG>"
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_CONFIG_PATH}
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv21-artifacts/Release/riscv21-linux-s-mode-uart0-retained.bin")
+
+add_executable(test_riscv_linux_allocator_continuation
+    tests/test_riscv_linux_image_entry.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_allocator_continuation
+    PRIVATE RISCV_LINUX_STARTUP_CONTINUATION=1
+            RISCV_LINUX_CONSOLE_CONTINUATION=1
+            RISCV_LINUX_BOOT_CONTINUATION=1
+            RISCV_LINUX_ALLOCATOR_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_allocator_continuation PRIVATE bcrypt)
+add_test(NAME RiscVLinuxAllocatorContinuationTests
+         COMMAND test_riscv_linux_allocator_continuation
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_DTB_COPY}
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv23-artifacts/$<CONFIG>"
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH}
                  "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv21-artifacts/Release/riscv21-linux-s-mode-uart0-retained.bin")
@@ -1292,6 +1313,7 @@ foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_startup_continuation
                                 test_riscv_linux_console_continuation
                                 test_riscv_linux_boot_continuation
+                                test_riscv_linux_allocator_continuation
                                 test_riscv_linux_trap_continuation)
     if(MSVC)
         target_compile_options(${riscv18_target} PRIVATE /W4)

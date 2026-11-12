@@ -432,11 +432,87 @@ struct LinuxStage {
     uint64_t newSupervisorTimerInterrupts = 0;
     uint64_t newMmioEvents = 0;
     uint64_t newUartBytes = 0;
+    uint64_t newAllocatorEntries = 0;
+    uint64_t newAllocatorReturns = 0;
+    uint64_t newAllocatorNonNullResults = 0;
+    uint64_t newAllocatorNullResults = 0;
+    uint64_t nonRetiringTrapEvents = 0;
+    uint64_t interruptEvents = 0;
+    uint64_t sbiCalls = 0;
+    uint64_t handlerEntries = 0;
+    uint64_t handlerReturns = 0;
     uint64_t stateFingerprintAtStart = 0;
     uint64_t stateFingerprintAtEnd = 0;
+    uint64_t mtime = 0;
+    uint64_t mtimecmp = UINT64_MAX;
+    uint64_t mstatus = 0;
+    uint64_t sstatus = 0;
+    uint64_t scause = 0;
+    uint64_t sepc = 0;
+    uint64_t nextInstructionRaw = 0;
+    std::string nextInstruction;
+    std::string fdtSha256;
+    std::array<uint64_t, NUM_GENERAL_REGISTERS> registers{};
     PrivilegeMode privilege = PrivilegeMode::Supervisor;
     uint64_t satp = 0;
     std::vector<std::string> newSymbolNames;
+};
+
+struct AllocatorContinuationInstruction {
+    uint64_t pc = 0;
+    uint32_t raw = 0;
+    std::string disassembly;
+    uint64_t a0Before = 0;
+    uint64_t a0After = 0;
+    bool readsA0 = false;
+    bool writesA0 = false;
+};
+
+struct AllocatorCallSample {
+    uint64_t entryRetired = 0;
+    uint64_t returnRetired = 0;
+    uint64_t entryPc = 0;
+    uint64_t callerPc = 0;
+    uint64_t returnAddress = 0;
+    uint64_t cachePointer = 0;
+    uint64_t allocationFlags = 0;
+    uint64_t resultPointer = 0;
+    uint32_t callerInstructionRaw = 0;
+    bool callerInstructionRead = false;
+    bool returned = false;
+    bool firstCompletionAfterBoundary = false;
+    bool resultConsumedByCaller = false;
+    bool resultOverwrittenBeforeRead = false;
+    std::string callerSymbol;
+    std::vector<AllocatorContinuationInstruction> callerInstructions;
+};
+
+struct AllocatorBranchSample {
+    uint64_t retiredBefore = 0;
+    uint64_t pc = 0;
+    uint64_t nextPc = 0;
+    uint64_t leftOperand = 0;
+    uint64_t rightOperand = 0;
+    uint64_t cachePointer = 0;
+    uint64_t allocationFlags = 0;
+    size_t callSampleIndex = SIZE_MAX;
+    uint32_t raw = 0;
+    uint8_t rs1 = 0;
+    uint8_t rs2 = 0;
+    bool taken = false;
+};
+
+struct AllocatorInvocation {
+    uint64_t entryRetired = 0;
+    uint64_t entryPc = 0;
+    uint64_t returnAddress = 0;
+    uint64_t cachePointer = 0;
+    uint64_t allocationFlags = 0;
+    uint64_t callerPc = 0;
+    uint32_t callerInstructionRaw = 0;
+    bool callerInstructionRead = false;
+    std::string callerSymbol;
+    size_t sampleIndex = SIZE_MAX;
 };
 
 struct LinuxSymbolVisit {
@@ -503,6 +579,7 @@ struct Sv39WalkLevel {
 struct ContinuationEvidence {
     BssEvidence bss;
     riscv_test::TrapAccounting accounting;
+    bool allocatorNestingOverflow = false;
     uint64_t linuxStepCalls = 100000;
     uint64_t supervisorRetired = 100000;
     uint64_t machineRetiredAfterHandoff = 0;
@@ -551,6 +628,21 @@ struct ContinuationEvidence {
     uint64_t uniqueLinuxSymbols = 0;
     uint64_t droppedSymbolVisitDetails = 0;
     std::vector<Sv39WalkLevel> firstPageWalk;
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    uint64_t allocatorEntries = 0;
+    uint64_t allocatorReturns = 0;
+    uint64_t allocatorNonNullResults = 0;
+    uint64_t allocatorNullResults = 0;
+    uint64_t allocatorEntrySamplesDropped = 0;
+    uint64_t allocatorBranchSamplesDropped = 0;
+    uint64_t allocatorMaximumNestingDepth = 0;
+    std::vector<AllocatorInvocation> activeAllocatorInvocations;
+    std::vector<AllocatorCallSample> allocatorSamples;
+    std::vector<AllocatorBranchSample> allocatorBranches;
+    size_t firstCompletionSampleIndex = SIZE_MAX;
+    size_t pendingAllocatorConsumptionSample = SIZE_MAX;
+    uint64_t pendingAllocatorConsumptionSteps = 0;
+#endif
 };
 
 bool InRange(size_t offset, size_t bytes, size_t total) {
@@ -1327,13 +1419,24 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                            riscv_test::UartTxObserver* uartObserver = nullptr,
                            const std::vector<ElfFunctionSymbol>* linuxFunctions = nullptr) {
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    static constexpr std::array<uint64_t, 10> kTotalBudgets{{
+        250000, 1000000, 5000000, 20000000, 25000000, 30000000,
+        40000000, 45000000, 50000000, 60000000}};
+#elif defined(RISCV_LINUX_BOOT_CONTINUATION)
     static constexpr std::array<uint64_t, 7> kTotalBudgets{{
         250000, 1000000, 5000000, 20000000, 25000000, 30000000, 40000000}};
+#else
+    static constexpr std::array<uint64_t, 7> kTotalBudgets{{
+        250000, 1000000, 5000000, 20000000, 25000000, 30000000, 40000000}};
+#endif
     static constexpr uint64_t kMachineInstructionBudget = 8000000;
     static constexpr uint64_t kMachineHandlerInstructionBudget = 7000000;
     // RISCV-21 reached 2M in valid timer-handler work near the 37.1M frontier.
     // The corrected accounting and per-invocation cap justify this bounded 3M limit.
-#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 4000000;
+#elif defined(RISCV_LINUX_BOOT_CONTINUATION)
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 3000000;
 #else
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 2000000;
@@ -1372,6 +1475,38 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         }
     }
 #endif
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    const auto readInstructionAt = [&cpu](uint64_t guestPc, uint32_t& raw) {
+        const Sv39Translation translation = cpu.translateFetch(guestPc, 4);
+        std::array<uint8_t, 4> bytes{};
+        if (!translation.ok ||
+            !cpu.readPhysical(translation.paddr, bytes.data(), bytes.size())) return false;
+        raw = static_cast<uint32_t>(bytes[0]) |
+            (static_cast<uint32_t>(bytes[1]) << 8) |
+            (static_cast<uint32_t>(bytes[2]) << 16) |
+            (static_cast<uint32_t>(bytes[3]) << 24);
+        return true;
+    };
+    const auto createAllocatorSample = [&evidence](
+        const AllocatorInvocation& invocation) {
+        if (evidence.allocatorSamples.size() >= 64) {
+            ++evidence.allocatorEntrySamplesDropped;
+            return SIZE_MAX;
+        }
+        AllocatorCallSample sample;
+        sample.entryRetired = invocation.entryRetired;
+        sample.entryPc = invocation.entryPc;
+        sample.callerPc = invocation.callerPc;
+        sample.returnAddress = invocation.returnAddress;
+        sample.cachePointer = invocation.cachePointer;
+        sample.allocationFlags = invocation.allocationFlags;
+        sample.callerInstructionRaw = invocation.callerInstructionRaw;
+        sample.callerInstructionRead = invocation.callerInstructionRead;
+        sample.callerSymbol = invocation.callerSymbol;
+        evidence.allocatorSamples.push_back(std::move(sample));
+        return evidence.allocatorSamples.size() - 1;
+    };
+#endif
     const auto synchronizeAccounting = [&]() {
         const auto& counts = evidence.accounting.counters();
         evidence.linuxStepCalls = counts.stepCalls;
@@ -1404,10 +1539,19 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         const uint64_t mmioAtStageStart = cpu.machineMmioEventSequence();
         const uint64_t uartBytesAtStageStart = uartObserver == nullptr ? 0 :
             uartObserver->outputByteCounts()[0] + uartObserver->outputByteCounts()[1];
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+        const uint64_t allocatorEntriesAtStageStart = evidence.allocatorEntries;
+        const uint64_t allocatorReturnsAtStageStart = evidence.allocatorReturns;
+        const uint64_t allocatorNonNullAtStageStart = evidence.allocatorNonNullResults;
+        const uint64_t allocatorNullAtStageStart = evidence.allocatorNullResults;
+#endif
 #endif
         stage.stateFingerprintAtStart = ArchitecturalStateFingerprint(cpu);
         while (run.retired < target && !run.reachedFrontier) {
             const uint64_t pcBefore = cpu.getPC();
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+            const uint64_t a0BeforeStep = cpu.readGR(10);
+#endif
             const uint64_t a3Before = cpu.readGR(13);
             const uint64_t a4Before = cpu.readGR(14);
             const PrivilegeMode privilegeBefore = cpu.privilege();
@@ -1460,6 +1604,45 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                         }
                     }
                     evidence.tickProgramCallSites.push_back(std::move(site));
+                }
+            }
+#endif
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+            const ElfFunctionSymbol* currentFunction =
+                FunctionAtAddress(linuxFunctionsByAddress, pcBefore);
+            if (privilegeBefore == PrivilegeMode::Supervisor &&
+                currentFunction != nullptr &&
+                currentFunction->name == "kmem_cache_alloc_noprof" &&
+                currentFunction->address == pcBefore) {
+                ++evidence.allocatorEntries;
+                AllocatorInvocation invocation;
+                invocation.entryRetired = run.retired;
+                invocation.entryPc = pcBefore;
+                invocation.returnAddress = cpu.readGR(1);
+                invocation.callerPc = invocation.returnAddress >= 4
+                    ? invocation.returnAddress - 4 : 0;
+                invocation.cachePointer = cpu.readGR(10);
+                invocation.allocationFlags = cpu.readGR(11);
+                const ElfFunctionSymbol* caller = invocation.callerPc == 0 ? nullptr :
+                    FunctionAtAddress(linuxFunctionsByAddress, invocation.callerPc);
+                invocation.callerSymbol = caller == nullptr
+                    ? "<unresolved>" : caller->name;
+                invocation.callerInstructionRead =
+                    invocation.callerPc != 0 &&
+                    readInstructionAt(invocation.callerPc,
+                                      invocation.callerInstructionRaw);
+                const bool sampleEntry = evidence.allocatorEntries <= 8 ||
+                    (run.retired >= 40000000ULL &&
+                     (evidence.allocatorEntries % 2048ULL) == 0);
+                if (sampleEntry)
+                    invocation.sampleIndex = createAllocatorSample(invocation);
+                if (evidence.activeAllocatorInvocations.size() >= 16) {
+                    evidence.allocatorNestingOverflow = true;
+                } else {
+                    evidence.activeAllocatorInvocations.push_back(invocation);
+                    evidence.allocatorMaximumNestingDepth = std::max(
+                        evidence.allocatorMaximumNestingDepth,
+                        static_cast<uint64_t>(evidence.activeAllocatorInvocations.size()));
                 }
             }
 #endif
@@ -1627,6 +1810,135 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 ++run.retired;
                 run.hasRetired = true;
                 run.lastRetiredPc = step.pc;
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+                if (evidence.pendingAllocatorConsumptionSample != SIZE_MAX &&
+                    evidence.pendingAllocatorConsumptionSample <
+                        evidence.allocatorSamples.size()) {
+                    AllocatorCallSample& sample = evidence.allocatorSamples[
+                        evidence.pendingAllocatorConsumptionSample];
+                    if (sample.callerInstructions.size() < 8) {
+                        const uint32_t opcode = step.insn.rawWord & 0x7FU;
+                        bool readsA0 = false;
+                        switch (opcode) {
+                        case 0x03: case 0x13: case 0x1B: case 0x67:
+                            readsA0 = step.insn.rs1 == 10;
+                            break;
+                        case 0x23: case 0x2F: case 0x33: case 0x3B: case 0x63:
+                            readsA0 = step.insn.rs1 == 10 || step.insn.rs2 == 10;
+                            break;
+                        case 0x73:
+                            readsA0 = ((step.insn.rawWord >> 12) & 7U) < 5U &&
+                                step.insn.rs1 == 10;
+                            break;
+                        default:
+                            break;
+                        }
+                        const bool writesA0 =
+                            (opcode == 0x03 || opcode == 0x13 || opcode == 0x17 ||
+                             opcode == 0x1B || opcode == 0x33 || opcode == 0x37 ||
+                             opcode == 0x3B || opcode == 0x67 || opcode == 0x6F ||
+                             opcode == 0x73) && step.insn.rd == 10;
+                        sample.callerInstructions.push_back({
+                            pcBefore, step.insn.rawWord, decoder.Disassemble(step.insn),
+                            a0BeforeStep, cpu.readGR(10), readsA0, writesA0});
+                        ++evidence.pendingAllocatorConsumptionSteps;
+                        if (readsA0) {
+                            sample.resultConsumedByCaller = true;
+                            evidence.pendingAllocatorConsumptionSample = SIZE_MAX;
+                            evidence.pendingAllocatorConsumptionSteps = 0;
+                        } else if (writesA0) {
+                            sample.resultOverwrittenBeforeRead = true;
+                            evidence.pendingAllocatorConsumptionSample = SIZE_MAX;
+                            evidence.pendingAllocatorConsumptionSteps = 0;
+                        } else if (sample.callerInstructions.size() >= 8) {
+                            evidence.pendingAllocatorConsumptionSample = SIZE_MAX;
+                            evidence.pendingAllocatorConsumptionSteps = 0;
+                        }
+                    } else {
+                        evidence.pendingAllocatorConsumptionSample = SIZE_MAX;
+                        evidence.pendingAllocatorConsumptionSteps = 0;
+                    }
+                }
+
+                const uint64_t branchRetiredBefore = run.retired - 1;
+                const bool sampleAllocatorBranch =
+                    evidence.allocatorBranches.size() < 4 ||
+                    branchRetiredBefore == 40000000ULL ||
+                    (branchRetiredBefore > 40000000ULL &&
+                     evidence.allocatorReturns != 0 &&
+                     (evidence.allocatorReturns % 512ULL) == 0);
+                if (pcBefore == 0xFFFFFFFF801DAC18ULL &&
+                    sampleAllocatorBranch &&
+                    evidence.allocatorBranches.size() < 64) {
+                    AllocatorBranchSample branch;
+                    branch.retiredBefore = branchRetiredBefore;
+                    branch.pc = pcBefore;
+                    branch.nextPc = step.nextPc;
+                    branch.raw = step.insn.rawWord;
+                    branch.rs1 = step.insn.rs1;
+                    branch.rs2 = step.insn.rs2;
+                    branch.leftOperand = cpu.readGR(step.insn.rs1);
+                    branch.rightOperand = cpu.readGR(step.insn.rs2);
+                    branch.taken = step.nextPc != pcBefore + step.length;
+                    if (!evidence.activeAllocatorInvocations.empty()) {
+                        const AllocatorInvocation& invocation =
+                            evidence.activeAllocatorInvocations.back();
+                        branch.cachePointer = invocation.cachePointer;
+                        branch.allocationFlags = invocation.allocationFlags;
+                        branch.callSampleIndex = invocation.sampleIndex;
+                        if (invocation.sampleIndex == SIZE_MAX &&
+                            branchRetiredBefore >= 40000000ULL) {
+                            const size_t sampleIndex = createAllocatorSample(invocation);
+                            evidence.activeAllocatorInvocations.back().sampleIndex =
+                                sampleIndex;
+                            branch.callSampleIndex = sampleIndex;
+                        }
+                    }
+                    evidence.allocatorBranches.push_back(branch);
+                } else if (pcBefore == 0xFFFFFFFF801DAC18ULL &&
+                           sampleAllocatorBranch) {
+                    ++evidence.allocatorBranchSamplesDropped;
+                }
+
+                const ElfFunctionSymbol* retiredFunction =
+                    FunctionAtAddress(linuxFunctionsByAddress, pcBefore);
+                if (!evidence.activeAllocatorInvocations.empty() &&
+                    retiredFunction != nullptr &&
+                    retiredFunction->name == "kmem_cache_alloc_noprof" &&
+                    step.insn.mnemonic == Mnemonic::JALR && step.insn.rd == 0 &&
+                    step.insn.rs1 == 1 && step.insn.immediate == 0 &&
+                    step.nextPc == evidence.activeAllocatorInvocations.back().returnAddress) {
+                    AllocatorInvocation invocation =
+                        evidence.activeAllocatorInvocations.back();
+                    evidence.activeAllocatorInvocations.pop_back();
+                    if (invocation.sampleIndex == SIZE_MAX && run.retired > 40000000ULL) {
+                        invocation.sampleIndex = createAllocatorSample(invocation);
+                    }
+                    ++evidence.allocatorReturns;
+                    const uint64_t result = cpu.readGR(10);
+                    if (result == 0) ++evidence.allocatorNullResults;
+                    else ++evidence.allocatorNonNullResults;
+                    if (run.retired > 40000000ULL &&
+                        evidence.firstCompletionSampleIndex == SIZE_MAX &&
+                        invocation.sampleIndex != SIZE_MAX) {
+                        evidence.firstCompletionSampleIndex = invocation.sampleIndex;
+                        evidence.allocatorSamples[invocation.sampleIndex]
+                            .firstCompletionAfterBoundary = true;
+                    }
+                    if (invocation.sampleIndex != SIZE_MAX) {
+                        AllocatorCallSample& sample =
+                            evidence.allocatorSamples[invocation.sampleIndex];
+                        sample.returned = true;
+                        sample.returnRetired = run.retired;
+                        sample.resultPointer = result;
+                        if (evidence.pendingAllocatorConsumptionSample == SIZE_MAX) {
+                            evidence.pendingAllocatorConsumptionSample =
+                                invocation.sampleIndex;
+                            evidence.pendingAllocatorConsumptionSteps = 0;
+                        }
+                    }
+                }
+#endif
                 ObserveBssStep(cpu, run, evidence, step, pcBefore, a3Before, a4Before);
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
                 if (privilegeBefore == PrivilegeMode::Supervisor &&
@@ -1762,7 +2074,10 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 const auto& counts = evidence.accounting.counters();
                 std::string classification;
                 std::string reason;
-                if (counts.machineRetired > kMachineInstructionBudget) {
+                if (evidence.allocatorNestingOverflow) {
+                    classification = "allocator_observer_nesting_limit";
+                    reason = "bounded allocator invocation observer nesting limit exceeded";
+                } else if (counts.machineRetired > kMachineInstructionBudget) {
                     classification = "m_mode_instruction_budget";
                     reason = "bounded post-handoff M-mode firmware instruction allowance exhausted";
                 } else if (counts.machineHandlerInstructions > kMachineHandlerInstructionBudget) {
@@ -1829,6 +2144,12 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         stage.mModeHandlerInstructions = evidence.accounting.counters().machineHandlerInstructions;
         stage.activeHandlers = evidence.accounting.activeHandlerInvocations();
         stage.maxNestingDepth = evidence.accounting.counters().maxNestingDepth;
+        stage.nonRetiringTrapEvents =
+            evidence.accounting.counters().nonRetiringTrapTransitions;
+        stage.interruptEvents = evidence.accounting.counters().interruptTransitions;
+        stage.sbiCalls = evidence.accounting.counters().sbiCalls;
+        stage.handlerEntries = evidence.accounting.counters().handlerEntries;
+        stage.handlerReturns = evidence.accounting.counters().handlerReturns;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
         const auto& stageCounts = evidence.accounting.counters();
         stage.newLinuxSymbols = evidence.uniqueLinuxSymbols - symbolsAtStageStart;
@@ -1842,11 +2163,33 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
             uartObserver->outputByteCounts()[0] + uartObserver->outputByteCounts()[1] -
                 uartBytesAtStageStart;
         stage.stateFingerprintAtEnd = ArchitecturalStateFingerprint(cpu);
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+        stage.newAllocatorEntries = evidence.allocatorEntries - allocatorEntriesAtStageStart;
+        stage.newAllocatorReturns = evidence.allocatorReturns - allocatorReturnsAtStageStart;
+        stage.newAllocatorNonNullResults =
+            evidence.allocatorNonNullResults - allocatorNonNullAtStageStart;
+        stage.newAllocatorNullResults =
+            evidence.allocatorNullResults - allocatorNullAtStageStart;
 #endif
+#endif
+        stage.mtime = cpu.mtime();
+        stage.mtimecmp = cpu.mtimecmp();
+        stage.mstatus = CsrOrZero(cpu, 0x300);
+        stage.sstatus = CsrOrZero(cpu, 0x100);
+        stage.scause = CsrOrZero(cpu, 0x142);
+        stage.sepc = CsrOrZero(cpu, 0x141);
+        for (size_t index = 0; index < stage.registers.size(); ++index)
+            stage.registers[index] = cpu.readGR(index);
+        CaptureProgressFrontier(cpu, run);
+        stage.nextInstructionRaw = run.frontier.insn.rawWord;
+        stage.nextInstruction = decoder.Disassemble(run.frontier.insn);
+        stage.fdtSha256 = Sha256(ReadHandoffFdt(cpu));
         evidence.stages.push_back(stage);
         lastStageTarget = target;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
-#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+        std::cout << "RISCV-23 stage target=" << stage.targetRetired
+#elif defined(RISCV_LINUX_BOOT_CONTINUATION)
         std::cout << "RISCV-22 stage target=" << stage.targetRetired
 #else
         std::cout << "RISCV-21 stage target=" << stage.targetRetired
@@ -1859,7 +2202,12 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                   << " SBI+=" << stage.newSbiCalls
                   << " timerM+=" << stage.newMachineTimerInterrupts
                   << " timerS+=" << stage.newSupervisorTimerInterrupts
-                  << " UART+=" << stage.newUartBytes << std::endl;
+                  << " UART+=" << stage.newUartBytes
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+                  << " alloc+=" << stage.newAllocatorEntries
+                  << "/" << stage.newAllocatorReturns
+#endif
+                  << std::endl;
 #endif
         if (run.reachedFrontier) break;
     }
@@ -1909,7 +2257,14 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
     (void)originalLinuxConsole;
 #endif
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
-#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    const std::string phasePrefix = "riscv23";
+    const std::string phaseName = "RISCV-23";
+    constexpr uint64_t totalRetiredBudget = 60000000;
+    constexpr uint64_t machineRetiredBudget = 8000000;
+    constexpr uint64_t machineHandlerInstructionBudget = 7000000;
+    constexpr uint64_t supervisorHandlerInstructionBudget = 4000000;
+#elif defined(RISCV_LINUX_BOOT_CONTINUATION)
     const std::string phasePrefix = "riscv22";
     const std::string phaseName = "RISCV-22";
     constexpr uint64_t totalRetiredBudget = 40000000;
@@ -2393,10 +2748,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             }
         }
 
-        std::ofstream out(dir / "riscv22-linux-timer-events.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-timer-events.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 1,\n"
-            << "  \"phase\": \"RISCV-22\",\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
             << "  \"virtualTimebaseHz\": 10000000,\n"
             << "  \"mtimeAdvancesOneTickPerRetiredGuestInstruction\": true,\n"
             << "  \"sbiTimeRequests\": " << sbiTimeRequestCount << ",\n"
@@ -2493,10 +2848,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             if (left.second != right.second) return left.second > right.second;
             return left.first < right.first;
         });
-        std::ofstream statsOut(dir / "riscv22-linux-handler-statistics.json",
+        std::ofstream statsOut(dir / (phasePrefix + "-linux-handler-statistics.json"),
                               std::ios::out | std::ios::trunc);
         statsOut << "{\n  \"schemaVersion\": 1,\n"
-            << "  \"phase\": \"RISCV-22\",\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
             << "  \"cumulativeSModeHandlerInstructions\": "
             << trapCounts.supervisorHandlerInstructions << ",\n"
             << "  \"entryCount\": " << trapCounts.handlerEntries << ",\n"
@@ -2751,15 +3106,135 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 << ",\"newSupervisorTimerInterrupts\":" << stage.newSupervisorTimerInterrupts
                 << ",\"newMmioEvents\":" << stage.newMmioEvents
                 << ",\"newUartBytes\":" << stage.newUartBytes
+                << ",\"newAllocatorEntries\":" << stage.newAllocatorEntries
+                << ",\"newAllocatorReturns\":" << stage.newAllocatorReturns
+                << ",\"newAllocatorNonNullResults\":" << stage.newAllocatorNonNullResults
+                << ",\"newAllocatorNullResults\":" << stage.newAllocatorNullResults
+                << ",\"nonRetiringTrapEvents\":" << stage.nonRetiringTrapEvents
+                << ",\"interruptEvents\":" << stage.interruptEvents
+                << ",\"sbiCalls\":" << stage.sbiCalls
+                << ",\"handlerEntries\":" << stage.handlerEntries
+                << ",\"handlerReturns\":" << stage.handlerReturns
+                << ",\"mtime\":" << JsonQuote(Hex(stage.mtime))
+                << ",\"mtimecmp\":" << JsonQuote(Hex(stage.mtimecmp))
+                << ",\"mstatus\":" << JsonQuote(Hex(stage.mstatus))
+                << ",\"sstatus\":" << JsonQuote(Hex(stage.sstatus))
+                << ",\"scause\":" << JsonQuote(Hex(stage.scause))
+                << ",\"sepc\":" << JsonQuote(Hex(stage.sepc))
+                << ",\"nextInstructionRaw\":" << JsonQuote(Hex(stage.nextInstructionRaw))
+                << ",\"nextInstruction\":" << JsonQuote(stage.nextInstruction)
+                << ",\"fdtSha256\":" << JsonQuote(stage.fdtSha256)
                 << ",\"stateFingerprintAtStart\":" << JsonQuote(Hex(stage.stateFingerprintAtStart))
                 << ",\"stateFingerprintAtEnd\":" << JsonQuote(Hex(stage.stateFingerprintAtEnd))
-                << ",\"newSymbolNames\":[";
+                << ",\"registers\":[";
+            for (size_t reg = 0; reg < stage.registers.size(); ++reg)
+                out << (reg == 0 ? "" : ",") << JsonQuote(Hex(stage.registers[reg]));
+            out << "],\"newSymbolNames\":[";
             for (size_t symbol = 0; symbol < stage.newSymbolNames.size(); ++symbol)
                 out << (symbol == 0 ? "" : ",") << JsonQuote(stage.newSymbolNames[symbol]);
             out << "]}" << (index + 1 == evidence.stages.size() ? "\n" : ",\n");
         }
         out << "  ]\n}\n";
     }
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    {
+        uint64_t allocatorSymbolAddress = 0;
+        for (const ElfFunctionSymbol& function : linuxFunctions) {
+            if (function.name == "kmem_cache_alloc_noprof") {
+                allocatorSymbolAddress = function.address;
+                break;
+            }
+        }
+        std::ofstream out(dir / "riscv23-linux-allocator-evidence.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": \"RISCV-23\",\n"
+            << "  \"vmlinuxSha256\": " << JsonQuote(Sha256(vmlinux)) << ",\n"
+            << "  \"allocatorSymbol\": \"kmem_cache_alloc_noprof\",\n"
+            << "  \"allocatorSymbolAddress\": " << JsonQuote(Hex(allocatorSymbolAddress)) << ",\n"
+            << "  \"branchInstructionPc\": \"0xffffffff801dac18\",\n"
+            << "  \"entryCount\": " << evidence.allocatorEntries << ",\n"
+            << "  \"returnCount\": " << evidence.allocatorReturns << ",\n"
+            << "  \"nonNullResults\": " << evidence.allocatorNonNullResults << ",\n"
+            << "  \"nullResults\": " << evidence.allocatorNullResults << ",\n"
+            << "  \"activeInvocationsAtStop\": "
+            << evidence.activeAllocatorInvocations.size() << ",\n"
+            << "  \"maximumNestingDepth\": " << evidence.allocatorMaximumNestingDepth << ",\n"
+            << "  \"nestingOverflow\": "
+            << (evidence.allocatorNestingOverflow ? "true" : "false") << ",\n"
+            << "  \"sampleLimit\": 64,\n"
+            << "  \"droppedEntrySamples\": " << evidence.allocatorEntrySamplesDropped << ",\n"
+            << "  \"branchSampleLimit\": 64,\n"
+            << "  \"droppedBranchSamples\": " << evidence.allocatorBranchSamplesDropped << ",\n"
+            << "  \"firstCompletionAfter40M\": ";
+        if (evidence.firstCompletionSampleIndex == SIZE_MAX)
+            out << "null";
+        else
+            out << evidence.firstCompletionSampleIndex;
+        out << ",\n  \"branches\": [\n";
+        for (size_t index = 0; index < evidence.allocatorBranches.size(); ++index) {
+            const AllocatorBranchSample& branch = evidence.allocatorBranches[index];
+            out << "    {\"retiredBefore\":" << branch.retiredBefore
+                << ",\"pc\":" << JsonQuote(Hex(branch.pc))
+                << ",\"raw\":" << JsonQuote(Hex(branch.raw))
+                << ",\"instruction\":\"bne x15, x0, 352\""
+                << ",\"rs1\":" << static_cast<unsigned>(branch.rs1)
+                << ",\"rs2\":" << static_cast<unsigned>(branch.rs2)
+                << ",\"leftOperand\":" << JsonQuote(Hex(branch.leftOperand))
+                << ",\"rightOperand\":" << JsonQuote(Hex(branch.rightOperand))
+                << ",\"taken\":" << (branch.taken ? "true" : "false")
+                << ",\"nextPc\":" << JsonQuote(Hex(branch.nextPc))
+                << ",\"cachePointer\":" << JsonQuote(Hex(branch.cachePointer))
+                << ",\"allocationFlags\":" << JsonQuote(Hex(branch.allocationFlags))
+                << ",\"callSampleIndex\":";
+            if (branch.callSampleIndex == SIZE_MAX) out << "null";
+            else out << branch.callSampleIndex;
+            out << "}" << (index + 1 == evidence.allocatorBranches.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"samples\": [\n";
+        for (size_t index = 0; index < evidence.allocatorSamples.size(); ++index) {
+            const AllocatorCallSample& sample = evidence.allocatorSamples[index];
+            out << "    {\"entryRetired\":" << sample.entryRetired
+                << ",\"entryPc\":" << JsonQuote(Hex(sample.entryPc))
+                << ",\"callerSymbol\":" << JsonQuote(sample.callerSymbol)
+                << ",\"callSitePc\":" << JsonQuote(Hex(sample.callerPc))
+                << ",\"callSiteInstructionRaw\":"
+                << JsonQuote(Hex(sample.callerInstructionRaw))
+                << ",\"callSiteInstructionRead\":"
+                << (sample.callerInstructionRead ? "true" : "false")
+                << ",\"returnAddress\":" << JsonQuote(Hex(sample.returnAddress))
+                << ",\"cachePointer\":" << JsonQuote(Hex(sample.cachePointer))
+                << ",\"allocationFlags\":" << JsonQuote(Hex(sample.allocationFlags))
+                << ",\"returned\":" << (sample.returned ? "true" : "false")
+                << ",\"returnRetired\":" << sample.returnRetired
+                << ",\"resultPointer\":" << JsonQuote(Hex(sample.resultPointer))
+                << ",\"resultNonNull\":" << (sample.resultPointer != 0 ? "true" : "false")
+                << ",\"firstCompletionAfterBoundary\":"
+                << (sample.firstCompletionAfterBoundary ? "true" : "false")
+                << ",\"resultConsumedByCaller\":"
+                << (sample.resultConsumedByCaller ? "true" : "false")
+                << ",\"resultOverwrittenBeforeRead\":"
+                << (sample.resultOverwrittenBeforeRead ? "true" : "false")
+                << ",\"callerInstructions\":[";
+            for (size_t instruction = 0;
+                 instruction < sample.callerInstructions.size(); ++instruction) {
+                const AllocatorContinuationInstruction& next =
+                    sample.callerInstructions[instruction];
+                out << (instruction == 0 ? "" : ",")
+                    << "{\"pc\":" << JsonQuote(Hex(next.pc))
+                    << ",\"raw\":" << JsonQuote(Hex(next.raw))
+                    << ",\"instruction\":" << JsonQuote(next.disassembly)
+                    << ",\"a0Before\":" << JsonQuote(Hex(next.a0Before))
+                    << ",\"a0After\":" << JsonQuote(Hex(next.a0After))
+                    << ",\"readsA0\":" << (next.readsA0 ? "true" : "false")
+                    << ",\"writesA0\":" << (next.writesA0 ? "true" : "false")
+                    << "}";
+            }
+            out << "]}" << (index + 1 == evidence.allocatorSamples.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+#endif
     {
         std::ofstream out(dir / (phasePrefix + "-linux-symbol-visits.json"),
                           std::ios::out | std::ios::trunc);
@@ -2921,6 +3396,9 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             writeTranscriptArtifacts(phasePrefix + "-linux-console-continued-raw.bin",
                 phasePrefix + "-linux-console-continued.txt",
                 phasePrefix + "-linux-console-continued-analysis.json", linuxConsoleBytes);
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+            WriteBytes(dir / "riscv23-linux-console.bin", linuxConsoleBytes);
+#endif
         }
 #else
         writeTranscriptArtifacts(phasePrefix + "-linux-console-raw.bin",
@@ -3349,10 +3827,96 @@ int main(int argc, char** argv) {
            stage30->pc == 0xFFFFFFFF80061550ULL &&
            stage30->lastRetiredPc == 0xFFFFFFFF8006154CULL,
            "fresh authentic replay preserves the accepted 30M architectural boundary");
+#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+    Expect(stage40 != continuation.stages.end() &&
+           stage40->actualRetired == 40000000ULL &&
+           stage40->pc == 0xFFFFFFFF801DAC18ULL &&
+           !linuxRun.reachedFrontier &&
+           continuation.stopClassification == "instruction_budget",
+           "RISCV-22 exact 40M state is reproduced before allocator continuation");
+    const std::array<uint64_t, NUM_GENERAL_REGISTERS> expected40mRegisters{{
+        0x0ULL, 0xFFFFFFFF801DABE4ULL, 0xFFFFFFC60000B9D0ULL, 0xFFFFFFFF810E3C38ULL,
+        0xFFFFFFD601488000ULL, 0xFFFFFFD601695880ULL, 0x0ULL, 0xFFFFFFD6018275E8ULL,
+        0xFFFFFFC60000BA30ULL, 0xFFFFFFD601449D80ULL, 0xFFFFFFD6016957F8ULL, 0x0ULL,
+        0x0ULL, 0xFFFFFFD601695880ULL, 0x0ULL, 0x0ULL, 0x2ULL, 0x8124ULL,
+        0x2ULL, 0xDC0ULL, 0xFFFFFFFF8029739CULL, 0x88ULL, 0xFFFFFFFF80D6DBE8ULL,
+        0x0ULL, 0x0ULL, 0xFFFFFFD6016955D8ULL, 0xFFFFFFFF80DA39C8ULL, 0x0ULL,
+        0x8000ULL, 0xB71B0ULL, 0xFFFFFFFF81015F30ULL, 0xFFFFFFD601653B96ULL}};
+    Expect(stage40 != continuation.stages.end() &&
+           stage40->registers == expected40mRegisters &&
+           stage40->pc == 0xFFFFFFFF801DAC18ULL &&
+           stage40->privilege == PrivilegeMode::Supervisor &&
+           stage40->satp == 0x80000000000812EFULL &&
+           stage40->nextInstructionRaw == 0x16079063ULL &&
+           stage40->nextInstruction == "bne x15, x0, 352",
+           "RISCV-22 40M PC, GPRs, privilege, satp, and unexecuted branch exactly reproduce");
+    Expect(stage40->mtime == 52287139ULL && stage40->mtimecmp == 0x31E0F1FULL &&
+           stage40->mstatus == 0xA2ULL && stage40->sstatus == 0x22ULL &&
+           stage40->scause == 0x8000000000000005ULL &&
+           stage40->sepc == 0xFFFFFFFF80657050ULL &&
+           stage40->sModeRetired == 36951456ULL &&
+           stage40->mModeRetired == 3048544ULL &&
+           stage40->sModeHandlerInstructions == 2244333ULL &&
+           stage40->activeHandlers == 0 && stage40->nonRetiringTrapEvents == 6851 &&
+           stage40->interruptEvents == 1398 && stage40->sbiCalls == 1419 &&
+           stage40->handlerEntries == 6850 && stage40->handlerReturns == 6850 &&
+           stage40->maxNestingDepth == 2 &&
+           stage40->fdtSha256 ==
+               "580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475",
+           "RISCV-22 40M trap, SBI, timer, handler, and FDT state exactly reproduces");
+    std::vector<std::string> pmp40mFailures;
+    Expect(ComparePmp(cpu, pmp40mFailures),
+           "PMP entries at the reproduced 40M boundary still match the accepted contract");
+
+    const auto stage45 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 45000000ULL; });
+    const auto stage50 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 50000000ULL; });
+    const auto stage60 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 60000000ULL; });
+    Expect(stage45 != continuation.stages.end() &&
+           stage45->actualRetired == 45000000ULL &&
+           stage50 != continuation.stages.end() &&
+           stage50->actualRetired == 50000000ULL &&
+           stage60 != continuation.stages.end() &&
+           stage60->actualRetired == 60000000ULL &&
+           linuxRun.retired == 60000000ULL && !linuxRun.reachedFrontier &&
+           continuation.stopClassification == "instruction_budget",
+           "same guest reaches the bounded 45M, 50M, and 60M continuation stages");
+
+    const auto targetBranch = std::find_if(continuation.allocatorBranches.begin(),
+        continuation.allocatorBranches.end(), [](const AllocatorBranchSample& branch) {
+            return branch.retiredBefore == 40000000ULL;
+        });
+    Expect(targetBranch != continuation.allocatorBranches.end() &&
+           targetBranch->pc == 0xFFFFFFFF801DAC18ULL &&
+           targetBranch->raw == 0x16079063U && targetBranch->rs1 == 15 &&
+           targetBranch->rs2 == 0 && targetBranch->leftOperand == 0 &&
+           targetBranch->rightOperand == 0 && !targetBranch->taken &&
+           targetBranch->nextPc == 0xFFFFFFFF801DAC1CULL &&
+           targetBranch->cachePointer != 0,
+           "the exact RISCV-22 allocator branch executes untaken with its live operands");
+    Expect(continuation.firstCompletionSampleIndex != SIZE_MAX &&
+           continuation.firstCompletionSampleIndex < continuation.allocatorSamples.size() &&
+           continuation.allocatorSamples[continuation.firstCompletionSampleIndex]
+               .firstCompletionAfterBoundary &&
+           continuation.allocatorSamples[continuation.firstCompletionSampleIndex].returned &&
+           continuation.allocatorSamples[continuation.firstCompletionSampleIndex]
+               .returnRetired > 40000000ULL &&
+           continuation.allocatorSamples[continuation.firstCompletionSampleIndex]
+               .callerPc != 0 &&
+           continuation.allocatorSamples[continuation.firstCompletionSampleIndex]
+               .callerInstructionRead &&
+           !continuation.allocatorSamples[continuation.firstCompletionSampleIndex]
+                .callerInstructions.empty() &&
+           !continuation.allocatorNestingOverflow,
+           "allocator invocation entered at or before 40M completes after the boundary");
+#else
     Expect(stage40 != continuation.stages.end() && stage40->actualRetired == 40000000ULL &&
            linuxRun.retired == 40000000ULL && !linuxRun.reachedFrontier &&
            continuation.stopClassification == "instruction_budget",
            "bounded continuation reaches exactly 40M post-handoff retirements without a guest fault");
+#endif
 #endif
     Expect(linuxRun.retired > 20000000ULL,
            "Linux guest retires beyond the preserved 20M continuation boundary");

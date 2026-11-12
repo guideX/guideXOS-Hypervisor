@@ -848,3 +848,37 @@ Validation and next target:
 - See `phase-riscv-22-report.txt` for the transcript analysis, returned Linux
   initialization paths, exact timer/SBI correlation, final architectural
   state, artifacts, and Debug/Release and IA-64 validation results.
+
+--- Phase RISCV-23: authentic slab allocator and 60-million continuation ---
+
+- The pinned Linux v6.12 Image and OpenSBI v1.8.1 binaries and machine
+  contract remain unchanged. Fresh Debug and Release executions exactly
+  reproduce the RISCV-22 40,000,000-retirement frontier, including all GPRs,
+  key CSRs, privilege, retirement accounting, timer state, FDT hash, and the 5,630-byte
+  Linux UART0 transcript.
+- The old frontier is raw `0x16079063`, `bne x15, x0, 352`, at
+  `0xffffffff801dac18`. x15 and x0 are both zero, so the branch is not taken.
+  The in-flight `kmem_cache_alloc_noprof` call returns a non-NULL object to
+  `__kernfs_new_node` at 40,000,009 retired instructions, and the caller copies
+  the returned pointer into x9. Across 60M, aggregate instrumentation observed
+  8,126 allocator calls and returns; all results were non-NULL, none was NULL,
+  and no call remained active.
+- The same guest state continued through 45M, 50M, and 60M. At 60M it had
+  52,541,360 normal S-mode Linux instructions, 3,934,596 S-mode handler
+  instructions, and 3,524,044 M-mode OpenSBI instructions. Timer/SBI activity
+  continued, handlers were paired, and no new UART bytes appeared. Earlier
+  symbol evidence shows `rest_init`, `kernel_init`, `kernel_init_freeable`,
+  `do_one_initcall`, and a returned `populate_rootfs`; the later stages add no
+  new initialization milestone. The final stop is the bounded 60M instruction
+  cap with forward progress, not an architectural fault or a completed-boot
+  claim.
+- The dedicated RISCV-23 continuation passed in Release (1/1) and Debug (1/1).
+  All 31 existing RISC-V suites also passed in each configuration, for 32/32
+  RISC-V tests in Debug and Release. The Debug and Release evidence bundles
+  contain 38 files each and are byte-identical. EFI memory-map and IA-64 SAL
+  CTests passed 2/2 in Debug and Release; direct IA-64 ACPI,
+  interrupt-controller, and processor-interrupt-block regressions passed 3/3
+  in both configurations.
+- See `phase-riscv-23-report.txt` for exact allocator call-site evidence,
+  stage counts, handler and timer totals, terminal-condition scan, artifact
+  paths, validation, and the RISCV-24 recommendation.

@@ -1,0 +1,171 @@
+guideXOS Hypervisor — Phase RISCV-23 Report
+Authentic Linux v6.12 Slab-Allocator Continuation and Deeper Kernel Initialization
+Run date: 2026-11-11
+Outcome: A — exact RISCV-22 frontier reproduced, crossed, and authentic Linux
+execution continued to the bounded 60,000,000-retirement limit. This is not a
+claim that Linux boot or userspace completed.
+
+Repository and scope
+--------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV
+Starting HEAD: e83fa1f8c5fadaebaba8ae39637dd239f9e9bae0
+Starting origin/RISCV divergence: 1 ahead / 0 behind
+Starting phase marker: RISCV-22 complete; RISCV-23 next
+
+The pre-existing untracked Testing/ directory and fixture .build/ directories
+for dual-UART, PLIC/UART, and PMP were preserved. RISCV-18 through RISCV-22
+artifacts were preserved; new outputs are under
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv23-artifacts. CMake redirects
+the previous console and boot continuation tests into RISCV-23 reproduction
+subdirectories so they do not overwrite prior phase bundles. The only source
+changes are bounded test instrumentation and CTest wiring. No production CPU,
+MMU, PMP, timer, UART, PLIC, Linux, firmware, or IA-64 implementation source was
+changed. No QEMU was run and nothing was pushed.
+
+Pinned artifacts and machine contract
+-------------------------------------
+Linux v6.12 source commit: adc218676eef25575469234709c2d87185ca223a
+Image SHA-256:
+60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C
+vmlinux SHA-256:
+49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093
+Configuration SHA-256:
+5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB
+
+OpenSBI v1.8.1 source commit: 74434f255873d74e56cc50aa762d1caf24c099f8
+fw_jump.bin SHA-256:
+CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+
+The accepted single-hart RV64IMA_Zicsr/Sv39 profile remains unchanged:
+RAM [0x80000000,0x84000000), Linux Image entry 0x80200000, FDT 0x82200000,
+StandardPmp16 restricted supervisor domain, UART0 0x10000000, UART1 0x1000A000,
+PLIC 0x0C000000, machine-owned ACLINT timer, and a 10 MHz timebase. The
+console command line is unchanged. OpenSBI genuinely entered S-mode Linux at
+PC 0x80200000 with a0=0, a1=0x82200000, and satp=Bare; no host SBI provider was
+present. The handoff FDT SHA-256 remained
+580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475.
+
+RISCV-22 reproduction
+---------------------
+Fresh Debug and Release runs reproduced the exact 40,000,000 post-handoff checkpoint.
+All 32 GPRs, PC, privilege, relevant CSR state, retired-instruction accounting,
+trap/SBI counters, timer state, active-handler count, and FDT checksum matched
+the accepted RISCV-22 evidence. At the boundary:
+
+- S-mode total: 36,951,456 instructions; normal S-mode Linux: 34,707,123.
+- S-mode handler work: 2,244,333 instructions; M-mode OpenSBI: 3,048,544.
+- PC: 0xffffffff801dac18, privilege S, satp 0x80000000000812ef.
+- mtime: 0x31dd6a3; mtimecmp: 0x31e0f1f.
+- Traps: 6,851; SBI calls: 1,419; M/S timer interrupts: 699 each.
+- Handler entries/returns: 6,850/6,850; active handlers: 0; max nesting: 2.
+- FDT SHA-256: 580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475.
+- Linux UART0 remained the exact 5,630-byte, 76-complete-line transcript.
+
+Pinned vmlinux disassembly identifies the boundary instruction as raw
+0x16079063, `bne x15, x0, 352`, at 0xffffffff801dac18. Both operands were zero,
+so the branch was not taken; execution continued at 0xffffffff801dac1c. This is
+the stack-canary check on the allocator return path, not an allocation-failure
+branch or a CPU defect.
+
+Allocator observation
+--------------------
+The pinned mm/slub.c implementation calls slab_alloc_node, performs allocation
+tracing, and returns the result from kmem_cache_alloc_noprof. At the boundary,
+the in-flight call had entered at retired count 39,999,835 from caller
+__kernfs_new_node (call-site 0xffffffff80297398, raw 0xf18430ef). Its cache
+pointer was 0xffffffd601449d80 and flags were 0xdc0. It returned at retired
+count 40,000,009 with non-NULL result 0xffffffd6016957f8. The caller then
+consumed a0 at 0xffffffff8029739c with `addi x9, x10, 0`, copying the pointer
+into x9. This proves the genuine result was used by subsequent Linux execution.
+
+Across the complete 60M run, aggregate instrumentation recorded 8,126 allocator
+entries, 8,126 returns, 8,126 non-NULL results, zero NULL results, zero active
+calls at stop, and maximum nesting 1. Diagnostic sampling was bounded to 64
+entry samples and 64 branch samples; dropped entry details are reported in the
+JSON while aggregate counts remain complete. No allocator response, metadata,
+register, or guest memory was modified by the observer.
+
+Staged continuation
+-------------------
+The same CPU and RAM state continued through all stages; there was no restore,
+manual PC advance, or skipped guest instruction. Each stage ended with no
+active handler and maximum observed nesting depth 2.
+
+Target       Normal S       S handlers     M/OpenSBI      PC
+40,000,000   34,707,123      2,244,333      3,048,544     0xffffffff801dac18
+45,000,000   39,166,527      2,666,054      3,167,419     0xffffffff80662df0
+50,000,000   43,628,526      3,085,180      3,286,294     0xffffffff80310cf8
+60,000,000   52,541,360      3,934,596      3,524,044     0xffffffff80298ff0
+
+At 45M, 50M, and 60M, respectively, SBI calls had increased by 250, 250, and
+500 since the previous listed stage; M-mode and S-mode timer counts increased
+by 125, 125, and 250 each. The handler-entry and return totals remained paired.
+There were no additional Linux UART bytes at any continuation stage. No new
+main initialization milestone appeared after the earlier observed
+populate_rootfs return at retired count 25,326,062.
+
+Authenticated symbol visits before 40M included rest_init entry at 11,990,101,
+kernel_init entry at 12,077,316, kernel_init_freeable entry at 12,077,509,
+do_one_initcall with return observed at 12,552,837, and populate_rootfs with
+return observed at 25,326,062. Entry-only observations are not called function
+completion. These visits show kernel initialization reached those paths; they
+do not prove a mounted root filesystem, launched init process, or completed
+boot. The 60M interval additionally executed watchdog_timer_fn,
+completion_done, stop_one_cpu_nowait_workfn, and softlockup_fn. The pinned
+watchdog source shows this is a timer/heartbeat callback path. No soft-lockup
+diagnostic, BUG, Oops, panic, allocation failure, unsupported SBI, or
+unhandled/unexpected guest fault was observed.
+
+The final stop classification is `instruction_budget`: exactly 60,000,000
+post-handoff guest retirements with forward guest progress. The final PC is
+0xffffffff80298ff0 in S-mode with satp 0x80000000000812ef. The last retired PC
+is 0xffffffff802995ac and the next raw instruction is 0xfe010113
+(`addi x2, x2, -32`) in kernfs_new_node. Totals are 8,851 trap transitions,
+2,398 interrupts, 2,419 SBI calls, 1,199 M-mode and 1,199 S-mode timer
+interrupts, and 8,850 paired handler entries/returns. There were no active
+handlers at stop, maximum nesting depth 2, and the largest individual handler
+was 6,008 instructions. This bounded frontier is not a terminal kernel
+condition and not completed boot.
+
+Console and artifact evidence
+-----------------------------
+Captured Linux S-mode UART0 output remained exactly 5,630 bytes across 76
+complete lines; there were zero additional bytes from 40M through 60M. The
+5,630-byte RISCV-22 transcript remained an exact prefix. Capture attribution was
+complete with no dropped observer events or attribution failures. UART1
+remained silent. The console contained no warning, BUG, Oops, panic, or
+out-of-memory message.
+
+Release evidence is in
+E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv23-artifacts\Release; Debug
+evidence is in the matching Debug directory. The bundles include run summary,
+progress stages, allocator evidence, milestones, console captures and analysis,
+trap accounting, SBI/timer/UART events, symbol visits, and final frontier.
+An initial exploratory run exposed a test-observer sample-cap issue; the sampler
+was corrected to retain the exact 40M branch and first completion. Its bounded
+failure evidence remains under phase-riscv23-artifacts\attempt-1 and is not
+used as the accepted run.
+
+Validation
+----------
+The dedicated RISCV-23 continuation CTest passed in Release (1/1, 821.17 sec)
+and Debug (1/1, 28,602.75 sec). All 31 pre-existing RISC-V CTests passed in
+Release (579.51 sec) and Debug (16,792.30 sec), for 32/32 RISC-V tests in each
+configuration when the dedicated continuation is included. The Debug and
+Release RISCV-23 artifact bundles contain 38 files each and are byte-identical
+file by file, including all architectural checkpoint and event evidence.
+IA-64 EfiMemoryMapTests and IA64SalTests passed in Debug and Release. Direct
+ACPI, interrupt-controller, and processor-interrupt-block regressions passed
+in both configurations. No IA-64 implementation file was modified.
+`git diff --check` passed.
+
+RISCV-24 recommendation
+-----------------------
+Trace genuine continuation through kernel_init and initcall execution, recording
+return statuses and the first provable root/init outcome. Preserve the pinned
+Linux/OpenSBI binaries, machine contract, timer model, PMP policy, and UART
+attribution. Keep diagnostics bounded and use a new execution limit with S-mode
+handler allowance recalculated from the measured 3,934,596 handler instructions
+at 60M. Do not add a root filesystem, initramfs, device, or ISA support without
+evidence from a real guest frontier.
