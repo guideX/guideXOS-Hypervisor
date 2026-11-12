@@ -12,7 +12,7 @@ The later ACPI bus call that can initialize FACS was not reached. R30 did not en
 
 - Starting HEAD: `f6e05dd2bdc740ba861629994a7043690370680f`, subject `Docs: record IA64 R29 ACPI qualification`.
 - R29 implementation `705433a8a13a092c94f5da770e7a7f7a9767a8ab` and the starting R29 report commit are ancestors of the starting HEAD.
-- The R30 closeout commit is the final repository HEAD for this investigation; its exact object ID is included in the closeout response after commit.
+- The local R30 report/evidence package commit is `227aa592fd0071d78c846804566c57838cd33887`. A metadata follow-up records that package SHA in this report; the follow-up is the final HEAD, whose SHA is included in the closeout response.
 
 ## 3. Branch, divergence, and existing work
 
@@ -213,8 +213,8 @@ Resume from the same authenticated R29 post-EBS checkpoint with the R29 firmware
 
 ## 30. Local commit
 
-The validated report and R30 evidence are committed locally on `IA64`. The exact commit object ID is supplied in the closeout response after the commit is created; no push is performed.
+The validated report and R30 evidence package were committed locally on `IA64` as `227aa592fd0071d78c846804566c57838cd33887`. This paragraph records that package SHA in a follow-up metadata commit. The follow-up is final HEAD and its SHA is supplied in the closeout response. Neither commit was pushed.
 
 ## 31. Final worktree and push status
 
-R30 changes are limited to this report and `evidence-9r30/`. The historical untracked evidence directories and ignored builds are preserved. The branch remains `IA64`, and the R30 commit remains local with nothing pushed. The final status and upstream divergence are recorded in the closeout response.
+R30 changes are limited to this report and `evidence-9r30/`. The historical untracked evidence directories and ignored builds are preserved. The branch remains `IA64`, nine commits ahead of `origin/IA64` and zero behind after the report/evidence commit and metadata follow-up. Both commits remain local with nothing pushed. The final HEAD SHA is included in the closeout response.
