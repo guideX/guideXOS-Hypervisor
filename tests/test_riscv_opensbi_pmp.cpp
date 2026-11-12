@@ -1,6 +1,7 @@
 #define RISCV_OPENSBI_FWJUMP_HELPERS_ONLY
 #include "test_riscv_opensbi_fw_jump.cpp"
 
+#include <cstring>
 #include <set>
 
 namespace {

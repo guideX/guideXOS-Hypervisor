@@ -882,3 +882,28 @@ Validation and next target:
 - See `phase-riscv-23-report.txt` for exact allocator call-site evidence,
   stage counts, handler and timer totals, terminal-condition scan, artifact
   paths, validation, and the RISCV-24 recommendation.
+
+--- Phase RISCV-24: authentic Linux initialization and scheduling continuation ---
+
+- The unchanged Linux v6.12 Image and OpenSBI v1.8.1 path reproduced the exact
+  RISCV-23 60-million post-handoff state, then continued on the same CPU and
+  guest RAM to the bounded 80-million cap. This phase made no production CPU,
+  decoder, MMU, PMP, firmware, or device change.
+- The pinned kernel entered `rest_init`, `kernel_init`, `kernel_init_freeable`,
+  and `kthreadd`; `populate_rootfs` and captured initcall callbacks have
+  authenticated return observations. These entries and returns are distinct
+  from a claim of completed kernel initialization or userspace startup.
+- Read-only scheduling instrumentation records 512 completed distinct
+  `__switch_to` operations. For each retained record, guest task pointers and
+  `tp` identify different previous and next contexts, the switch exits, and
+  `sp` changes. The first selected contexts are linked to `kernel_init` and
+  `kthreadd` function entries. Further event details are capped.
+- At 80M, Linux emitted 737 additional UART0 bytes (6,367 total), including
+  8250, HID, SDHCI, MMC, and SBI PMU messages. SBI TIME requests and timer
+  handlers continue to return; all captured trap handlers are paired. The
+  exact stop is an instruction-budget boundary inside ordinary
+  `kmem_cache_alloc_noprof`, with one active allocator call and no guest fault
+  or panic marker. The result does not claim Linux boot completion.
+- RISCV-24 validation and exact counters are recorded in
+  `phase-riscv-24-report.txt` and the Debug/Release artifact bundles under
+  `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv24-artifacts`.

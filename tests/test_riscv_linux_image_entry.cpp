@@ -120,6 +120,188 @@ std::string JsonString(const std::string& json, const std::string& key) {
     return json.substr(begin + 1, end - begin - 1);
 }
 
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+bool JsonUnsignedValue(const std::string& json, const std::string& key,
+                       uint64_t& value) {
+    const std::string needle = "\"" + key + "\"";
+    const size_t keyAt = json.find(needle);
+    if (keyAt == std::string::npos) return false;
+    const size_t colon = json.find(':', keyAt + needle.size());
+    if (colon == std::string::npos) return false;
+    size_t begin = colon + 1;
+    while (begin < json.size() && std::isspace(static_cast<unsigned char>(json[begin])))
+        ++begin;
+    const bool quoted = begin < json.size() && json[begin] == '"';
+    if (quoted) ++begin;
+    size_t end = begin;
+    while (end < json.size() && (std::isxdigit(static_cast<unsigned char>(json[end])) ||
+           json[end] == 'x' || json[end] == 'X')) ++end;
+    if (end == begin) return false;
+    try {
+        value = std::stoull(json.substr(begin, end - begin), nullptr, 0);
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+bool JsonTopLevelUnsignedValue(const std::string& json, const std::string& key,
+                              uint64_t& value) {
+    size_t objectDepth = 0;
+    size_t arrayDepth = 0;
+    for (size_t cursor = 0; cursor < json.size();) {
+        if (json[cursor] == '"') {
+            const size_t begin = cursor++;
+            bool escaped = false;
+            while (cursor < json.size()) {
+                const char character = json[cursor++];
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == '"') break;
+            }
+            if (objectDepth != 1 || arrayDepth != 0 || cursor > json.size() ||
+                cursor - begin < 2 ||
+                json.compare(begin + 1, cursor - begin - 2, key) != 0)
+                continue;
+            size_t colon = cursor;
+            while (colon < json.size() &&
+                   std::isspace(static_cast<unsigned char>(json[colon]))) ++colon;
+            if (colon == json.size() || json[colon] != ':') continue;
+            size_t number = colon + 1;
+            while (number < json.size() &&
+                   std::isspace(static_cast<unsigned char>(json[number]))) ++number;
+            size_t end = number;
+            while (end < json.size() &&
+                   (std::isxdigit(static_cast<unsigned char>(json[end])) ||
+                    json[end] == 'x' || json[end] == 'X')) ++end;
+            if (end == number) return false;
+            try {
+                value = std::stoull(json.substr(number, end - number), nullptr, 0);
+            } catch (...) {
+                return false;
+            }
+            return true;
+        }
+        if (json[cursor] == '{') ++objectDepth;
+        else if (json[cursor] == '}') --objectDepth;
+        else if (json[cursor] == '[') ++arrayDepth;
+        else if (json[cursor] == ']') --arrayDepth;
+        ++cursor;
+    }
+    return false;
+}
+
+bool JsonBooleanValue(const std::string& json, const std::string& key,
+                      bool& value) {
+    const std::string needle = "\"" + key + "\"";
+    const size_t keyAt = json.find(needle);
+    if (keyAt == std::string::npos) return false;
+    const size_t colon = json.find(':', keyAt + needle.size());
+    if (colon == std::string::npos) return false;
+    const size_t begin = json.find_first_not_of(" \t\r\n", colon + 1);
+    if (begin == std::string::npos) return false;
+    if (json.compare(begin, 4, "true") == 0) { value = true; return true; }
+    if (json.compare(begin, 5, "false") == 0) { value = false; return true; }
+    return false;
+}
+
+std::vector<uint64_t> JsonHexArray(const std::string& json,
+                                  const std::string& key) {
+    std::vector<uint64_t> result;
+    const std::string needle = "\"" + key + "\"";
+    const size_t keyAt = json.find(needle);
+    if (keyAt == std::string::npos) return result;
+    const size_t open = json.find('[', keyAt + needle.size());
+    const size_t close = open == std::string::npos ? std::string::npos
+                                                    : json.find(']', open + 1);
+    if (close == std::string::npos) return result;
+    size_t cursor = open + 1;
+    while (cursor < close) {
+        const size_t begin = json.find('"', cursor);
+        if (begin == std::string::npos || begin >= close) break;
+        const size_t end = json.find('"', begin + 1);
+        if (end == std::string::npos || end > close) return {};
+        try {
+            result.push_back(std::stoull(json.substr(begin + 1, end - begin - 1),
+                                         nullptr, 0));
+        } catch (...) {
+            return {};
+        }
+        cursor = end + 1;
+    }
+    return result;
+}
+
+std::string JsonObjectWithNumericField(const std::string& json,
+                                       const std::string& field,
+                                       uint64_t expected) {
+    const std::string needle = "\"" + field + "\"";
+    size_t searchFrom = 0;
+    while (searchFrom < json.size()) {
+        const size_t keyAt = json.find(needle, searchFrom);
+        if (keyAt == std::string::npos) return {};
+        const size_t end = json.find('}', keyAt);
+        const size_t begin = json.rfind('{', keyAt);
+        if (begin == std::string::npos || end == std::string::npos) return {};
+        const std::string object = json.substr(begin, end - begin + 1);
+        uint64_t actual = 0;
+        if (JsonUnsignedValue(object, field, actual) && actual == expected)
+            return object;
+        searchFrom = end + 1;
+    }
+    return {};
+}
+
+std::string LinuxInitMilestoneClass(const std::string& name) {
+    if (name == "sched_init" || name == "schedule" || name == "__schedule" ||
+        name == "__switch_to" || name == "schedule_preempt_disabled" ||
+        name == "cpu_startup_entry" || name == "default_idle_call") return "scheduler";
+    if (name == "rest_init" || name == "kernel_init" || name == "kthreadd" ||
+        name == "ret_from_fork") return "task_lifecycle";
+    if (name == "do_one_initcall" || name == "do_pre_smp_initcalls" ||
+        name == "do_basic_setup" || name == "do_initcalls" ||
+        name == "kernel_init_freeable" || name == "populate_rootfs") return "initcall";
+    if (name == "time_init" || name == "timekeeping_init") return "timekeeping";
+    if (name == "irq_init" || name == "trap_init") return "interrupt_initialization";
+    if (name == "setup_arch") return "architecture_initialization";
+    if (name == "console_init" || name.find("console") != std::string::npos ||
+        name.find("earlycon") != std::string::npos) return "console_initialization";
+    if (name == "mem_init" || name == "sparse_init" || name == "free_area_init" ||
+        name.rfind("memblock", 0) == 0) return "memory_initialization";
+    if (name == "driver_probe_device" || name == "really_probe" ||
+        name == "device_attach" || name == "bus_add_device" || name == "device_add")
+        return "device_probe_or_registration";
+    if (name == "prepare_namespace" || name == "run_init_process" ||
+        name == "try_to_run_init_process" || name == "kernel_execve" ||
+        name == "init_post") return "root_or_init_process";
+    return "kernel_initialization";
+}
+
+bool IsLinuxInitMilestoneTarget(const std::string& name) {
+    static const std::unordered_set<std::string> targets{
+        "start_kernel", "setup_arch", "sched_init", "time_init", "timekeeping_init",
+        "irq_init", "trap_init", "rest_init", "kernel_init", "kernel_init_freeable",
+        "do_pre_smp_initcalls", "do_basic_setup", "do_initcalls", "do_one_initcall",
+        "populate_rootfs", "kthreadd", "schedule", "__schedule", "__switch_to",
+        "context_switch",
+        "schedule_preempt_disabled", "cpu_startup_entry", "default_idle_call",
+        "ret_from_fork", "driver_probe_device", "really_probe", "device_attach",
+        "bus_add_device", "device_add", "prepare_namespace", "run_init_process",
+        "try_to_run_init_process", "kernel_execve", "init_post"};
+    return targets.contains(name);
+}
+
+uint64_t LinuxInitMilestoneDetailLimit(const std::string& name) {
+    if (name == "schedule" || name == "__schedule" || name == "context_switch" ||
+        name == "__switch_to") return 128;
+    if (name == "do_one_initcall") return 256;
+    if (name == "driver_probe_device" || name == "really_probe" ||
+        name == "device_attach" || name == "bus_add_device" || name == "device_add")
+        return 16;
+    return 8;
+}
+#endif
+
 std::string AsString(const std::vector<uint8_t>& bytes) {
     return std::string(bytes.begin(), bytes.end());
 }
@@ -439,8 +621,18 @@ struct LinuxStage {
     uint64_t nonRetiringTrapEvents = 0;
     uint64_t interruptEvents = 0;
     uint64_t sbiCalls = 0;
+    uint64_t totalStepCalls = 0;
     uint64_t handlerEntries = 0;
     uint64_t handlerReturns = 0;
+    uint64_t machineTimerInterrupts = 0;
+    uint64_t supervisorTimerInterrupts = 0;
+    uint64_t allocatorEntriesTotal = 0;
+    uint64_t allocatorReturnsTotal = 0;
+    uint64_t allocatorNonNullResultsTotal = 0;
+    uint64_t allocatorNullResultsTotal = 0;
+    uint64_t activeAllocatorCalls = 0;
+    uint64_t linuxConsoleBytes = 0;
+    std::string linuxConsoleSha256;
     uint64_t stateFingerprintAtStart = 0;
     uint64_t stateFingerprintAtEnd = 0;
     uint64_t mtime = 0;
@@ -529,6 +721,73 @@ struct LinuxSymbolVisit {
     bool functionCompletionDemonstrated = false;
 };
 
+struct LinuxInitMilestoneEvent {
+    uint64_t eventId = 0;
+    std::string name;
+    std::string milestoneClass;
+    uint64_t symbolAddress = 0;
+    uint64_t entryPc = 0;
+    uint64_t entryRetired = 0;
+    uint64_t returnAddress = 0;
+    uint64_t callSitePc = 0;
+    uint32_t callSiteInstructionRaw = 0;
+    std::string callSiteInstruction;
+    bool callSiteInstructionRead = false;
+    bool callInstructionValidated = false;
+    std::string callerSymbol;
+    uint64_t taskPointer = 0;
+    uint64_t stackPointer = 0;
+    uint64_t activeHandlerEventId = UINT64_MAX;
+    uint64_t satp = 0;
+    uint64_t sstatus = 0;
+    uint64_t mstatus = 0;
+    uint64_t scause = 0;
+    uint64_t sepc = 0;
+    std::array<uint64_t, NUM_GENERAL_REGISTERS> registers{};
+    uint64_t initcallTargetAddress = 0;
+    std::string initcallTargetSymbol;
+    bool functionCompletionDemonstrated = false;
+    uint64_t returnRetired = 0;
+    uint64_t returnInstructionPc = 0;
+    uint64_t returnTargetPc = 0;
+    uint64_t returnValueA0 = 0;
+    uint64_t returnTaskPointer = 0;
+    uint64_t returnStackPointer = 0;
+    std::string completionClassification = "entry_only";
+    uint64_t selectedBySwitchEventId = UINT64_MAX;
+};
+
+struct LinuxTaskSwitchEvent {
+    uint64_t eventId = 0;
+    uint64_t entryPc = 0;
+    uint64_t entryRetired = 0;
+    uint64_t symbolAddress = 0;
+    uint64_t symbolSize = 0;
+    uint64_t previousTaskPointer = 0;
+    uint64_t nextTaskPointer = 0;
+    uint64_t returnAddress = 0;
+    uint64_t tpBefore = 0;
+    uint64_t spBefore = 0;
+    uint64_t activeHandlerEventId = UINT64_MAX;
+    std::array<uint64_t, NUM_GENERAL_REGISTERS> entryRegisters{};
+    bool previousTaskMatchedTp = false;
+    bool selectedDifferentTask = false;
+    bool nextTaskTpObserved = false;
+    uint64_t nextTaskTpRetired = 0;
+    uint64_t tpAtTransition = 0;
+    uint64_t spAtTransition = 0;
+    bool functionExitObserved = false;
+    uint64_t functionExitPc = 0;
+    uint64_t functionExitTargetPc = 0;
+    uint64_t functionExitRetired = 0;
+    uint64_t tpAfter = 0;
+    uint64_t spAfter = 0;
+    std::array<uint64_t, NUM_GENERAL_REGISTERS> exitRegisters{};
+    bool stackPointerChanged = false;
+    bool completedDistinctTaskSwitch = false;
+    uint64_t firstTaskEntryEventId = UINT64_MAX;
+};
+
 struct LinuxTimerEvent {
     uint64_t eventId = 0;
     uint64_t parentId = UINT64_MAX;
@@ -607,6 +866,8 @@ struct ContinuationEvidence {
     uint64_t finalMtime = 0;
     uint64_t handoffMtimecmp = 0;
     uint64_t finalMtimecmp = 0;
+    uint64_t handoffUart0Bytes = 0;
+    uint64_t lastLinuxConsoleObservationSequence = 0;
     uint64_t handoffMmioSequence = 0;
     uint64_t finalMmioSequence = 0;
     uint64_t handoffMmioReads = 0;
@@ -618,6 +879,21 @@ struct ContinuationEvidence {
     std::vector<LinuxTrapEvent> traps;
     std::vector<LinuxStage> stages;
     std::vector<LinuxSymbolVisit> symbolVisits;
+    std::vector<LinuxInitMilestoneEvent> initMilestones;
+    std::vector<LinuxTaskSwitchEvent> taskSwitchEvents;
+    std::map<std::string, uint64_t> initMilestoneSymbolAddresses;
+    std::map<std::string, uint64_t> initMilestoneEntryCounts;
+    std::map<std::string, uint64_t> initMilestoneDetailCounts;
+    std::map<std::string, uint64_t> initMilestoneCompletionCounts;
+    uint64_t droppedInitMilestoneDetails = 0;
+    uint64_t droppedTaskSwitchDetails = 0;
+    uint64_t linuxConsoleBytesAfterHandoff = 0;
+    std::string linuxConsoleRawAfterHandoff;
+    std::string linuxConsoleForMarkerDetection;
+    bool linuxConsoleCaptureOverflow = false;
+    bool linuxPanicMarkerObserved = false;
+    uint64_t linuxPanicMarkerRetired = 0;
+    uint64_t linuxPanicMarkerPc = 0;
     std::vector<LinuxTimerEvent> timerEvents;
     std::unordered_map<uint64_t, size_t> timerEventIndexById;
     std::map<std::string, uint64_t> supervisorHandlerSymbolInstructions;
@@ -1419,7 +1695,11 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                            riscv_test::UartTxObserver* uartObserver = nullptr,
                            const std::vector<ElfFunctionSymbol>* linuxFunctions = nullptr) {
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
-#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    static constexpr std::array<uint64_t, 12> kTotalBudgets{{
+        250000, 1000000, 5000000, 20000000, 25000000, 30000000,
+        40000000, 45000000, 50000000, 60000000, 70000000, 80000000}};
+#elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     static constexpr std::array<uint64_t, 10> kTotalBudgets{{
         250000, 1000000, 5000000, 20000000, 25000000, 30000000,
         40000000, 45000000, 50000000, 60000000}};
@@ -1431,10 +1711,19 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         250000, 1000000, 5000000, 20000000, 25000000, 30000000, 40000000}};
 #endif
     static constexpr uint64_t kMachineInstructionBudget = 8000000;
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    // At 60M, handler rates were 3,934,596 S-mode and 3,524,044 M-mode
+    // instructions. Scaling those measured rates to 80M and adding over 20%
+    // margin yields bounded 6.4M S-handler and 6.0M M-handler allowances.
+    static constexpr uint64_t kMachineHandlerInstructionBudget = 6000000;
+#else
     static constexpr uint64_t kMachineHandlerInstructionBudget = 7000000;
+#endif
     // RISCV-21 reached 2M in valid timer-handler work near the 37.1M frontier.
     // The corrected accounting and per-invocation cap justify this bounded 3M limit.
-#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 6400000;
+#elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 4000000;
 #elif defined(RISCV_LINUX_BOOT_CONTINUATION)
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 3000000;
@@ -1474,6 +1763,14 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
             }
         }
     }
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    std::unordered_map<std::string, const ElfFunctionSymbol*> linuxFunctionsByName;
+    for (const ElfFunctionSymbol& function : linuxFunctionsByAddress) {
+        if (!IsLinuxInitMilestoneTarget(function.name)) continue;
+        linuxFunctionsByName.emplace(function.name, &function);
+        evidence.initMilestoneSymbolAddresses.emplace(function.name, function.address);
+    }
+#endif
 #endif
 #if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     const auto readInstructionAt = [&cpu](uint64_t guestPc, uint32_t& raw) {
@@ -1521,6 +1818,52 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
     (void)linuxFunctions;
 #endif
     uint64_t lastStageTarget = run.retired;
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    size_t activeTaskSwitchEventIndex = SIZE_MAX;
+    const auto captureLinuxConsole = [&evidence, uartObserver](
+        const StepResult* currentStep, uint64_t retiredAfterStep) {
+        if (uartObserver == nullptr) return;
+        const uint64_t linuxUart0Bytes =
+            uartObserver->outputByteCountsByOrigin()[1][0];
+        if (linuxUart0Bytes <= evidence.linuxConsoleBytesAfterHandoff) return;
+        uint64_t lastLinuxByteRetired = 0;
+        uint64_t lastLinuxBytePc = 0;
+        for (const auto& observation : uartObserver->observations()) {
+            if (observation.outputSequence <= evidence.lastLinuxConsoleObservationSequence)
+                continue;
+            evidence.lastLinuxConsoleObservationSequence = observation.outputSequence;
+            if (observation.uartIndex != 0 || observation.origin !=
+                    riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff) continue;
+            const char outputByte = static_cast<char>(observation.byte);
+            evidence.linuxConsoleForMarkerDetection.push_back(outputByte);
+            if (evidence.linuxConsoleRawAfterHandoff.size() < 1024 * 1024)
+                evidence.linuxConsoleRawAfterHandoff.push_back(outputByte);
+            else
+                evidence.linuxConsoleCaptureOverflow = true;
+            ++evidence.linuxConsoleBytesAfterHandoff;
+            lastLinuxByteRetired = observation.postHandoffRetirements;
+            lastLinuxBytePc = observation.guestPc;
+        }
+        constexpr size_t kConsoleMarkerWindow = 1024;
+        if (evidence.linuxConsoleForMarkerDetection.size() > kConsoleMarkerWindow) {
+            evidence.linuxConsoleForMarkerDetection.erase(0,
+                evidence.linuxConsoleForMarkerDetection.size() - kConsoleMarkerWindow);
+        }
+        const bool panicMarker =
+            evidence.linuxConsoleForMarkerDetection.find(
+                "Kernel panic - not syncing") != std::string::npos ||
+            evidence.linuxConsoleForMarkerDetection.find(
+                "No working init found.") != std::string::npos;
+        if (panicMarker && !evidence.linuxPanicMarkerObserved) {
+            evidence.linuxPanicMarkerObserved = true;
+            evidence.linuxPanicMarkerPc = currentStep == nullptr
+                ? lastLinuxBytePc : currentStep->pc;
+            evidence.linuxPanicMarkerRetired = currentStep == nullptr
+                ? lastLinuxByteRetired : retiredAfterStep;
+        }
+    };
+    captureLinuxConsole(nullptr, run.retired);
+#endif
 #if defined(RISCV_LINUX_BOOT_CONTINUATION)
     uint64_t previousTimeRequestRetired = 0;
     bool sawPreviousTimeRequest = false;
@@ -1569,6 +1912,119 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 if (function != linuxFunctionsAtEntry.end())
                     RecordLinuxSymbolVisit(evidence, stage, *function->second, pcBefore,
                                            run.retired, privilegeBefore, cpu);
+            }
+#endif
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+            const auto initEntryFunction = linuxFunctionsAtEntry.find(pcBefore);
+            if (privilegeBefore == PrivilegeMode::Supervisor &&
+                initEntryFunction != linuxFunctionsAtEntry.end() &&
+                IsLinuxInitMilestoneTarget(initEntryFunction->second->name)) {
+                const ElfFunctionSymbol& function = *initEntryFunction->second;
+                ++evidence.initMilestoneEntryCounts[function.name];
+                uint64_t& retainedDetails =
+                    evidence.initMilestoneDetailCounts[function.name];
+                if (evidence.initMilestones.size() < 2048 &&
+                    retainedDetails < LinuxInitMilestoneDetailLimit(function.name)) {
+                    ++retainedDetails;
+                    LinuxInitMilestoneEvent milestone;
+                    milestone.eventId = evidence.initMilestones.size();
+                    milestone.name = function.name;
+                    milestone.milestoneClass = LinuxInitMilestoneClass(function.name);
+                    milestone.symbolAddress = function.address;
+                    milestone.entryPc = pcBefore;
+                    milestone.entryRetired = run.retired;
+                    milestone.returnAddress = cpu.readGR(1);
+                    milestone.taskPointer = cpu.readGR(4);
+                    milestone.stackPointer = cpu.readGR(2);
+                    milestone.activeHandlerEventId =
+                        evidence.accounting.activeHandlerInvocations() == 0
+                            ? UINT64_MAX : evidence.accounting.activeHandlerEventId();
+                    milestone.satp = CsrOrZero(cpu, 0x180);
+                    milestone.sstatus = CsrOrZero(cpu, 0x100);
+                    milestone.mstatus = CsrOrZero(cpu, 0x300);
+                    milestone.scause = CsrOrZero(cpu, 0x142);
+                    milestone.sepc = CsrOrZero(cpu, 0x141);
+                    for (size_t reg = 0; reg < milestone.registers.size(); ++reg)
+                        milestone.registers[reg] = cpu.readGR(reg);
+
+                    if (milestone.returnAddress >= 4) {
+                        milestone.callSitePc = milestone.returnAddress - 4;
+                        milestone.callSiteInstructionRead = readInstructionAt(
+                            milestone.callSitePc, milestone.callSiteInstructionRaw);
+                        if (milestone.callSiteInstructionRead) {
+                            const DecodedInstruction call = decoder.Decode(
+                                milestone.callSiteInstructionRaw);
+                            milestone.callSiteInstruction = decoder.Disassemble(call);
+                            if (call.mnemonic == Mnemonic::JAL && call.rd == 1) {
+                                const uint64_t target = milestone.callSitePc +
+                                    static_cast<uint64_t>(call.immediate);
+                                milestone.callInstructionValidated = target == pcBefore;
+                            } else if (call.mnemonic == Mnemonic::JALR && call.rd == 1 &&
+                                       call.rs1 != 1) {
+                                const uint64_t target = (cpu.readGR(call.rs1) +
+                                    static_cast<uint64_t>(call.immediate)) & ~1ULL;
+                                milestone.callInstructionValidated = target == pcBefore;
+                            }
+                            if (milestone.callInstructionValidated) {
+                                const ElfFunctionSymbol* caller = FunctionAtAddress(
+                                    linuxFunctionsByAddress, milestone.callSitePc);
+                                milestone.callerSymbol = caller == nullptr
+                                    ? "<unresolved>" : caller->name;
+                            }
+                        }
+                    }
+                    if (function.name == "do_one_initcall") {
+                        milestone.initcallTargetAddress = cpu.readGR(10);
+                        const ElfFunctionSymbol* target = FunctionAtAddress(
+                            linuxFunctionsByAddress, milestone.initcallTargetAddress);
+                        milestone.initcallTargetSymbol = target == nullptr
+                            ? "<unresolved>" : target->name;
+                    }
+                    if (function.name == "kernel_init" || function.name == "kthreadd") {
+                        for (auto previous = evidence.taskSwitchEvents.rbegin();
+                             previous != evidence.taskSwitchEvents.rend(); ++previous) {
+                            if (!previous->completedDistinctTaskSwitch ||
+                                previous->nextTaskPointer != milestone.taskPointer ||
+                                previous->firstTaskEntryEventId != UINT64_MAX) continue;
+                            milestone.selectedBySwitchEventId = previous->eventId;
+                            previous->firstTaskEntryEventId = milestone.eventId;
+                            break;
+                        }
+                    }
+                    evidence.initMilestones.push_back(std::move(milestone));
+                } else {
+                    ++evidence.droppedInitMilestoneDetails;
+                }
+            }
+
+            if (privilegeBefore == PrivilegeMode::Supervisor &&
+                initEntryFunction != linuxFunctionsAtEntry.end() &&
+                initEntryFunction->second->name == "__switch_to") {
+                if (evidence.taskSwitchEvents.size() < 512) {
+                    LinuxTaskSwitchEvent event;
+                    event.eventId = evidence.taskSwitchEvents.size();
+                    event.entryPc = pcBefore;
+                    event.entryRetired = run.retired;
+                    event.symbolAddress = initEntryFunction->second->address;
+                    event.symbolSize = initEntryFunction->second->size;
+                    event.previousTaskPointer = cpu.readGR(10);
+                    event.nextTaskPointer = cpu.readGR(11);
+                    event.returnAddress = cpu.readGR(1);
+                    event.tpBefore = cpu.readGR(4);
+                    event.spBefore = cpu.readGR(2);
+                    event.activeHandlerEventId =
+                        evidence.accounting.activeHandlerInvocations() == 0
+                            ? UINT64_MAX : evidence.accounting.activeHandlerEventId();
+                    event.previousTaskMatchedTp = event.previousTaskPointer == event.tpBefore;
+                    event.selectedDifferentTask = event.previousTaskPointer !=
+                        event.nextTaskPointer;
+                    for (size_t reg = 0; reg < event.entryRegisters.size(); ++reg)
+                        event.entryRegisters[reg] = cpu.readGR(reg);
+                    evidence.taskSwitchEvents.push_back(std::move(event));
+                    activeTaskSwitchEventIndex = evidence.taskSwitchEvents.size() - 1;
+                } else {
+                    ++evidence.droppedTaskSwitchDetails;
+                }
             }
 #endif
 #if defined(RISCV_LINUX_BOOT_CONTINUATION)
@@ -1755,6 +2211,10 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 const size_t newTxBytes = uartObserver->observeAfterStep(
                     cpu, step, privilegeBefore,
                     run.retired + (step.outcome == StepOutcome::Ok ? 1ULL : 0ULL));
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+                captureLinuxConsole(&step,
+                    run.retired + (step.outcome == StepOutcome::Ok ? 1ULL : 0ULL));
+#endif
                 if (newTxBytes != 0 && privilegeBefore == PrivilegeMode::Machine) {
                     for (auto event = evidence.accounting.events().rbegin();
                          event != evidence.accounting.events().rend(); ++event) {
@@ -1810,6 +2270,66 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 ++run.retired;
                 run.hasRetired = true;
                 run.lastRetiredPc = step.pc;
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+                if (privilegeBefore == PrivilegeMode::Supervisor &&
+                    step.insn.mnemonic == Mnemonic::JALR && step.insn.rd == 0 &&
+                    step.insn.rs1 == 1 && step.insn.immediate == 0) {
+                    for (auto milestone = evidence.initMilestones.rbegin();
+                         milestone != evidence.initMilestones.rend(); ++milestone) {
+                        if (milestone->functionCompletionDemonstrated ||
+                            milestone->returnAddress != step.nextPc ||
+                            milestone->taskPointer != cpu.readGR(4)) continue;
+                        milestone->functionCompletionDemonstrated = true;
+                        milestone->returnRetired = run.retired;
+                        milestone->returnInstructionPc = step.pc;
+                        milestone->returnTargetPc = step.nextPc;
+                        milestone->returnValueA0 = cpu.readGR(10);
+                        milestone->returnTaskPointer = cpu.readGR(4);
+                        milestone->returnStackPointer = cpu.readGR(2);
+                        milestone->completionClassification =
+                            milestone->name == "do_one_initcall"
+                                ? (milestone->returnValueA0 == 0
+                                    ? "initcall_return_zero" : "initcall_return_nonzero")
+                                : "return_observed";
+                        ++evidence.initMilestoneCompletionCounts[milestone->name];
+                        break;
+                    }
+                }
+
+                if (activeTaskSwitchEventIndex != SIZE_MAX &&
+                    activeTaskSwitchEventIndex < evidence.taskSwitchEvents.size()) {
+                    LinuxTaskSwitchEvent& event =
+                        evidence.taskSwitchEvents[activeTaskSwitchEventIndex];
+                    const uint64_t switchStop = event.symbolAddress + event.symbolSize;
+                    const bool instructionInSwitch = step.pc >= event.symbolAddress &&
+                        step.pc < switchStop;
+                    if (instructionInSwitch && cpu.readGR(4) == event.nextTaskPointer) {
+                        if (!event.nextTaskTpObserved) {
+                            event.nextTaskTpRetired = run.retired;
+                            event.tpAtTransition = cpu.readGR(4);
+                            event.spAtTransition = cpu.readGR(2);
+                        }
+                        event.nextTaskTpObserved = true;
+                    }
+                    if (instructionInSwitch &&
+                        (step.nextPc < event.symbolAddress || step.nextPc >= switchStop)) {
+                        event.functionExitObserved = true;
+                        event.functionExitPc = step.pc;
+                        event.functionExitTargetPc = step.nextPc;
+                        event.functionExitRetired = run.retired;
+                        event.tpAfter = cpu.readGR(4);
+                        event.spAfter = cpu.readGR(2);
+                        event.stackPointerChanged = event.spBefore != event.spAfter;
+                        for (size_t reg = 0; reg < event.exitRegisters.size(); ++reg)
+                            event.exitRegisters[reg] = cpu.readGR(reg);
+                        event.completedDistinctTaskSwitch =
+                            event.selectedDifferentTask && event.previousTaskMatchedTp &&
+                            event.nextTaskTpObserved &&
+                            event.tpAfter == event.nextTaskPointer;
+                        activeTaskSwitchEventIndex = SIZE_MAX;
+                    }
+                }
+#endif
 #if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
                 if (evidence.pendingAllocatorConsumptionSample != SIZE_MAX &&
                     evidence.pendingAllocatorConsumptionSample <
@@ -2111,6 +2631,18 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 }
             }
 
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+            if (evidence.linuxPanicMarkerObserved && !run.reachedFrontier) {
+                evidence.stopClassification = "linux_terminal_panic";
+                evidence.stopReason = "Linux emitted a terminal panic or missing-init marker on UART0";
+                run.reachedFrontier = true;
+                run.frontier = step;
+                run.frontierPrivilegeBefore = privilegeBefore;
+                run.stopReason = evidence.stopReason;
+                break;
+            }
+#endif
+
             const uint64_t currentPc = cpu.getPC();
             const uint64_t state = ArchitecturalStateFingerprint(cpu);
             auto& repeat = repeatedStates[currentPc];
@@ -2148,8 +2680,11 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
             evidence.accounting.counters().nonRetiringTrapTransitions;
         stage.interruptEvents = evidence.accounting.counters().interruptTransitions;
         stage.sbiCalls = evidence.accounting.counters().sbiCalls;
+        stage.totalStepCalls = evidence.accounting.counters().stepCalls;
         stage.handlerEntries = evidence.accounting.counters().handlerEntries;
         stage.handlerReturns = evidence.accounting.counters().handlerReturns;
+        stage.machineTimerInterrupts = evidence.accounting.counters().machineTimerInterrupts;
+        stage.supervisorTimerInterrupts = evidence.accounting.counters().supervisorTimerInterrupts;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
         const auto& stageCounts = evidence.accounting.counters();
         stage.newLinuxSymbols = evidence.uniqueLinuxSymbols - symbolsAtStageStart;
@@ -2170,6 +2705,20 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
             evidence.allocatorNonNullResults - allocatorNonNullAtStageStart;
         stage.newAllocatorNullResults =
             evidence.allocatorNullResults - allocatorNullAtStageStart;
+        stage.allocatorEntriesTotal = evidence.allocatorEntries;
+        stage.allocatorReturnsTotal = evidence.allocatorReturns;
+        stage.allocatorNonNullResultsTotal = evidence.allocatorNonNullResults;
+        stage.allocatorNullResultsTotal = evidence.allocatorNullResults;
+        stage.activeAllocatorCalls = evidence.activeAllocatorInvocations.size();
+#endif
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+        stage.linuxConsoleBytes = evidence.linuxConsoleBytesAfterHandoff;
+        if (!evidence.linuxConsoleCaptureOverflow) {
+            const std::vector<uint8_t> consoleBytes(
+                evidence.linuxConsoleRawAfterHandoff.begin(),
+                evidence.linuxConsoleRawAfterHandoff.end());
+            stage.linuxConsoleSha256 = Sha256(consoleBytes);
+        }
 #endif
 #endif
         stage.mtime = cpu.mtime();
@@ -2187,7 +2736,9 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         evidence.stages.push_back(stage);
         lastStageTarget = target;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
-#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+        std::cout << "RISCV-24 stage target=" << stage.targetRetired
+#elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
         std::cout << "RISCV-23 stage target=" << stage.targetRetired
 #elif defined(RISCV_LINUX_BOOT_CONTINUATION)
         std::cout << "RISCV-22 stage target=" << stage.targetRetired
@@ -2257,7 +2808,14 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
     (void)originalLinuxConsole;
 #endif
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
-#if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const std::string phasePrefix = "riscv24";
+    const std::string phaseName = "RISCV-24";
+    constexpr uint64_t totalRetiredBudget = 80000000;
+    constexpr uint64_t machineRetiredBudget = 8000000;
+    constexpr uint64_t machineHandlerInstructionBudget = 6000000;
+    constexpr uint64_t supervisorHandlerInstructionBudget = 6400000;
+#elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     const std::string phasePrefix = "riscv23";
     const std::string phaseName = "RISCV-23";
     constexpr uint64_t totalRetiredBudget = 60000000;
@@ -2421,6 +2979,13 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"handoffMmioWrites\": " << evidence.handoffMmioWrites << ",\n"
             << "  \"finalMmioWrites\": " << evidence.finalMmioWrites << ",\n"
             << "  \"fdtSha256AtHandoff\": \"" << Sha256(handoffFdt) << "\",\n"
+            << "  \"handoffUart0Bytes\": " << evidence.handoffUart0Bytes << ",\n"
+            << "  \"linuxConsoleBytesAfterHandoff\": "
+            << evidence.linuxConsoleBytesAfterHandoff << ",\n"
+            << "  \"linuxPanicMarkerObserved\": "
+            << (evidence.linuxPanicMarkerObserved ? "true" : "false") << ",\n"
+            << "  \"linuxPanicMarkerPc\": " << JsonQuote(Hex(evidence.linuxPanicMarkerPc)) << ",\n"
+            << "  \"linuxPanicMarkerRetired\": " << evidence.linuxPanicMarkerRetired << ",\n"
             << "  \"stopClassification\": " << JsonQuote(evidence.stopClassification) << ",\n"
             << "  \"stopReason\": " << JsonQuote(evidence.stopReason) << "\n}\n";
     }
@@ -3113,8 +3678,20 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 << ",\"nonRetiringTrapEvents\":" << stage.nonRetiringTrapEvents
                 << ",\"interruptEvents\":" << stage.interruptEvents
                 << ",\"sbiCalls\":" << stage.sbiCalls
+                << ",\"totalStepCalls\":" << stage.totalStepCalls
                 << ",\"handlerEntries\":" << stage.handlerEntries
                 << ",\"handlerReturns\":" << stage.handlerReturns
+                << ",\"machineTimerInterrupts\":" << stage.machineTimerInterrupts
+                << ",\"supervisorTimerInterrupts\":" << stage.supervisorTimerInterrupts
+                << ",\"allocatorEntriesTotal\":" << stage.allocatorEntriesTotal
+                << ",\"allocatorReturnsTotal\":" << stage.allocatorReturnsTotal
+                << ",\"allocatorNonNullResultsTotal\":" << stage.allocatorNonNullResultsTotal
+                << ",\"allocatorNullResultsTotal\":" << stage.allocatorNullResultsTotal
+                << ",\"activeAllocatorCalls\":" << stage.activeAllocatorCalls
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+                << ",\"linuxConsoleBytes\":" << stage.linuxConsoleBytes
+                << ",\"linuxConsoleSha256\":" << JsonQuote(stage.linuxConsoleSha256)
+#endif
                 << ",\"mtime\":" << JsonQuote(Hex(stage.mtime))
                 << ",\"mtimecmp\":" << JsonQuote(Hex(stage.mtimecmp))
                 << ",\"mstatus\":" << JsonQuote(Hex(stage.mstatus))
@@ -3136,6 +3713,202 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         }
         out << "  ]\n}\n";
     }
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    {
+        static const std::array<const char*, 35> milestoneCandidates{{
+            "start_kernel", "setup_arch", "sched_init", "time_init",
+            "timekeeping_init", "irq_init", "trap_init", "rest_init",
+            "kernel_init", "kernel_init_freeable", "do_pre_smp_initcalls",
+            "do_basic_setup", "do_initcalls", "do_one_initcall", "populate_rootfs",
+            "kthreadd", "schedule", "__schedule", "context_switch", "__switch_to",
+            "schedule_preempt_disabled", "cpu_startup_entry", "default_idle_call",
+            "ret_from_fork", "driver_probe_device", "really_probe", "device_attach",
+            "bus_add_device", "device_add", "prepare_namespace", "run_init_process",
+            "try_to_run_init_process", "kernel_execve", "init_post", "mem_init"}};
+        std::ofstream out(dir / "riscv24-linux-init-milestones.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": \"RISCV-24\",\n"
+            << "  \"vmlinuxSha256\": " << JsonQuote(Sha256(vmlinux)) << ",\n"
+            << "  \"postHandoffRetiredInstructions\": " << run.retired << ",\n"
+            << "  \"stopClassification\": " << JsonQuote(evidence.stopClassification) << ",\n"
+            << "  \"panicMarkerObserved\": "
+            << (evidence.linuxPanicMarkerObserved ? "true" : "false") << ",\n"
+            << "  \"panicMarkerPc\": " << JsonQuote(Hex(evidence.linuxPanicMarkerPc)) << ",\n"
+            << "  \"panicMarkerRetired\": " << evidence.linuxPanicMarkerRetired << ",\n"
+            << "  \"handoffUart0Bytes\": " << evidence.handoffUart0Bytes << ",\n"
+            << "  \"capturedLinuxUart0Bytes\": " << evidence.linuxConsoleBytesAfterHandoff << ",\n"
+            << "  \"consoleCaptureOverflow\": "
+            << (evidence.linuxConsoleCaptureOverflow ? "true" : "false") << ",\n"
+            << "  \"symbolAvailability\": [\n";
+        for (size_t index = 0; index < milestoneCandidates.size(); ++index) {
+            const std::string name = milestoneCandidates[index];
+            const auto symbol = evidence.initMilestoneSymbolAddresses.find(name);
+            out << "    {\"name\":" << JsonQuote(name)
+                << ",\"present\":" << (symbol != evidence.initMilestoneSymbolAddresses.end()
+                    ? "true" : "false")
+                << ",\"address\":" << JsonQuote(symbol ==
+                    evidence.initMilestoneSymbolAddresses.end() ? "" : Hex(symbol->second))
+                << "}" << (index + 1 == milestoneCandidates.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"entryCounts\": {";
+        size_t countIndex = 0;
+        for (const auto& [name, count] : evidence.initMilestoneEntryCounts)
+            out << (countIndex++ == 0 ? "" : ",") << JsonQuote(name) << ":" << count;
+        out << "},\n  \"completionCounts\": {";
+        countIndex = 0;
+        for (const auto& [name, count] : evidence.initMilestoneCompletionCounts)
+            out << (countIndex++ == 0 ? "" : ",") << JsonQuote(name) << ":" << count;
+        out << "},\n  \"retainedDetailCounts\": {";
+        countIndex = 0;
+        for (const auto& [name, count] : evidence.initMilestoneDetailCounts)
+            out << (countIndex++ == 0 ? "" : ",") << JsonQuote(name) << ":" << count;
+        out << "},\n  \"droppedEventDetails\": "
+            << evidence.droppedInitMilestoneDetails << ",\n  \"events\": [\n";
+        for (size_t index = 0; index < evidence.initMilestones.size(); ++index) {
+            const LinuxInitMilestoneEvent& event = evidence.initMilestones[index];
+            out << "    {\"eventId\":" << event.eventId
+                << ",\"name\":" << JsonQuote(event.name)
+                << ",\"class\":" << JsonQuote(event.milestoneClass)
+                << ",\"symbolAddress\":" << JsonQuote(Hex(event.symbolAddress))
+                << ",\"entryPc\":" << JsonQuote(Hex(event.entryPc))
+                << ",\"entryRetired\":" << event.entryRetired
+                << ",\"returnAddress\":" << JsonQuote(Hex(event.returnAddress))
+                << ",\"callSitePc\":" << JsonQuote(Hex(event.callSitePc))
+                << ",\"callSiteInstructionRaw\":" << JsonQuote(Hex(event.callSiteInstructionRaw))
+                << ",\"callSiteInstruction\":" << JsonQuote(event.callSiteInstruction)
+                << ",\"callSiteInstructionRead\":"
+                << (event.callSiteInstructionRead ? "true" : "false")
+                << ",\"callInstructionValidated\":"
+                << (event.callInstructionValidated ? "true" : "false")
+                << ",\"callerSymbol\":" << JsonQuote(event.callerSymbol)
+                << ",\"taskPointer\":" << JsonQuote(Hex(event.taskPointer))
+                << ",\"stackPointer\":" << JsonQuote(Hex(event.stackPointer))
+                << ",\"activeHandlerEventId\":";
+            if (event.activeHandlerEventId == UINT64_MAX) out << "null";
+            else out << event.activeHandlerEventId;
+            out << ",\"satp\":" << JsonQuote(Hex(event.satp))
+                << ",\"sstatus\":" << JsonQuote(Hex(event.sstatus))
+                << ",\"mstatus\":" << JsonQuote(Hex(event.mstatus))
+                << ",\"scause\":" << JsonQuote(Hex(event.scause))
+                << ",\"sepc\":" << JsonQuote(Hex(event.sepc))
+                << ",\"registers\":";
+            writeRegisters(out, event.registers);
+            out << ",\"initcallTargetAddress\":"
+                << JsonQuote(Hex(event.initcallTargetAddress))
+                << ",\"initcallTargetSymbol\":" << JsonQuote(event.initcallTargetSymbol)
+                << ",\"functionCompletionDemonstrated\":"
+                << (event.functionCompletionDemonstrated ? "true" : "false")
+                << ",\"returnRetired\":" << event.returnRetired
+                << ",\"returnInstructionPc\":" << JsonQuote(Hex(event.returnInstructionPc))
+                << ",\"returnTargetPc\":" << JsonQuote(Hex(event.returnTargetPc))
+                << ",\"returnValueA0\":" << JsonQuote(Hex(event.returnValueA0))
+                << ",\"returnTaskPointer\":" << JsonQuote(Hex(event.returnTaskPointer))
+                << ",\"returnStackPointer\":" << JsonQuote(Hex(event.returnStackPointer))
+                << ",\"completionClassification\":"
+                << JsonQuote(event.completionClassification)
+                << ",\"selectedBySwitchEventId\":";
+            if (event.selectedBySwitchEventId == UINT64_MAX) out << "null";
+            else out << event.selectedBySwitchEventId;
+            out << "}" << (index + 1 == evidence.initMilestones.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+    {
+        static const std::array<const char*, 8> schedulerCandidates{{
+            "schedule", "__schedule", "context_switch", "__switch_to",
+            "sched_init", "rest_init", "kernel_init", "kthreadd"}};
+        std::ofstream out(dir / "riscv24-linux-scheduler-observation.json",
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": \"RISCV-24\",\n"
+            << "  \"symbolAvailability\": [\n";
+        for (size_t index = 0; index < schedulerCandidates.size(); ++index) {
+            const std::string name = schedulerCandidates[index];
+            const auto symbol = evidence.initMilestoneSymbolAddresses.find(name);
+            out << "    {\"name\":" << JsonQuote(name)
+                << ",\"present\":" << (symbol != evidence.initMilestoneSymbolAddresses.end()
+                    ? "true" : "false")
+                << ",\"address\":" << JsonQuote(symbol ==
+                    evidence.initMilestoneSymbolAddresses.end() ? "" : Hex(symbol->second))
+                << "}" << (index + 1 == schedulerCandidates.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"schedulerAndTaskEntries\": [\n";
+        std::vector<const LinuxInitMilestoneEvent*> selectedEvents;
+        for (const LinuxInitMilestoneEvent& event : evidence.initMilestones) {
+            if (event.milestoneClass == "scheduler" ||
+                event.name == "rest_init" || event.name == "kernel_init" ||
+                event.name == "kthreadd" || event.name == "ret_from_fork")
+                selectedEvents.push_back(&event);
+        }
+        for (size_t index = 0; index < selectedEvents.size(); ++index) {
+            const auto& event = *selectedEvents[index];
+            out << "    {\"eventId\":" << event.eventId
+                << ",\"name\":" << JsonQuote(event.name)
+                << ",\"class\":" << JsonQuote(event.milestoneClass)
+                << ",\"entryPc\":" << JsonQuote(Hex(event.entryPc))
+                << ",\"entryRetired\":" << event.entryRetired
+                << ",\"taskPointer\":" << JsonQuote(Hex(event.taskPointer))
+                << ",\"stackPointer\":" << JsonQuote(Hex(event.stackPointer))
+                << ",\"returnAddress\":" << JsonQuote(Hex(event.returnAddress))
+                << ",\"selectedBySwitchEventId\":";
+            if (event.selectedBySwitchEventId == UINT64_MAX) out << "null";
+            else out << event.selectedBySwitchEventId;
+            out << ",\"functionCompletionDemonstrated\":"
+                << (event.functionCompletionDemonstrated ? "true" : "false")
+                << ",\"completionClassification\":"
+                << JsonQuote(event.completionClassification) << "}"
+                << (index + 1 == selectedEvents.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"taskSwitchEvents\": [\n";
+        for (size_t index = 0; index < evidence.taskSwitchEvents.size(); ++index) {
+            const LinuxTaskSwitchEvent& event = evidence.taskSwitchEvents[index];
+            out << "    {\"eventId\":" << event.eventId
+                << ",\"entryPc\":" << JsonQuote(Hex(event.entryPc))
+                << ",\"entryRetired\":" << event.entryRetired
+                << ",\"symbolAddress\":" << JsonQuote(Hex(event.symbolAddress))
+                << ",\"symbolSize\":" << event.symbolSize
+                << ",\"previousTaskPointer\":" << JsonQuote(Hex(event.previousTaskPointer))
+                << ",\"nextTaskPointer\":" << JsonQuote(Hex(event.nextTaskPointer))
+                << ",\"returnAddress\":" << JsonQuote(Hex(event.returnAddress))
+                << ",\"tpBefore\":" << JsonQuote(Hex(event.tpBefore))
+                << ",\"spBefore\":" << JsonQuote(Hex(event.spBefore))
+                << ",\"previousTaskMatchedTp\":"
+                << (event.previousTaskMatchedTp ? "true" : "false")
+                << ",\"selectedDifferentTask\":"
+                << (event.selectedDifferentTask ? "true" : "false")
+                << ",\"activeHandlerEventId\":";
+            if (event.activeHandlerEventId == UINT64_MAX) out << "null";
+            else out << event.activeHandlerEventId;
+            out << ",\"entryRegisters\":";
+            writeRegisters(out, event.entryRegisters);
+            out << ",\"nextTaskTpObserved\":"
+                << (event.nextTaskTpObserved ? "true" : "false")
+                << ",\"nextTaskTpRetired\":" << event.nextTaskTpRetired
+                << ",\"tpAtTransition\":" << JsonQuote(Hex(event.tpAtTransition))
+                << ",\"spAtTransition\":" << JsonQuote(Hex(event.spAtTransition))
+                << ",\"functionExitObserved\":"
+                << (event.functionExitObserved ? "true" : "false")
+                << ",\"functionExitPc\":" << JsonQuote(Hex(event.functionExitPc))
+                << ",\"functionExitTargetPc\":" << JsonQuote(Hex(event.functionExitTargetPc))
+                << ",\"functionExitRetired\":" << event.functionExitRetired
+                << ",\"tpAfter\":" << JsonQuote(Hex(event.tpAfter))
+                << ",\"spAfter\":" << JsonQuote(Hex(event.spAfter))
+                << ",\"stackPointerChanged\":"
+                << (event.stackPointerChanged ? "true" : "false")
+                << ",\"exitRegisters\":";
+            writeRegisters(out, event.exitRegisters);
+            out << ",\"completedDistinctTaskSwitch\":"
+                << (event.completedDistinctTaskSwitch ? "true" : "false")
+                << ",\"firstTaskEntryEventId\":";
+            if (event.firstTaskEntryEventId == UINT64_MAX) out << "null";
+            else out << event.firstTaskEntryEventId;
+            out << "}" << (index + 1 == evidence.taskSwitchEvents.size() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"droppedTaskSwitchDetails\": "
+            << evidence.droppedTaskSwitchDetails << "\n}\n";
+    }
+#endif
 #if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     {
         uint64_t allocatorSymbolAddress = 0;
@@ -3145,10 +3918,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 break;
             }
         }
-        std::ofstream out(dir / "riscv23-linux-allocator-evidence.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-allocator-evidence.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 1,\n"
-            << "  \"phase\": \"RISCV-23\",\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
             << "  \"vmlinuxSha256\": " << JsonQuote(Sha256(vmlinux)) << ",\n"
             << "  \"allocatorSymbol\": \"kmem_cache_alloc_noprof\",\n"
             << "  \"allocatorSymbolAddress\": " << JsonQuote(Hex(allocatorSymbolAddress)) << ",\n"
@@ -3397,7 +4170,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 phasePrefix + "-linux-console-continued.txt",
                 phasePrefix + "-linux-console-continued-analysis.json", linuxConsoleBytes);
 #if defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
-            WriteBytes(dir / "riscv23-linux-console.bin", linuxConsoleBytes);
+            WriteBytes(dir / (phasePrefix + "-linux-console.bin"), linuxConsoleBytes);
 #endif
         }
 #else
@@ -3484,7 +4257,10 @@ int main(int argc, char** argv) {
         return g_failures == 0 ? 0 : 1;
     }
 #endif
-#if defined(RISCV_LINUX_BOOT_CONTINUATION)
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    constexpr int kExpectedArgc = 11;
+    constexpr const char* kUsage = "usage: test_riscv_linux_init_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config riscv21_linux_uart0.bin riscv23_baseline_dir";
+#elif defined(RISCV_LINUX_BOOT_CONTINUATION)
     constexpr int kExpectedArgc = 10;
     constexpr const char* kUsage = "usage: test_riscv_linux_boot_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config riscv21_linux_uart0.bin";
 #elif defined(RISCV_LINUX_STARTUP_CONTINUATION)
@@ -3518,6 +4294,30 @@ int main(int argc, char** argv) {
            baselineTranscript.completeLines.front().text.rfind("[    0.000000] Linux version 6.12.0", 0) == 0 &&
            baselineTranscript.partialTrailingLine.empty(),
            "console transcript parser recognizes the pinned Linux version and complete-line boundary");
+#endif
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const std::filesystem::path riscv23BaselineDir(argv[10]);
+    const std::string riscv23RunSummary = AsString(ReadFile(
+        (riscv23BaselineDir / "riscv23-linux-run-summary.json").string()));
+    const std::string riscv23ProgressStages = AsString(ReadFile(
+        (riscv23BaselineDir / "riscv23-linux-progress-stages.json").string()));
+    const std::string riscv23AllocatorEvidence = AsString(ReadFile(
+        (riscv23BaselineDir / "riscv23-linux-allocator-evidence.json").string()));
+    const std::string riscv23TrapAccounting = AsString(ReadFile(
+        (riscv23BaselineDir / "riscv23-linux-trap-accounting.json").string()));
+    const std::string riscv23CsrState = AsString(ReadFile(
+        (riscv23BaselineDir / "riscv23-linux-csr-state.json").string()));
+    const std::string riscv23PmpEffective = AsString(ReadFile(
+        (riscv23BaselineDir / "riscv-pmp-effective-v1.json").string()));
+    const std::vector<uint8_t> riscv23FixedupFdt = ReadFile(
+        (riscv23BaselineDir / "riscv18-final-fixedup.dtb").string());
+    const std::vector<uint8_t> riscv23Console = ReadFile(
+        (riscv23BaselineDir / "riscv23-linux-console-raw.bin").string());
+    Expect(!riscv23RunSummary.empty() && !riscv23ProgressStages.empty() &&
+           !riscv23AllocatorEvidence.empty() && !riscv23TrapAccounting.empty() &&
+           !riscv23CsrState.empty() && !riscv23PmpEffective.empty() &&
+           !riscv23Console.empty() && !riscv23FixedupFdt.empty(),
+           "retained RISCV-23 baseline summary, stage, allocator, trap, CSR, and console artifacts are present");
 #endif
     const LinuxSymbols symbols = ParseLinuxVmlinux(vmlinux);
     const bool headDisassemblyMatches = VerifyHeadDisassembly(vmlinux, image, symbols);
@@ -3720,6 +4520,7 @@ int main(int argc, char** argv) {
     continuation.handoffMmioSequence = handoffMmioSequence;
     continuation.handoffMmioReads = handoffMmioReads;
     continuation.handoffMmioWrites = handoffMmioWrites;
+    continuation.handoffUart0Bytes = handoffUartOutput.size();
     continuation.bss.expectedStart = symbols.physical(symbols.bssStart);
     continuation.bss.expectedStop = symbols.physical(symbols.bssStop);
     continuation.bss.loopStorePc = boot_contract::kLinuxImageEntry + 0x104ULL;
@@ -3789,9 +4590,15 @@ int main(int argc, char** argv) {
                (acceptedFrontierA3 - continuation.bss.expectedStart) / 8ULL &&
            continuation.bss.storeCountAt100k < expectedStores,
            "guest a3 records measurable BSS-store progress at the accepted frontier");
-    continuation.stages.push_back({100000, linuxRun.retired, linuxRun.retired,
-        linuxRun.retired, cpu.getPC(), linuxRun.lastRetiredPc,
-        continuation.bss.storesRetired});
+    LinuxStage initialStage;
+    initialStage.targetRetired = 100000;
+    initialStage.actualRetired = linuxRun.retired;
+    initialStage.additionalRetired = linuxRun.retired;
+    initialStage.stepCalls = linuxRun.retired;
+    initialStage.pc = cpu.getPC();
+    initialStage.lastRetiredPc = linuxRun.lastRetiredPc;
+    initialStage.bssStores = continuation.bss.storesRetired;
+    continuation.stages.push_back(std::move(initialStage));
     RecordMilestone(continuation, cpu, linuxRun, "riscv18_100000_instruction_frontier",
                     "exact PC, decoded instruction, a3/a4 and S-mode state matched the accepted run");
     const uint64_t pcAtContinuation = cpu.getPC();
@@ -3874,15 +4681,159 @@ int main(int argc, char** argv) {
         [](const LinuxStage& stage) { return stage.targetRetired == 50000000ULL; });
     const auto stage60 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
         [](const LinuxStage& stage) { return stage.targetRetired == 60000000ULL; });
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const std::string baselineStage60 = JsonObjectWithNumericField(
+        riscv23ProgressStages, "targetRetired", 60000000ULL);
+    const auto jsonNumberIs = [](const std::string& json, const std::string& key,
+                                 uint64_t expected) {
+        uint64_t actual = 0;
+        return JsonUnsignedValue(json, key, actual) && actual == expected;
+    };
+    const auto jsonTopLevelNumberIs = [](const std::string& json,
+                                        const std::string& key,
+                                        uint64_t expected) {
+        uint64_t actual = 0;
+        return JsonTopLevelUnsignedValue(json, key, actual) && actual == expected;
+    };
+    const std::vector<uint64_t> baselineStageRegisters =
+        JsonHexArray(baselineStage60, "registers");
+    const std::vector<uint64_t> baselineCsrRegisters =
+        JsonHexArray(riscv23CsrState, "registers");
+    const bool baselineStage60Matches = stage60 != continuation.stages.end() &&
+        !baselineStage60.empty() &&
+        jsonNumberIs(baselineStage60, "targetRetired", 60000000ULL) &&
+        jsonNumberIs(baselineStage60, "actualRetired", stage60->actualRetired) &&
+        jsonNumberIs(baselineStage60, "stepCalls", stage60->stepCalls) &&
+        stage60->totalStepCalls == 60008851ULL &&
+        jsonNumberIs(baselineStage60, "sModeRetired", stage60->sModeRetired) &&
+        jsonNumberIs(baselineStage60, "mModeRetired", stage60->mModeRetired) &&
+        jsonNumberIs(baselineStage60, "sModeHandlerInstructions",
+                     stage60->sModeHandlerInstructions) &&
+        jsonNumberIs(baselineStage60, "mModeHandlerInstructions",
+                     stage60->mModeHandlerInstructions) &&
+        jsonNumberIs(baselineStage60, "activeHandlers", stage60->activeHandlers) &&
+        jsonNumberIs(baselineStage60, "maxNestingDepth", stage60->maxNestingDepth) &&
+        jsonNumberIs(baselineStage60, "nonRetiringTrapEvents",
+                     stage60->nonRetiringTrapEvents) &&
+        jsonNumberIs(baselineStage60, "interruptEvents", stage60->interruptEvents) &&
+        jsonNumberIs(baselineStage60, "sbiCalls", stage60->sbiCalls) &&
+        jsonNumberIs(baselineStage60, "handlerEntries", stage60->handlerEntries) &&
+        jsonNumberIs(baselineStage60, "handlerReturns", stage60->handlerReturns) &&
+        jsonNumberIs(baselineStage60, "newAllocatorEntries", 1772ULL) &&
+        jsonNumberIs(baselineStage60, "newAllocatorReturns", 1772ULL) &&
+        jsonNumberIs(baselineStage60, "newAllocatorNonNullResults", 1772ULL) &&
+        jsonNumberIs(baselineStage60, "newAllocatorNullResults", 0ULL) &&
+        JsonString(baselineStage60, "pc") == Hex(stage60->pc) &&
+        JsonString(baselineStage60, "lastRetiredPc") == Hex(stage60->lastRetiredPc) &&
+        JsonString(baselineStage60, "privilege") == "S" &&
+        JsonString(baselineStage60, "satp") == Hex(stage60->satp) &&
+        JsonString(baselineStage60, "mtime") == Hex(stage60->mtime) &&
+        JsonString(baselineStage60, "mtimecmp") == Hex(stage60->mtimecmp) &&
+        JsonString(baselineStage60, "mstatus") == Hex(stage60->mstatus) &&
+        JsonString(baselineStage60, "sstatus") == Hex(stage60->sstatus) &&
+        JsonString(baselineStage60, "scause") == Hex(stage60->scause) &&
+        JsonString(baselineStage60, "sepc") == Hex(stage60->sepc) &&
+        JsonString(baselineStage60, "fdtSha256") == stage60->fdtSha256 &&
+        baselineStageRegisters.size() == stage60->registers.size() &&
+        std::equal(baselineStageRegisters.begin(), baselineStageRegisters.end(),
+                   stage60->registers.begin()) &&
+        stage60->allocatorEntriesTotal == 8126ULL &&
+        stage60->allocatorReturnsTotal == 8126ULL &&
+        stage60->allocatorNonNullResultsTotal == 8126ULL &&
+        stage60->allocatorNullResultsTotal == 0ULL &&
+        stage60->machineTimerInterrupts == 1199ULL &&
+        stage60->supervisorTimerInterrupts == 1199ULL &&
+        stage60->stateFingerprintAtEnd == 0xA67869BD5DC5425BULL;
+    const bool baselineRunSummaryMatches =
+        jsonNumberIs(riscv23RunSummary, "totalPostHandoffStepCalls", 60008851ULL) &&
+        jsonNumberIs(riscv23RunSummary, "postHandoffRetiredInstructions", 60000000ULL) &&
+        jsonNumberIs(riscv23RunSummary, "linuxRetiredInstructions", 56475956ULL) &&
+        jsonNumberIs(riscv23RunSummary, "normalSModeLinuxInstructions", 52541360ULL) &&
+        jsonNumberIs(riscv23RunSummary, "sModeHandlerInstructions", 3934596ULL) &&
+        jsonNumberIs(riscv23RunSummary, "mModeOpenSbiInstructions", 3524044ULL) &&
+        jsonTopLevelNumberIs(riscv23RunSummary, "trapEvents", 8851ULL) &&
+        jsonNumberIs(riscv23RunSummary, "interruptEvents", 2398ULL) &&
+        jsonNumberIs(riscv23RunSummary, "sbiEcalls", 2419ULL) &&
+        JsonString(riscv23RunSummary, "finalPc") == "0xffffffff80298ff0" &&
+        JsonString(riscv23RunSummary, "lastRetiredPc") == "0xffffffff802995ac" &&
+        JsonString(riscv23RunSummary, "finalPrivilege") == "S" &&
+        JsonString(riscv23RunSummary, "finalSatp") == "0x80000000000812ef" &&
+        JsonString(riscv23RunSummary, "fdtSha256AtHandoff") ==
+            "580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475";
+    const bool baselineAccountingMatches =
+        jsonNumberIs(riscv23TrapAccounting, "stepCalls", 60008851ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "totalRetired", 60000000ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "nonRetiringTrapTransitions", 8851ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "sModeHandlerInstructions", 3934596ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "mModeHandlerInstructions", 3524044ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "activeAtStop", 0ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "maximumNestingDepth", 2ULL) &&
+        jsonNumberIs(riscv23TrapAccounting, "largestInvocationInstructions", 6008ULL);
+    bool baselineLifetimeUncertain = true;
+    const bool baselineAccountingLifetimeParsed = JsonBooleanValue(
+        riscv23TrapAccounting, "lifetimeUncertain", baselineLifetimeUncertain);
+    const bool baselineAllocatorMatches =
+        jsonNumberIs(riscv23AllocatorEvidence, "entryCount", 8126ULL) &&
+        jsonNumberIs(riscv23AllocatorEvidence, "returnCount", 8126ULL) &&
+        jsonNumberIs(riscv23AllocatorEvidence, "nonNullResults", 8126ULL) &&
+        jsonNumberIs(riscv23AllocatorEvidence, "nullResults", 0ULL) &&
+        jsonNumberIs(riscv23AllocatorEvidence, "activeInvocationsAtStop", 0ULL) &&
+        JsonString(riscv23AllocatorEvidence, "vmlinuxSha256") ==
+            "49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093";
+    const bool baselineCsrMatches = stage60 != continuation.stages.end() &&
+        JsonString(riscv23CsrState, "pc") == "0xffffffff80298ff0" &&
+        JsonString(riscv23CsrState, "privilege") == "S" &&
+        jsonNumberIs(riscv23CsrState, "mtime", 72287139ULL) &&
+        JsonString(riscv23CsrState, "mtimecmp") == "0x44f3c1f" &&
+        baselineCsrRegisters.size() == stage60->registers.size() &&
+        std::equal(baselineCsrRegisters.begin(), baselineCsrRegisters.end(),
+                   stage60->registers.begin());
+    const std::string baselineConsoleSha256 = Sha256(riscv23Console);
+    Expect(baselineStage60Matches && baselineRunSummaryMatches &&
+           baselineAccountingMatches && baselineAccountingLifetimeParsed &&
+           !baselineLifetimeUncertain && baselineAllocatorMatches && baselineCsrMatches &&
+           riscv23Console.size() == 5630 &&
+           baselineConsoleSha256 ==
+               "2E8B68F93E9D799025E4DB52756F79A0C7F74F838B3ABB9B9B48E68FDE4A77BD",
+           "retained RISCV-23 stage, summary, trap, allocator, CSR, and UART evidence remains intact and validates as the replay baseline");
+    const auto stage70 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 70000000ULL; });
+    const auto stage80 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 80000000ULL; });
+    const bool terminalPanicStop = linuxRun.reachedFrontier &&
+        continuation.stopClassification == "linux_terminal_panic" &&
+        continuation.linuxPanicMarkerObserved && linuxRun.retired >= 60000000ULL;
+    const bool bounded80mStop = !linuxRun.reachedFrontier &&
+        continuation.stopClassification == "instruction_budget" &&
+        linuxRun.retired == 80000000ULL && stage70 != continuation.stages.end() &&
+        stage70->actualRetired == 70000000ULL && stage80 != continuation.stages.end() &&
+        stage80->actualRetired == 80000000ULL;
+#endif
     Expect(stage45 != continuation.stages.end() &&
            stage45->actualRetired == 45000000ULL &&
            stage50 != continuation.stages.end() &&
            stage50->actualRetired == 50000000ULL &&
            stage60 != continuation.stages.end() &&
            stage60->actualRetired == 60000000ULL &&
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+           stage60->pc == 0xFFFFFFFF80298FF0ULL &&
+           stage60->lastRetiredPc == 0xFFFFFFFF802995ACULL &&
+           stage60->privilege == PrivilegeMode::Supervisor &&
+           stage60->satp == 0x80000000000812EFULL &&
+           (bounded80mStop || terminalPanicStop),
+           "RISCV-23 60M checkpoint is preserved before the bounded RISCV-24 70M/80M continuation or a Linux terminal panic");
+#else
            linuxRun.retired == 60000000ULL && !linuxRun.reachedFrontier &&
            continuation.stopClassification == "instruction_budget",
            "same guest reaches the bounded 45M, 50M, and 60M continuation stages");
+#endif
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    Expect(terminalPanicStop ||
+           (stage60->stateFingerprintAtEnd != stage80->stateFingerprintAtEnd &&
+            stage80->sModeRetired > stage60->sModeRetired &&
+            stage80->activeHandlers == 0 && stage80->activeAllocatorCalls <= 1),
+           "same Linux state advances beyond the reproduced 60M checkpoint without active handlers and at most one bounded allocation in flight at the exact stop");
+#endif
 
     const auto targetBranch = std::find_if(continuation.allocatorBranches.begin(),
         continuation.allocatorBranches.end(), [](const AllocatorBranchSample& branch) {
@@ -3960,6 +4911,19 @@ int main(int argc, char** argv) {
         newLinuxConsole.compare(0, riscv21Console.size(), AsString(riscv21Console)) == 0;
     Expect(originalConsolePrefixPreserved,
            "all 5,630 accepted RISCV-21 Linux UART bytes remain the unchanged prefix of the continuation");
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const bool retained60mConsoleMatches = stage60 != continuation.stages.end() &&
+        stage60->linuxConsoleBytes == riscv23Console.size() &&
+        stage60->linuxConsoleSha256 == Sha256(riscv23Console) &&
+        continuation.linuxConsoleRawAfterHandoff.size() >= riscv23Console.size() &&
+        std::equal(riscv23Console.begin(), riscv23Console.end(),
+                   continuation.linuxConsoleRawAfterHandoff.begin());
+    Expect(retained60mConsoleMatches &&
+           continuation.handoffUart0Bytes == handoffUartOutput.size() &&
+           continuation.linuxConsoleBytesAfterHandoff ==
+               uartObserver.outputByteCountsByOrigin()[1][0],
+           "the exact 60M Linux UART stream matches the retained RISCV-23 bytes and remains tied to the S-mode UART observer");
+#endif
     const std::vector<uint8_t> newConsoleBytes(newLinuxConsole.begin(), newLinuxConsole.end());
     const auto continuedTranscript =
         riscv_linux_test::ParseLinuxConsoleTranscript(newConsoleBytes);
@@ -3982,6 +4946,67 @@ int main(int argc, char** argv) {
            firstLinuxByte->guestPc == 0xFFFFFFFF80449314ULL &&
            firstLinuxByte->postHandoffRetirements == 2028672,
            "UART0 byte ordering, M/S attribution, first Linux writer PC, and zero-drop provenance reproduce");
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const auto entryObserved = [&continuation](const std::string& name) {
+        return std::any_of(continuation.initMilestones.begin(),
+            continuation.initMilestones.end(), [&name](const LinuxInitMilestoneEvent& event) {
+                return event.name == name;
+            });
+    };
+    const auto completedObserved = [&continuation](const std::string& name) {
+        return std::any_of(continuation.initMilestones.begin(),
+            continuation.initMilestones.end(), [&name](const LinuxInitMilestoneEvent& event) {
+                return event.name == name && event.functionCompletionDemonstrated;
+            });
+    };
+    const auto symbolPresent = [&continuation](const std::string& name) {
+        return continuation.initMilestoneSymbolAddresses.contains(name);
+    };
+    const bool initLifecycleObserved = entryObserved("rest_init") &&
+        entryObserved("kernel_init") && entryObserved("kthreadd") &&
+        entryObserved("kernel_init_freeable") && entryObserved("do_one_initcall") &&
+        entryObserved("populate_rootfs");
+    const bool initcallReturnsObserved = completedObserved("do_one_initcall") &&
+        completedObserved("populate_rootfs") &&
+        std::any_of(continuation.initMilestones.begin(), continuation.initMilestones.end(),
+            [](const LinuxInitMilestoneEvent& event) {
+                return event.name == "do_one_initcall" &&
+                    !event.initcallTargetSymbol.empty() &&
+                    event.initcallTargetSymbol != "<unresolved>" &&
+                    (event.completionClassification == "initcall_return_zero" ||
+                     event.completionClassification == "initcall_return_nonzero");
+            });
+    const auto completedSwitch = std::find_if(continuation.taskSwitchEvents.begin(),
+        continuation.taskSwitchEvents.end(), [](const LinuxTaskSwitchEvent& event) {
+            return event.completedDistinctTaskSwitch && event.functionExitObserved &&
+                event.nextTaskTpObserved && event.previousTaskMatchedTp &&
+                event.previousTaskPointer != event.nextTaskPointer &&
+                event.tpBefore == event.previousTaskPointer &&
+                event.tpAfter == event.nextTaskPointer &&
+                event.entryRegisters[4] == event.tpBefore &&
+                event.exitRegisters[4] == event.tpAfter &&
+                event.entryRegisters[2] == event.spBefore &&
+                event.exitRegisters[2] == event.spAfter;
+        });
+    const bool taskStartsLinkedToSwitch = std::any_of(
+        continuation.initMilestones.begin(), continuation.initMilestones.end(),
+        [](const LinuxInitMilestoneEvent& event) {
+            return (event.name == "kernel_init" || event.name == "kthreadd") &&
+                event.selectedBySwitchEventId != UINT64_MAX;
+        });
+    Expect(initLifecycleObserved && initcallReturnsObserved,
+           "real kernel_init, kthreadd, rootfs, and initcall entry/return outcomes are observed on the pinned vmlinux path");
+    Expect(symbolPresent("schedule") && symbolPresent("__schedule") &&
+           symbolPresent("__switch_to") &&
+           std::any_of(continuation.initMilestones.begin(),
+               continuation.initMilestones.end(), [](const LinuxInitMilestoneEvent& event) {
+                   return event.name == "schedule" || event.name == "__schedule";
+               }) && completedSwitch != continuation.taskSwitchEvents.end() &&
+           completedSwitch->stackPointerChanged,
+           "scheduler activity includes a completed distinct guest task switch with observed tp and sp state changes");
+    Expect(taskStartsLinkedToSwitch,
+           "a first kernel_init or kthreadd task entry is linked to the selected task pointer from an observed switch");
+#endif
 #endif
 #else
     ContinueLinuxInStages(cpu, linuxRun, continuation, symbols);
@@ -3999,17 +5024,31 @@ int main(int argc, char** argv) {
                 event.returned && event.resumed && event.sbiResultCaptured;
         }));
 #if defined(RISCV_LINUX_BOOT_CONTINUATION)
+#if !defined(RISCV_LINUX_INIT_CONTINUATION)
     const uint64_t successfulSbiCalls = static_cast<uint64_t>(std::count_if(
         continuation.accounting.events().begin(), continuation.accounting.events().end(),
         [](const riscv_test::TrapAccountingEvent& event) {
             return event.sbiCall && event.returned && event.resumed &&
                 event.sbiResultCaptured && event.sbiError == 0;
         }));
+#endif
     const uint64_t completedSbiCalls = static_cast<uint64_t>(std::count_if(
         continuation.accounting.events().begin(), continuation.accounting.events().end(),
         [](const riscv_test::TrapAccountingEvent& event) {
             return event.sbiCall && event.returned && event.resumed && event.sbiResultCaptured;
         }));
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const uint64_t observedSbiCalls = static_cast<uint64_t>(std::count_if(
+        continuation.accounting.events().begin(), continuation.accounting.events().end(),
+        [](const riscv_test::TrapAccountingEvent& event) { return event.sbiCall; }));
+    const bool observedSbiResultsAreValid = std::all_of(
+        continuation.accounting.events().begin(), continuation.accounting.events().end(),
+        [](const riscv_test::TrapAccountingEvent& event) {
+            if (!event.sbiCall || !event.sbiResultCaptured) return true;
+            return event.sbiError == 0 || event.sbiError == static_cast<uint64_t>(-2) ||
+                event.sbiError == static_cast<uint64_t>(-3);
+        });
+#endif
     const uint64_t observedTimeCalls = static_cast<uint64_t>(std::count_if(
         continuation.timerEvents.begin(), continuation.timerEvents.end(),
         [](const LinuxTimerEvent& event) { return event.kind == "sbi_time"; }));
@@ -4056,8 +5095,14 @@ int main(int argc, char** argv) {
                 (event.mtimecmpAtTrap != UINT64_MAX &&
                  event.mtimeAtTrap >= event.mtimecmpAtTrap);
         });
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    Expect(completedSbiCalls == observedSbiCalls && completedSbiCalls != 0 &&
+           observedSbiResultsAreValid,
+           "every guest SBI call returns through authentic OpenSBI and resumes Linux, with optional-extension probes reporting standard SBI errors");
+#else
     Expect(successfulSbiCalls == completedSbiCalls && successfulSbiCalls != 0,
            "every completed guest SBI call returned through OpenSBI, resumed Linux, and reported success");
+#endif
     Expect(observedTimeCalls >= returnedTimeCalls &&
            observedMachineTimers == trapCounts.machineTimerInterrupts &&
            observedSupervisorTimers == trapCounts.supervisorTimerInterrupts &&
@@ -4393,6 +5438,13 @@ int main(int argc, char** argv) {
         nullptr,
 #endif
         handoffUartOutput, handoffUart1Output);
+#endif
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+    const std::string currentPmpEffective = AsString(ReadFile(
+        (artifactDir / "riscv-pmp-effective-v1.json").string()));
+    Expect(currentPmpEffective == riscv23PmpEffective &&
+           finalFdtBytes == riscv23FixedupFdt && continuation.fdtUnchanged,
+           "RISCV-23 effective PMP table and fixed-up FDT bytes remain identical through the RISCV-24 continuation");
 #endif
 
     std::cout << "OpenSBI: steps=" << firmwareRun.steps

@@ -1,0 +1,230 @@
+guideXOS Hypervisor — Phase RISCV-24 Report
+Authentic Linux v6.12 initialization, scheduling, and bounded continuation
+
+Outcome: A. The pinned Linux/OpenSBI run exactly reproduced the accepted
+RISCV-23 60-million-retirement state and continued on the same guest state to
+the bounded 80-million-retirement frontier. Linux entered real initialization
+and task scheduling paths, including distinct completed task switches into
+kernel_init and kthreadd. This is not a claim that Linux boot or userspace
+completed.
+
+Repository and provenance
+-------------------------
+Branch: RISCV
+Starting HEAD: 7e8905cda3b41a9abeb134c8a63eb426184262e9
+Starting upstream divergence: 2 commits ahead, 0 behind origin/RISCV
+Starting phase marker: RISCV-23 complete; RISCV-24 next
+
+Linux source: upstream v6.12, commit adc218676eef25575469234709c2d87185ca223a
+Linux Image SHA-256: 60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C
+vmlinux SHA-256: 49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093
+Kernel config SHA-256: 5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB
+OpenSBI v1.8.1 source: 74434f255873d74e56cc50aa762d1caf24c099f8
+fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+
+The original Linux and OpenSBI binaries, kernel configuration, device tree,
+boot arguments, machine memory map, timer, MMIO map, PMP domain, and firmware
+handoff were not changed. No Linux source was rebuilt or patched. The Linux
+Image, vmlinux, and configuration were independently hashed before execution.
+RISCV-23's Debug and Release bundles each still contain 38 files and compare
+byte-for-byte.
+
+The machine remains hart 0, RAM [0x80000000,0x84000000), Linux entry
+0x80200000, FDT 0x82200000, UART0 0x10000000, UART1 0x1000A000, PLIC
+0x0C000000, and a 10 MHz machine-owned timer. The authentic OpenSBI M-mode
+path performs the MRET handoff to S-mode Linux. No host SBI provider or
+synthetic firmware handling is used.
+
+RISCV-23 reproduction and 60M frontier
+--------------------------------------
+The fresh run reproduced the retained S-mode Linux handoff at PC 0x80200000,
+a0=0, a1=0x82200000, with Bare satp. It reproduced BSS clearing (44,149
+stores), setup_vm, the first Sv39 satp write, virtual kernel execution,
+soc_early_init, start_kernel, and the previously accepted 20M, 40M, and 60M
+boundaries. PMP and FDT state match the retained baseline; the FDT SHA-256 is
+580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475.
+
+At 60M, all 32 GPRs, key CSRs, PC, privilege, timer values, mode counters,
+handler counters, allocator counters, and the Linux UART prefix matched the
+RISCV-23 evidence. Exact frontier:
+
+  Retired instructions:       60,000,000
+  CPU step calls:             60,008,851
+  Normal S-mode Linux:        52,541,360
+  S-mode handler:              3,934,596
+  M-mode OpenSBI:              3,524,044
+  PC / privilege:             0xffffffff80298ff0 / S
+  Last retired PC:            0xffffffff802995ac
+  mtime / mtimecmp:            0x44f03a3 / 0x44f3c1f
+  Linux UART0 bytes:          5,630 (same SHA-256 as RISCV-23)
+
+The pinned vmlinux resolves the 60M PC to kernfs_new_node, with the prior
+retired instruction in kernfs_create_dir_ns. This is ordinary S-mode
+initialization work. No trap handler or allocator call was active at that
+boundary. The prior 40M kmem_cache_alloc_noprof call had returned a non-NULL
+object and the caller had consumed it; the 60M stop is not that pending call.
+
+Bounded continuation
+--------------------
+The same CPU and guest RAM continued without restoring or assigning a late
+state. Each configured stage was reached exactly. Counters below are cumulative
+since the firmware handoff; handler work is shown separately from normal S-mode
+Linux execution.
+
+  Target      Step calls   Normal S-mode   S handler   M/OpenSBI    Final PC
+  60M        60,008,851     52,541,360    3,934,596   3,524,044   0xffffffff80298ff0
+  70M        70,009,929     61,425,706    4,779,599   3,794,695   0xffffffff8064dc48
+  80M        80,010,929     70,344,307    5,623,248   4,032,445   0xffffffff801dac04
+
+The 70M and 80M stage PC is in the pinned vmlinux symbol
+kmem_cache_alloc_noprof. At 80M, the next instruction at 0xffffffff801dac04
+(`ld x22, 32(x2)`) had not executed; the last retired PC is
+0xffffffff801dac00. The current privilege is S, satp is
+0x80000000000812ef, the allocator has one in-flight invocation, and there
+are no active trap handlers. The current saved return address matches the
+validated __kernfs_new_node allocation call site at 0xffffffff80297398.
+This is an instruction-budget stop inside ordinary allocator work, not a
+fault, allocation failure, or evidence of a nonprogress loop.
+
+The run completed 11,474 allocator entries and 11,473 returns; all 11,473
+returned objects were non-NULL, no return was NULL, and one invocation was
+active at the exact instruction cap. The RISCV-23 completed allocator totals
+at 60M remain 8,126 entries and returns with zero active calls.
+
+Initialization and task lifecycle
+---------------------------------
+Milestones were selected from the actual pinned vmlinux symbol table. The
+observer records guest PC, post-handoff retirement, privilege, registers,
+CSRs, caller evidence when directly validated, and entry/return classification.
+Function entry alone is not reported as subsystem completion. Linux v6.12
+source reference: https://github.com/torvalds/linux/blob/v6.12/init/main.c
+
+Observed entries include start_kernel, setup_arch, sched_init, trap_init,
+timekeeping_init, time_init, rest_init, kernel_init, kernel_init_freeable,
+kthreadd, do_one_initcall, and populate_rootfs. The symbol is reached in
+S-mode with satp=0x80000000000812ef. sched_init, setup_arch, trap_init,
+timekeeping_init, and time_init have return observations. rest_init,
+kernel_init, kernel_init_freeable, and kthreadd are entry-only at the bounded
+horizon. populate_rootfs entered from do_one_initcall at 25,326,062 retired
+instructions and returned at 25,328,254 with a0=0. This is a function return
+milestone; it does not prove a mounted root filesystem or started userspace.
+
+The first captured do_one_initcall target was compat_mode_detect. In the
+bounded detail set, 256 callback entries have matching returns: 249 returned
+zero and 7 returned a nonzero value. The aggregate entry counter observed 364
+do_one_initcall entries; 108 later details were not retained after the
+per-symbol cap. No claim is made about the return status of those unretained
+calls. driver_probe_device and really_probe each had 10 observed entries and
+returns; these calls are not treated as proof that every device bound
+successfully.
+
+The pinned build has no standalone context_switch symbol. The scheduler path
+is observable through schedule, __schedule, and RISC-V __switch_to. The first
+captured switch entered __switch_to at 12,077,065 post-handoff retirements and
+selected the task later observed entering kernel_init. The next selected task
+was observed entering kthreadd. For each of the 512 retained switch records,
+the previous task pointer matched tp before the switch, the selected task
+pointer differed, tp after the switch matched the selected pointer, sp
+changed, and execution exited __switch_to. All 512 retained events therefore
+demonstrate completed distinct task switches. The event detail cap dropped
+809 subsequent switch details; those dropped events are not included in the
+512-event completion statement. Linux v6.12 RISC-V switch source reference:
+https://github.com/torvalds/linux/blob/v6.12/arch/riscv/include/asm/switch_to.h
+
+The evidence does not show entry into do_pre_smp_initcalls, do_basic_setup,
+do_initcalls, prepare_namespace, run_init_process, try_to_run_init_process,
+kernel_execve, init_post, cpu_startup_entry, or default_idle_call by 80M.
+Some of these functions have symbols in vmlinux but no observed entry; others
+are absent from this build. kernel_init has not been shown to return from its
+initialization path, and no userspace process was observed.
+
+Console, SBI, timer, and traps
+-----------------------------
+The exact 5,630-byte S-mode Linux UART0 prefix at 60M matches the retained
+RISCV-23 bytes (SHA-256
+2E8B68F93E9D799025E4DB52756F79A0C7F74F838B3ABB9B9B48E68FDE4A77BD).
+By 80M, the actual guest UART0 S-mode stream contains 6,367 bytes, 87 complete
+lines, and no trailing partial line. The 737-byte continuation adds 11 lines,
+including 8250/16550, mousedev, SDHCI, DesignWare MMC/SDHCI platform, usbhid,
+and riscv-pmu-sbi initialization messages. UART1 remains silent. The complete
+6,367-byte stream SHA-256 is
+B6C8CB4311604F78CE79F3BFFC72A1F47AC468E90B47CC36B0145F90E8397E4C.
+The panic/Oops marker scan observed no Linux panic marker.
+
+At 80M, Linux made 3,497 SBI ecall requests; all returned to and resumed S-mode
+with result evidence. 3,445 returned 0. The 52 nonzero results were all SBI
+PMU EID 0x504d55 calls: 50 FID 2 and one FID 7 returned
+SBI_ERR_NOT_SUPPORTED (-2), and one FID 1 returned SBI_ERR_INVALID_PARAM
+(-3). The 3,401 SBI TIME calls all returned success. There were
+1,699 machine timer and 1,699 supervisor timer interrupts; each observed
+handler returned. The 10 MHz virtual mtime advanced one tick per retired guest
+instruction. At the cap, mtime is 0x58030a3; mtimecmp is 0x580691f.
+
+Trap accounting records 10,929 non-retiring trap transitions and 10,928
+matched handler entries and returns. Active handlers at stop: zero. Maximum
+nesting: two. Largest handler: 6,012 instructions. No trap event details were
+dropped. The total is 75,967,555 S-mode Linux retirements plus 4,032,445
+M-mode OpenSBI retirements, exactly 80,000,000. Of the S-mode total,
+70,344,307 are normal Linux instructions and 5,623,248 are handler
+instructions.
+
+Failure and stop classification
+--------------------------------
+No unsupported instruction, access fault, page fault frontier, SBI execution
+failure, panic, Oops, BUG, or stalled guest state was observed. The run ended
+at the configured 80,000,000 post-handoff retirement limit with forward
+progress. No production CPU, MMU, PMP, timer, UART, OpenSBI, or Linux change was
+made. Source changes are limited to the bounded observer/test integration,
+artifact-path isolation for earlier continuation regressions, an explicit
+`<cstring>` include for the existing OpenSBI PMP test under the active
+toolchain, the shared ELF64 loader source needed by Debug Linux test links,
+and this documentation.
+
+Artifacts
+---------
+Release evidence: E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv24-artifacts\Release
+Debug evidence:   E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv24-artifacts\Debug
+The evidence directories include the run summary, staged counters and GPR/
+CSR snapshots, milestone and scheduler observations, UART binary and analysis,
+SBI and timer events, trap accounting, allocator evidence, PMP/FDT evidence,
+and the final frontier. Earlier RISCV-21/22/23 outputs used by regressions are
+written under the separate `regression-runs` subdirectory so retained phase
+artifacts remain untouched.
+
+Validation
+----------
+RISCV-24 dedicated authentic continuation, Release: PASS (1/1,
+1,063.58 seconds). The 32 existing RISC-V suites plus the EFI memory-map and
+IA-64 SAL targets build in both Debug and Release; the three direct IA-64
+targets also build in both configurations.
+
+Debug CTest: 35/35 selected RISC-V, EFI, and SAL suites passed (4,747.55
+seconds), including the RISCV-24 continuation. Release CTest: 34/34 existing
+RISC-V, EFI, and SAL suites passed (1,081.64 seconds); together with the
+separate RISCV-24 continuation, Release passed all 35 required outcomes.
+Direct IA-64 ACPI, interrupt-controller, and processor-interrupt-block tests
+passed 3/3 in both Debug and Release.
+
+The RISCV-24 Debug and Release evidence bundles each contain 40 files and are
+byte-identical. The retained RISCV-23 Debug and Release bundles each still
+contain 38 files and remain byte-identical. The pinned Linux Image, vmlinux,
+kernel config, and OpenSBI firmware hashes match their accepted values.
+`git diff --check` passes.
+
+The broader all-target Release build reaches two unrelated generic test link
+failures: `test_cpu_execution.exe` and `test_mov_imm.exe` have unresolved
+Winsock imports (`WSAStartup`, `socket`, `send`, and related symbols). The
+required RISC-V and IA-64 targets build successfully; no Winsock or other
+unrelated project changes were made.
+
+RISCV-25 recommendation
+-----------------------
+Continue from the real 80M guest state with a separately bounded run only
+after reviewing this frontier. Prioritize observing the remainder of
+kernel_init_freeable and the transition into later initcalls or namespace/init
+preparation. Determine from guest execution whether the next requirement is
+an absent root filesystem or device, ordinary initialization work, or a
+specific architectural/platform behavior. Keep Linux, its config, RAM, PMP,
+and firmware unchanged until guest evidence demonstrates a concrete blocker.
+Do not infer Linux boot completion from retirement count or these task
+switches.
