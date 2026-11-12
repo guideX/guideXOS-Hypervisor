@@ -178,6 +178,9 @@ enum class Op {
     LdrLit,   // LDR (literal): Xt/Wt = Mem[PC + SEx(imm19)*4] via sf64
     Stp,      // STP (register pair): signed-offset / pre / post-index
     Ldp,      // LDP (register pair): signed-offset / pre / post-index
+    Ldxr,     // LDXR/LDAXR byte, halfword, word, or doubleword
+    Stxr,     // STXR/STLXR byte, halfword, word, or doubleword
+    Clrex,    // CLREX: clear the local exclusive monitor
     Ldur,     // LDUR (unscaled, imm9 signed): Wt/Xt = Mem[Rn + SEx(imm9)]
     Stur,     // STUR (unscaled, imm9 signed): Mem[Rn + SEx(imm9)] = Wt/Xt
     LdrPre,   // LDR (immediate, pre-index): writeback base = base + SEx(imm9)
@@ -189,6 +192,7 @@ enum class Op {
     EorImm,   // EOR (immediate): bitmask immediate
     AndsImm,  // ANDS (immediate): bitmask immediate (TST alias when Rd==31)
     LogicalReg, // Logical shifted-register AND/ORR/EOR/ANDS family
+    Ubfm,     // UBFM and its unsigned extract/shift aliases
     Csel,     // CSEL: conditional select
     Csinc,    // CSINC: conditional select increment (CINC/CSET aliases)
     Mrs,      // MRS Xt, system register
@@ -242,6 +246,7 @@ struct Decoded {
     uint8_t logicalShift = 0;  // Logical shifted-register shift type: LSL/LSR/ASR/ROR
     bool invertRm = false;     // Logical shifted-register N bit (BIC/ORN/EON/BICS)
     bool setsFlags = false;    // ANDS/TST (sets N,Z; clears C,V)
+    bool acquireRelease = false; // Exclusive load-acquire/store-release variant
     int64_t pcOffset = 0;      // ADR/ADRP/LDR-literal signed byte displacement
                                // from the current instruction address, fully
                                // scaled (ADR x1, ADRP x4096, LDR literal x4).
@@ -283,6 +288,16 @@ struct RunOutcome {
 // EL1h/SP_EL1. A real guest may transition levels only through ERET.
 class Cpu {
 public:
+    // Fixed immutable virtual CPU identification profile. The selected
+    // cacheless memory model uses one-word line minima, PIPT (where relevant),
+    // a 16-byte exclusive reservation granule, and coherent RAM instruction
+    // fetch (IDC/DIC). These are architectural field encodings, not byte sizes.
+    static constexpr uint64_t kCtrEl0Value =
+        (1ULL << 31) | (1ULL << 29) | (1ULL << 28) |
+        (1ULL << 24) | (2ULL << 20) | (3ULL << 14);
+    static constexpr uint64_t kClidrEl1Value = 0; // no data/instruction cache levels
+    static constexpr uint64_t kExclusiveReservationGranuleBytes = 16;
+
     explicit Cpu(uint64_t entryPoint = 0,
                  ExceptionLevel initialLevel = ExceptionLevel::EL0) {
         reset(entryPoint, initialLevel);
@@ -468,6 +483,9 @@ private:
     void takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
                                   uint64_t preferredReturnAddress);
     void synchronizeTranslationContext();
+    void clearExclusiveMonitor() noexcept;
+    void invalidateExclusiveMonitor(uint64_t physicalAddress,
+                                   size_t byteCount) noexcept;
     void takeMemoryAbort(uint64_t faultAddress, MMUAccess access,
                          uint8_t faultStatus, bool duringTableWalk);
     bool readGuestMemory(const ia64::IMemory& memory, uint64_t virtualAddress,
@@ -511,6 +529,12 @@ private:
     // been fetched and dispatched. A failed fetch in this window is fatal,
     // preventing an unmapped vector from repeatedly aborting into itself.
     bool exceptionVectorPending_ = false;
+    // Per-CPU local exclusive monitor. It is derived execution state and is
+    // conservatively cleared on reset, exception entry, and checkpoint restore.
+    bool exclusiveMonitorValid_ = false;
+    uint64_t exclusivePhysicalAddress_ = 0;
+    uint64_t exclusiveGranuleBase_ = 0;
+    uint8_t exclusiveAccessBytes_ = 0;
     std::vector<std::weak_ptr<AArch64SystemRegisterHandler>> systemRegisterHandlers_;
     mutable AArch64TLB tlb_;
     // Serializes complete instruction execution with snapshot management.

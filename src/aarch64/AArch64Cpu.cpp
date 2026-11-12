@@ -173,6 +173,8 @@ const char* sysregName(uint8_t op0, uint8_t op1, uint8_t crn,
                        uint8_t crm, uint8_t op2) {
     const uint16_t key = sysregKey(op0, op1, crn, crm, op2);
     switch (key) {
+    case sysregKey(3, 3, 0, 0, 1): return "ctr_el0";
+    case sysregKey(3, 1, 0, 0, 1): return "clidr_el1";
     case sysregKey(3, 0, 4, 2, 2): return "currentel";
     case sysregKey(3, 3, 4, 2, 0): return "nzcv";
     case sysregKey(3, 3, 4, 2, 1): return "daif";
@@ -240,6 +242,7 @@ Cpu::Cpu(const Cpu& other) {
     effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
     effectiveMairEl1_ = other.effectiveMairEl1_;
     exceptionVectorPending_ = other.exceptionVectorPending_;
+    clearExclusiveMonitor();
     tlb_ = other.tlb_;
     lastFault_ = other.lastFault_;
     lastError_ = other.lastError_;
@@ -260,6 +263,7 @@ Cpu& Cpu::operator=(const Cpu& other) {
     effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
     effectiveMairEl1_ = other.effectiveMairEl1_;
     exceptionVectorPending_ = other.exceptionVectorPending_;
+    clearExclusiveMonitor();
     tlb_ = other.tlb_;
     lastFault_ = other.lastFault_;
     lastError_ = other.lastError_;
@@ -281,6 +285,7 @@ Cpu::Cpu(Cpu&& other) {
     effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
     effectiveMairEl1_ = other.effectiveMairEl1_;
     exceptionVectorPending_ = other.exceptionVectorPending_;
+    clearExclusiveMonitor();
     tlb_ = std::move(other.tlb_);
     lastFault_ = other.lastFault_;
     lastError_ = std::move(other.lastError_);
@@ -301,6 +306,7 @@ Cpu& Cpu::operator=(Cpu&& other) {
     effectiveTtbr1El1_ = other.effectiveTtbr1El1_;
     effectiveMairEl1_ = other.effectiveMairEl1_;
     exceptionVectorPending_ = other.exceptionVectorPending_;
+    clearExclusiveMonitor();
     tlb_ = std::move(other.tlb_);
     lastFault_ = other.lastFault_;
     lastError_ = std::move(other.lastError_);
@@ -460,6 +466,7 @@ void Cpu::reset(uint64_t entryPoint, ExceptionLevel initialLevel) {
     effectiveSctlrEl1_ = effectiveTcrEl1_ = effectiveTtbr0El1_ =
         effectiveTtbr1El1_ = effectiveMairEl1_ = 0;
     exceptionVectorPending_ = false;
+    clearExclusiveMonitor();
     tlb_.reset();
     lastFault_ = Fault::None;
     lastError_.clear();
@@ -535,6 +542,23 @@ void Cpu::synchronizeTranslationContext() {
     effectiveMairEl1_ = mairEl1_;
 }
 
+void Cpu::clearExclusiveMonitor() noexcept {
+    exclusiveMonitorValid_ = false;
+    exclusivePhysicalAddress_ = 0;
+    exclusiveGranuleBase_ = 0;
+    exclusiveAccessBytes_ = 0;
+}
+
+void Cpu::invalidateExclusiveMonitor(uint64_t physicalAddress,
+                                    size_t byteCount) noexcept {
+    if (!exclusiveMonitorValid_ || byteCount == 0) return;
+    const uint64_t last = physicalAddress + static_cast<uint64_t>(byteCount - 1);
+    const uint64_t granuleEnd = exclusiveGranuleBase_ +
+        kExclusiveReservationGranuleBytes - 1;
+    if (physicalAddress <= granuleEnd && exclusiveGranuleBase_ <= last)
+        clearExclusiveMonitor();
+}
+
 void Cpu::takeMemoryAbort(uint64_t faultAddress, MMUAccess access,
                           uint8_t faultStatus, bool duringTableWalk) {
     const bool instruction = access == MMUAccess::Instruction;
@@ -555,6 +579,7 @@ void Cpu::takeMemoryAbort(uint64_t faultAddress, MMUAccess access,
         iss |= 1u << 9; // synchronous external abort, including instruction aborts
     }
     farEl1_ = faultAddress;
+    clearExclusiveMonitor();
     takeSynchronousException(exceptionClass, iss, pc_);
     lastFault_ = Fault::None;
     lastError_.clear();
@@ -650,6 +675,7 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
     if ((effectiveSctlrEl1_ & 1u) == 0) {
         try {
             memory.Write(virtualAddress, source, size);
+            invalidateExclusiveMonitor(virtualAddress, size);
         } catch (const AArch64PhysicalAccessFault& exception) {
             if (exception.kind() != AArch64PhysicalFaultKind::ExternalAbort) throw;
             if (status != nullptr) *status = 0x10u;
@@ -702,6 +728,7 @@ bool Cpu::writeGuestMemory(ia64::IMemory& memory, uint64_t virtualAddress,
     for (const Segment& segment : segments) {
         try {
             memory.Write(segment.pa, source + segment.offset, segment.size);
+            invalidateExclusiveMonitor(segment.pa, segment.size);
         } catch (const AArch64PhysicalAccessFault& exception) {
             if (exception.kind() != AArch64PhysicalFaultKind::ExternalAbort) throw;
             return fail(0x10, false, virtualAddress + segment.offset);
@@ -1132,6 +1159,37 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
     }
 
+    // UBFM (including UBFX/LSR/LSL aliases). This narrow unsigned form is
+    // used by Linux to extract CTR_EL0 cache-line fields; signed and insert
+    // bitfield variants remain outside this execution subset.
+    if ((word & 0x7F800000u) == 0x53000000u) {
+        const bool sf = (word & 0x80000000u) != 0;
+        const uint32_t nBit = (word >> 22) & 1u;
+        const uint32_t immr = (word >> 16) & 0x3Fu;
+        const uint32_t imms = (word >> 10) & 0x3Fu;
+        if (nBit != static_cast<uint32_t>(sf) ||
+            (!sf && ((immr | imms) & 0x20u) != 0)) {
+            return invalid(word, address, Fault::UnallocatedEncoding,
+                           "UBFM encoding has reserved width or N-bit fields");
+        }
+        Decoded d;
+        d.op = Op::Ubfm;
+        d.valid = true;
+        d.sf64 = sf;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+        d.immr = immr;
+        d.imms = imms;
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "ubfm %s, %s, #%u, #%u",
+                      regName(sf, d.rd).c_str(), regName(sf, d.rn).c_str(),
+                      immr, imms);
+        d.disassembly = buf;
+        return d;
+    }
+
     // Logical (shifted register): sf[31] opc[30:29] 01010 shift[23:22]
     // N[21] Rm[20:16] imm6[15:10] Rn[9:5] Rd[4:0].  The N bit inverts
     // operand Rm (BIC/ORN/EON/BICS); register 31 is always XZR/WZR here.
@@ -1376,6 +1434,63 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         d.word = word;
         d.address = address;
         d.disassembly = "eret";
+        return d;
+    }
+
+    // CLREX is an architectural system hint with an immediate that selects
+    // the shareability domain. This single-PE profile has only the local
+    // monitor, so the domain does not change its clear operation.
+    if ((word & 0xFFFFF0FFu) == 0xD503305Fu) {
+        Decoded d;
+        d.op = Op::Clrex;
+        d.valid = true;
+        d.word = word;
+        d.address = address;
+        d.disassembly = "clrex";
+        return d;
+    }
+
+    // Scalar Load/Store Exclusive forms. The profile deliberately excludes
+    // pair exclusives and LSE atomics; bit 23 distinguishes the ordered
+    // non-exclusive LDAR/STLR encodings, and Rt2 must be the scalar sentinel.
+    if ((word & 0x3F200C00u) == 0x08000C00u &&
+        (word & (1u << 23)) == 0) {
+        const bool isLoad = (word & (1u << 22)) != 0;
+        const uint8_t rs = static_cast<uint8_t>((word >> 16) & 31u);
+        const uint8_t rt2 = static_cast<uint8_t>((word >> 10) & 31u);
+        if (rt2 != 31u || (isLoad && rs != 31u)) {
+            return invalid(word, address, Fault::UnsupportedFeature,
+                           "exclusive pair or malformed scalar-exclusive encoding is outside this profile");
+        }
+        const uint8_t sizeCode = static_cast<uint8_t>((word >> 30) & 3u);
+        const uint8_t accessBytes = static_cast<uint8_t>(1u << sizeCode);
+        const uint8_t rt = static_cast<uint8_t>(word & 31u);
+        const uint8_t rn = static_cast<uint8_t>((word >> 5) & 31u);
+        const bool acquireRelease = (word & (1u << 15)) != 0;
+        Decoded d;
+        d.op = isLoad ? Op::Ldxr : Op::Stxr;
+        d.valid = true;
+        d.sf64 = accessBytes == 8;
+        d.word = word;
+        d.address = address;
+        d.rd = isLoad ? rt : rs; // STXR status is always W-sized.
+        d.rt2 = rt;
+        d.rn = rn;
+        d.accessBytes = accessBytes;
+        d.acquireRelease = acquireRelease;
+        const char* stem = isLoad
+            ? (acquireRelease ? "ldaxr" : "ldxr")
+            : (acquireRelease ? "stlxr" : "stxr");
+        const char* suffix = accessBytes == 1 ? "b" : accessBytes == 2 ? "h" : "";
+        char buf[80];
+        if (isLoad) {
+            std::snprintf(buf, sizeof(buf), "%s%s %c%u, [x%u]", stem, suffix,
+                          accessBytes == 8 ? 'x' : 'w', rt, rn);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%s%s w%u, %c%u, [x%u]", stem, suffix,
+                          rs, accessBytes == 8 ? 'x' : 'w', rt, rn);
+        }
+        d.disassembly = buf;
         return d;
     }
 
@@ -1674,6 +1789,7 @@ void Cpu::takeSynchronousException(uint8_t exceptionClass, uint32_t iss,
                                   uint64_t preferredReturnAddress) {
     // Synchronous exception entry is a context synchronization event.
     synchronizeTranslationContext();
+    clearExclusiveMonitor();
     const uint8_t originEl = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
     uint64_t vectorOffset = 0x400; // lower EL using AArch64
     if (originEl == 1) {
@@ -1763,6 +1879,8 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     const uint16_t key = sysregKey(decoded.sysOp0, decoded.sysOp1,
                                    decoded.sysCrn, decoded.sysCrm,
                                    decoded.sysOp2);
+    const uint16_t ctrKey = sysregKey(3, 3, 0, 0, 1);
+    const uint16_t clidrKey = sysregKey(3, 1, 0, 0, 1);
     const uint16_t currentElKey = sysregKey(3, 0, 4, 2, 2);
     const uint16_t nzcvKey = sysregKey(3, 3, 4, 2, 0);
     const uint16_t daifKey = sysregKey(3, 3, 4, 2, 1);
@@ -1795,7 +1913,8 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     constexpr uint32_t kSupportedSpsrFields =
         0xF0000000u | kPstateDAIF | (1u << 20) | kPstateModeMask;
 
-    const bool known = key == currentElKey || key == nzcvKey || key == daifKey ||
+    const bool known = key == ctrKey || key == clidrKey ||
+                       key == currentElKey || key == nzcvKey || key == daifKey ||
                        key == spEl0Key || key == spselKey || key == spsrKey ||
                        key == elrKey || key == vbarKey || key == esrKey ||
                        key == farKey || key == sctlrKey || key == tcrKey ||
@@ -1809,6 +1928,13 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
         return Fault::UnsupportedFeature;
     }
 
+    // Identification registers are read-only architectural registers. Writes
+    // are UNDEFINED, including at EL0, and must not modify any CPU state.
+    if (!isRead && (key == ctrKey || key == clidrKey)) {
+        takeSynchronousException(0x00, 0, pc_);
+        return Fault::None;
+    }
+
     if (deviceRegister && !isRead && registerHandler->writeIsUndefined(key)) {
         takeSynchronousException(0x00, 0, pc_);
         return Fault::None;
@@ -1818,16 +1944,28 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
     // in this profile. Timer access uses the distinct CNTKCTL_EL1 controls;
     // other privileged-only accesses remain architecturally UNDEFINED.
     const bool el0AccessAllowed = key == nzcvKey ||
+        (key == ctrKey && (effectiveSctlrEl1_ & (1ULL << 15)) != 0) ||
         (deviceRegister && registerHandler->el0AccessAllowed(key, isRead));
     if (el == 0 && !el0AccessAllowed) {
         if (key == daifKey) {
             takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
-        } else if (deviceRegister &&
-                   !registerHandler->el0AccessIsUndefined(key, isRead)) {
+        } else if (key == ctrKey || (deviceRegister &&
+                   !registerHandler->el0AccessIsUndefined(key, isRead))) {
             takeSynchronousException(0x18, systemRegisterSyndrome(decoded, isRead), pc_);
         } else {
             takeSynchronousException(0x00, 0, pc_);
         }
+        return Fault::None;
+    }
+
+    if (isRead && key == ctrKey) {
+        if (decoded.rd != 31) x_[decoded.rd] = kCtrEl0Value;
+        pc_ += kInstructionSize;
+        return Fault::None;
+    }
+    if (isRead && key == clidrKey) {
+        if (decoded.rd != 31) x_[decoded.rd] = kClidrEl1Value;
+        pc_ += kInstructionSize;
         return Fault::None;
     }
 
@@ -1858,7 +1996,8 @@ Fault Cpu::executeSystemRegister(const Decoded& decoded) {
 
     if (!isRead && key == sctlrKey) {
         const uint64_t source = decoded.rd == 31 ? 0 : x_[decoded.rd];
-        constexpr uint64_t supportedSctlr = (1ULL << 0) | (1ULL << 19); // M, WXN
+        constexpr uint64_t supportedSctlr = (1ULL << 0) | (1ULL << 15) |
+                                           (1ULL << 19); // M, UCT, WXN
         if ((source & ~supportedSctlr) != 0) {
             lastError_ = "SCTLR_EL1 fields outside M/WXN are unsupported by this memory profile";
             return Fault::UnsupportedFeature;
@@ -2149,6 +2288,117 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         synchronizeTranslationContext();
         pc_ += kInstructionSize;
         break;
+    case Op::Clrex:
+        clearExclusiveMonitor();
+        pc_ += kInstructionSize;
+        break;
+    case Op::Ldxr: {
+        const size_t size = decoded.accessBytes;
+        const uint64_t address = decoded.rn == 31 ? activeSpRef() : x_[decoded.rn];
+        if ((address & (size - 1u)) != 0) {
+            takeMemoryAbort(address, MMUAccess::Read, 0x21u, false);
+            return Fault::None;
+        }
+        uint64_t physicalAddress = address;
+        if ((effectiveSctlrEl1_ & 1u) != 0) {
+            const MMUResult translated = translateGuestAddress(
+                memory, address, MMUAccess::Read);
+            if (!translated.success) {
+                takeMemoryAbort(address, MMUAccess::Read,
+                                translated.faultStatus,
+                                translated.duringTableWalk);
+                return Fault::None;
+            }
+            physicalAddress = translated.physicalAddress;
+        }
+        uint8_t bytes[8] = {};
+        try {
+            uint8_t dfsc = 0;
+            bool walkFault = false;
+            uint64_t faultVa = address;
+            if (!readGuestMemory(memory, address, bytes, size, MMUAccess::Read,
+                                 nullptr, &dfsc, &walkFault, &faultVa)) {
+                takeMemoryAbort(faultVa, MMUAccess::Read, dfsc, walkFault);
+                return Fault::None;
+            }
+        } catch (const std::exception& ex) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = std::string("LDXR data access failed: ") + ex.what();
+            return lastFault_;
+        } catch (...) {
+            lastFault_ = Fault::MemoryFault;
+            lastError_ = "LDXR data access failed with a non-standard exception";
+            return lastFault_;
+        }
+        uint64_t value = 0;
+        for (size_t i = 0; i < size; ++i)
+            value |= static_cast<uint64_t>(bytes[i]) << (8u * i);
+        if (decoded.rt2 != 31)
+            x_[decoded.rt2] = decoded.sf64 ? value : (value & 0xFFFFFFFFu);
+        exclusiveMonitorValid_ = true;
+        exclusivePhysicalAddress_ = physicalAddress;
+        exclusiveGranuleBase_ = physicalAddress &
+            ~(kExclusiveReservationGranuleBytes - 1u);
+        exclusiveAccessBytes_ = decoded.accessBytes;
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Stxr: {
+        const size_t size = decoded.accessBytes;
+        const uint64_t address = decoded.rn == 31 ? activeSpRef() : x_[decoded.rn];
+        if ((address & (size - 1u)) != 0) {
+            takeMemoryAbort(address, MMUAccess::Write, 0x21u, false);
+            return Fault::None;
+        }
+        bool succeeds = false;
+        uint64_t physicalAddress = address;
+        if (exclusiveMonitorValid_) {
+            if ((effectiveSctlrEl1_ & 1u) != 0) {
+                const MMUResult translated = translateGuestAddress(
+                    memory, address, MMUAccess::Write);
+                if (!translated.success) {
+                    takeMemoryAbort(address, MMUAccess::Write,
+                                    translated.faultStatus,
+                                    translated.duringTableWalk);
+                    return Fault::None;
+                }
+                physicalAddress = translated.physicalAddress;
+            }
+            succeeds = physicalAddress == exclusivePhysicalAddress_ &&
+                       decoded.accessBytes == exclusiveAccessBytes_;
+        }
+        // A store-exclusive attempt always consumes the local reservation.
+        clearExclusiveMonitor();
+        if (succeeds) {
+            const uint64_t source = decoded.rt2 == 31 ? 0 :
+                (decoded.sf64 ? x_[decoded.rt2]
+                              : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rt2])));
+            uint8_t bytes[8] = {};
+            for (size_t i = 0; i < size; ++i)
+                bytes[i] = static_cast<uint8_t>(source >> (8u * i));
+            try {
+                uint8_t dfsc = 0;
+                bool walkFault = false;
+                uint64_t faultVa = address;
+                if (!writeGuestMemory(memory, address, bytes, size,
+                                      &dfsc, &walkFault, &faultVa)) {
+                    takeMemoryAbort(faultVa, MMUAccess::Write, dfsc, walkFault);
+                    return Fault::None;
+                }
+            } catch (const std::exception& ex) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = std::string("STXR data access failed: ") + ex.what();
+                return lastFault_;
+            } catch (...) {
+                lastFault_ = Fault::MemoryFault;
+                lastError_ = "STXR data access failed with a non-standard exception";
+                return lastFault_;
+            }
+        }
+        if (decoded.rd != 31) x_[decoded.rd] = succeeds ? 0u : 1u;
+        pc_ += kInstructionSize;
+        break;
+    }
     case Op::Tlbi: {
         const Fault result = executeTlbi(decoded);
         if (result != Fault::None) {
@@ -2827,6 +3077,29 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         } else {
             x_[decoded.rn] = wb;
         }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::Ubfm: {
+        const unsigned width = decoded.sf64 ? 64u : 32u;
+        const uint64_t widthMask = decoded.sf64 ? UINT64_MAX : 0xFFFFFFFFu;
+        const uint64_t source = decoded.rn == 31 ? 0 :
+            (decoded.sf64 ? x_[decoded.rn]
+                          : static_cast<uint64_t>(static_cast<uint32_t>(x_[decoded.rn])));
+        const unsigned rotate = decoded.immr;
+        const unsigned diff = (decoded.imms - rotate) & (width - 1u);
+        const uint64_t writeMask = decoded.imms == width - 1u
+            ? widthMask : ((uint64_t{1} << (decoded.imms + 1u)) - 1u);
+        const uint64_t rotatedMask = rotate == 0 ? writeMask :
+            ((writeMask >> rotate) | (writeMask << (width - rotate))) & widthMask;
+        const uint64_t topMask = diff == width - 1u
+            ? widthMask : ((uint64_t{1} << (diff + 1u)) - 1u);
+        const uint64_t rotatedSource = rotate == 0 ? source & widthMask :
+            ((source >> rotate) | (source << (width - rotate))) & widthMask;
+        const uint64_t result = rotatedSource & rotatedMask & topMask;
+        if (decoded.rd != 31)
+            x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);
+        // UBFM and its aliases preserve NZCV.
         pc_ += kInstructionSize;
         break;
     }

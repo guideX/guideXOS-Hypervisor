@@ -55,7 +55,7 @@ bool validV2Spsr(uint32_t value) {
 }
 
 bool validSctlr(uint64_t value) {
-    return (value & ~((1ULL << 0) | (1ULL << 19))) == 0;
+    return (value & ~((1ULL << 0) | (1ULL << 15) | (1ULL << 19))) == 0;
 }
 
 ia64::ISAExecutionResult faultToResult(Fault fault) {
@@ -304,6 +304,10 @@ void AArch64State::applyTo(Cpu& cpu) const {
     cpu.effectiveTtbr1El1_ = effectiveTtbr1El1_;
     cpu.effectiveMairEl1_ = effectiveMairEl1_;
     cpu.exceptionVectorPending_ = exceptionVectorPending_;
+    // Exclusive monitor state is intentionally derived and omitted from the
+    // legacy v3 checkpoint. A restored CPU starts with a conservatively cold
+    // local monitor, so a subsequent STXR can fail but cannot falsely succeed.
+    cpu.clearExclusiveMonitor();
     // The TLB is derived microarchitectural state. A CPU-state restore starts
     // cold and reconstructs mappings from the separately restored guest RAM.
     cpu.tlb_.reset();

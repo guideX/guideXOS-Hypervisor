@@ -696,6 +696,7 @@ add_test(NAME AArch64GenericTimerTests COMMAND test_aarch64_generic_timer)
 add_test(NAME AArch64GICv3Tests COMMAND test_aarch64_gicv3)
 add_test(NAME AArch64PlatformTests COMMAND test_aarch64_platform)
 add_test(NAME AArch64LinuxBootTests COMMAND test_aarch64_linux_boot)
+add_test(NAME AArch64CpuIdentificationTests COMMAND test_aarch64_cpu_identification)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
 set_tests_properties(AArch64GICv3Tests PROPERTIES TIMEOUT 120)
@@ -984,6 +985,16 @@ add_executable(test_aarch64_linux_boot
     ${HEADERS}
 )
 
+# AARCH64-15: production CTR_EL0/cache-profile, privilege, coherency,
+# exclusive-monitor, and cold snapshot-restore checks.
+add_executable(test_aarch64_cpu_identification
+    tests/test_aarch64_cpu_identification.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
     target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
@@ -992,6 +1003,7 @@ if(WIN32)
     target_link_libraries(test_aarch64_gicv3 PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_platform PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_linux_boot PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_cpu_identification PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)
@@ -1012,6 +1024,7 @@ if(MSVC)
     target_compile_options(test_aarch64_gicv3 PRIVATE /W4)
     target_compile_options(test_aarch64_platform PRIVATE /W4)
     target_compile_options(test_aarch64_linux_boot PRIVATE /W4)
+    target_compile_options(test_aarch64_cpu_identification PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
@@ -1020,6 +1033,7 @@ else()
     target_compile_options(test_aarch64_gicv3 PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_platform PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_linux_boot PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_cpu_identification PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

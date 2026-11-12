@@ -393,6 +393,11 @@ struct StepRecord {
     std::string disassembly;
     Fault fault = Fault::None;
     uint64_t nextPc = 0;
+    uint64_t x0 = 0;
+    uint64_t x1 = 0;
+    uint64_t x2 = 0;
+    uint64_t x3 = 0;
+    uint32_t pstate = 0;
     bool exceptionTaken = false;
     bool retired = false;
     uint64_t esr = 0;
@@ -411,6 +416,11 @@ struct StepRecord {
             << " exception_taken=" << (exceptionTaken ? "yes" : "no")
             << " retired=" << (retired ? "yes" : "no")
             << " next_pc=" << hex(nextPc, 16)
+            << " x0=" << hex(x0, 16)
+            << " x1=" << hex(x1, 16)
+            << " x2=" << hex(x2, 16)
+            << " x3=" << hex(x3, 16)
+            << " pstate=" << hex(pstate, 8)
             << " esr_el1=" << hex(esr, 16)
             << " far_el1=" << hex(far, 16);
         if (!diagnostic.empty()) out << " diagnostic=\"" << diagnostic << '"';
@@ -446,6 +456,11 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         const uint64_t oldElr = core.elrEl1();
         record.fault = core.step(platform.physicalBus());
         record.nextPc = core.pc();
+        record.x0 = core.readX(0);
+        record.x1 = core.readX(1);
+        record.x2 = core.readX(2);
+        record.x3 = core.readX(3);
+        record.pstate = core.pstate();
         record.esr = core.esrEl1();
         record.far = core.farEl1();
         const uint64_t vbar = core.vbarEl1();
