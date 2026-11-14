@@ -1159,6 +1159,42 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
     }
 
+    // Variable shift (register): sf[31] 00 11010110 0 Rm 0010 op2 Rn Rd.
+    // The fixed-field mask deliberately excludes sf, Rm, Rn, and Rd while
+    // validating the full opcode and op2 fields. LSLV/LSRV/ASRV/RORV share
+    // this encoding family; the register aliases use this same execution path.
+    {
+        constexpr uint32_t kVariableShiftMask = 0x7FE0FC00u;
+        constexpr uint32_t kVariableShiftBase = 0x1AC02000u;
+        const uint32_t fixed = word & kVariableShiftMask;
+        if ((fixed & 0xFFFFF3FFu) == kVariableShiftBase) {
+            const bool sf = (word & 0x80000000u) != 0;
+            Decoded d;
+            d.op = Op::VariableShift;
+            d.valid = true;
+            d.sf64 = sf;
+            d.word = word;
+            d.address = address;
+            d.rd = static_cast<uint8_t>(word & 31u);
+            d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+            d.rm = static_cast<uint8_t>((word >> 16) & 31u);
+            d.variableShift = static_cast<uint8_t>((word >> 10) & 3u);
+            static constexpr const char* kNames[] = {"lslv", "lsrv", "asrv", "rorv"};
+            const std::string rdName = d.rd == 31
+                ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rd);
+            const std::string rnName = d.rn == 31
+                ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rn);
+            const std::string rmName = d.rm == 31
+                ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rm);
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, %s",
+                          kNames[d.variableShift], rdName.c_str(),
+                          rnName.c_str(), rmName.c_str());
+            d.disassembly = buf;
+            return d;
+        }
+    }
+
     // UBFM (including UBFX/LSR/LSL aliases). This narrow unsigned form is
     // used by Linux to extract CTR_EL0 cache-line fields; signed and insert
     // bitfield variants remain outside this execution subset.
@@ -1586,6 +1622,16 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
                 }
                 d.disassembly = buf;
                 return d;
+            }
+
+            // DC IVAC, Xt: recognize the valid A64 cache-maintenance alias
+            // reached by the pinned Linux Image. This cacheless profile does
+            // not model the operation's architectural effects, so report an
+            // unsupported feature instead of mislabeling it unallocated.
+            if (!isRead && op0 == 1u && op1 == 0u && crn == 7u &&
+                crm == 6u && op2 == 1u) {
+                return invalid(word, address, Fault::UnsupportedFeature,
+                               "DC IVAC cache maintenance is outside the cacheless execution profile");
             }
 
             if (!isRead && op0 == 0u && crn == 4u && rt == 31u) {
@@ -3077,6 +3123,52 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         } else {
             x_[decoded.rn] = wb;
         }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::VariableShift: {
+        const unsigned width = decoded.sf64 ? 64u : 32u;
+        const uint64_t widthMask = decoded.sf64 ? UINT64_MAX : 0xFFFFFFFFULL;
+        // Read both sources before writing Rd so all register aliases observe
+        // the instruction's original architectural state. Register 31 is
+        // XZR/WZR for this instruction class, never SP.
+        const uint64_t source = decoded.rn == 31
+            ? 0 : (x_[decoded.rn] & widthMask);
+        const uint64_t shiftRegister = decoded.rm == 31
+            ? 0 : (x_[decoded.rm] & widthMask);
+        const unsigned amount = static_cast<unsigned>(shiftRegister & (width - 1u));
+        uint64_t result = source;
+        switch (decoded.variableShift) {
+        case 0: // LSLV: unsigned left shift, with defined modulo-width truncation.
+            result = (source << amount) & widthMask;
+            break;
+        case 1: // LSRV: logical right shift inserts zero bits.
+            result = source >> amount;
+            break;
+        case 2: // ASRV: form sign fill using unsigned bit operations.
+            result = source >> amount;
+            if (amount != 0u && (source & (uint64_t{1} << (width - 1u))) != 0) {
+                result |= widthMask ^ (widthMask >> amount);
+            }
+            break;
+        case 3: // RORV: avoid evaluating a native shift by the operand width.
+            if (amount != 0u) {
+                result = (source >> amount) |
+                         ((source << (width - amount)) & widthMask);
+            }
+            break;
+        default:
+            lastFault_ = Fault::UnallocatedEncoding;
+            lastError_ = "variable-shift instruction has an invalid operation selector";
+            return lastFault_;
+        }
+        result &= widthMask;
+        if (decoded.rd != 31) {
+            x_[decoded.rd] = decoded.sf64
+                ? result : static_cast<uint64_t>(static_cast<uint32_t>(result));
+        }
+        // These instructions do not update NZCV. PC and retirement accounting
+        // follow the common successful-instruction path below.
         pc_ += kInstructionSize;
         break;
     }

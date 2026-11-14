@@ -3,6 +3,7 @@
 #include "aarch64/AArch64PL011.h"
 #include "aarch64/AArch64VirtualPlatform.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -432,10 +433,34 @@ struct ExecutionResult {
     std::vector<StepRecord> trace;
     uint64_t retired = 0;
     uint64_t finalPc = 0;
+    uint64_t timerCounter = 0;
+    uint64_t sctlrEl1 = 0;
+    uint64_t tcrEl1 = 0;
+    uint64_t ttbr0El1 = 0;
+    uint64_t ttbr1El1 = 0;
+    uint64_t mairEl1 = 0;
+    uint64_t vbarEl1 = 0;
+    uint64_t elrEl1 = 0;
+    uint64_t spsrEl1 = 0;
     std::string status;
     std::string diagnostic;
     std::vector<uint8_t> uart;
 };
+
+void captureFinalSystemState(ExecutionResult& result,
+                             AArch64VirtualPlatform& platform) {
+    const Cpu& core = platform.cpu().cpu();
+    result.finalPc = core.pc();
+    result.timerCounter = platform.timer().counter();
+    result.sctlrEl1 = core.sctlrEl1();
+    result.tcrEl1 = core.tcrEl1();
+    result.ttbr0El1 = core.ttbr0El1();
+    result.ttbr1El1 = core.ttbr1El1();
+    result.mairEl1 = core.mairEl1();
+    result.vbarEl1 = core.vbarEl1();
+    result.elrEl1 = core.elrEl1();
+    result.spsrEl1 = core.spsrEl1();
+}
 
 ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
                                uint64_t maximumAttempts,
@@ -488,7 +513,7 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         result.status = "instruction budget frontier";
         result.diagnostic = "bounded execution attempt budget expired";
     }
-    result.finalPc = core.pc();
+    captureFinalSystemState(result, platform);
     result.uart = platform.uart().outputBytes();
     return result;
 }
@@ -561,7 +586,8 @@ std::string formatTrace(const std::vector<StepRecord>& trace) {
 }
 
 int runFrontier(const std::filesystem::path& imagePath,
-                const std::filesystem::path& outputDirectory) {
+                const std::filesystem::path& outputDirectory,
+                uint64_t maximumAttempts) {
     const std::vector<uint8_t> image = readFile(imagePath);
     AArch64LinuxImageInfo info;
     std::string error;
@@ -579,6 +605,7 @@ int runFrontier(const std::filesystem::path& imagePath,
     std::ostringstream manifest;
     manifest << "Source input: " << imagePath.string() << '\n'
              << "Image bytes: " << image.size() << '\n'
+             << "Maximum attempts per fresh run: " << maximumAttempts << '\n'
              << "code0: " << hex(info.code0, 8) << '\n'
              << "code1: " << hex(info.code1, 8) << '\n'
              << "text_offset: " << hex(info.textOffset, 16) << '\n'
@@ -593,9 +620,12 @@ int runFrontier(const std::filesystem::path& imagePath,
              << "image_kind: uncompressed ARM64 Linux Image; not ELF\n";
     writeText(outputDirectory / "kernel-image-manifest.txt", manifest.str());
 
-    const auto runFresh = [&](bool snapshotReplay,
+    bool snapshotReached = false;
+    bool snapshotQualified = false;
+    const auto runFresh = [&](bool allowSnapshot,
                               std::vector<StepRecord>& collected,
-                              std::string& snapshotText) {
+                              std::string& snapshotText,
+                              bool& replayQualified) {
         AArch64VirtualPlatform platform(config);
         AArch64LinuxImageInfo loaded;
         std::string loadError;
@@ -635,9 +665,9 @@ int runFrontier(const std::filesystem::path& imagePath,
               << "CPU count: 1\n"
               << "GICv3: reset single-PE device and EL1 system-register endpoint attached\n"
               << "stage-1 MMU: disabled\n";
-        if (snapshotReplay) writeText(outputDirectory / "entry-state.txt", entry.str());
+        if (allowSnapshot) writeText(outputDirectory / "entry-state.txt", entry.str());
 
-        if (snapshotReplay) {
+        if (allowSnapshot) {
             writeBytes(outputDirectory / "dtb.bin", platform.deviceTreeBlob());
             std::ostringstream map;
             map << "RAM: " << hex(config.ramBase, 16) << " .. "
@@ -664,50 +694,89 @@ int runFrontier(const std::filesystem::path& imagePath,
                 "DTB bytes are preserved in dtb.bin for independent SHA-256 calculation.\n");
         }
 
-        const uint64_t prefixCount = snapshotReplay ? 32 : 128;
+        const uint64_t prefixCount = std::min<uint64_t>(32, maximumAttempts);
         ExecutionResult current = executeBounded(platform, prefixCount);
         collected.insert(collected.end(), current.trace.begin(), current.trace.end());
-        if (snapshotReplay && current.status == "instruction budget frontier" &&
-            current.trace.size() == prefixCount) {
+        const bool safeCheckpoint = allowSnapshot && prefixCount == 32 &&
+            current.status == "instruction budget frontier" &&
+            current.trace.size() == 32 && current.retired == 32;
+        if (safeCheckpoint) {
+            snapshotReached = true;
+            const uint64_t checkpointPc = platform.cpu().cpu().pc();
             std::vector<uint8_t> snapshot;
             std::string snapshotError;
             if (platform.captureSnapshot(snapshot, &snapshotError)) {
-                ExecutionResult continuation = executeBounded(platform, 16, prefixCount);
-                if (continuation.status == "instruction budget frontier" &&
-                    continuation.trace.size() == 16) {
-                    if (!platform.restoreSnapshot(snapshot, &snapshotError)) {
-                        snapshotText = "capture succeeded; restore failed: " + snapshotError + "\n";
-                    } else {
-                        ExecutionResult replay = executeBounded(platform, 16, prefixCount);
-                        const bool replayMatches = sameTrace(continuation.trace, replay.trace) &&
-                            continuation.retired == replay.retired &&
-                            continuation.finalPc == replay.finalPc;
-                        snapshotText = "capture_bytes=" + std::to_string(snapshot.size()) +
-                            "\nrestore=successful\nreplayed_steps=16\nfrontier_match=" +
-                            std::string(replayMatches ? "yes" : "no") + "\n";
-                        if (!replayMatches)
-                            snapshotText += "continuation/replay trace or final PC differed\n";
-                        collected.insert(collected.end(), replay.trace.begin(), replay.trace.end());
-                        current = replay;
-                        if (!replayMatches) {
-                            current.status = "snapshot replay mismatch";
-                            current.diagnostic = "snapshot continuation did not reproduce";
-                        }
-                    }
-                } else {
-                    snapshotText = "capture succeeded but continuation reached " +
-                        continuation.status + " before 16 steps\n";
-                    collected.insert(collected.end(), continuation.trace.begin(), continuation.trace.end());
-                    current = continuation;
+                const std::filesystem::path snapshotDirectory = outputDirectory / "snapshots";
+                if (!std::filesystem::create_directory(snapshotDirectory))
+                    throw std::runtime_error("unable to create the new live-Linux snapshot directory");
+                writeBytes(snapshotDirectory / "linux-live.snapshot", snapshot);
+
+                const uint64_t continuationBudget = maximumAttempts - prefixCount;
+                ExecutionResult continuation = executeBounded(
+                    platform, continuationBudget, prefixCount);
+                collected.insert(collected.end(), continuation.trace.begin(),
+                                 continuation.trace.end());
+
+                AArch64VirtualPlatform restored(config);
+                AArch64LinuxImageInfo restoredImage;
+                const bool restoredImageLoaded = restored.loadLinuxImage(
+                    image, 0, &restoredImage, &snapshotError);
+                const bool restoreSucceeded = restoredImageLoaded &&
+                    restored.restoreSnapshot(snapshot, &snapshotError);
+                ExecutionResult replay;
+                bool replayMatches = false;
+                if (restoreSucceeded) {
+                    replay = executeBounded(restored, continuationBudget, prefixCount);
+                    replayMatches = sameTrace(continuation.trace, replay.trace) &&
+                        continuation.retired == replay.retired &&
+                        continuation.status == replay.status &&
+                        continuation.diagnostic == replay.diagnostic &&
+                        continuation.finalPc == replay.finalPc &&
+                        continuation.timerCounter == replay.timerCounter &&
+                        continuation.sctlrEl1 == replay.sctlrEl1 &&
+                        continuation.tcrEl1 == replay.tcrEl1 &&
+                        continuation.ttbr0El1 == replay.ttbr0El1 &&
+                        continuation.ttbr1El1 == replay.ttbr1El1 &&
+                        continuation.mairEl1 == replay.mairEl1 &&
+                        continuation.vbarEl1 == replay.vbarEl1 &&
+                        continuation.elrEl1 == replay.elrEl1 &&
+                        continuation.spsrEl1 == replay.spsrEl1 &&
+                        continuation.uart == replay.uart &&
+                        platform.cpu().serialize_state() == restored.cpu().serialize_state() &&
+                        platform.timer().counter() == restored.timer().counter();
                 }
+                replayQualified = restoreSucceeded && replayMatches;
+                std::ostringstream snapshotReport;
+                snapshotReport << "checkpoint_pc: " << hex(checkpointPc, 16) << '\n'
+                    << "checkpoint_retired_instructions: 32\n"
+                    << "snapshot_bytes: " << snapshot.size() << '\n'
+                    << "snapshot_file: snapshots/linux-live.snapshot\n"
+                    << "capture: successful\n"
+                    << "independent_platform_loaded_same_kernel: "
+                    << (restoredImageLoaded ? "yes" : "no") << '\n'
+                    << "restore_into_independent_platform: "
+                    << (restoreSucceeded ? "successful" : "failed") << '\n'
+                    << "continuation_attempts: " << continuation.trace.size() << '\n'
+                    << "continuation_retired: " << continuation.retired << '\n'
+                    << "continuation_final_pc: " << hex(continuation.finalPc, 16) << '\n'
+                    << "continuation_timer_counter: " << continuation.timerCounter << '\n'
+                    << "continuation_status: " << continuation.status << '\n'
+                    << "replay_matches: " << (replayMatches ? "yes" : "no") << '\n';
+                if (!snapshotError.empty())
+                    snapshotReport << "snapshot_diagnostic: " << snapshotError << '\n';
+                snapshotText = snapshotReport.str();
+                current = continuation;
             } else {
-                snapshotText = "capture unavailable: " + snapshotError + "\n";
+                snapshotText = "checkpoint_pc: " + hex(core.pc(), 16) +
+                    "\ncheckpoint_retired_instructions: 32\ncapture: failed\n" +
+                    "diagnostic: " + snapshotError + "\n";
             }
         }
-        const uint64_t totalUniqueSteps = collected.size();
-        if (current.status == "instruction budget frontier" && totalUniqueSteps < 128) {
-            ExecutionResult extension = executeBounded(platform, 128 - totalUniqueSteps,
-                                                         totalUniqueSteps);
+        if (current.status == "instruction budget frontier" &&
+            collected.size() < maximumAttempts) {
+            const uint64_t remaining = maximumAttempts - collected.size();
+            ExecutionResult extension = executeBounded(platform, remaining,
+                                                         collected.size());
             collected.insert(collected.end(), extension.trace.begin(), extension.trace.end());
             current = extension;
         }
@@ -716,31 +785,63 @@ int runFrontier(const std::filesystem::path& imagePath,
         for (const StepRecord& record : collected)
             if (record.retired) ++current.retired;
         current.finalPc = platform.cpu().cpu().pc();
+        captureFinalSystemState(current, platform);
         current.uart = platform.uart().outputBytes();
         return current;
     };
 
     std::vector<StepRecord> run1Trace;
     std::string snapshotText;
-    ExecutionResult run1 = runFresh(true, run1Trace, snapshotText);
+    ExecutionResult run1 = runFresh(true, run1Trace, snapshotText, snapshotQualified);
     std::vector<StepRecord> run2Trace;
     std::string ignoredSnapshotText;
-    ExecutionResult run2 = runFresh(false, run2Trace, ignoredSnapshotText);
+    bool ignoredSnapshotQualified = false;
+    ExecutionResult run2 = runFresh(false, run2Trace, ignoredSnapshotText,
+                                    ignoredSnapshotQualified);
 
     const bool reproducible = sameTrace(run1Trace, run2Trace) &&
         run1.finalPc == run2.finalPc && run1.status == run2.status &&
-        run1.retired == run2.retired && run1.uart == run2.uart;
+        run1.retired == run2.retired && run1.uart == run2.uart &&
+        run1.timerCounter == run2.timerCounter &&
+        run1.sctlrEl1 == run2.sctlrEl1 && run1.tcrEl1 == run2.tcrEl1 &&
+        run1.ttbr0El1 == run2.ttbr0El1 && run1.ttbr1El1 == run2.ttbr1El1 &&
+        run1.mairEl1 == run2.mairEl1 && run1.vbarEl1 == run2.vbarEl1 &&
+        run1.elrEl1 == run2.elrEl1 && run1.spsrEl1 == run2.spsrEl1;
     std::ostringstream run1File;
     run1File << "status: " << run1.status << '\n'
              << "retired_instructions: " << run1.retired << '\n'
              << "attempted_steps: " << run1Trace.size() << '\n'
              << "final_pc: " << hex(run1.finalPc, 16) << '\n'
+             << "timer_counter: " << run1.timerCounter << '\n'
+             << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << '\n'
+             << "SCTLR_EL1: " << hex(run1.sctlrEl1, 16) << '\n'
+             << "TCR_EL1: " << hex(run1.tcrEl1, 16) << '\n'
+             << "TTBR0_EL1: " << hex(run1.ttbr0El1, 16) << '\n'
+             << "TTBR1_EL1: " << hex(run1.ttbr1El1, 16) << '\n'
+             << "MAIR_EL1: " << hex(run1.mairEl1, 16) << '\n'
+             << "VBAR_EL1: " << hex(run1.vbarEl1, 16) << '\n'
+             << "ELR_EL1: " << hex(run1.elrEl1, 16) << '\n'
+             << "SPSR_EL1: " << hex(run1.spsrEl1, 8) << '\n'
+             << "ESR_EL1: " << hex(run1Trace.back().esr, 16) << '\n'
+             << "FAR_EL1: " << hex(run1Trace.back().far, 16) << '\n'
              << "diagnostic: " << run1.diagnostic << '\n';
     std::ostringstream run2File;
     run2File << "status: " << run2.status << '\n'
              << "retired_instructions: " << run2.retired << '\n'
              << "attempted_steps: " << run2Trace.size() << '\n'
              << "final_pc: " << hex(run2.finalPc, 16) << '\n'
+             << "timer_counter: " << run2.timerCounter << '\n'
+             << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << '\n'
+             << "SCTLR_EL1: " << hex(run2.sctlrEl1, 16) << '\n'
+             << "TCR_EL1: " << hex(run2.tcrEl1, 16) << '\n'
+             << "TTBR0_EL1: " << hex(run2.ttbr0El1, 16) << '\n'
+             << "TTBR1_EL1: " << hex(run2.ttbr1El1, 16) << '\n'
+             << "MAIR_EL1: " << hex(run2.mairEl1, 16) << '\n'
+             << "VBAR_EL1: " << hex(run2.vbarEl1, 16) << '\n'
+             << "ELR_EL1: " << hex(run2.elrEl1, 16) << '\n'
+             << "SPSR_EL1: " << hex(run2.spsrEl1, 8) << '\n'
+             << "ESR_EL1: " << hex(run2Trace.back().esr, 16) << '\n'
+             << "FAR_EL1: " << hex(run2Trace.back().far, 16) << '\n'
              << "diagnostic: " << run2.diagnostic << '\n';
     writeText(outputDirectory / "run1-frontier.txt", run1File.str());
     writeText(outputDirectory / "run2-frontier.txt", run2File.str());
@@ -760,6 +861,16 @@ int runFrontier(const std::filesystem::path& imagePath,
             << "Run 2: " << run2.status << ", retired=" << run2.retired
             << ", attempts=" << run2Trace.size() << ", final_pc=" << hex(run2.finalPc, 16) << ".\n"
             << "Fresh-run trace reproducibility: " << (reproducible ? "PASS" : "FAIL") << "\n"
+            << "Timer counter at frontier: " << run1.timerCounter << "\n"
+            << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << "\n"
+            << "SCTLR_EL1/TCR_EL1/TTBR0_EL1/TTBR1_EL1/MAIR_EL1: "
+            << hex(run1.sctlrEl1, 16) << "/" << hex(run1.tcrEl1, 16) << "/"
+            << hex(run1.ttbr0El1, 16) << "/" << hex(run1.ttbr1El1, 16) << "/"
+            << hex(run1.mairEl1, 16) << "\n"
+            << "Attempt budget per fresh run: " << maximumAttempts << "\n"
+            << "32-retirement snapshot boundary reached: " << (snapshotReached ? "yes" : "no") << "\n"
+            << "Live snapshot capture and independent replay: "
+            << (snapshotReached ? (snapshotQualified ? "PASS" : "FAIL") : "not reached") << "\n"
             << "Run 1 diagnostic: " << run1.diagnostic << "\n"
             << "Run 2 diagnostic: " << run2.diagnostic << "\n"
             << "UART bytes: " << run1.uart.size() << "\n"
@@ -767,7 +878,7 @@ int runFrontier(const std::filesystem::path& imagePath,
     writeText(outputDirectory / "execution-summary.txt", summary.str());
 
     std::cout << summary.str();
-    return reproducible ? 0 : 2;
+    return reproducible && (!snapshotReached || snapshotQualified) ? 0 : 2;
 }
 
 } // namespace
@@ -778,9 +889,21 @@ int main(int argc, char** argv) {
             runUnitTests();
             return failures == 0 ? 0 : 1;
         }
-        if (argc == 4 && std::string(argv[1]) == "--frontier")
-            return runFrontier(argv[2], argv[3]);
-        std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory]\n";
+        if ((argc == 4 || argc == 5) && std::string(argv[1]) == "--frontier") {
+            uint64_t maximumAttempts = 64;
+            if (argc == 5) {
+                std::size_t consumed = 0;
+                maximumAttempts = std::stoull(argv[4], &consumed, 10);
+                if (consumed != std::string(argv[4]).size() ||
+                    (maximumAttempts != 64 && maximumAttempts != 1024 &&
+                     maximumAttempts != 16384)) {
+                    std::cerr << "frontier attempt budget must be 64, 1024, or 16384\n";
+                    return 2;
+                }
+            }
+            return runFrontier(argv[2], argv[3], maximumAttempts);
+        }
+        std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory [64|1024|16384]]\n";
         return 2;
     } catch (const std::exception& exception) {
         std::cerr << "AARCH64-14 Linux boot harness error: " << exception.what() << '\n';

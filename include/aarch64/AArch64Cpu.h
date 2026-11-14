@@ -192,6 +192,7 @@ enum class Op {
     EorImm,   // EOR (immediate): bitmask immediate
     AndsImm,  // ANDS (immediate): bitmask immediate (TST alias when Rd==31)
     LogicalReg, // Logical shifted-register AND/ORR/EOR/ANDS family
+    VariableShift, // LSLV/LSRV/ASRV/RORV (register shift amount, modulo width)
     Ubfm,     // UBFM and its unsigned extract/shift aliases
     Csel,     // CSEL: conditional select
     Csinc,    // CSINC: conditional select increment (CINC/CSET aliases)
@@ -244,6 +245,7 @@ struct Decoded {
     uint64_t logicalImm = 0;   // decoded bitmask immediate
     uint8_t logicalOpcode = 0; // Shifted-register opc: AND/ORR/EOR/ANDS
     uint8_t logicalShift = 0;  // Logical shifted-register shift type: LSL/LSR/ASR/ROR
+    uint8_t variableShift = 0; // LSLV/LSRV/ASRV/RORV selector (bits[11:10])
     bool invertRm = false;     // Logical shifted-register N bit (BIC/ORN/EON/BICS)
     bool setsFlags = false;    // ANDS/TST (sets N,Z; clears C,V)
     bool acquireRelease = false; // Exclusive load-acquire/store-release variant

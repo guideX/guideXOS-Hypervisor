@@ -697,6 +697,7 @@ add_test(NAME AArch64GICv3Tests COMMAND test_aarch64_gicv3)
 add_test(NAME AArch64PlatformTests COMMAND test_aarch64_platform)
 add_test(NAME AArch64LinuxBootTests COMMAND test_aarch64_linux_boot)
 add_test(NAME AArch64CpuIdentificationTests COMMAND test_aarch64_cpu_identification)
+add_test(NAME AArch64VariableShiftTests COMMAND test_aarch64_variable_shift)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
 set_tests_properties(AArch64GICv3Tests PROPERTIES TIMEOUT 120)
@@ -995,6 +996,17 @@ add_executable(test_aarch64_cpu_identification
     ${HEADERS}
 )
 
+# AARCH64-16: architectural LSLV/LSRV/ASRV/RORV W/X forms, independent
+# bit-level references, production ISA-plugin guest execution, and CPU/RAM
+# snapshot replay without changing the CPU checkpoint schema.
+add_executable(test_aarch64_variable_shift
+    tests/test_aarch64_variable_shift.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
     target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
@@ -1004,6 +1016,7 @@ if(WIN32)
     target_link_libraries(test_aarch64_platform PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_linux_boot PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_cpu_identification PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_variable_shift PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)
@@ -1025,6 +1038,7 @@ if(MSVC)
     target_compile_options(test_aarch64_platform PRIVATE /W4)
     target_compile_options(test_aarch64_linux_boot PRIVATE /W4)
     target_compile_options(test_aarch64_cpu_identification PRIVATE /W4)
+    target_compile_options(test_aarch64_variable_shift PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
@@ -1034,6 +1048,7 @@ else()
     target_compile_options(test_aarch64_platform PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_linux_boot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_cpu_identification PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_variable_shift PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
