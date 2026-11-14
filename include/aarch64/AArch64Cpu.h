@@ -207,6 +207,7 @@ enum class Op {
     Dmb,      // DMB: ordered single-CPU memory operation
     Isb,      // ISB: instruction context synchronization event
     Tlbi,     // Supported EL1&0 stage-1 TLBI system instruction
+    DcIvac,   // DC IVAC by VA to PoC; cacheless EL1 NOP, EL0 UNDEFINED
 };
 
 enum class TlbiOperation : uint8_t {

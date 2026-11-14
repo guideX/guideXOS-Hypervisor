@@ -341,9 +341,10 @@ void testDecoderRejectionAndNeighbors() {
     CHECK(!allOnes.valid && allOnes.fault == Fault::UnallocatedEncoding);
 
     const Decoded linuxCacheFrontier = Cpu::decodeWord(0xD5087620u, 0x36A68u);
-    CHECK(!linuxCacheFrontier.valid);
-    CHECK(linuxCacheFrontier.fault == Fault::UnsupportedFeature);
-    CHECK(linuxCacheFrontier.error.find("DC IVAC") != std::string::npos);
+    CHECK(linuxCacheFrontier.valid);
+    CHECK(linuxCacheFrontier.op == Op::DcIvac);
+    CHECK_EQ(0, linuxCacheFrontier.rd);
+    CHECK(linuxCacheFrontier.disassembly == "dc ivac, x0");
 }
 
 uint32_t movzW(unsigned rd, uint16_t imm) {

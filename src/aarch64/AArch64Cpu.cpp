@@ -1624,14 +1624,23 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
                 return d;
             }
 
-            // DC IVAC, Xt: recognize the valid A64 cache-maintenance alias
-            // reached by the pinned Linux Image. This cacheless profile does
-            // not model the operation's architectural effects, so report an
-            // unsupported feature instead of mislabeling it unallocated.
+            // DC IVAC, Xt: decode only this allocated A64 cache-maintenance
+            // operation. Its cacheless no-op and EL0 privilege behavior are
+            // applied by executeDecoded; neighboring SYS operations remain
+            // unsupported.
             if (!isRead && op0 == 1u && op1 == 0u && crn == 7u &&
                 crm == 6u && op2 == 1u) {
-                return invalid(word, address, Fault::UnsupportedFeature,
-                               "DC IVAC cache maintenance is outside the cacheless execution profile");
+                Decoded d;
+                d.op = Op::DcIvac;
+                d.valid = true;
+                d.word = word;
+                d.address = address;
+                d.rd = rt;
+                char buf[48];
+                std::snprintf(buf, sizeof(buf), "dc ivac, %s",
+                              rt == 31u ? "xzr" : regName(true, rt).c_str());
+                d.disassembly = buf;
+                return d;
             }
 
             if (!isRead && op0 == 0u && crn == 4u && rt == 31u) {
@@ -2451,6 +2460,28 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             lastFault_ = result;
             return result;
         }
+        break;
+    }
+    case Op::DcIvac: {
+        const uint8_t el = static_cast<uint8_t>((pstate_ & kPstateElMask) >> 2);
+        if (el == 0u) {
+            // Arm defines DC IVAC as UNDEFINED at EL0. UCI is not an EL0
+            // enable for this operation. The exception path records the
+            // current instruction in ELR_EL1 and EC=0 in ESR_EL1.
+            takeSynchronousException(0x00, 0, pc_);
+            break;
+        }
+        if (el != 1u) {
+            lastFault_ = Fault::UnsupportedFeature;
+            lastError_ = "DC IVAC execution at EL2/EL3 is outside this profile";
+            return lastFault_;
+        }
+
+        // This CPU profile has no data/unified cache and implements the
+        // architecturally permitted TreatDCAsNOP path. With EL2 absent the
+        // operation cannot be trapped, so Arm's pseudocode takes ExecuteAsNOP
+        // before AArch64.DC (and before its optional VA translation).
+        pc_ += kInstructionSize;
         break;
     }
     case Op::Mrs:

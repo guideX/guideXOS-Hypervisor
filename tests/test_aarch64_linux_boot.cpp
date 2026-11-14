@@ -545,13 +545,15 @@ void writeBytes(const std::filesystem::path& path,
         throw std::runtime_error("unable to write evidence file " + path.string());
 }
 
-std::vector<uint8_t> readFile(const std::filesystem::path& path) {
+std::vector<uint8_t> readFile(
+    const std::filesystem::path& path,
+    uint64_t maximumBytes = 128ULL * 1024ULL * 1024ULL) {
     std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("unable to open kernel Image " + path.string());
+    if (!input) throw std::runtime_error("unable to open input file " + path.string());
     input.seekg(0, std::ios::end);
     const auto end = input.tellg();
-    if (end <= 0 || static_cast<uint64_t>(end) > 128ULL * 1024ULL * 1024ULL)
-        throw std::runtime_error("kernel Image is empty or exceeds the 128 MiB harness bound");
+    if (end <= 0 || static_cast<uint64_t>(end) > maximumBytes)
+        throw std::runtime_error("input file is empty or exceeds the harness bound");
     input.seekg(0, std::ios::beg);
     std::vector<uint8_t> image(static_cast<std::size_t>(end));
     if (!input.read(reinterpret_cast<char*>(image.data()), end))
@@ -881,6 +883,75 @@ int runFrontier(const std::filesystem::path& imagePath,
     return reproducible && (!snapshotReached || snapshotQualified) ? 0 : 2;
 }
 
+int runCheckpointResume(const std::filesystem::path& imagePath,
+                        const std::filesystem::path& snapshotPath,
+                        const std::filesystem::path& outputDirectory,
+                        uint64_t maximumAttempts) {
+    const std::vector<uint8_t> image = readFile(imagePath);
+    const std::vector<uint8_t> snapshot = readFile(
+        snapshotPath, 512ULL * 1024ULL * 1024ULL);
+    AArch64LinuxImageInfo info;
+    std::string error;
+    if (!inspectAArch64LinuxImage(image, info, &error))
+        throw std::runtime_error("Image validation failed: " + error);
+    if (info.textOffset != 0)
+        throw std::runtime_error("checkpoint replay is pinned to the validated Image's 0 text_offset");
+    const AArch64PlatformConfig config = linuxConfig(info);
+    if (!validateAArch64PlatformConfig(config, &error))
+        throw std::runtime_error("Linux readiness platform configuration is invalid: " + error);
+    if (!std::filesystem::create_directory(outputDirectory))
+        throw std::runtime_error("evidence directory already exists or cannot be created: " +
+                                 outputDirectory.string());
+
+    AArch64VirtualPlatform platform(config);
+    AArch64LinuxImageInfo loaded;
+    if (!platform.loadLinuxImage(image, 0, &loaded, &error))
+        throw std::runtime_error("Linux Image load failed: " + error);
+    if (!platform.restoreSnapshot(snapshot, &error))
+        throw std::runtime_error("accepted Linux checkpoint restore failed: " + error);
+
+    const Cpu& restoredCore = platform.cpu().cpu();
+    if (restoredCore.pc() != 0x36A54 || platform.timer().counter() != 32 ||
+        restoredCore.exceptionLevel() != ExceptionLevel::EL1) {
+        throw std::runtime_error("restored checkpoint did not match the accepted PC/retirement/EL baseline");
+    }
+    const ExecutionResult result = executeBounded(platform, maximumAttempts, 32);
+    writeText(outputDirectory / "checkpoint-trace.txt", formatTrace(result.trace));
+    std::ostringstream frontier;
+    frontier << "status: " << result.status << '\n'
+             << "retired_instructions_after_checkpoint: " << result.retired << '\n'
+             << "attempted_steps_after_checkpoint: " << result.trace.size() << '\n'
+             << "checkpoint_pc: " << hex(0x36A54, 16) << '\n'
+             << "checkpoint_timer_counter: 32\n"
+             << "final_pc: " << hex(result.finalPc, 16) << '\n'
+             << "timer_counter: " << result.timerCounter << '\n'
+             << "X0: " << hex(restoredCore.readX(0), 16) << '\n'
+             << "ESR_EL1: " << hex(result.trace.back().esr, 16) << '\n'
+             << "FAR_EL1: " << hex(result.trace.back().far, 16) << '\n'
+             << "diagnostic: " << result.diagnostic << '\n';
+    writeText(outputDirectory / "checkpoint-frontier.txt", frontier.str());
+    if (!result.uart.empty()) writeBytes(outputDirectory / "uart-output.bin", result.uart);
+
+    std::ostringstream report;
+    report << "image: " << imagePath.string() << '\n'
+           << "snapshot: " << snapshotPath.string() << '\n'
+           << "snapshot_bytes: " << snapshot.size() << '\n'
+           << "image_bytes: " << image.size() << '\n'
+           << "independent_platform_restore: PASS\n"
+           << "checkpoint_pc: " << hex(0x36A54, 16) << '\n'
+           << "checkpoint_timer_counter: 32\n"
+           << "attempt_budget: " << maximumAttempts << '\n'
+           << "continuation_status: " << result.status << '\n'
+           << "continuation_retired: " << result.retired << '\n'
+           << "continuation_attempts: " << result.trace.size() << '\n'
+           << "continuation_final_pc: " << hex(result.finalPc, 16) << '\n'
+           << "continuation_timer_counter: " << result.timerCounter << '\n'
+           << "UART_bytes: " << result.uart.size() << '\n';
+    writeText(outputDirectory / "checkpoint-replay.txt", report.str());
+    std::cout << report.str();
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -903,7 +974,22 @@ int main(int argc, char** argv) {
             }
             return runFrontier(argv[2], argv[3], maximumAttempts);
         }
-        std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory [64|1024|16384]]\n";
+        if ((argc == 5 || argc == 6) && std::string(argv[1]) == "--resume") {
+            uint64_t maximumAttempts = 64;
+            if (argc == 6) {
+                std::size_t consumed = 0;
+                maximumAttempts = std::stoull(argv[5], &consumed, 10);
+                if (consumed != std::string(argv[5]).size() ||
+                    (maximumAttempts != 64 && maximumAttempts != 1024 &&
+                     maximumAttempts != 16384)) {
+                    std::cerr << "resume attempt budget must be 64, 1024, or 16384\n";
+                    return 2;
+                }
+            }
+            return runCheckpointResume(argv[2], argv[3], argv[4], maximumAttempts);
+        }
+        std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory [64|1024|16384]]\n"
+                     "       test_aarch64_linux_boot --resume Image snapshot output-directory [64|1024|16384]\n";
         return 2;
     } catch (const std::exception& exception) {
         std::cerr << "AARCH64-14 Linux boot harness error: " << exception.what() << '\n';

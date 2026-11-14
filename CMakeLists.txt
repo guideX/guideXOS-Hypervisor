@@ -698,6 +698,7 @@ add_test(NAME AArch64PlatformTests COMMAND test_aarch64_platform)
 add_test(NAME AArch64LinuxBootTests COMMAND test_aarch64_linux_boot)
 add_test(NAME AArch64CpuIdentificationTests COMMAND test_aarch64_cpu_identification)
 add_test(NAME AArch64VariableShiftTests COMMAND test_aarch64_variable_shift)
+add_test(NAME AArch64CacheMaintenanceTests COMMAND test_aarch64_cache_maintenance)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
 set_tests_properties(AArch64GICv3Tests PROPERTIES TIMEOUT 120)
@@ -1007,6 +1008,25 @@ add_executable(test_aarch64_variable_shift
     ${HEADERS}
 )
 
+# AARCH64-17: exact DC IVAC decoding, cacheless EL1 no-op behavior, EL0
+# Undefined exception, MMU bypass, and production guest snapshot replay.
+add_executable(test_aarch64_cache_maintenance
+    tests/test_aarch64_cache_maintenance.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    src/aarch64/AArch64DeviceState.cpp
+    src/aarch64/AArch64DeviceSnapshot.cpp
+    src/aarch64/AArch64PhysicalBus.cpp
+    src/aarch64/AArch64PL011.cpp
+    src/aarch64/AArch64GenericTimer.cpp
+    src/aarch64/AArch64GICv3.cpp
+    src/aarch64/AArch64DeviceTree.cpp
+    src/aarch64/AArch64LinuxImage.cpp
+    src/aarch64/AArch64VirtualPlatform.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 if(WIN32)
     target_link_libraries(test_aarch64_snapshot PRIVATE ws2_32)
     target_link_libraries(test_aarch64_device_snapshot PRIVATE ws2_32 bcrypt psapi)
@@ -1017,6 +1037,7 @@ if(WIN32)
     target_link_libraries(test_aarch64_linux_boot PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_cpu_identification PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_variable_shift PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_cache_maintenance PRIVATE ws2_32 bcrypt psapi)
 endif()
 
 if(WIN32)
@@ -1039,6 +1060,7 @@ if(MSVC)
     target_compile_options(test_aarch64_linux_boot PRIVATE /W4)
     target_compile_options(test_aarch64_cpu_identification PRIVATE /W4)
     target_compile_options(test_aarch64_variable_shift PRIVATE /W4)
+    target_compile_options(test_aarch64_cache_maintenance PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_device_snapshot PRIVATE -Wall -Wextra -Wpedantic)
@@ -1049,6 +1071,7 @@ else()
     target_compile_options(test_aarch64_linux_boot PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_cpu_identification PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_variable_shift PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_cache_maintenance PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)
