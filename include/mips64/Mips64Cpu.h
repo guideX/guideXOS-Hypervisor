@@ -455,6 +455,8 @@ enum class Mips64Op : uint8_t {
     // MIPS64 shared-memory completion barrier. Appended to retain all prior
     // operation values used by diagnostics and tests.
     Sync,
+    // MIPS64 Release 2 full-width signed comparison with sign-extended immediate.
+    Slti,
 };
 
 struct Mips64ReservationState {

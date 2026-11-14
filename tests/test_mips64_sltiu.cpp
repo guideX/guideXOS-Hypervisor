@@ -171,25 +171,34 @@ void testUnsignedComparisonAndSignExtendedImmediateBothEndianModes() {
     }
 }
 
-void testSltiIsDistinctAndUnsupportedStatusIsPreserved() {
-    // SLTI's signed result for -1 < 33 would be 1, while SLTIU interprets the
-    // same source bits as UINT64_MAX and produces 0. SLTI remains outside this
-    // phase's supported subset and must not alias the new SLTIU decode.
+void testSltiAndSltiuRemainDistinct() {
+    // Both immediate fields are identical, but signed and unsigned comparison
+    // produce different results for the same source bits.
     constexpr uint32_t sltiWord = (0x0AU << 26) | (8U << 21) | (9U << 16) | 33U;
     const Mips64Decoded slti = decodeInstruction(sltiWord);
-    CHECK(!slti.valid);
-    CHECK(slti.fault == Mips64Fault::UnsupportedInstruction);
-    CHECK(decodeInstruction(encodeI(0x0B, 8, 9, 33)).op == Mips64Op::Sltiu);
+    const Mips64Decoded sltiu = decodeInstruction(encodeI(0x0B, 8, 9, 33));
+    CHECK(slti.valid);
+    CHECK(slti.op == Mips64Op::Slti);
+    CHECK(slti.raw == sltiWord);
+    CHECK(slti.rs == 8);
+    CHECK(slti.rt == 9);
+    CHECK(slti.imm == 33);
+    CHECK(sltiu.valid);
+    CHECK(sltiu.op == Mips64Op::Sltiu);
+    CHECK(slti.op != sltiu.op);
+    CHECK(Mips64Cpu{}.disassemble(slti) == "slti $9, $8, 33");
+    CHECK(std::string(Mips64Cpu::opName(slti.op)) == "slti");
+    CHECK(Mips64Cpu{}.disassemble(sltiu) == "sltiu $9, $8, 33");
 
     Memory memory(kRamBytes);
     Mips64Cpu cpu(Mips64Endianness::Big);
     cpu.setPc(kTestPc);
     cpu.writeGpr(8, 0xFFFFFFFFFFFFFFFFULL);
     storeWord(memory, kTestPa, sltiWord, false);
-    CHECK(cpu.step(memory) == Mips64StepResult::Fault);
-    CHECK(cpu.fault() == Mips64Fault::UnsupportedInstruction);
-    CHECK(cpu.pc() == kTestPc);
-    CHECK(cpu.readGpr(9) == 0);
+    CHECK(cpu.step(memory) == Mips64StepResult::Continue);
+    CHECK(cpu.fault() == Mips64Fault::None);
+    CHECK(cpu.pc() == kTestPc + 4);
+    CHECK(cpu.readGpr(9) == 1);
     CHECK(cpu.cp0Count() == 1);
     CHECK(cpu.cp0Cause() == 0);
 
@@ -346,7 +355,7 @@ void testFullVmSnapshotReplayAtSltiuBoundary() {
 int main() {
     testAuthenticatedKernelEncodingAndDisassembly();
     testUnsignedComparisonAndSignExtendedImmediateBothEndianModes();
-    testSltiIsDistinctAndUnsupportedStatusIsPreserved();
+    testSltiAndSltiuRemainDistinct();
     testSltiuInBranchDelaySlot();
     testCpuSerializationRoundTripAfterSltiu();
     testFullVmSnapshotReplayAtSltiuBoundary();

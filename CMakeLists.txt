@@ -1172,6 +1172,21 @@ else()
 endif()
 add_test(NAME Mips64SltiuTests COMMAND test_mips64_sltiu)
 
+# MIPS64-27 architectural qualification for signed SLTI and authentic Linux continuation.
+add_executable(test_mips64_slti
+    tests/test_mips64_slti.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_slti PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_slti PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_slti PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64SltiTests COMMAND test_mips64_slti)
+
 # MIPS64-17 architectural qualification for variable word shift-left.
 add_executable(test_mips64_sllv
     tests/test_mips64_sllv.cpp
