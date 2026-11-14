@@ -64,7 +64,7 @@ No CPU checkpoint layout or snapshot schema change was needed. The guest snapsho
 
 ## Architectural references
 
-The W/X encodings, operand fields, modulo-width shift amount, and operation semantics were checked against the [Arm Architecture Reference Manual, DDI0487](https://developer.arm.com/documentation/ddi0487/latest) and the instruction descriptions for [LSLV](https://www.scs.stanford.edu/~zyedidia/arm64/lslv.html), [LSRV](https://www.scs.stanford.edu/~zyedidia/arm64/lsrv.html), [ASRV](https://www.scs.stanford.edu/~zyedidia/arm64/asrv.html), and [RORV](https://www.scs.stanford.edu/~zyedidia/arm64/rorv.html). The tests use independently specified encodings and bit-by-bit expected-value logic.
+The W/X encodings, operand fields, modulo-width shift amount, and operation semantics were checked against the [Arm Architecture Reference Manual, DDI0487](https://developer.arm.com/documentation/ddi0487/latest) and the instruction descriptions for [LSLV](https://www.scs.stanford.edu/~zyedidia/arm64/lslv.html), [LSRV](https://www.scs.stanford.edu/~zyedidia/arm64/lsrv.html), [ASRV](https://www.scs.stanford.edu/~zyedidia/arm64/asrv.html), and [RORV](https://www.scs.stanford.edu/~zyedidia/arm64/rorv.html). The Windows host has no `llvm-mc`, `llvm-objdump`, or `aarch64-linux-gnu-as` installed, so no independent assembler was available. Test fixture constants were cross-checked against the Arm encoding fields and the authentic Linux `0x9AC32042` word; no extra toolchain was installed. Tests use independent bit-by-bit expected-value logic.
 
 ## Verification
 
