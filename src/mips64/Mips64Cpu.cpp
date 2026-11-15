@@ -970,6 +970,12 @@ bool Mips64Cpu::requireKernel(uint64_t address, bool inDelaySlot, uint64_t branc
 }
 
 bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
+    if (rd == kCp0RegPRId && sel == kCp0SelPRId) {
+        // PRId is immutable CPU-model identity and is deliberately not part
+        // of the serialized mutable architectural state.
+        out = kMips64CpuPrId;
+        return true;
+    }
     if (rd == kCp0RegIndex && sel == kCp0SelIndex) {
         out = index_ & kIndexWritableMask;
         return true;

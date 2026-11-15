@@ -35,6 +35,9 @@ constexpr uint64_t kRamBytes = 256ULL * 1024 * 1024;
 constexpr uint64_t kLinuxEntry = 0xFFFFFFFF80917670ULL;
 constexpr uint64_t kSyncPc = 0xFFFFFFFF8091EB50ULL;
 constexpr uint64_t kSltiPc = 0xFFFFFFFF8091ABC4ULL;
+constexpr uint64_t kPrIdPc = 0xFFFFFFFF8010BF3CULL;
+constexpr uint64_t kPrIdPa = 0x00010BF3CULL;
+constexpr uint32_t kPrIdWord = 0x40047800U;
 constexpr uint64_t kRetiredBeforeSync = 157780;
 constexpr uint64_t kSltiPa = 0x00091ABC4ULL;
 constexpr uint64_t kRetiredBeforeSlti = 157787;
@@ -48,6 +51,8 @@ constexpr char kPhase25TraceSha256[] =
     "222593af3cf8e35b2b415190daf3bf1a0b9c00d90eebb03b8d86f6e8752c0c2f";
 constexpr char kPhase26TraceSha256[] =
     "5b7627802f8365e080e9edff2565818a8696a63b5bd59791452c435625645397";
+constexpr char kPhase27TraceSha256[] =
+    "b4a2b3343cd9c4810ce5311531546272ef4c1e9acf923a43b9e409f6063594f9";
 constexpr uint64_t kTestPc = 0xFFFFFFFF80001000ULL;
 constexpr uint64_t kTestPa = 0x1000ULL;
 constexpr size_t kTestRamBytes = 2ULL * 1024 * 1024;
@@ -620,6 +625,38 @@ struct ContinuationStop {
     uint64_t badVAddr = 0;
 };
 
+struct AuthenticPrIdObservation {
+    bool seen = false;
+    bool retired = false;
+    uint64_t physical = 0;
+    uint64_t priorA0 = 0;
+    uint64_t resultA0 = 0;
+    uint64_t countBefore = 0;
+    uint64_t countAfter = 0;
+    uint64_t cyclesBefore = 0;
+    uint64_t cyclesAfter = 0;
+    uint64_t retiredBefore = 0;
+    uint64_t retiredAfter = 0;
+    uint64_t status = 0;
+    uint64_t cause = 0;
+    uint64_t epc = 0;
+    uint64_t ebase = 0;
+    uint64_t hi = 0;
+    uint64_t lo = 0;
+    bool delayArmed = false;
+    bool kernelMode = false;
+    std::array<uint64_t, kNumGpr> gprsBefore{};
+    std::array<uint64_t, kNumGpr> gprsAfter{};
+    std::array<uint64_t, 22> cp0Before{};
+    std::array<uint64_t, 22> cp0After{};
+    std::array<Mips64TlbEntry, Mips64Cpu::tlbSize()> tlbBefore{};
+    Mips64ReservationState reservationBefore{};
+    std::vector<uint8_t> cpuAfter;
+    Mips64FullVmSnapshot beforeSnapshot{};
+    std::deque<std::string> phase27OverlapTail;
+    std::vector<std::string> consumers;
+};
+
 struct InstructionWindow {
     std::vector<std::string> complete;
     std::vector<std::string> first;
@@ -665,7 +702,8 @@ bool sameWindow(const InstructionWindow& left, const InstructionWindow& right) {
 ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
                                CPUContext& context, uint64_t budget,
                                InstructionWindow& window,
-                               const ContinuationStop* expectedFrontier = nullptr) {
+                               const ContinuationStop* expectedFrontier = nullptr,
+                               AuthenticPrIdObservation* pridObservation = nullptr) {
     ContinuationStop stop;
     stop.reason = "instruction_budget_exhausted";
     std::set<uint64_t> retiredPcs;
@@ -688,6 +726,49 @@ ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
             stop.distinctRetiredPcs = retiredPcs.size();
             return stop;
         }
+        const bool authenticPrId = pc == kPrIdPc && word == kPrIdWord;
+        if (authenticPrId && pridObservation && !pridObservation->seen) {
+            pridObservation->seen = true;
+            pridObservation->physical = fetch.phys;
+            pridObservation->priorA0 = cpu.readGpr(4);
+            pridObservation->countBefore = cpu.cp0Count();
+            pridObservation->cyclesBefore = vm.getCyclesExecuted();
+            pridObservation->retiredBefore = context.instructionsExecuted;
+            pridObservation->status = cpu.cp0Status();
+            pridObservation->cause = cpu.cp0Cause();
+            pridObservation->epc = cpu.cp0Epc();
+            pridObservation->ebase = cpu.cp0EBase();
+            pridObservation->hi = cpu.hi();
+            pridObservation->lo = cpu.lo();
+            pridObservation->delayArmed = cpu.delayArmed();
+            pridObservation->kernelMode = cpu.isKernelMode();
+            pridObservation->gprsBefore = gprsOf(cpu);
+            pridObservation->cp0Before = cp0Of(cpu);
+            pridObservation->tlbBefore = tlbOf(cpu);
+            pridObservation->reservationBefore = cpu.reservationState();
+            pridObservation->beforeSnapshot = vm.captureMips64FullSnapshot();
+            if (!pridObservation->beforeSnapshot.ValidateIntegrity() ||
+                pridObservation->beforeSnapshot.formatVersion != 3 ||
+                pridObservation->beforeSnapshot.cpuComponentVersion != 6 ||
+                pridObservation->beforeSnapshot.cpus.size() != 1 ||
+                pridObservation->beforeSnapshot.cpus[0].architecturalState.size() != 1001 ||
+                pridObservation->countBefore != pridObservation->retiredBefore ||
+                pridObservation->cyclesBefore != pridObservation->retiredBefore ||
+                !pridObservation->kernelMode || pridObservation->delayArmed)
+                throw std::runtime_error("authentic PRId prestate or snapshot mismatch");
+            pridObservation->phase27OverlapTail.clear();
+            const auto& previousRecords = window.compacted ? window.tail :
+                std::deque<std::string>(window.complete.begin(), window.complete.end());
+            for (const std::string& previous : previousRecords) {
+                if (pridObservation->phase27OverlapTail.size() == 64)
+                    pridObservation->phase27OverlapTail.pop_front();
+                pridObservation->phase27OverlapTail.push_back(previous);
+            }
+        }
+        const bool captureConsumer = pridObservation && pridObservation->retired &&
+                                     pridObservation->consumers.size() < 10;
+        const auto consumerGprsBefore = captureConsumer ? gprsOf(cpu)
+            : std::array<uint64_t, kNumGpr>{};
         if (!decoded.valid && decoded.fault == Mips64Fault::UnsupportedInstruction) {
             stop.reason = "unsupported_instruction";
             stop.executionFault = Mips64Cpu::faultName(decoded.fault);
@@ -725,6 +806,70 @@ ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
                    << ",\"delay_armed_after\":"
                    << (cpu.delayArmed() ? "true" : "false") << "}";
             window.add(record.str());
+            if (authenticPrId && pridObservation) {
+                pridObservation->retired = true;
+                pridObservation->resultA0 = cpu.readGpr(4);
+                pridObservation->countAfter = cpu.cp0Count();
+                pridObservation->cyclesAfter = vm.getCyclesExecuted();
+                pridObservation->retiredAfter = context.instructionsExecuted;
+                pridObservation->gprsAfter = gprsOf(cpu);
+                pridObservation->cp0After = cp0Of(cpu);
+                pridObservation->cpuAfter = cpu.serialize();
+                const Mips64FullVmSnapshot afterSnapshot = vm.captureMips64FullSnapshot();
+                bool unrelatedGprsUnchanged = true;
+                bool unrelatedCp0Unchanged = true;
+                for (size_t index = 0; index < kNumGpr; ++index) {
+                    if (index != 4 && pridObservation->gprsAfter[index] !=
+                                      pridObservation->gprsBefore[index])
+                        unrelatedGprsUnchanged = false;
+                }
+                for (size_t index = 0; index < pridObservation->cp0Before.size(); ++index) {
+                    if (index != 6 && pridObservation->cp0After[index] !=
+                                      pridObservation->cp0Before[index])
+                        unrelatedCp0Unchanged = false;
+                }
+                if (pridObservation->resultA0 != 0x0000000000018900ULL ||
+                    pridObservation->gprsAfter[4] != pridObservation->resultA0 ||
+                    !unrelatedGprsUnchanged || !unrelatedCp0Unchanged ||
+                    pridObservation->countAfter != pridObservation->countBefore + 1 ||
+                    pridObservation->cyclesAfter != pridObservation->cyclesBefore + 1 ||
+                    pridObservation->retiredAfter != pridObservation->retiredBefore + 1 ||
+                    cpu.pc() != kPrIdPc + 4 || cpu.delayArmed() ||
+                    cpu.fault() != Mips64Fault::None || cpu.causeExcCode() != 0 ||
+                    cpu.cp0Status() != pridObservation->status ||
+                    cpu.cp0Cause() != pridObservation->cause ||
+                    cpu.cp0Epc() != pridObservation->epc ||
+                    cpu.cp0EBase() != pridObservation->ebase ||
+                    cpu.hi() != pridObservation->hi || cpu.lo() != pridObservation->lo ||
+                    !sameTlb(cpu, pridObservation->tlbBefore) ||
+                    !sameReservation(pridObservation->reservationBefore,
+                                     cpu.reservationState()) ||
+                    !afterSnapshot.ValidateIntegrity() ||
+                    !samePhysicalMemory(pridObservation->beforeSnapshot.physicalMemory,
+                                        afterSnapshot.physicalMemory) ||
+                    afterSnapshot.uart.transmitCount !=
+                        pridObservation->beforeSnapshot.uart.transmitCount ||
+                    afterSnapshot.uart.receiveFifo !=
+                        pridObservation->beforeSnapshot.uart.receiveFifo ||
+                    afterSnapshot.console.bytes !=
+                        pridObservation->beforeSnapshot.console.bytes)
+                    throw std::runtime_error("authentic MFC0 PRId changed an unrelated state");
+            } else if (captureConsumer) {
+                std::ostringstream consumer;
+                consumer << "{\"type\":\"linux_prid_consumer\",\"pc_va\":\""
+                         << hexValue(pc, 16) << "\",\"pc_pa\":\""
+                         << hexValue(fetch.phys, 9) << "\",\"instruction\":\""
+                         << hexValue(word, 8) << "\",\"disassembly\":\""
+                         << cpu.disassemble(decoded) << "\",\"a0_before\":\""
+                         << hexValue(consumerGprsBefore[4], 16)
+                         << "\",\"a0_after\":\"" << hexValue(cpu.readGpr(4), 16)
+                         << "\",\"r2_before\":\"" << hexValue(consumerGprsBefore[2], 16)
+                         << "\",\"r2_after\":\"" << hexValue(cpu.readGpr(2), 16)
+                         << "\",\"r19_before\":\"" << hexValue(consumerGprsBefore[19], 16)
+                         << "\",\"delay_armed_before\":" << (delayBefore ? "true" : "false")
+                         << "}";
+                pridObservation->consumers.push_back(consumer.str());
+            }
             continue;
         }
         if (cyclesRun == 1 && vm.getCyclesExecuted() == cycleBefore + 1) {
@@ -765,10 +910,11 @@ ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
 int runAuthenticContinuation(const std::filesystem::path& imagePath,
                             const std::filesystem::path& phase25TracePath,
                             const std::filesystem::path& phase26TracePath,
-                            const std::filesystem::path& tracePath) {
+                            const std::filesystem::path& tracePath,
+                            const std::filesystem::path& phase27TracePath = {}) {
     Logger::getInstance().setLogLevel(LogLevel::ERROR);
     if (std::filesystem::exists(tracePath))
-        throw std::runtime_error("refusing to overwrite Phase 27 trace: " + tracePath.string());
+        throw std::runtime_error("refusing to overwrite an accepted trace: " + tracePath.string());
     const std::vector<uint8_t> image = readFile(imagePath);
     if (image.size() != kKernelSize) throw std::runtime_error("unexpected kernel size");
 
@@ -780,6 +926,31 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
                                                     "authentic_sync_retirement");
     const auto acceptedPostSync = linesOfType(phase26TracePath,
                                               "continuation_instruction");
+    std::vector<std::string> acceptedPhase27;
+    std::vector<std::string> acceptedPhase27Continuation;
+    std::vector<std::string> acceptedPhase27SltiPre;
+    std::vector<std::string> acceptedPhase27SltiRetirement;
+    std::vector<std::string> acceptedPhase27Frontier;
+    if (!phase27TracePath.empty()) {
+        acceptedPhase27 = linesOfType(phase27TracePath, "instruction");
+        acceptedPhase27Continuation = linesOfType(phase27TracePath,
+                                                  "continuation_instruction");
+        acceptedPhase27SltiPre = linesOfType(phase27TracePath,
+                                             "authentic_slti_pre_instruction");
+        acceptedPhase27SltiRetirement = linesOfType(phase27TracePath,
+                                                    "authentic_slti_retirement");
+        acceptedPhase27Frontier = linesOfType(phase27TracePath, "continuation_frontier");
+        if (acceptedPhase27.size() != 256 ||
+            acceptedPhase27Continuation.size() != 102 ||
+            acceptedPhase27SltiPre.size() != 1 ||
+            acceptedPhase27SltiRetirement.size() != 1 ||
+            acceptedPhase27Frontier.size() != 1 ||
+            acceptedPhase27Frontier[0].find("\"pc_va\":\"0xffffffff8010bf3c\"") ==
+                std::string::npos ||
+            acceptedPhase27Frontier[0].find("\"instruction\":\"0x40047800\"") ==
+                std::string::npos)
+            throw std::runtime_error("accepted Phase 27 trace shape/frontier changed");
+    }
     if (acceptedPhase25.size() != 256 || acceptedPhase26.size() != 256)
         throw std::runtime_error("accepted instruction-prefix trace counts changed");
     if (acceptedSyncPre.size() != 1 || acceptedSyncRetirement.size() != 1 ||
@@ -811,7 +982,8 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
     std::string prefixLine;
     for (size_t index = 0; index < acceptedPhase25.size(); ++index) {
         if (!std::getline(prefixLines, prefixLine) || prefixLine != acceptedPhase25[index] ||
-            prefixLine != acceptedPhase26[index])
+            prefixLine != acceptedPhase26[index] ||
+            (!acceptedPhase27.empty() && prefixLine != acceptedPhase27[index]))
             throw std::runtime_error("accepted Phase 25/26 instruction prefix diverged");
     }
     if (vm.run(kRetiredBeforeSync - acceptedPhase25.size()) !=
@@ -949,6 +1121,15 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         cpu.cp0BadVAddr() != 0 || cpu.delayArmed()) {
         throw std::runtime_error("authentic SLTI frontier/prestate mismatch");
     }
+    if (!acceptedPhase27SltiPre.empty() &&
+        (acceptedPhase27SltiPre[0].find("\"pc_va\":\"" + hexValue(kSltiPc, 16) + "\"") ==
+             std::string::npos ||
+         acceptedPhase27SltiPre[0].find("\"instruction\":\"" + hexValue(kSltiWord, 8) + "\"") ==
+             std::string::npos ||
+         acceptedPhase27SltiPre[0].find("\"count\":157787") == std::string::npos ||
+         acceptedPhase27SltiRetirement[0].find("\"count_after\":157788") ==
+             std::string::npos))
+        throw std::runtime_error("accepted Phase 27 SLTI overlap changed");
     if (!decoded.valid || decoded.op != Mips64Op::Slti) {
         throw std::runtime_error("production decoder did not recognize authentic SLTI");
     }
@@ -1014,14 +1195,23 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         throw std::runtime_error("authentic SLTI changed RAM or reservation generations");
 
     InstructionWindow preflightWindow;
+    AuthenticPrIdObservation preflightPrid;
     ContinuationStop preflightStop = runToFrontier(
-        vm, cpu, *context, kContinuationBudget, preflightWindow);
+        vm, cpu, *context, kContinuationBudget, preflightWindow, nullptr,
+        &preflightPrid);
+    if (!preflightPrid.seen || !preflightPrid.retired ||
+        preflightPrid.physical != kPrIdPa || preflightPrid.resultA0 != 0x00018900ULL ||
+        preflightPrid.countBefore != 158131 ||
+        preflightPrid.cyclesBefore != 158131 ||
+        preflightPrid.retiredBefore != 158131)
+        throw std::runtime_error("authentic PRId instruction was not qualified");
     const bool executionErrorProbed = vm.getState() == VMState::ERROR;
     if (executionErrorProbed && (preflightStop.pc == 0 || preflightStop.word == 0))
         throw std::runtime_error("VM execution error did not identify an instruction frontier");
 
     InstructionWindow firstWindow;
     ContinuationStop firstStop;
+    AuthenticPrIdObservation firstPrid;
     if (executionErrorProbed) {
         // The production VM intentionally does not snapshot an ERROR state.
         // Reset returns it to a stopped boundary without clearing RAM; restore
@@ -1038,10 +1228,11 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         if (vm.run(1) != 1 || cpu.serialize() != afterSltiCpuBytes)
             throw std::runtime_error("SLTI replay after frontier probe diverged");
         firstStop = runToFrontier(vm, cpu, *context, kContinuationBudget,
-                                  firstWindow, &preflightStop);
+                                  firstWindow, &preflightStop, &firstPrid);
     } else {
         firstWindow = std::move(preflightWindow);
         firstStop = preflightStop;
+        firstPrid = std::move(preflightPrid);
     }
     const Mips64FullVmSnapshot firstTerminal = vm.captureMips64FullSnapshot();
     if (!firstTerminal.ValidateIntegrity()) throw std::runtime_error("invalid first terminal snapshot");
@@ -1064,15 +1255,32 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         cpu.pc() != kSltiPc + 4 || cpu.delayArmed())
         throw std::runtime_error("authentic SLTI immediate replay diverged");
     InstructionWindow replayWindow;
+    AuthenticPrIdObservation replayPrid;
     const ContinuationStop replayStop = runToFrontier(
         vm, cpu, *context, kContinuationBudget, replayWindow,
-        executionErrorProbed ? &preflightStop : nullptr);
+        executionErrorProbed ? &preflightStop : nullptr, &replayPrid);
     const Mips64FullVmSnapshot replayTerminal = vm.captureMips64FullSnapshot();
     if (firstStop.reason != replayStop.reason || firstStop.pc != replayStop.pc ||
         firstStop.physical != replayStop.physical || firstStop.word != replayStop.word ||
         firstStop.attempts != replayStop.attempts || firstStop.retired != replayStop.retired ||
         firstStop.distinctRetiredPcs != replayStop.distinctRetiredPcs ||
         !sameWindow(firstWindow, replayWindow) ||
+        !firstPrid.seen || !replayPrid.seen || !firstPrid.retired ||
+        !replayPrid.retired || firstPrid.priorA0 != replayPrid.priorA0 ||
+        firstPrid.resultA0 != replayPrid.resultA0 ||
+        firstPrid.countBefore != replayPrid.countBefore ||
+        firstPrid.cyclesBefore != replayPrid.cyclesBefore ||
+        firstPrid.retiredBefore != replayPrid.retiredBefore ||
+        firstPrid.gprsBefore != replayPrid.gprsBefore ||
+        firstPrid.gprsAfter != replayPrid.gprsAfter ||
+        firstPrid.consumers != replayPrid.consumers ||
+        firstPrid.phase27OverlapTail != replayPrid.phase27OverlapTail ||
+        !sameReplaySnapshot(firstPrid.beforeSnapshot, replayPrid.beforeSnapshot) ||
+        (!acceptedPhase27Continuation.empty() &&
+         (firstPrid.phase27OverlapTail.size() != 64 ||
+          !std::equal(firstPrid.phase27OverlapTail.begin(),
+                      firstPrid.phase27OverlapTail.end(),
+                      acceptedPhase27Continuation.begin() + 38))) ||
         firstRetired != context->instructionsExecuted || firstCount != cpu.cp0Count() ||
         firstCycles != vm.getCyclesExecuted() ||
         !sameReplaySnapshot(firstTerminal, replayTerminal))
@@ -1081,14 +1289,16 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
     if (!std::filesystem::exists(tracePath.parent_path()))
         std::filesystem::create_directories(tracePath.parent_path());
     std::ofstream trace(tracePath, std::ios::binary | std::ios::trunc);
-    if (!trace) throw std::runtime_error("could not create Phase 27 trace");
+    if (!trace) throw std::runtime_error("could not create authentic continuation trace");
     trace << prefixTrace.str();
     trace << "{\"type\":\"production_environment\",\"kernel_size\":" << image.size()
           << ",\"kernel_sha256\":\"" << kKernelSha256
           << "\",\"accepted_phase25_trace_sha256\":\"" << kPhase25TraceSha256
           << "\",\"accepted_phase26_trace_sha256\":\"" << kPhase26TraceSha256
+          << "\",\"accepted_phase27_trace_sha256\":\"" << kPhase27TraceSha256
           << "\",\"phase25_prefix_records_matched\":256"
           << ",\"phase26_prefix_records_matched\":256"
+          << ",\"phase27_prefix_records_matched\":" << acceptedPhase27.size()
           << ",\"linux_entry\":\"" << hexValue(kLinuxEntry, 16)
           << "\",\"guest_ram_bytes\":" << kRamBytes
           << ",\"endianness\":\"big\",\"prom_command_line\":\"console=ttyS0,38400n8\""
@@ -1149,6 +1359,57 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << ",\"gpr_state_qualified\":true,\"cp0_except_count_unchanged\":true"
           << ",\"hi_lo_unchanged\":true,\"ram_and_reservations_unchanged\":true"
           << ",\"overflow_exception\":false}\n";
+    trace << "{\"type\":\"authentic_prid_pre_instruction\",\"pc_va\":\""
+          << hexValue(kPrIdPc, 16) << "\",\"pc_pa\":\""
+          << hexValue(firstPrid.physical, 9) << "\",\"instruction\":\""
+          << hexValue(kPrIdWord, 8)
+          << "\",\"operation\":\"MFC0\",\"rt\":4,\"rd\":15,\"sel\":0"
+          << ",\"a0_before\":\"" << hexValue(firstPrid.priorA0, 16)
+          << "\",\"prid_expected\":\"0x00018900\""
+          << ",\"count\":" << firstPrid.countBefore
+          << ",\"vm_cycles\":" << firstPrid.cyclesBefore
+          << ",\"retired\":" << firstPrid.retiredBefore
+          << ",\"status\":\"" << hexValue(firstPrid.status, 16)
+          << "\",\"cause\":\"" << hexValue(firstPrid.cause, 16)
+          << "\",\"epc\":\"" << hexValue(firstPrid.epc, 16)
+          << "\",\"ebase\":\"" << hexValue(firstPrid.ebase, 16)
+          << "\",\"kernel_mode\":" << (firstPrid.kernelMode ? "true" : "false")
+          << ",\"delay_armed\":" << (firstPrid.delayArmed ? "true" : "false")
+          << ",\"snapshot_valid\":true,\"snapshot_format\":3"
+          << ",\"cpu_version\":6,\"cpu_bytes\":1001,\"memory_version\":2"
+          << ",\"uart_version\":4,\"irq_version\":1}\n";
+    trace << "{\"type\":\"authentic_prid_retirement\",\"pre_pc\":\""
+          << hexValue(kPrIdPc, 16) << "\",\"word\":\""
+          << hexValue(kPrIdWord, 8) << "\",\"a0_before\":\""
+          << hexValue(firstPrid.priorA0, 16) << "\",\"a0_expected\":\"0x0000000000018900\""
+          << ",\"a0_after\":\"" << hexValue(firstPrid.resultA0, 16)
+          << "\",\"post_pc\":\"" << hexValue(kPrIdPc + 4, 16)
+          << "\",\"count_before\":" << firstPrid.countBefore
+          << ",\"count_after\":" << firstPrid.countAfter
+          << ",\"vm_cycles_before\":" << firstPrid.cyclesBefore
+          << ",\"vm_cycles_after\":" << firstPrid.cyclesAfter
+          << ",\"retired_before\":" << firstPrid.retiredBefore
+          << ",\"retired_after\":" << firstPrid.retiredAfter
+          << ",\"normal_retirement\":true,\"other_gprs_unchanged\":true"
+          << ",\"other_cp0_unchanged_except_count\":true,\"hi_lo_unchanged\":true"
+          << ",\"tlb_unchanged\":true,\"ram_unchanged\":true"
+          << ",\"reservation_unchanged\":true,\"uart_console_unchanged\":true"
+          << ",\"architectural_exception\":false,\"snapshot_replay_verified\":true}\n";
+    trace << "{\"type\":\"prid_selector_policy\",\"register\":15"
+          << ",\"sel0\":\"read-only PRId 0x00018900\""
+          << ",\"sel1\":\"existing EBase behavior\""
+          << ",\"other_selectors\":\"unsupported Cp0Violation\""
+          << ",\"dmfc0\":\"deterministic zero-extended result for architecturally unpredictable 32-bit-register read\""
+          << ",\"mtc0_dmtc0\":\"rejected by existing unsupported-write Cp0Violation policy\"}\n";
+    trace << "{\"type\":\"linux_prid_identity_consumer\",\"observed_instructions\":"
+          << firstPrid.consumers.size() << ",\"records\":[";
+    for (size_t index = 0; index < firstPrid.consumers.size(); ++index) {
+        if (index != 0) trace << ',';
+        trace << firstPrid.consumers[index];
+    }
+    trace << "],\"accepted_phase27_pre_prid_overlap_records_matched\":"
+          << (acceptedPhase27Continuation.empty() ? 0 : firstPrid.phase27OverlapTail.size())
+          << "}\n";
     trace << "{\"type\":\"invalid_snapshot_rejection\",\"rejected\":true"
           << ",\"live_cpu_unchanged\":true,\"guest_ram_unchanged\":true"
           << ",\"virtual_time_unchanged\":true}\n";
@@ -1198,6 +1459,39 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << ",\"snapshot_format\":3,\"cpu_version\":6,\"cpu_bytes\":1001"
           << ",\"memory_version\":2,\"uart_version\":4,\"irq_version\":1"
           << ",\"continuation_budget\":" << kContinuationBudget << "}\n";
+    trace << "{\"type\":\"authentic_prid_continuation_summary\""
+          << ",\"former_frontier_retired_before\":158131"
+          << ",\"total_retired\":" << firstRetired
+          << ",\"retired_since_linux_entry\":"
+          << (firstRetired - kLinuxEntryRetiredBefore)
+          << ",\"instructions_beyond_former_prid_frontier\":"
+          << (firstRetired - 158131)
+          << ",\"instructions_retired_after_prid\":"
+          << (firstRetired - firstPrid.retiredAfter)
+          << ",\"prid_count_after_retirement\":" << firstPrid.countAfter
+          << ",\"next_frontier\":\"" << hexValue(firstStop.pc, 16)
+          << "\",\"next_fetch_pa\":\"" << hexValue(firstStop.physical, 9)
+          << "\",\"next_word\":\"" << hexValue(firstStop.word, 8)
+          << "\",\"stop_reason\":\"" << firstStop.reason
+          << "\",\"execution_fault\":\"" << firstStop.executionFault
+          << "\",\"count_at_snapshotable_frontier\":" << firstCount
+          << ",\"count_after_initial_stop_probe\":" << preflightStop.count
+          << ",\"vm_cycles\":" << firstCycles
+          << ",\"status\":\"" << hexValue(cpu.cp0Status(), 16)
+          << "\",\"cause\":\"" << hexValue(cpu.cp0Cause(), 16)
+          << "\",\"epc\":\"" << hexValue(cpu.cp0Epc(), 16)
+          << "\",\"badvaddr\":\"" << hexValue(cpu.cp0BadVAddr(), 16)
+          << "\",\"architectural_exception\":"
+          << (cpu.causeExcCode() != 0 ? "true" : "false")
+          << ",\"delay_armed\":" << (cpu.delayArmed() ? "true" : "false")
+          << ",\"reservation_valid\":"
+          << (cpu.reservationState().valid ? "true" : "false")
+          << ",\"uart_tx_bytes\":" << uartTx << ",\"uart_rx_fifo_bytes\":" << uartRx
+          << ",\"console_bytes\":" << console.bytes.size()
+          << ",\"console_sequence\":" << console.sequence
+          << ",\"mmio_observation\":\"not instrumented\""
+          << ",\"snapshot_replay_identical\":true"
+          << ",\"continuation_budget\":" << kContinuationBudget << "}\n";
     trace << "{\"type\":\"continuation_frontier\",\"pc_va\":\""
           << hexValue(firstStop.pc, 16) << "\",\"pc_pa\":\""
           << hexValue(firstStop.physical, 9) << "\",\"instruction\":\""
@@ -1210,14 +1504,41 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << cpu.disassemble(decodeInstruction(firstStop.word))
           << "\",\"architectural_exception\":"
           << (cpu.causeExcCode() != 0 ? "true" : "false") << "}\n";
+    // Exercise the exact full-VM checkpoint captured immediately before the
+    // authentic MFC0, independently of the longer continuation replay.
+    if (!vm.reset()) throw std::runtime_error("VM reset before authentic PRId replay failed");
+    restoreError.clear();
+    if (!vm.restoreMips64FullSnapshot(firstPrid.beforeSnapshot, &restoreError) ||
+        !restoreError.empty() || cpu.pc() != kPrIdPc ||
+        cpu.cp0Count() != firstPrid.countBefore ||
+        vm.getCyclesExecuted() != firstPrid.cyclesBefore ||
+        context->instructionsExecuted != firstPrid.retiredBefore)
+        throw std::runtime_error("authentic pre-MFC0 snapshot restore failed: " + restoreError);
+    if (vm.run(1) != 1 || cpu.serialize() != firstPrid.cpuAfter ||
+        cpu.readGpr(4) != 0x0000000000018900ULL ||
+        context->instructionsExecuted != firstPrid.retiredAfter ||
+        vm.getCyclesExecuted() != firstPrid.cyclesAfter)
+        throw std::runtime_error("authentic MFC0 snapshot replay diverged");
+    const Mips64FullVmSnapshot afterIsolatedPrid = vm.captureMips64FullSnapshot();
+    if (!samePhysicalMemory(firstPrid.beforeSnapshot.physicalMemory,
+                            afterIsolatedPrid.physicalMemory) ||
+        afterIsolatedPrid.uart.transmitCount != firstPrid.beforeSnapshot.uart.transmitCount ||
+        afterIsolatedPrid.console.bytes != firstPrid.beforeSnapshot.console.bytes)
+        throw std::runtime_error("authentic MFC0 replay changed RAM or output devices");
+    trace << "{\"type\":\"authentic_prid_snapshot_replay\""
+          << ",\"restored_pre_pc\":\"" << hexValue(kPrIdPc, 16)
+          << "\",\"restored_pre_count\":" << firstPrid.countBefore
+          << ",\"result_a0\":\"" << hexValue(cpu.readGpr(4), 16)
+          << "\",\"cpu_state_reproduced\":true,\"cycles_reproduced\":true"
+          << ",\"ram_reservations_devices_reproduced\":true}\n";
     trace.flush();
-    if (!trace) throw std::runtime_error("failed writing Phase 27 trace");
+    if (!trace) throw std::runtime_error("failed writing authentic MIPS64-28 trace");
 
-    std::cout << "MIPS64_SLTI_LINUX_CONTINUATION pc=0x" << std::hex << kSltiPc
-              << " word=0x" << word << " s1=0x" << sourceBits
-              << " v0_before=0x" << preGprs[rt] << " v0_after=0x" << observedResult
+    std::cout << "MIPS64_PRID_LINUX_CONTINUATION pc=0x" << std::hex << kPrIdPc
+              << " word=0x" << kPrIdWord << " a0_before=0x" << firstPrid.priorA0
+              << " prid=0x" << firstPrid.resultA0
               << " total_retired=" << std::dec << firstRetired
-              << " beyond_old_frontier=" << (firstRetired - kRetiredBeforeSlti)
+              << " beyond_old_frontier=" << (firstRetired - 158131)
               << " next_frontier=0x" << std::hex << firstStop.pc
               << " next_word=0x" << firstStop.word << " stop_reason=" << firstStop.reason
               << " count=" << std::dec << firstCount << " cycles=" << firstCycles
@@ -1230,6 +1551,8 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 7 && std::string(argv[1]) == "--continue-authentic-prid-kernel")
+            return runAuthenticContinuation(argv[2], argv[3], argv[4], argv[6], argv[5]);
         if (argc == 6 && std::string(argv[1]) == "--continue-authentic-kernel")
             return runAuthenticContinuation(argv[2], argv[3], argv[4], argv[5]);
         if (argc == 1) {
@@ -1239,7 +1562,9 @@ int main(int argc, char** argv) {
             return gFail == 0 ? 0 : 1;
         }
         std::cerr << "Usage: test_mips64_slti [--continue-authentic-kernel <ELF> "
-                     "<phase25-trace> <phase26-trace> <output-trace>]\n";
+                     "<phase25-trace> <phase26-trace> <output-trace> | "
+                     "--continue-authentic-prid-kernel <ELF> <phase25-trace> "
+                     "<phase26-trace> <phase27-trace> <output-trace>]\n";
         return 2;
     } catch (const std::exception& error) {
         std::cerr << "test_mips64_slti: " << error.what() << "\n";

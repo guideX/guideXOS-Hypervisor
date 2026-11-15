@@ -180,7 +180,13 @@ constexpr unsigned kCp0RegCause = 13;
 constexpr unsigned kCp0SelCause = 0;
 constexpr unsigned kCp0RegEpc = 14;
 constexpr unsigned kCp0SelEpc = 0;
-constexpr unsigned kCp0RegEBase = 15;
+// guideXOS exposes a deterministic MIPS 5KE-family-compatible PRId.  The
+// current CPU is a documented MIPS64r2 subset rather than a full physical
+// 5KEc: see the MIPS64-28 qualification report for profile differences.
+constexpr unsigned kCp0RegPRId = 15;
+constexpr unsigned kCp0SelPRId = 0;
+constexpr uint32_t kMips64CpuPrId = 0x00018900U;
+constexpr unsigned kCp0RegEBase = kCp0RegPRId;
 constexpr unsigned kCp0SelEBase = 1;
 constexpr unsigned kCp0RegXContext = 20;
 constexpr unsigned kCp0SelXContext = 0;
