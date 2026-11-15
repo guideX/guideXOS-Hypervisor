@@ -303,9 +303,13 @@ Linux scheduling and context-restoration qualification.
 32. **Evidence manifest:** `r32-evidence-manifest.txt` inventories 80 R32
     evidence files with size and SHA-256; it excludes itself. Manifest
     SHA-256: `19E48790FE5A845B9150C04E481C943784EF04941EF00790816EB28190315EBC`.
-33. **Local package commit:** recorded after the package commit below.
-34. **Ending status/divergence:** recorded after the final local closeout
-    commit below; prior untracked historical evidence remains preserved.
+33. **Local package commit:** `dd0cb830d921e690adeaf03b01fd8173a2c2b445`
+    (`docs(ia64): record R32 mempolicy provenance evidence`).
+34. **Ending status/divergence:** after the metadata closeout commit, branch
+    `IA64` is two commits ahead and zero behind `origin/IA64`; the tracked
+    worktree is clean. The tracking ref now points at starting HEAD
+    `ceb2ba8e8849ca32a2a72c553df13922c5235f03`; it advanced during closeout.
+    No R32 push was issued. Pre-existing untracked R23–R28 evidence is preserved.
 35. **Push:** nothing was pushed.
 
 ## Evidence and local commits
@@ -317,5 +321,7 @@ was decompressed and verified against the original byte count and SHA-256
 before the uncompressed file was removed. See
 [`r32-evidence-manifest.txt`](../evidence-9r32/r32-evidence-manifest.txt).
 
-The validated package commit and final closeout commit are filled in during
-the local commit sequence. Both remain on `IA64`; no push is performed.
+The evidence and report are in package commit
+`dd0cb830d921e690adeaf03b01fd8173a2c2b445`. This report's metadata update is
+committed separately on `IA64`; the final commit is identified by the local
+Git history. No push is performed.
