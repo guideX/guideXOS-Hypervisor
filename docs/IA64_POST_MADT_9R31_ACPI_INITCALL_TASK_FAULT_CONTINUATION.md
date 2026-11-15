@@ -143,4 +143,4 @@ R32 should trace the child task's `task_struct.mempolicy` field through `dup_tas
 
 ## Local commit and closeout
 
-R31 is committed locally on branch `IA64`; no push was performed. The package commit SHA is recorded by the follow-up metadata commit; the final HEAD SHA and final tracked/untracked status are reported in the closeout response. `.phase` remains open and unchanged.
+R31 package commit: `42dbe575d8c3a4796f4241a8b7ada72cbfc082de` (`docs(ia64): record R31 initcall task fault evidence`). It is followed by a metadata-only commit recording this package SHA. After that follow-up, the branch is two commits ahead of `origin/IA64` and zero behind. Both commits remain local; nothing was pushed. The final metadata commit SHA and final tracked/untracked status are reported in the closeout response. `.phase` remains open and unchanged.
