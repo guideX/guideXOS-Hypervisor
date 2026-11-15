@@ -1203,6 +1203,22 @@ else()
 endif()
 add_test(NAME Mips64PridTests COMMAND test_mips64_prid)
 
+# MIPS64-29 encoded CP0 Config0 qualification and CPU capability consistency.
+add_executable(test_mips64_config0
+    tests/test_mips64_config0.cpp
+    ${ALL_SOURCES}
+)
+target_include_directories(test_mips64_config0 PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(WIN32)
+    target_link_libraries(test_mips64_config0 PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_config0 PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_config0 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64Config0Tests COMMAND test_mips64_config0)
+
 # MIPS64-17 architectural qualification for variable word shift-left.
 add_executable(test_mips64_sllv
     tests/test_mips64_sllv.cpp

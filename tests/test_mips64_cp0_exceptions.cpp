@@ -244,11 +244,12 @@ static void testUnsupportedCp0() {
     cpu.writeGpr(8, 0xABC);
     cpu.writeGpr(9, 0x1234);  // sentinel: must not be overwritten
     CHECK(setupKusegIdentityMap(cpu, mem));
-    // Genuinely unsupported CP0 register/selector pairs: PRId, Status sel 1,
-    // Config, ErrorEPC sel 1, Cause sel 1, BadVAddr sel 1. Index (0,0) is
-    // supported in MIPS64-3 and is exercised by testCp0TlbRegisters.
+    // Genuinely unsupported CP0 register/selector pairs: Config2 (Config0
+    // and Config1 are implemented in MIPS64-29), Status sel 1, ErrorEPC
+    // sel 1, Cause sel 1, BadVAddr sel 1. PRId is covered by MIPS64-28;
+    // Index (0,0) is covered by testCp0TlbRegisters.
     const uint32_t words[6] = {
-        encodeCp0(0, 9, 15, 0), encodeCp0(0, 9, 12, 1), encodeCp0(1, 9, 16, 0),
+        encodeCp0(0, 9, 16, 2), encodeCp0(0, 9, 12, 1), encodeCp0(1, 9, 16, 2),
         encodeCp0(4, 8, 30, 1), encodeCp0(0, 9, 13, 1), encodeCp0(0, 9, 8, 1),
     };
     for (int i = 0; i < 6; ++i) {

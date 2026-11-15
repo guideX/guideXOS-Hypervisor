@@ -64,7 +64,7 @@ constexpr uint8_t kOpSd = 0x3F;
 // The modeled Malta CPU profile uses Config.K0=3: cached noncoherent KSEG0.
 // KSEG1 remains uncached (CCA=2). The physical-map reservation monitor
 // supplies the guest-visible ordering/invalidation behavior for this profile.
-constexpr uint8_t kMaltaKseg0CacheAttribute = 3;
+constexpr uint8_t kMaltaKseg0CacheAttribute = kMips64Kseg0CacheAttribute;
 
 bool supportsMips64LlScCacheAttribute(uint8_t cca) {
     // Release 2 defines LL/SC behavior for cached access types. The VM has no
@@ -974,6 +974,17 @@ bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
         // PRId is immutable CPU-model identity and is deliberately not part
         // of the serialized mutable architectural state.
         out = kMips64CpuPrId;
+        return true;
+    }
+    if (rd == kCp0RegConfig && sel == kCp0SelConfig0) {
+        // Config0 is a 32-bit, read-only capability report derived from the
+        // configured CPU profile. Config0.M is backed by the minimal Config1
+        // report below; its M bit is clear so no absent Config2 is advertised.
+        out = mips64Config0(endianness_);
+        return true;
+    }
+    if (rd == kCp0RegConfig && sel == kCp0SelConfig1) {
+        out = mips64Config1();
         return true;
     }
     if (rd == kCp0RegIndex && sel == kCp0SelIndex) {

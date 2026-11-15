@@ -38,6 +38,9 @@ constexpr uint64_t kSltiPc = 0xFFFFFFFF8091ABC4ULL;
 constexpr uint64_t kPrIdPc = 0xFFFFFFFF8010BF3CULL;
 constexpr uint64_t kPrIdPa = 0x00010BF3CULL;
 constexpr uint32_t kPrIdWord = 0x40047800U;
+constexpr uint64_t kConfig0Pc = 0xFFFFFFFF8010B840ULL;
+constexpr uint64_t kConfig0Pa = 0x00010B840ULL;
+constexpr uint32_t kConfig0Word = 0x40068000U;
 constexpr uint64_t kRetiredBeforeSync = 157780;
 constexpr uint64_t kSltiPa = 0x00091ABC4ULL;
 constexpr uint64_t kRetiredBeforeSlti = 157787;
@@ -53,6 +56,8 @@ constexpr char kPhase26TraceSha256[] =
     "5b7627802f8365e080e9edff2565818a8696a63b5bd59791452c435625645397";
 constexpr char kPhase27TraceSha256[] =
     "b4a2b3343cd9c4810ce5311531546272ef4c1e9acf923a43b9e409f6063594f9";
+constexpr char kPhase28TraceSha256[] =
+    "3a14bb7df4f1f2f387373b40ba948d37b2c990980cafc28e2e3998a0ce68c76b";
 constexpr uint64_t kTestPc = 0xFFFFFFFF80001000ULL;
 constexpr uint64_t kTestPa = 0x1000ULL;
 constexpr size_t kTestRamBytes = 2ULL * 1024 * 1024;
@@ -657,6 +662,37 @@ struct AuthenticPrIdObservation {
     std::vector<std::string> consumers;
 };
 
+struct AuthenticConfig0Observation {
+    bool seen = false;
+    bool retired = false;
+    uint64_t physical = 0;
+    uint64_t priorA2 = 0;
+    uint64_t resultA2 = 0;
+    uint64_t countBefore = 0;
+    uint64_t countAfter = 0;
+    uint64_t cyclesBefore = 0;
+    uint64_t cyclesAfter = 0;
+    uint64_t retiredBefore = 0;
+    uint64_t retiredAfter = 0;
+    uint64_t status = 0;
+    uint64_t cause = 0;
+    uint64_t epc = 0;
+    uint64_t badVAddr = 0;
+    uint64_t ebase = 0;
+    bool delayArmed = false;
+    bool kernelMode = false;
+    bool bigEndian = false;
+    std::array<uint64_t, kNumGpr> gprsBefore{};
+    std::array<uint64_t, kNumGpr> gprsAfter{};
+    std::array<uint64_t, 22> cp0Before{};
+    std::array<uint64_t, 22> cp0After{};
+    std::array<Mips64TlbEntry, Mips64Cpu::tlbSize()> tlbBefore{};
+    Mips64ReservationState reservationBefore{};
+    std::vector<uint8_t> cpuAfter;
+    Mips64FullVmSnapshot beforeSnapshot{};
+    std::vector<std::string> consumers;
+};
+
 struct InstructionWindow {
     std::vector<std::string> complete;
     std::vector<std::string> first;
@@ -703,7 +739,8 @@ ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
                                CPUContext& context, uint64_t budget,
                                InstructionWindow& window,
                                const ContinuationStop* expectedFrontier = nullptr,
-                               AuthenticPrIdObservation* pridObservation = nullptr) {
+                               AuthenticPrIdObservation* pridObservation = nullptr,
+                               AuthenticConfig0Observation* config0Observation = nullptr) {
     ContinuationStop stop;
     stop.reason = "instruction_budget_exhausted";
     std::set<uint64_t> retiredPcs;
@@ -765,9 +802,56 @@ ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
                 pridObservation->phase27OverlapTail.push_back(previous);
             }
         }
+        const bool authenticConfig0 = pc == kConfig0Pc && word == kConfig0Word;
+        if (authenticConfig0 && config0Observation && !config0Observation->seen) {
+            config0Observation->seen = true;
+            config0Observation->physical = fetch.phys;
+            config0Observation->priorA2 = cpu.readGpr(6);
+            config0Observation->countBefore = cpu.cp0Count();
+            config0Observation->cyclesBefore = vm.getCyclesExecuted();
+            config0Observation->retiredBefore = context.instructionsExecuted;
+            config0Observation->status = cpu.cp0Status();
+            config0Observation->cause = cpu.cp0Cause();
+            config0Observation->epc = cpu.cp0Epc();
+            config0Observation->badVAddr = cpu.cp0BadVAddr();
+            config0Observation->ebase = cpu.cp0EBase();
+            config0Observation->delayArmed = cpu.delayArmed();
+            config0Observation->kernelMode = cpu.isKernelMode();
+            config0Observation->bigEndian = !cpu.isLittleEndian();
+            config0Observation->gprsBefore = gprsOf(cpu);
+            config0Observation->cp0Before = cp0Of(cpu);
+            config0Observation->tlbBefore = tlbOf(cpu);
+            config0Observation->reservationBefore = cpu.reservationState();
+            config0Observation->beforeSnapshot = vm.captureMips64FullSnapshot();
+            if (fetch.phys != kConfig0Pa || !decoded.valid ||
+                decoded.op != Mips64Op::Mfc0 || decoded.rs != 0 ||
+                decoded.rt != 6 || decoded.rd != 16 || decoded.sel != 0 ||
+                (word & 0x7F8U) != 0 || !config0Observation->bigEndian ||
+                !config0Observation->kernelMode || config0Observation->delayArmed ||
+                !config0Observation->beforeSnapshot.ValidateIntegrity() ||
+                config0Observation->beforeSnapshot.formatVersion != 3 ||
+                config0Observation->beforeSnapshot.cpuComponentVersion != 6 ||
+                config0Observation->beforeSnapshot.cpus.size() != 1 ||
+                config0Observation->beforeSnapshot.cpus[0].architecturalState.size() != 1001 ||
+                config0Observation->beforeSnapshot.memoryComponentVersion != 2 ||
+                config0Observation->beforeSnapshot.uartComponentVersion != 4 ||
+                config0Observation->beforeSnapshot.irqRoutingComponentVersion != 1 ||
+                config0Observation->countBefore != 158205 ||
+                config0Observation->cyclesBefore != 158205 ||
+                config0Observation->retiredBefore != 158205 ||
+                config0Observation->status != 0x00400080ULL ||
+                config0Observation->cause != 0 || config0Observation->epc != 0 ||
+                config0Observation->badVAddr != 0 ||
+                config0Observation->ebase != 0x80000000ULL)
+                throw std::runtime_error("authentic Config0 prestate or snapshot mismatch");
+        }
         const bool captureConsumer = pridObservation && pridObservation->retired &&
                                      pridObservation->consumers.size() < 10;
         const auto consumerGprsBefore = captureConsumer ? gprsOf(cpu)
+            : std::array<uint64_t, kNumGpr>{};
+        const bool captureConfig0Consumer = config0Observation &&
+            config0Observation->retired && config0Observation->consumers.size() < 10;
+        const auto config0ConsumerGprsBefore = captureConfig0Consumer ? gprsOf(cpu)
             : std::array<uint64_t, kNumGpr>{};
         if (!decoded.valid && decoded.fault == Mips64Fault::UnsupportedInstruction) {
             stop.reason = "unsupported_instruction";
@@ -870,6 +954,70 @@ ContinuationStop runToFrontier(VirtualMachine& vm, Mips64Cpu& cpu,
                          << "}";
                 pridObservation->consumers.push_back(consumer.str());
             }
+            if (authenticConfig0 && config0Observation) {
+                config0Observation->retired = true;
+                config0Observation->resultA2 = cpu.readGpr(6);
+                config0Observation->countAfter = cpu.cp0Count();
+                config0Observation->cyclesAfter = vm.getCyclesExecuted();
+                config0Observation->retiredAfter = context.instructionsExecuted;
+                config0Observation->gprsAfter = gprsOf(cpu);
+                config0Observation->cp0After = cp0Of(cpu);
+                config0Observation->cpuAfter = cpu.serialize();
+                const Mips64FullVmSnapshot afterSnapshot = vm.captureMips64FullSnapshot();
+                bool otherGprsUnchanged = true;
+                bool otherCp0Unchanged = true;
+                for (size_t reg = 0; reg < kNumGpr; ++reg) {
+                    if (reg != 6 && config0Observation->gprsAfter[reg] !=
+                                    config0Observation->gprsBefore[reg])
+                        otherGprsUnchanged = false;
+                }
+                for (size_t reg = 0; reg < config0Observation->cp0Before.size(); ++reg) {
+                    if (reg != 6 && config0Observation->cp0After[reg] !=
+                                    config0Observation->cp0Before[reg])
+                        otherCp0Unchanged = false;
+                }
+                if (config0Observation->resultA2 != 0xFFFFFFFF8000C483ULL ||
+                    !otherGprsUnchanged || !otherCp0Unchanged ||
+                    config0Observation->countAfter != config0Observation->countBefore + 1 ||
+                    config0Observation->cyclesAfter != config0Observation->cyclesBefore + 1 ||
+                    config0Observation->retiredAfter != config0Observation->retiredBefore + 1 ||
+                    cpu.pc() != kConfig0Pc + 4 || cpu.delayArmed() ||
+                    cpu.fault() != Mips64Fault::None || cpu.causeExcCode() != 0 ||
+                    cpu.cp0Status() != config0Observation->status ||
+                    cpu.cp0Cause() != config0Observation->cause ||
+                    cpu.cp0Epc() != config0Observation->epc ||
+                    cpu.cp0BadVAddr() != config0Observation->badVAddr ||
+                    cpu.cp0EBase() != config0Observation->ebase ||
+                    !sameTlb(cpu, config0Observation->tlbBefore) ||
+                    !sameReservation(config0Observation->reservationBefore,
+                                     cpu.reservationState()) ||
+                    !afterSnapshot.ValidateIntegrity() ||
+                    !samePhysicalMemory(config0Observation->beforeSnapshot.physicalMemory,
+                                        afterSnapshot.physicalMemory) ||
+                    afterSnapshot.uart.transmitCount !=
+                        config0Observation->beforeSnapshot.uart.transmitCount ||
+                    afterSnapshot.uart.receiveFifo !=
+                        config0Observation->beforeSnapshot.uart.receiveFifo ||
+                    afterSnapshot.console.bytes !=
+                        config0Observation->beforeSnapshot.console.bytes ||
+                    afterSnapshot.scheduler.lastCPUIndex !=
+                        config0Observation->beforeSnapshot.scheduler.lastCPUIndex ||
+                    afterSnapshot.totalVirtualCycles !=
+                        config0Observation->beforeSnapshot.totalVirtualCycles + 1)
+                    throw std::runtime_error("authentic MFC0 Config0 changed unrelated state");
+            } else if (captureConfig0Consumer) {
+                std::ostringstream consumer;
+                consumer << "{\"type\":\"linux_config0_consumer\",\"pc_va\":\""
+                         << hexValue(pc, 16) << "\",\"pc_pa\":\""
+                         << hexValue(fetch.phys, 9) << "\",\"instruction\":\""
+                         << hexValue(word, 8) << "\",\"disassembly\":\""
+                         << cpu.disassemble(decoded) << "\",\"a2_before\":\""
+                         << hexValue(config0ConsumerGprsBefore[6], 16)
+                         << "\",\"a2_after\":\"" << hexValue(cpu.readGpr(6), 16)
+                         << "\",\"delay_armed_before\":"
+                         << (delayBefore ? "true" : "false") << "}";
+                config0Observation->consumers.push_back(consumer.str());
+            }
             continue;
         }
         if (cyclesRun == 1 && vm.getCyclesExecuted() == cycleBefore + 1) {
@@ -911,7 +1059,8 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
                             const std::filesystem::path& phase25TracePath,
                             const std::filesystem::path& phase26TracePath,
                             const std::filesystem::path& tracePath,
-                            const std::filesystem::path& phase27TracePath = {}) {
+                            const std::filesystem::path& phase27TracePath = {},
+                            const std::filesystem::path& phase28TracePath = {}) {
     Logger::getInstance().setLogLevel(LogLevel::ERROR);
     if (std::filesystem::exists(tracePath))
         throw std::runtime_error("refusing to overwrite an accepted trace: " + tracePath.string());
@@ -931,6 +1080,11 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
     std::vector<std::string> acceptedPhase27SltiPre;
     std::vector<std::string> acceptedPhase27SltiRetirement;
     std::vector<std::string> acceptedPhase27Frontier;
+    std::vector<std::string> acceptedPhase28PridPre;
+    std::vector<std::string> acceptedPhase28PridRetirement;
+    std::vector<std::string> acceptedPhase28Summary;
+    std::vector<std::string> acceptedPhase28Frontier;
+    std::vector<std::string> acceptedPhase28Replay;
     if (!phase27TracePath.empty()) {
         acceptedPhase27 = linesOfType(phase27TracePath, "instruction");
         acceptedPhase27Continuation = linesOfType(phase27TracePath,
@@ -950,6 +1104,33 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
             acceptedPhase27Frontier[0].find("\"instruction\":\"0x40047800\"") ==
                 std::string::npos)
             throw std::runtime_error("accepted Phase 27 trace shape/frontier changed");
+    }
+    if (!phase28TracePath.empty()) {
+        acceptedPhase28PridPre = linesOfType(phase28TracePath,
+                                             "authentic_prid_pre_instruction");
+        acceptedPhase28PridRetirement = linesOfType(phase28TracePath,
+                                                    "authentic_prid_retirement");
+        acceptedPhase28Summary = linesOfType(phase28TracePath,
+                                             "authentic_prid_continuation_summary");
+        acceptedPhase28Frontier = linesOfType(phase28TracePath, "continuation_frontier");
+        acceptedPhase28Replay = linesOfType(phase28TracePath,
+                                            "authentic_prid_snapshot_replay");
+        if (acceptedPhase28PridPre.size() != 1 ||
+            acceptedPhase28PridRetirement.size() != 1 ||
+            acceptedPhase28Summary.size() != 1 || acceptedPhase28Frontier.size() != 1 ||
+            acceptedPhase28Replay.size() != 1 ||
+            acceptedPhase28PridPre[0].find("\"count\":158131") == std::string::npos ||
+            acceptedPhase28PridRetirement[0].find("\"a0_expected\":\"0x0000000000018900\"") ==
+                std::string::npos ||
+            acceptedPhase28Summary[0].find("\"total_retired\":158205") ==
+                std::string::npos ||
+            acceptedPhase28Summary[0].find("\"count_after_initial_stop_probe\":158206") ==
+                std::string::npos ||
+            acceptedPhase28Frontier[0].find("\"pc_va\":\"0xffffffff8010b840\"") ==
+                std::string::npos ||
+            acceptedPhase28Frontier[0].find("\"instruction\":\"0x40068000\"") ==
+                std::string::npos)
+            throw std::runtime_error("accepted Phase 28 trace identity/frontier changed");
     }
     if (acceptedPhase25.size() != 256 || acceptedPhase26.size() != 256)
         throw std::runtime_error("accepted instruction-prefix trace counts changed");
@@ -1196,15 +1377,26 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
 
     InstructionWindow preflightWindow;
     AuthenticPrIdObservation preflightPrid;
+    AuthenticConfig0Observation preflightConfig0;
     ContinuationStop preflightStop = runToFrontier(
         vm, cpu, *context, kContinuationBudget, preflightWindow, nullptr,
-        &preflightPrid);
+        &preflightPrid, &preflightConfig0);
     if (!preflightPrid.seen || !preflightPrid.retired ||
         preflightPrid.physical != kPrIdPa || preflightPrid.resultA0 != 0x00018900ULL ||
         preflightPrid.countBefore != 158131 ||
         preflightPrid.cyclesBefore != 158131 ||
         preflightPrid.retiredBefore != 158131)
         throw std::runtime_error("authentic PRId instruction was not qualified");
+    if (!preflightConfig0.seen || !preflightConfig0.retired ||
+        preflightConfig0.physical != kConfig0Pa ||
+        preflightConfig0.resultA2 != 0xFFFFFFFF8000C483ULL ||
+        preflightConfig0.countBefore != 158205 ||
+        preflightConfig0.cyclesBefore != 158205 ||
+        preflightConfig0.retiredBefore != 158205 ||
+        preflightConfig0.countAfter != 158206 ||
+        preflightConfig0.cyclesAfter != 158206 ||
+        preflightConfig0.retiredAfter != 158206)
+        throw std::runtime_error("authentic Config0 instruction was not qualified");
     const bool executionErrorProbed = vm.getState() == VMState::ERROR;
     if (executionErrorProbed && (preflightStop.pc == 0 || preflightStop.word == 0))
         throw std::runtime_error("VM execution error did not identify an instruction frontier");
@@ -1212,6 +1404,7 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
     InstructionWindow firstWindow;
     ContinuationStop firstStop;
     AuthenticPrIdObservation firstPrid;
+    AuthenticConfig0Observation firstConfig0;
     if (executionErrorProbed) {
         // The production VM intentionally does not snapshot an ERROR state.
         // Reset returns it to a stopped boundary without clearing RAM; restore
@@ -1228,11 +1421,13 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         if (vm.run(1) != 1 || cpu.serialize() != afterSltiCpuBytes)
             throw std::runtime_error("SLTI replay after frontier probe diverged");
         firstStop = runToFrontier(vm, cpu, *context, kContinuationBudget,
-                                  firstWindow, &preflightStop, &firstPrid);
+                                  firstWindow, &preflightStop, &firstPrid,
+                                  &firstConfig0);
     } else {
         firstWindow = std::move(preflightWindow);
         firstStop = preflightStop;
         firstPrid = std::move(preflightPrid);
+        firstConfig0 = std::move(preflightConfig0);
     }
     const Mips64FullVmSnapshot firstTerminal = vm.captureMips64FullSnapshot();
     if (!firstTerminal.ValidateIntegrity()) throw std::runtime_error("invalid first terminal snapshot");
@@ -1256,9 +1451,11 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         throw std::runtime_error("authentic SLTI immediate replay diverged");
     InstructionWindow replayWindow;
     AuthenticPrIdObservation replayPrid;
+    AuthenticConfig0Observation replayConfig0;
     const ContinuationStop replayStop = runToFrontier(
         vm, cpu, *context, kContinuationBudget, replayWindow,
-        executionErrorProbed ? &preflightStop : nullptr, &replayPrid);
+        executionErrorProbed ? &preflightStop : nullptr, &replayPrid,
+        &replayConfig0);
     const Mips64FullVmSnapshot replayTerminal = vm.captureMips64FullSnapshot();
     if (firstStop.reason != replayStop.reason || firstStop.pc != replayStop.pc ||
         firstStop.physical != replayStop.physical || firstStop.word != replayStop.word ||
@@ -1276,6 +1473,18 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
         firstPrid.consumers != replayPrid.consumers ||
         firstPrid.phase27OverlapTail != replayPrid.phase27OverlapTail ||
         !sameReplaySnapshot(firstPrid.beforeSnapshot, replayPrid.beforeSnapshot) ||
+        !firstConfig0.seen || !replayConfig0.seen || !firstConfig0.retired ||
+        !replayConfig0.retired || firstConfig0.physical != replayConfig0.physical ||
+        firstConfig0.priorA2 != replayConfig0.priorA2 ||
+        firstConfig0.resultA2 != replayConfig0.resultA2 ||
+        firstConfig0.countBefore != replayConfig0.countBefore ||
+        firstConfig0.cyclesBefore != replayConfig0.cyclesBefore ||
+        firstConfig0.retiredBefore != replayConfig0.retiredBefore ||
+        firstConfig0.gprsBefore != replayConfig0.gprsBefore ||
+        firstConfig0.gprsAfter != replayConfig0.gprsAfter ||
+        firstConfig0.consumers != replayConfig0.consumers ||
+        !sameReplaySnapshot(firstConfig0.beforeSnapshot,
+                            replayConfig0.beforeSnapshot) ||
         (!acceptedPhase27Continuation.empty() &&
          (firstPrid.phase27OverlapTail.size() != 64 ||
           !std::equal(firstPrid.phase27OverlapTail.begin(),
@@ -1296,9 +1505,13 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << "\",\"accepted_phase25_trace_sha256\":\"" << kPhase25TraceSha256
           << "\",\"accepted_phase26_trace_sha256\":\"" << kPhase26TraceSha256
           << "\",\"accepted_phase27_trace_sha256\":\"" << kPhase27TraceSha256
+          << "\",\"accepted_phase28_trace_sha256\":\"" << kPhase28TraceSha256
           << "\",\"phase25_prefix_records_matched\":256"
           << ",\"phase26_prefix_records_matched\":256"
           << ",\"phase27_prefix_records_matched\":" << acceptedPhase27.size()
+          << ",\"phase28_frontier_records_matched\":"
+          << acceptedPhase28Frontier.size()
+          << ",\"accepted_phase28_record_count\":375"
           << ",\"linux_entry\":\"" << hexValue(kLinuxEntry, 16)
           << "\",\"guest_ram_bytes\":" << kRamBytes
           << ",\"endianness\":\"big\",\"prom_command_line\":\"console=ttyS0,38400n8\""
@@ -1395,6 +1608,64 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << ",\"tlb_unchanged\":true,\"ram_unchanged\":true"
           << ",\"reservation_unchanged\":true,\"uart_console_unchanged\":true"
           << ",\"architectural_exception\":false,\"snapshot_replay_verified\":true}\n";
+    trace << "{\"type\":\"authentic_config0_pre_instruction\",\"pc_va\":\""
+          << hexValue(kConfig0Pc, 16) << "\",\"pc_pa\":\""
+          << hexValue(firstConfig0.physical, 9) << "\",\"instruction\":\""
+          << hexValue(kConfig0Word, 8)
+          << "\",\"operation\":\"MFC0\",\"opcode\":16,\"rs\":0"
+          << ",\"rt\":6,\"rd\":16,\"sel\":0,\"reserved_bits_10_3\":0"
+          << ",\"a2_before\":\"" << hexValue(firstConfig0.priorA2, 16)
+          << "\",\"prid\":\"0x00018900\",\"config0_expected\":\"0x8000c483\""
+          << ",\"fields\":{\"M\":1,\"K23\":0,\"KU\":0,\"Impl\":0"
+          << ",\"BE\":1,\"AT\":2,\"AR\":1,\"MT\":1,\"Reserved\":0"
+          << ",\"VI\":0,\"K0\":3},\"endianness\":\"big\""
+          << ",\"status\":\"" << hexValue(firstConfig0.status, 16)
+          << "\",\"cause\":\"" << hexValue(firstConfig0.cause, 16)
+          << "\",\"epc\":\"" << hexValue(firstConfig0.epc, 16)
+          << "\",\"badvaddr\":\"" << hexValue(firstConfig0.badVAddr, 16)
+          << "\",\"count\":" << firstConfig0.countBefore
+          << ",\"vm_cycles\":" << firstConfig0.cyclesBefore
+          << ",\"retired\":" << firstConfig0.retiredBefore
+          << ",\"ebase\":\"" << hexValue(firstConfig0.ebase, 16)
+          << "\",\"kernel_mode\":" << (firstConfig0.kernelMode ? "true" : "false")
+          << ",\"delay_armed\":" << (firstConfig0.delayArmed ? "true" : "false")
+          << ",\"snapshot_valid\":true,\"snapshot_format\":3"
+          << ",\"cpu_version\":6,\"cpu_bytes\":1001,\"memory_version\":2"
+          << ",\"uart_version\":4,\"irq_version\":1,\"full_gpr_prestate\":[";
+    for (size_t index = 0; index < firstConfig0.gprsBefore.size(); ++index) {
+        if (index != 0) trace << ',';
+        trace << '"' << hexValue(firstConfig0.gprsBefore[index], 16) << '"';
+    }
+    trace << "]}\n";
+    trace << "{\"type\":\"authentic_config0_retirement\",\"pre_pc\":\""
+          << hexValue(kConfig0Pc, 16) << "\",\"word\":\""
+          << hexValue(kConfig0Word, 8) << "\",\"a2_before\":\""
+          << hexValue(firstConfig0.priorA2, 16)
+          << "\",\"config0_word\":\"0x8000c483\",\"a2_after\":\""
+          << hexValue(firstConfig0.resultA2, 16) << "\",\"post_pc\":\""
+          << hexValue(kConfig0Pc + 4, 16) << "\",\"count_before\":"
+          << firstConfig0.countBefore << ",\"count_after\":"
+          << firstConfig0.countAfter << ",\"cycles_before\":"
+          << firstConfig0.cyclesBefore << ",\"cycles_after\":"
+          << firstConfig0.cyclesAfter << ",\"retired_before\":"
+          << firstConfig0.retiredBefore << ",\"retired_after\":"
+          << firstConfig0.retiredAfter
+          << ",\"normal_retirement\":true,\"other_gprs_unchanged\":true"
+          << ",\"other_cp0_unchanged_except_count\":true,\"hi_lo_unchanged\":true"
+          << ",\"tlb_unchanged\":true,\"ram_unchanged\":true"
+          << ",\"reservation_unchanged\":true,\"uart_console_unchanged\":true"
+          << ",\"architectural_exception\":false,\"snapshot_replay_verified\":true}\n";
+    trace << "{\"type\":\"config0_write_policy\",\"register\":16,\"sel\":0"
+          << ",\"capability_fields\":\"read-only\",\"K0_architectural\":\"R/W\""
+          << ",\"K0_profile\":3,\"dynamic_K0_supported\":false"
+          << ",\"MTC0_DMTC0\":\"rejected as unsupported Cp0Violation\"}\n";
+    trace << "{\"type\":\"linux_config0_consumers\",\"observed_instructions\":"
+          << firstConfig0.consumers.size() << ",\"records\":[";
+    for (size_t index = 0; index < firstConfig0.consumers.size(); ++index) {
+        if (index != 0) trace << ',';
+        trace << firstConfig0.consumers[index];
+    }
+    trace << "]}\n";
     trace << "{\"type\":\"prid_selector_policy\",\"register\":15"
           << ",\"sel0\":\"read-only PRId 0x00018900\""
           << ",\"sel1\":\"existing EBase behavior\""
@@ -1475,7 +1746,7 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << "\",\"stop_reason\":\"" << firstStop.reason
           << "\",\"execution_fault\":\"" << firstStop.executionFault
           << "\",\"count_at_snapshotable_frontier\":" << firstCount
-          << ",\"count_after_initial_stop_probe\":" << preflightStop.count
+          << ",\"preflight_stop_count\":" << preflightStop.count
           << ",\"vm_cycles\":" << firstCycles
           << ",\"status\":\"" << hexValue(cpu.cp0Status(), 16)
           << "\",\"cause\":\"" << hexValue(cpu.cp0Cause(), 16)
@@ -1492,6 +1763,40 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << ",\"mmio_observation\":\"not instrumented\""
           << ",\"snapshot_replay_identical\":true"
           << ",\"continuation_budget\":" << kContinuationBudget << "}\n";
+    const Mips64Decoded nextDecoded = decodeInstruction(firstStop.word);
+    const bool config1Frontier = nextDecoded.valid &&
+        nextDecoded.op == Mips64Op::Mfc0 && nextDecoded.rs == 0 &&
+        nextDecoded.rd == 16 && nextDecoded.sel == 1;
+    trace << "{\"type\":\"authentic_config0_continuation_summary\""
+          << ",\"config0_word\":\"0x8000c483\""
+          << ",\"config0_a2_before\":\""
+          << hexValue(firstConfig0.priorA2, 16)
+          << "\",\"config0_a2_after\":\""
+          << hexValue(firstConfig0.resultA2, 16)
+          << "\",\"retired_before_config0\":" << firstConfig0.retiredBefore
+          << ",\"retired_total\":" << firstRetired
+          << ",\"retired_since_config0\":"
+          << (firstRetired - firstConfig0.retiredAfter)
+          << ",\"next_frontier\":\"" << hexValue(firstStop.pc, 16)
+          << "\",\"next_word\":\"" << hexValue(firstStop.word, 8)
+          << "\",\"next_stop_reason\":\"" << firstStop.reason
+          << "\",\"next_execution_fault\":\"" << firstStop.executionFault
+          << "\",\"config1_mfc0_frontier\":"
+          << (config1Frontier ? "true" : "false")
+          << ",\"count_at_snapshotable_frontier\":" << firstCount
+          << ",\"preflight_stop_count\":" << preflightStop.count
+          << ",\"vm_cycles\":" << firstCycles
+          << ",\"status\":\"" << hexValue(cpu.cp0Status(), 16)
+          << "\",\"cause\":\"" << hexValue(cpu.cp0Cause(), 16)
+          << "\",\"epc\":\"" << hexValue(cpu.cp0Epc(), 16)
+          << "\",\"badvaddr\":\"" << hexValue(cpu.cp0BadVAddr(), 16)
+          << "\",\"delay_armed\":" << (cpu.delayArmed() ? "true" : "false")
+          << ",\"uart_tx_bytes\":" << uartTx
+          << ",\"uart_rx_fifo_bytes\":" << uartRx
+          << ",\"console_bytes\":" << console.bytes.size()
+          << ",\"mmio_observation\":\"not instrumented\""
+          << ",\"snapshot_replay_identical\":true"
+          << ",\"continuation_budget\":" << kContinuationBudget << "}\n";
     trace << "{\"type\":\"continuation_frontier\",\"pc_va\":\""
           << hexValue(firstStop.pc, 16) << "\",\"pc_pa\":\""
           << hexValue(firstStop.physical, 9) << "\",\"instruction\":\""
@@ -1504,6 +1809,36 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << cpu.disassemble(decodeInstruction(firstStop.word))
           << "\",\"architectural_exception\":"
           << (cpu.causeExcCode() != 0 ? "true" : "false") << "}\n";
+    trace << "{\"type\":\"unsupported_frontier_prestate\",\"pc_va\":\""
+          << hexValue(firstStop.pc, 16) << "\",\"pc_pa\":\""
+          << hexValue(firstStop.physical, 9) << "\",\"instruction\":\""
+          << hexValue(firstStop.word, 8) << "\",\"execution_fault\":\""
+          << firstStop.executionFault << "\",\"opcode\":"
+          << ((firstStop.word >> 26) & 0x3F)
+          << ",\"rs\":" << ((firstStop.word >> 21) & 0x1F)
+          << ",\"rt\":" << ((firstStop.word >> 16) & 0x1F)
+          << ",\"rd\":" << ((firstStop.word >> 11) & 0x1F)
+          << ",\"sa\":" << ((firstStop.word >> 6) & 0x1F)
+          << ",\"funct\":" << (firstStop.word & 0x3F)
+          << ",\"independent_decode\":\"EXT $v1,$a2,1,14\""
+          << ",\"config1_frontier\":" << (config1Frontier ? "true" : "false")
+          << ",\"a2\":\"" << hexValue(cpu.readGpr(6), 16)
+          << "\",\"status\":\"" << hexValue(cpu.cp0Status(), 16)
+          << "\",\"cause\":\"" << hexValue(cpu.cp0Cause(), 16)
+          << "\",\"epc\":\"" << hexValue(cpu.cp0Epc(), 16)
+          << "\",\"badvaddr\":\"" << hexValue(cpu.cp0BadVAddr(), 16)
+          << "\",\"count\":" << cpu.cp0Count()
+          << ",\"vm_cycles\":" << vm.getCyclesExecuted()
+          << ",\"retired\":" << context->instructionsExecuted
+          << ",\"delay_armed\":" << (cpu.delayArmed() ? "true" : "false")
+          << ",\"architectural_exception\":"
+          << (cpu.causeExcCode() != 0 ? "true" : "false")
+          << ",\"full_gpr_prestate\":[";
+    for (size_t index = 0; index < kNumGpr; ++index) {
+        if (index != 0) trace << ',';
+        trace << '"' << hexValue(cpu.readGpr(static_cast<unsigned>(index)), 16) << '"';
+    }
+    trace << "]}\n";
     // Exercise the exact full-VM checkpoint captured immediately before the
     // authentic MFC0, independently of the longer continuation replay.
     if (!vm.reset()) throw std::runtime_error("VM reset before authentic PRId replay failed");
@@ -1531,9 +1866,88 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << ",\"result_a0\":\"" << hexValue(cpu.readGpr(4), 16)
           << "\",\"cpu_state_reproduced\":true,\"cycles_reproduced\":true"
           << ",\"ram_reservations_devices_reproduced\":true}\n";
+    if (!vm.reset()) throw std::runtime_error("VM reset before authentic Config0 replay failed");
+    restoreError.clear();
+    if (!vm.restoreMips64FullSnapshot(firstConfig0.beforeSnapshot, &restoreError) ||
+        !restoreError.empty() || cpu.pc() != kConfig0Pc ||
+        cpu.cp0Count() != firstConfig0.countBefore ||
+        vm.getCyclesExecuted() != firstConfig0.cyclesBefore ||
+        context->instructionsExecuted != firstConfig0.retiredBefore)
+        throw std::runtime_error("authentic pre-Config0 snapshot restore failed: " +
+                                 restoreError);
+    if (vm.run(1) != 1 || cpu.serialize() != firstConfig0.cpuAfter ||
+        cpu.readGpr(6) != 0xFFFFFFFF8000C483ULL ||
+        context->instructionsExecuted != firstConfig0.retiredAfter ||
+        vm.getCyclesExecuted() != firstConfig0.cyclesAfter)
+        throw std::runtime_error("authentic Config0 snapshot replay diverged");
+    const Mips64FullVmSnapshot afterIsolatedConfig0 = vm.captureMips64FullSnapshot();
+    if (!samePhysicalMemory(firstConfig0.beforeSnapshot.physicalMemory,
+                            afterIsolatedConfig0.physicalMemory) ||
+        afterIsolatedConfig0.uart.transmitCount !=
+            firstConfig0.beforeSnapshot.uart.transmitCount ||
+        afterIsolatedConfig0.uart.receiveFifo !=
+            firstConfig0.beforeSnapshot.uart.receiveFifo ||
+        afterIsolatedConfig0.console.bytes != firstConfig0.beforeSnapshot.console.bytes ||
+        afterIsolatedConfig0.scheduler.lastCPUIndex !=
+            firstConfig0.beforeSnapshot.scheduler.lastCPUIndex)
+        throw std::runtime_error("authentic Config0 replay changed RAM or output devices");
+    InstructionWindow replayFromConfig0Window;
+    const ContinuationStop replayFromConfig0Stop = runToFrontier(
+        vm, cpu, *context, kContinuationBudget, replayFromConfig0Window,
+        &firstStop);
+    const Mips64FullVmSnapshot replayFromConfig0Terminal =
+        vm.captureMips64FullSnapshot();
+    const std::deque<std::string> originalWindow = firstWindow.compacted
+        ? firstWindow.tail
+        : std::deque<std::string>(firstWindow.complete.begin(),
+                                  firstWindow.complete.end());
+    bool postConfig0InstructionSuffixMatches =
+        replayFromConfig0Window.count == firstRetired - firstConfig0.retiredAfter &&
+        replayFromConfig0Window.complete.size() == replayFromConfig0Window.count &&
+        originalWindow.size() >= replayFromConfig0Window.complete.size();
+    if (postConfig0InstructionSuffixMatches) {
+        const auto suffixStart = originalWindow.end() -
+            static_cast<std::ptrdiff_t>(replayFromConfig0Window.complete.size());
+        postConfig0InstructionSuffixMatches = std::equal(
+            replayFromConfig0Window.complete.begin(),
+            replayFromConfig0Window.complete.end(), suffixStart);
+    }
+    if (replayFromConfig0Stop.reason != firstStop.reason ||
+        replayFromConfig0Stop.pc != firstStop.pc ||
+        replayFromConfig0Stop.physical != firstStop.physical ||
+        replayFromConfig0Stop.word != firstStop.word ||
+        replayFromConfig0Stop.count != firstStop.count ||
+        replayFromConfig0Stop.cycles != firstStop.cycles ||
+        !postConfig0InstructionSuffixMatches ||
+        !sameReplaySnapshot(firstTerminal, replayFromConfig0Terminal))
+        throw std::runtime_error("authentic Config0-to-frontier snapshot replay diverged");
+    trace << "{\"type\":\"authentic_config0_snapshot_replay\""
+          << ",\"restored_pre_pc\":\"" << hexValue(kConfig0Pc, 16)
+          << "\",\"restored_pre_count\":" << firstConfig0.countBefore
+          << ",\"prior_a2\":\"" << hexValue(firstConfig0.priorA2, 16)
+          << "\",\"result_a2\":\"" << hexValue(cpu.readGpr(6), 16)
+          << "\",\"cpu_state_reproduced\":true,\"cycles_reproduced\":true"
+          << ",\"ram_reservations_devices_scheduler_reproduced\":true"
+          << ",\"continued_to_same_frontier\":true"
+          << ",\"retired_beyond_config0\":"
+          << replayFromConfig0Window.count
+          << ",\"next_frontier\":\""
+          << hexValue(replayFromConfig0Stop.pc, 16)
+          << "\",\"next_word\":\""
+          << hexValue(replayFromConfig0Stop.word, 8) << "\"}\n";
     trace.flush();
-    if (!trace) throw std::runtime_error("failed writing authentic MIPS64-28 trace");
+    if (!trace) throw std::runtime_error("failed writing authentic MIPS64-29 trace");
 
+    std::cout << "MIPS64_CONFIG0_LINUX_CONTINUATION pc=0x" << std::hex << kConfig0Pc
+              << " word=0x" << kConfig0Word
+              << " a2_before=0x" << firstConfig0.priorA2
+              << " config0=0x8000c483 a2_after=0x" << firstConfig0.resultA2
+              << " total_retired=" << std::dec << firstRetired
+              << " next_frontier=0x" << std::hex << firstStop.pc
+              << " next_word=0x" << firstStop.word << " stop_reason=" << firstStop.reason
+              << " count=" << std::dec << firstCount << " cycles=" << firstCycles
+              << " uart_tx=" << uartTx << " uart_rx=" << uartRx
+              << " console_bytes=" << console.bytes.size() << " replay=identical\n";
     std::cout << "MIPS64_PRID_LINUX_CONTINUATION pc=0x" << std::hex << kPrIdPc
               << " word=0x" << kPrIdWord << " a0_before=0x" << firstPrid.priorA0
               << " prid=0x" << firstPrid.resultA0
@@ -1551,6 +1965,9 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 8 && std::string(argv[1]) == "--continue-authentic-config0-kernel")
+            return runAuthenticContinuation(argv[2], argv[3], argv[4], argv[7],
+                                            argv[5], argv[6]);
         if (argc == 7 && std::string(argv[1]) == "--continue-authentic-prid-kernel")
             return runAuthenticContinuation(argv[2], argv[3], argv[4], argv[6], argv[5]);
         if (argc == 6 && std::string(argv[1]) == "--continue-authentic-kernel")
@@ -1561,7 +1978,10 @@ int main(int argc, char** argv) {
                       << " failed\n";
             return gFail == 0 ? 0 : 1;
         }
-        std::cerr << "Usage: test_mips64_slti [--continue-authentic-kernel <ELF> "
+        std::cerr << "Usage: test_mips64_slti [--continue-authentic-config0-kernel "
+                     "<ELF> <phase25-trace> <phase26-trace> <phase27-trace> "
+                     "<phase28-trace> <output-trace> | "
+                     "--continue-authentic-kernel <ELF> "
                      "<phase25-trace> <phase26-trace> <output-trace> | "
                      "--continue-authentic-prid-kernel <ELF> <phase25-trace> "
                      "<phase26-trace> <phase27-trace> <output-trace>]\n";

@@ -78,6 +78,30 @@ enum class Mips64Endianness : uint8_t {
     Big = 1,
 };
 
+// CP0 Config0 identity for the implemented MIPS64 Release 2 CPU subset.
+// Fields not backed by this profile (K23/KU, implementation bits, and VI)
+// read as zero. Config0.M is set because Config1 is architecturally required;
+// Config1 reports the actual TLB size and does not advertise Config2.
+constexpr unsigned kCp0RegConfig = 16;
+constexpr unsigned kCp0SelConfig0 = 0;
+constexpr unsigned kCp0SelConfig1 = 1;
+constexpr uint32_t kConfig0M = 1U << 31;
+constexpr uint32_t kConfig0Be = 1U << 15;
+constexpr uint32_t kConfig0AtMips64 = 2U << 13;
+constexpr uint32_t kConfig0ArRelease2 = 1U << 10;
+constexpr uint32_t kConfig0MtStandardTlb = 1U << 7;
+constexpr uint32_t kConfig0K0Mask = 0x7U;
+constexpr uint8_t kMips64Kseg0CacheAttribute = 3;
+
+constexpr uint32_t mips64Config0(Mips64Endianness endianness) {
+    return kConfig0M |
+           (endianness == Mips64Endianness::Big ? kConfig0Be : 0U) |
+           kConfig0AtMips64 |
+           kConfig0ArRelease2 |
+           kConfig0MtStandardTlb |
+           (static_cast<uint32_t>(kMips64Kseg0CacheAttribute) & kConfig0K0Mask);
+}
+
 // Diagnostic fault codes. These describe why the most recent step did not
 // retire normally; synchronous MIPS exceptions additionally update CP0
 // (Cause.ExcCode/BD, EPC, BadVAddr, EntryHi, Context/XContext where
@@ -306,6 +330,13 @@ enum class Mips64Segment : uint8_t {
 // ============================================================================
 
 constexpr unsigned kTlbEntries = 16;  // fixed JTLB size for this phase
+constexpr unsigned kConfig1TlbSizeShift = 25;
+constexpr uint32_t mips64Config1() {
+    // Config1 MMUSize is the number of TLB entries minus one. Zero-valued
+    // cache and option fields describe the non-modeled features in this core;
+    // M=0 prevents Linux from probing an unimplemented Config2.
+    return static_cast<uint32_t>(kTlbEntries - 1U) << kConfig1TlbSizeShift;
+}
 
 // TLBWI/TLBWR are constrained by Wired: Random cycles deterministically in
 // [Wired, kTlbEntries). Wired is clamped to [0, kTlbEntries] on write.
