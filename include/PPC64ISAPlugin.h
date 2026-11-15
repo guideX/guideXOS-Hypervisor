@@ -59,8 +59,9 @@ constexpr size_t INSN_WIDTH = 4;
 // Legacy v1/v2 restores initialize PIDR to zero. serialize_state() preserves
 // the smallest compatible layout, emits v3 for a nonzero PIDR, v4 for
 // hypervisor architectural state, v5 when DEC is armed, v6 when SPRG1 is
-// nonzero, v7 when FSCR is nonzero, and v8 when MMCRA is nonzero. Explicit
-// version APIs select their respective layouts; older readers remain supported.
+// nonzero, v7 when FSCR is nonzero, v8 when MMCRA is nonzero, and v9 when
+// MMCR0 differs from the selected POWER9 profile reset value. Explicit version
+// APIs select their respective layouts; older readers remain supported.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
@@ -80,6 +81,8 @@ constexpr uint32_t STATE_VERSION_V7 = 7;
 constexpr size_t STATE_SIZE_V7 = STATE_SIZE_V6 + 8;
 constexpr uint32_t STATE_VERSION_V8 = 8;
 constexpr size_t STATE_SIZE_V8 = STATE_SIZE_V7 + 8;
+constexpr uint32_t STATE_VERSION_V9 = 9;
+constexpr size_t STATE_SIZE_V9 = STATE_SIZE_V8 + 8;
 
 // ============================================================================
 // PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
@@ -184,6 +187,40 @@ constexpr uint16_t SPR_SPRG2 = 274;
 constexpr uint16_t SPR_SPRG3 = 275;
 constexpr uint16_t SPR_FSCR = 153;
 constexpr uint16_t SPR_MMCRA = 786;
+constexpr uint16_t SPR_MMCR0 = 795;
+// POWER9 MMCR0 Freeze Counters (FC), in the Linux-compatible low-word mask.
+constexpr uint64_t MMCR0_FC = 0x80000000ULL;
+constexpr uint64_t MMCR0_FCS = 0x40000000ULL;
+constexpr uint64_t MMCR0_FCP = 0x20000000ULL;
+constexpr uint64_t MMCR0_FCM1 = 0x10000000ULL;
+constexpr uint64_t MMCR0_FCM0 = 0x08000000ULL;
+constexpr uint64_t MMCR0_PMAE = 0x04000000ULL;
+constexpr uint64_t MMCR0_FCECE = 0x02000000ULL;
+constexpr uint64_t MMCR0_TBSEL = 0x01800000ULL;
+constexpr uint64_t MMCR0_TBEE = 0x00400000ULL;
+constexpr uint64_t MMCR0_BHRBA = 0x00200000ULL;
+constexpr uint64_t MMCR0_EBE = 0x00100000ULL;
+constexpr uint64_t MMCR0_PMCC = 0x000C0000ULL;
+constexpr uint64_t MMCR0_FCTM = 0x00020000ULL;
+constexpr uint64_t MMCR0_FCNTS = 0x00010000ULL;
+constexpr uint64_t MMCR0_PMC1CE = 0x00008000ULL;
+constexpr uint64_t MMCR0_PMCjCE = 0x00004000ULL;
+constexpr uint64_t MMCR0_TRIGGER = 0x00002000ULL;
+constexpr uint64_t MMCR0_FCPC = 0x00001000ULL;
+constexpr uint64_t MMCR0_PMAOQ = 0x00000800ULL;
+constexpr uint64_t MMCR0_PMAO_SYNC = MMCR0_PMAOQ;
+constexpr uint64_t MMCR0_CC56RUN = 0x00000100ULL;
+constexpr uint64_t MMCR0_PMAO = 0x00000080ULL;
+constexpr uint64_t MMCR0_FCSS = 0x00000040ULL;
+constexpr uint64_t MMCR0_FC1_4 = 0x00000020ULL;
+constexpr uint64_t MMCR0_FC5_6 = 0x00000010ULL;
+constexpr uint64_t MMCR0_FCTI = 0x00000008ULL;
+constexpr uint64_t MMCR0_FCTA = 0x00000004ULL;
+constexpr uint64_t MMCR0_FCWAIT = 0x00000002ULL;
+constexpr uint64_t MMCR0_FCH = 0x00000001ULL;
+// The POWER9 profile follows the pinned QEMU system-emulation reset value.
+// This is a guideXOS profile choice, not a universal Power ISA reset value.
+constexpr uint64_t MMCR0_POWER9_RESET = MMCR0_FC;
 constexpr uint16_t SPR_HSPRG0 = 304;
 constexpr uint16_t SPR_HSPRG1 = 305;
 
@@ -602,6 +639,8 @@ public:
     void deserializeV7(const uint8_t* buffer);
     void serializeV8(uint8_t* buffer) const;
     void deserializeV8(const uint8_t* buffer);
+    void serializeV9(uint8_t* buffer) const;
+    void deserializeV9(const uint8_t* buffer);
     static constexpr size_t v2Size() { return STATE_SIZE_V2; }
     static constexpr size_t v3Size() { return STATE_SIZE_V3; }
     static constexpr size_t v4Size() { return STATE_SIZE_V4; }
@@ -609,6 +648,7 @@ public:
     static constexpr size_t v6Size() { return STATE_SIZE_V6; }
     static constexpr size_t v7Size() { return STATE_SIZE_V7; }
     static constexpr size_t v8Size() { return STATE_SIZE_V8; }
+    static constexpr size_t v9Size() { return STATE_SIZE_V9; }
 
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
@@ -634,6 +674,10 @@ public:
     // MMCRA (SPR 786), per-vCPU POWER9 PMU control/sample metadata. The
     // bounded PMU profile stores and reads this value but does not execute PMU.
     uint64_t mmcra = 0;
+    // MMCR0 (SPR 795), full-width per-vCPU POWER9 PMU control state. No PMU
+    // counting/event engine is modeled. Older checkpoints restore the profile
+    // reset value below.
+    uint64_t mmcr0 = MMCR0_POWER9_RESET;
 };
 
 /**
@@ -715,6 +759,8 @@ public:
     uint64_t getSPRG1() const { return state_.sprg1; }
     uint64_t getFSCR() const { return state_.fscr; }
     uint64_t getMMCRA() const { return state_.mmcra; }
+    uint64_t getMMCR0() const { return state_.mmcr0; }
+    bool isMMCR0Frozen() const { return (state_.mmcr0 & MMCR0_FC) != 0; }
     void setPIDR(uint32_t value) {
         if (state_.pidr != value) {
             state_.pidr = value;
@@ -830,6 +876,8 @@ public:
     bool deserialize_state_v7(const std::vector<uint8_t>& data);
     std::vector<uint8_t> serialize_state_v8() const;
     bool deserialize_state_v8(const std::vector<uint8_t>& data);
+    std::vector<uint8_t> serialize_state_v9() const;
+    bool deserialize_state_v9(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the

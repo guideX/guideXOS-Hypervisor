@@ -216,6 +216,7 @@ bool sameRegisters(const PPC64RegisterView& lhs,
                    const PPC64RegisterView& rhs) {
     return lhs.nip == rhs.nip && lhs.sprg1 == rhs.sprg1 &&
         lhs.fscr == rhs.fscr && lhs.mmcra == rhs.mmcra &&
+        lhs.mmcr0 == rhs.mmcr0 &&
         std::equal(lhs.gpr, lhs.gpr + 32, rhs.gpr) &&
         lhs.lr == rhs.lr && lhs.ctr == rhs.ctr && lhs.cr == rhs.cr &&
         lhs.xer == rhs.xer && lhs.msr == rhs.msr && lhs.pidr == rhs.pidr &&
@@ -1078,6 +1079,20 @@ struct AuthenticReplay {
     uint64_t mmcraTimebaseAfter = 0;
     uint64_t mmcraRamBefore = 0;
     uint64_t mmcraRamAfter = 0;
+    bool mmcr0Fetched = false;
+    bool mmcr0Retired = false;
+    uint64_t mmcr0Nip = 0;
+    uint32_t mmcr0RawWord = 0;
+    uint16_t mmcr0LPID = 0;
+    uint64_t mmcr0SourceValue = 0;
+    uint64_t mmcr0ValueBefore = 0;
+    uint64_t mmcr0ValueAfter = 0;
+    uint64_t mmcr0CyclesBefore = 0;
+    uint64_t mmcr0CyclesAfter = 0;
+    uint64_t mmcr0TimebaseBefore = 0;
+    uint64_t mmcr0TimebaseAfter = 0;
+    uint64_t mmcr0RamBefore = 0;
+    uint64_t mmcr0RamAfter = 0;
     uint64_t fscrWriteNip = 0;
     uint16_t fscrWriteLPID = 0;
     uint64_t fscrWriteSource = 0;
@@ -1147,8 +1162,12 @@ struct AuthenticReplay {
     PPC64RegisterView fscrWriteAfter{};
     PPC64RegisterView mmcraBefore{};
     PPC64RegisterView mmcraAfter{};
+    PPC64RegisterView mmcr0Before{};
+    PPC64RegisterView mmcr0After{};
     PPC64VirtualInterruptSnapshot mmcraInterruptBefore{};
     PPC64VirtualInterruptSnapshot mmcraInterruptAfter{};
+    PPC64VirtualInterruptSnapshot mmcr0InterruptBefore{};
+    PPC64VirtualInterruptSnapshot mmcr0InterruptAfter{};
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1173,7 +1192,9 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  bool stopAtNeg = false,
                                  uint64_t stopAtNip = 0,
                                  uint64_t fscrFunctionEntryNip = 0,
-                                 bool retireMMCRA = false) {
+                                 bool retireMMCRA = false,
+                                 bool retireMMCR0 = false,
+                                 bool stopAtMMCR0 = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1479,6 +1500,42 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.mmcraCyclesBefore = vm.getCyclesExecuted();
                 result.mmcraTimebaseBefore = vm.getPPC64Timebase();
                 result.mmcraRamBefore = fingerprintRam(*memory);
+            }
+            if (following.kind == DecodedKind::MTSPR &&
+                following.sprn == SPR_MMCR0 && !result.mmcr0Fetched) {
+                result.mmcr0Fetched = true;
+                result.mmcr0Nip = before.nip;
+                result.mmcr0RawWord = following.raw;
+                result.mmcr0LPID = cpu->getActiveLPID();
+                result.mmcr0SourceValue = before.gpr[following.rt];
+                result.mmcr0Before = before;
+                result.mmcr0InterruptBefore =
+                    vm.getPPC64InterruptSnapshot();
+                result.mmcr0ValueBefore = before.mmcr0;
+                result.mmcr0CyclesBefore = vm.getCyclesExecuted();
+                result.mmcr0TimebaseBefore = vm.getPPC64Timebase();
+                result.mmcr0RamBefore = fingerprintRam(*memory);
+                if (stopAtMMCR0 || !retireMMCR0) {
+                    result.stopClass = stopAtMMCR0
+                        ? "phase43-historical-MMCR0-boundary"
+                        : "explicit-authentic-frontier";
+                    result.stopNip = before.nip;
+                    result.stopWord = following.raw;
+                    result.stopDisassembly = next.disassembly;
+                    result.stopLPID = cpu->getActiveLPID();
+                    const uint64_t gra = before.nip & kGuestRealMask;
+                    const auto translation =
+                        PPC64PartitionMMU::translateGuestReal(
+                            vm.getMemory(), *partition, gra,
+                            PPC64TranslationAccess::FETCH);
+                    result.stopFetchTranslated = translation.success;
+                    result.stopFetchExecuteAllowed =
+                        translation.executeAllowed;
+                    result.stopBackingAddress =
+                        translation.hostBackingAddress;
+                    stopped = true;
+                    break;
+                }
             }
             if (following.kind == DecodedKind::MFSPR &&
                 following.sprn == SPR_FSCR && !result.fscrFetched) {
@@ -1895,6 +1952,19 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.mmcraTimebaseAfter = vm.getPPC64Timebase();
                 result.mmcraRamAfter = fingerprintRam(*memory);
                 result.mmcraRetired = retired &&
+                    after.nip == before.nip + 4U;
+            }
+            if (following.kind == DecodedKind::MTSPR &&
+                following.sprn == SPR_MMCR0 &&
+                before.nip == result.mmcr0Nip) {
+                result.mmcr0After = after;
+                result.mmcr0InterruptAfter =
+                    vm.getPPC64InterruptSnapshot();
+                result.mmcr0ValueAfter = after.mmcr0;
+                result.mmcr0CyclesAfter = vm.getCyclesExecuted();
+                result.mmcr0TimebaseAfter = vm.getPPC64Timebase();
+                result.mmcr0RamAfter = fingerprintRam(*memory);
+                result.mmcr0Retired = retired &&
                     after.nip == before.nip + 4U;
             }
             if (!retired) {

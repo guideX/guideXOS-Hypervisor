@@ -962,6 +962,7 @@ PPC64RegisterView VirtualMachine::getPPC64RegisterView(int cpuIndex) const {
     view.sprg1 = plugin->getSPRG1();
     view.fscr = plugin->getFSCR();
     view.mmcra = plugin->getMMCRA();
+    view.mmcr0 = plugin->getMMCR0();
     view.srr0 = plugin->getSRR0();
     view.srr1 = plugin->getSRR1();
     view.dar = plugin->getDAR();

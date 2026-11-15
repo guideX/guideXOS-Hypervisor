@@ -154,12 +154,12 @@ void testMMCRADecodeAndIdentity43() {
               write.sprn == SPR_MMCRA && write.rt == reg);
     }
     for (uint16_t spr : {uint16_t{770}, uint16_t{784}, uint16_t{785},
-                         uint16_t{787}, uint16_t{795}, uint16_t{796},
+                         uint16_t{787}, uint16_t{796},
                          uint16_t{797}, uint16_t{798}, uint16_t{190},
                          uint16_t{153}, uint16_t{273}, uint16_t{999}}) {
         const auto read = PPC64ISAPlugin::decodeWord(encodeMfspr(9U, spr));
         const auto write = PPC64ISAPlugin::decodeWord(encodeMtspr(9U, spr));
-        if (spr == 153U || spr == 273U) {
+        if (spr == 153U || spr == 273U || spr == SPR_MMCR0) {
             CHECK(read.supported && write.supported);
         } else {
             CHECK(!read.supported && !write.supported);
@@ -344,7 +344,7 @@ void testMMCRARawValuesAndCapabilityBoundary43() {
     for (uint16_t spr : {uint16_t{784}, uint16_t{787}, uint16_t{788},
                          uint16_t{789}, uint16_t{790}, uint16_t{791},
                          uint16_t{792}, uint16_t{793}, uint16_t{794},
-                         uint16_t{795}, uint16_t{796}, uint16_t{797},
+                         uint16_t{796}, uint16_t{797},
                          uint16_t{798}, uint16_t{770}}) {
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMfspr(4U, spr)).supported);
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMtspr(4U, spr)).supported);
@@ -601,10 +601,10 @@ void testAuthenticLinuxMMCRARetirement43() {
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
         false, false, 65'536U, false, false, true, false, 0U,
-        kPower9SetupEntry43, true);
+        kPower9SetupEntry43, true, false, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
         false, false, 65'536U, false, false, true, false, 0U,
-        kPower9SetupEntry43, true);
+        kPower9SetupEntry43, true, false, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -675,7 +675,7 @@ void testAuthenticLinuxMMCRARetirement43() {
                                   second.mmcraInterruptAfter));
     CHECK(first.totalRetired == 2'693'017ULL &&
           second.totalRetired == first.totalRetired);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.stopClass == "phase43-historical-MMCR0-boundary" &&
           second.stopClass == first.stopClass);
     CHECK(first.stopNip == kMmcraLinuxNip43 + 12U &&
           second.stopNip == first.stopNip);
@@ -697,9 +697,9 @@ void testAuthenticLinuxMMCRARetirement43() {
         (((first.stopWord >> 11U) & 31U) << 5U) |
         ((first.stopWord >> 16U) & 31U));
     const auto nextDecode = PPC64ISAPlugin::decodeWord(first.stopWord);
-    CHECK(first.stopWord == 0x7D5BC3A6U && nextSpr == 795U &&
-          !nextDecode.supported &&
-          first.stopDisassembly == "mtspr 795,r10 ; unsupported SPR");
+    CHECK(first.stopWord == 0x7D5BC3A6U && nextSpr == SPR_MMCR0 &&
+          nextDecode.supported && nextDecode.kind == DecodedKind::MTSPR &&
+          first.stopDisassembly == "mtspr 795,r10");
     CHECK(readHexField(frontierContents.str(), "frontier_file_offset", owner));
     CHECK(owner == 0x4AD20U);
 
@@ -825,6 +825,7 @@ void testAuthenticLinuxMMCRARetirement43() {
 
 } // namespace
 
+#ifndef PPC64_PHASE43_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -865,7 +866,7 @@ int main() {
         "K CPU v8, v1-v7 reads, v7 FSCR and v8 MMCRA VM checkpoints, corruption: PASS\n"
         "L production VirtualMachine::step read and write: PASS\n"
         "M authentic branch into __setup_cpu_power9 and MMCRA retirement at 0xC00000000003AD20: PASS\n"
-        "N bounded continuation through MMCRA to authentic unsupported MMCR0 and two deterministic replays: PASS\n"));
+        "N historical Phase 43 boundary at now-supported MMCR0 0xC00000000003AD2C; Phase 44 retires it: PASS\n"));
     CHECK(writeText(runDirectory / "isa-qemu-mmcra-reference.txt",
         "POWER9 PMU User's Guide v1.2 Appendix A.6: privileged MMCRA SPR 786 is 64-bit control/sample metadata; it describes sampling enable/mode, BHRB filtering, and threshold behavior.\n"
         "Linux v7.2 reg.h defines SPRN_MMCRA as 0x312. cpu_setup_power.c init_PMU writes MMCRA=0 before MMCR0, MMCR1, and MMCR2 setup.\n"
@@ -878,3 +879,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif
