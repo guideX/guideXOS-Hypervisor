@@ -1,0 +1,258 @@
+guideXOS Hypervisor — Phase RISCV-25 Report
+Authentic Linux v6.12 initcall progression and userspace-readiness frontier
+
+Outcome: A. Authentic OpenSBI and the unchanged Linux v6.12 Image reproduced
+the accepted RISCV-24 80-million-retirement state, crossed the unfinished slab
+allocation, completed the remaining observed kernel initialization path,
+prepared the namespace, freed init memory, and tried all four default init
+paths. Each kernel_execve returned -ENOENT. Linux then emitted its explicit
+"No working init found" panic. No userspace instruction ran. This is a missing
+init/root-filesystem boot-environment requirement, not an observed CPU, SBI,
+PMP, or device-emulation failure and not a claim of completed boot.
+
+Repository and provenance
+-------------------------
+Branch: RISCV
+Starting HEAD: 4b29cc1e7e76756f7b12b88c9a34fa996a92999a
+Starting divergence: 0 commits ahead, 0 behind origin/RISCV
+Starting phase marker: RISCV-24 complete; RISCV-25 next
+Ending HEAD and local commit: recorded after validation below
+
+Linux source: upstream v6.12, commit adc218676eef25575469234709c2d87185ca223a
+Linux Image SHA-256: 60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C
+vmlinux SHA-256: 49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093
+Kernel config SHA-256: 5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB
+OpenSBI v1.8.1 source: 74434f255873d74e56cc50aa762d1caf24c099f8
+fw_jump.bin SHA-256: CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+
+The accepted Linux Image, vmlinux, configuration, OpenSBI firmware, Linux
+source, and boot contract were not changed. The run uses authentic OpenSBI
+M-mode initialization and MRET to S-mode Linux. There is no host SBI provider
+or synthetic guest-state injection. The machine remains hart 0, 64 MiB RAM at
+0x80000000, Linux entry 0x80200000, FDT 0x82200000, StandardPmp16 restricted
+S-mode, UART0 0x10000000, UART1 0x1000A000, PLIC 0x0C000000, and the existing
+machine-owned 10 MHz timer. No IA-64 implementation source was edited.
+
+RISCV-24 reproduction and allocator completion
+-----------------------------------------------
+The authentic handoff is S-mode at 0x80200000 with a0=0, a1=0x82200000, and
+satp=Bare. Firmware executed 12,287,177 steps, including 12,287,139 M-mode
+retirements before the Linux handoff. The FDT SHA-256 remains
+580E8235E4C870BD79AE9348E4A8BDCA8D999E1C394EFE2C773A19D886C14475.
+
+The run re-created RISCV-24's exact 80,000,000 post-handoff state. It had
+80,010,929 step calls; 75,967,555 S-mode retirements (70,344,307 normal Linux
+instructions and 5,623,248 S-mode handler instructions); and 4,032,445 M-mode
+OpenSBI retirements. All 10,928 observed handler invocations had returned;
+none was active. The PC is 0xffffffff801dac04, the next instruction is
+`ld x22, 32(x2)`, privilege is S, satp is 0x80000000000812ef, and mtime is
+0x58030a3. The exact 6,367-byte Linux UART0 prefix matches RISCV-24
+(SHA-256 B6C8CB4311604F78CE79F3BFFC72A1F47AC468E90B47CC36B0145F90E8397E4C).
+
+The earlier retained frontiers also match: RISCV-22's 40M allocator branch
+at 0xffffffff801dac18 and RISCV-23's 60M frontier at 0xffffffff80298ff0.
+Their post-handoff retired totals and mode accounting are reproduced in the
+stage evidence; the exact 80M GPR/CSR/fingerprint, timer, FDT, and console
+comparisons pass in the dedicated continuation.
+
+  Target reached  Retired step calls  Normal S     S handler   M/OpenSBI   PC
+  40,000,000       40,006,851          34,707,123   2,244,333   3,048,544  0xffffffff801dac18
+  60,000,000       60,008,851          52,541,360   3,934,596   3,524,044  0xffffffff80298ff0
+  80,000,000       80,010,929          70,344,307   5,623,248   4,032,445  0xffffffff801dac04
+  90,000,000       83,804,342          73,729,481   5,941,475   4,122,080  0xffffffff80449318
+
+The allocation active at that frontier entered kmem_cache_alloc_noprof at
+79,999,840 retirements from __kernfs_new_node. It returned the non-null pointer
+0xffffffd601c39110 at 80,000,014. The caller copied a0 to x9 at
+0xffffffff8029739c and continued. No allocation fault, retry, or null result
+was observed. Across the full run, 12,610 allocator entries matched 12,610
+returns; all were non-null and no invocation remained active.
+Allocator detail storage was bounded at 72 call samples and 64 branch samples;
+7,990 additional call-entry samples were dropped, with no omitted branch
+samples. Aggregate allocator totals were retained independently of detail.
+
+Continuation and lifecycle
+--------------------------
+The same CPU and guest RAM continued through the 90M target stage. At 90M,
+Linux had already emitted its terminal missing-init panic, so the stage stopped
+at 83,793,036 retirements rather than running beyond a terminal condition.
+There was no guest architectural fault, unsupported instruction, PMP denial,
+or unreturned trap at the final frontier.
+
+Final totals from firmware handoff:
+  Post-handoff retired instructions: 83,793,036
+  CPU step calls:                   83,804,342
+  Normal S-mode Linux:              73,729,481
+  S-mode handlers:                   5,941,475
+  Total S-mode:                     79,670,956
+  M-mode OpenSBI:                    4,122,080
+  Final privilege / satp:            S / 0x80000000000812ef
+  Last retired PC / final PC:        0xffffffff80449314 / 0xffffffff80449318
+  Final instruction:                 `ld x8, 8(x2)` in serial8250_early_out
+  Stop classification:               linux_terminal_panic
+
+Linux entered kernel_init_freeable once and returned once at retirement
+82,906,617. The observed path then returned from wait_for_initramfs,
+console_on_rootfs, init_eaccess, and prepare_namespace. prepare_namespace
+returned at 82,906,596. Linux called free_initmem and returned at 83,581,584;
+the console reports freeing 2,172 KiB of init memory. In the pinned vmlinux,
+kernel_init itself had one entry and no return before panic; the terminal
+condition occurs in its post-initialization init-execution path. In the pinned
+vmlinux,
+do_pre_smp_initcalls, do_basic_setup, and do_initcalls do not have independent
+symbols. Their work is observed through actual do_one_initcall entries and
+returns, callback symbols, guest retirements, and the surrounding observed
+kernel_init_freeable return path. The source control flow is in Linux v6.12
+init/main.c: https://github.com/torvalds/linux/blob/v6.12/init/main.c
+
+Linux entered run_init_process, try_to_run_init_process, and kernel_execve four
+times for /sbin/init, /etc/init, /bin/init, and /bin/sh. Each kernel_execve
+returned a0=-2 (-ENOENT). The final UART line is:
+
+  Kernel panic - not syncing: No working init found. Try passing init= option to kernel. See Linux Documentation/admin-guide/init.rst for guidance.
+
+No userspace transition or U-mode retirement occurred. devtmpfs was mounted,
+but the run supplied neither an initramfs nor a root filesystem containing an
+init executable. This is the first demonstrated terminal boot requirement;
+there is no evidence that expanding the emulator's device or ISA model would
+resolve it.
+
+Initcalls and task switches
+---------------------------
+At the exact 80M checkpoint, aggregate initcall accounting was 364 entries,
+363 matched completions, 353 zero returns, 10 nonzero returns, and one active
+callback. Of the detail cap of 256, 256 were retained and 108 were omitted.
+By the terminal panic, all 386 entries had matching completions: 376 returned
+zero and 10 nonzero. No invocation remained active; 256 detail records were
+retained and 130 omitted. Counts are aggregate observer results; dropped
+details are not treated as missing executions or inferred return values.
+
+The ten observed nonzero callbacks were cacheinfo_sysfs_init (-ENOENT), and
+clk_starfive_jh7100_driver_init, cpufreq_dt_platdev_init,
+jh7100_reset_driver_init, jh7110_pll_driver_init, jh7110_syscrg_driver_init,
+renesas_soc_init, sifive_ccache_init, sun50i_iommu_driver_init, and
+sunxi_sram_driver_init (each -ENODEV). These are callback return values, not
+automatically platform failures. In the pinned Linux sources,
+cacheinfo_sysfs_init propagates the cache hotplug callback's -ENOENT when no
+cache leaves are described; cpufreq_dt_platdev_init returns -ENODEV when the
+root compatible/CPU OPP data is not on its allowlist; sifive_ccache_init and
+renesas_soc_init return -ENODEV when their matching device-tree nodes are
+absent. The StarFive clock/reset, Allwinner IOMMU, and SRAM initcalls use
+`builtin_platform_driver_probe` for platform-specific compatible devices; no
+such hardware is described by this machine FDT. These optional setup results
+are separate from architectural or generic device-emulation failures. The
+kernel proceeds through initcall completion, namespace preparation, initmem
+cleanup, and init attempts without a related architectural failure.
+
+At 80M there were 1,321 switch entries and 1,321 confirmed distinct completed
+task switches; 512 details were retained and 809 omitted. At the stop there
+were 1,337 entries and 1,337 confirmed distinct completions; 512 retained,
+825 omitted. Saved and restored contexts were observed on all 1,337 operations.
+There were 21 distinct previous-task identities and 20 next-task identities;
+no active, incomplete, uncertain, or untracked switch remained. The counters
+do not imply a userspace process.
+
+UART, SBI, timer, and traps
+--------------------------
+The full S-mode Linux UART0 capture is 7,157 bytes. It preserves the 6,367-byte RISCV-24 prefix and
+adds 790 bytes, including IOMMU policy, USB, ALSA, clocksource selection,
+PCI/workingset, SBI PMU capability, debug page-table validation, unused clock
+and power-domain shutdown, no soundcards, an initial-console warning,
+devtmpfs mount, initmem release, four init attempts, and the exact panic line.
+UART1 remains silent. Firmware pre-handoff and Linux console bytes retain their
+separate attributions.
+
+Linux made 3,685 SBI calls: 20 Base, 3,589 TIME, and 76 PMU requests. Every
+call returned and S-mode resumed. All 3,589 TIME requests succeeded. Of 76 PMU
+calls, 24 succeeded; 52 returned expected optional-extension errors: 50
+SBI_ERR_NOT_SUPPORTED from FID 2, one SBI_ERR_NOT_SUPPORTED from FID 7, and
+one SBI_ERR_INVALID_PARAM from FID 1. No PMU implementation was added.
+
+The deterministic 10 MHz virtual mtime advances one tick per retired guest
+instruction. mtime advanced from 0x00bb7ca3 at handoff to 0x05ba112f at stop;
+mtimecmp ended at 0x05b9c89f. TIME saw 1,795 disabled deadlines and 1,794 future deadlines;
+none was expired or decreasing, and every request succeeded. There were 1,794
+machine timer interrupts and 1,793 supervisor timer interrupts. Exactly one
+final MTIP had no following STIP because execution stopped at the terminal
+panic; the other observed timer pairings reconcile. Trap accounting recorded
+11,306 transitions, 11,305 matched handler entries/returns, zero active
+handlers, maximum nesting 2, largest handler 6,012 instructions, and zero
+dropped trap details. The 9,512 MRET and 1,793 SRET retirements account for all
+11,305 matched handler returns. No PMP-denied event was recorded.
+
+Observer and regression changes
+-------------------------------
+Changes are limited to the RISC-V Linux test harness, its bounded initcall
+observer, focused test coverage, CMake test registration/output isolation,
+and phase documentation. No production CPU, MMU, PMP, SBI, timer, UART, Linux,
+OpenSBI, or IA-64 implementation change was made. The observer separately
+counts entries, matched completions, return classes, active and untracked
+entries, retained callback details, and omitted details. The capped-detail
+regression verifies that a dropped record can still pair a real callback
+return and preserve its result code.
+
+Validation
+----------
+The CMake registry contains 34 RISC-V CTests after adding the focused observer
+regression. All 34 passed in both Debug and Release. The 32 RISC-V tests other
+than the Phase25 continuation and observer passed in Debug (32/32, 10,163.98
+seconds) and Release (32/32, 3,294.05 seconds). The dedicated Phase25
+continuation passed in Debug (1/1, 7,819.55 seconds) and Release (1/1,
+1,786.59 seconds). The registered observer CTest passed in Debug (1/1, 0.27
+seconds) and Release (1/1, 0.67 seconds).
+
+The accepted Debug and Release directories each contain 43 evidence files;
+all 43 filename/byte/hash entries match byte for byte between configurations.
+This includes the run summary, stage/frontier state, lifecycle, initcall and
+scheduler accounting, allocator, UART, SBI, timer, trap traces, handoff, PMP,
+and FDT evidence. The deterministic comparison is retained at
+`E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv25-artifacts\phase-riscv25-deterministic-comparison.json`
+(SHA-256 `1584060C0D278C8416745026FD278C2CA1E30708D87D31BE8E10C54830E9F598`).
+
+EFI memory-map and IA-64 SAL CTests passed 2/2 in both Debug and Release.
+Direct IA-64 ACPI, interrupt-controller, and processor-interrupt-block
+regressions passed 3/3 in both configurations. No IA-64 implementation file
+was modified.
+
+A supplementary Debug build of generic ELFValidationTests was attempted
+outside the requested matrix and failed to link because the target has an
+unresolved guideXOS::ComputeIa64EfiAliasBase reference. This is separate from
+the required RISC-V/EFI/SAL/ACPI/interrupt regressions, all of which passed in
+both configurations. No IA-64 repair was made. The broader all-target Release
+build was not used as acceptance evidence.
+
+Artifacts and checksums
+-----------------------
+Build: E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv25-build
+Accepted Release: E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv25-artifacts\Release
+Accepted Debug:   E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv25-artifacts\Debug
+Diagnostic first attempts are preserved under phase-riscv25-artifacts\attempt-1.
+Phase RISCV-24 artifacts remain unchanged under phase-riscv24-artifacts.
+
+Each accepted artifact directory contains a `sha256-manifest.json` covering
+its 43 evidence files. Debug manifest SHA-256:
+`573438A3E69A7B3096AF5B662E416AAEA510D43E87601BAFECA9DB0DB59A8F85`.
+Release manifest SHA-256:
+`AE7969D4452260B544D0A6D11E50A5971FA729EF40349B34B40B9E479D23F1AE`.
+The identical run-summary SHA-256 is
+`49150F61E7E46580C41D68080C2D1787F4B476187C3A33C503933264A8363568`; the
+identical full Linux console SHA-256 is
+`501FC6DCD10B7EEF83A8B6016EF655B1A510D3E240F7F3E1E19CEBC44C2D976F`.
+
+RISCV-26 recommendation
+-----------------------
+Provide the smallest controlled initramfs or root filesystem with an
+executable /init, then replay the unchanged Linux Image and machine contract.
+Keep the initial userspace action bounded (for example, print a marker and
+halt). This directly tests the discovered missing-init prerequisite without
+adding unrelated storage, networking, SMP, or speculative SBI behavior.
+
+Phase disposition
+-----------------
+Outcome A is supported by authentic execution through kernel initialization,
+namespace preparation, initmem cleanup, and real init execution attempts,
+ending at the explicit missing-init panic. Debug and Release acceptance has
+passed; `.phase-riscv` is updated to RISCV-25 complete / RISCV-26 next. The
+in-scope code, tests, and documentation are committed locally on RISCV; the
+commit and ending repository state are recorded in the final handoff. Nothing
+was pushed.

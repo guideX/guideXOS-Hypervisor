@@ -2,6 +2,7 @@
 #include "test_riscv_opensbi_fw_jump.cpp"
 #include "riscv_linux_test_helpers.h"
 #include "riscv_linux_console_transcript.h"
+#include "riscv_linux_initcall_observer.h"
 #include "riscv_trap_accounting.h"
 #include "riscv_uart_tx_observer.h"
 
@@ -20,6 +21,20 @@ constexpr size_t kFirmwareTraceLimit = 64;
 constexpr size_t kLinuxStepBudget = 100000;
 constexpr size_t kLinuxTraceHeadLimit = 64;
 constexpr size_t kLinuxTraceTailLimit = 64;
+#if defined(RISCV_LINUX_PHASE25_CONTINUATION)
+constexpr size_t kAllocatorSampleLimit = 72;
+#else
+constexpr size_t kAllocatorSampleLimit = 64;
+#endif
+#if defined(RISCV_LINUX_PHASE25_CONTINUATION) && \
+    defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+constexpr size_t kAllocatorFrontierSampleReserve = 1;
+#else
+constexpr size_t kAllocatorFrontierSampleReserve = 0;
+#endif
+#if defined(RISCV_LINUX_INIT_CONTINUATION)
+constexpr size_t kTaskIdentityDetailLimit = 4096;
+#endif
 
 struct FirmwareTraceLine {
     StepResult step;
@@ -260,21 +275,37 @@ std::string LinuxInitMilestoneClass(const std::string& name) {
         name == "ret_from_fork") return "task_lifecycle";
     if (name == "do_one_initcall" || name == "do_pre_smp_initcalls" ||
         name == "do_basic_setup" || name == "do_initcalls" ||
-        name == "kernel_init_freeable" || name == "populate_rootfs") return "initcall";
+        name == "kernel_init_freeable" || name == "populate_rootfs" ||
+        name == "do_initcall_level" || name == "do_ctors") return "initcall";
     if (name == "time_init" || name == "timekeeping_init") return "timekeeping";
     if (name == "irq_init" || name == "trap_init") return "interrupt_initialization";
     if (name == "setup_arch") return "architecture_initialization";
     if (name == "console_init" || name.find("console") != std::string::npos ||
         name.find("earlycon") != std::string::npos) return "console_initialization";
     if (name == "mem_init" || name == "sparse_init" || name == "free_area_init" ||
+        name == "free_initmem" || name == "free_initmem_default" ||
         name.rfind("memblock", 0) == 0) return "memory_initialization";
     if (name == "driver_probe_device" || name == "really_probe" ||
         name == "device_attach" || name == "bus_add_device" || name == "device_add")
         return "device_probe_or_registration";
     if (name == "prepare_namespace" || name == "run_init_process" ||
         name == "try_to_run_init_process" || name == "kernel_execve" ||
-        name == "init_post") return "root_or_init_process";
+        name == "init_eaccess" || name == "wait_for_initramfs" ||
+        name == "console_on_rootfs" || name == "init_post")
+        return "root_or_init_process";
     return "kernel_initialization";
+}
+
+std::string LinuxInitcallErrorName(int32_t returnCode) {
+    switch (returnCode) {
+    case -1: return "-EPERM";
+    case -2: return "-ENOENT";
+    case -5: return "-EIO";
+    case -12: return "-ENOMEM";
+    case -19: return "-ENODEV";
+    case -22: return "-EINVAL";
+    default: return returnCode < 0 ? "negative_errno_or_kernel_status" : "positive_status";
+    }
 }
 
 bool IsLinuxInitMilestoneTarget(const std::string& name) {
@@ -287,7 +318,10 @@ bool IsLinuxInitMilestoneTarget(const std::string& name) {
         "schedule_preempt_disabled", "cpu_startup_entry", "default_idle_call",
         "ret_from_fork", "driver_probe_device", "really_probe", "device_attach",
         "bus_add_device", "device_add", "prepare_namespace", "run_init_process",
-        "try_to_run_init_process", "kernel_execve", "init_post"};
+        "try_to_run_init_process", "kernel_execve", "init_post", "init_eaccess",
+        "free_initmem", "free_initmem_default", "wait_for_initramfs",
+        "console_on_rootfs", "do_initcall_level", "do_ctors",
+        "async_synchronize_full", "integrity_load_keys"};
     return targets.contains(name);
 }
 
@@ -631,6 +665,21 @@ struct LinuxStage {
     uint64_t allocatorNonNullResultsTotal = 0;
     uint64_t allocatorNullResultsTotal = 0;
     uint64_t activeAllocatorCalls = 0;
+    uint64_t initcallEntries = 0;
+    uint64_t initcallCompletions = 0;
+    uint64_t initcallZeroReturns = 0;
+    uint64_t initcallNonzeroReturns = 0;
+    uint64_t initcallActiveInvocations = 0;
+    uint64_t initcallRetainedDetails = 0;
+    uint64_t initcallDroppedDetails = 0;
+    uint64_t taskSwitchEntries = 0;
+    uint64_t taskSwitchFunctionReturns = 0;
+    uint64_t completedDistinctTaskSwitches = 0;
+    uint64_t activeTaskSwitches = 0;
+    uint64_t distinctPreviousTaskIdentities = 0;
+    uint64_t distinctNextTaskIdentities = 0;
+    uint64_t retainedTaskSwitchDetails = 0;
+    uint64_t droppedTaskSwitchDetails = 0;
     uint64_t linuxConsoleBytes = 0;
     std::string linuxConsoleSha256;
     uint64_t stateFingerprintAtStart = 0;
@@ -728,6 +777,7 @@ struct LinuxInitMilestoneEvent {
     uint64_t symbolAddress = 0;
     uint64_t entryPc = 0;
     uint64_t entryRetired = 0;
+    PrivilegeMode entryPrivilege = PrivilegeMode::Supervisor;
     uint64_t returnAddress = 0;
     uint64_t callSitePc = 0;
     uint32_t callSiteInstructionRaw = 0;
@@ -786,6 +836,30 @@ struct LinuxTaskSwitchEvent {
     bool stackPointerChanged = false;
     bool completedDistinctTaskSwitch = false;
     uint64_t firstTaskEntryEventId = UINT64_MAX;
+};
+
+struct ActiveLinuxMilestoneInvocation {
+    std::string name;
+    uint64_t returnAddress = 0;
+    uint64_t taskPointer = 0;
+    size_t detailEventIndex = SIZE_MAX;
+};
+
+struct ActiveLinuxTaskSwitch {
+    uint64_t symbolAddress = 0;
+    uint64_t symbolSize = 0;
+    uint64_t previousTaskPointer = 0;
+    uint64_t nextTaskPointer = 0;
+    uint64_t returnAddress = 0;
+    uint64_t tpBefore = 0;
+    uint64_t spBefore = 0;
+    size_t detailEventIndex = SIZE_MAX;
+    bool previousTaskMatchedTp = false;
+    bool selectedDifferentTask = false;
+    bool nextTaskTpObserved = false;
+    uint64_t nextTaskTpRetired = 0;
+    uint64_t tpAtTransition = 0;
+    uint64_t spAtTransition = 0;
 };
 
 struct LinuxTimerEvent {
@@ -881,12 +955,27 @@ struct ContinuationEvidence {
     std::vector<LinuxSymbolVisit> symbolVisits;
     std::vector<LinuxInitMilestoneEvent> initMilestones;
     std::vector<LinuxTaskSwitchEvent> taskSwitchEvents;
+    std::vector<ActiveLinuxMilestoneInvocation> activeMilestoneInvocations;
+    std::vector<ActiveLinuxTaskSwitch> activeTaskSwitchInvocations;
+    riscv_test::LinuxInitcallObserver initcallObserver;
     std::map<std::string, uint64_t> initMilestoneSymbolAddresses;
     std::map<std::string, uint64_t> initMilestoneEntryCounts;
     std::map<std::string, uint64_t> initMilestoneDetailCounts;
     std::map<std::string, uint64_t> initMilestoneCompletionCounts;
     uint64_t droppedInitMilestoneDetails = 0;
     uint64_t droppedTaskSwitchDetails = 0;
+    uint64_t untrackedMilestoneInvocations = 0;
+    uint64_t taskSwitchEntries = 0;
+    uint64_t taskSwitchFunctionReturns = 0;
+    uint64_t completedDistinctTaskSwitches = 0;
+    uint64_t confirmedSameTaskSwitchReturns = 0;
+    uint64_t incompleteTaskSwitchReturns = 0;
+    uint64_t savedTaskContextEntryObservations = 0;
+    uint64_t restoredTaskContextReturnObservations = 0;
+    uint64_t untrackedTaskSwitchEntries = 0;
+    uint64_t droppedTaskIdentityDetails = 0;
+    std::unordered_set<uint64_t> previousTaskIdentities;
+    std::unordered_set<uint64_t> nextTaskIdentities;
     uint64_t linuxConsoleBytesAfterHandoff = 0;
     std::string linuxConsoleRawAfterHandoff;
     std::string linuxConsoleForMarkerDetection;
@@ -916,6 +1005,7 @@ struct ContinuationEvidence {
     std::vector<AllocatorCallSample> allocatorSamples;
     std::vector<AllocatorBranchSample> allocatorBranches;
     size_t firstCompletionSampleIndex = SIZE_MAX;
+    size_t riscv24FrontierAllocatorSampleIndex = SIZE_MAX;
     size_t pendingAllocatorConsumptionSample = SIZE_MAX;
     uint64_t pendingAllocatorConsumptionSteps = 0;
 #endif
@@ -1696,9 +1786,10 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                            const std::vector<ElfFunctionSymbol>* linuxFunctions = nullptr) {
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    static constexpr std::array<uint64_t, 12> kTotalBudgets{{
+    static constexpr std::array<uint64_t, 14> kTotalBudgets{{
         250000, 1000000, 5000000, 20000000, 25000000, 30000000,
-        40000000, 45000000, 50000000, 60000000, 70000000, 80000000}};
+        40000000, 45000000, 50000000, 60000000, 70000000, 80000000,
+        90000000, 100000000}};
 #elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     static constexpr std::array<uint64_t, 10> kTotalBudgets{{
         250000, 1000000, 5000000, 20000000, 25000000, 30000000,
@@ -1712,9 +1803,9 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
 #endif
     static constexpr uint64_t kMachineInstructionBudget = 8000000;
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    // At 60M, handler rates were 3,934,596 S-mode and 3,524,044 M-mode
-    // instructions. Scaling those measured rates to 80M and adding over 20%
-    // margin yields bounded 6.4M S-handler and 6.0M M-handler allowances.
+    // At 80M, 5,623,248 S-mode and 4,032,445 M-mode handler instructions
+    // were observed. Scaling to 100M yields 7.03M and 5.04M; the independent
+    // 8.5M and 6.0M limits leave bounded headroom while retaining the per-call cap.
     static constexpr uint64_t kMachineHandlerInstructionBudget = 6000000;
 #else
     static constexpr uint64_t kMachineHandlerInstructionBudget = 7000000;
@@ -1722,7 +1813,7 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
     // RISCV-21 reached 2M in valid timer-handler work near the 37.1M frontier.
     // The corrected accounting and per-invocation cap justify this bounded 3M limit.
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 6400000;
+    static constexpr uint64_t kSupervisorHandlerInstructionBudget = 8500000;
 #elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     static constexpr uint64_t kSupervisorHandlerInstructionBudget = 4000000;
 #elif defined(RISCV_LINUX_BOOT_CONTINUATION)
@@ -1785,8 +1876,12 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         return true;
     };
     const auto createAllocatorSample = [&evidence](
-        const AllocatorInvocation& invocation) {
-        if (evidence.allocatorSamples.size() >= 64) {
+        const AllocatorInvocation& invocation, bool frontierPriority = false) {
+        const size_t generalSampleLimit =
+            kAllocatorSampleLimit - kAllocatorFrontierSampleReserve;
+        const size_t sampleLimit = frontierPriority
+            ? kAllocatorSampleLimit : generalSampleLimit;
+        if (evidence.allocatorSamples.size() >= sampleLimit) {
             ++evidence.allocatorEntrySamplesDropped;
             return SIZE_MAX;
         }
@@ -1819,7 +1914,6 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
 #endif
     uint64_t lastStageTarget = run.retired;
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    size_t activeTaskSwitchEventIndex = SIZE_MAX;
     const auto captureLinuxConsole = [&evidence, uartObserver](
         const StepResult* currentStep, uint64_t retiredAfterStep) {
         if (uartObserver == nullptr) return;
@@ -1849,11 +1943,17 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
             evidence.linuxConsoleForMarkerDetection.erase(0,
                 evidence.linuxConsoleForMarkerDetection.size() - kConsoleMarkerWindow);
         }
-        const bool panicMarker =
-            evidence.linuxConsoleForMarkerDetection.find(
-                "Kernel panic - not syncing") != std::string::npos ||
-            evidence.linuxConsoleForMarkerDetection.find(
-                "No working init found.") != std::string::npos;
+        const size_t panicPrefixPosition = evidence.linuxConsoleForMarkerDetection.find(
+            "Kernel panic - not syncing");
+        const size_t missingInitPosition = evidence.linuxConsoleForMarkerDetection.find(
+            "No working init found.");
+        const bool completePanicLine = panicPrefixPosition != std::string::npos &&
+            evidence.linuxConsoleForMarkerDetection.find('\n', panicPrefixPosition) !=
+                std::string::npos;
+        const bool completeMissingInitLine = missingInitPosition != std::string::npos &&
+            evidence.linuxConsoleForMarkerDetection.find('\n', missingInitPosition) !=
+                std::string::npos;
+        const bool panicMarker = completePanicLine || completeMissingInitLine;
         if (panicMarker && !evidence.linuxPanicMarkerObserved) {
             evidence.linuxPanicMarkerObserved = true;
             evidence.linuxPanicMarkerPc = currentStep == nullptr
@@ -1923,8 +2023,18 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 ++evidence.initMilestoneEntryCounts[function.name];
                 uint64_t& retainedDetails =
                     evidence.initMilestoneDetailCounts[function.name];
-                if (evidence.initMilestones.size() < 2048 &&
-                    retainedDetails < LinuxInitMilestoneDetailLimit(function.name)) {
+                const uint64_t callbackAddress = function.name == "do_one_initcall"
+                    ? cpu.readGR(10) : 0;
+                const ElfFunctionSymbol* callback = callbackAddress == 0 ? nullptr :
+                    FunctionAtAddress(linuxFunctionsByAddress, callbackAddress);
+                const std::string callbackSymbol = callback == nullptr
+                    ? "<unresolved>" : callback->name;
+                const bool detailAvailable = evidence.initMilestones.size() < 2048 &&
+                    retainedDetails < LinuxInitMilestoneDetailLimit(function.name) &&
+                    (function.name != "do_one_initcall" ||
+                     evidence.initcallObserver.detailAvailable());
+                size_t detailEventIndex = SIZE_MAX;
+                if (detailAvailable) {
                     ++retainedDetails;
                     LinuxInitMilestoneEvent milestone;
                     milestone.eventId = evidence.initMilestones.size();
@@ -1933,6 +2043,7 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                     milestone.symbolAddress = function.address;
                     milestone.entryPc = pcBefore;
                     milestone.entryRetired = run.retired;
+                    milestone.entryPrivilege = privilegeBefore;
                     milestone.returnAddress = cpu.readGR(1);
                     milestone.taskPointer = cpu.readGR(4);
                     milestone.stackPointer = cpu.readGR(2);
@@ -1974,11 +2085,8 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                         }
                     }
                     if (function.name == "do_one_initcall") {
-                        milestone.initcallTargetAddress = cpu.readGR(10);
-                        const ElfFunctionSymbol* target = FunctionAtAddress(
-                            linuxFunctionsByAddress, milestone.initcallTargetAddress);
-                        milestone.initcallTargetSymbol = target == nullptr
-                            ? "<unresolved>" : target->name;
+                        milestone.initcallTargetAddress = callbackAddress;
+                        milestone.initcallTargetSymbol = callbackSymbol;
                     }
                     if (function.name == "kernel_init" || function.name == "kthreadd") {
                         for (auto previous = evidence.taskSwitchEvents.rbegin();
@@ -1991,40 +2099,81 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                             break;
                         }
                     }
+                    detailEventIndex = milestone.eventId;
                     evidence.initMilestones.push_back(std::move(milestone));
                 } else {
                     ++evidence.droppedInitMilestoneDetails;
+                }
+                if (function.name == "do_one_initcall") {
+                    evidence.initcallObserver.enter(
+                        callbackSymbol, callbackAddress, run.retired, cpu.readGR(1),
+                        cpu.readGR(4), detailEventIndex);
+                } else if (evidence.activeMilestoneInvocations.size() < 2048) {
+                    evidence.activeMilestoneInvocations.push_back({
+                        function.name, cpu.readGR(1), cpu.readGR(4), detailEventIndex});
+                } else {
+                    ++evidence.untrackedMilestoneInvocations;
                 }
             }
 
             if (privilegeBefore == PrivilegeMode::Supervisor &&
                 initEntryFunction != linuxFunctionsAtEntry.end() &&
                 initEntryFunction->second->name == "__switch_to") {
+                ++evidence.taskSwitchEntries;
+                const uint64_t previousTaskPointer = cpu.readGR(10);
+                const uint64_t nextTaskPointer = cpu.readGR(11);
+                const auto recordTaskIdentity = [&evidence](
+                    std::unordered_set<uint64_t>& identities, uint64_t identity) {
+                    if (identities.contains(identity)) return;
+                    if (identities.size() < kTaskIdentityDetailLimit)
+                        identities.insert(identity);
+                    else
+                        ++evidence.droppedTaskIdentityDetails;
+                };
+                recordTaskIdentity(evidence.previousTaskIdentities, previousTaskPointer);
+                recordTaskIdentity(evidence.nextTaskIdentities, nextTaskPointer);
+
+                ActiveLinuxTaskSwitch active;
+                active.symbolAddress = initEntryFunction->second->address;
+                active.symbolSize = initEntryFunction->second->size;
+                active.previousTaskPointer = previousTaskPointer;
+                active.nextTaskPointer = nextTaskPointer;
+                active.returnAddress = cpu.readGR(1);
+                active.tpBefore = cpu.readGR(4);
+                active.spBefore = cpu.readGR(2);
+                active.previousTaskMatchedTp =
+                    active.previousTaskPointer == active.tpBefore;
+                active.selectedDifferentTask =
+                    active.previousTaskPointer != active.nextTaskPointer;
+
                 if (evidence.taskSwitchEvents.size() < 512) {
                     LinuxTaskSwitchEvent event;
                     event.eventId = evidence.taskSwitchEvents.size();
                     event.entryPc = pcBefore;
                     event.entryRetired = run.retired;
-                    event.symbolAddress = initEntryFunction->second->address;
-                    event.symbolSize = initEntryFunction->second->size;
-                    event.previousTaskPointer = cpu.readGR(10);
-                    event.nextTaskPointer = cpu.readGR(11);
-                    event.returnAddress = cpu.readGR(1);
-                    event.tpBefore = cpu.readGR(4);
-                    event.spBefore = cpu.readGR(2);
+                    event.symbolAddress = active.symbolAddress;
+                    event.symbolSize = active.symbolSize;
+                    event.previousTaskPointer = active.previousTaskPointer;
+                    event.nextTaskPointer = active.nextTaskPointer;
+                    event.returnAddress = active.returnAddress;
+                    event.tpBefore = active.tpBefore;
+                    event.spBefore = active.spBefore;
                     event.activeHandlerEventId =
                         evidence.accounting.activeHandlerInvocations() == 0
                             ? UINT64_MAX : evidence.accounting.activeHandlerEventId();
-                    event.previousTaskMatchedTp = event.previousTaskPointer == event.tpBefore;
-                    event.selectedDifferentTask = event.previousTaskPointer !=
-                        event.nextTaskPointer;
+                    event.previousTaskMatchedTp = active.previousTaskMatchedTp;
+                    event.selectedDifferentTask = active.selectedDifferentTask;
                     for (size_t reg = 0; reg < event.entryRegisters.size(); ++reg)
                         event.entryRegisters[reg] = cpu.readGR(reg);
                     evidence.taskSwitchEvents.push_back(std::move(event));
-                    activeTaskSwitchEventIndex = evidence.taskSwitchEvents.size() - 1;
+                    active.detailEventIndex = evidence.taskSwitchEvents.size() - 1;
                 } else {
                     ++evidence.droppedTaskSwitchDetails;
                 }
+                if (evidence.activeTaskSwitchInvocations.size() < 64)
+                    evidence.activeTaskSwitchInvocations.push_back(active);
+                else
+                    ++evidence.untrackedTaskSwitchEntries;
             }
 #endif
 #if defined(RISCV_LINUX_BOOT_CONTINUATION)
@@ -2274,59 +2423,120 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 if (privilegeBefore == PrivilegeMode::Supervisor &&
                     step.insn.mnemonic == Mnemonic::JALR && step.insn.rd == 0 &&
                     step.insn.rs1 == 1 && step.insn.immediate == 0) {
-                    for (auto milestone = evidence.initMilestones.rbegin();
-                         milestone != evidence.initMilestones.rend(); ++milestone) {
-                        if (milestone->functionCompletionDemonstrated ||
-                            milestone->returnAddress != step.nextPc ||
-                            milestone->taskPointer != cpu.readGR(4)) continue;
-                        milestone->functionCompletionDemonstrated = true;
-                        milestone->returnRetired = run.retired;
-                        milestone->returnInstructionPc = step.pc;
-                        milestone->returnTargetPc = step.nextPc;
-                        milestone->returnValueA0 = cpu.readGR(10);
-                        milestone->returnTaskPointer = cpu.readGR(4);
-                        milestone->returnStackPointer = cpu.readGR(2);
-                        milestone->completionClassification =
-                            milestone->name == "do_one_initcall"
-                                ? (milestone->returnValueA0 == 0
-                                    ? "initcall_return_zero" : "initcall_return_nonzero")
-                                : "return_observed";
-                        ++evidence.initMilestoneCompletionCounts[milestone->name];
+                    const uint64_t returnTaskPointer = cpu.readGR(4);
+                    const uint64_t returnValueA0 = cpu.readGR(10);
+                    riscv_test::LinuxInitcallCompletion initcallCompletion;
+                    if (evidence.initcallObserver.complete(
+                            step.nextPc, returnTaskPointer, returnValueA0,
+                            run.retired, initcallCompletion)) {
+                        ++evidence.initMilestoneCompletionCounts["do_one_initcall"];
+                        const size_t detailIndex =
+                            initcallCompletion.invocation.detailEventIndex;
+                        if (detailIndex < evidence.initMilestones.size()) {
+                            LinuxInitMilestoneEvent& milestone =
+                                evidence.initMilestones[detailIndex];
+                            milestone.functionCompletionDemonstrated = true;
+                            milestone.returnRetired = run.retired;
+                            milestone.returnInstructionPc = step.pc;
+                            milestone.returnTargetPc = step.nextPc;
+                            milestone.returnValueA0 = returnValueA0;
+                            milestone.returnTaskPointer = returnTaskPointer;
+                            milestone.returnStackPointer = cpu.readGR(2);
+                            milestone.completionClassification = returnValueA0 == 0
+                                ? "initcall_return_zero" : "initcall_return_nonzero";
+                        }
+                    }
+
+                    for (size_t reverse = evidence.activeMilestoneInvocations.size();
+                         reverse > 0; --reverse) {
+                        const size_t index = reverse - 1;
+                        const ActiveLinuxMilestoneInvocation invocation =
+                            evidence.activeMilestoneInvocations[index];
+                        if (invocation.returnAddress != step.nextPc ||
+                            invocation.taskPointer != returnTaskPointer) continue;
+                        ++evidence.initMilestoneCompletionCounts[invocation.name];
+                        if (invocation.detailEventIndex < evidence.initMilestones.size()) {
+                            LinuxInitMilestoneEvent& milestone =
+                                evidence.initMilestones[invocation.detailEventIndex];
+                            milestone.functionCompletionDemonstrated = true;
+                            milestone.returnRetired = run.retired;
+                            milestone.returnInstructionPc = step.pc;
+                            milestone.returnTargetPc = step.nextPc;
+                            milestone.returnValueA0 = returnValueA0;
+                            milestone.returnTaskPointer = returnTaskPointer;
+                            milestone.returnStackPointer = cpu.readGR(2);
+                            milestone.completionClassification = "return_observed";
+                        }
+                        evidence.activeMilestoneInvocations.erase(
+                            evidence.activeMilestoneInvocations.begin() +
+                            static_cast<std::ptrdiff_t>(index));
                         break;
                     }
                 }
 
-                if (activeTaskSwitchEventIndex != SIZE_MAX &&
-                    activeTaskSwitchEventIndex < evidence.taskSwitchEvents.size()) {
-                    LinuxTaskSwitchEvent& event =
-                        evidence.taskSwitchEvents[activeTaskSwitchEventIndex];
-                    const uint64_t switchStop = event.symbolAddress + event.symbolSize;
-                    const bool instructionInSwitch = step.pc >= event.symbolAddress &&
+                for (size_t reverse = evidence.activeTaskSwitchInvocations.size();
+                     reverse > 0; --reverse) {
+                    const size_t index = reverse - 1;
+                    ActiveLinuxTaskSwitch& active =
+                        evidence.activeTaskSwitchInvocations[index];
+                    const uint64_t switchStop = active.symbolAddress + active.symbolSize;
+                    const bool instructionInSwitch = step.pc >= active.symbolAddress &&
                         step.pc < switchStop;
-                    if (instructionInSwitch && cpu.readGR(4) == event.nextTaskPointer) {
-                        if (!event.nextTaskTpObserved) {
-                            event.nextTaskTpRetired = run.retired;
-                            event.tpAtTransition = cpu.readGR(4);
-                            event.spAtTransition = cpu.readGR(2);
+                    if (!instructionInSwitch) continue;
+                    if (cpu.readGR(4) == active.nextTaskPointer) {
+                        if (!active.nextTaskTpObserved) {
+                            active.nextTaskTpRetired = run.retired;
+                            active.tpAtTransition = cpu.readGR(4);
+                            active.spAtTransition = cpu.readGR(2);
                         }
-                        event.nextTaskTpObserved = true;
+                        active.nextTaskTpObserved = true;
+                        if (active.detailEventIndex < evidence.taskSwitchEvents.size()) {
+                            LinuxTaskSwitchEvent& event =
+                                evidence.taskSwitchEvents[active.detailEventIndex];
+                            event.nextTaskTpObserved = true;
+                            event.nextTaskTpRetired = active.nextTaskTpRetired;
+                            event.tpAtTransition = active.tpAtTransition;
+                            event.spAtTransition = active.spAtTransition;
+                        }
                     }
-                    if (instructionInSwitch &&
-                        (step.nextPc < event.symbolAddress || step.nextPc >= switchStop)) {
-                        event.functionExitObserved = true;
-                        event.functionExitPc = step.pc;
-                        event.functionExitTargetPc = step.nextPc;
-                        event.functionExitRetired = run.retired;
-                        event.tpAfter = cpu.readGR(4);
-                        event.spAfter = cpu.readGR(2);
-                        event.stackPointerChanged = event.spBefore != event.spAfter;
-                        for (size_t reg = 0; reg < event.exitRegisters.size(); ++reg)
-                            event.exitRegisters[reg] = cpu.readGR(reg);
-                        event.completedDistinctTaskSwitch =
-                            event.selectedDifferentTask && event.previousTaskMatchedTp &&
-                            event.nextTaskTpObserved &&
-                            event.tpAfter == event.nextTaskPointer;
-                        activeTaskSwitchEventIndex = SIZE_MAX;
+                    if (step.nextPc < active.symbolAddress || step.nextPc >= switchStop) {
+                        ++evidence.taskSwitchFunctionReturns;
+                        const uint64_t tpAfter = cpu.readGR(4);
+                        const uint64_t spAfter = cpu.readGR(2);
+                        const bool completedDistinct = active.selectedDifferentTask &&
+                            active.previousTaskMatchedTp && active.nextTaskTpObserved &&
+                            tpAfter == active.nextTaskPointer;
+                        const bool completedSameTask = !active.selectedDifferentTask &&
+                            active.previousTaskMatchedTp && tpAfter == active.nextTaskPointer;
+                        if (active.previousTaskMatchedTp && active.spBefore != 0)
+                            ++evidence.savedTaskContextEntryObservations;
+                        if (completedDistinct) {
+                            ++evidence.completedDistinctTaskSwitches;
+                            if (spAfter != active.spBefore)
+                                ++evidence.restoredTaskContextReturnObservations;
+                        } else if (completedSameTask) {
+                            ++evidence.confirmedSameTaskSwitchReturns;
+                        } else {
+                            ++evidence.incompleteTaskSwitchReturns;
+                        }
+                        if (active.detailEventIndex < evidence.taskSwitchEvents.size()) {
+                            LinuxTaskSwitchEvent& event =
+                                evidence.taskSwitchEvents[active.detailEventIndex];
+                            event.functionExitObserved = true;
+                            event.functionExitPc = step.pc;
+                            event.functionExitTargetPc = step.nextPc;
+                            event.functionExitRetired = run.retired;
+                            event.tpAfter = tpAfter;
+                            event.spAfter = spAfter;
+                            event.stackPointerChanged = event.spBefore != event.spAfter;
+                            for (size_t reg = 0; reg < event.exitRegisters.size(); ++reg)
+                                event.exitRegisters[reg] = cpu.readGR(reg);
+                            event.completedDistinctTaskSwitch = completedDistinct;
+                        }
+                        evidence.activeTaskSwitchInvocations.erase(
+                            evidence.activeTaskSwitchInvocations.begin() +
+                            static_cast<std::ptrdiff_t>(index));
+                        break;
                     }
                 }
 #endif
@@ -2662,6 +2872,19 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
                 repeat.second = 0;
             }
         }
+#if defined(RISCV_LINUX_PHASE25_CONTINUATION) && \
+    defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
+        if (target == 80000000ULL &&
+            !evidence.activeAllocatorInvocations.empty()) {
+            AllocatorInvocation& active = evidence.activeAllocatorInvocations.back();
+            if (active.sampleIndex == SIZE_MAX) {
+                active.sampleIndex = createAllocatorSample(active, true);
+                evidence.riscv24FrontierAllocatorSampleIndex = active.sampleIndex;
+            } else {
+                evidence.riscv24FrontierAllocatorSampleIndex = active.sampleIndex;
+            }
+        }
+#endif
         stage.actualRetired = run.retired;
         stage.additionalRetired = run.retired - retiredAtStageStart;
         stage.stepCalls = evidence.linuxStepCalls - callsAtStageStart;
@@ -2712,6 +2935,21 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         stage.activeAllocatorCalls = evidence.activeAllocatorInvocations.size();
 #endif
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
+        stage.initcallEntries = evidence.initcallObserver.entries();
+        stage.initcallCompletions = evidence.initcallObserver.completions();
+        stage.initcallZeroReturns = evidence.initcallObserver.zeroReturns();
+        stage.initcallNonzeroReturns = evidence.initcallObserver.nonzeroReturns();
+        stage.initcallActiveInvocations = evidence.initcallObserver.activeInvocations();
+        stage.initcallRetainedDetails = evidence.initcallObserver.retainedDetails();
+        stage.initcallDroppedDetails = evidence.initcallObserver.droppedDetails();
+        stage.taskSwitchEntries = evidence.taskSwitchEntries;
+        stage.taskSwitchFunctionReturns = evidence.taskSwitchFunctionReturns;
+        stage.completedDistinctTaskSwitches = evidence.completedDistinctTaskSwitches;
+        stage.activeTaskSwitches = evidence.activeTaskSwitchInvocations.size();
+        stage.distinctPreviousTaskIdentities = evidence.previousTaskIdentities.size();
+        stage.distinctNextTaskIdentities = evidence.nextTaskIdentities.size();
+        stage.retainedTaskSwitchDetails = evidence.taskSwitchEvents.size();
+        stage.droppedTaskSwitchDetails = evidence.droppedTaskSwitchDetails;
         stage.linuxConsoleBytes = evidence.linuxConsoleBytesAfterHandoff;
         if (!evidence.linuxConsoleCaptureOverflow) {
             const std::vector<uint8_t> consoleBytes(
@@ -2737,7 +2975,7 @@ void ContinueLinuxInStages(RV64CPU& cpu, LinuxRun& run,
         lastStageTarget = target;
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-        std::cout << "RISCV-24 stage target=" << stage.targetRetired
+        std::cout << "RISCV-25 stage target=" << stage.targetRetired
 #elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
         std::cout << "RISCV-23 stage target=" << stage.targetRetired
 #elif defined(RISCV_LINUX_BOOT_CONTINUATION)
@@ -2809,12 +3047,12 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
 #endif
 #if defined(RISCV_LINUX_CONSOLE_CONTINUATION)
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    const std::string phasePrefix = "riscv24";
-    const std::string phaseName = "RISCV-24";
-    constexpr uint64_t totalRetiredBudget = 80000000;
+    const std::string phasePrefix = "riscv25";
+    const std::string phaseName = "RISCV-25";
+    constexpr uint64_t totalRetiredBudget = 100000000;
     constexpr uint64_t machineRetiredBudget = 8000000;
     constexpr uint64_t machineHandlerInstructionBudget = 6000000;
-    constexpr uint64_t supervisorHandlerInstructionBudget = 6400000;
+    constexpr uint64_t supervisorHandlerInstructionBudget = 8500000;
 #elif defined(RISCV_LINUX_ALLOCATOR_CONTINUATION)
     const std::string phasePrefix = "riscv23";
     const std::string phaseName = "RISCV-23";
@@ -3250,6 +3488,9 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         uint64_t returnedRequests = 0;
         uint64_t successfulRequests = 0;
         uint64_t matchedMachineTimers = 0;
+        uint64_t observedMachineTimerCount = 0;
+        uint64_t observedSupervisorTimerCount = 0;
+        uint64_t machineTimersWithoutSupervisorDelivery = 0;
         std::map<uint64_t, uint64_t> sbiToMachineTimer;
         std::map<uint64_t, uint64_t> machineToSupervisorTimer;
 
@@ -3295,6 +3536,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                     }
                 }
             } else if (event.kind == "machine_timer_interrupt") {
+                ++observedMachineTimerCount;
                 uint64_t nextMachineTimerId = UINT64_MAX;
                 for (size_t next = index + 1; next < evidence.timerEvents.size(); ++next) {
                     if (evidence.timerEvents[next].kind == "machine_timer_interrupt") {
@@ -3310,6 +3552,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                         break;
                     }
                 }
+                if (!machineToSupervisorTimer.contains(event.eventId))
+                    ++machineTimersWithoutSupervisorDelivery;
+            } else if (event.kind == "supervisor_timer_interrupt") {
+                ++observedSupervisorTimerCount;
             }
         }
 
@@ -3327,6 +3573,10 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"returnedAndResumedRequests\": " << returnedRequests << ",\n"
             << "  \"successfulRequests\": " << successfulRequests << ",\n"
             << "  \"requestsAssociatedWithSubsequentMtip\": " << matchedMachineTimers << ",\n"
+            << "  \"machineTimerInterrupts\": " << observedMachineTimerCount << ",\n"
+            << "  \"supervisorTimerInterrupts\": " << observedSupervisorTimerCount << ",\n"
+            << "  \"machineTimersWithoutSupervisorDelivery\": "
+            << machineTimersWithoutSupervisorDelivery << ",\n"
             << "  \"timerEvents\": [\n";
         for (size_t index = 0; index < evidence.timerEvents.size(); ++index) {
             const LinuxTimerEvent& event = evidence.timerEvents[index];
@@ -3689,6 +3939,26 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 << ",\"allocatorNullResultsTotal\":" << stage.allocatorNullResultsTotal
                 << ",\"activeAllocatorCalls\":" << stage.activeAllocatorCalls
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
+                << ",\"initcallEntries\":" << stage.initcallEntries
+                << ",\"initcallCompletions\":" << stage.initcallCompletions
+                << ",\"initcallZeroReturns\":" << stage.initcallZeroReturns
+                << ",\"initcallNonzeroReturns\":" << stage.initcallNonzeroReturns
+                << ",\"initcallActiveInvocations\":" << stage.initcallActiveInvocations
+                << ",\"initcallRetainedDetails\":" << stage.initcallRetainedDetails
+                << ",\"initcallDroppedDetails\":" << stage.initcallDroppedDetails
+                << ",\"taskSwitchEntries\":" << stage.taskSwitchEntries
+                << ",\"taskSwitchFunctionReturns\":" << stage.taskSwitchFunctionReturns
+                << ",\"completedDistinctTaskSwitches\":"
+                << stage.completedDistinctTaskSwitches
+                << ",\"activeTaskSwitches\":" << stage.activeTaskSwitches
+                << ",\"distinctPreviousTaskIdentities\":"
+                << stage.distinctPreviousTaskIdentities
+                << ",\"distinctNextTaskIdentities\":"
+                << stage.distinctNextTaskIdentities
+                << ",\"retainedTaskSwitchDetails\":"
+                << stage.retainedTaskSwitchDetails
+                << ",\"droppedTaskSwitchDetails\":"
+                << stage.droppedTaskSwitchDetails
                 << ",\"linuxConsoleBytes\":" << stage.linuxConsoleBytes
                 << ",\"linuxConsoleSha256\":" << JsonQuote(stage.linuxConsoleSha256)
 #endif
@@ -3715,7 +3985,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
     }
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
     {
-        static const std::array<const char*, 35> milestoneCandidates{{
+        static const std::array<const char*, 44> milestoneCandidates{{
             "start_kernel", "setup_arch", "sched_init", "time_init",
             "timekeeping_init", "irq_init", "trap_init", "rest_init",
             "kernel_init", "kernel_init_freeable", "do_pre_smp_initcalls",
@@ -3724,11 +3994,14 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             "schedule_preempt_disabled", "cpu_startup_entry", "default_idle_call",
             "ret_from_fork", "driver_probe_device", "really_probe", "device_attach",
             "bus_add_device", "device_add", "prepare_namespace", "run_init_process",
-            "try_to_run_init_process", "kernel_execve", "init_post", "mem_init"}};
-        std::ofstream out(dir / "riscv24-linux-init-milestones.json",
+            "try_to_run_init_process", "kernel_execve", "init_post", "mem_init",
+            "init_eaccess", "free_initmem", "free_initmem_default",
+            "wait_for_initramfs", "console_on_rootfs", "do_initcall_level",
+            "do_ctors", "async_synchronize_full", "integrity_load_keys"}};
+        std::ofstream out(dir / (phasePrefix + "-linux-init-milestones.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 1,\n"
-            << "  \"phase\": \"RISCV-24\",\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
             << "  \"vmlinuxSha256\": " << JsonQuote(Sha256(vmlinux)) << ",\n"
             << "  \"postHandoffRetiredInstructions\": " << run.retired << ",\n"
             << "  \"stopClassification\": " << JsonQuote(evidence.stopClassification) << ",\n"
@@ -3759,6 +4032,18 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         countIndex = 0;
         for (const auto& [name, count] : evidence.initMilestoneCompletionCounts)
             out << (countIndex++ == 0 ? "" : ",") << JsonQuote(name) << ":" << count;
+        out << "},\n  \"activeCounts\": {";
+        countIndex = 0;
+        for (const auto& [name, count] : evidence.initMilestoneEntryCounts) {
+            const auto completed = evidence.initMilestoneCompletionCounts.find(name);
+            const uint64_t completedCount = completed ==
+                evidence.initMilestoneCompletionCounts.end() ? 0 : completed->second;
+            const uint64_t activeCount = count > completedCount
+                ? count - completedCount : 0;
+            if (activeCount != 0)
+                out << (countIndex++ == 0 ? "" : ",") << JsonQuote(name)
+                    << ":" << activeCount;
+        }
         out << "},\n  \"retainedDetailCounts\": {";
         countIndex = 0;
         for (const auto& [name, count] : evidence.initMilestoneDetailCounts)
@@ -3773,6 +4058,8 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
                 << ",\"symbolAddress\":" << JsonQuote(Hex(event.symbolAddress))
                 << ",\"entryPc\":" << JsonQuote(Hex(event.entryPc))
                 << ",\"entryRetired\":" << event.entryRetired
+                << ",\"entryPrivilege\":"
+                << JsonQuote(PrivilegeModeToString(event.entryPrivilege))
                 << ",\"returnAddress\":" << JsonQuote(Hex(event.returnAddress))
                 << ",\"callSitePc\":" << JsonQuote(Hex(event.callSitePc))
                 << ",\"callSiteInstructionRaw\":" << JsonQuote(Hex(event.callSiteInstructionRaw))
@@ -3815,13 +4102,166 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
         out << "  ]\n}\n";
     }
     {
+        const riscv_test::LinuxInitcallObserver& observer = evidence.initcallObserver;
+        std::ofstream out(dir / (phasePrefix + "-linux-initcall-evidence.json"),
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
+            << "  \"entryCount\": " << observer.entries() << ",\n"
+            << "  \"matchedCompletionCount\": " << observer.completions() << ",\n"
+            << "  \"zeroReturnCount\": " << observer.zeroReturns() << ",\n"
+            << "  \"nonzeroReturnCount\": " << observer.nonzeroReturns() << ",\n"
+            << "  \"activeInvocationsAtStop\": " << observer.activeInvocations() << ",\n"
+            << "  \"maximumObservedNestingDepth\": " << observer.maximumActiveDepth() << ",\n"
+            << "  \"untrackedActiveInvocations\": " << observer.untrackedEntries() << ",\n"
+            << "  \"retainedDetailRecords\": " << observer.retainedDetails() << ",\n"
+            << "  \"droppedDetailRecords\": " << observer.droppedDetails() << ",\n"
+            << "  \"detailLimit\": 256,\n  \"activeInvocations\": [\n";
+        for (size_t index = 0; index < observer.activeInvocations(); ++index) {
+            const riscv_test::LinuxInitcallInvocation& active = observer.active()[index];
+            out << "    {\"callback\":" << JsonQuote(active.callbackSymbol)
+                << ",\"callbackAddress\":" << JsonQuote(Hex(active.callbackAddress))
+                << ",\"entryRetired\":" << active.entryRetired
+                << ",\"returnAddress\":" << JsonQuote(Hex(active.returnAddress))
+                << ",\"taskPointer\":" << JsonQuote(Hex(active.taskPointer))
+                << "}" << (index + 1 == observer.activeInvocations() ? "\n" : ",\n");
+        }
+        out << "  ],\n  \"callbackResults\": [\n";
+        size_t callbackIndex = 0;
+        for (const auto& [symbol, counts] : observer.callbackCounts()) {
+            out << "    {\"symbol\":" << JsonQuote(symbol)
+                << ",\"entries\":" << counts.entries
+                << ",\"matchedCompletions\":" << counts.completions
+                << ",\"zeroReturns\":" << counts.zeroReturns
+                << ",\"nonzeroReturns\":" << counts.nonzeroReturns
+                << ",\"returnCodes\":[";
+            size_t returnCodeIndex = 0;
+            for (const auto& [code, count] : counts.returnCodes) {
+                out << (returnCodeIndex++ == 0 ? "" : ",")
+                    << "{\"value\":" << code
+                    << ",\"name\":" << JsonQuote(LinuxInitcallErrorName(code))
+                    << ",\"count\":" << count << "}";
+            }
+            out << "]}" << (++callbackIndex == observer.callbackCounts().size()
+                ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+    {
+        static const std::array<const char*, 44> lifecycleCandidates{{
+            "start_kernel", "setup_arch", "sched_init", "time_init",
+            "timekeeping_init", "irq_init", "trap_init", "rest_init",
+            "kernel_init", "kernel_init_freeable", "do_pre_smp_initcalls",
+            "do_basic_setup", "do_initcalls", "do_one_initcall", "populate_rootfs",
+            "kthreadd", "schedule", "__schedule", "context_switch", "__switch_to",
+            "schedule_preempt_disabled", "cpu_startup_entry", "default_idle_call",
+            "ret_from_fork", "driver_probe_device", "really_probe", "device_attach",
+            "bus_add_device", "device_add", "prepare_namespace", "run_init_process",
+            "try_to_run_init_process", "kernel_execve", "init_post", "mem_init",
+            "init_eaccess", "free_initmem", "free_initmem_default",
+            "wait_for_initramfs", "console_on_rootfs", "do_initcall_level",
+            "do_ctors", "async_synchronize_full", "integrity_load_keys"}};
+        const auto entriesFor = [&evidence](const std::string& name) {
+            const auto found = evidence.initMilestoneEntryCounts.find(name);
+            return found == evidence.initMilestoneEntryCounts.end() ? 0ULL : found->second;
+        };
+        const auto completionsFor = [&evidence](const std::string& name) {
+            const auto found = evidence.initMilestoneCompletionCounts.find(name);
+            return found == evidence.initMilestoneCompletionCounts.end() ? 0ULL : found->second;
+        };
+        const auto presentFor = [&evidence](const std::string& name) {
+            return evidence.initMilestoneSymbolAddresses.contains(name);
+        };
+        std::ofstream out(dir / (phasePrefix + "-linux-lifecycle.json"),
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
+            << "  \"postHandoffRetiredInstructions\": " << run.retired << ",\n"
+            << "  \"kernelInitFreeableEntries\": " << entriesFor("kernel_init_freeable") << ",\n"
+            << "  \"kernelInitFreeableReturns\": " << completionsFor("kernel_init_freeable") << ",\n"
+            << "  \"kernelInitFreeableActiveAtStop\": "
+            << (entriesFor("kernel_init_freeable") > completionsFor("kernel_init_freeable")
+                ? entriesFor("kernel_init_freeable") - completionsFor("kernel_init_freeable") : 0)
+            << ",\n  \"namespacePreparationEntries\": "
+            << entriesFor("prepare_namespace") << ",\n"
+            << "  \"namespacePreparationReturns\": "
+            << completionsFor("prepare_namespace") << ",\n"
+            << "  \"initAccessChecks\": {\"entries\":" << entriesFor("init_eaccess")
+            << ",\"returns\":" << completionsFor("init_eaccess") << "},\n"
+            << "  \"runInitProcessEntries\": " << entriesFor("run_init_process") << ",\n"
+            << "  \"tryInitProcessEntries\": " << entriesFor("try_to_run_init_process") << ",\n"
+            << "  \"kernelExecveEntries\": " << entriesFor("kernel_execve") << ",\n"
+            << "  \"userModeRetiredInstructions\": "
+            << evidence.accounting.counters().userRetired << ",\n"
+            << "  \"panicMarkerObserved\": "
+            << (evidence.linuxPanicMarkerObserved ? "true" : "false") << ",\n"
+            << "  \"stopClassification\": " << JsonQuote(evidence.stopClassification)
+            << ",\n  \"milestones\": [\n";
+        for (size_t index = 0; index < lifecycleCandidates.size(); ++index) {
+            const std::string name = lifecycleCandidates[index];
+            const auto symbol = evidence.initMilestoneSymbolAddresses.find(name);
+            const uint64_t entries = entriesFor(name);
+            const uint64_t completions = completionsFor(name);
+            const uint64_t active = entries > completions ? entries - completions : 0;
+            const std::string status = !presentFor(name) ? "symbol_absent" :
+                entries == 0 ? "symbol_present_not_observed" :
+                active == 0 ? "all_observed_entries_returned" :
+                    "entry_observed_with_active_invocation_at_stop";
+            out << "    {\"symbol\":" << JsonQuote(name)
+                << ",\"present\":" << (symbol != evidence.initMilestoneSymbolAddresses.end()
+                    ? "true" : "false")
+                << ",\"address\":" << JsonQuote(symbol ==
+                    evidence.initMilestoneSymbolAddresses.end() ? "" : Hex(symbol->second))
+                << ",\"entries\":" << entries
+                << ",\"returns\":" << completions
+                << ",\"activeAtStop\":" << active
+                << ",\"status\":" << JsonQuote(status) << "}"
+                << (index + 1 == lifecycleCandidates.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+    }
+    {
+        const uint64_t activeAtStop = evidence.activeTaskSwitchInvocations.size();
+        const uint64_t incompleteOrUncertain = evidence.incompleteTaskSwitchReturns +
+            activeAtStop + evidence.untrackedTaskSwitchEntries;
+        std::ofstream out(dir / (phasePrefix + "-linux-scheduler-summary.json"),
+                          std::ios::out | std::ios::trunc);
+        out << "{\n  \"schemaVersion\": 1,\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
+            << "  \"switchEntries\": " << evidence.taskSwitchEntries << ",\n"
+            << "  \"switchFunctionReturns\": " << evidence.taskSwitchFunctionReturns << ",\n"
+            << "  \"confirmedDistinctCompletedSwitches\": "
+            << evidence.completedDistinctTaskSwitches << ",\n"
+            << "  \"confirmedSameTaskReturns\": "
+            << evidence.confirmedSameTaskSwitchReturns << ",\n"
+            << "  \"distinctPreviousTaskIdentities\": "
+            << evidence.previousTaskIdentities.size() << ",\n"
+            << "  \"distinctNextTaskIdentities\": "
+            << evidence.nextTaskIdentities.size() << ",\n"
+            << "  \"savedContextEntryObservations\": "
+            << evidence.savedTaskContextEntryObservations << ",\n"
+            << "  \"restoredContextReturnObservations\": "
+            << evidence.restoredTaskContextReturnObservations << ",\n"
+            << "  \"retainedDetailedEvents\": " << evidence.taskSwitchEvents.size() << ",\n"
+            << "  \"droppedDetailEvents\": " << evidence.droppedTaskSwitchDetails << ",\n"
+            << "  \"detailLimit\": 512,\n"
+            << "  \"activeSwitchesAtStop\": " << activeAtStop << ",\n"
+            << "  \"incompleteOrUncertainSwitches\": "
+            << incompleteOrUncertain << ",\n"
+            << "  \"untrackedSwitchEntries\": "
+            << evidence.untrackedTaskSwitchEntries << ",\n"
+            << "  \"droppedTaskIdentityDetails\": "
+            << evidence.droppedTaskIdentityDetails << ",\n"
+            << "  \"taskIdentityRetentionLimit\": " << kTaskIdentityDetailLimit << "\n}\n";
+    }
+    {
         static const std::array<const char*, 8> schedulerCandidates{{
             "schedule", "__schedule", "context_switch", "__switch_to",
             "sched_init", "rest_init", "kernel_init", "kthreadd"}};
-        std::ofstream out(dir / "riscv24-linux-scheduler-observation.json",
+        std::ofstream out(dir / (phasePrefix + "-linux-scheduler-observation.json"),
                           std::ios::out | std::ios::trunc);
         out << "{\n  \"schemaVersion\": 1,\n"
-            << "  \"phase\": \"RISCV-24\",\n"
+            << "  \"phase\": " << JsonQuote(phaseName) << ",\n"
             << "  \"symbolAvailability\": [\n";
         for (size_t index = 0; index < schedulerCandidates.size(); ++index) {
             const std::string name = schedulerCandidates[index];
@@ -3935,7 +4375,7 @@ void WriteContinuationArtifacts(const std::filesystem::path& dir,
             << "  \"maximumNestingDepth\": " << evidence.allocatorMaximumNestingDepth << ",\n"
             << "  \"nestingOverflow\": "
             << (evidence.allocatorNestingOverflow ? "true" : "false") << ",\n"
-            << "  \"sampleLimit\": 64,\n"
+            << "  \"sampleLimit\": " << kAllocatorSampleLimit << ",\n"
             << "  \"droppedEntrySamples\": " << evidence.allocatorEntrySamplesDropped << ",\n"
             << "  \"branchSampleLimit\": 64,\n"
             << "  \"droppedBranchSamples\": " << evidence.allocatorBranchSamplesDropped << ",\n"
@@ -4258,8 +4698,8 @@ int main(int argc, char** argv) {
     }
 #endif
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    constexpr int kExpectedArgc = 11;
-    constexpr const char* kUsage = "usage: test_riscv_linux_init_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config riscv21_linux_uart0.bin riscv23_baseline_dir";
+    constexpr int kExpectedArgc = 12;
+    constexpr const char* kUsage = "usage: test_riscv_linux_initcall_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config riscv21_linux_uart0.bin riscv23_baseline_dir riscv24_baseline_dir";
 #elif defined(RISCV_LINUX_BOOT_CONTINUATION)
     constexpr int kExpectedArgc = 10;
     constexpr const char* kUsage = "usage: test_riscv_linux_boot_continuation fw_jump.bin fw_jump.elf Image manifest.json platform.dtb artifact_dir vmlinux config riscv21_linux_uart0.bin";
@@ -4313,11 +4753,28 @@ int main(int argc, char** argv) {
         (riscv23BaselineDir / "riscv18-final-fixedup.dtb").string());
     const std::vector<uint8_t> riscv23Console = ReadFile(
         (riscv23BaselineDir / "riscv23-linux-console-raw.bin").string());
+    const std::filesystem::path riscv24BaselineDir(argv[11]);
+    const std::string riscv24RunSummary = AsString(ReadFile(
+        (riscv24BaselineDir / "riscv24-linux-run-summary.json").string()));
+    const std::string riscv24ProgressStages = AsString(ReadFile(
+        (riscv24BaselineDir / "riscv24-linux-progress-stages.json").string()));
+    const std::string riscv24InitMilestones = AsString(ReadFile(
+        (riscv24BaselineDir / "riscv24-linux-init-milestones.json").string()));
+    const std::string riscv24SchedulerSummary = AsString(ReadFile(
+        (riscv24BaselineDir / "riscv24-linux-scheduler-observation.json").string()));
+    const std::string riscv24AllocatorEvidence = AsString(ReadFile(
+        (riscv24BaselineDir / "riscv24-linux-allocator-evidence.json").string()));
+    const std::vector<uint8_t> riscv24Console = ReadFile(
+        (riscv24BaselineDir / "riscv24-linux-console.bin").string());
     Expect(!riscv23RunSummary.empty() && !riscv23ProgressStages.empty() &&
            !riscv23AllocatorEvidence.empty() && !riscv23TrapAccounting.empty() &&
            !riscv23CsrState.empty() && !riscv23PmpEffective.empty() &&
            !riscv23Console.empty() && !riscv23FixedupFdt.empty(),
            "retained RISCV-23 baseline summary, stage, allocator, trap, CSR, and console artifacts are present");
+    Expect(!riscv24RunSummary.empty() && !riscv24ProgressStages.empty() &&
+           !riscv24InitMilestones.empty() && !riscv24SchedulerSummary.empty() &&
+           !riscv24AllocatorEvidence.empty() && riscv24Console.size() == 6367,
+           "retained RISCV-24 summary, 80M state, lifecycle, allocator, scheduler and UART evidence are present");
 #endif
     const LinuxSymbols symbols = ParseLinuxVmlinux(vmlinux);
     const bool headDisassemblyMatches = VerifyHeadDisassembly(vmlinux, image, symbols);
@@ -4638,9 +5095,9 @@ int main(int argc, char** argv) {
     Expect(stage40 != continuation.stages.end() &&
            stage40->actualRetired == 40000000ULL &&
            stage40->pc == 0xFFFFFFFF801DAC18ULL &&
-           !linuxRun.reachedFrontier &&
-           continuation.stopClassification == "instruction_budget",
-           "RISCV-22 exact 40M state is reproduced before allocator continuation");
+           stage40->privilege == PrivilegeMode::Supervisor &&
+           stage40->nextInstructionRaw == 0x16079063ULL,
+           "RISCV-22 exact 40M checkpoint is reproduced before the later terminal frontier");
     const std::array<uint64_t, NUM_GENERAL_REGISTERS> expected40mRegisters{{
         0x0ULL, 0xFFFFFFFF801DABE4ULL, 0xFFFFFFC60000B9D0ULL, 0xFFFFFFFF810E3C38ULL,
         0xFFFFFFD601488000ULL, 0xFFFFFFD601695880ULL, 0x0ULL, 0xFFFFFFD6018275E8ULL,
@@ -4800,14 +5257,138 @@ int main(int argc, char** argv) {
         [](const LinuxStage& stage) { return stage.targetRetired == 70000000ULL; });
     const auto stage80 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
         [](const LinuxStage& stage) { return stage.targetRetired == 80000000ULL; });
+    const auto stage90 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 90000000ULL; });
+    const auto stage100 = std::find_if(continuation.stages.begin(), continuation.stages.end(),
+        [](const LinuxStage& stage) { return stage.targetRetired == 100000000ULL; });
     const bool terminalPanicStop = linuxRun.reachedFrontier &&
         continuation.stopClassification == "linux_terminal_panic" &&
-        continuation.linuxPanicMarkerObserved && linuxRun.retired >= 60000000ULL;
-    const bool bounded80mStop = !linuxRun.reachedFrontier &&
+        continuation.linuxPanicMarkerObserved && linuxRun.retired >= 80000000ULL;
+    const bool bounded100mStop = !linuxRun.reachedFrontier &&
         continuation.stopClassification == "instruction_budget" &&
-        linuxRun.retired == 80000000ULL && stage70 != continuation.stages.end() &&
+        linuxRun.retired == 100000000ULL && stage70 != continuation.stages.end() &&
         stage70->actualRetired == 70000000ULL && stage80 != continuation.stages.end() &&
-        stage80->actualRetired == 80000000ULL;
+        stage80->actualRetired == 80000000ULL && stage90 != continuation.stages.end() &&
+        stage90->actualRetired == 90000000ULL && stage100 != continuation.stages.end() &&
+        stage100->actualRetired == 100000000ULL;
+    const bool boundedEarlierStop = linuxRun.reachedFrontier &&
+        linuxRun.retired > 80000000ULL && stage80 != continuation.stages.end() &&
+        stage80->actualRetired == 80000000ULL &&
+        (continuation.stopClassification == "architectural_state_nonprogress" ||
+         continuation.stopClassification == "linux_terminal_panic" ||
+         continuation.stopClassification == "guest_fault" ||
+         continuation.stopClassification == "unsupported_instruction");
+
+    const std::string accepted80mStage = JsonObjectWithNumericField(
+        riscv24ProgressStages, "targetRetired", 80000000ULL);
+    const std::vector<uint64_t> accepted80mRegisters =
+        JsonHexArray(accepted80mStage, "registers");
+    const std::vector<uint64_t> replay80mRegisters(
+        stage80 == continuation.stages.end() ? std::vector<uint64_t>{}
+            : std::vector<uint64_t>(stage80->registers.begin(), stage80->registers.end()));
+    const bool accepted80mArchitecturalStateMatches =
+        stage80 != continuation.stages.end() && !accepted80mStage.empty() &&
+        accepted80mRegisters == replay80mRegisters &&
+        JsonString(accepted80mStage, "pc") == Hex(stage80->pc) &&
+        JsonString(accepted80mStage, "lastRetiredPc") == Hex(stage80->lastRetiredPc) &&
+        JsonString(accepted80mStage, "privilege") ==
+            PrivilegeModeToString(stage80->privilege) &&
+        JsonString(accepted80mStage, "satp") == Hex(stage80->satp) &&
+        JsonString(accepted80mStage, "mtime") == Hex(stage80->mtime) &&
+        JsonString(accepted80mStage, "mtimecmp") == Hex(stage80->mtimecmp) &&
+        JsonString(accepted80mStage, "stateFingerprintAtEnd") ==
+            Hex(stage80->stateFingerprintAtEnd) &&
+        JsonString(accepted80mStage, "nextInstructionRaw") ==
+            Hex(stage80->nextInstructionRaw) &&
+        JsonString(accepted80mStage, "nextInstruction") == stage80->nextInstruction &&
+        stage80->actualRetired == 80000000ULL &&
+        stage80->pc == 0xFFFFFFFF801DAC04ULL &&
+        stage80->lastRetiredPc == 0xFFFFFFFF801DAC00ULL &&
+        stage80->privilege == PrivilegeMode::Supervisor &&
+        stage80->satp == 0x80000000000812EFULL &&
+        stage80->nextInstructionRaw == 0x02013B03U &&
+        stage80->nextInstruction == "ld x22, 32(x2)" &&
+        stage80->mtime == 0x58030A3ULL && stage80->mtimecmp == 0x580691FULL &&
+        stage80->sModeRetired == 75967555ULL && stage80->mModeRetired == 4032445ULL &&
+        stage80->sModeHandlerInstructions == 5623248ULL &&
+        stage80->activeHandlers == 0 && stage80->handlerEntries == 10928 &&
+        stage80->handlerReturns == 10928 && stage80->activeAllocatorCalls == 1 &&
+        stage80->linuxConsoleBytes == 6367 &&
+        stage80->linuxConsoleSha256 == Sha256(riscv24Console);
+    uint64_t accepted24Retired = 0;
+    uint64_t accepted24Steps = 0;
+    uint64_t accepted24NormalSMode = 0;
+    uint64_t accepted24SHandler = 0;
+    uint64_t accepted24MMode = 0;
+    const bool accepted80mRunSummaryMatches =
+        JsonUnsignedValue(riscv24RunSummary, "postHandoffRetiredInstructions",
+                          accepted24Retired) && accepted24Retired == 80000000ULL &&
+        JsonUnsignedValue(riscv24RunSummary, "totalPostHandoffStepCalls",
+                          accepted24Steps) && accepted24Steps == 80010929ULL &&
+        JsonUnsignedValue(riscv24RunSummary, "normalSModeLinuxInstructions",
+                          accepted24NormalSMode) && accepted24NormalSMode == 70344307ULL &&
+        JsonUnsignedValue(riscv24RunSummary, "sModeHandlerInstructions",
+                          accepted24SHandler) && accepted24SHandler == 5623248ULL &&
+        JsonUnsignedValue(riscv24RunSummary, "mModeOpenSbiInstructions",
+                          accepted24MMode) && accepted24MMode == 4032445ULL &&
+        JsonString(riscv24RunSummary, "finalPc") == "0xffffffff801dac04" &&
+        JsonString(riscv24RunSummary, "finalPrivilege") == "S" &&
+        JsonString(riscv24RunSummary, "stopClassification") == "instruction_budget";
+    uint64_t accepted24AllocatorEntries = 0;
+    uint64_t accepted24AllocatorReturns = 0;
+    uint64_t accepted24AllocatorNonNull = 0;
+    uint64_t accepted24AllocatorNull = 0;
+    uint64_t accepted24AllocatorActive = 0;
+    uint64_t accepted24InitcallEntries = 0;
+    uint64_t accepted24InitcallRetained = 0;
+    uint64_t accepted24InitcallCompletions = 0;
+    const bool accepted80mObserverCountsMatch =
+        JsonUnsignedValue(riscv24AllocatorEvidence, "entryCount",
+                          accepted24AllocatorEntries) && accepted24AllocatorEntries == 11474 &&
+        JsonUnsignedValue(riscv24AllocatorEvidence, "returnCount",
+                          accepted24AllocatorReturns) && accepted24AllocatorReturns == 11473 &&
+        JsonUnsignedValue(riscv24AllocatorEvidence, "nonNullResults",
+                          accepted24AllocatorNonNull) && accepted24AllocatorNonNull == 11473 &&
+        JsonUnsignedValue(riscv24AllocatorEvidence, "nullResults",
+                          accepted24AllocatorNull) && accepted24AllocatorNull == 0 &&
+        JsonUnsignedValue(riscv24AllocatorEvidence, "activeInvocationsAtStop",
+                          accepted24AllocatorActive) && accepted24AllocatorActive == 1 &&
+        JsonUnsignedValue(JsonObjectWithNumericField(
+                              riscv24InitMilestones, "do_one_initcall", 364),
+                          "do_one_initcall", accepted24InitcallEntries) &&
+        accepted24InitcallEntries == 364 &&
+        JsonUnsignedValue(JsonObjectWithNumericField(
+                              riscv24InitMilestones, "do_one_initcall", 256),
+                          "do_one_initcall", accepted24InitcallCompletions) &&
+        accepted24InitcallCompletions == 256 &&
+        JsonUnsignedValue(JsonObjectWithNumericField(
+                              riscv24InitMilestones, "do_one_initcall", 256),
+                          "do_one_initcall", accepted24InitcallRetained) &&
+        accepted24InitcallRetained == 256;
+    uint64_t acceptedDroppedTaskSwitchDetails = 0;
+    const bool accepted80mRetentionMatches =
+        JsonUnsignedValue(riscv24SchedulerSummary, "droppedTaskSwitchDetails",
+                          acceptedDroppedTaskSwitchDetails) &&
+        acceptedDroppedTaskSwitchDetails == 809 &&
+        riscv24SchedulerSummary.find("\"eventId\":511") != std::string::npos;
+    const bool replayed80mObserverAccountingMatches =
+        stage80 != continuation.stages.end() &&
+        stage80->initcallEntries == 364 &&
+        stage80->initcallRetainedDetails == 256 &&
+        stage80->initcallDroppedDetails == 108 &&
+        stage80->initcallCompletions + stage80->initcallActiveInvocations ==
+            stage80->initcallEntries &&
+        stage80->initcallZeroReturns + stage80->initcallNonzeroReturns ==
+            stage80->initcallCompletions &&
+        stage80->taskSwitchEntries == 1321 &&
+        stage80->retainedTaskSwitchDetails == 512 &&
+        stage80->droppedTaskSwitchDetails == 809;
+    Expect(accepted80mArchitecturalStateMatches && accepted80mRunSummaryMatches &&
+           accepted80mObserverCountsMatch && accepted80mRetentionMatches &&
+           replayed80mObserverAccountingMatches &&
+           accepted24InitcallEntries == 364 && accepted24InitcallRetained == 256 &&
+           accepted24InitcallCompletions == 256,
+           "fresh replay exactly matches the retained RISCV-24 80M machine state and independently reconciles initcall and scheduler detail caps");
 #endif
     Expect(stage45 != continuation.stages.end() &&
            stage45->actualRetired == 45000000ULL &&
@@ -4820,19 +5401,24 @@ int main(int argc, char** argv) {
            stage60->lastRetiredPc == 0xFFFFFFFF802995ACULL &&
            stage60->privilege == PrivilegeMode::Supervisor &&
            stage60->satp == 0x80000000000812EFULL &&
-           (bounded80mStop || terminalPanicStop),
-           "RISCV-23 60M checkpoint is preserved before the bounded RISCV-24 70M/80M continuation or a Linux terminal panic");
+            (bounded100mStop || boundedEarlierStop || terminalPanicStop),
+            "RISCV-23 60M checkpoint is preserved before the bounded RISCV-25 70M/80M/90M/100M continuation or an evidenced terminal stop");
 #else
            linuxRun.retired == 60000000ULL && !linuxRun.reachedFrontier &&
            continuation.stopClassification == "instruction_budget",
            "same guest reaches the bounded 45M, 50M, and 60M continuation stages");
 #endif
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
-    Expect(terminalPanicStop ||
+    Expect(terminalPanicStop || boundedEarlierStop ||
            (stage60->stateFingerprintAtEnd != stage80->stateFingerprintAtEnd &&
             stage80->sModeRetired > stage60->sModeRetired &&
             stage80->activeHandlers == 0 && stage80->activeAllocatorCalls <= 1),
-           "same Linux state advances beyond the reproduced 60M checkpoint without active handlers and at most one bounded allocation in flight at the exact stop");
+           "same Linux state advances beyond the reproduced 60M checkpoint and reproduces the accepted 80M state before continuing");
+    Expect(accepted80mArchitecturalStateMatches && accepted80mRunSummaryMatches &&
+           accepted80mObserverCountsMatch && accepted80mRetentionMatches,
+           "RISCV-24's retained machine-readable 80M state, callback accounting and bounded scheduler evidence reproduce exactly");
+    Expect(bounded100mStop || boundedEarlierStop || terminalPanicStop,
+           "RISCV-25 continues the same guest beyond 80M to 100M or records an evidenced earlier terminal frontier");
 #endif
 
     const auto targetBranch = std::find_if(continuation.allocatorBranches.begin(),
@@ -4862,6 +5448,34 @@ int main(int argc, char** argv) {
                 .callerInstructions.empty() &&
            !continuation.allocatorNestingOverflow,
            "allocator invocation entered at or before 40M completes after the boundary");
+#if defined(RISCV_LINUX_PHASE25_CONTINUATION)
+    const bool accepted80mAllocatorCaptured =
+        continuation.riscv24FrontierAllocatorSampleIndex != SIZE_MAX &&
+        continuation.riscv24FrontierAllocatorSampleIndex <
+            continuation.allocatorSamples.size();
+    const AllocatorCallSample* accepted80mAllocator = accepted80mAllocatorCaptured
+        ? &continuation.allocatorSamples[
+            continuation.riscv24FrontierAllocatorSampleIndex] : nullptr;
+    const bool accepted80mAllocatorReturned = accepted80mAllocator != nullptr &&
+        accepted80mAllocator->entryRetired < 80000000ULL &&
+        accepted80mAllocator->returnRetired > 80000000ULL &&
+        accepted80mAllocator->returned && accepted80mAllocator->resultPointer != 0 &&
+        accepted80mAllocator->callerSymbol == "__kernfs_new_node";
+    const bool accepted80mAllocationConsumed = accepted80mAllocatorReturned &&
+        accepted80mAllocator->resultConsumedByCaller &&
+        !accepted80mAllocator->resultOverwrittenBeforeRead &&
+        std::any_of(accepted80mAllocator->callerInstructions.begin(),
+                    accepted80mAllocator->callerInstructions.end(),
+                    [](const AllocatorContinuationInstruction& instruction) {
+                        return instruction.readsA0;
+                    });
+    Expect(accepted80mAllocatorCaptured,
+           "the exact allocator invocation active at the reproduced 80M frontier receives one bounded return sample");
+    Expect(accepted80mAllocatorReturned,
+           "the pending 80M kmem_cache_alloc call returns a non-null object after the frontier to __kernfs_new_node");
+    Expect(accepted80mAllocationConsumed,
+           "the allocator caller consumes the returned object and continues without an allocation failure");
+#endif
 #else
     Expect(stage40 != continuation.stages.end() && stage40->actualRetired == 40000000ULL &&
            linuxRun.retired == 40000000ULL && !linuxRun.reachedFrontier &&
@@ -4962,6 +5576,38 @@ int main(int argc, char** argv) {
     const auto symbolPresent = [&continuation](const std::string& name) {
         return continuation.initMilestoneSymbolAddresses.contains(name);
     };
+    const auto& initcallObserver = continuation.initcallObserver;
+    uint64_t callbackEntries = 0;
+    uint64_t callbackCompletions = 0;
+    uint64_t callbackReturnClasses = 0;
+    for (const auto& [callback, counts] : initcallObserver.callbackCounts()) {
+        (void)callback;
+        callbackEntries += counts.entries;
+        callbackCompletions += counts.completions;
+        callbackReturnClasses += counts.zeroReturns + counts.nonzeroReturns;
+    }
+    const bool initcallObserverAccountingValid =
+        callbackEntries == initcallObserver.entries() &&
+        callbackCompletions == initcallObserver.completions() &&
+        callbackReturnClasses == initcallObserver.completions() &&
+        initcallObserver.zeroReturns() + initcallObserver.nonzeroReturns() ==
+            initcallObserver.completions() &&
+        initcallObserver.retainedDetails() + initcallObserver.droppedDetails() ==
+            initcallObserver.entries() && initcallObserver.untrackedEntries() == 0 &&
+        initcallObserver.completions() + initcallObserver.activeInvocations() ==
+            initcallObserver.entries();
+    const bool taskSwitchAccountingValid =
+        continuation.taskSwitchEntries == continuation.taskSwitchEvents.size() +
+            continuation.droppedTaskSwitchDetails &&
+        continuation.taskSwitchFunctionReturns ==
+            continuation.completedDistinctTaskSwitches +
+            continuation.confirmedSameTaskSwitchReturns +
+            continuation.incompleteTaskSwitchReturns &&
+        continuation.taskSwitchFunctionReturns +
+            continuation.activeTaskSwitchInvocations.size() ==
+            continuation.taskSwitchEntries &&
+        continuation.untrackedTaskSwitchEntries == 0 &&
+        continuation.droppedTaskIdentityDetails == 0;
     const bool initLifecycleObserved = entryObserved("rest_init") &&
         entryObserved("kernel_init") && entryObserved("kthreadd") &&
         entryObserved("kernel_init_freeable") && entryObserved("do_one_initcall") &&
@@ -4994,8 +5640,11 @@ int main(int argc, char** argv) {
             return (event.name == "kernel_init" || event.name == "kthreadd") &&
                 event.selectedBySwitchEventId != UINT64_MAX;
         });
-    Expect(initLifecycleObserved && initcallReturnsObserved,
+    Expect(initLifecycleObserved && initcallReturnsObserved &&
+           initcallObserverAccountingValid,
            "real kernel_init, kthreadd, rootfs, and initcall entry/return outcomes are observed on the pinned vmlinux path");
+    Expect(taskSwitchAccountingValid,
+           "all task-switch entries reconcile with completed, active, retained and dropped aggregate observations");
     Expect(symbolPresent("schedule") && symbolPresent("__schedule") &&
            symbolPresent("__switch_to") &&
            std::any_of(continuation.initMilestones.begin(),
@@ -5095,6 +5744,25 @@ int main(int argc, char** argv) {
                 (event.mtimecmpAtTrap != UINT64_MAX &&
                  event.mtimeAtTrap >= event.mtimecmpAtTrap);
         });
+    uint64_t machineTimersWithoutSupervisorDelivery = 0;
+    for (size_t index = 0; index < continuation.timerEvents.size(); ++index) {
+        if (continuation.timerEvents[index].kind != "machine_timer_interrupt") continue;
+        bool supervisorDeliveryObserved = false;
+        for (size_t next = index + 1; next < continuation.timerEvents.size(); ++next) {
+            if (continuation.timerEvents[next].kind == "machine_timer_interrupt") break;
+            if (continuation.timerEvents[next].kind == "supervisor_timer_interrupt") {
+                supervisorDeliveryObserved = true;
+                break;
+            }
+        }
+        if (!supervisorDeliveryObserved) ++machineTimersWithoutSupervisorDelivery;
+    }
+    const bool timerSequenceMatchesStop =
+        (observedMachineTimers == observedSupervisorTimers &&
+         machineTimersWithoutSupervisorDelivery == 0) ||
+        (continuation.stopClassification == "linux_terminal_panic" &&
+         observedMachineTimers == observedSupervisorTimers + 1 &&
+         machineTimersWithoutSupervisorDelivery == 1);
 #if defined(RISCV_LINUX_INIT_CONTINUATION)
     Expect(completedSbiCalls == observedSbiCalls && completedSbiCalls != 0 &&
            observedSbiResultsAreValid,
@@ -5106,8 +5774,8 @@ int main(int argc, char** argv) {
     Expect(observedTimeCalls >= returnedTimeCalls &&
            observedMachineTimers == trapCounts.machineTimerInterrupts &&
            observedSupervisorTimers == trapCounts.supervisorTimerInterrupts &&
-           observedMachineTimers == observedSupervisorTimers,
-           "SBI TIME, MTIP, and STIP event samples reconcile with trap accounting");
+           timerSequenceMatchesStop,
+           "SBI TIME, MTIP, and STIP samples reconcile, with only a terminal-stop pending MTIP allowed");
     Expect(supervisorHandlerEntries == trapCounts.supervisorTimerInterrupts &&
            attributedSupervisorHandlerInstructions == trapCounts.supervisorHandlerInstructions &&
            trapCounts.largestHandlerInvocation <= 200000,
@@ -5444,7 +6112,7 @@ int main(int argc, char** argv) {
         (artifactDir / "riscv-pmp-effective-v1.json").string()));
     Expect(currentPmpEffective == riscv23PmpEffective &&
            finalFdtBytes == riscv23FixedupFdt && continuation.fdtUnchanged,
-           "RISCV-23 effective PMP table and fixed-up FDT bytes remain identical through the RISCV-24 continuation");
+           "RISCV-23 effective PMP table and fixed-up FDT bytes remain identical through the RISCV-25 continuation");
 #endif
 
     std::cout << "OpenSBI: steps=" << firmwareRun.steps

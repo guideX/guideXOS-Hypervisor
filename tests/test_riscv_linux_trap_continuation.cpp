@@ -1,4 +1,5 @@
 #include "riscv_trap_accounting.h"
+#include "riscv_linux_initcall_observer.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -395,6 +396,49 @@ void TestRepeatedTimeCallsAndInstanceIsolation() {
            "reset clears only the selected VM accounting instance");
 }
 
+void TestInitcallObserverCappedDetails() {
+    riscv_test::LinuxInitcallObserver observer(1, 4);
+    const size_t firstDetail = observer.detailAvailable() ? 7 :
+        riscv_test::LinuxInitcallObserver::kNoDetail;
+    observer.enter("first_callback", 0x1000, 10, 0x2000, 0xA000, firstDetail);
+    const size_t secondDetail = observer.detailAvailable() ? 8 :
+        riscv_test::LinuxInitcallObserver::kNoDetail;
+    observer.enter("optional_device_init", 0x1100, 20, 0x2100, 0xA000,
+                   secondDetail);
+    observer.enter("last_callback", 0x1200, 30, 0x2200, 0xA000,
+                   riscv_test::LinuxInitcallObserver::kNoDetail);
+
+    riscv_test::LinuxInitcallCompletion completion;
+    Expect(!observer.complete(0x2100, 0xB000, 0, 40, completion) &&
+           observer.activeInvocations() == 3,
+           "initcall return matching keeps an invocation active when task identity differs");
+    Expect(observer.complete(0x2200, 0xA000, 0, 41, completion) &&
+           completion.invocation.callbackSymbol == "last_callback" &&
+           completion.returnCode == 0,
+           "initcall return resolves the matching callback despite capped detail retention");
+    Expect(observer.complete(0x2100, 0xA000,
+                             static_cast<uint64_t>(static_cast<int64_t>(-19)),
+                             42, completion) &&
+           completion.invocation.callbackSymbol == "optional_device_init" &&
+           completion.invocation.detailEventIndex ==
+               riscv_test::LinuxInitcallObserver::kNoDetail &&
+           completion.returnCode == -19,
+           "dropped initcall details still retain the actual nonzero callback result");
+    Expect(observer.complete(0x2000, 0xA000, 0, 43, completion) &&
+           completion.invocation.callbackSymbol == "first_callback",
+           "retained initcall details and aggregate completion accounting remain paired");
+
+    const auto& callbackCounts = observer.callbackCounts();
+    const auto optional = callbackCounts.find("optional_device_init");
+    Expect(observer.entries() == 3 && observer.completions() == 3 &&
+           observer.zeroReturns() == 2 && observer.nonzeroReturns() == 1 &&
+           observer.retainedDetails() == 1 && observer.droppedDetails() == 2 &&
+           observer.activeInvocations() == 0 && optional != callbackCounts.end() &&
+           optional->second.entries == 1 && optional->second.completions == 1 &&
+           optional->second.returnCodes.contains(-19),
+           "initcall totals, return classes, active calls, callback codes and dropped details reconcile");
+}
+
 } // namespace
 
 int main() {
@@ -403,6 +447,7 @@ int main() {
     TestExternalInterruptAndSequentialUnrelatedTraps();
     TestNestedMachineSynchronousTrap();
     TestRepeatedTimeCallsAndInstanceIsolation();
+    TestInitcallObserverCappedDetails();
     std::cout << "RISCV-20 trap accounting checks=" << g_checks << " failures=0\n";
     return 0;
 }

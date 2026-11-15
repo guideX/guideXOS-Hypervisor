@@ -907,3 +907,27 @@ Validation and next target:
 - RISCV-24 validation and exact counters are recorded in
   `phase-riscv-24-report.txt` and the Debug/Release artifact bundles under
   `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv24-artifacts`.
+
+--- Phase RISCV-25: authentic Linux initcalls and userspace-readiness frontier ---
+
+- The pinned Linux v6.12 and OpenSBI v1.8.1 artifacts and machine contract
+  remain unchanged. Authentic M-mode firmware handoff reproduces RISCV-24's
+  exact 80,000,000-retirement state. The pending `kmem_cache_alloc_noprof`
+  call returns a non-null object after the boundary, and `__kernfs_new_node`
+  consumes it and continues.
+- Linux completes `kernel_init_freeable`, initcall execution, initramfs wait,
+  namespace preparation, init access checks, and init-memory cleanup. The
+  bounded observer reports 386 matched initcall completions, 376 zero returns,
+  10 nonzero returns, 256 retained details, and 130 dropped details.
+- The scheduler observer confirms 1,337 completed distinct task switches;
+  512 detailed events are retained and 825 are omitted by the bounded cap.
+  The omitted details do not reduce the aggregate count or imply userspace.
+- Linux tries `/sbin/init`, `/etc/init`, `/bin/init`, and `/bin/sh`. All four
+  `kernel_execve` calls return `-ENOENT`, followed by the real
+  `No working init found` terminal panic. No userspace instruction retires.
+  This demonstrates a missing init/root-filesystem prerequisite; no emulator
+  production behavior is changed.
+- Debug and Release validation, exact mode/timer/trap counts, artifact hashes,
+  and the final RISCV-26 recommendation are recorded in
+  `phase-riscv-25-report.txt` and the evidence bundles under
+  `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv25-artifacts`.
