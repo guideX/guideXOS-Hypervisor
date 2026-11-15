@@ -1395,3 +1395,19 @@ else()
     target_compile_options(test_mips64_ext PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64ExtTests COMMAND test_mips64_ext)
+
+# MIPS64-31 architectural qualification for DINSU and the unchanged OpenWrt
+# Malta Linux continuation.
+add_executable(test_mips64_dinsu
+    tests/test_mips64_dinsu.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_dinsu PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_dinsu PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_dinsu PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64DinsuTests COMMAND test_mips64_dinsu)

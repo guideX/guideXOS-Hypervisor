@@ -120,6 +120,7 @@ constexpr uint8_t kFnDsra32 = 0x3F;
 constexpr uint8_t kFnDext = 0x03;
 constexpr uint8_t kFnDextm = 0x01;
 constexpr uint8_t kFnExt = 0x00;
+constexpr uint8_t kFnDinsu = 0x06;
 
 // -- REGIMM rt field ------------------------------------------------------------
 constexpr uint8_t kRiBltz = 0x00;
@@ -442,6 +443,24 @@ Mips64Decoded decodeInstruction(uint32_t word) {
         }
         case kOpSpecial3: {
             const uint8_t funct = static_cast<uint8_t>(word & 0x3FU);
+            if (funct == kFnDinsu) {
+                // DINSU encodes MSB-32 in RD and LSB-32 in SA. Its defined
+                // field is entirely in bits 32..63; LSB-32 > MSB-32 is
+                // architecturally UNPREDICTABLE, so reject it without RI.
+                if (decoded.sa > decoded.rd) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                "UNPREDICTABLE DINSU field (lsbminus32 exceeds msbminus32)");
+                }
+                decoded.op = Mips64Op::Dinsu;
+                decoded.valid = true;
+                return decoded;
+            }
+            if (funct == 0x05 || funct == 0x07) {
+                const char* mnemonic = funct == 0x05 ? "DINSM" : "DINS";
+                return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                            std::string("valid ") + mnemonic +
+                                " encoding outside the implemented subset");
+            }
             if (funct == kFnExt) {
                 // EXT stores size-1 in MSBD (rd) and the source position in
                 // LSB (sa). Out-of-range fields are UNPREDICTABLE, so retain
@@ -1719,6 +1738,36 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rt, result);
             break;
         }
+        case Mips64Op::Dinsu: {
+            // DINSU inserts the low `size` bits of RS into RT at positions
+            // pos..msb and preserves every other destination bit. These
+            // encoded fields guarantee size <= 32 and pos >= 32, but validate
+            // before unsigned subtraction or shifting in case a caller passes
+            // a manually constructed decoded instruction.
+            const unsigned lsbMinus32 = decoded.sa;
+            const unsigned msbMinus32 = decoded.rd;
+            if (lsbMinus32 > msbMinus32) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE DINSU field (lsbminus32 exceeds msbminus32)");
+                return Mips64StepResult::Fault;
+            }
+            const unsigned pos = lsbMinus32 + 32U;
+            const unsigned msb = msbMinus32 + 32U;
+            const unsigned size = msb - pos + 1U;
+            if (pos < 32U || pos >= 64U || size == 0U || size > 32U ||
+                pos + size > 64U) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE DINSU field range");
+                return Mips64StepResult::Fault;
+            }
+            const uint64_t source = readGpr(decoded.rs);
+            const uint64_t originalDestination = readGpr(decoded.rt);
+            const uint64_t lowMask = (uint64_t{1} << size) - 1ULL;
+            const uint64_t fieldMask = lowMask << pos;
+            const uint64_t inserted = (source & lowMask) << pos;
+            writeGpr(decoded.rt, (originalDestination & ~fieldMask) | inserted);
+            break;
+        }
         case Mips64Op::Ext: {
             const uint64_t originalSource = readGpr(decoded.rs);
             const uint32_t source = static_cast<uint32_t>(originalSource);
@@ -2629,6 +2678,12 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
                           decoded.rt, decoded.rs, decoded.sa,
                           static_cast<unsigned>(decoded.rd) + 33U);
             break;
+        case Mips64Op::Dinsu:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u, %u", name,
+                          decoded.rt, decoded.rs,
+                          static_cast<unsigned>(decoded.sa) + 32U,
+                          static_cast<unsigned>(decoded.rd) - decoded.sa + 1U);
+            break;
         case Mips64Op::Sll:
         case Mips64Op::Srl:
         case Mips64Op::Sra:
@@ -3298,6 +3353,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dext: return "dext";
         case Mips64Op::Ext: return "ext";
         case Mips64Op::Dextm: return "dextm";
+        case Mips64Op::Dinsu: return "dinsu";
         case Mips64Op::Sync: return "sync";
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
