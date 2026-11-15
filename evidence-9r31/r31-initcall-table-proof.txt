@@ -1,0 +1,53 @@
+R31 authenticated Debian 3.2.78 initcall table proof
+
+Inputs
+  Kernel ELF: evidence-9r27/r27-authenticated-linux.elf
+  ELF size/SHA-256: 13,035,024 / F2C573C29DBBC030E9F93A18A97CAE3E62023A8A6F80C7CA0035E5A13DB2A483
+  Symbol map: E:\CodexArtifacts\guideXOS_Hypervisor\p6_symbol_package\itanium\data\boot\System.map-3.2.0-4-itanium
+  Map size/SHA-256: 1,595,223 / A1ED660417EE3F5BF0B3701572280F8169131DE470EC94212FB97F192AB4E144
+  Source: E:\CodexArtifacts\guideXOS_Hypervisor\src-linux-3.2.78\linux-3.2.78
+
+Source control flow (matching Debian source)
+  init/main.c:715       do_initcalls()
+  init/main.c:730       do_basic_setup()
+  init/main.c:739       do_basic_setup calls do_initcalls()
+  init/main.c:798       kernel_init()
+  init/main.c:827       kernel_init calls do_basic_setup()
+  drivers/acpi/bus.c:1034  acpi_init()
+  drivers/acpi/bus.c:1065  subsys_initcall(acpi_init)
+  This source has no do_initcall_level() helper. do_initcalls() is a flat
+  walk over the ordered initcall range; linker table names encode levels.
+
+Authenticated System.map table symbols (IA-64 VMA)
+  __initcall_start                    0xa000000100acd540
+  __initcall_sn_io_early_init3        0xa000000100acd688
+  __initcall_topology_init4           0xa000000100acd690
+  __initcall_acpi_init4               0xa000000100acd708
+  __initcall_dock_init4               0xa000000100acd710
+  __initcall_dma_init5                0xa000000100acd7d0
+  acpi_init                           0xa000000100a3d710
+  do_one_initcall                     0xa00000010000a500
+  kernel_init                         0xa000000100a01220
+
+ELF section mapping, read from authenticated ELF with IA-64 readelf
+  .init.data VMA 0xa000000100a5e8a0, file offset 0x00a6e8a0.
+  The matching load mapping places __initcall_acpi_init4 at file offset
+  0x00add708 (VMA-to-file-offset delta 0x00010000).
+  .opd VMA 0xa0000001009d7000, file offset 0x009e7000.
+  Descriptor VMA 0xa0000001009ebce0 is at file offset 0x009fbce0.
+
+Raw little-endian ELF values, independently read from the file
+  Qword at .init.data file offset 0x00add708:
+    0xa0000001009ebce0
+  Two qwords at that function descriptor's .opd file offset 0x009fbce0:
+    entry IP 0xa000000100a3d710
+    global pointer 0xa000000100ea2530
+
+Conclusion
+  The level-4 table slot points to an IA-64 function descriptor, not directly
+  to the callback code address. Its descriptor resolves exactly to the mapped
+  acpi_init symbol. Table ordering places it after topology_init4 and before
+  dock_init4, within level 4 (the subsystem initcall section), and before the
+  level-5 dma_init5 marker. Runtime reachability/call/return are established
+  separately by r31-probe-events.txt; these static bytes alone do not prove
+  that Linux's walker reached this slot.

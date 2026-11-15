@@ -1,0 +1,32 @@
+R31 guest task and fault-frame layout proof
+
+Matching Linux source
+  include/linux/sched.h:1228 defines struct task_struct.
+  Its first field is volatile long state; on this IA-64 ELF, long is 64 bits,
+  so task_struct.state is the first qword at offset 0.
+  Exact state constants in the same source are TASK_RUNNING=0,
+  TASK_UNINTERRUPTIBLE=2, and TASK_DEAD=64.
+  task_struct.comm follows the pid/tgid and parent/group fields.
+
+Matching kernel ELF and map
+  ELF: evidence-9r27/r27-authenticated-linux.elf
+  ELF SHA-256: F2C573C29DBBC030E9F93A18A97CAE3E62023A8A6F80C7CA0035E5A13DB2A483
+  System.map symbol init_task: 0xa000000100bc0000.
+  The ELF LOAD mapping for the .data segment maps that VMA to file offset
+  0x00b70000. The bytes "swapper\0" occur at file offset 0x00b70348,
+  deriving init_task.comm at offset 0x348. This is the same task_struct field
+  offset used for the other Linux tasks in the same guest.
+
+Fault-frame offsets from matching arch/ia64/include/asm/ptrace.h
+  The ia64_do_page_fault entry records its struct pt_regs pointer in r34.
+  Within struct pt_regs: cr_ipsr=0x40, cr_iip=0x48, cr_ifs=0x50,
+  ar_unat=0x58, ar_rsc=0x68, ar_rnat=0x70, pr=0x80, b0=0x88,
+  r12=0xa0, r13=0xa8, r2=0xc8, and r3=0xd0.
+  These offsets permit independent decoding of the interrupted instruction,
+  saved return address, predicate p16, and memcpy source register r3 from the
+  read-only task-stack dump. The frame also records its saved NaT/RSE state.
+
+Identity limit
+  Runtime comm strings can be read at task_struct+0x348 and compared with the
+  guest call path. Numeric pid/tgid values are not asserted unless their
+  exact offsets and the corresponding guest bytes are independently validated.

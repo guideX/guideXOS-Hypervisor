@@ -1,0 +1,40 @@
+R31 validation summary
+
+Build and source
+- Assertion-enabled configuration: build-9r26-assert, Release with -O3 -UNDEBUG.
+- R31 source change is limited to tools/ia64_iso_matrix.cpp: optional read-only event logging and guest task-state/translation decoding. No production CPU, firmware, ACPICA, Linux guest, scheduler, or phase-marker change.
+- The assertion-enabled ia64_iso_matrix target was already built for the smoke and R31 replays; it will be rechecked before commit.
+
+Existing architecture CTests
+- Selected command from the R30 baseline: 10/10 passed, 0 failed.
+- Includes NewInstructionTests, IA64XUnitDecodeTests, EfiMemoryMapTests, IA64AcpiFirmwareTests, IA64SalTests, VMCheckpointTests, IA64CheckpointContextContinuationTests, IA64RSEFaultRestartTests, IA64CallFrameReturnTests, and IA64AutomaticRSEPressureTests.
+- Log: r31-selected-ctest.log.
+
+Direct architecture invocations
+- Full test_isa_plugin.exe: PASS.
+- test_isa_plugin.exe breakfault: PASS.
+- test_ia64_interrupt_controller.exe: PASS.
+- test_ia64_processor_interrupt_block.exe: PASS.
+- test_ia64_single_cpu_context_switch.exe: PASS.
+- Total: 5/5 passed; logs are r31-test-*.log.
+
+Read-only reference checks
+- R23 bootmem bitmap: PASS, 30,761 free PFN bits, zero mismatches.
+- R24 bootmem bitmap: PASS, 30,760 free PFNs, zero mismatches.
+- R26 per-CPU allocation map: PASS, seven snapshots plus extension accounting.
+- R27 find_next_bit capture: PASS, expected result 148.
+- R27 find_next_bit vectors: PASS, 10/10.
+- R30 60M ACPI RAM snapshot: PASS.
+- R30 550M ACPI RAM snapshot: PASS.
+- Total: 7/7 final reference invocations passed. R30 captures were validated with the preserved R29 EFI configuration capture; the R30 globals dump begins at 0x4cbf058, supplied explicitly as --globals-base.
+- The first two ACPI reference invocations used the tool's default globals base and exited 2 because it read a null DSDT pointer. The capture's actual base was checked, the invocation was corrected, both validations passed, and the initial error logs are retained with -initial-wrong-base.log suffixes.
+
+Artifact integrity
+- R30 evidence manifest: 36/36 files matched recorded size and SHA-256; manifest SHA-256 matched F16DDB68DE554F1C7963C866233C612CE5FDA70F46F23D850A3111C6C16484B3.
+- ISO, compressed kernel, authenticated kernel ELF, System.map, corrected R29 checkpoint, and R29 manifest hashes all matched in r31-authenticated-artifact-identity.txt.
+- The INITRD.GZ identity is inherited from the authenticated R29 manifest; no standalone payload file is present.
+
+Not run
+- Eight other registered CTests remain unrun: BasicTests, SyscallTests, DebuggerTests, ProfilerTests, FuzzerTests, VMIsolationTests, RiscVDecoderSmokeTest, and ELFValidationTests.
+- test_bootstrap remains unrun because of the existing Windows Winsock linkage limitation.
+- There is no separate registered scheduler instrumentation CTest; the synthetic single-CPU context-switch invocation passed and the authentic scheduler trace is captured in r31-probe-events.txt.

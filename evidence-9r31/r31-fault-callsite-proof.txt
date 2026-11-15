@@ -1,0 +1,43 @@
+R31 kthreadd mempolicy-copy fault provenance
+
+Runtime fault frame (r31-task-8ee8000.bin)
+  Task pointer: 0xe000000008ee8000; final task_struct.state=64 (TASK_DEAD),
+  task_struct.comm="kthreadd". Numeric PID/TGID is not asserted.
+  ia64_do_page_fault entry cycle: 835,582,656.
+  CR_IPSR=0x1010085a6008 (kernel mode); CR_IIP=0xa00000010040d5e0;
+  CR_IFA=0xffff0000; ISR=0x400000000; ITIR=0x38;
+  CR_IFS=0x80000000000111a3; PR=0x14701 (p16=true);
+  AR_UNAT=0; AR_RSC=3; AR_RNAT=0; B0=0xa0000001001ce7e0;
+  R12=0xe000000008eef9d0; R13=0xe000000008ee8000;
+  R2=0xe000000000b387c0; R3=0xffff0000.
+  The frame is at pt_regs VA 0xe000000008eef810, PA 0x8eef810,
+  offset 0x7810 in the 64 KiB task dump. The live handler event and saved frame agree.
+
+Authenticated instruction and caller
+  System.map: memcpy=0xa00000010040d540; __mpol_dup=0xa0000001001ce6b0;
+  copy_process=0xa000000100084fb0; kthreadd=0xa0000001000c7cb0.
+  Faulting instruction address: memcpy+0xa0, slot 0 of its bundle.
+  Disassembly: (p16) ld8 r32=[r3],8. The source register r3 contains 0xffff0000,
+  which is unmapped/unresolved in the guest data translation; the predicate is true.
+  The authenticated ELF bundle bytes at 0xa00000010040d5e0 are:
+    10 02 21 06 18 14  00 00 00 02 00 24  00 00 00 74
+  In __mpol_dup, the return address 0xa0000001001ce7e0 is the continuation of
+  the ordinary `*new = *old` branch. The caller sets memcpy's source argument
+  from __mpol_dup's `old` argument; the fault frame proves this source is 0xffff0000.
+
+Matching Debian 3.2.78 source path
+  kernel/fork.c:1171: p->mempolicy = mpol_dup(p->mempolicy).
+  mm/mempolicy.c:1977: __mpol_dup(struct mempolicy *old); its copy operation is *new = *old.
+  kernel/kthread.c:166-167: kthread_create_on_node() wakes kthreadd_task,
+  then waits for create.done.
+  mm/backing-dev.c:249-266: default_bdi_init() calls
+  kthread_run(bdi_sync_supers, NULL, "sync_supers") and is registered at level 4.
+
+Observed disposition and limits
+  The kthreadd task enters die() at cycle 835,611,662 and do_exit at cycle
+  836,295,972 with argument 11; its state becomes TASK_DEAD, then scheduler
+  selects init_task. This establishes the immediate bad pointer and faulting copy.
+  The trace does not show how p->mempolicy acquired 0xffff0000, nor does it log
+  the kthread_create_info object/name. The source and scheduler timeline strongly
+  correlate the fault with the default_bdi_init4 kthread_run wait, but do not
+  prove request-object pointer equality. No CPU, firmware, or guest change was made.

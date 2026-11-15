@@ -1,0 +1,86 @@
+R31 runtime and initcall summary
+
+Authenticated replay
+  Baseline: R29 corrected-firmware after-ExitBootServices checkpoint, SHA-256 F3233FA4DB2067720FBD91627BCB677DB696D8957D945F7A369440615DF6B592.
+  Guest: authentic Debian IA-64 Linux 3.2.78; 512 MiB; one IA-64 vCPU; same R16-q6 ISO/LINUX.gz/INITRD.GZ identity recorded in r31-authenticated-artifact-identity.txt.
+  Main continuation: 550,000,000 attempted instruction slots; 0 failed; 550,000,000 executed slots; guest cycles 778,197,459 -> 1,328,197,459; unique addresses 104,269; unique bundles 35,022.
+  Endpoint: VM RUNNING, panic=no; raw IP 0x4012b90, canonical 0xa000000100012b90 (ia64_pal_call_static+0x70); final ITC 546,986,467. No separate retired-instruction counter was emitted.
+  IRQ counters: 1,696 timer compare events and timer interrupt entries; 1,697 interrupt returns; one accepted PIB INT; no pending or in-service IRQ at the boundary. Console remained 2,840 bytes with zero delta.
+
+Initcall execution
+  kernel_init entry: cycle 828,870,464; task pointer 0xe000000008ec0000.
+  First do_one_initcall entry: cycle 828,888,301. Runtime initcall callback entries: 46; matching returns: 45; unmatched entries at boundary: 1.
+  Last successful callback: __initcall_pm_sysrq_init4 / pm_sysrq_init, return cycle 835,564,618, return value 0.
+  First callback without a return: __initcall_default_bdi_init4 / default_bdi_init, entry cycle 835,564,624; descriptor 0xa0000001009fd330; table slot 0xa000000100acd6a8.
+  The next relevant table entry is __initcall_acpi_init4 at 0xa000000100acd708. No runtime entry into acpi_init (0xa000000100a3d710) or acpi_scan_init (0xa000000100a3dfa0) was observed.
+  Matching Debian source has a flat do_initcalls() walk and no do_initcall_level() helper. The static do_basic_setup()/do_initcalls() names are not independently symbolized; the runtime do_one_initcall entries demonstrate the walker was reached.
+
+Observed callback timeline (guest cycle; callback; return cycle/status or PENDING)
+  828888301; (__initcall_migration_initearly) migration_init; return 828889340 status=0x0
+  828889346; (__initcall_spawn_ksoftirqdearly) spawn_ksoftirqd; return 828913138 status=0x0
+  828913144; (__initcall_init_workqueuesearly) init_workqueues; return 829201267 status=0x0
+  829201273; (__initcall_cpu_stop_initearly) cpu_stop_init; return 829233092 status=0x0
+  829233098; (__initcall_rcu_scheduler_really_startedearly) rcu_scheduler_really_started; return 829233173 status=0x0
+  829233179; (__initcall_relay_initearly) relay_init; return 829233734 status=0x0
+  831881488; (__initcall_ipc_ns_init0) ipc_ns_init; return 831881717 status=0x0
+  831881723; (__initcall_init_mmap_min_addr0) init_mmap_min_addr; return 831881813 status=0x0
+  831881819; (__initcall_init_cpufreq_transition_notifier_list0) init_cpufreq_transition_notifier_list; return 831922340 status=0x0
+  831922346; (__initcall_net_ns_init0) net_ns_init; return 832002062 status=0x0
+  832002068; (__initcall_run_dmi_scan1) run_dmi_scan; return 832018199 status=0x0
+  832018205; (__initcall_sysctl_init1) sysctl_init; return 832202495 status=0x0
+  832202501; (__initcall_ksysfs_init1) ksysfs_init; return 832223684 status=0x0
+  832223690; (__initcall_init_jiffies_clocksource1) init_jiffies_clocksource; return 832224016 status=0x0
+  832224022; (__initcall_pm_init1) pm_init; return 832476648 status=0x0
+  832476654; (__initcall_init_zero_pfn1) init_zero_pfn; return 832476756 status=0x0
+  832476762; (__initcall_fsnotify_init1) fsnotify_init; return 832517379 status=0x0
+  832517385; (__initcall_filelock_init1) filelock_init; return 832556662 status=0x0
+  832556668; (__initcall_init_script_binfmt1) init_script_binfmt; return 832556815 status=0x0
+  832556821; (__initcall_init_elf_binfmt1) init_elf_binfmt; return 832556968 status=0x0
+  832556974; (__initcall_debugfs_init1) debugfs_init; return 832562821 status=0x0
+  832562827; (__initcall_securityfs_init1) securityfs_init; return 832568551 status=0x0
+  832568557; (__initcall_random32_init1) random32_init; return 832569046 status=0x0
+  832569052; (__initcall_regulator_init1) regulator_init; return 832840955 status=0x0
+  832840961; (__initcall_cpufreq_core_init1) cpufreq_core_init; return 832846199 status=0x0
+  832846205; (__initcall_sock_init1) sock_init; return 833097632 status=0x0
+  833097638; (__initcall_net_inuse_init1) net_inuse_init; return 833138480 status=0x0
+  833138486; (__initcall_netpoll_init1) netpoll_init; return 833138567 status=0x0
+  833138573; (__initcall_netlink_proto_init1) netlink_proto_init; return 833193403 status=0x0
+  833193409; (__initcall_bdi_class_init2) bdi_class_init; return 833206517 status=0x0
+  833206523; (__initcall_kobject_uevent_init2) kobject_uevent_init; return 833211078 status=0x0
+  833211084; (__initcall_pcibus_class_init2) pcibus_class_init; return 833231396 status=0x0
+  833231402; (__initcall_pci_driver_init2) pci_driver_init; return 833269835 status=0x0
+  833269841; (__initcall_backlight_class_init2) backlight_class_init; return 833285168 status=0x0
+  833285174; (__initcall_tty_class_init2) tty_class_init; return 833300195 status=0x0
+  833300201; (__initcall_vtconsole_class_init2) vtconsole_class_init; return 833365516 status=0x0
+  833365522; (__initcall_register_node_type2) register_node_type; return 833386207 status=0x0
+  833386213; (__initcall_regmap_initcall2) regmap_initcall; return 833405683 status=0x0
+  833405689; (__initcall_spi_init2) spi_init; return 833464215 status=0x0
+  833464221; (__initcall_acpi_pci_init3) acpi_pci_init; return 833486516 status=0x0
+  833486522; (__initcall_dmi_id_init3) dmi_id_init; return 833486609 status=0xffffffffffffffed
+  833486615; (__initcall_sn_io_early_init3) sn_io_early_init; return 833486717 status=0x0
+  833486723; (__initcall_topology_init4) topology_init; return 833576726 status=0x0
+  833576732; (__initcall_param_sysfs_init4) param_sysfs_init; return 835564393 status=0x0
+  835564399; (__initcall_pm_sysrq_init4) pm_sysrq_init; return 835564618 status=0x0
+  835564624; (__initcall_default_bdi_init4) default_bdi_init; PENDING at boundary
+
+Scheduler and task state
+  Native switch path probes: ia64_native_switch_to=51, current-task-pointer update=51, task-resume site=51; pointer updates had distinct previous/current values in all 51 records.
+  Scheduler entry probes=42; __schedule probes=52; default_idle probes=2.
+  kernel_init task pointer 0xe000000008ec0000 entered schedule with TASK_UNINTERRUPTIBLE (state 2) at 10 recorded scheduler entries; last such entry cycle 835579195. Its final guest-memory snapshot still has state 2.
+  Final task snapshots: r31-task-8ec0000.bin: state=2 comm='swapper/0'
+  Final task snapshots: r31-task-8ee8000.bin: state=64 comm='kthreadd'
+  Final task snapshots: r31-task-8f28000.bin: state=2 comm='kdevtmpfs'
+  init_task snapshot: r31-init-task.bin: state=0 comm='swapper/0'
+  No numeric PID/TGID is asserted; the trace did not capture validated numeric task IDs. The f28000 task name at the replay endpoint is not used as its earlier fault-time identity.
+
+Fault relationship
+  Earlier distinct page fault: task pointer 0xe000000008f28000; IIP 0xa0000001000bba70 (__queue_work+0x0); IFA 0; kernel-mode saved PSR 0x1210085a6008. The focused 54M replay records raw slot 1 and a zero source operand; handler proceeds through die() and do_exit. It predates default_bdi_init4 and is separate from the later kthreadd fault.
+  Main blocked-path fault: task pointer 0xe000000008ee8000, identified by the final task_struct.comm bytes as kthreadd; IIP 0xa00000010040d5e0 (memcpy+0xa0); IFA 0xffff0000; handler -> die -> do_exit; task reaches TASK_DEAD (state 64). See r31-fault-callsite-proof.txt.
+  Correlation: kernel_init is in default_bdi_init4 and state 2; matching default_bdi_init() source invokes kthread_run("sync_supers"); kthread_create_on_node() wakes kthreadd and waits on create.done. kthreadd then faults during copy_process and dies. This explains why the earlier callback never returns and why the table walker does not reach acpi_init4. The request object/name was not captured at runtime, so the exact completion-object handoff is source-and-schedule correlation, not a logged pointer equality.
+
+ACPI and former BUG sites
+  R31 acpi_init, acpi_scan_init, init_post, and the former R28 BUG site 0xa000000100580f10: zero hits. driver_register entry was observed once before default_bdi_init4.
+  No late FACS mapping or acpi_gbl_FACS pointer was observed. R30 early FACS skip remains accepted: ACPI_NO_FACS_INIT=0x80, early flags 0xffffffffffffffef, descriptor index 1 at PA 0x1fdb4000, length 64, mapped-origin.
+
+Focused replay
+  Same checkpoint and guest; 54,000,000 attempted slots; 0 failed; strictRecovery=1; VM RUNNING; panic=no. It reached the earlier __queue_work null-pointer fault, captured a 512-slot trace window, and confirmed the die/do_exit path. See r31-first-fault-progress.txt, r31-first-fault-events.txt, and r31-first-fault-instruction-proof.txt.

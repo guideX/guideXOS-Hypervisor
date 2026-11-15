@@ -56,6 +56,7 @@ struct Options {
     std::string efiFileReadCapturePath;
     std::string hotIpsPath;
     std::string lockTracePath;
+    std::string probeEventLogPath;
     uint64_t r14TraceStartCycle = std::numeric_limits<uint64_t>::max();
     uint64_t r14TraceEndCycle = 0;
     std::string r14TracePath;
@@ -218,6 +219,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             uint64_t probe = 0;
             if (!parseUnsigned(argv[++i], probe)) return false;
             options.probeAllIps.push_back(probe);
+        } else if (argument == "--probe-event-log" && i + 1 < argc) {
+            options.probeEventLogPath = argv[++i];
         } else if (argument == "--help" || argument == "-h") {
             return false;
         } else {
@@ -251,7 +254,7 @@ void printUsage() {
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
                  "[--dump-memory-range BASE SIZE PATH] [--hot-ips PATH] [--lock-trace PATH] "
-                 "[--probe-ip-all IP]... "
+                 "[--probe-ip-all IP]... [--probe-event-log PATH] "
                  "[--r14-provenance START END PATH] [--r14-watch-memory-pa PA] "
                  "[--capture-efi-file-reads BASE]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
@@ -655,6 +658,62 @@ uint64_t rawPhysicalBundleAddress(uint64_t rawIP) {
     return rawIP & ~0xFULL;
 }
 
+bool guestDataPhysicalAddress(const ia64::CPUState& cpu, uint64_t virtualAddress,
+                              uint64_t& physicalAddress, const char*& source) {
+    const uint64_t psr = cpu.GetPSR();
+    if ((psr & (uint64_t{1} << 17)) == 0) {
+        physicalAddress = virtualAddress;
+        source = "physical_mode";
+        return true;
+    }
+
+    const uint64_t region = virtualAddress >> 61;
+    const uint64_t rid = (cpu.GetRR(region) >> 8) & 0xffffffULL;
+    const auto checkEntry = [&](const ia64::TranslationRegisterState& entry) {
+        if (!entry.valid || ((entry.regionValue >> 8) & 0xffffffULL) != rid) return false;
+        const unsigned pageShift = static_cast<unsigned>((entry.itir >> 2) & 0x3fULL);
+        if (pageShift < 12 || pageShift > 61) return false;
+        const uint64_t pageMask = (uint64_t{1} << pageShift) - 1;
+        if ((virtualAddress & ~pageMask) != (entry.virtualAddress & ~pageMask)) return false;
+        physicalAddress = ((entry.physicalAddress & ((uint64_t{1} << 50) - 1)) & ~pageMask) |
+                          (virtualAddress & pageMask);
+        return true;
+    };
+
+    for (size_t index = 0; index < ia64::NUM_TRANSLATION_REGISTERS; ++index) {
+        if (checkEntry(cpu.GetDTR(index))) {
+            source = "dtr";
+            return true;
+        }
+    }
+    for (size_t index = 0; index < ia64::NUM_DATA_TLB_ENTRIES; ++index) {
+        if (checkEntry(cpu.GetDTLB(index))) {
+            source = "dtlb";
+            return true;
+        }
+    }
+    if (region == 7 || region == 6) {
+        physicalAddress = virtualAddress & ((uint64_t{1} << 61) - 1);
+        source = region == 7 ? "region7_identity" : "region6_identity";
+        return true;
+    }
+    source = "unresolved";
+    return false;
+}
+
+bool readGuestTaskState(const ia64::CPUState& cpu, const uint8_t* rawMemory,
+                        size_t memorySize, uint64_t taskAddress,
+                        uint64_t& physicalAddress, uint64_t& state,
+                        const char*& translationSource) {
+    if (rawMemory == nullptr || taskAddress == 0 ||
+        !guestDataPhysicalAddress(cpu, taskAddress, physicalAddress, translationSource) ||
+        physicalAddress > memorySize || sizeof(state) > memorySize - physicalAddress) {
+        return false;
+    }
+    std::memcpy(&state, rawMemory + physicalAddress, sizeof(state));
+    return true;
+}
+
 std::string readKernelCString(ia64::VirtualMachine& vm, uint64_t va, size_t maxLength) {
     constexpr uint64_t virtualBase = 0xA000000100000000ULL;
     constexpr uint64_t physicalBase = 0x04000000ULL;
@@ -758,9 +817,14 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    std::string r14TracePath = {},
                                    std::vector<uint64_t> r14WatchMemoryPas = {},
                                    bool traceControlFlowOnly = false,
-                                   const std::vector<uint64_t>& probeAllIps = {}) {
+                                   const std::vector<uint64_t>& probeAllIps = {},
+                                   const std::string& probeEventLogPath = {}) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
+    constexpr uint64_t doOneInitcallEntryVma = 0xA00000010000A500ULL;
+    constexpr uint64_t nativeSwitchEntryVma = 0xA00000010000B380ULL;
+    constexpr uint64_t nativeSwitchTaskUpdateVma = 0xA00000010000B3F0ULL;
+    constexpr uint64_t nativeSwitchResumeVma = 0xA00000010000B420ULL;
     ContinuationRecord record;
     record.vmCycleStart = vm.getCyclesExecuted();
     record.firstInstructions.reserve(64);
@@ -773,6 +837,28 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
     std::unordered_map<uint64_t, size_t> probeLineIndex;
     std::vector<uint64_t> recentPath;
     recentPath.reserve(16384);
+    struct PendingInitcall {
+        uint64_t task = 0;
+        uint64_t returnIp = 0;
+        uint64_t functionDescriptor = 0;
+        uint64_t entryCycle = 0;
+    };
+    std::vector<PendingInitcall> pendingInitcalls;
+    std::ofstream probeEventLog;
+    if (!probeEventLogPath.empty()) {
+        probeEventLog.open(probeEventLogPath, std::ios::trunc);
+        if (probeEventLog) {
+            probeEventLog << "# Read-only slot-0 probe events and dynamic do_one_initcall returns\n";
+            probeEventLog << "# probe_ips=";
+            for (const uint64_t probe : probeAllIps) {
+                probeEventLog << "0x" << std::hex << probe << ',';
+            }
+            probeEventLog << std::dec << "\n";
+        } else {
+            std::cerr << "[IA64-PROBE-EVENTS] open-failed path=\""
+                      << probeEventLogPath << "\"\n";
+        }
+    }
     constexpr size_t faultRingSize = 64;
     std::array<FaultStep, faultRingSize> faultRing{};
     size_t faultRingCount = 0;
@@ -782,6 +868,90 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
     ia64::Memory* concreteMemory = nullptr;
     size_t lockWriteHookId = 0;
     const uint8_t* rawMemory = vm.getMemory().GetRawData();
+    const auto writeEvent = [&](const char* kind, uint64_t eventIp,
+                                const ia64::CPUState& cpu,
+                                uint64_t eventCycle, size_t eventSlot) {
+        if (!probeEventLog) return;
+        uint64_t taskPa = 0;
+        uint64_t taskState = 0;
+        const char* taskTranslation = "unresolved";
+        const bool taskStateAvailable = readGuestTaskState(
+            cpu, rawMemory, vm.getMemory().GetTotalSize(), cpu.GetGR(13),
+            taskPa, taskState, taskTranslation);
+        uint64_t ifaPa = 0;
+        const char* ifaTranslation = "unresolved";
+        const bool ifaAvailable = cpu.GetCR(20) != 0 &&
+            guestDataPhysicalAddress(cpu, cpu.GetCR(20), ifaPa, ifaTranslation);
+        uint64_t natMask = 0;
+        uint64_t predicateMask = 0;
+        for (size_t reg = 1; reg < 64; ++reg) {
+            if (cpu.GetGRNaT(reg)) natMask |= uint64_t{1} << reg;
+        }
+        for (size_t predicate = 0; predicate < 64; ++predicate) {
+            if (cpu.GetPR(predicate)) predicateMask |= uint64_t{1} << predicate;
+        }
+        probeEventLog << "event=" << kind
+                      << " cycle=" << eventCycle
+                      << " slot=" << eventSlot
+                      << " ip=0x" << std::hex << eventIp
+                      << " itc=0x" << cpu.GetAR(44)
+                      << " task=0x" << cpu.GetGR(13)
+                      << " task_pa=0x" << taskPa
+                      << " task_translation=" << taskTranslation
+                      << " task_state=";
+        if (taskStateAvailable) {
+            probeEventLog << "0x" << taskState
+                          << " task_state_signed=" << std::dec
+                          << static_cast<int64_t>(taskState) << std::hex;
+        } else {
+            probeEventLog << "unresolved";
+        }
+        probeEventLog << " sp=0x" << cpu.GetGR(12)
+                      << " r8=0x" << cpu.GetGR(8)
+                      << " r32=0x" << cpu.GetGR(32)
+                      << " r33=0x" << cpu.GetGR(33)
+                      << " r34=0x" << cpu.GetGR(34)
+                      << " r35=0x" << cpu.GetGR(35)
+                      << " b0=0x" << cpu.GetBR(0)
+                      << " cfm=0x" << cpu.GetCFM()
+                      << " pfs=0x" << cpu.GetPFS()
+                      << " rsc=0x" << cpu.GetRSC()
+                      << " bsp=0x" << cpu.GetBSP()
+                      << " bspstore=0x" << cpu.GetBSPSTORE()
+                      << " rnat=0x" << cpu.GetRNAT()
+                      << " psr=0x" << cpu.GetPSR()
+                      << " ipsr=0x" << cpu.GetCR(ia64::IA64_CR_IPSR)
+                      << " isr=0x" << cpu.GetCR(ia64::IA64_CR_ISR)
+                      << " iip=0x" << cpu.GetCR(ia64::IA64_CR_IIP)
+                      << " ifa=0x" << cpu.GetCR(20)
+                      << " ifa_translation=" << ifaTranslation;
+        if (ifaAvailable) probeEventLog << " ifa_pa=0x" << ifaPa;
+        probeEventLog << " itir=0x" << cpu.GetCR(21)
+                      << " iha=0x" << cpu.GetCR(25)
+                      << " ifs=0x" << cpu.GetCR(23)
+                      << " predicate_mask=0x" << predicateMask
+                      << " gr_nat_mask=0x" << natMask;
+        if (eventIp == nativeSwitchEntryVma ||
+            eventIp == nativeSwitchTaskUpdateVma ||
+            eventIp == nativeSwitchResumeVma) {
+            uint64_t nextTaskPa = 0;
+            uint64_t nextTaskState = 0;
+            const char* nextTaskTranslation = "unresolved";
+            const bool nextTaskStateAvailable = readGuestTaskState(
+                cpu, rawMemory, vm.getMemory().GetTotalSize(), cpu.GetGR(32),
+                nextTaskPa, nextTaskState, nextTaskTranslation);
+            probeEventLog << " next_task=0x" << cpu.GetGR(32)
+                          << " next_task_pa=0x" << nextTaskPa
+                          << " next_task_translation=" << nextTaskTranslation
+                          << " next_task_state=";
+            if (nextTaskStateAvailable) {
+                probeEventLog << "0x" << nextTaskState;
+            } else {
+                probeEventLog << "unresolved";
+            }
+        }
+        probeEventLog << "\n";
+    };
     if (!lockTracePath.empty()) {
         lockTrace.open(lockTracePath, std::ios::trunc);
         concreteMemory = dynamic_cast<ia64::Memory*>(&vm.getMemory());
@@ -1111,6 +1281,26 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
         if (recentPath.size() > 16384) {
             recentPath.erase(recentPath.begin(), recentPath.begin() + 4096);
         }
+        if (probeEventLog && slot == 0 && !pendingInitcalls.empty()) {
+            const ia64::CPUState& eventCpu = vm.getCPUState(0);
+            for (auto it = pendingInitcalls.rbegin(); it != pendingInitcalls.rend(); ++it) {
+                if (it->task == eventCpu.GetGR(13) && it->returnIp == canonicalIp) {
+                    std::ostringstream event;
+                    event << "initcall_return descriptor=0x" << std::hex
+                          << it->functionDescriptor << " entry_cycle=" << std::dec
+                          << it->entryCycle;
+                    writeEvent(event.str().c_str(), canonicalIp, eventCpu,
+                               globalCycle, slot);
+                    pendingInitcalls.erase(std::next(it).base());
+                    break;
+                }
+            }
+        }
+        if (probeEventLog && canonicalIp == nativeSwitchTaskUpdateVma && slot == 1) {
+            const ia64::CPUState& eventCpu = vm.getCPUState(0);
+            writeEvent("switch_task_pointer_updated", canonicalIp, eventCpu,
+                       globalCycle, slot);
+        }
         const uint64_t previousFaultIp = faultRingCount > 0
             ? (faultRing[(faultRingCount - 1) % faultRingSize].ip & ~0xFULL) : 0;
         constexpr uint64_t externalInterruptEntryVma = 0xA000000100003000ULL;
@@ -1235,6 +1425,17 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
         for (const uint64_t probe : probeAllIps) {
             if (canonicalIp == probe) {
                 const ia64::CPUState& cpu = vm.getCPUState(0);
+                if (probeEventLog && slot == 0) {
+                    const char* eventKind = probe == doOneInitcallEntryVma
+                        ? "do_one_initcall_entry"
+                        : "probe_entry";
+                    writeEvent(eventKind, probe, cpu, globalCycle, slot);
+                    if (probe == doOneInitcallEntryVma) {
+                        pendingInitcalls.push_back({
+                            cpu.GetGR(13), canonicalKernelVma(cpu.GetBR(0)) & ~0xFULL,
+                            cpu.GetGR(32), globalCycle});
+                    }
+                }
                 std::ostringstream probeLine;
                 probeLine << "[IA64-PROBE-ALL] ip=0x" << std::hex << probe
                           << " slot=" << std::dec << slot
@@ -1267,6 +1468,11 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                           << " psr_i=" << ((psr >> 13) & 1ULL)
                           << " ipsr=0x" << cpu.GetCR(ia64::IA64_CR_IPSR)
                           << " isr=0x" << cpu.GetCR(ia64::IA64_CR_ISR)
+                          << " iip=0x" << cpu.GetCR(ia64::IA64_CR_IIP)
+                          << " ifa=0x" << cpu.GetCR(20)
+                          << " itir=0x" << cpu.GetCR(21)
+                          << " iha=0x" << cpu.GetCR(25)
+                          << " ifs=0x" << cpu.GetCR(23)
                           << " interrupt_controller_pending="
                           << (interruptController != nullptr &&
                                       interruptController->HasPendingInterrupt()
@@ -1699,6 +1905,23 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                  << " final_r14_nat=" << (vm.getCPUState(0).GetGRNaT(14) ? 1 : 0)
                  << std::dec << "\n";
         r14Trace.flush();
+    }
+    if (probeEventLog) {
+        const ia64::CPUState& boundaryCpu = vm.getCPUState(0);
+        const ia64::IA64ISAPlugin* boundaryPlugin = getPlugin(vm);
+        writeEvent("boundary", canonicalKernelVma(vm.getIP(0)), boundaryCpu,
+                   vm.getCyclesExecuted(),
+                   boundaryPlugin == nullptr ? 0 : boundaryPlugin->getCurrentSlot());
+        for (const PendingInitcall& pending : pendingInitcalls) {
+            std::ostringstream event;
+            event << "pending_initcall descriptor=0x" << std::hex
+                  << pending.functionDescriptor << " task=0x" << pending.task
+                  << " return_ip=0x" << pending.returnIp << " entry_cycle=0x"
+                  << pending.entryCycle << " current_boundary_ip=0x"
+                  << canonicalKernelVma(vm.getIP(0)) << "\n";
+            probeEventLog << event.str();
+        }
+        probeEventLog.flush();
     }
     if (lockWriteHookId != 0 && concreteMemory != nullptr) {
         concreteMemory->GetMMU().UnregisterWriteHook(lockWriteHookId);
@@ -2166,7 +2389,8 @@ int main(int argc, char** argv) {
                                                                 options.r14TracePath,
                                                                 options.r14WatchMemoryPas,
                                                                 options.traceControlFlowOnly,
-                                                                options.probeAllIps);
+                                                                options.probeAllIps,
+                                                                options.probeEventLogPath);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
@@ -2438,7 +2662,7 @@ int main(int argc, char** argv) {
             !options.hotIpsPath.empty() || !options.probeIps.empty() ||
             !options.probeAllIps.empty() ||
             !options.lockTracePath.empty() || options.traceInstructionCount != 0 ||
-            !options.r14TracePath.empty();
+            !options.r14TracePath.empty() || !options.probeEventLogPath.empty();
         const bool collectColdHotIps = !options.hotIpsPath.empty();
         auto reportColdProgress = [&](const ContinuationRecord& record,
                                       uint64_t startIP) {
@@ -2473,7 +2697,7 @@ int main(int argc, char** argv) {
                     options.traceInstructionCount, options.r14TraceStartCycle,
                     options.r14TraceEndCycle, options.r14TracePath,
                     options.r14WatchMemoryPas, options.traceControlFlowOnly,
-                    options.probeAllIps);
+                    options.probeAllIps, options.probeEventLogPath);
                 executed = progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {
@@ -2522,7 +2746,8 @@ int main(int argc, char** argv) {
                     options.traceAfterCycles, options.traceInstructionCount,
                     options.r14TraceStartCycle, options.r14TraceEndCycle,
                     options.r14TracePath, options.r14WatchMemoryPas,
-                    options.traceControlFlowOnly, options.probeAllIps);
+                    options.traceControlFlowOnly, options.probeAllIps,
+                    options.probeEventLogPath);
                 executed += progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {

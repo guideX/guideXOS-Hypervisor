@@ -1,0 +1,32 @@
+R31 focused __queue_work null-pointer fault proof
+
+Replay
+  Checkpoint: build-9r26-assert/r29-authentic-corrected-firmware-cold.gxcp
+  Focused continuation: 54,000,000 attempted slots; zero failed slots; strict recovery enabled.
+  Fault handler event: cycle 830,876,811; task pointer 0xe000000008f28000.
+
+Instruction evidence from r31-first-fault-progress.txt
+  Kernel symbol map: __queue_work = 0xa0000001000bba70.
+  Faulting bundle VMA: 0xa0000001000bba70; slot 1; template 0x9; unit M.
+  Raw instruction: 0x8082100380.
+  Bundle representation in trace: raw_bundle_hi=0xc4000520202084, raw_bundle_lo=0xe0058018415009.
+  Decode: ld4 r14 = [r33], predicate p0=true (predicate mask 0x5981).
+  The trace's source operand value is 0; no NaT marker is present for the source.
+  The load address therefore resolves to 0, matching the handler's IFA=0.
+
+Saved guest fault frame
+  The handler's r34 points to pt_regs at VA 0xe000000008f2fc20, PA 0x8f2fc20,
+  offset 0x7c20 in r31-task-8f28000.bin. Independently decoded values:
+  CR_IPSR=0x1210085a6008, CR_IIP=0xa0000001000bba70,
+  CR_IFS=0x8000000000000610, AR_UNAT=0, AR_RSC=3, AR_RNAT=0,
+  PR=0x5981, B0=0xa0000001000bc2c0, R12=0xe000000008f2fde0,
+  R13=0xe000000008f28000, R2=0x4101, R3=0x4100.
+  The saved frame matches the live page-fault probe's IIP and task pointer.
+
+Disposition
+  The guest took a kernel-mode null-pointer page fault in __queue_work, then entered
+  die() at cycle 830,905,923 and do_exit at cycle 831,615,493. The do_exit caller
+  is die+0x300. This is separate from the later kthreadd fault during default_bdi_init4.
+  The task's fault-time comm/PID was not captured. At the final boundary the same
+  task memory address contains state=2, comm="kdevtmpfs"; this endpoint name is not
+  attributed backward to the earlier fault because task-object reuse is possible.
