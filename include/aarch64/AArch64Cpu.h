@@ -14,7 +14,8 @@
 //   - ADR / ADRP (PC-relative address generation, Rd==31 is XZR).
 //   - LDR (literal, immediate) 32/64-bit general-purpose forms through
 //     IMemory (Rt==31 is WZR/XZR; failed loads preserve dest and PC).
-//   - MOVZ/MOVK unchanged; full-width synthesis validated by tests.
+//   - MOVN/MOVZ/MOVK move-wide immediates support W/X widths and all legal
+//     halfword positions with zero-register and zero-extension semantics.
 //   - Nested BL/RET programs using SUB/ADD SP + STR/LDR unsigned-offset
 //     stack frames (no STP/LDP required).
 // SCOPE (Phase AARCH64-4, additive):
@@ -151,6 +152,7 @@ enum class Fault {
 enum class Op {
     Invalid = 0,
     Nop,
+    Movn,
     Movz,
     Movk,
     Rev,      // REV (byte-reverse within a 32- or 64-bit GPR)
@@ -224,10 +226,10 @@ struct Decoded {
     uint8_t rn = 0;            // source register number 0..31
     uint8_t rt2 = 0;           // second transfer register (LDP/STP Rt2 field)
     uint8_t rm = 0;            // second source register (CSEL/CSINC Rm field)
-    uint8_t hw = 0;            // MOVZ/MOVK halfword selector 0..3
-    uint16_t imm16 = 0;        // MOVZ/MOVK 16-bit immediate
+    uint8_t hw = 0;            // MOVN/MOVZ/MOVK halfword selector 0..3
+    uint16_t imm16 = 0;        // MOVN/MOVZ/MOVK 16-bit immediate
     uint16_t imm12 = 0;        // ADD/SUB/LDR/STR 12-bit immediate
-    uint8_t shift = 0;         // Immediate shift (ADD/SUB, imm6); MOVZ/MOVK pos = hw*16
+    uint8_t shift = 0;         // Immediate shift (ADD/SUB, imm6); move-wide pos = hw*16
     int64_t branchOffset = 0;  // B/BL/CBZ/CBNZ/B.cond signed byte offset (scaled by 4)
     uint64_t memOffset = 0;    // LDR/STR scaled unsigned byte offset (imm12 << 2 or 3)
     uint8_t accessBytes = 4;   // byte width for scalar GPR LDR/STR transfers

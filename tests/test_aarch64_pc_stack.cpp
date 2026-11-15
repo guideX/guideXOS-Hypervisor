@@ -229,8 +229,8 @@ void testDecoderClasses() {
         CHECK(!d.valid);
         CHECK(d.op == Op::Invalid);
     }
-    // MOVN and non-NOP HINTs remain outside the subset (no silent NOPs).
-    CHECK(!Cpu::decodeWord(0x92800000u, 0).valid); // MOVN X0, #0
+    // MOVN is implemented; non-NOP HINTs remain explicit unallocated forms.
+    CHECK(Cpu::decodeWord(0x92800000u, 0).op == Op::Movn); // MOVN X0, #0
     CHECK(Cpu::decodeWord(0xD503201Fu, 0).op == Op::Nop);
 
     // Disassembly names the new forms.
@@ -958,17 +958,17 @@ void testPcRelativeProgramB() {
 void testDecoderFaults() {
     FlatMemory mem(0x10000);
 
-    // Unsupported allocated encodings fault without state change (no NOP).
+    // MOVN executes as a width-limited inverse and advances exactly once.
     {
         Cpu cpu;
         cpu.reset(0x1000);
         cpu.writeX(0, 0x1111);
         storeWordLE(mem, 0x1000, 0x92800000u); // MOVN X0, #0
         Decoded d = cpu.fetchDecode(mem);
-        CHECK(!d.valid);
-        CHECK(cpu.executeDecoded(d, mem) == Fault::UnsupportedFeature);
-        CHECK_EQ(0x1111u, cpu.readX(0));
-        CHECK_EQ(0x1000u, cpu.pc());
+        CHECK(d.valid && d.op == Op::Movn);
+        CHECK(cpu.executeDecoded(d, mem) == Fault::None);
+        CHECK_EQ(UINT64_MAX, cpu.readX(0));
+        CHECK_EQ(0x1004u, cpu.pc());
     }
     // Misaligned and unreadable fetches keep their taxonomy.
     {

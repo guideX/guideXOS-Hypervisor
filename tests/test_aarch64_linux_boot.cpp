@@ -417,8 +417,10 @@ struct StepRecord {
     uint64_t nextPc = 0;
     uint64_t preX0 = 0;
     uint64_t preX2 = 0;
+    uint64_t preX7 = 0;
     uint64_t preSpEl1 = 0;
     uint32_t prePstate = 0;
+    uint8_t preEl = 0;
     uint64_t timerBefore = 0;
     uint64_t timerAfter = 0;
     uint64_t spEl1 = 0;
@@ -426,6 +428,7 @@ struct StepRecord {
     uint64_t x1 = 0;
     uint64_t x2 = 0;
     uint64_t x3 = 0;
+    uint64_t x7 = 0;
     uint32_t pstate = 0;
     bool exceptionTaken = false;
     bool retired = false;
@@ -447,7 +450,9 @@ struct StepRecord {
             << " next_pc=" << hex(nextPc, 16)
             << " pre_x0=" << hex(preX0, 16)
             << " pre_x2=" << hex(preX2, 16)
+            << " pre_x7=" << hex(preX7, 16)
             << " pre_sp_el1=" << hex(preSpEl1, 16)
+            << " pre_el=" << static_cast<unsigned>(preEl)
             << " pre_pstate=" << hex(prePstate, 8)
             << " timer_before=" << timerBefore
             << " timer_after=" << timerAfter
@@ -456,6 +461,7 @@ struct StepRecord {
             << " x1=" << hex(x1, 16)
             << " x2=" << hex(x2, 16)
             << " x3=" << hex(x3, 16)
+            << " x7=" << hex(x7, 16)
             << " pstate=" << hex(pstate, 8)
             << " esr_el1=" << hex(esr, 16)
             << " far_el1=" << hex(far, 16);
@@ -499,12 +505,17 @@ struct ExecutionResult {
     std::string status;
     std::string diagnostic;
     std::vector<uint8_t> uart;
+    std::vector<uint8_t> finalCpuState;
+    std::array<uint64_t, 31> finalGprs{};
 };
 
 void captureFinalSystemState(ExecutionResult& result,
                              AArch64VirtualPlatform& platform) {
     const Cpu& core = platform.cpu().cpu();
     result.finalPc = core.pc();
+    result.finalCpuState = platform.cpu().serialize_state();
+    for (unsigned index = 0; index < result.finalGprs.size(); ++index)
+        result.finalGprs[index] = core.readX(index);
     result.timerCounter = platform.timer().counter();
     result.timerPhysicalComparator = platform.timer().physicalComparator();
     result.timerVirtualComparator = platform.timer().virtualComparator();
@@ -562,8 +573,10 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         record.pc = core.pc();
         record.preX0 = core.readX(0);
         record.preX2 = core.readX(2);
+        record.preX7 = core.readX(7);
         record.preSpEl1 = core.spEl1();
         record.prePstate = core.pstate();
+        record.preEl = static_cast<uint8_t>(core.exceptionLevel());
         record.timerBefore = platform.timer().counter();
         try {
             record.instruction = platform.ram().read<uint32_t>(record.pc);
@@ -581,6 +594,7 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         record.x1 = core.readX(1);
         record.x2 = core.readX(2);
         record.x3 = core.readX(3);
+        record.x7 = core.readX(7);
         record.pstate = core.pstate();
         record.esr = core.esrEl1();
         record.far = core.farEl1();
@@ -647,6 +661,36 @@ bool authenticOldFrontierAddRetired(const std::vector<StepRecord>& trace) {
         record.x0 == record.preX0 + record.preX2 && record.x2 == record.preX2 &&
         record.pstate == record.prePstate && record.spEl1 == record.preSpEl1 &&
         record.timerAfter == record.timerBefore + 1u;
+}
+
+bool authenticLinuxMovnRetired(const std::vector<StepRecord>& trace) {
+    const auto found = std::find_if(trace.begin(), trace.end(),
+        [](const StepRecord& record) { return record.pc == 0x1D37250u; });
+    if (found == trace.end()) return false;
+    const StepRecord& record = *found;
+    const Decoded decoded = Cpu::decodeWord(record.instruction, record.pc);
+    return record.instructionWordAvailable &&
+        record.instruction == 0x12800107u && decoded.valid &&
+        decoded.op == Op::Movn && !decoded.sf64 && decoded.hw == 0u &&
+        decoded.shift == 0u && decoded.imm16 == 8u && decoded.rd == 7u &&
+        record.preX7 == 0u && record.preEl == 1u &&
+        record.disassembly == "movn w7, #0x8, lsl #0" &&
+        record.fault == Fault::None && !record.exceptionTaken && record.retired &&
+        record.nextPc == 0x1D37254u && record.x7 == UINT64_C(0x00000000FFFFFFF7) &&
+        record.pstate == record.prePstate && record.spEl1 == record.preSpEl1 &&
+        record.timerAfter == record.timerBefore + 1u;
+}
+
+std::string finalRegisterText(const std::array<uint64_t, 31>& registers) {
+    std::ostringstream out;
+    for (unsigned index = 0; index < registers.size(); ++index)
+        out << "X" << index << ": " << hex(registers[index], 16) << '\n';
+    return out.str();
+}
+
+const char* executionClassification(const ExecutionResult& result) {
+    return result.status == "instruction budget frontier"
+        ? "RUNNING_AT_BUDGET" : result.status.c_str();
 }
 
 void writeText(const std::filesystem::path& path, const std::string& contents) {
@@ -947,10 +991,14 @@ int runFrontier(const std::filesystem::path& imagePath,
                                     ignoredSnapshotQualified);
     const bool authenticAddRun1 = authenticOldFrontierAddRetired(run1Trace);
     const bool authenticAddRun2 = authenticOldFrontierAddRetired(run2Trace);
+    const bool authenticMovnRun1 = authenticLinuxMovnRetired(run1Trace);
+    const bool authenticMovnRun2 = authenticLinuxMovnRetired(run2Trace);
 
     const bool reproducible = sameTrace(run1Trace, run2Trace) &&
         run1.finalPc == run2.finalPc && run1.status == run2.status &&
         run1.retired == run2.retired && run1.uart == run2.uart &&
+        run1.finalCpuState == run2.finalCpuState &&
+        run1.finalGprs == run2.finalGprs &&
         run1.timerCounter == run2.timerCounter &&
         run1.sctlrEl1 == run2.sctlrEl1 && run1.tcrEl1 == run2.tcrEl1 &&
         run1.ttbr0El1 == run2.ttbr0El1 && run1.ttbr1El1 == run2.ttbr1El1 &&
@@ -977,12 +1025,19 @@ int runFrontier(const std::filesystem::path& imagePath,
         run1.uartPendingRx == run2.uartPendingRx;
     std::ostringstream run1File;
     run1File << "status: " << run1.status << '\n'
+             << "execution_classification: " << executionClassification(run1) << '\n'
              << "retired_instructions: " << run1.retired << '\n'
+             << "old_frontier_accepted_retired_instructions: 115\n"
              << "attempted_steps: " << run1Trace.size() << '\n'
              << "final_pc: " << hex(run1.finalPc, 16) << '\n'
+             << "frontier_instruction_word: " << hex(run1Trace.back().instruction, 8) << '\n'
+             << "frontier_disassembly: " << run1Trace.back().disassembly << '\n'
+             << "frontier_fault: " << faultName(run1Trace.back().fault) << '\n'
              << "timer_counter: " << run1.timerCounter << '\n'
              << "authentic_ADD_at_0x36A6C_retired_correctly: "
              << (authenticAddRun1 ? "PASS" : "FAIL") << '\n'
+             << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
+             << (authenticMovnRun1 ? "PASS" : "FAIL") << '\n'
              << "GIC_pending/active/enabled: " << run1.gicPendingCount << "/"
              << run1.gicActiveCount << "/" << run1.gicEnabledCount << '\n'
              << "GIC_pending/active/enabled_masks: "
@@ -1018,15 +1073,23 @@ int runFrontier(const std::filesystem::path& imagePath,
              << "SPSR_EL1: " << hex(run1.spsrEl1, 8) << '\n'
              << "ESR_EL1: " << hex(run1Trace.back().esr, 16) << '\n'
              << "FAR_EL1: " << hex(run1Trace.back().far, 16) << '\n'
-             << "diagnostic: " << run1.diagnostic << '\n';
+             << "diagnostic: " << run1.diagnostic << '\n'
+             << "final_cpu_registers:\n" << finalRegisterText(run1.finalGprs);
     std::ostringstream run2File;
     run2File << "status: " << run2.status << '\n'
+             << "execution_classification: " << executionClassification(run2) << '\n'
              << "retired_instructions: " << run2.retired << '\n'
+             << "old_frontier_accepted_retired_instructions: 115\n"
              << "attempted_steps: " << run2Trace.size() << '\n'
              << "final_pc: " << hex(run2.finalPc, 16) << '\n'
+             << "frontier_instruction_word: " << hex(run2Trace.back().instruction, 8) << '\n'
+             << "frontier_disassembly: " << run2Trace.back().disassembly << '\n'
+             << "frontier_fault: " << faultName(run2Trace.back().fault) << '\n'
              << "timer_counter: " << run2.timerCounter << '\n'
              << "authentic_ADD_at_0x36A6C_retired_correctly: "
              << (authenticAddRun2 ? "PASS" : "FAIL") << '\n'
+             << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
+             << (authenticMovnRun2 ? "PASS" : "FAIL") << '\n'
              << "GIC_pending/active/enabled: " << run2.gicPendingCount << "/"
              << run2.gicActiveCount << "/" << run2.gicEnabledCount << '\n'
              << "GIC_pending/active/enabled_masks: "
@@ -1062,11 +1125,14 @@ int runFrontier(const std::filesystem::path& imagePath,
              << "SPSR_EL1: " << hex(run2.spsrEl1, 8) << '\n'
              << "ESR_EL1: " << hex(run2Trace.back().esr, 16) << '\n'
              << "FAR_EL1: " << hex(run2Trace.back().far, 16) << '\n'
-             << "diagnostic: " << run2.diagnostic << '\n';
+             << "diagnostic: " << run2.diagnostic << '\n'
+             << "final_cpu_registers:\n" << finalRegisterText(run2.finalGprs);
     writeText(outputDirectory / "run1-frontier.txt", run1File.str());
     writeText(outputDirectory / "run2-frontier.txt", run2File.str());
     writeText(outputDirectory / "run1-trace.txt", formatTrace(run1Trace));
     writeText(outputDirectory / "run2-trace.txt", formatTrace(run2Trace));
+    writeBytes(outputDirectory / "run1-cpu-state.bin", run1.finalCpuState);
+    writeBytes(outputDirectory / "run2-cpu-state.bin", run2.finalCpuState);
     std::ostringstream firstTrace;
     for (std::size_t index = 0; index < run1Trace.size() && index < 8; ++index)
         firstTrace << run1Trace[index].text() << '\n';
@@ -1083,6 +1149,13 @@ int runFrontier(const std::filesystem::path& imagePath,
             << "Fresh-run trace reproducibility: " << (reproducible ? "PASS" : "FAIL") << "\n"
             << "Authentic ADD operands/result/flags/SP/PC/timer: "
             << ((authenticAddRun1 && authenticAddRun2) ? "PASS" : "FAIL") << "\n"
+            << "Authentic MOVN W7 decode/result/flags/SP/PC/retirement: "
+            << ((authenticMovnRun1 && authenticMovnRun2) ? "PASS" : "FAIL") << "\n"
+            << "Original accepted retirement frontier: 115\n"
+            << "Move-wide continuation retired: "
+            << ((authenticMovnRun1 && run1.retired > 115u) ? "yes" : "no") << "\n"
+            << "New frontier instruction: " << hex(run1Trace.back().instruction, 8)
+            << " " << run1Trace.back().disassembly << "\n"
             << "Timer counter at frontier: " << run1.timerCounter << "\n"
             << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << "\n"
             << "SCTLR_EL1/TCR_EL1/TTBR0_EL1/TTBR1_EL1/MAIR_EL1: "
@@ -1105,6 +1178,7 @@ int runFrontier(const std::filesystem::path& imagePath,
 
     std::cout << summary.str();
     return reproducible && authenticAddRun1 && authenticAddRun2 &&
+        authenticMovnRun1 && authenticMovnRun2 && run1.retired > 115u &&
         (!captureFreshCheckpoint || !snapshotReached || snapshotQualified) ? 0 : 2;
 }
 
@@ -1142,14 +1216,20 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
     }
     const ExecutionResult result = executeBounded(platform, maximumAttempts, 32);
     const bool authenticAddRetired = authenticOldFrontierAddRetired(result.trace);
+    const bool authenticMovnRetired = authenticLinuxMovnRetired(result.trace);
     writeText(outputDirectory / "checkpoint-trace.txt", formatTrace(result.trace));
+    writeBytes(outputDirectory / "checkpoint-cpu-state.bin", result.finalCpuState);
     std::ostringstream frontier;
     frontier << "status: " << result.status << '\n'
+             << "execution_classification: " << executionClassification(result) << '\n'
              << "retired_instructions_after_checkpoint: " << result.retired << '\n'
              << "attempted_steps_after_checkpoint: " << result.trace.size() << '\n'
              << "checkpoint_pc: " << hex(0x36A54, 16) << '\n'
              << "checkpoint_timer_counter: 32\n"
              << "final_pc: " << hex(result.finalPc, 16) << '\n'
+             << "frontier_instruction_word: " << hex(result.trace.back().instruction, 8) << '\n'
+             << "frontier_disassembly: " << result.trace.back().disassembly << '\n'
+             << "frontier_fault: " << faultName(result.trace.back().fault) << '\n'
              << "timer_counter: " << result.timerCounter << '\n'
              << "X0: " << hex(restoredCore.readX(0), 16) << '\n'
              << "X2: " << hex(restoredCore.readX(2), 16) << '\n'
@@ -1181,11 +1261,14 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
              << result.uartPendingRx.size() << '\n'
              << "frontier_pre_X0: " << hex(result.trace.back().preX0, 16) << '\n'
              << "frontier_pre_X2: " << hex(result.trace.back().preX2, 16) << '\n'
+             << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
+             << (authenticMovnRetired ? "PASS" : "FAIL") << '\n'
              << "authentic_ADD_at_0x36A6C_retired_correctly: "
              << (authenticAddRetired ? "PASS" : "FAIL") << '\n'
              << "ESR_EL1: " << hex(result.trace.back().esr, 16) << '\n'
              << "FAR_EL1: " << hex(result.trace.back().far, 16) << '\n'
-             << "diagnostic: " << result.diagnostic << '\n';
+             << "diagnostic: " << result.diagnostic << '\n'
+             << "final_cpu_registers:\n" << finalRegisterText(result.finalGprs);
     writeText(outputDirectory / "checkpoint-frontier.txt", frontier.str());
     if (!result.uart.empty()) writeBytes(outputDirectory / "uart-output.bin", result.uart);
 
@@ -1199,10 +1282,15 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
            << "checkpoint_timer_counter: 32\n"
            << "attempt_budget: " << maximumAttempts << '\n'
            << "continuation_status: " << result.status << '\n'
+           << "execution_classification: " << executionClassification(result) << '\n'
            << "continuation_retired: " << result.retired << '\n'
            << "continuation_attempts: " << result.trace.size() << '\n'
            << "continuation_final_pc: " << hex(result.finalPc, 16) << '\n'
+           << "new_frontier_instruction_word: " << hex(result.trace.back().instruction, 8) << '\n'
+           << "new_frontier_disassembly: " << result.trace.back().disassembly << '\n'
            << "continuation_timer_counter: " << result.timerCounter << '\n'
+           << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
+           << (authenticMovnRetired ? "PASS" : "FAIL") << '\n'
            << "authentic_ADD_at_0x36A6C_retired_correctly: "
            << (authenticAddRetired ? "PASS" : "FAIL") << '\n'
            << "GIC_pending/active/enabled: " << result.gicPendingCount << "/"
@@ -1231,7 +1319,7 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
            << result.uartPendingRx.size() << '\n';
     writeText(outputDirectory / "checkpoint-replay.txt", report.str());
     std::cout << report.str();
-    return authenticAddRetired ? 0 : 2;
+    return authenticAddRetired && authenticMovnRetired && result.retired > 83u ? 0 : 2;
 }
 
 } // namespace

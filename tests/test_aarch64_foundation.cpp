@@ -442,13 +442,10 @@ void testFaults() {
     cpu.reset(0);
     FlatMemory big(0x1000);
     const uint32_t garbage[] = {0xFFFFFFFFu, 0x00000000u,
-                                0xD503203Fu /*hint #1, not NOP*/, 0x92800000u /*movn*/};
+                                0xD503203Fu /*hint #1, not NOP*/,
+                                0xB2800000u /*reserved move-wide opc=01*/};
     for (uint32_t word : garbage) {
-        if (word == 0x92800000u) {
-            CHECK(runOne(cpu, big, word) == Fault::UnsupportedFeature);
-        } else {
-            CHECK(runOne(cpu, big, word) == Fault::UnallocatedEncoding);
-        }
+        CHECK(runOne(cpu, big, word) == Fault::UnallocatedEncoding);
         CHECK_EQ(0u, cpu.pc());
     }
 
@@ -574,7 +571,7 @@ void testPluginAndRegistry() {
     CHECK(plugin->hasFeature("BL"));
     CHECK(plugin->hasFeature("RET"));
     CHECK(plugin->hasFeature("NOP"));
-    CHECK(!plugin->hasFeature("MOVN"));
+    CHECK(plugin->hasFeature("MOVN"));
     CHECK(!plugin->hasFeature("GIC"));
 
     // decode/execute through the IISA interface.

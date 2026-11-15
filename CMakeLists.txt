@@ -699,6 +699,7 @@ add_test(NAME AArch64LinuxBootTests COMMAND test_aarch64_linux_boot)
 add_test(NAME AArch64CpuIdentificationTests COMMAND test_aarch64_cpu_identification)
 add_test(NAME AArch64VariableShiftTests COMMAND test_aarch64_variable_shift)
 add_test(NAME AArch64AddSubShiftedTests COMMAND test_aarch64_add_sub_shifted)
+add_test(NAME AArch64MoveWideTests COMMAND test_aarch64_move_wide)
 add_test(NAME AArch64CacheMaintenanceTests COMMAND test_aarch64_cache_maintenance)
 set_tests_properties(AArch64DeviceSnapshotTests PROPERTIES TIMEOUT 60)
 set_tests_properties(AArch64GenericTimerTests PROPERTIES TIMEOUT 120)
@@ -1019,6 +1020,15 @@ add_executable(test_aarch64_add_sub_shifted
     ${HEADERS}
 )
 
+# AARCH64-19: MOVN/MOVZ/MOVK width, halfword, register and checkpoint behavior.
+add_executable(test_aarch64_move_wide
+    tests/test_aarch64_move_wide.cpp
+    src/aarch64/AArch64ExecutionSnapshot.cpp
+    ${AARCH64_SOURCES}
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+
 # AARCH64-17: exact DC IVAC decoding, cacheless EL1 no-op behavior, EL0
 # Undefined exception, MMU bypass, and production guest snapshot replay.
 add_executable(test_aarch64_cache_maintenance
@@ -1049,6 +1059,7 @@ if(WIN32)
     target_link_libraries(test_aarch64_cpu_identification PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_variable_shift PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_add_sub_shifted PRIVATE ws2_32 bcrypt psapi)
+    target_link_libraries(test_aarch64_move_wide PRIVATE ws2_32 bcrypt psapi)
     target_link_libraries(test_aarch64_cache_maintenance PRIVATE ws2_32 bcrypt psapi)
 endif()
 
@@ -1073,6 +1084,7 @@ if(MSVC)
     target_compile_options(test_aarch64_cpu_identification PRIVATE /W4)
     target_compile_options(test_aarch64_variable_shift PRIVATE /W4)
     target_compile_options(test_aarch64_add_sub_shifted PRIVATE /W4)
+    target_compile_options(test_aarch64_move_wide PRIVATE /W4)
     target_compile_options(test_aarch64_cache_maintenance PRIVATE /W4)
 else()
     target_compile_options(test_aarch64_snapshot PRIVATE -Wall -Wextra -Wpedantic)
@@ -1085,6 +1097,7 @@ else()
     target_compile_options(test_aarch64_cpu_identification PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_variable_shift PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_add_sub_shifted PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(test_aarch64_move_wide PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(test_aarch64_cache_maintenance PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 

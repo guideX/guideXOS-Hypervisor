@@ -2,7 +2,7 @@
 // Encoding field layout per ARM DDI 0487 (ARMv8-A ARM), cross-checked with
 // the machine-readable ISA definitions (see header for links):
 //   Move wide immediate: sf[31] opc[30:29] 100101 hw[22:21] imm16[20:5] Rd[4:0]
-//     opc 10 = MOVZ, 11 = MOVK (00/01 = MOVN, out of scope).
+//     opc 00 = MOVN, 10 = MOVZ, 11 = MOVK, and 01 is unallocated.
 //     hw selects halfword 0..3 (64-bit) or 0..1 (32-bit).
 //   Add/sub immediate: sf[31] op[30] S[29] 10001 0[23] sh[22] imm12[21:10]
 //     Rn[9:5] Rd[4:0]; op 0 = ADD, 1 = SUB; S 0 = ADD/SUB, S 1 = ADDS/SUBS.
@@ -867,16 +867,16 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         const bool sf = (word & 0x80000000u) != 0;
         const uint32_t opc = (word >> 29) & 3u;
         const uint8_t hw = static_cast<uint8_t>((word >> 21) & 3u);
-        if (opc == 0 || opc == 1) {
-            return invalid(word, address, Fault::UnsupportedFeature,
-                           "MOVN (move wide with NOT) is outside the implemented subset");
+        if (opc == 1) {
+            return invalid(word, address, Fault::UnallocatedEncoding,
+                           "move-wide opc=01 is unallocated");
         }
         if (!sf && hw >= 2) {
             return invalid(word, address, Fault::UnallocatedEncoding,
                            "32-bit move-wide with hw>=2 (shift 32/48) is unallocated");
         }
         Decoded d;
-        d.op = (opc == 2) ? Op::Movz : Op::Movk;
+        d.op = (opc == 0) ? Op::Movn : (opc == 2) ? Op::Movz : Op::Movk;
         d.valid = true;
         d.sf64 = sf;
         d.word = word;
@@ -886,8 +886,10 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         d.imm16 = static_cast<uint16_t>((word >> 5) & 0xFFFFu);
         d.rd = static_cast<uint8_t>(word & 31u);
         char buf[96];
+        const char* mnemonic = d.op == Op::Movn ? "movn"
+                             : d.op == Op::Movz ? "movz" : "movk";
         std::snprintf(buf, sizeof(buf), "%s %s, #0x%x, lsl #%u",
-                      d.op == Op::Movz ? "movz" : "movk",
+                      mnemonic,
                       d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
                       d.imm16, d.shift);
         d.disassembly = buf;
@@ -2589,6 +2591,17 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             lastFault_ = result;
             return result;
         }
+        break;
+    }
+    case Op::Movn: {
+        const uint64_t positioned = static_cast<uint64_t>(decoded.imm16)
+                                  << decoded.shift;
+        const uint64_t value = decoded.sf64
+            ? ~positioned
+            : static_cast<uint64_t>(~static_cast<uint32_t>(positioned));
+        if (decoded.rd != 31u)
+            x_[decoded.rd] = value;
+        pc_ += kInstructionSize;
         break;
     }
     case Op::Movz: {
