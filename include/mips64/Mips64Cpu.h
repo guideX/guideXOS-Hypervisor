@@ -494,6 +494,8 @@ enum class Mips64Op : uint8_t {
     Sync,
     // MIPS64 Release 2 full-width signed comparison with sign-extended immediate.
     Slti,
+    // MIPS32/64 Release 2 word-sized extract bit field. Appended for ABI stability.
+    Ext,
 };
 
 struct Mips64ReservationState {
@@ -512,8 +514,8 @@ struct Mips64Decoded {
     uint32_t raw = 0;
     uint8_t rs = 0;
     uint8_t rt = 0;
-    uint8_t rd = 0;      // DEXT: msbd; DEXTM: msbdminus32, not a GPR
-    uint8_t sa = 0;      // DEXT/DEXTM interpret bits 10:6 as position
+    uint8_t rd = 0;      // EXT/DEXT: msbd; DEXTM: msbdminus32, not a GPR
+    uint8_t sa = 0;      // EXT/DEXT/DEXTM interpret bits 10:6 as position
     uint8_t stype = 0;   // SYNC synchronization type (bits 10:6)
     uint8_t sel = 0;     // COP0 selector (bits 2:0) for MFC0/MTC0 family
     uint16_t code = 0;   // SPECIAL Trap software code (bits 15:6)

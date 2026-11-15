@@ -195,7 +195,11 @@ void testNeighboringSpecial3FunctionsRemainDistinct() {
     CHECK(dextm.rs == 17 && dextm.rt == 17 && dextm.rd == 29 && dextm.sa == 0);
     CHECK(Mips64Cpu{}.disassemble(dextm) == "dextm $17, $17, 0, 62");
 
-    for (uint8_t funct : {uint8_t{0x00}, uint8_t{0x02},
+    const Mips64Decoded ext = decodeInstruction(encodeDext(4, 3, 7, 6, 0x00));
+    CHECK(ext.valid && ext.op == Mips64Op::Ext);
+    CHECK(Mips64Cpu{}.disassemble(ext) == "ext $3, $4, 6, 8");
+
+    for (uint8_t funct : {uint8_t{0x02},
                           uint8_t{0x04}, uint8_t{0x05}, uint8_t{0x06},
                           uint8_t{0x07}, uint8_t{0x19}, uint8_t{0x20},
                           uint8_t{0x24}, uint8_t{0x25}, uint8_t{0x26},

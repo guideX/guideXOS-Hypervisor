@@ -1820,7 +1820,7 @@ int runAuthenticContinuation(const std::filesystem::path& imagePath,
           << ",\"rd\":" << ((firstStop.word >> 11) & 0x1F)
           << ",\"sa\":" << ((firstStop.word >> 6) & 0x1F)
           << ",\"funct\":" << (firstStop.word & 0x3F)
-          << ",\"independent_decode\":\"EXT $v1,$a2,1,14\""
+          << ",\"independent_decode\":\"EXT $v1,$a2,13,2\""
           << ",\"config1_frontier\":" << (config1Frontier ? "true" : "false")
           << ",\"a2\":\"" << hexValue(cpu.readGpr(6), 16)
           << "\",\"status\":\"" << hexValue(cpu.cp0Status(), 16)

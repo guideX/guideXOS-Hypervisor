@@ -1379,3 +1379,19 @@ else()
     target_compile_options(test_mips64_sync PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64SyncTests COMMAND test_mips64_sync)
+
+# MIPS64-30 architectural qualification for the authenticated EXT frontier and
+# unchanged OpenWrt Malta Linux continuation.
+add_executable(test_mips64_ext
+    tests/test_mips64_ext.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_ext PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_ext PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_ext PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64ExtTests COMMAND test_mips64_ext)

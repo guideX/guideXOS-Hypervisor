@@ -119,6 +119,7 @@ constexpr uint8_t kFnDsrl32 = 0x3E;
 constexpr uint8_t kFnDsra32 = 0x3F;
 constexpr uint8_t kFnDext = 0x03;
 constexpr uint8_t kFnDextm = 0x01;
+constexpr uint8_t kFnExt = 0x00;
 
 // -- REGIMM rt field ------------------------------------------------------------
 constexpr uint8_t kRiBltz = 0x00;
@@ -441,6 +442,20 @@ Mips64Decoded decodeInstruction(uint32_t word) {
         }
         case kOpSpecial3: {
             const uint8_t funct = static_cast<uint8_t>(word & 0x3FU);
+            if (funct == kFnExt) {
+                // EXT stores size-1 in MSBD (rd) and the source position in
+                // LSB (sa). Out-of-range fields are UNPREDICTABLE, so retain
+                // the typed unsupported-stop policy without RI exception entry.
+                const unsigned pos = decoded.sa;
+                const unsigned size = static_cast<unsigned>(decoded.rd) + 1U;
+                if (pos + size > 32U) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                "UNPREDICTABLE EXT field (position + size exceeds 32)");
+                }
+                decoded.op = Mips64Op::Ext;
+                decoded.valid = true;
+                return decoded;
+            }
             if (funct == kFnDextm) {
                 // DEXTM stores msbd-32 in bits 15:11; the architectural
                 // field width is encoded value + 33. Values crossing bit 63
@@ -466,7 +481,7 @@ Mips64Decoded decodeInstruction(uint32_t word) {
             }
             if (isKnownSpecial3Function(funct)) {
                 return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
-                            "valid MIPS64r2 SPECIAL3 instruction outside the DEXT subset");
+                            "valid MIPS64r2 SPECIAL3 instruction outside the implemented subset");
             }
             return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
                         "reserved SPECIAL3 function encoding");
@@ -1704,6 +1719,28 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rt, result);
             break;
         }
+        case Mips64Op::Ext: {
+            const uint64_t originalSource = readGpr(decoded.rs);
+            const uint32_t source = static_cast<uint32_t>(originalSource);
+            const unsigned pos = decoded.sa;
+            const unsigned size = static_cast<unsigned>(decoded.rd) + 1U;
+            if (pos + size > 32U) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE EXT field (position + size exceeds 32)");
+                return Mips64StepResult::Fault;
+            }
+            if (originalSource != signExtend32(source)) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE EXT source is not a sign-extended 32-bit word");
+                return Mips64StepResult::Fault;
+            }
+            const uint32_t mask = size == 32U
+                ? UINT32_MAX
+                : ((uint32_t{1} << size) - 1U);
+            const uint32_t result = (source >> pos) & mask;
+            writeGpr(decoded.rt, signExtend32(result));
+            break;
+        }
         case Mips64Op::Dextm: {
             const unsigned pos = decoded.sa;
             const unsigned size = static_cast<unsigned>(decoded.rd) + 33U;
@@ -2582,6 +2619,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
                           decoded.rt, decoded.rs, decoded.sa,
                           static_cast<unsigned>(decoded.rd) + 1U);
             break;
+        case Mips64Op::Ext:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u, %u", name,
+                          decoded.rt, decoded.rs, decoded.sa,
+                          static_cast<unsigned>(decoded.rd) + 1U);
+            break;
         case Mips64Op::Dextm:
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u, %u", name,
                           decoded.rt, decoded.rs, decoded.sa,
@@ -3254,6 +3296,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dsrl32: return "dsrl32";
         case Mips64Op::Sllv: return "sllv";
         case Mips64Op::Dext: return "dext";
+        case Mips64Op::Ext: return "ext";
         case Mips64Op::Dextm: return "dextm";
         case Mips64Op::Sync: return "sync";
         case Mips64Op::Dsllv: return "dsllv";
