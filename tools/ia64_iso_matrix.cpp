@@ -63,6 +63,9 @@ struct Options {
     std::vector<uint64_t> r14WatchMemoryPas;
     std::vector<uint64_t> probeIps;
     std::vector<uint64_t> probeAllIps;
+    bool probeCycleRangeEnabled = false;
+    uint64_t probeCycleStart = 0;
+    uint64_t probeCycleEnd = 0;
     struct InputKey {
         uint16_t scanCode = 0;
         uint16_t unicodeChar = 0;
@@ -219,6 +222,12 @@ bool parseOptions(int argc, char** argv, Options& options) {
             uint64_t probe = 0;
             if (!parseUnsigned(argv[++i], probe)) return false;
             options.probeAllIps.push_back(probe);
+        } else if (argument == "--probe-cycle-range" && i + 2 < argc) {
+            options.probeCycleRangeEnabled = true;
+            if (!parseUnsigned(argv[++i], options.probeCycleStart) ||
+                !parseUnsigned(argv[++i], options.probeCycleEnd)) {
+                return false;
+            }
         } else if (argument == "--probe-event-log" && i + 1 < argc) {
             options.probeEventLogPath = argv[++i];
         } else if (argument == "--help" || argument == "-h") {
@@ -236,6 +245,9 @@ bool parseOptions(int argc, char** argv, Options& options) {
            options.traceInstructionCount <= 1'000'000 &&
            (options.traceInstructionCount == 0 ||
             options.traceAfterCycles != std::numeric_limits<uint64_t>::max()) &&
+           (!options.probeCycleRangeEnabled ||
+            (options.probeCycleStart < options.probeCycleEnd &&
+             options.probeCycleEnd - options.probeCycleStart <= 100'000)) &&
            (options.r14TracePath.empty()
                 ? options.r14TraceStartCycle == std::numeric_limits<uint64_t>::max() &&
                       options.r14TraceEndCycle == 0 && options.r14WatchMemoryPas.empty()
@@ -254,7 +266,8 @@ void printUsage() {
                  "[--handoff-cycles N] [--post-checkpoint-cycles N] "
                  "[--equivalence-log PATH] [--guest-identity ID] [--dump-ram PATH] "
                  "[--dump-memory-range BASE SIZE PATH] [--hot-ips PATH] [--lock-trace PATH] "
-                 "[--probe-ip-all IP]... [--probe-event-log PATH] "
+                 "[--probe-ip-all IP]... [--probe-cycle-range START END] "
+                 "[--probe-event-log PATH] "
                  "[--r14-provenance START END PATH] [--r14-watch-memory-pa PA] "
                  "[--capture-efi-file-reads BASE]\n"
               << "Defaults: --cycles 2000000 --memory-mib 512 "
@@ -818,7 +831,10 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
                                    std::vector<uint64_t> r14WatchMemoryPas = {},
                                    bool traceControlFlowOnly = false,
                                    const std::vector<uint64_t>& probeAllIps = {},
-                                   const std::string& probeEventLogPath = {}) {
+                                   const std::string& probeEventLogPath = {},
+                                   bool probeCycleRangeEnabled = false,
+                                   uint64_t probeCycleStart = 0,
+                                   uint64_t probeCycleEnd = 0) {
     constexpr uint64_t panicEntryVma = 0xA00000010081AC70ULL;
     constexpr uint64_t doExitEntryVma = 0xA0000001000929A0ULL;
     constexpr uint64_t doOneInitcallEntryVma = 0xA00000010000A500ULL;
@@ -1401,111 +1417,115 @@ ContinuationRecord runContinuation(ia64::VirtualMachine& vm, uint64_t cycles,
             record.panicFormat = readKernelCString(vm, record.panicFmtVA, 256);
             record.panicPath = recentPath;
         }
-        for (const uint64_t probe : probeIps) {
-            if (canonicalIp == probe) {
-                const ia64::CPUState& cpu = vm.getCPUState(0);
-                std::ostringstream probeLine;
-                probeLine << "[IA64-PROBE] ip=0x" << std::hex << probe
-                          << " slot=" << std::dec << slot
-                          << " cycle=" << globalCycle
-                          << " itc=0x" << std::hex << cpu.GetAR(44);
-                for (size_t reg = 1; reg < 64; ++reg) {
-                    probeLine << " r" << std::dec << reg << "=0x" << std::hex
-                              << cpu.GetGR(reg);
-                }
-                auto it = probeLineIndex.find(probe);
-                if (it == probeLineIndex.end()) {
-                    probeLineIndex[probe] = record.probeLines.size();
-                    record.probeLines.push_back(probeLine.str());
-                } else {
-                    record.probeLines[it->second] = probeLine.str();
+        const bool probeCycleMatches = !probeCycleRangeEnabled ||
+            (globalCycle >= probeCycleStart && globalCycle < probeCycleEnd);
+        if (probeCycleMatches) {
+            for (const uint64_t probe : probeIps) {
+                if (canonicalIp == probe) {
+                    const ia64::CPUState& cpu = vm.getCPUState(0);
+                    std::ostringstream probeLine;
+                    probeLine << "[IA64-PROBE] ip=0x" << std::hex << probe
+                              << " slot=" << std::dec << slot
+                              << " cycle=" << globalCycle
+                              << " itc=0x" << std::hex << cpu.GetAR(44);
+                    for (size_t reg = 1; reg < 64; ++reg) {
+                        probeLine << " r" << std::dec << reg << "=0x" << std::hex
+                                  << cpu.GetGR(reg);
+                    }
+                    auto it = probeLineIndex.find(probe);
+                    if (it == probeLineIndex.end()) {
+                        probeLineIndex[probe] = record.probeLines.size();
+                        record.probeLines.push_back(probeLine.str());
+                    } else {
+                        record.probeLines[it->second] = probeLine.str();
+                    }
                 }
             }
-        }
-        for (const uint64_t probe : probeAllIps) {
-            if (canonicalIp == probe) {
-                const ia64::CPUState& cpu = vm.getCPUState(0);
-                if (probeEventLog && slot == 0) {
-                    const char* eventKind = probe == doOneInitcallEntryVma
-                        ? "do_one_initcall_entry"
-                        : "probe_entry";
-                    writeEvent(eventKind, probe, cpu, globalCycle, slot);
-                    if (probe == doOneInitcallEntryVma) {
-                        pendingInitcalls.push_back({
-                            cpu.GetGR(13), canonicalKernelVma(cpu.GetBR(0)) & ~0xFULL,
-                            cpu.GetGR(32), globalCycle});
+            for (const uint64_t probe : probeAllIps) {
+                if (canonicalIp == probe) {
+                    const ia64::CPUState& cpu = vm.getCPUState(0);
+                    if (probeEventLog && slot == 0) {
+                        const char* eventKind = probe == doOneInitcallEntryVma
+                            ? "do_one_initcall_entry"
+                            : "probe_entry";
+                        writeEvent(eventKind, probe, cpu, globalCycle, slot);
+                        if (probe == doOneInitcallEntryVma) {
+                            pendingInitcalls.push_back({
+                                cpu.GetGR(13), canonicalKernelVma(cpu.GetBR(0)) & ~0xFULL,
+                                cpu.GetGR(32), globalCycle});
+                        }
                     }
-                }
-                std::ostringstream probeLine;
-                probeLine << "[IA64-PROBE-ALL] ip=0x" << std::hex << probe
-                          << " slot=" << std::dec << slot
-                          << " cycle=" << globalCycle
-                          << " itc=0x" << std::hex << cpu.GetAR(44);
-                uint64_t predicateMask = 0;
-                uint64_t grNaTMask = 0;
-                for (size_t predicate = 0; predicate < 64; ++predicate) {
-                    if (cpu.GetPR(predicate)) {
-                        predicateMask |= uint64_t{1} << predicate;
+                    std::ostringstream probeLine;
+                    probeLine << "[IA64-PROBE-ALL] ip=0x" << std::hex << probe
+                              << " slot=" << std::dec << slot
+                              << " cycle=" << globalCycle
+                              << " itc=0x" << std::hex << cpu.GetAR(44);
+                    uint64_t predicateMask = 0;
+                    uint64_t grNaTMask = 0;
+                    for (size_t predicate = 0; predicate < 64; ++predicate) {
+                        if (cpu.GetPR(predicate)) {
+                            predicateMask |= uint64_t{1} << predicate;
+                        }
                     }
-                }
-                for (size_t reg = 1; reg < 64; ++reg) {
-                    if (cpu.GetGRNaT(reg)) {
-                        grNaTMask |= uint64_t{1} << reg;
+                    for (size_t reg = 1; reg < 64; ++reg) {
+                        if (cpu.GetGRNaT(reg)) {
+                            grNaTMask |= uint64_t{1} << reg;
+                        }
                     }
-                }
-                const uint64_t psr = cpu.GetPSR();
-                const ia64::BasicInterruptController* interruptController =
-                    vm.getInterruptController();
-                probeLine << " cfm=0x" << cpu.GetCFM()
-                          << " pfs=0x" << cpu.GetPFS()
-                          << " rsc=0x" << cpu.GetRSC()
-                          << " bsp=0x" << cpu.GetBSP()
-                          << " bspstore=0x" << cpu.GetBSPSTORE()
-                          << " rnat=0x" << cpu.GetRNAT()
-                          << " ar_lc=0x" << cpu.GetAR(65)
-                          << " ar_ec=0x" << cpu.GetAR(66)
-                          << " psr=0x" << psr
-                          << " psr_i=" << ((psr >> 13) & 1ULL)
-                          << " ipsr=0x" << cpu.GetCR(ia64::IA64_CR_IPSR)
-                          << " isr=0x" << cpu.GetCR(ia64::IA64_CR_ISR)
-                          << " iip=0x" << cpu.GetCR(ia64::IA64_CR_IIP)
-                          << " ifa=0x" << cpu.GetCR(20)
-                          << " itir=0x" << cpu.GetCR(21)
-                          << " iha=0x" << cpu.GetCR(25)
-                          << " ifs=0x" << cpu.GetCR(23)
-                          << " interrupt_controller_pending="
-                          << (interruptController != nullptr &&
-                                      interruptController->HasPendingInterrupt()
-                                  ? 1
-                                  : 0)
-                          << " interrupt_in_service_vector=0x"
-                          << (plugin != nullptr ? plugin->getInServiceVector() : 0xff)
-                          << " predicate_mask=0x" << predicateMask
-                          << " gr_nat_mask=0x" << grNaTMask
-                          << " b0=0x" << cpu.GetBR(0);
-                for (size_t reg = 1; reg < 64; ++reg) {
-                    probeLine << " r" << std::dec << reg << "=0x" << std::hex
-                              << cpu.GetGR(reg);
-                }
-                for (size_t index = 0; index < ia64::NUM_TRANSLATION_REGISTERS; ++index) {
-                    const ia64::TranslationRegisterState& entry = cpu.GetITR(index);
-                    if (entry.valid) {
-                        probeLine << " itr" << std::dec << index << "={pa:0x" << std::hex
-                                  << entry.physicalAddress << ",va:0x" << entry.virtualAddress
-                                  << ",itir:0x" << entry.itir << ",rr:0x" << entry.regionValue
-                                  << '}';
+                    const uint64_t psr = cpu.GetPSR();
+                    const ia64::BasicInterruptController* interruptController =
+                        vm.getInterruptController();
+                    probeLine << " cfm=0x" << cpu.GetCFM()
+                              << " pfs=0x" << cpu.GetPFS()
+                              << " rsc=0x" << cpu.GetRSC()
+                              << " bsp=0x" << cpu.GetBSP()
+                              << " bspstore=0x" << cpu.GetBSPSTORE()
+                              << " rnat=0x" << cpu.GetRNAT()
+                              << " ar_lc=0x" << cpu.GetAR(65)
+                              << " ar_ec=0x" << cpu.GetAR(66)
+                              << " psr=0x" << psr
+                              << " psr_i=" << ((psr >> 13) & 1ULL)
+                              << " ipsr=0x" << cpu.GetCR(ia64::IA64_CR_IPSR)
+                              << " isr=0x" << cpu.GetCR(ia64::IA64_CR_ISR)
+                              << " iip=0x" << cpu.GetCR(ia64::IA64_CR_IIP)
+                              << " ifa=0x" << cpu.GetCR(20)
+                              << " itir=0x" << cpu.GetCR(21)
+                              << " iha=0x" << cpu.GetCR(25)
+                              << " ifs=0x" << cpu.GetCR(23)
+                              << " interrupt_controller_pending="
+                              << (interruptController != nullptr &&
+                                          interruptController->HasPendingInterrupt()
+                                      ? 1
+                                      : 0)
+                              << " interrupt_in_service_vector=0x"
+                              << (plugin != nullptr ? plugin->getInServiceVector() : 0xff)
+                              << " predicate_mask=0x" << predicateMask
+                              << " gr_nat_mask=0x" << grNaTMask
+                              << " b0=0x" << cpu.GetBR(0);
+                    for (size_t reg = 1; reg < 64; ++reg) {
+                        probeLine << " r" << std::dec << reg << "=0x" << std::hex
+                                  << cpu.GetGR(reg);
                     }
-                }
-                for (size_t index = 0; index < ia64::NUM_INSTRUCTION_TLB_ENTRIES; ++index) {
-                    const ia64::TranslationRegisterState& entry = cpu.GetITLB(index);
-                    if (entry.valid) {
-                        probeLine << " itlb" << std::dec << index << "={pa:0x" << std::hex
-                                  << entry.physicalAddress << ",va:0x" << entry.virtualAddress
-                                  << ",itir:0x" << entry.itir << ",rr:0x" << entry.regionValue
-                                  << '}';
+                    for (size_t index = 0; index < ia64::NUM_TRANSLATION_REGISTERS; ++index) {
+                        const ia64::TranslationRegisterState& entry = cpu.GetITR(index);
+                        if (entry.valid) {
+                            probeLine << " itr" << std::dec << index << "={pa:0x" << std::hex
+                                      << entry.physicalAddress << ",va:0x" << entry.virtualAddress
+                                      << ",itir:0x" << entry.itir << ",rr:0x" << entry.regionValue
+                                      << '}';
+                        }
                     }
+                    for (size_t index = 0; index < ia64::NUM_INSTRUCTION_TLB_ENTRIES; ++index) {
+                        const ia64::TranslationRegisterState& entry = cpu.GetITLB(index);
+                        if (entry.valid) {
+                            probeLine << " itlb" << std::dec << index << "={pa:0x" << std::hex
+                                      << entry.physicalAddress << ",va:0x" << entry.virtualAddress
+                                      << ",itir:0x" << entry.itir << ",rr:0x" << entry.regionValue
+                                      << '}';
+                        }
+                    }
+                    record.probeLines.push_back(probeLine.str());
                 }
-                record.probeLines.push_back(probeLine.str());
             }
         }
         if (collectHotIps) {
@@ -2390,7 +2410,10 @@ int main(int argc, char** argv) {
                                                                 options.r14WatchMemoryPas,
                                                                 options.traceControlFlowOnly,
                                                                 options.probeAllIps,
-                                                                options.probeEventLogPath);
+                                                                options.probeEventLogPath,
+                                                                options.probeCycleRangeEnabled,
+                                                                options.probeCycleStart,
+                                                                options.probeCycleEnd);
             const std::string restoreLog = options.equivalenceLogPath.empty()
                 ? std::string()
                 : options.equivalenceLogPath + ".restore.log";
@@ -2697,7 +2720,9 @@ int main(int argc, char** argv) {
                     options.traceInstructionCount, options.r14TraceStartCycle,
                     options.r14TraceEndCycle, options.r14TracePath,
                     options.r14WatchMemoryPas, options.traceControlFlowOnly,
-                    options.probeAllIps, options.probeEventLogPath);
+                    options.probeAllIps, options.probeEventLogPath,
+                    options.probeCycleRangeEnabled, options.probeCycleStart,
+                    options.probeCycleEnd);
                 executed = progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {
@@ -2747,7 +2772,8 @@ int main(int argc, char** argv) {
                     options.r14TraceStartCycle, options.r14TraceEndCycle,
                     options.r14TracePath, options.r14WatchMemoryPas,
                     options.traceControlFlowOnly, options.probeAllIps,
-                    options.probeEventLogPath);
+                    options.probeEventLogPath, options.probeCycleRangeEnabled,
+                    options.probeCycleStart, options.probeCycleEnd);
                 executed += progress.cycles;
                 reportColdProgress(progress, startIP);
             } else {

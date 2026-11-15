@@ -1,0 +1,48 @@
+IA64-POST-MADT-9R32 validation summary
+
+Build and implementation scope
+  Assertion-enabled Release build: build-9r26-assert.
+  Rebuilt ia64_iso_matrix successfully after adding --probe-cycle-range.
+  The option limits probe-ip/probe-ip-all output to a requested global guest
+  cycle interval (maximum width 100,000); default behavior remains unchanged.
+  No production CPU, memory, scheduler, firmware, Linux, initrd, or phase-marker
+  behavior changed. There is no new focused regression because the exact
+  emulator instruction-level cause remains under investigation.
+
+Selected architecture CTests
+  NewInstructionTests: PASS
+  IA64XUnitDecodeTests: PASS
+  EfiMemoryMapTests: PASS
+  IA64AcpiFirmwareTests: PASS
+  IA64SalTests: PASS
+  VMCheckpointTests: PASS
+  IA64CheckpointContextContinuationTests: PASS
+  IA64RSEFaultRestartTests: PASS
+  IA64CallFrameReturnTests: PASS
+  IA64AutomaticRSEPressureTests: PASS
+  Result: 10/10 passed, 0 failed. Log: r32-selected-ctest.log.
+
+Direct architecture invocations
+  test_isa_plugin.exe: PASS (full suite)
+  test_isa_plugin.exe breakfault: PASS
+  test_ia64_interrupt_controller.exe: PASS
+  test_ia64_processor_interrupt_block.exe: PASS
+  test_ia64_single_cpu_context_switch.exe: PASS
+  Result: 5/5 passed. Individual logs are r32-test_*.log.
+
+Read-only reference checks
+  R23 bootmem bitmap: PASS, 30,761 free PFN bits, zero mismatches.
+  R24 bootmem bitmap: PASS, 30,760 free PFNs, zero mismatches.
+  R26 per-CPU map: PASS, seven snapshots and map-extension relation.
+  R27 find_next_bit capture: PASS, result 148 at offset 148.
+  R27 find_next_bit vectors: PASS, 10/10.
+  R30 60M ACPI guest-RAM snapshot: PASS.
+  R30 550M ACPI guest-RAM snapshot: PASS.
+  Result: 7/7 passed. Individual logs are r32-reference-*.log.
+
+Other checks
+  R29/R30/R31 evidence manifests were revalidated: 60/60, 36/36, and 48/48.
+  git diff --check: PASS.
+  test_bootstrap was not run; the existing Windows Winsock linkage limitation
+  remains documented. The other eight CTests outside the selected acceptance
+  set remain unrun. No test is claimed from a build alone.

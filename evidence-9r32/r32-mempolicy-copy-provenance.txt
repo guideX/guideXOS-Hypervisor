@@ -1,0 +1,111 @@
+IA64 R32 mempolicy pointer provenance and first bad store
+
+Authenticated replay
+  Start checkpoint: build-9r26-assert/r29-authentic-corrected-firmware-cold.gxcp
+  Guest identity: R16-q6-ISO-sha256=6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E;
+    LINUX.gz=F16B5547BF5944F2E8BC2A41FABC3047D921B4C3B94572792F5002A7087CDD2C;
+    INITRD.GZ=D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B
+  Focused replay starts at checkpoint cycle 778197459 and ends at 838197459.
+  No guest binary, initrd, firmware table, or checkpoint content was changed.
+
+Kernel-thread dependency
+  The authenticated default_bdi_init4 callback is the first unmatched initcall.
+  It requests sync_supers through kthread_run(bdi_sync_supers, NULL,
+  "sync_supers"). The function descriptor is 0xa0000001009fd1d0 and resolves
+  to bdi_sync_supers. The name format pointer is 0xa00000010096b128 and reads
+  "sync_supers\0".
+  Requesting task kernel_init: task_struct 0xe000000008ec0000.
+  Request object: 0xe000000008ec7db0. Completion: 0xe000000008ec7dd0.
+  kernel_init waits on that exact completion. kthreadd task
+  0xe000000008ee8000 dequeues that exact request and invokes kernel_thread
+  with the same request pointer. The resulting copy_process child is
+  0xe000000008f80000.
+  The same-request/same-completion identity proves why this request's failure
+  leaves default_bdi_init4 waiting. The worker faults before the kthread
+  trampoline can publish create->result and complete(&create->done); the
+  completion is not signaled, and kernel_init remains TASK_UNINTERRUPTIBLE (2).
+
+Task structure and source bytes
+  copy_process/dup_task_struct parent: 0xe000000008ee8000 (kthreadd).
+  Child: 0xe000000008f80000.
+  The authenticated task_struct.mempolicy offset is 3056 bytes (0xbf0):
+  the matching source declares the field, and the kernel's __mpol_dup and
+  copy_process instructions address task+3056. The field address is therefore
+  parent+0xbf0 or child+0xbf0, independently matching runtime memory probes.
+  No DWARF is present for a direct type-offset query; code operand, source
+  declaration, and live parent/child addresses were cross-checked.
+  Parent+0xbf0 is null. The adjacent qword at parent+0xbf8 is
+  0x00000000ffff0000. Matching Linux 3.2.78 sched.h places short il_next and
+  short pref_node_fork immediately after mempolicy; the bytes include the
+  legitimate pref_node_fork value -1 at byte offset 0xbfa. The qword is
+  adjacent task metadata, not a mempolicy pointer.
+  Child+0xbf0 was zero immediately before the task copy. The memcpy call
+  receives equal task bases and a length of 3184 bytes (0xc70), matching the
+  authenticated task structure size.
+
+First incorrect guest-memory transition
+  The generic weak arch_dup_task_struct implementation in the exact guest
+  source performs *dst = *src. dup_task_struct invokes it, and copy_process
+  then evaluates mpol_dup(p->mempolicy).
+  The authenticated IA-64 memcpy implementation uses a 25-stage software loop:
+  (p16) ld8 r32=[r3],8 and (p40) st8 [r2]=r56,8, with rotating val[0] at r32
+  and val[24] at r56.
+  In the bounded cycle trace, a load from parent+0xbf0 reads zero at cycle
+  835576842. A subsequent load from parent+0xbf8 reads 0xffff0000 at cycle
+  835576848 and places it in rotating r32. At cycle 835576995, the authentic
+  (p40) st8 instruction at memcpy+0xb0 writes r56=0xffff0000 to child+0xbf0;
+  the watched guest-memory transition is before=0, after=0xffff0000.
+  At that store, CFM RRB.GR is 10. At the source load, the corresponding
+  rotating-register stage uses RRB.GR=2; with SOR=32, r32 at offset 0 plus
+  RRB.GR 2 and r56 at offset 24 plus RRB.GR 10 select the same rotating slot
+  (34 modulo 32 equals 2). The source neighbor's value therefore reaches the
+  destination mempolicy slot through the authentic rotating pipeline.
+  The parent source field was null, so the child's first bad field value is
+  introduced by this task-structure copy, before mpol_dup is called.
+
+Fault consequence
+  Immediately before __mpol_dup, child->mempolicy is 0xffff0000. The wrapper
+  does not skip __mpol_dup for this non-null value. In __mpol_dup, ordinary
+  *new = *old reaches memcpy. At cycle 835582656, the first load at
+  memcpy+0xa0 is (p16) ld8 r32=[r3],8, with p16 true and r3=0xffff0000.
+  It faults on an eight-byte guest virtual read: IFA=0xffff0000, ITIR=0x38,
+  region 5, RR=0x539, ISR=0x400000000, kernel IPSR=0x1010085a6008. No matching
+  guest data translation exists. The saved frame has CFM/IFS
+  0x80000000000111a3 (interrupted CFM 0x111a3), RSC=3, RNAT=0, AR.UNAT=0,
+  and B0=0xa0000001001ce7e0, returning into __mpol_dup+0x130. The page-fault
+  handler probe records handler-time BSP=0xe000000008ee8fa0,
+  BSPSTORE=0xe000000008ee8dd0, RSC=3, RNAT=0, CFM=0x3, and PFS=0x3; these are
+  explicitly handler-time values, not substituted for the interrupted frame.
+  The interrupted r3 is 0xffff0000; the R31 fault proof records no NaT on the
+  relevant state. This is an ordinary guest page fault, not a host translation
+  mismatch.
+
+Scope and unresolved point
+  R32 proves the source bytes, child overwrite, and exact first incorrect
+  guest-memory transition. It proves no independent stale policy object,
+  allocator lifetime error, or incoming malformed parent pointer.
+  The underlying emulator semantic that makes the authentic software-pipelined
+  memcpy place the neighboring qword at the child field is not yet isolated
+  between the RRBGR/rotating-GR mapping and rotating-predicate pipeline stages.
+  The general fault is not repaired speculatively. The next diagnostic should
+  run a small exact 25-stage load/store loop with observable p16/p40 and
+  rotating-GR stage values, compare each cycle with Intel's architectural
+  semantics, then add a focused regression before changing execution code.
+
+Scheduler and prior fault
+  R31 scheduler evidence shows normal task switches and kernel_init entering
+  TASK_UNINTERRUPTIBLE; no proven saved/restored architectural mismatch was
+  found. During the bounded memcpy trace, r13 remains kthreadd, RSC=3, and the
+  observed source/destination NaT state is clear. The fault alone is not an
+  RSE or context-switch diagnosis.
+  The earlier __queue_work null-pointer fault occurred in a distinct task
+  context before default_bdi_init4; no shared cause is established. Preserve
+  and keep that R31 finding separate.
+
+Disposition
+  Outcome B: pointer provenance and the first bad guest-memory store are
+  established; the responsible emulator execution detail and repair are
+  pending. No production CPU, memory, scheduler, firmware, kernel, or initrd
+  change was made. The same authenticated replay reaches the former fault and
+  remains blocked before default_bdi_init4 returns; acpi_init4 and FACS mapping
+  are not reached. The R30 early ACPI_NO_FACS_INIT skip remains unchanged.

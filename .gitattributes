@@ -1,1 +1,3 @@
 evidence-9r29/r29-test-isa-plugin-full.log -diff
+evidence-9r32/** -text
+evidence-9r32/** whitespace=-blank-at-eol

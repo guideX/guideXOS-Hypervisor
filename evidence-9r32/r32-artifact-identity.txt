@@ -1,0 +1,56 @@
+IA64-POST-MADT-9R32 authenticated artifact and replay identity
+
+Repository
+  Starting branch: IA64
+  Starting HEAD: ceb2ba8e8849ca32a2a72c553df13922c5235f03
+  Starting subject: docs(ia64): record R31 package commit SHA
+  Starting divergence from origin/IA64: 2 ahead, 0 behind
+  Starting tracked tree: clean
+  Existing untracked evidence/build artifacts were preserved.
+  .phase:
+    project=guideXOS_Hypervisor
+    last_completed=IA64-POST-MADT-8
+    next_expected=IA64-POST-MADT-9
+
+Accepted guest artifacts
+  ISO build-9r9/authentic-reconstructed.iso
+    bytes=4695296000
+    SHA-256=6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E
+  Kernel build-9r9/inspection/reconstructed-LINUX.gz
+    bytes=4530130
+    SHA-256=F16B5547BF5944F2E8BC2A41FABC3047D921B4C3B94572792F5002A7087CDD2C
+  Matching kernel ELF evidence-9r27/r27-authenticated-linux.elf
+    bytes=13035024
+    SHA-256=F2C573C29DBBC030E9F93A18A97CAE3E62023A8A6F80C7CA0035E5A13DB2A483
+  Matching System.map build-9r18/linux-symbols/data/boot/System.map-3.2.0-4-itanium
+    bytes=1595223
+    SHA-256=A1ED660417EE3F5BF0B3701572280F8169131DE470EC94212FB97F192AB4E144
+  INITRD.GZ: 9077124 bytes; SHA-256
+    D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B
+    It is recorded in the accepted R29 checkpoint manifest and is not present
+    as a standalone payload file.
+
+Checkpoint and platform
+  R29 corrected-firmware cold checkpoint:
+    build-9r26-assert/r29-authentic-corrected-firmware-cold.gxcp
+    bytes=574309223
+    SHA-256=F3233FA4DB2067720FBD91627BCB677DB696D8957D945F7A369440615DF6B592
+  Checkpoint format: diagnostic checkpoint v1, IA-64, after ExitBootServices,
+    generated from the accepted corrected R29 ISO.
+  Guest identity:
+    R16-q6-ISO-sha256=6B4096B2D41BE1AB60391AB3178BBE8C28CBBED7859175B4A04A6D142A51439E;
+    LINUX.gz=F16B5547BF5944F2E8BC2A41FABC3047D921B4C3B94572792F5002A7087CDD2C;
+    INITRD.GZ=D88848D0A834DAE69223126710BEEA8FA5B1F4FEAAFFBF27D7A32F928D8EC52B
+  Checkpoint cycle=778197459; raw handoff IP=0x1fd55490; one IA-64 vCPU;
+  guest memory=512 MiB. The firmware-table graph and guest configuration match
+  the accepted R29/R30 state. No firmware, kernel, initrd, or checkpoint bytes
+  were changed for R32.
+  R30 ACPI RAM capture SHA-256: 4B5F0705C678CD612A3238D2F4350D2650ACAB0FC2A4BC5C2F031571EC1C5251.
+
+Manifest verification
+  R29: 60 listed, 0 mismatches; manifest SHA-256
+    7AACE1A9B6B59D5690F60B89CD1E74FC0CC17A3C9B6F401F9FC05586DCF16597
+  R30: 36 listed, 0 mismatches; manifest SHA-256
+    F16DDB68DE554F1C7963C866233C612CE5FDA70F46F23D850A3111C6C16484B3
+  R31: 48 listed, 0 mismatches; manifest SHA-256
+    7E2EE060F2F553BA6C60A0F2951612ED64CA1DC0EDDD919162F5DBF90F2E0AB0
