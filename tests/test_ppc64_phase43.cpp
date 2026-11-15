@@ -159,7 +159,8 @@ void testMMCRADecodeAndIdentity43() {
                          uint16_t{153}, uint16_t{273}, uint16_t{999}}) {
         const auto read = PPC64ISAPlugin::decodeWord(encodeMfspr(9U, spr));
         const auto write = PPC64ISAPlugin::decodeWord(encodeMtspr(9U, spr));
-        if (spr == 153U || spr == 273U || spr == SPR_MMCR0) {
+        if (spr == 153U || spr == 273U || spr == SPR_MMCR0 ||
+            spr == SPR_MMCR1) {
             CHECK(read.supported && write.supported);
         } else {
             CHECK(!read.supported && !write.supported);
@@ -344,11 +345,14 @@ void testMMCRARawValuesAndCapabilityBoundary43() {
     for (uint16_t spr : {uint16_t{784}, uint16_t{787}, uint16_t{788},
                          uint16_t{789}, uint16_t{790}, uint16_t{791},
                          uint16_t{792}, uint16_t{793}, uint16_t{794},
-                         uint16_t{796}, uint16_t{797},
-                         uint16_t{798}, uint16_t{770}}) {
+                         uint16_t{796}, uint16_t{797}, uint16_t{770}}) {
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMfspr(4U, spr)).supported);
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMtspr(4U, spr)).supported);
     }
+    CHECK(PPC64ISAPlugin::decodeWord(
+              encodeMfspr(4U, SPR_MMCR1)).supported);
+    CHECK(PPC64ISAPlugin::decodeWord(
+              encodeMtspr(4U, SPR_MMCR1)).supported);
     CHECK(!PPC64ISAPlugin::decodeWord(0xFC22182AU).supported);
     CHECK(cpu->getMMCRA() == values.back());
     focusedChecks += checks - firstCheck;

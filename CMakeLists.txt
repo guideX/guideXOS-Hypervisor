@@ -1558,6 +1558,26 @@ endif()
 add_test(NAME PPC64Phase44Tests COMMAND test_ppc64_phase44)
 set_tests_properties(PPC64Phase44Tests PROPERTIES TIMEOUT 3600)
 
+# PPC64 POWER9 MMCR1 access, checkpoint v10, and authentic Linux continuation.
+add_executable(test_ppc64_phase45
+    tests/test_ppc64_phase45.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase45 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase45 PRIVATE
+    PPC64_PHASE33_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase45 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase45 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase45Tests COMMAND test_ppc64_phase45)
+set_tests_properties(PPC64Phase45Tests PROPERTIES TIMEOUT 3600)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

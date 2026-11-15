@@ -67,7 +67,15 @@ void testMMCR0DecodeAndIdentity44() {
     const auto mmcra = PPC64ISAPlugin::decodeWord(encodeMfspr(4U, SPR_MMCRA));
     CHECK(mmcra.supported && mmcra.sprn == SPR_MMCRA &&
           mmcra.sprn != SPR_MMCR0);
-    for (uint16_t spr : {uint16_t{785}, uint16_t{798}, uint16_t{190},
+    const auto mmcr1 = PPC64ISAPlugin::decodeWord(encodeMfspr(4U, SPR_MMCR1));
+    CHECK(mmcr1.supported && mmcr1.kind == DecodedKind::MFSPR &&
+          mmcr1.sprn == 798U && mmcr1.sprn != SPR_MMCR0 &&
+          mmcr1.sprn != SPR_MMCRA);
+    const auto mmcr1Write = PPC64ISAPlugin::decodeWord(
+        encodeMtspr(9U, SPR_MMCR1));
+    CHECK(mmcr1Write.supported && mmcr1Write.kind == DecodedKind::MTSPR &&
+          mmcr1Write.sprn == SPR_MMCR1 && mmcr1Write.rt == 9U);
+    for (uint16_t spr : {uint16_t{785}, uint16_t{190},
                          uint16_t{999}}) {
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMfspr(4U, spr)).supported);
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMtspr(4U, spr)).supported);
@@ -576,7 +584,7 @@ void testMMCR0PmuCapabilityBoundary44() {
     const int firstCheck = checks;
     for (uint16_t spr : {uint16_t{787}, uint16_t{788}, uint16_t{789},
                          uint16_t{790}, uint16_t{791}, uint16_t{792},
-                         uint16_t{798}, uint16_t{785}}) {
+                         uint16_t{785}}) {
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMfspr(4U, spr)).supported);
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMtspr(4U, spr)).supported);
     }
@@ -733,7 +741,7 @@ void testAuthenticLinuxMMCR0Retirement44() {
                                   second.mmcr0InterruptAfter));
     CHECK(first.totalRetired == 2'693'018ULL &&
           second.totalRetired == first.totalRetired);
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.stopClass == "phase44-authenticated-MMCR1-boundary" &&
           second.stopClass == first.stopClass);
     CHECK(first.stopNip == first.mmcr0After.nip &&
           second.stopNip == first.stopNip);
@@ -741,16 +749,19 @@ void testAuthenticLinuxMMCR0Retirement44() {
           second.stopFetchTranslated && second.stopFetchExecuteAllowed);
     CHECK(first.stopWord == 0x7D3EC3A6U &&
           first.stopWord == second.stopWord &&
-          first.stopDisassembly == "mtspr 798,r9 ; unsupported SPR" &&
+          first.stopDisassembly == "mtspr 798,r9" &&
           second.stopDisassembly == first.stopDisassembly);
     const uint16_t nextSpr = static_cast<uint16_t>(
         (((first.stopWord >> 11U) & 31U) << 5U) |
         ((first.stopWord >> 16U) & 31U));
     const auto nextDecode = PPC64ISAPlugin::decodeWord(first.stopWord);
-    CHECK(!nextDecode.supported && nextDecode.kind == DecodedKind::MTSPR &&
+    CHECK(nextDecode.supported && nextDecode.kind == DecodedKind::MTSPR &&
           nextDecode.rt == 9U && nextDecode.sprn == 798U &&
           first.stopWord != kMmcr0LinuxWord44);
     CHECK(nextSpr == 798U);
+    CHECK(first.mmcr1Fetched && !first.mmcr1Retired &&
+          first.mmcr1Nip == first.stopNip && first.mmcr1SourceValue == 0U &&
+          first.mmcr1ValueBefore == 0U && first.mmcr1LPID == 1U);
     CHECK(first.final.gpr[9] == second.final.gpr[9]);
     std::ostringstream authenticatedNext;
     authenticatedNext << hex(first.stopNip) << ": " << wordHex(first.stopWord);
@@ -803,8 +814,8 @@ void testAuthenticLinuxMMCR0Retirement44() {
          << "\nnext_source_R9=" << hex(first.final.gpr[9])
          << "\nnext_spr_independent=" << nextSpr
          << "\nstop_class=" << first.stopClass
-         << "\narchitectural_exception=none; decode-time unsupported stop before execution"
-         << "\nnext_MMCR1=unsupported; no MMCR1 state was added"
+         << "\narchitectural_exception=none; explicit historical boundary before execution"
+         << "\nnext_MMCR1=supported in PPC64-45; Phase 44 snapshot stops before execution"
          << "\nnext_MMCR2=unsupported; no MMCR2 state was added"
          << "\nLPID=" << first.stopLPID
          << "\nfinal_cr=0x" << std::hex << first.final.cr
@@ -834,9 +845,9 @@ void testAuthenticLinuxMMCR0Retirement44() {
         << "\nCR=0x" << std::hex << first.final.cr
         << "\nXER=0x" << first.final.xer << std::dec
         << "\nSPRG1=" << hex(first.final.sprg1)
-        << "\narchitectural_exception=none; decode-time unsupported stop before execution"
+        << "\narchitectural_exception=none; explicit historical boundary before execution"
         << "\nELF_attribution=__setup_cpu_power9; independently verified by ELF window"
-        << "\nMMCR1_and_MMCR2=next unsupported PMU writes; not implemented by Phase 44\n";
+        << "\nMMCR1=supported in PPC64-45; MMCR2 remains outside Phase 44\n";
     CHECK(writeText(runDirectory / "next-frontier-snapshot.txt",
                     nextFrontier.str()));
     std::ostringstream comparison;
@@ -881,7 +892,7 @@ void testAuthenticLinuxMMCR0Retirement44() {
         "K CPU v9, v1-v8 readers, full VM v7/v8/v9 restore and reset: PASS\n"
         "L independent MFSPR/MTSPR words through VirtualMachine::step(): PASS\n"
         "M authentic Linux mtspr 795,r10 retired from fresh Phase 43 prefix: PASS\n"
-        "N unchanged Linux continued to the next authentic unsupported frontier twice: PASS\n"));
+        "N unchanged Linux reached the Phase 44 historical MMCR1 boundary twice: PASS\n"));
     std::ostringstream reference;
     reference << "POWER9 PMU User's Guide v1.2 Appendix A.3 identifies MMCR0 as "
         << "the basic PMU start/stop/freeze control. Linux v7.2 reg.h defines "
@@ -911,6 +922,7 @@ void testAuthenticLinuxMMCR0Retirement44() {
 
 } // namespace
 
+#ifndef PPC64_PHASE44_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -945,3 +957,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

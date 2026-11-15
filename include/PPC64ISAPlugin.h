@@ -59,9 +59,10 @@ constexpr size_t INSN_WIDTH = 4;
 // Legacy v1/v2 restores initialize PIDR to zero. serialize_state() preserves
 // the smallest compatible layout, emits v3 for a nonzero PIDR, v4 for
 // hypervisor architectural state, v5 when DEC is armed, v6 when SPRG1 is
-// nonzero, v7 when FSCR is nonzero, v8 when MMCRA is nonzero, and v9 when
-// MMCR0 differs from the selected POWER9 profile reset value. Explicit version
-// APIs select their respective layouts; older readers remain supported.
+// nonzero, v7 when FSCR is nonzero, v8 when MMCRA is nonzero, v9 when MMCR0
+// differs from the selected POWER9 profile reset value, and v10 when MMCR1 is
+// nonzero. Explicit version APIs select their respective layouts; older
+// readers remain supported.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
@@ -83,6 +84,8 @@ constexpr uint32_t STATE_VERSION_V8 = 8;
 constexpr size_t STATE_SIZE_V8 = STATE_SIZE_V7 + 8;
 constexpr uint32_t STATE_VERSION_V9 = 9;
 constexpr size_t STATE_SIZE_V9 = STATE_SIZE_V8 + 8;
+constexpr uint32_t STATE_VERSION_V10 = 10;
+constexpr size_t STATE_SIZE_V10 = STATE_SIZE_V9 + 8;
 
 // ============================================================================
 // PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
@@ -185,9 +188,12 @@ constexpr uint16_t SPR_SPRG0 = 272;
 constexpr uint16_t SPR_SPRG1 = 273;
 constexpr uint16_t SPR_SPRG2 = 274;
 constexpr uint16_t SPR_SPRG3 = 275;
+constexpr uint16_t SPR_HFSCR = 190; // identified, not implemented in this profile
 constexpr uint16_t SPR_FSCR = 153;
 constexpr uint16_t SPR_MMCRA = 786;
 constexpr uint16_t SPR_MMCR0 = 795;
+constexpr uint16_t SPR_MMCR2 = 785; // identified, remains unsupported
+constexpr uint16_t SPR_MMCR1 = 798;
 // POWER9 MMCR0 Freeze Counters (FC), in the Linux-compatible low-word mask.
 constexpr uint64_t MMCR0_FC = 0x80000000ULL;
 constexpr uint64_t MMCR0_FCS = 0x40000000ULL;
@@ -641,6 +647,8 @@ public:
     void deserializeV8(const uint8_t* buffer);
     void serializeV9(uint8_t* buffer) const;
     void deserializeV9(const uint8_t* buffer);
+    void serializeV10(uint8_t* buffer) const;
+    void deserializeV10(const uint8_t* buffer);
     static constexpr size_t v2Size() { return STATE_SIZE_V2; }
     static constexpr size_t v3Size() { return STATE_SIZE_V3; }
     static constexpr size_t v4Size() { return STATE_SIZE_V4; }
@@ -649,6 +657,7 @@ public:
     static constexpr size_t v7Size() { return STATE_SIZE_V7; }
     static constexpr size_t v8Size() { return STATE_SIZE_V8; }
     static constexpr size_t v9Size() { return STATE_SIZE_V9; }
+    static constexpr size_t v10Size() { return STATE_SIZE_V10; }
 
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
@@ -678,6 +687,10 @@ public:
     // counting/event engine is modeled. Older checkpoints restore the profile
     // reset value below.
     uint64_t mmcr0 = MMCR0_POWER9_RESET;
+    // MMCR1 (SPR 798), per-vCPU POWER9 event-selection state. Selector bytes
+    // are stored in raw numeric bits 31:24, 23:16, 15:8, and 7:0 for PMC1-4.
+    // This profile stores and reads the full value but does not count events.
+    uint64_t mmcr1 = 0;
 };
 
 /**
@@ -760,6 +773,7 @@ public:
     uint64_t getFSCR() const { return state_.fscr; }
     uint64_t getMMCRA() const { return state_.mmcra; }
     uint64_t getMMCR0() const { return state_.mmcr0; }
+    uint64_t getMMCR1() const { return state_.mmcr1; }
     bool isMMCR0Frozen() const { return (state_.mmcr0 & MMCR0_FC) != 0; }
     void setPIDR(uint32_t value) {
         if (state_.pidr != value) {
@@ -878,6 +892,8 @@ public:
     bool deserialize_state_v8(const std::vector<uint8_t>& data);
     std::vector<uint8_t> serialize_state_v9() const;
     bool deserialize_state_v9(const std::vector<uint8_t>& data);
+    std::vector<uint8_t> serialize_state_v10() const;
+    bool deserialize_state_v10(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the
