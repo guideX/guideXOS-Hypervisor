@@ -1,5 +1,6 @@
 #include "aarch64/AArch64LinuxImage.h"
 #include "aarch64/AArch64GenericTimer.h"
+#include "aarch64/AArch64GICv3.h"
 #include "aarch64/AArch64PL011.h"
 #include "aarch64/AArch64VirtualPlatform.h"
 
@@ -372,6 +373,26 @@ std::string hex(uint64_t value, unsigned width = 0) {
     return out.str();
 }
 
+std::string gicPriorityHex(const std::array<uint8_t, 64>& priorities) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (uint8_t priority : priorities)
+        out << std::setw(2) << static_cast<unsigned>(priority);
+    return out.str();
+}
+
+std::string interruptSourceSummary(
+    const std::array<AArch64InterruptSourceState, 3>& sources) {
+    std::ostringstream out;
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        if (index != 0) out << ',';
+        out << sources[index].id << ':'
+            << (sources[index].asserted ? '1' : '0')
+            << (sources[index].pending ? '1' : '0');
+    }
+    return out.str();
+}
+
 std::string faultName(Fault fault) {
     switch (fault) {
     case Fault::None: return "None";
@@ -394,6 +415,13 @@ struct StepRecord {
     std::string disassembly;
     Fault fault = Fault::None;
     uint64_t nextPc = 0;
+    uint64_t preX0 = 0;
+    uint64_t preX2 = 0;
+    uint64_t preSpEl1 = 0;
+    uint32_t prePstate = 0;
+    uint64_t timerBefore = 0;
+    uint64_t timerAfter = 0;
+    uint64_t spEl1 = 0;
     uint64_t x0 = 0;
     uint64_t x1 = 0;
     uint64_t x2 = 0;
@@ -417,6 +445,13 @@ struct StepRecord {
             << " exception_taken=" << (exceptionTaken ? "yes" : "no")
             << " retired=" << (retired ? "yes" : "no")
             << " next_pc=" << hex(nextPc, 16)
+            << " pre_x0=" << hex(preX0, 16)
+            << " pre_x2=" << hex(preX2, 16)
+            << " pre_sp_el1=" << hex(preSpEl1, 16)
+            << " pre_pstate=" << hex(prePstate, 8)
+            << " timer_before=" << timerBefore
+            << " timer_after=" << timerAfter
+            << " sp_el1=" << hex(spEl1, 16)
             << " x0=" << hex(x0, 16)
             << " x1=" << hex(x1, 16)
             << " x2=" << hex(x2, 16)
@@ -434,6 +469,25 @@ struct ExecutionResult {
     uint64_t retired = 0;
     uint64_t finalPc = 0;
     uint64_t timerCounter = 0;
+    uint64_t gicPendingCount = 0;
+    uint64_t gicActiveCount = 0;
+    uint64_t gicEnabledCount = 0;
+    uint64_t gicPendingMask = 0;
+    uint64_t gicActiveMask = 0;
+    uint64_t gicEnabledMask = 0;
+    std::array<uint8_t, 64> gicPriorities{};
+    uint8_t gicRunningPriority = 0;
+    bool gicIrqAsserted = false;
+    uint64_t timerPhysicalComparator = 0;
+    uint64_t timerVirtualComparator = 0;
+    uint64_t timerCntkctl = 0;
+    uint32_t timerPhysicalControl = 0;
+    uint32_t timerVirtualControl = 0;
+    bool timerPhysicalCondition = false;
+    bool timerVirtualCondition = false;
+    std::array<AArch64InterruptSourceState, 3> interruptSources{};
+    std::vector<uint8_t> uartPendingTx;
+    std::vector<uint8_t> uartPendingRx;
     uint64_t sctlrEl1 = 0;
     uint64_t tcrEl1 = 0;
     uint64_t ttbr0El1 = 0;
@@ -452,6 +506,41 @@ void captureFinalSystemState(ExecutionResult& result,
     const Cpu& core = platform.cpu().cpu();
     result.finalPc = core.pc();
     result.timerCounter = platform.timer().counter();
+    result.timerPhysicalComparator = platform.timer().physicalComparator();
+    result.timerVirtualComparator = platform.timer().virtualComparator();
+    result.timerCntkctl = platform.timer().cntkctl();
+    result.timerPhysicalControl = platform.timer().physicalControl();
+    result.timerVirtualControl = platform.timer().virtualControl();
+    result.timerPhysicalCondition = platform.timer().physicalCondition();
+    result.timerVirtualCondition = platform.timer().virtualCondition();
+    result.gicIrqAsserted = platform.gic().irqOutputAsserted();
+    for (uint32_t intid = 0; intid <= AArch64GICv3::kLastSpi; ++intid) {
+        const uint64_t bit = uint64_t{1} << intid;
+        result.gicPriorities[intid] = platform.gic().priority(intid);
+        if (platform.gic().pending(intid)) {
+            ++result.gicPendingCount;
+            result.gicPendingMask |= bit;
+        }
+        if (platform.gic().active(intid)) {
+            ++result.gicActiveCount;
+            result.gicActiveMask |= bit;
+        }
+        if (platform.gic().enabled(intid)) {
+            ++result.gicEnabledCount;
+            result.gicEnabledMask |= bit;
+        }
+    }
+    result.gicRunningPriority = platform.gic().runningPriority();
+    result.uartPendingTx = platform.uart().pendingTransmitBytes();
+    result.uartPendingRx = platform.uart().pendingReceiveBytes();
+    const uint64_t sourceIds[] = {201, 202, 203};
+    for (std::size_t index = 0; index < result.interruptSources.size(); ++index) {
+        std::string error;
+        if (!platform.devices().queryInterruptSource(sourceIds[index],
+                result.interruptSources[index], &error)) {
+            throw std::runtime_error("unable to query final interrupt-source state: " + error);
+        }
+    }
     result.sctlrEl1 = core.sctlrEl1();
     result.tcrEl1 = core.tcrEl1();
     result.ttbr0El1 = core.ttbr0El1();
@@ -471,6 +560,11 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         StepRecord record;
         record.index = stepOffset + index;
         record.pc = core.pc();
+        record.preX0 = core.readX(0);
+        record.preX2 = core.readX(2);
+        record.preSpEl1 = core.spEl1();
+        record.prePstate = core.pstate();
+        record.timerBefore = platform.timer().counter();
         try {
             record.instruction = platform.ram().read<uint32_t>(record.pc);
             record.instructionWordAvailable = true;
@@ -481,6 +575,8 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         const uint64_t oldElr = core.elrEl1();
         record.fault = core.step(platform.physicalBus());
         record.nextPc = core.pc();
+        record.timerAfter = platform.timer().counter();
+        record.spEl1 = core.spEl1();
         record.x0 = core.readX(0);
         record.x1 = core.readX(1);
         record.x2 = core.readX(2);
@@ -524,6 +620,33 @@ bool sameTrace(const std::vector<StepRecord>& left,
     for (std::size_t index = 0; index < left.size(); ++index)
         if (left[index].text() != right[index].text()) return false;
     return true;
+}
+
+bool sameInterruptSources(
+    const std::array<AArch64InterruptSourceState, 3>& left,
+    const std::array<AArch64InterruptSourceState, 3>& right) {
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (left[index].id != right[index].id ||
+            left[index].ownerDeviceId != right[index].ownerDeviceId ||
+            left[index].mode != right[index].mode ||
+            left[index].asserted != right[index].asserted ||
+            left[index].pending != right[index].pending) return false;
+    }
+    return true;
+}
+
+bool authenticOldFrontierAddRetired(const std::vector<StepRecord>& trace) {
+    const auto found = std::find_if(trace.begin(), trace.end(),
+        [](const StepRecord& record) { return record.index == 36u; });
+    if (found == trace.end()) return false;
+    const StepRecord& record = *found;
+    return record.index == 36u && record.pc == 0x36A6Cu &&
+        record.instructionWordAvailable && record.instruction == 0x8B020000u &&
+        record.disassembly == "add x0, x0, x2" && record.fault == Fault::None &&
+        !record.exceptionTaken && record.retired && record.nextPc == 0x36A70u &&
+        record.x0 == record.preX0 + record.preX2 && record.x2 == record.preX2 &&
+        record.pstate == record.prePstate && record.spEl1 == record.preSpEl1 &&
+        record.timerAfter == record.timerBefore + 1u;
 }
 
 void writeText(const std::filesystem::path& path, const std::string& contents) {
@@ -589,7 +712,7 @@ std::string formatTrace(const std::vector<StepRecord>& trace) {
 
 int runFrontier(const std::filesystem::path& imagePath,
                 const std::filesystem::path& outputDirectory,
-                uint64_t maximumAttempts) {
+                uint64_t maximumAttempts, bool captureFreshCheckpoint = true) {
     const std::vector<uint8_t> image = readFile(imagePath);
     AArch64LinuxImageInfo info;
     std::string error;
@@ -702,7 +825,7 @@ int runFrontier(const std::filesystem::path& imagePath,
         const bool safeCheckpoint = allowSnapshot && prefixCount == 32 &&
             current.status == "instruction budget frontier" &&
             current.trace.size() == 32 && current.retired == 32;
-        if (safeCheckpoint) {
+        if (safeCheckpoint && captureFreshCheckpoint) {
             snapshotReached = true;
             const uint64_t checkpointPc = platform.cpu().cpu().pc();
             std::vector<uint8_t> snapshot;
@@ -743,6 +866,26 @@ int runFrontier(const std::filesystem::path& imagePath,
                         continuation.vbarEl1 == replay.vbarEl1 &&
                         continuation.elrEl1 == replay.elrEl1 &&
                         continuation.spsrEl1 == replay.spsrEl1 &&
+                        continuation.gicPendingCount == replay.gicPendingCount &&
+                        continuation.gicActiveCount == replay.gicActiveCount &&
+                        continuation.gicEnabledCount == replay.gicEnabledCount &&
+                        continuation.gicPendingMask == replay.gicPendingMask &&
+                        continuation.gicActiveMask == replay.gicActiveMask &&
+                        continuation.gicEnabledMask == replay.gicEnabledMask &&
+                        continuation.gicPriorities == replay.gicPriorities &&
+                        continuation.gicRunningPriority == replay.gicRunningPriority &&
+                        continuation.gicIrqAsserted == replay.gicIrqAsserted &&
+                        continuation.timerPhysicalComparator == replay.timerPhysicalComparator &&
+                        continuation.timerVirtualComparator == replay.timerVirtualComparator &&
+                        continuation.timerCntkctl == replay.timerCntkctl &&
+                        continuation.timerPhysicalControl == replay.timerPhysicalControl &&
+                        continuation.timerVirtualControl == replay.timerVirtualControl &&
+                        continuation.timerPhysicalCondition == replay.timerPhysicalCondition &&
+                        continuation.timerVirtualCondition == replay.timerVirtualCondition &&
+                        sameInterruptSources(continuation.interruptSources,
+                                             replay.interruptSources) &&
+                        continuation.uartPendingTx == replay.uartPendingTx &&
+                        continuation.uartPendingRx == replay.uartPendingRx &&
                         continuation.uart == replay.uart &&
                         platform.cpu().serialize_state() == restored.cpu().serialize_state() &&
                         platform.timer().counter() == restored.timer().counter();
@@ -773,6 +916,8 @@ int runFrontier(const std::filesystem::path& imagePath,
                     "\ncheckpoint_retired_instructions: 32\ncapture: failed\n" +
                     "diagnostic: " + snapshotError + "\n";
             }
+        } else if (safeCheckpoint) {
+            snapshotReached = true;
         }
         if (current.status == "instruction budget frontier" &&
             collected.size() < maximumAttempts) {
@@ -800,6 +945,8 @@ int runFrontier(const std::filesystem::path& imagePath,
     bool ignoredSnapshotQualified = false;
     ExecutionResult run2 = runFresh(false, run2Trace, ignoredSnapshotText,
                                     ignoredSnapshotQualified);
+    const bool authenticAddRun1 = authenticOldFrontierAddRetired(run1Trace);
+    const bool authenticAddRun2 = authenticOldFrontierAddRetired(run2Trace);
 
     const bool reproducible = sameTrace(run1Trace, run2Trace) &&
         run1.finalPc == run2.finalPc && run1.status == run2.status &&
@@ -808,13 +955,58 @@ int runFrontier(const std::filesystem::path& imagePath,
         run1.sctlrEl1 == run2.sctlrEl1 && run1.tcrEl1 == run2.tcrEl1 &&
         run1.ttbr0El1 == run2.ttbr0El1 && run1.ttbr1El1 == run2.ttbr1El1 &&
         run1.mairEl1 == run2.mairEl1 && run1.vbarEl1 == run2.vbarEl1 &&
-        run1.elrEl1 == run2.elrEl1 && run1.spsrEl1 == run2.spsrEl1;
+        run1.elrEl1 == run2.elrEl1 && run1.spsrEl1 == run2.spsrEl1 &&
+        run1.gicPendingCount == run2.gicPendingCount &&
+        run1.gicActiveCount == run2.gicActiveCount &&
+        run1.gicEnabledCount == run2.gicEnabledCount &&
+        run1.gicPendingMask == run2.gicPendingMask &&
+        run1.gicActiveMask == run2.gicActiveMask &&
+        run1.gicEnabledMask == run2.gicEnabledMask &&
+        run1.gicPriorities == run2.gicPriorities &&
+        run1.gicRunningPriority == run2.gicRunningPriority &&
+        run1.gicIrqAsserted == run2.gicIrqAsserted &&
+        run1.timerPhysicalComparator == run2.timerPhysicalComparator &&
+        run1.timerVirtualComparator == run2.timerVirtualComparator &&
+        run1.timerCntkctl == run2.timerCntkctl &&
+        run1.timerPhysicalControl == run2.timerPhysicalControl &&
+        run1.timerVirtualControl == run2.timerVirtualControl &&
+        run1.timerPhysicalCondition == run2.timerPhysicalCondition &&
+        run1.timerVirtualCondition == run2.timerVirtualCondition &&
+        sameInterruptSources(run1.interruptSources, run2.interruptSources) &&
+        run1.uartPendingTx == run2.uartPendingTx &&
+        run1.uartPendingRx == run2.uartPendingRx;
     std::ostringstream run1File;
     run1File << "status: " << run1.status << '\n'
              << "retired_instructions: " << run1.retired << '\n'
              << "attempted_steps: " << run1Trace.size() << '\n'
              << "final_pc: " << hex(run1.finalPc, 16) << '\n'
              << "timer_counter: " << run1.timerCounter << '\n'
+             << "authentic_ADD_at_0x36A6C_retired_correctly: "
+             << (authenticAddRun1 ? "PASS" : "FAIL") << '\n'
+             << "GIC_pending/active/enabled: " << run1.gicPendingCount << "/"
+             << run1.gicActiveCount << "/" << run1.gicEnabledCount << '\n'
+             << "GIC_pending/active/enabled_masks: "
+             << hex(run1.gicPendingMask, 16) << "/"
+             << hex(run1.gicActiveMask, 16) << "/"
+             << hex(run1.gicEnabledMask, 16) << '\n'
+             << "GIC_running_priority: " << hex(run1.gicRunningPriority, 2) << '\n'
+             << "GIC_priorities_intid_0_to_63: "
+             << gicPriorityHex(run1.gicPriorities) << '\n'
+             << "GIC_IRQ_asserted: " << (run1.gicIrqAsserted ? "yes" : "no") << '\n'
+             << "timer_comparators_P/V: "
+             << hex(run1.timerPhysicalComparator, 16) << "/"
+             << hex(run1.timerVirtualComparator, 16) << '\n'
+             << "timer_control_P/V: " << hex(run1.timerPhysicalControl, 8)
+             << "/" << hex(run1.timerVirtualControl, 8) << '\n'
+             << "timer_CNTKCTL_EL1: " << hex(run1.timerCntkctl, 16) << '\n'
+             << "timer_condition_P/V: "
+             << (run1.timerPhysicalCondition ? "1" : "0")
+             << "/" << (run1.timerVirtualCondition ? "1" : "0") << '\n'
+             << "interrupt_sources_id:asserted-pending: "
+             << interruptSourceSummary(run1.interruptSources) << '\n'
+             << "PL011_output_bytes: " << run1.uart.size() << '\n'
+             << "PL011_pending_tx/rx_bytes: " << run1.uartPendingTx.size() << "/"
+             << run1.uartPendingRx.size() << '\n'
              << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << '\n'
              << "SCTLR_EL1: " << hex(run1.sctlrEl1, 16) << '\n'
              << "TCR_EL1: " << hex(run1.tcrEl1, 16) << '\n'
@@ -833,6 +1025,32 @@ int runFrontier(const std::filesystem::path& imagePath,
              << "attempted_steps: " << run2Trace.size() << '\n'
              << "final_pc: " << hex(run2.finalPc, 16) << '\n'
              << "timer_counter: " << run2.timerCounter << '\n'
+             << "authentic_ADD_at_0x36A6C_retired_correctly: "
+             << (authenticAddRun2 ? "PASS" : "FAIL") << '\n'
+             << "GIC_pending/active/enabled: " << run2.gicPendingCount << "/"
+             << run2.gicActiveCount << "/" << run2.gicEnabledCount << '\n'
+             << "GIC_pending/active/enabled_masks: "
+             << hex(run2.gicPendingMask, 16) << "/"
+             << hex(run2.gicActiveMask, 16) << "/"
+             << hex(run2.gicEnabledMask, 16) << '\n'
+             << "GIC_running_priority: " << hex(run2.gicRunningPriority, 2) << '\n'
+             << "GIC_priorities_intid_0_to_63: "
+             << gicPriorityHex(run2.gicPriorities) << '\n'
+             << "GIC_IRQ_asserted: " << (run2.gicIrqAsserted ? "yes" : "no") << '\n'
+             << "timer_comparators_P/V: "
+             << hex(run2.timerPhysicalComparator, 16) << "/"
+             << hex(run2.timerVirtualComparator, 16) << '\n'
+             << "timer_control_P/V: " << hex(run2.timerPhysicalControl, 8)
+             << "/" << hex(run2.timerVirtualControl, 8) << '\n'
+             << "timer_CNTKCTL_EL1: " << hex(run2.timerCntkctl, 16) << '\n'
+             << "timer_condition_P/V: "
+             << (run2.timerPhysicalCondition ? "1" : "0")
+             << "/" << (run2.timerVirtualCondition ? "1" : "0") << '\n'
+             << "interrupt_sources_id:asserted-pending: "
+             << interruptSourceSummary(run2.interruptSources) << '\n'
+             << "PL011_output_bytes: " << run2.uart.size() << '\n'
+             << "PL011_pending_tx/rx_bytes: " << run2.uartPendingTx.size() << "/"
+             << run2.uartPendingRx.size() << '\n'
              << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << '\n'
              << "SCTLR_EL1: " << hex(run2.sctlrEl1, 16) << '\n'
              << "TCR_EL1: " << hex(run2.tcrEl1, 16) << '\n'
@@ -863,6 +1081,8 @@ int runFrontier(const std::filesystem::path& imagePath,
             << "Run 2: " << run2.status << ", retired=" << run2.retired
             << ", attempts=" << run2Trace.size() << ", final_pc=" << hex(run2.finalPc, 16) << ".\n"
             << "Fresh-run trace reproducibility: " << (reproducible ? "PASS" : "FAIL") << "\n"
+            << "Authentic ADD operands/result/flags/SP/PC/timer: "
+            << ((authenticAddRun1 && authenticAddRun2) ? "PASS" : "FAIL") << "\n"
             << "Timer counter at frontier: " << run1.timerCounter << "\n"
             << "CTR_EL0: " << hex(Cpu::kCtrEl0Value, 16) << "\n"
             << "SCTLR_EL1/TCR_EL1/TTBR0_EL1/TTBR1_EL1/MAIR_EL1: "
@@ -871,8 +1091,12 @@ int runFrontier(const std::filesystem::path& imagePath,
             << hex(run1.mairEl1, 16) << "\n"
             << "Attempt budget per fresh run: " << maximumAttempts << "\n"
             << "32-retirement snapshot boundary reached: " << (snapshotReached ? "yes" : "no") << "\n"
-            << "Live snapshot capture and independent replay: "
-            << (snapshotReached ? (snapshotQualified ? "PASS" : "FAIL") : "not reached") << "\n"
+            << "Fresh live snapshot capture and replay: "
+            << (captureFreshCheckpoint
+                    ? (snapshotReached ? (snapshotQualified ? "PASS" : "FAIL")
+                                       : "not reached")
+                    : "skipped; accepted historical checkpoint replay is separate")
+            << "\n"
             << "Run 1 diagnostic: " << run1.diagnostic << "\n"
             << "Run 2 diagnostic: " << run2.diagnostic << "\n"
             << "UART bytes: " << run1.uart.size() << "\n"
@@ -880,7 +1104,8 @@ int runFrontier(const std::filesystem::path& imagePath,
     writeText(outputDirectory / "execution-summary.txt", summary.str());
 
     std::cout << summary.str();
-    return reproducible && (!snapshotReached || snapshotQualified) ? 0 : 2;
+    return reproducible && authenticAddRun1 && authenticAddRun2 &&
+        (!captureFreshCheckpoint || !snapshotReached || snapshotQualified) ? 0 : 2;
 }
 
 int runCheckpointResume(const std::filesystem::path& imagePath,
@@ -916,6 +1141,7 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
         throw std::runtime_error("restored checkpoint did not match the accepted PC/retirement/EL baseline");
     }
     const ExecutionResult result = executeBounded(platform, maximumAttempts, 32);
+    const bool authenticAddRetired = authenticOldFrontierAddRetired(result.trace);
     writeText(outputDirectory / "checkpoint-trace.txt", formatTrace(result.trace));
     std::ostringstream frontier;
     frontier << "status: " << result.status << '\n'
@@ -926,6 +1152,37 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
              << "final_pc: " << hex(result.finalPc, 16) << '\n'
              << "timer_counter: " << result.timerCounter << '\n'
              << "X0: " << hex(restoredCore.readX(0), 16) << '\n'
+             << "X2: " << hex(restoredCore.readX(2), 16) << '\n'
+             << "SP_EL1: " << hex(restoredCore.spEl1(), 16) << '\n'
+             << "PSTATE: " << hex(restoredCore.pstate(), 8) << '\n'
+             << "GIC_pending/active/enabled: " << result.gicPendingCount << "/"
+             << result.gicActiveCount << "/" << result.gicEnabledCount << '\n'
+             << "GIC_pending/active/enabled_masks: "
+             << hex(result.gicPendingMask, 16) << "/"
+             << hex(result.gicActiveMask, 16) << "/"
+             << hex(result.gicEnabledMask, 16) << '\n'
+             << "GIC_running_priority: " << hex(result.gicRunningPriority, 2) << '\n'
+             << "GIC_priorities_intid_0_to_63: "
+             << gicPriorityHex(result.gicPriorities) << '\n'
+             << "GIC_IRQ_asserted: " << (result.gicIrqAsserted ? "yes" : "no") << '\n'
+             << "timer_comparators_P/V: "
+             << hex(result.timerPhysicalComparator, 16) << "/"
+             << hex(result.timerVirtualComparator, 16) << '\n'
+             << "timer_control_P/V: " << hex(result.timerPhysicalControl, 8)
+             << "/" << hex(result.timerVirtualControl, 8) << '\n'
+             << "timer_CNTKCTL_EL1: " << hex(result.timerCntkctl, 16) << '\n'
+             << "timer_condition_P/V: "
+             << (result.timerPhysicalCondition ? "1" : "0")
+             << "/" << (result.timerVirtualCondition ? "1" : "0") << '\n'
+             << "interrupt_sources_id:asserted-pending: "
+             << interruptSourceSummary(result.interruptSources) << '\n'
+             << "PL011_output_bytes: " << result.uart.size() << '\n'
+             << "PL011_pending_tx/rx_bytes: " << result.uartPendingTx.size() << "/"
+             << result.uartPendingRx.size() << '\n'
+             << "frontier_pre_X0: " << hex(result.trace.back().preX0, 16) << '\n'
+             << "frontier_pre_X2: " << hex(result.trace.back().preX2, 16) << '\n'
+             << "authentic_ADD_at_0x36A6C_retired_correctly: "
+             << (authenticAddRetired ? "PASS" : "FAIL") << '\n'
              << "ESR_EL1: " << hex(result.trace.back().esr, 16) << '\n'
              << "FAR_EL1: " << hex(result.trace.back().far, 16) << '\n'
              << "diagnostic: " << result.diagnostic << '\n';
@@ -946,10 +1203,35 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
            << "continuation_attempts: " << result.trace.size() << '\n'
            << "continuation_final_pc: " << hex(result.finalPc, 16) << '\n'
            << "continuation_timer_counter: " << result.timerCounter << '\n'
-           << "UART_bytes: " << result.uart.size() << '\n';
+           << "authentic_ADD_at_0x36A6C_retired_correctly: "
+           << (authenticAddRetired ? "PASS" : "FAIL") << '\n'
+           << "GIC_pending/active/enabled: " << result.gicPendingCount << "/"
+           << result.gicActiveCount << "/" << result.gicEnabledCount << '\n'
+           << "GIC_pending/active/enabled_masks: "
+           << hex(result.gicPendingMask, 16) << "/"
+           << hex(result.gicActiveMask, 16) << "/"
+           << hex(result.gicEnabledMask, 16) << '\n'
+           << "GIC_running_priority: " << hex(result.gicRunningPriority, 2) << '\n'
+           << "GIC_priorities_intid_0_to_63: "
+           << gicPriorityHex(result.gicPriorities) << '\n'
+           << "GIC_IRQ_asserted: " << (result.gicIrqAsserted ? "yes" : "no") << '\n'
+           << "timer_comparators_P/V: "
+           << hex(result.timerPhysicalComparator, 16) << "/"
+           << hex(result.timerVirtualComparator, 16) << '\n'
+           << "timer_control_P/V: " << hex(result.timerPhysicalControl, 8)
+           << "/" << hex(result.timerVirtualControl, 8) << '\n'
+           << "timer_CNTKCTL_EL1: " << hex(result.timerCntkctl, 16) << '\n'
+           << "timer_condition_P/V: "
+           << (result.timerPhysicalCondition ? "1" : "0")
+           << "/" << (result.timerVirtualCondition ? "1" : "0") << '\n'
+           << "interrupt_sources_id:asserted-pending: "
+           << interruptSourceSummary(result.interruptSources) << '\n'
+           << "PL011_output_bytes: " << result.uart.size() << '\n'
+           << "PL011_pending_tx/rx_bytes: " << result.uartPendingTx.size() << "/"
+           << result.uartPendingRx.size() << '\n';
     writeText(outputDirectory / "checkpoint-replay.txt", report.str());
     std::cout << report.str();
-    return 0;
+    return authenticAddRetired ? 0 : 2;
 }
 
 } // namespace
@@ -974,6 +1256,21 @@ int main(int argc, char** argv) {
             }
             return runFrontier(argv[2], argv[3], maximumAttempts);
         }
+        if ((argc == 4 || argc == 5) &&
+            std::string(argv[1]) == "--frontier-no-snapshot") {
+            uint64_t maximumAttempts = 64;
+            if (argc == 5) {
+                std::size_t consumed = 0;
+                maximumAttempts = std::stoull(argv[4], &consumed, 10);
+                if (consumed != std::string(argv[4]).size() ||
+                    (maximumAttempts != 64 && maximumAttempts != 1024 &&
+                     maximumAttempts != 16384)) {
+                    std::cerr << "frontier attempt budget must be 64, 1024, or 16384\n";
+                    return 2;
+                }
+            }
+            return runFrontier(argv[2], argv[3], maximumAttempts, false);
+        }
         if ((argc == 5 || argc == 6) && std::string(argv[1]) == "--resume") {
             uint64_t maximumAttempts = 64;
             if (argc == 6) {
@@ -989,6 +1286,7 @@ int main(int argc, char** argv) {
             return runCheckpointResume(argv[2], argv[3], argv[4], maximumAttempts);
         }
         std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory [64|1024|16384]]\n"
+                     "       test_aarch64_linux_boot --frontier-no-snapshot Image output-directory [64|1024|16384]\n"
                      "       test_aarch64_linux_boot --resume Image snapshot output-directory [64|1024|16384]\n";
         return 2;
     } catch (const std::exception& exception) {

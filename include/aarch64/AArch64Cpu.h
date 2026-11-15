@@ -192,6 +192,7 @@ enum class Op {
     EorImm,   // EOR (immediate): bitmask immediate
     AndsImm,  // ANDS (immediate): bitmask immediate (TST alias when Rd==31)
     LogicalReg, // Logical shifted-register AND/ORR/EOR/ANDS family
+    AddSubShifted, // ADD/ADDS/SUB/SUBS (shifted register)
     VariableShift, // LSLV/LSRV/ASRV/RORV (register shift amount, modulo width)
     Ubfm,     // UBFM and its unsigned extract/shift aliases
     Csel,     // CSEL: conditional select
@@ -226,7 +227,7 @@ struct Decoded {
     uint8_t hw = 0;            // MOVZ/MOVK halfword selector 0..3
     uint16_t imm16 = 0;        // MOVZ/MOVK 16-bit immediate
     uint16_t imm12 = 0;        // ADD/SUB/LDR/STR 12-bit immediate
-    uint8_t shift = 0;         // ADD/SUB shift amount (0 or 12); MOVZ/MOVK pos = hw*16
+    uint8_t shift = 0;         // Immediate shift (ADD/SUB, imm6); MOVZ/MOVK pos = hw*16
     int64_t branchOffset = 0;  // B/BL/CBZ/CBNZ/B.cond signed byte offset (scaled by 4)
     uint64_t memOffset = 0;    // LDR/STR scaled unsigned byte offset (imm12 << 2 or 3)
     uint8_t accessBytes = 4;   // byte width for scalar GPR LDR/STR transfers
@@ -246,6 +247,8 @@ struct Decoded {
     uint64_t logicalImm = 0;   // decoded bitmask immediate
     uint8_t logicalOpcode = 0; // Shifted-register opc: AND/ORR/EOR/ANDS
     uint8_t logicalShift = 0;  // Logical shifted-register shift type: LSL/LSR/ASR/ROR
+    uint8_t addSubShift = 0;   // ADD/SUB shifted-register shift type: LSL/LSR/ASR
+    bool addSubSubtract = false; // ADD/SUB shifted-register operation selector
     uint8_t variableShift = 0; // LSLV/LSRV/ASRV/RORV selector (bits[11:10])
     bool invertRm = false;     // Logical shifted-register N bit (BIC/ORN/EON/BICS)
     bool setsFlags = false;    // ANDS/TST (sets N,Z; clears C,V)

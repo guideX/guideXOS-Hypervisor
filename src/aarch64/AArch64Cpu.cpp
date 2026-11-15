@@ -937,6 +937,66 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         return d;
     }
 
+    // Add/subtract shifted register: sf[31] op[30] S[29] 01011 shift[23:22]
+    // 0[21] Rm[20:16] imm6[15:10] Rn[9:5] Rd[4:0]. Register 31 is XZR/WZR
+    // in all three register positions. Shift 11 and W-form imm6[5] are
+    // reserved. This bit-21 check keeps the neighboring extended-register
+    // class disjoint.
+    if ((word & 0x1F200000u) == 0x0B000000u) {
+        const bool sf = (word & 0x80000000u) != 0;
+        const uint32_t shiftType = (word >> 22) & 3u;
+        const uint32_t amount = (word >> 10) & 0x3Fu;
+        if ((!sf && (amount & 0x20u) != 0) || shiftType == 3u) {
+            return invalid(word, address, Fault::UnallocatedEncoding,
+                           "add/sub shifted-register encoding has a reserved shift amount or type");
+        }
+        Decoded d;
+        d.op = Op::AddSubShifted;
+        d.valid = true;
+        d.sf64 = sf;
+        d.word = word;
+        d.address = address;
+        d.rd = static_cast<uint8_t>(word & 31u);
+        d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+        d.rm = static_cast<uint8_t>((word >> 16) & 31u);
+        d.shift = static_cast<uint8_t>(amount);
+        d.addSubShift = static_cast<uint8_t>(shiftType);
+        d.addSubSubtract = (word & 0x40000000u) != 0;
+        d.setsFlags = (word & 0x20000000u) != 0;
+
+        const std::string rdName = regName(sf, d.rd);
+        const std::string rnName = regName(sf, d.rn);
+        const std::string rmName = regName(sf, d.rm);
+        static constexpr const char* kShiftNames[] = {"lsl", "lsr", "asr"};
+        std::string shiftedRm = rmName;
+        if (d.addSubShift != 0u || d.shift != 0u) {
+            shiftedRm += ", ";
+            shiftedRm += kShiftNames[d.addSubShift];
+            shiftedRm += " #";
+            shiftedRm += std::to_string(d.shift);
+        }
+        if (d.setsFlags && d.rd == 31u) {
+            // SUBS/ADDS with Rd==31 are the CMP/CMN aliases.
+            d.disassembly = (d.addSubSubtract ? "cmp " : "cmn ") +
+                            rnName + ", " + shiftedRm;
+        } else if (d.addSubSubtract && d.rn == 31u) {
+            // Rn==31 is XZR here, so SUB/SUBS use NEG/NEGS aliases.
+            d.disassembly = (d.setsFlags ? "negs " : "neg ") +
+                            rdName + ", " + shiftedRm;
+        } else {
+            const char* mnemonic = d.addSubSubtract
+                ? (d.setsFlags ? "subs " : "sub ")
+                : (d.setsFlags ? "adds " : "add ");
+            d.disassembly = std::string(mnemonic) + rdName + ", " +
+                            rnName + ", " + shiftedRm;
+        }
+        return d;
+    }
+    if ((word & 0x1F200000u) == 0x0B200000u) {
+        return invalid(word, address, Fault::UnsupportedFeature,
+                       "ADD/SUB extended-register operations are outside the implemented subset");
+    }
+
     // LDR (literal, general-purpose integer): opc[31:30] 011000
     // imm19[23:5] Rt[4:0]. opc 00 (0x18 family) = LDR Wt, opc 01 (0x58
     // family) = LDR Xt. opc 10 is LDRSW, opc 11 is PRFM, and the
@@ -2837,6 +2897,54 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
             // ADDS/SUBS to XZR/WZR: result discarded, flags still updated.
         }
         setNzcv(flags.n, flags.z, flags.c, flags.v);
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::AddSubShifted: {
+        const unsigned width = decoded.sf64 ? 64u : 32u;
+        if (decoded.addSubShift > 2u || decoded.shift >= width) {
+            lastFault_ = Fault::UnallocatedEncoding;
+            lastError_ = "add/sub shifted-register has an invalid shift selector or amount";
+            return lastFault_;
+        }
+        const uint64_t widthMask = decoded.sf64 ? UINT64_MAX : 0xFFFFFFFFULL;
+        // Every source is read before Rd is written. Register 31 is XZR/WZR
+        // for this instruction class and never denotes SP.
+        const uint64_t operand1 = decoded.rn == 31u
+            ? 0 : (x_[decoded.rn] & widthMask);
+        const uint64_t source2 = decoded.rm == 31u
+            ? 0 : (x_[decoded.rm] & widthMask);
+        const unsigned amount = decoded.shift;
+        uint64_t operand2 = source2;
+        switch (decoded.addSubShift) {
+        case 0: // LSL: unsigned arithmetic gives defined modulo-width truncation.
+            operand2 = (source2 << amount) & widthMask;
+            break;
+        case 1: // LSR: zero-fill from the left.
+            operand2 = source2 >> amount;
+            break;
+        case 2: // ASR: sign-fill from the selected W/X operand width.
+            operand2 = source2 >> amount;
+            if (amount != 0u &&
+                (source2 & (uint64_t{1} << (decoded.sf64 ? 63u : 31u))) != 0) {
+                operand2 |= widthMask ^ (widthMask >> amount);
+            }
+            break;
+        default:
+            lastFault_ = Fault::UnallocatedEncoding;
+            lastError_ = "add/sub shifted-register has a reserved shift type";
+            return lastFault_;
+        }
+        operand2 &= widthMask;
+        const AddSubFlags arithmetic = decoded.addSubSubtract
+            ? subFlags(decoded.sf64, operand1, operand2)
+            : addFlags(decoded.sf64, operand1, operand2);
+        if (decoded.rd != 31u) {
+            x_[decoded.rd] = arithmetic.result;
+        }
+        if (decoded.setsFlags) {
+            setNzcv(arithmetic.n, arithmetic.z, arithmetic.c, arithmetic.v);
+        }
         pc_ += kInstructionSize;
         break;
     }
