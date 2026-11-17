@@ -1907,6 +1907,13 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
                 instr.oe = false;
                 instr.kind = DecodedKind::EXTSW;
                 instr.supported = instr.rb == 0;
+            } else if (combined == XO_CNTLZD) {
+                // CNTLZD uses the X-form field diagram's non-operand ///
+                // field. It does not name RB, and POWER9/QEMU decode that
+                // field without constraining its bit pattern.
+                instr.oe = false;
+                instr.kind = DecodedKind::CNTLZD;
+                instr.supported = true;
             } else if (combined == XO_CMP && !rc) {
                 // cmp: reserved ISA bit 9 (word bit 22) must be zero.
                 if (((word >> 22) & 0x1U) != 0) {
@@ -2243,6 +2250,11 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (!instr.supported) {
                 out << " ; invalid reserved field";
             }
+            break;
+        case DecodedKind::CNTLZD:
+            out << "cntlzd" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt);
             break;
         case DecodedKind::ANDI_DOT:
             out << "andi. r" << static_cast<int>(instr.ra)
@@ -4102,6 +4114,28 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const uint64_t result = (word & 0x80000000ULL) != 0
                 ? word | 0xFFFFFFFF00000000ULL
                 : word;
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::CNTLZD: {
+            // Snapshot RS before writing RA so source/destination aliasing
+            // uses the original value. The explicit zero case gives the
+            // architectural result 64 without relying on host builtin rules.
+            const uint64_t source = state_.gpr[instr.rt];
+            uint64_t result = 0;
+            if (source == 0U) {
+                result = 64U;
+            } else {
+                uint64_t leadingMask = uint64_t{1} << 63U;
+                while ((source & leadingMask) == 0U) {
+                    ++result;
+                    leadingMask >>= 1U;
+                }
+            }
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);

@@ -611,11 +611,13 @@ void testAuthenticLinuxMMCR2RetirementAndContinuation46() {
     // 1,024, 16,384, then 65,536 additional retirements, unless Linux reaches
     // a genuine unsupported operation or architectural stop earlier.
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 0U, false, false, true, false, 0U,
-        kPower9SetupEntry43, true, true, false, true, true);
+        false, false, 0U, false, false, true, false,
+        0xC0000000013B2C18ULL, kPower9SetupEntry43,
+        true, true, false, true, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 0U, false, false, true, false, 0U,
-        kPower9SetupEntry43, true, true, false, true, true);
+        false, false, 0U, false, false, true, false,
+        0xC0000000013B2C18ULL, kPower9SetupEntry43,
+        true, true, false, true, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
     CHECK(first.hvBranchTaken && second.hvBranchTaken);
@@ -728,9 +730,10 @@ void testAuthenticLinuxMMCR2RetirementAndContinuation46() {
     CHECK(first.stopNip == 0xC0000000013B2C18ULL &&
           second.stopNip == first.stopNip);
     CHECK(independentCntlzd &&
-          !PPC64ISAPlugin::decodeWord(frontierWord).supported &&
-          first.stopFault.category == PPC64FaultCategory::INVALID_INSTRUCTION &&
-          !first.stopFault.resumable);
+          PPC64ISAPlugin::decodeWord(frontierWord).supported &&
+          PPC64ISAPlugin::decodeWord(frontierWord).kind ==
+              DecodedKind::CNTLZD &&
+          first.stopClass == "explicit-authentic-frontier");
     CHECK(sameRegisters(first.final, second.final));
     CHECK(first.finalRam == second.finalRam &&
           first.traceDigest == second.traceDigest &&
@@ -850,7 +853,7 @@ void testAuthenticLinuxMMCR2RetirementAndContinuation46() {
     CHECK(writeText(runDirectory / "two-run-comparison.txt",
                     comparison.str()));
     std::ostringstream nextState;
-    nextState << "classification=unsupported-instruction decode-time stop\n"
+    nextState << "classification=explicit-authentic-frontier-before-phase47-execution\n"
         << "guest_exception_delivered=false\n"
         << "NIP=" << hex(first.stopNip)
         << "\nraw=" << wordHex(first.stopWord)
@@ -895,6 +898,7 @@ void testAuthenticLinuxMMCR2RetirementAndContinuation46() {
 
 } // namespace
 
+#ifndef PPC64_PHASE46_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -932,3 +936,4 @@ int main() {
     (void)firstCheck;
     return failures == 0 ? 0 : 1;
 }
+#endif

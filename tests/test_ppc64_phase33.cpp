@@ -886,6 +886,8 @@ struct AuthenticReplay {
     bool srdRetired = false;
     bool subficFetched = false;
     bool subficRetired = false;
+    bool cntlzdFetched = false;
+    bool cntlzdRetired = false;
     bool mtocrfFetched = false;
     bool mtocrfRetired = false;
     bool negFetched = false;
@@ -926,6 +928,14 @@ struct AuthenticReplay {
     uint64_t subficTimebaseAfter = 0;
     uint64_t subficRamBefore = 0;
     uint64_t subficRamAfter = 0;
+    uint64_t cntlzdNip = 0;
+    uint64_t cntlzdCyclesBefore = 0;
+    uint64_t cntlzdCyclesAfter = 0;
+    uint64_t cntlzdTimebaseBefore = 0;
+    uint64_t cntlzdTimebaseAfter = 0;
+    uint64_t cntlzdRamBefore = 0;
+    uint64_t cntlzdRamAfter = 0;
+    uint64_t cntlzdTotalRetired = 0;
     uint64_t mtocrfCyclesBefore = 0;
     uint64_t mtocrfCyclesAfter = 0;
     uint64_t mtocrfTimebaseBefore = 0;
@@ -953,6 +963,7 @@ struct AuthenticReplay {
     bool mtocrfFirstBranchCaptured = false;
     bool mtocrfFirstBranchTaken = false;
     uint16_t subficLPID = 0;
+    uint16_t cntlzdLPID = 0;
     uint64_t subficRetiredAtContinuation = 0;
     uint16_t stopLPID = 0;
     uint64_t sldCyclesBefore = 0;
@@ -997,6 +1008,7 @@ struct AuthenticReplay {
     uint32_t sldRawWord = 0;
     uint32_t srdRawWord = 0;
     uint32_t subficRawWord = 0;
+    uint32_t cntlzdRawWord = 0;
     uint32_t mtocrfRawWord = 0;
     uint32_t negRawWord = 0;
     uint32_t negAlignmentRawWord = 0;
@@ -1183,6 +1195,8 @@ struct AuthenticReplay {
     PPC64RegisterView srdAfter{};
     PPC64RegisterView subficBefore{};
     PPC64RegisterView subficAfter{};
+    PPC64RegisterView cntlzdBefore{};
+    PPC64RegisterView cntlzdAfter{};
     PPC64RegisterView mtocrfBefore{};
     PPC64RegisterView mtocrfAfter{};
     PPC64RegisterView negBefore{};
@@ -1211,6 +1225,12 @@ struct AuthenticReplay {
     PPC64VirtualInterruptSnapshot mmcr1InterruptAfter{};
     PPC64VirtualInterruptSnapshot mmcr2InterruptBefore{};
     PPC64VirtualInterruptSnapshot mmcr2InterruptAfter{};
+    PPC64VirtualInterruptSnapshot cntlzdInterruptBefore{};
+    PPC64VirtualInterruptSnapshot cntlzdInterruptAfter{};
+    std::string cntlzdDecode;
+    std::string cntlzdTraceLine;
+    std::vector<std::string> cntlzdPrecedingInstructions;
+    std::vector<std::string> cntlzdFollowingInstructions;
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -2030,6 +2050,37 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             if (following.kind == DecodedKind::MFSPR && following.sprn == SPR_SPRG1) {
                 ++result.sprg1Reads;
             }
+            if (following.kind == DecodedKind::CNTLZD &&
+                !result.cntlzdFetched) {
+                result.cntlzdFetched = true;
+                result.cntlzdNip = before.nip;
+                result.cntlzdRawWord = following.raw;
+                result.cntlzdDecode = next.disassembly;
+                result.cntlzdBefore = before;
+                result.cntlzdLPID = cpu->getActiveLPID();
+                result.cntlzdCyclesBefore = vm.getCyclesExecuted();
+                result.cntlzdTimebaseBefore = vm.getPPC64Timebase();
+                result.cntlzdRamBefore = fingerprintRam(*memory);
+                result.cntlzdInterruptBefore =
+                    vm.getPPC64InterruptSnapshot();
+                const size_t contextStart = lastInstructions.size() > 32U
+                    ? lastInstructions.size() - 32U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                << hex(lastGprs[index][reg])
+                                << (reg + 1U == lastGprs[index].size()
+                                    ? "" : ",");
+                        }
+                    }
+                    result.cntlzdPrecedingInstructions.push_back(
+                        context.str());
+                }
+            }
             if (following.kind == DecodedKind::EXTSW && !result.extswFetched) {
                 result.extswFetched = true;
                 result.extswNip = before.nip;
@@ -2064,6 +2115,17 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             }
             const bool retired = vm.step();
             const PPC64RegisterView after = vm.getPPC64RegisterView();
+            if (following.kind == DecodedKind::CNTLZD &&
+                result.cntlzdFetched && before.nip == result.cntlzdNip) {
+                result.cntlzdAfter = after;
+                result.cntlzdRetired = retired &&
+                    after.nip == before.nip + 4U;
+                result.cntlzdCyclesAfter = vm.getCyclesExecuted();
+                result.cntlzdTimebaseAfter = vm.getPPC64Timebase();
+                result.cntlzdRamAfter = fingerprintRam(*memory);
+                result.cntlzdInterruptAfter =
+                    vm.getPPC64InterruptSnapshot();
+            }
             if (following.kind == DecodedKind::MTSPR &&
                 following.sprn == SPR_MMCRA &&
                 before.nip == result.mmcraNip) {
@@ -2190,6 +2252,11 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.fscrWriteRetired = after.nip == before.nip + 4U;
             }
             ++result.continuationRetired;
+            if (following.kind == DecodedKind::CNTLZD &&
+                result.cntlzdRetired && before.nip == result.cntlzdNip) {
+                result.cntlzdTotalRetired = result.prefixRetired +
+                    result.continuationRetired;
+            }
             if (following.kind == DecodedKind::MTSPR &&
                 following.sprn == SPR_MMCR2 &&
                 before.nip == result.mmcr2Nip && result.mmcr2Retired) {
@@ -2374,6 +2441,40 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                  << " r4=" << hex(before.gpr[4])
                  << " r5=" << hex(before.gpr[5])
                  << " r31=" << hex(before.gpr[31]);
+            if (following.kind == DecodedKind::CNTLZD &&
+                before.nip == result.cntlzdNip) {
+                std::ostringstream cntlzdLine;
+                cntlzdLine << line.str()
+                    << " R9_before=" << hex(before.gpr[9])
+                    << " R10_before=" << hex(before.gpr[10])
+                    << " R10_after=" << hex(after.gpr[10])
+                    << " CR_before=0x" << std::hex << before.cr
+                    << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " retired=" << std::boolalpha
+                    << result.cntlzdRetired;
+                result.cntlzdTraceLine = cntlzdLine.str();
+            }
+            if (result.cntlzdRetired && before.nip != result.cntlzdNip &&
+                result.cntlzdFollowingInstructions.size() < 16U) {
+                std::ostringstream context;
+                context << line.str() << " CR_before=0x" << std::hex
+                    << before.cr << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " GPR_before=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(before.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                context << " GPR_after=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(after.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                result.cntlzdFollowingInstructions.push_back(context.str());
+            }
             if (result.mmcr2Retired && before.nip > result.mmcr2Nip &&
                 before.nip <= result.mmcr2Nip + 0x2CU) {
                 result.mmcr2PostInstructions.push_back(line.str());
@@ -2678,6 +2779,15 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             trace << line << "\n";
         }
         trace << "authentic_fscr_read_preceding_context_end\n";
+    }
+    if (result.cntlzdFetched) {
+        trace << "authentic_cntlzd_retirement="
+              << result.cntlzdTraceLine << "\n";
+        trace << "authentic_cntlzd_following_context_begin\n";
+        for (const auto& line : result.cntlzdFollowingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_cntlzd_following_context_end\n";
     }
     result.trace = trace.str();
     return result;
