@@ -470,6 +470,8 @@ std::string AArch64ISAPlugin::disassemble(ia64::IMemory& memory, uint64_t addres
 bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
     return feature == "A64" || feature == "NOP" || feature == "MOVN" ||
             feature == "MOVZ" || feature == "MOVK" ||
+            feature == "MADD" || feature == "MSUB" ||
+            feature == "MUL" || feature == "MNEG" ||
             feature == "ADD_IMM" || feature == "SUB_IMM" ||
             feature == "B" || feature == "BL" || feature == "RET" ||
             feature == "LDR_IMM" || feature == "STR_IMM" || feature == "CBZ" ||

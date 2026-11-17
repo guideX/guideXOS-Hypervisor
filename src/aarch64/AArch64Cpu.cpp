@@ -4,6 +4,8 @@
 //   Move wide immediate: sf[31] opc[30:29] 100101 hw[22:21] imm16[20:5] Rd[4:0]
 //     opc 00 = MOVN, 10 = MOVZ, 11 = MOVK, and 01 is unallocated.
 //     hw selects halfword 0..3 (64-bit) or 0..1 (32-bit).
+//   MADD/MSUB: sf[31] op54[30:29]=00 11011 op31[23:21]=000 Rm[20:16]
+//     o0[15] Ra[14:10] Rn[9:5] Rd[4:0]. Ra=31 aliases MUL/MNEG.
 //   Add/sub immediate: sf[31] op[30] S[29] 10001 0[23] sh[22] imm12[21:10]
 //     Rn[9:5] Rd[4:0]; op 0 = ADD, 1 = SUB; S 0 = ADD/SUB, S 1 = ADDS/SUBS.
 //     For ADD/SUB, Rn/Rd == 31 denote SP. For ADDS/SUBS, Rn == 31 is SP but
@@ -892,6 +894,43 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
                       mnemonic,
                       d.rd == 31 ? (sf ? "xzr" : "wzr") : regName(sf, d.rd).c_str(),
                       d.imm16, d.shift);
+        d.disassembly = buf;
+        return d;
+    }
+
+    // MADD/MSUB three-source integer multiply. The fixed-class match includes
+    // op54=00, bits[28:24]=11011 and op31=000; all other three-source classes
+    // (long multiply and multiply-high included) remain unallocated here.
+    if ((word & 0x7FE00000u) == 0x1B000000u) {
+        Decoded d;
+        d.op = Op::MaddMsub;
+        d.valid = true;
+        d.sf64 = (word & 0x80000000u) != 0;
+        d.word = word;
+        d.address = address;
+        d.rm = static_cast<uint8_t>((word >> 16) & 31u);
+        d.multiplySubtract = ((word >> 15) & 1u) != 0;
+        d.ra = static_cast<uint8_t>((word >> 10) & 31u);
+        d.rn = static_cast<uint8_t>((word >> 5) & 31u);
+        d.rd = static_cast<uint8_t>(word & 31u);
+
+        const char* mnemonic = d.multiplySubtract
+            ? (d.ra == 31u ? "mneg" : "msub")
+            : (d.ra == 31u ? "mul" : "madd");
+        const std::string destination = regName(d.sf64, d.rd);
+        const std::string multiplicand = regName(d.sf64, d.rn);
+        const std::string multiplier = regName(d.sf64, d.rm);
+        char buf[128];
+        if (d.ra == 31u) {
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, %s", mnemonic,
+                          destination.c_str(), multiplicand.c_str(),
+                          multiplier.c_str());
+        } else {
+            const std::string accumulator = regName(d.sf64, d.ra);
+            std::snprintf(buf, sizeof(buf), "%s %s, %s, %s, %s", mnemonic,
+                          destination.c_str(), multiplicand.c_str(),
+                          multiplier.c_str(), accumulator.c_str());
+        }
         d.disassembly = buf;
         return d;
     }
@@ -2633,6 +2672,42 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
                     (cur & ~mask) | (static_cast<uint32_t>(decoded.imm16) << pos));
             }
         }
+        pc_ += kInstructionSize;
+        break;
+    }
+    case Op::MaddMsub: {
+        const uint64_t widthMask = decoded.sf64 ? UINT64_MAX : UINT64_C(0xFFFFFFFF);
+        const auto readOperand = [&](uint8_t index) -> uint64_t {
+            return index == 31u ? 0u : (x_[index] & widthMask);
+        };
+
+        // Read all three sources before writing Rd. This is required when Rd
+        // aliases Rn, Rm or Ra (including the authentic Linux MUL W7,W5,W7).
+        const uint64_t multiplicand = readOperand(decoded.rn);
+        const uint64_t multiplier = readOperand(decoded.rm);
+        const uint64_t addend = readOperand(decoded.ra);
+        uint64_t result = 0;
+        if (decoded.sf64) {
+            // Unsigned multiplication and subtraction/addition wrap by
+            // definition; only the low 64 bits are architecturally retained.
+            const uint64_t product = multiplicand * multiplier;
+            result = decoded.multiplySubtract
+                ? addend - product
+                : product + addend;
+        } else {
+            // Computing the low 32 product bits via unsigned 64-bit
+            // multiplication and narrowing is defined and width-correct.
+            const uint32_t product = static_cast<uint32_t>(
+                static_cast<uint64_t>(static_cast<uint32_t>(multiplicand)) *
+                static_cast<uint64_t>(static_cast<uint32_t>(multiplier)));
+            const uint32_t third = static_cast<uint32_t>(addend);
+            const uint32_t result32 = decoded.multiplySubtract
+                ? third - product
+                : product + third;
+            result = result32; // W writes zero-extend into the X register.
+        }
+        if (decoded.rd != 31u) x_[decoded.rd] = result;
+        // MADD/MSUB and their aliases never modify NZCV or SP.
         pc_ += kInstructionSize;
         break;
     }

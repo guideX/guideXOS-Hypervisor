@@ -16,6 +16,8 @@
 //     IMemory (Rt==31 is WZR/XZR; failed loads preserve dest and PC).
 //   - MOVN/MOVZ/MOVK move-wide immediates support W/X widths and all legal
 //     halfword positions with zero-register and zero-extension semantics.
+//   - MADD/MSUB three-source integer multiplication supports W/X widths,
+//     modular low-width results, and the MUL/MNEG Ra=31 aliases.
 //   - Nested BL/RET programs using SUB/ADD SP + STR/LDR unsigned-offset
 //     stack frames (no STP/LDP required).
 // SCOPE (Phase AARCH64-4, additive):
@@ -155,6 +157,7 @@ enum class Op {
     Movn,
     Movz,
     Movk,
+    MaddMsub, // MADD/MSUB three-source integer multiply (MUL/MNEG aliases)
     Rev,      // REV (byte-reverse within a 32- or 64-bit GPR)
     AddImm,
     SubImm,
@@ -224,6 +227,7 @@ struct Decoded {
     bool sf64 = true;          // true = 64-bit (X) form, false = 32-bit (W) form
     uint8_t rd = 0;            // destination register number 0..31
     uint8_t rn = 0;            // source register number 0..31
+    uint8_t ra = 0;            // third source register number 0..31 (MADD/MSUB)
     uint8_t rt2 = 0;           // second transfer register (LDP/STP Rt2 field)
     uint8_t rm = 0;            // second source register (CSEL/CSINC Rm field)
     uint8_t hw = 0;            // MOVN/MOVZ/MOVK halfword selector 0..3
@@ -251,6 +255,7 @@ struct Decoded {
     uint8_t logicalShift = 0;  // Logical shifted-register shift type: LSL/LSR/ASR/ROR
     uint8_t addSubShift = 0;   // ADD/SUB shifted-register shift type: LSL/LSR/ASR
     bool addSubSubtract = false; // ADD/SUB shifted-register operation selector
+    bool multiplySubtract = false; // MSUB selector in the MADD/MSUB class
     uint8_t variableShift = 0; // LSLV/LSRV/ASRV/RORV selector (bits[11:10])
     bool invertRm = false;     // Logical shifted-register N bit (BIC/ORN/EON/BICS)
     bool setsFlags = false;    // ANDS/TST (sets N,Z; clears C,V)

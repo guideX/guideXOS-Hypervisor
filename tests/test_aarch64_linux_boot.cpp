@@ -417,6 +417,7 @@ struct StepRecord {
     uint64_t nextPc = 0;
     uint64_t preX0 = 0;
     uint64_t preX2 = 0;
+    uint64_t preX5 = 0;
     uint64_t preX7 = 0;
     uint64_t preSpEl1 = 0;
     uint32_t prePstate = 0;
@@ -428,6 +429,7 @@ struct StepRecord {
     uint64_t x1 = 0;
     uint64_t x2 = 0;
     uint64_t x3 = 0;
+    uint64_t x5 = 0;
     uint64_t x7 = 0;
     uint32_t pstate = 0;
     bool exceptionTaken = false;
@@ -450,6 +452,7 @@ struct StepRecord {
             << " next_pc=" << hex(nextPc, 16)
             << " pre_x0=" << hex(preX0, 16)
             << " pre_x2=" << hex(preX2, 16)
+            << " pre_x5=" << hex(preX5, 16)
             << " pre_x7=" << hex(preX7, 16)
             << " pre_sp_el1=" << hex(preSpEl1, 16)
             << " pre_el=" << static_cast<unsigned>(preEl)
@@ -461,6 +464,7 @@ struct StepRecord {
             << " x1=" << hex(x1, 16)
             << " x2=" << hex(x2, 16)
             << " x3=" << hex(x3, 16)
+            << " x5=" << hex(x5, 16)
             << " x7=" << hex(x7, 16)
             << " pstate=" << hex(pstate, 8)
             << " esr_el1=" << hex(esr, 16)
@@ -573,6 +577,7 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         record.pc = core.pc();
         record.preX0 = core.readX(0);
         record.preX2 = core.readX(2);
+        record.preX5 = core.readX(5);
         record.preX7 = core.readX(7);
         record.preSpEl1 = core.spEl1();
         record.prePstate = core.pstate();
@@ -594,6 +599,7 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         record.x1 = core.readX(1);
         record.x2 = core.readX(2);
         record.x3 = core.readX(3);
+        record.x5 = core.readX(5);
         record.x7 = core.readX(7);
         record.pstate = core.pstate();
         record.esr = core.esrEl1();
@@ -678,6 +684,39 @@ bool authenticLinuxMovnRetired(const std::vector<StepRecord>& trace) {
         record.fault == Fault::None && !record.exceptionTaken && record.retired &&
         record.nextPc == 0x1D37254u && record.x7 == UINT64_C(0x00000000FFFFFFF7) &&
         record.pstate == record.prePstate && record.spEl1 == record.preSpEl1 &&
+        record.timerAfter == record.timerBefore + 1u;
+}
+
+const StepRecord* authenticLinuxMultiplyRecord(
+    const std::vector<StepRecord>& trace) {
+    const auto found = std::find_if(trace.begin(), trace.end(),
+        [](const StepRecord& record) { return record.pc == 0x1D3725Cu; });
+    return found == trace.end() ? nullptr : &*found;
+}
+
+uint64_t authenticLinuxMultiplyExpected(const StepRecord& record) {
+    const uint64_t fullProduct =
+        static_cast<uint64_t>(static_cast<uint32_t>(record.preX5)) *
+        static_cast<uint64_t>(static_cast<uint32_t>(record.preX7));
+    return static_cast<uint32_t>(fullProduct);
+}
+
+bool authenticLinuxMultiplyRetired(const std::vector<StepRecord>& trace) {
+    const StepRecord* entry = authenticLinuxMultiplyRecord(trace);
+    if (!entry) return false;
+    const StepRecord& record = *entry;
+    const Decoded decoded = Cpu::decodeWord(record.instruction, record.pc);
+    const uint64_t expected = authenticLinuxMultiplyExpected(record);
+    return record.instructionWordAvailable &&
+        record.instruction == 0x1B077CA7u && decoded.valid &&
+        decoded.op == Op::MaddMsub && !decoded.sf64 &&
+        !decoded.multiplySubtract && decoded.ra == 31u &&
+        decoded.rn == 5u && decoded.rm == 7u && decoded.rd == 7u &&
+        record.preEl == 1u && record.disassembly == "mul w7, w5, w7" &&
+        record.fault == Fault::None && !record.exceptionTaken && record.retired &&
+        record.nextPc == 0x1D37260u && record.x7 == expected &&
+        record.x5 == record.preX5 && record.pstate == record.prePstate &&
+        record.spEl1 == record.preSpEl1 &&
         record.timerAfter == record.timerBefore + 1u;
 }
 
@@ -993,6 +1032,10 @@ int runFrontier(const std::filesystem::path& imagePath,
     const bool authenticAddRun2 = authenticOldFrontierAddRetired(run2Trace);
     const bool authenticMovnRun1 = authenticLinuxMovnRetired(run1Trace);
     const bool authenticMovnRun2 = authenticLinuxMovnRetired(run2Trace);
+    const bool authenticMulRun1 = authenticLinuxMultiplyRetired(run1Trace);
+    const bool authenticMulRun2 = authenticLinuxMultiplyRetired(run2Trace);
+    const StepRecord* linuxMulRun1 = authenticLinuxMultiplyRecord(run1Trace);
+    const StepRecord* linuxMulRun2 = authenticLinuxMultiplyRecord(run2Trace);
 
     const bool reproducible = sameTrace(run1Trace, run2Trace) &&
         run1.finalPc == run2.finalPc && run1.status == run2.status &&
@@ -1038,6 +1081,12 @@ int runFrontier(const std::filesystem::path& imagePath,
              << (authenticAddRun1 ? "PASS" : "FAIL") << '\n'
              << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
              << (authenticMovnRun1 ? "PASS" : "FAIL") << '\n'
+             << "authentic_MUL_W7_at_0x1D3725C_retired_correctly: "
+             << (authenticMulRun1 ? "PASS" : "FAIL") << '\n'
+             << "MUL_W5_before: " << (linuxMulRun1 ? hex(linuxMulRun1->preX5, 16) : "unobserved") << '\n'
+             << "MUL_W7_before: " << (linuxMulRun1 ? hex(linuxMulRun1->preX7, 16) : "unobserved") << '\n'
+             << "MUL_expected_X7_after: " << (linuxMulRun1 ? hex(authenticLinuxMultiplyExpected(*linuxMulRun1), 16) : "unobserved") << '\n'
+             << "MUL_actual_X7_after: " << (linuxMulRun1 ? hex(linuxMulRun1->x7, 16) : "unobserved") << '\n'
              << "GIC_pending/active/enabled: " << run1.gicPendingCount << "/"
              << run1.gicActiveCount << "/" << run1.gicEnabledCount << '\n'
              << "GIC_pending/active/enabled_masks: "
@@ -1090,6 +1139,12 @@ int runFrontier(const std::filesystem::path& imagePath,
              << (authenticAddRun2 ? "PASS" : "FAIL") << '\n'
              << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
              << (authenticMovnRun2 ? "PASS" : "FAIL") << '\n'
+             << "authentic_MUL_W7_at_0x1D3725C_retired_correctly: "
+             << (authenticMulRun2 ? "PASS" : "FAIL") << '\n'
+             << "MUL_W5_before: " << (linuxMulRun2 ? hex(linuxMulRun2->preX5, 16) : "unobserved") << '\n'
+             << "MUL_W7_before: " << (linuxMulRun2 ? hex(linuxMulRun2->preX7, 16) : "unobserved") << '\n'
+             << "MUL_expected_X7_after: " << (linuxMulRun2 ? hex(authenticLinuxMultiplyExpected(*linuxMulRun2), 16) : "unobserved") << '\n'
+             << "MUL_actual_X7_after: " << (linuxMulRun2 ? hex(linuxMulRun2->x7, 16) : "unobserved") << '\n'
              << "GIC_pending/active/enabled: " << run2.gicPendingCount << "/"
              << run2.gicActiveCount << "/" << run2.gicEnabledCount << '\n'
              << "GIC_pending/active/enabled_masks: "
@@ -1151,6 +1206,18 @@ int runFrontier(const std::filesystem::path& imagePath,
             << ((authenticAddRun1 && authenticAddRun2) ? "PASS" : "FAIL") << "\n"
             << "Authentic MOVN W7 decode/result/flags/SP/PC/retirement: "
             << ((authenticMovnRun1 && authenticMovnRun2) ? "PASS" : "FAIL") << "\n"
+            << "Authentic MUL W7 operands/result/flags/SP/PC/retirement: "
+            << ((authenticMulRun1 && authenticMulRun2) ? "PASS" : "FAIL") << "\n"
+            << "Run 1 MUL inputs/result W5/W7/expected/actual: "
+            << (linuxMulRun1 ? hex(linuxMulRun1->preX5, 16) + "/" +
+                hex(linuxMulRun1->preX7, 16) + "/" +
+                hex(authenticLinuxMultiplyExpected(*linuxMulRun1), 16) + "/" +
+                hex(linuxMulRun1->x7, 16) : "unobserved") << "\n"
+            << "Run 2 MUL inputs/result W5/W7/expected/actual: "
+            << (linuxMulRun2 ? hex(linuxMulRun2->preX5, 16) + "/" +
+                hex(linuxMulRun2->preX7, 16) + "/" +
+                hex(authenticLinuxMultiplyExpected(*linuxMulRun2), 16) + "/" +
+                hex(linuxMulRun2->x7, 16) : "unobserved") << "\n"
             << "Original accepted retirement frontier: 115\n"
             << "Move-wide continuation retired: "
             << ((authenticMovnRun1 && run1.retired > 115u) ? "yes" : "no") << "\n"
@@ -1178,7 +1245,8 @@ int runFrontier(const std::filesystem::path& imagePath,
 
     std::cout << summary.str();
     return reproducible && authenticAddRun1 && authenticAddRun2 &&
-        authenticMovnRun1 && authenticMovnRun2 && run1.retired > 115u &&
+        authenticMovnRun1 && authenticMovnRun2 && authenticMulRun1 &&
+        authenticMulRun2 && run1.retired > 118u &&
         (!captureFreshCheckpoint || !snapshotReached || snapshotQualified) ? 0 : 2;
 }
 
@@ -1217,6 +1285,8 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
     const ExecutionResult result = executeBounded(platform, maximumAttempts, 32);
     const bool authenticAddRetired = authenticOldFrontierAddRetired(result.trace);
     const bool authenticMovnRetired = authenticLinuxMovnRetired(result.trace);
+    const bool authenticMulRetired = authenticLinuxMultiplyRetired(result.trace);
+    const StepRecord* linuxMul = authenticLinuxMultiplyRecord(result.trace);
     writeText(outputDirectory / "checkpoint-trace.txt", formatTrace(result.trace));
     writeBytes(outputDirectory / "checkpoint-cpu-state.bin", result.finalCpuState);
     std::ostringstream frontier;
@@ -1261,6 +1331,12 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
              << result.uartPendingRx.size() << '\n'
              << "frontier_pre_X0: " << hex(result.trace.back().preX0, 16) << '\n'
              << "frontier_pre_X2: " << hex(result.trace.back().preX2, 16) << '\n'
+             << "authentic_MUL_W7_at_0x1D3725C_retired_correctly: "
+             << (authenticMulRetired ? "PASS" : "FAIL") << '\n'
+             << "MUL_W5_before: " << (linuxMul ? hex(linuxMul->preX5, 16) : "unobserved") << '\n'
+             << "MUL_W7_before: " << (linuxMul ? hex(linuxMul->preX7, 16) : "unobserved") << '\n'
+             << "MUL_expected_X7_after: " << (linuxMul ? hex(authenticLinuxMultiplyExpected(*linuxMul), 16) : "unobserved") << '\n'
+             << "MUL_actual_X7_after: " << (linuxMul ? hex(linuxMul->x7, 16) : "unobserved") << '\n'
              << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
              << (authenticMovnRetired ? "PASS" : "FAIL") << '\n'
              << "authentic_ADD_at_0x36A6C_retired_correctly: "
@@ -1289,6 +1365,12 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
            << "new_frontier_instruction_word: " << hex(result.trace.back().instruction, 8) << '\n'
            << "new_frontier_disassembly: " << result.trace.back().disassembly << '\n'
            << "continuation_timer_counter: " << result.timerCounter << '\n'
+           << "authentic_MUL_W7_at_0x1D3725C_retired_correctly: "
+           << (authenticMulRetired ? "PASS" : "FAIL") << '\n'
+           << "MUL_W5_before: " << (linuxMul ? hex(linuxMul->preX5, 16) : "unobserved") << '\n'
+           << "MUL_W7_before: " << (linuxMul ? hex(linuxMul->preX7, 16) : "unobserved") << '\n'
+           << "MUL_expected_X7_after: " << (linuxMul ? hex(authenticLinuxMultiplyExpected(*linuxMul), 16) : "unobserved") << '\n'
+           << "MUL_actual_X7_after: " << (linuxMul ? hex(linuxMul->x7, 16) : "unobserved") << '\n'
            << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
            << (authenticMovnRetired ? "PASS" : "FAIL") << '\n'
            << "authentic_ADD_at_0x36A6C_retired_correctly: "
@@ -1319,7 +1401,8 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
            << result.uartPendingRx.size() << '\n';
     writeText(outputDirectory / "checkpoint-replay.txt", report.str());
     std::cout << report.str();
-    return authenticAddRetired && authenticMovnRetired && result.retired > 83u ? 0 : 2;
+    return authenticAddRetired && authenticMovnRetired && authenticMulRetired &&
+        result.retired > 86u ? 0 : 2;
 }
 
 } // namespace
