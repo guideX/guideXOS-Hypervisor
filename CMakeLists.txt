@@ -1188,7 +1188,7 @@ set(RISCV_LINUX_CONFIG_PATH
     "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv18-linux-source/linux-v6.12-rv64-nonefi.config"
     CACHE FILEPATH "Path to the pinned Linux v6.12 RV64 .config")
 set(RISCV_LINUX_INITRAMFS_INPUT_DIR
-    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv26-artifacts/inputs"
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv26-artifacts/inputs-final-v6"
     CACHE PATH "Path to the reproducibly generated RISCV-26 initramfs inputs")
 set(RISCV_LINUX_INITRAMFS_PATH
     "${RISCV_LINUX_INITRAMFS_INPUT_DIR}/initramfs.cpio")
@@ -1370,6 +1370,39 @@ add_test(NAME RiscVLinuxInitramfsUserspaceTests
                  ${RISCV_LINUX_INITRAMFS_DTB_PATH}
                  "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv26-artifacts/$<CONFIG>")
 
+# RISCV-27 uses a separate deterministic initramfs and observes real Linux
+# clone, copy-on-write, scheduling, exit, wait4, and UART behavior.
+set(RISCV_LINUX_PROCESS_FIXTURE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_process_lifecycle)
+set(RISCV_LINUX_PROCESS_INPUT_DIR
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv27-artifacts/inputs"
+    CACHE PATH "Path to the reproducibly generated RISCV-27 process fixture")
+set(RISCV_LINUX_PROCESS_INITRAMFS_PATH
+    "${RISCV_LINUX_PROCESS_INPUT_DIR}/initramfs.cpio")
+set(RISCV_LINUX_PROCESS_ELF_PATH
+    "${RISCV_LINUX_PROCESS_INPUT_DIR}/init.elf")
+set(RISCV_LINUX_PROCESS_DTB_PATH
+    "${RISCV_LINUX_PROCESS_INPUT_DIR}/platform-initramfs.dtb")
+add_executable(test_riscv_linux_process_lifecycle
+    tests/test_riscv_linux_process_lifecycle.cpp
+    src/riscv/riscv_initramfs_contract.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_process_lifecycle
+    PRIVATE RISCV_LINUX_STARTUP_CONTINUATION=1 RISCV_LINUX_CONSOLE_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_process_lifecycle PRIVATE bcrypt)
+add_test(NAME RiscVLinuxProcessLifecycleTests
+         COMMAND test_riscv_linux_process_lifecycle
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_CONFIG_PATH}
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_PROCESS_INITRAMFS_PATH}
+                 ${RISCV_LINUX_PROCESS_ELF_PATH}
+                 ${RISCV_LINUX_PROCESS_DTB_PATH}
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv27-artifacts/$<CONFIG>")
+
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_image_entry
                                 test_riscv_linux_startup_continuation
@@ -1389,6 +1422,12 @@ if(MSVC)
     target_compile_options(test_riscv_linux_initramfs_userspace PRIVATE /W4)
 else()
     target_compile_options(test_riscv_linux_initramfs_userspace PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(MSVC)
+    target_compile_options(test_riscv_linux_process_lifecycle PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_linux_process_lifecycle PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

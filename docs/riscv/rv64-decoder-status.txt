@@ -959,3 +959,29 @@ Validation and next target:
   Full retirement, syscall, UART, test, and artifact details are in
   `phase-riscv-26-report.txt` and the evidence bundles under
   `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv26-artifacts`.
+
+--- Phase RISCV-27: authentic Linux process lifecycle ---
+
+- With the pinned Linux v6.12 and OpenSBI v1.8.1 unchanged, deterministic
+  `/init` used genuine `clone(SIGCHLD)` to create PID 21 from PID 1. Both
+  parent and child retired U-mode instructions; the child returned zero,
+  reported PID 21 and parent PID 1, and entered through `ret_from_fork`.
+- Linux performed the child address-space copy and handled its U-mode COW
+  store. The child read back `0x55667788`; after `wait4` the parent still read
+  `0x11223344`. The child exited with 37, the parent collected status 9472
+  (`37 << 8`) from guest memory, observed `-ECHILD`, emitted its success
+  marker, and remained alive.
+- Debug and Release each passed the 32-check integration at 86,687,385
+  post-handoff retirements with identical U/S/M totals, task identities,
+  scheduler transitions, console provenance, and clean trap accounting. The
+  focused 28-test RISC-V/EFI/SAL CTest selection and three direct IA-64
+  regressions passed in both configurations. No production emulator or IA-64
+  implementation changed.
+- The standalone page-walk sampler returned a zero root PTE for the code page
+  at the first-entry capture, while the actual U-mode step retired the exact
+  instruction bytes from the ELF entry. This sampler observation is preserved
+  as a measurement limitation; actual retired instruction bytes, stack walk,
+  and later COW address-space evidence are recorded separately.
+- Full lifecycle counters, artifact hashes, validation, and the RISCV-28
+  recommendation are in `phase-riscv-27-report.txt` and the Debug/Release
+  bundles under `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv27-artifacts`.
