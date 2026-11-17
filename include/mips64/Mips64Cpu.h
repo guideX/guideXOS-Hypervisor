@@ -498,6 +498,8 @@ enum class Mips64Op : uint8_t {
     Ext,
     // MIPS64 Release 2 doubleword insert bit field upper. Appended for ABI stability.
     Dinsu,
+    // MIPS64 Release 2 doubleword insert bit field in bits 0..31.
+    Dins,
 };
 
 struct Mips64ReservationState {

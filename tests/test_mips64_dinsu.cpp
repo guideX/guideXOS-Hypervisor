@@ -475,9 +475,10 @@ void testUnpredictableAndNeighboringSpecial3() {
 
         const Mips64Decoded dins = decodeInstruction(encodeSpecial3(5, 3, 31, 0, 0x07));
         const Mips64Decoded dinsm = decodeInstruction(encodeSpecial3(5, 3, 10, 0, 0x05));
-        CHECK(!dins.valid && dins.fault == Mips64Fault::UnsupportedInstruction);
+        CHECK(dins.valid && dins.op == Mips64Op::Dins);
+        CHECK(dins.rs == 5 && dins.rt == 3 && dins.rd == 31 && dins.sa == 0);
+        CHECK(cpu.disassemble(dins) == "dins $3, $5, 0, 32");
         CHECK(!dinsm.valid && dinsm.fault == Mips64Fault::UnsupportedInstruction);
-        CHECK(dins.error.find("valid DINS encoding") != std::string::npos);
         CHECK(dinsm.error.find("valid DINSM encoding") != std::string::npos);
         const Mips64Decoded reserved = decodeInstruction(encodeSpecial3(5, 3, 0, 0, 0x08));
         CHECK(!reserved.valid && reserved.fault == Mips64Fault::ReservedInstruction);

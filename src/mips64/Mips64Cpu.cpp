@@ -121,6 +121,7 @@ constexpr uint8_t kFnDext = 0x03;
 constexpr uint8_t kFnDextm = 0x01;
 constexpr uint8_t kFnExt = 0x00;
 constexpr uint8_t kFnDinsu = 0x06;
+constexpr uint8_t kFnDins = 0x07;
 
 // -- REGIMM rt field ------------------------------------------------------------
 constexpr uint8_t kRiBltz = 0x00;
@@ -455,11 +456,21 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                 decoded.valid = true;
                 return decoded;
             }
-            if (funct == 0x05 || funct == 0x07) {
-                const char* mnemonic = funct == 0x05 ? "DINSM" : "DINS";
+            if (funct == 0x05) {
                 return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
-                            std::string("valid ") + mnemonic +
-                                " encoding outside the implemented subset");
+                            "valid DINSM encoding outside the implemented subset");
+            }
+            if (funct == kFnDins) {
+                // DINS stores msb in RD and lsb (position) in SA. Reversed
+                // fields are architecturally UNPREDICTABLE; reject before any
+                // unsigned width calculation or execution.
+                if (decoded.sa > decoded.rd) {
+                    return fail(Mips64Op::Invalid, Mips64Fault::UnsupportedInstruction,
+                                "UNPREDICTABLE DINS field (lsb exceeds msb)");
+                }
+                decoded.op = Mips64Op::Dins;
+                decoded.valid = true;
+                return decoded;
             }
             if (funct == kFnExt) {
                 // EXT stores size-1 in MSBD (rd) and the source position in
@@ -1768,6 +1779,31 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rt, (originalDestination & ~fieldMask) | inserted);
             break;
         }
+        case Mips64Op::Dins: {
+            // DINS inserts the low `size` bits of RS into RT at positions
+            // pos..msb while preserving every other destination bit. Validate
+            // manually constructed decoded instructions before subtraction.
+            const unsigned pos = decoded.sa;
+            const unsigned msb = decoded.rd;
+            if (pos >= 32U || msb >= 32U || msb < pos) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE DINS field (position/msb outside bits 0..31)");
+                return Mips64StepResult::Fault;
+            }
+            const unsigned size = msb - pos + 1U;
+            if (size == 0U || size > 32U || pos + size > 32U) {
+                setFault(Mips64Fault::UnsupportedInstruction,
+                         "UNPREDICTABLE DINS field range");
+                return Mips64StepResult::Fault;
+            }
+            const uint64_t source = readGpr(decoded.rs);
+            const uint64_t originalDestination = readGpr(decoded.rt);
+            const uint64_t lowMask = (uint64_t{1} << size) - 1ULL;
+            const uint64_t fieldMask = lowMask << pos;
+            const uint64_t inserted = (source & lowMask) << pos;
+            writeGpr(decoded.rt, (originalDestination & ~fieldMask) | inserted);
+            break;
+        }
         case Mips64Op::Ext: {
             const uint64_t originalSource = readGpr(decoded.rs);
             const uint32_t source = static_cast<uint32_t>(originalSource);
@@ -2684,6 +2720,11 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
                           static_cast<unsigned>(decoded.sa) + 32U,
                           static_cast<unsigned>(decoded.rd) - decoded.sa + 1U);
             break;
+        case Mips64Op::Dins:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, %u, %u", name,
+                          decoded.rt, decoded.rs, decoded.sa,
+                          static_cast<unsigned>(decoded.rd) - decoded.sa + 1U);
+            break;
         case Mips64Op::Sll:
         case Mips64Op::Srl:
         case Mips64Op::Sra:
@@ -3354,6 +3395,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Ext: return "ext";
         case Mips64Op::Dextm: return "dextm";
         case Mips64Op::Dinsu: return "dinsu";
+        case Mips64Op::Dins: return "dins";
         case Mips64Op::Sync: return "sync";
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
