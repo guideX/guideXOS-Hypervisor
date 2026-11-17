@@ -931,3 +931,31 @@ Validation and next target:
   and the final RISCV-26 recommendation are recorded in
   `phase-riscv-25-report.txt` and the evidence bundles under
   `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv25-artifacts`.
+
+--- Phase RISCV-26: first authentic Linux userspace execution ---
+
+- The accepted Linux v6.12 Image, vmlinux, config, and OpenSBI v1.8.1 firmware
+  hashes are unchanged. A deterministic 5,880-byte newc initramfs contains a
+  static RV64 `/init`; two independent builds produced identical ELF, CPIO,
+  and generated FDT hashes. Linux parsed the FDT initrd fields, reserved the
+  archive, unpacked it, and returned success from the real `kernel_execve`.
+- Linux entered U-mode at ELF entry 0x10000 and retired the first instruction
+  matching the ELF PT_LOAD bytes. Sv39 user code/stack translations have U+X
+  and U+W permissions; the restricted PMP domain is unchanged. Genuine Linux
+  `getpid`, `openat(/dev/ttyS0)`, `write`, and `sched_yield` syscalls returned
+  1, descriptor 3, 49 bytes, and 0, respectively, with S-mode trap dispatch
+  and SRET returns.
+- The exact 49-byte userspace proof message was emitted through 49 matched
+  S-mode guest UART MMIO writes. The generated RISCV-26 `/soc` now declares
+  `simple-bus`, allowing the unchanged kernel to populate its 8250 UART
+  platform device. A narrowly scoped RISC-V UART model fix implements the
+  16550 THRE interrupt and has direct PLIC/UART regression coverage.
+- The full 37-test selection passed in Debug and Release: 35 RISC-V CTests,
+  EFI memory-map, and IA64 SAL. Direct IA-64 ACPI, interrupt-controller, and
+  processor-interrupt-block regressions passed 3/3 in both configurations;
+  no IA-64 implementation files changed. No QEMU was run.
+- `.phase-riscv` advances to RISCV-26 complete / RISCV-27 next. The
+  implementation and marker commit is `49535e2928ccdea5d0eadd871a2670e93792b7bc`.
+  Full retirement, syscall, UART, test, and artifact details are in
+  `phase-riscv-26-report.txt` and the evidence bundles under
+  `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv26-artifacts`.

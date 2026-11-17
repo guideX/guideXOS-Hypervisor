@@ -1,0 +1,237 @@
+guideXOS Hypervisor — Phase RISCV-26 Report
+Minimal initramfs, authentic Linux /init execution, and first RISC-V userspace proof
+
+Outcome: A — first authentic Linux userspace execution. The unchanged Linux
+v6.12 Image and OpenSBI v1.8.1 firmware entered Linux through the existing
+authentic M-mode initialization and MRET handoff. Linux reserved and unpacked
+the external initramfs, found and executed its static /init, entered U-mode,
+handled genuine Linux system calls, and emitted the exact userspace proof
+bytes through the guest UART. This proves the first userspace program runs; it
+does not claim that Linux completed a general-purpose boot.
+
+Repository and provenance
+-------------------------
+Repository: D:\dev\guideXOS_Hypervisor_RISCV
+Branch: RISCV
+Starting HEAD: bc366fe85abbc3f16467a9451588bb212b765af6
+Starting divergence: 1 commit ahead of origin/RISCV, 0 behind
+Starting marker: RISCV-25 complete; RISCV-26 next
+Implementation and marker commit: 49535e2928ccdea5d0eadd871a2670e93792b7bc
+Implementation commit parent: bc366fe85abbc3f16467a9451588bb212b765af6
+Ending validated implementation HEAD: 49535e2928ccdea5d0eadd871a2670e93792b7bc
+The report is included in a docs-only follow-up commit. No commits were pushed.
+
+After the implementation commit, the branch was 2 commits ahead of
+origin/RISCV. The documentation follow-up brings it to 3 ahead. The tracked
+worktree is clean after closeout. Pre-existing untracked Testing/ and the
+fixture .build/ directories remain in place and were not staged. The shared
+.phase and all IA-64 implementation files are unchanged.
+
+Pinned baseline and configuration
+---------------------------------
+Linux source: v6.12, upstream commit
+  adc218676eef25575469234709c2d87185ca223a
+Accepted Linux Image SHA-256:
+  60CCB1172FFBE4B49CBC4447E7CCB4B705B5D60A9E92D3F10CF02A0D46BBCA2C
+Accepted vmlinux SHA-256:
+  49A047DD85BAC9E8DA49F89907DFDCC845B8C9C564F9D6EB63BA76F68768D093
+Accepted config SHA-256:
+  5DFC1DEC7885EA79D1C6CA14262F7FF305D02AC37E74F01EE260CDD7317082AB
+OpenSBI v1.8.1 source commit:
+  74434f255873d74e56cc50aa762d1caf24c099f8
+Accepted fw_jump.bin SHA-256:
+  CC4410EF1A24FD5F9CBB9019F82802351B829187DE75B756C45B60479245D7A3
+
+The original Linux Image, vmlinux, configuration, firmware, and source tree
+were not rebuilt or modified. The exact configuration enables
+CONFIG_BLK_DEV_INITRD=y, CONFIG_BINFMT_ELF=y, CONFIG_DEVTMPFS=y,
+CONFIG_DEVTMPFS_MOUNT=y, CONFIG_SERIAL_8250=y,
+CONFIG_SERIAL_8250_CONSOLE=y, CONFIG_SERIAL_OF_PLATFORM=y, and CONFIG_TMPFS=y.
+The pinned kernel therefore accepts an external uncompressed newc archive and
+static ELF without a kernel variant.
+
+Init executable and deterministic archive
+-----------------------------------------
+Source fixture: tests/fixtures/riscv_linux_initramfs/
+Build: build.sh using riscv64-linux-gnu-gcc, readelf, objdump, Python 3, and
+dtc with -march=rv64ima_zicsr_zifencei. The freestanding ELF has no dynamic
+interpreter or shared libraries, and contains no compressed, floating-point,
+or vector instructions; the exercised instructions fit the existing
+RV64IMA_Zicsr profile.
+
+Static ELF:
+  SHA-256 b9c765b1a972d4556680037ea8660a771d3ccde9903caac3b8ca445f1d205458
+  5,168 bytes; ELF64 little-endian; machine RISC-V; entry 0x10000
+  Executable PT_LOAD: vaddr 0x10000, file/memory size 192, RX
+
+The program checks getpid() == 1, opens /dev/ttyS0 using openat(), writes the
+49-byte proof string using write(), checks the returned count, and remains
+alive by calling sched_yield(). The exact message is:
+  guideXOS RISCV-26: authentic U-mode /init reached
+
+Uncompressed deterministic newc archive:
+  SHA-256 83269e65a8bb1502b7cbc1ac86b811f827aa9cbdf7362629e5e8d8e3c899e1ba
+  5,880 bytes; six records: ., dev, dev/console (character 5:1),
+  dev/ttyS0 (character 4:64), init (mode 0755), and TRAILER!!!.
+  UID/GID and timestamps are zero; entry order and inode numbering are fixed.
+
+Two independent fixture builds produced byte-identical init.elf,
+initramfs.cpio, and platform-initramfs.dtb files. The build script independently
+validates the ELF headers/PT_LOAD bounds and newc archive contents before use.
+
+FDT, physical placement, and platform discovery
+-----------------------------------------------
+The separate RISCV-26 generated FDT preserves the RISCV-25 profile as a
+negative control. It keeps RAM [0x80000000,0x84000000), Linux Image at
+0x80200000, FDT at 0x82200000, the existing firmware, PMP domain, UARTs, PLIC,
+ACLINT timer, and 10 MHz timebase.
+
+Initramfs physical range:
+  start 0x81400000; end exclusive 0x814016f8; length 5,880 bytes
+  page-rounded Linux reservation [0x81400000,0x81402000), 8,192 bytes
+  no overlap with the kernel, FDT, firmware, or restricted PMP domain
+
+The generated DTB is 4,038 bytes, within its 12 KiB capacity. Its SHA-256 is
+3898e42537d41bfab790e93922fb1c39c23f9df4d7d7fc652e52f9ca78824f39. The
+firmware handoff FDT is valid and has SHA-256
+0647FA6EC1858C7028194697CCE3E0C8A045A545C9362817B1FFFE6273DE439E. The
+standard /chosen/linux,initrd-start and linux,initrd-end properties encode the
+exact range above using the FDT's two-cell address representation.
+
+The RISCV-26 copy of /soc advertises compatible = "simple-bus". The prior
+generated profile omitted that compatibility, so Linux did not populate the
+8250 UART platform device. Adding it only to the generated RISCV-26 FDT lets
+the unchanged kernel register ttyS0 and ttyS1. The RISCV-18 base DTS and
+RISCV-25 FDT profile remain unchanged.
+
+Authentic Linux initramfs and process-launch evidence
+-----------------------------------------------------
+The firmware performed 39 MRET operations and handed off to Linux with no
+host-side SBI provider. Both Debug and Release captured the same kernel
+milestones and retirement totals:
+
+- early_init_dt_scan_nodes returned at retirement 717,021.
+- memblock_reserve reserved the page-rounded initrd span at retirement
+  2,040,988; reserve_initrd_mem completed at 2,041,771.
+- populate_rootfs completed at 25,873,166; unpack_to_rootfs completed at
+  26,341,845.
+- Linux completed init access checks, entered run_init_process, and called
+  kernel_execve. kernel_execve returned 0 at retirement 84,809,529.
+- start_thread prepared the U-mode context and returned at retirement
+  84,809,142. Linux printed "Run /init as init process" before the user entry.
+
+These are guest execution observations from the pinned vmlinux. The
+initramfs was copied into guest RAM, advertised by the handoff FDT, reserved
+by Linux, and unpacked by Linux; no host-side process injection or pre-unpacked
+filesystem was used.
+
+First U-mode instruction and syscall proof
+------------------------------------------
+Debug and Release agree on the following evidence:
+
+- ELF entry and first U-mode PC: 0x10000; physical address: 0x82fe0000.
+- The production CPU retired raw instruction 0x0ac00893 at the ELF entry;
+  it matches the independently built ELF's executable PT_LOAD bytes.
+- First U-mode instruction retired at post-handoff retirement 84,813,928.
+- satp was 0x8000000000082473. The U-mode fetch page has U+X permissions and
+  the user stack page has U+W permissions. User fetch and stack translations
+  succeeded; the existing restricted PMP domain is unchanged.
+- Linux delivered each U-mode ECALL to S-mode and SRET returned to U-mode.
+  The first userspace instruction and 17 total U-mode instructions retired.
+
+Linux syscall evidence:
+
+  getpid: ECALL at 0x10004; __riscv_sys_getpid returned 1 (PID 1).
+  openat: ECALL at 0x10028; path /dev/ttyS0 was read from user memory and
+          matched; Linux returned descriptor 3.
+  write:  ECALL at 0x10040; fd 3, user buffer 0x10063, length 0x31 (49).
+          Linux copied the buffer from user memory, returned 0x31, and the
+          console emitted the same 49 bytes.
+  sched_yield: ECALL at 0x10050; Linux returned 0 and SRET resumed U-mode.
+
+All 49 proof bytes have matched S-mode Linux guest MMIO writes to UART0 at
+0x10000000 with corresponding retired steps. The machine UART output and
+proof-output artifact contain the exact userspace message. The proof is
+distinct from the preceding kernel printk transcript.
+
+UART model correction
+---------------------
+After Linux registered ttyS0, the first authentic write returned its full
+length but drained only the initial transmitter batch. The RISC-V 16550 model
+accepted only the receive-data interrupt enable (IER bit 0), while Linux's
+8250 driver waits for transmitter-holding-register-empty service (IER bit 1)
+to continue filling the transmitter. The model now supports IER THRE, reports
+IIR 0x02, clears the indication when IIR is read, and asserts/deasserts the
+existing level-sensitive PLIC source as TX service becomes pending. RX keeps
+priority and existing UART behavior is retained.
+
+The semantics match the TI TL16C2550 16550-compatible specification:
+https://www.ti.com/lit/ds/symlink/tl16c2550.pdf
+A direct UART/PLIC regression covers enabling THRE, IIR reporting and clearing,
+source claim/completion/re-pending, successive TX bytes, and disabling THRE.
+The only production emulator behavior change is the RISC-V UART model. No
+instruction semantics, MMU, PMP, OpenSBI, Linux, or IA-64 implementation
+changed.
+
+Retirement totals and stop classification
+-----------------------------------------
+Debug and Release each stopped at userspace_proof_complete after
+84,851,242 post-handoff retirements:
+  U-mode: 17; S-mode: 80,703,709; M-mode: 4,147,516.
+The stop PC was U-mode 0x10054, after the successful sched_yield return. There
+was no terminal panic, architectural fault, host SBI interception, or
+retirement-ceiling stop. This is the first authentic userspace execution
+frontier, not a claim that general-purpose Linux boot completed.
+
+Validation
+----------
+Debug CTest: 37/37 passed, 4,744.33 seconds total. This includes 35 RISC-V
+tests, EfiMemoryMapTests, IA64SalTests, the authentic initramfs integration,
+and the UART/PLIC regression.
+Release CTest: 37/37 passed, 3,320.46 seconds total, with the same selection.
+
+Direct IA-64 regressions passed 3/3 in both Debug and Release:
+test_ia64_acpi, test_ia64_interrupt_controller, and
+test_ia64_processor_interrupt_block. No IA-64 implementation file changed.
+The unrelated ComputeIa64EfiAliasBase linker issue was not part of this
+targeted test selection and remains separately classified.
+
+git diff --check passed. No QEMU was run.
+
+Artifacts and hashes
+-------------------
+Artifact root:
+  E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv26-artifacts
+Reproducible fixture inputs:
+  inputs-final-v6\ and independent rebuild-check-final-v6\
+Final Release evidence:
+  attempt-11-final-release-matrix\
+Final Debug evidence:
+  attempt-12-final-debug-matrix\
+Preserved focused, failed, and diagnostic attempts remain in attempt-1 through
+attempt-10 and the earlier named attempt directories. No earlier evidence,
+firmware, ISO, checkpoints, Testing/, or fixture .build/ directory was
+removed or overwritten.
+
+Validation logs:
+  riscv26-release-final-ctest.txt
+  riscv26-debug-final-ctest.txt
+  riscv26-direct-ia64-regressions-postfix.txt
+The evidence bundles include run summaries, syscall traces, kernel milestones,
+handoff FDT hashes, console bytes, exact proof output, and bounded trap
+summaries. Kernel Image, vmlinux, config, firmware, ELF, CPIO, DTB, and FDT
+handoff hashes are recorded above and in their manifests.
+
+Phase disposition and RISCV-27 recommendation
+---------------------------------------------
+`.phase-riscv` now records last_completed=RISCV-26 and
+next_expected=RISCV-27. The implementation and marker are committed locally in
+49535e2928ccdea5d0eadd871a2670e93792b7bc; the documentation is committed in a
+separate follow-up. Nothing was pushed.
+
+For RISCV-27, retain the same authenticated Linux and firmware baseline and
+verify user/kernel isolation with a bounded negative U-mode access to a
+supervisor-only mapping, then exercise the smallest additional real syscall
+path needed to validate controlled PID 1 continuation. Keep the next phase
+focused on process isolation and syscall return behavior rather than broad
+userspace or unrelated device support.
