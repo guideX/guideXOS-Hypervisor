@@ -72,8 +72,12 @@ bool LinuxValidatePlatformFdt(const std::vector<uint8_t>& bytes,
     if (!tree.valid || tree.totalSize == 0 || tree.totalSize != bytes.size()) {
         return fail("FDT header or structure is invalid");
     }
-    if (!LinuxFdtString(tree, "/", "compatible", "guidexos,riscv18-linux-entry")) {
-        return fail("root compatible does not identify RISCV-18 Linux-entry profile");
+    const bool phase25Profile = LinuxFdtString(
+        tree, "/", "compatible", "guidexos,riscv18-linux-entry");
+    const bool phase26Profile = LinuxFdtString(
+        tree, "/", "compatible", "guidexos,riscv26-linux-initramfs");
+    if (!phase25Profile && !phase26Profile) {
+        return fail("root compatible does not identify a supported Linux boot profile");
     }
     if (!LinuxFdtU32(tree, "/", "#address-cells", 2) ||
         !LinuxFdtU32(tree, "/", "#size-cells", 2)) {
@@ -131,6 +135,28 @@ bool LinuxValidatePlatformFdt(const std::vector<uint8_t>& bytes,
 
     if (!LinuxFdtString(tree, "/chosen", "stdout-path", "/soc/serial@10000000")) {
         return fail("chosen console does not point at UART0");
+    }
+    const bool hasInitrdStart = LinuxFdtNodeHasProperty(
+        tree, "/chosen", "linux,initrd-start");
+    const bool hasInitrdEnd = LinuxFdtNodeHasProperty(
+        tree, "/chosen", "linux,initrd-end");
+    if (phase26Profile) {
+        const auto* initrdStart = Property(tree, "/chosen", "linux,initrd-start");
+        const auto* initrdEnd = Property(tree, "/chosen", "linux,initrd-end");
+        if (initrdStart == nullptr || initrdStart->size() != 8 ||
+            initrdEnd == nullptr || initrdEnd->size() != 8) {
+            return fail("RISCV-26 chosen initrd addresses are not two 32-bit cells");
+        }
+        const uint64_t start = Be64Pair(*initrdStart, 0);
+        const uint64_t end = Be64Pair(*initrdEnd, 0);
+        if (start != 0x81400000ULL || end <= start ||
+            end > boot_contract::kRamBase + boot_contract::kRamSize ||
+            (start < boot_contract::kFdtAddress + boot_contract::kFdtCapacity &&
+             boot_contract::kFdtAddress < end)) {
+            return fail("RISCV-26 chosen initrd range is invalid, overlapping, or outside RAM");
+        }
+    } else if (hasInitrdStart || hasInitrdEnd) {
+        return fail("RISCV-18 negative-control FDT must not advertise an initramfs");
     }
     for (const auto& uart : std::array<std::array<uint64_t, 3>, 2>{{
              {{0x10000000ULL, 0x100ULL, 10}},

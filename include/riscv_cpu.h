@@ -759,6 +759,7 @@ private:
         mutable uint8_t receiveByte = 0;
         mutable bool receiveDataReady = false;
         mutable bool receiveOverrun = false;
+        mutable bool transmitEmptyInterruptPending = false;
         std::string output;
         uint32_t plicSource = 10;
     };

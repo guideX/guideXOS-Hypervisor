@@ -498,7 +498,10 @@ void TestPlicAndUartBoundaries() {
     ExpectEq("DLL reads back under DLAB", 0x34, ReadUart8(cpu, kUartBase, ok));
     ExpectEq("DLM reads back under DLAB", 0x12, ReadUart8(cpu, kUartBase + 1, ok));
     Expect(WriteUart8(cpu, kUartBase + 3, 3), "UART DLAB can be cleared");
-    Expect(WriteUart8(cpu, kUartBase + 1, 0x0F), "UART masks unsupported IER modes");
+    Expect(WriteUart8(cpu, kUartBase + 1, 0x0D), "UART masks unsupported IER modes");
+    ExpectEq("IER retains only receive-data enable", 1,
+             ReadUart8(cpu, kUartBase + 1, ok));
+    Expect(ok, "IER read succeeds after unsupported modes are masked");
     Expect(WriteUart8(cpu, kUartBase + 2, 0x01), "FIFO enable request is accepted but not advertised");
     Expect(cpu.injectMachineUartReceiveByte(0x55), "UART accepts byte with RX IER enabled");
     Expect(cpu.machineUartReceiveIrqAsserted() && cpu.machinePlicSourcePending(10),
@@ -515,6 +518,50 @@ void TestPlicAndUartBoundaries() {
     ExpectEq("claim returns UART source 10", 10, ReadMmio32(cpu, claimS, ok));
     Expect(WriteMmio32(cpu, claimS, 10), "guest-model completion of UART source succeeds");
     Expect(!cpu.machinePlicSourcePending(10), "deasserted UART source stays clear after completion");
+
+    Expect(WriteUart8(cpu, kUartBase + 1, 0x02),
+           "enabling THRE interrupt requests transmitter service");
+    Expect(cpu.machinePlicSourceAsserted(10) && cpu.machinePlicSourcePending(10) &&
+           cpu.machinePlicOutput(MachinePlicContext::Supervisor),
+           "idle transmitter raises its level-sensitive PLIC source");
+    ExpectEq("claim returns UART THRE source", 10, ReadMmio32(cpu, claimS, ok));
+    Expect(ok, "UART THRE interrupt is claimable by S-mode");
+    ExpectEq("IIR identifies transmitter-empty interrupt", 2,
+             ReadUart8(cpu, kUartBase + 2, ok));
+    Expect(ok && !cpu.machinePlicSourceAsserted(10),
+           "reading IIR clears the current THRE interrupt");
+    Expect(WriteUart8(cpu, kUartBase, 'A'), "THR accepts a transmit byte");
+    Expect(cpu.machineUartOutput().ends_with('A'),
+           "transmit byte reaches the UART output stream");
+    Expect(cpu.machinePlicSourceAsserted(10),
+           "empty THR reasserts TX service while THRI remains enabled");
+    Expect(WriteMmio32(cpu, claimS, 10),
+           "completion re-pends the asserted transmitter source");
+    Expect(cpu.machinePlicSourcePending(10),
+           "level-sensitive PLIC re-pends UART TX after completion");
+    ExpectEq("reasserted UART TX source remains claimable", 10,
+             ReadMmio32(cpu, claimS, ok));
+    ExpectEq("second THRE indication is reported", 2,
+             ReadUart8(cpu, kUartBase + 2, ok));
+    Expect(ok && !cpu.machinePlicSourceAsserted(10),
+           "second IIR read clears THRE before the next byte");
+    Expect(WriteUart8(cpu, kUartBase, 'B'),
+           "THR accepts the next byte after servicing THRE");
+    Expect(cpu.machineUartOutput().ends_with("AB"),
+           "successive transmit bytes preserve their order");
+    Expect(WriteMmio32(cpu, claimS, 10),
+           "second TX completion re-pends the still-enabled source");
+    ExpectEq("final empty TX source remains claimable", 10,
+             ReadMmio32(cpu, claimS, ok));
+    ExpectEq("final THRE indication is reported", 2,
+             ReadUart8(cpu, kUartBase + 2, ok));
+    Expect(WriteUart8(cpu, kUartBase + 1, 0),
+           "disabling THRI stops transmitter interrupts");
+    Expect(WriteMmio32(cpu, claimS, 10),
+           "final deasserted TX interrupt completes");
+    Expect(!cpu.machinePlicSourceAsserted(10) &&
+           !cpu.machinePlicSourcePending(10),
+           "disabling THRI leaves no UART source pending");
 
     Expect(WriteUart8(cpu, kUartBase + 1, 1), "UART RX interrupt is enabled");
     Expect(cpu.injectMachineUartReceiveByte(0x66), "UART accepts byte before FCR receiver reset");

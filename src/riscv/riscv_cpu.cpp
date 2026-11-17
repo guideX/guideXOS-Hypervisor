@@ -358,6 +358,7 @@ void RV64CPU::reset() {
         uart.receiveByte = 0;
         uart.receiveDataReady = false;
         uart.receiveOverrun = false;
+        uart.transmitEmptyInterruptPending = false;
         uart.output.clear();
     }
     mmioReadCount_ = 0;
@@ -662,9 +663,18 @@ bool RV64CPU::readUartMmio(uint64_t paddr, uint8_t* dst, size_t size,
                                                      : uart.interruptEnable;
             break;
         case 2:
-            // FIFO capability bits remain zero: only the non-FIFO receive
-            // data-available interrupt is implemented.
-            value = uartReceiveIrqAsserted(uartIndex) ? 0x04U : 0x01U;
+            // FIFO capability bits remain zero. Receive-data has priority
+            // over the 16550 transmitter-holding-register-empty interrupt.
+            if (uartReceiveIrqAsserted(uartIndex)) {
+                value = 0x04U;
+            } else if (uart.transmitEmptyInterruptPending &&
+                       (uart.interruptEnable & 0x02U) != 0U) {
+                value = 0x02U;
+                uart.transmitEmptyInterruptPending = false;
+                updateUartInterrupt(uartIndex);
+            } else {
+                value = 0x01U;
+            }
             break;
         case 3: value = uart.lineControl; break;
         case 4: value = uart.modemControl; break;
@@ -708,13 +718,21 @@ bool RV64CPU::writeUartMmio(uint64_t paddr, const uint8_t* src, size_t size,
                 uart.divisorLow = value;
             } else {
                 uart.output.push_back(static_cast<char>(value));
+                if ((uart.interruptEnable & 0x02U) != 0U) {
+                    // The bounded transmitter accepts each byte immediately,
+                    // so THR is empty again and can request the next TX batch.
+                    uart.transmitEmptyInterruptPending = true;
+                    updateUartInterrupt(uartIndex);
+                }
             }
             break;
         case 1:
             if ((uart.lineControl & 0x80U) != 0U) uart.divisorHigh = value;
             else {
-                // Receive-data-available is the only enabled interrupt mode.
-                uart.interruptEnable = value & 0x01U;
+                // Support receive-data-available and transmitter-empty.
+                uart.interruptEnable = value & 0x03U;
+                uart.transmitEmptyInterruptPending =
+                    (uart.interruptEnable & 0x02U) != 0U;
                 updateUartInterrupt(uartIndex);
             }
             break;
@@ -1088,6 +1106,7 @@ bool RV64CPU::configureMachineUartInstance(size_t uartIndex,
         uart.receiveByte = 0;
         uart.receiveDataReady = false;
         uart.receiveOverrun = false;
+        uart.transmitEmptyInterruptPending = false;
         uart.output.clear();
         return true;
     }
@@ -1126,6 +1145,7 @@ bool RV64CPU::configureMachineUartInstance(size_t uartIndex,
     uart.receiveByte = 0;
     uart.receiveDataReady = false;
     uart.receiveOverrun = false;
+    uart.transmitEmptyInterruptPending = false;
     uart.output.clear();
     setPlicSourceLevel(uart.plicSource, false);
     return true;
@@ -1268,8 +1288,11 @@ void RV64CPU::setPlicSourceLevel(uint32_t source, bool asserted) const {
 
 void RV64CPU::updateUartInterrupt(size_t uartIndex) const {
     if (uartIndex >= uartStates_.size()) return;
+    const auto& uart = uartStates_[uartIndex];
     setPlicSourceLevel(uartStates_[uartIndex].plicSource,
-                       uartReceiveIrqAsserted(uartIndex));
+                       uartReceiveIrqAsserted(uartIndex) ||
+                           (uart.transmitEmptyInterruptPending &&
+                            (uart.interruptEnable & 0x02U) != 0U));
 }
 
 bool RV64CPU::plicHasEligibleSource(uint32_t context) const {
