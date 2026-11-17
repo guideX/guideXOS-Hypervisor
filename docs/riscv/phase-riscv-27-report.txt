@@ -205,8 +205,10 @@ instrumentation false-negative runs are preserved in separate directories.
 Git result
 ----------
 .phase-riscv now records RISCV-27 complete and RISCV-28 next. The in-scope
-work was committed locally on branch RISCV; no push was made. The final full
-commit SHA is recorded in the completion message.
+work was committed locally on branch RISCV; no push was made. The phase
+implementation and marker commit is
+923014b04813b10ea373c9e2065161b43ed2b31e. A follow-up report-only commit
+records this identifier.
 
 Recommended RISCV-28 scope
 --------------------------
