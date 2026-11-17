@@ -170,6 +170,7 @@ struct PPC64RegisterView {
     uint64_t mmcra = 0;
     uint64_t mmcr0 = 0x80000000ULL; // POWER9 guideXOS profile reset value.
     uint64_t mmcr1 = 0; // POWER9 MMCR1 profile reset value.
+    uint64_t mmcr2 = 0; // POWER9 MMCR2 profile reset value.
     uint64_t srr0 = 0;
     uint64_t srr1 = 0;
     uint64_t dar = 0;

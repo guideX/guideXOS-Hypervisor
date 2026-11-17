@@ -159,8 +159,13 @@ void testMMCRADecodeAndIdentity43() {
                          uint16_t{153}, uint16_t{273}, uint16_t{999}}) {
         const auto read = PPC64ISAPlugin::decodeWord(encodeMfspr(9U, spr));
         const auto write = PPC64ISAPlugin::decodeWord(encodeMtspr(9U, spr));
-        if (spr == 153U || spr == 273U || spr == SPR_MMCR0 ||
-            spr == SPR_MMCR1) {
+        if (spr == SPR_MMCR2) {
+            CHECK(read.supported && read.kind == DecodedKind::MFSPR &&
+                  read.sprn == SPR_MMCR2 && read.rt == 9U);
+            CHECK(write.supported && write.kind == DecodedKind::MTSPR &&
+                  write.sprn == SPR_MMCR2 && write.rt == 9U);
+        } else if (spr == 153U || spr == 273U || spr == SPR_MMCR0 ||
+                   spr == SPR_MMCR1) {
             CHECK(read.supported && write.supported);
         } else {
             CHECK(!read.supported && !write.supported);

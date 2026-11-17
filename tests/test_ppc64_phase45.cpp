@@ -73,7 +73,15 @@ void testMMCR1DecodeAndEventFields45() {
           SPR_MMCR1 != SPR_HFSCR && SPR_MMCR1 != SPR_SPRG1);
     CHECK(!PPC64ISAPlugin::decodeWord(encodeMfspr(4U, SPR_HFSCR)).supported);
     CHECK(!PPC64ISAPlugin::decodeWord(encodeMtspr(4U, SPR_HFSCR)).supported);
-    for (uint16_t spr : {SPR_MMCR2, uint16_t{787}, uint16_t{788}, uint16_t{789},
+    const auto mmcr2Read = PPC64ISAPlugin::decodeWord(
+        encodeMfspr(4U, SPR_MMCR2));
+    const auto mmcr2Write = PPC64ISAPlugin::decodeWord(
+        encodeMtspr(4U, SPR_MMCR2));
+    CHECK(mmcr2Read.supported && mmcr2Read.kind == DecodedKind::MFSPR &&
+          mmcr2Read.sprn == SPR_MMCR2);
+    CHECK(mmcr2Write.supported && mmcr2Write.kind == DecodedKind::MTSPR &&
+          mmcr2Write.sprn == SPR_MMCR2);
+    for (uint16_t spr : {SPR_UMMCR2, uint16_t{787}, uint16_t{788}, uint16_t{789},
                          uint16_t{790}, uint16_t{791}, uint16_t{792},
                          uint16_t{999}}) {
         CHECK(!PPC64ISAPlugin::decodeWord(encodeMfspr(4U, spr)).supported);
@@ -619,7 +627,7 @@ void testAuthenticLinuxMMCR1Retirement45() {
     CHECK(first.totalRetired == 2'693'019ULL &&
           second.totalRetired == first.totalRetired);
 
-    CHECK(first.stopClass == "unsupported-or-invalid-instruction" &&
+    CHECK(first.stopClass == "phase46-authenticated-MMCR2-boundary" &&
           second.stopClass == first.stopClass);
     CHECK(first.stopNip == first.mmcr1After.nip &&
           first.stopNip == kMmcr1LinuxNip45 + 4U &&
@@ -638,7 +646,7 @@ void testAuthenticLinuxMMCR1Retirement45() {
           nextHigh == 24U && nextSpr == 785U &&
           ((first.stopWord >> 1U) & 0x3FFU) == XO_MTSPR &&
           (first.stopWord & 1U) == 0U);
-    CHECK(!nextDecode.supported && nextDecode.kind == DecodedKind::MTSPR &&
+    CHECK(nextDecode.supported && nextDecode.kind == DecodedKind::MTSPR &&
           nextDecode.rt == 9U && nextDecode.sprn == 785U);
     CHECK(first.final.gpr[9] == 0U && first.final.mmcr0 == MMCR0_FC &&
           first.final.mmcr1 == 0U && first.final.mmcra == 0U &&
@@ -685,7 +693,7 @@ void testAuthenticLinuxMMCR1Retirement45() {
         << "\nlast_successful_nip=" << hex(first.mmcr1Nip)
         << "\nfirst_unsupported_nip=" << hex(first.stopNip)
         << "\nraw=" << wordHex(first.stopWord)
-        << "\ndecode=unsupported mtspr SPR 785 (MMCR2), RS=r9"
+        << "\ndecode=supported mtspr SPR 785 (MMCR2), RS=r9; explicit Phase 45 stop-before-execution boundary"
         << "\nstop_class=" << first.stopClass
         << "\narchitectural_guest_exception=none; decode-time unsupported stop"
         << "\nR9=" << hex(first.final.gpr[9])
@@ -790,6 +798,7 @@ void testAuthenticLinuxMMCR1Retirement45() {
 
 } // namespace
 
+#ifndef PPC64_PHASE45_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -839,3 +848,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

@@ -60,9 +60,9 @@ constexpr size_t INSN_WIDTH = 4;
 // the smallest compatible layout, emits v3 for a nonzero PIDR, v4 for
 // hypervisor architectural state, v5 when DEC is armed, v6 when SPRG1 is
 // nonzero, v7 when FSCR is nonzero, v8 when MMCRA is nonzero, v9 when MMCR0
-// differs from the selected POWER9 profile reset value, and v10 when MMCR1 is
-// nonzero. Explicit version APIs select their respective layouts; older
-// readers remain supported.
+// differs from the selected POWER9 profile reset value, v10 when MMCR1 is
+// nonzero, and v11 when MMCR2 is nonzero. Explicit version APIs select their
+// respective layouts; older readers remain supported.
 constexpr uint32_t STATE_MAGIC = 0x31435050;  // 'P','P','C','1' little-endian
 constexpr uint32_t STATE_VERSION = 1;
 constexpr size_t STATE_SIZE =
@@ -86,6 +86,8 @@ constexpr uint32_t STATE_VERSION_V9 = 9;
 constexpr size_t STATE_SIZE_V9 = STATE_SIZE_V8 + 8;
 constexpr uint32_t STATE_VERSION_V10 = 10;
 constexpr size_t STATE_SIZE_V10 = STATE_SIZE_V9 + 8;
+constexpr uint32_t STATE_VERSION_V11 = 11;
+constexpr size_t STATE_SIZE_V11 = STATE_SIZE_V10 + 8;
 
 // ============================================================================
 // PPC64 Phase 4 Book III-S profile (Power ISA v3.1C, server environment)
@@ -190,10 +192,31 @@ constexpr uint16_t SPR_SPRG2 = 274;
 constexpr uint16_t SPR_SPRG3 = 275;
 constexpr uint16_t SPR_HFSCR = 190; // identified, not implemented in this profile
 constexpr uint16_t SPR_FSCR = 153;
+constexpr uint16_t SPR_UMMCR2 = 769; // separate user SPR; not implemented
 constexpr uint16_t SPR_MMCRA = 786;
 constexpr uint16_t SPR_MMCR0 = 795;
-constexpr uint16_t SPR_MMCR2 = 785; // identified, remains unsupported
+constexpr uint16_t SPR_MMCR2 = 785;
 constexpr uint16_t SPR_MMCR1 = 798;
+// POWER9 PMU User's Guide v1.2 defines six contiguous nine-bit MMCR2 fields
+// at Power bit positions [0:53]: FCnS, FCnP, FCnPC, FCnM1, FCnM0, FCnWAIT,
+// FCnH, FCnTI, FCnTA. Convert IBM/Power bit numbering (0 is the MSB) into the
+// raw uint64_t mask used by this interpreter. Bits 54:63 are reserved in the
+// guide; privileged access retains the full written value deterministically.
+constexpr uint64_t mmcr2PowerBitMask(unsigned bit) {
+    return bit < 64U ? (uint64_t{1} << (63U - bit)) : 0U;
+}
+constexpr uint64_t mmcr2CounterFieldMask(unsigned counter, unsigned fieldBit) {
+    return counter >= 1U && counter <= 6U && fieldBit < 9U
+        ? mmcr2PowerBitMask((counter - 1U) * 9U + fieldBit) : 0U;
+}
+constexpr uint64_t MMCR2_FC1P = mmcr2CounterFieldMask(1U, 1U);
+constexpr uint64_t MMCR2_FC2P = mmcr2CounterFieldMask(2U, 1U);
+constexpr uint64_t MMCR2_FC3P = mmcr2CounterFieldMask(3U, 1U);
+constexpr uint64_t MMCR2_FC4P = mmcr2CounterFieldMask(4U, 1U);
+constexpr uint64_t MMCR2_FC5P = mmcr2CounterFieldMask(5U, 1U);
+constexpr uint64_t MMCR2_FC6P = mmcr2CounterFieldMask(6U, 1U);
+constexpr uint64_t MMCR2_FCNP0_MASK = MMCR2_FC1P | MMCR2_FC2P |
+    MMCR2_FC3P | MMCR2_FC4P | MMCR2_FC5P | MMCR2_FC6P;
 // POWER9 MMCR0 Freeze Counters (FC), in the Linux-compatible low-word mask.
 constexpr uint64_t MMCR0_FC = 0x80000000ULL;
 constexpr uint64_t MMCR0_FCS = 0x40000000ULL;
@@ -649,6 +672,8 @@ public:
     void deserializeV9(const uint8_t* buffer);
     void serializeV10(uint8_t* buffer) const;
     void deserializeV10(const uint8_t* buffer);
+    void serializeV11(uint8_t* buffer) const;
+    void deserializeV11(const uint8_t* buffer);
     static constexpr size_t v2Size() { return STATE_SIZE_V2; }
     static constexpr size_t v3Size() { return STATE_SIZE_V3; }
     static constexpr size_t v4Size() { return STATE_SIZE_V4; }
@@ -658,6 +683,7 @@ public:
     static constexpr size_t v8Size() { return STATE_SIZE_V8; }
     static constexpr size_t v9Size() { return STATE_SIZE_V9; }
     static constexpr size_t v10Size() { return STATE_SIZE_V10; }
+    static constexpr size_t v11Size() { return STATE_SIZE_V11; }
 
     std::array<uint64_t, NUM_GPR> gpr{};
     uint64_t nip = 0;  // Next-instruction pointer (program counter)
@@ -691,6 +717,11 @@ public:
     // are stored in raw numeric bits 31:24, 23:16, 15:8, and 7:0 for PMC1-4.
     // This profile stores and reads the full value but does not count events.
     uint64_t mmcr1 = 0;
+    // MMCR2 (SPR 785), per-vCPU POWER9 per-counter freeze-control state.
+    // Six nine-bit control fields occupy Power bits 0:53. Reserved bits are
+    // retained raw as a deterministic profile choice; no PMU engine consumes
+    // these controls.
+    uint64_t mmcr2 = 0;
 };
 
 /**
@@ -774,6 +805,7 @@ public:
     uint64_t getMMCRA() const { return state_.mmcra; }
     uint64_t getMMCR0() const { return state_.mmcr0; }
     uint64_t getMMCR1() const { return state_.mmcr1; }
+    uint64_t getMMCR2() const { return state_.mmcr2; }
     bool isMMCR0Frozen() const { return (state_.mmcr0 & MMCR0_FC) != 0; }
     void setPIDR(uint32_t value) {
         if (state_.pidr != value) {
@@ -894,6 +926,8 @@ public:
     bool deserialize_state_v9(const std::vector<uint8_t>& data);
     std::vector<uint8_t> serialize_state_v10() const;
     bool deserialize_state_v10(const std::vector<uint8_t>& data);
+    std::vector<uint8_t> serialize_state_v11() const;
+    bool deserialize_state_v11(const std::vector<uint8_t>& data);
 
     // Phase 3 per-CPU fault/exception record. Independent per instance,
     // cleared by reset(), sticky across successful execution (see the
