@@ -1618,6 +1618,26 @@ endif()
 add_test(NAME PPC64Phase47Tests COMMAND test_ppc64_phase47)
 set_tests_properties(PPC64Phase47Tests PROPERTIES TIMEOUT 3600)
 
+# POWER9 EXTSB byte semantics, record form, and authentic Linux continuation.
+add_executable(test_ppc64_phase48
+    tests/test_ppc64_phase48.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase48 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase48 PRIVATE
+    PPC64_PHASE33_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase48 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase48 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase48Tests COMMAND test_ppc64_phase48)
+set_tests_properties(PPC64Phase48Tests PROPERTIES TIMEOUT 3600)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

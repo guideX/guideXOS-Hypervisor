@@ -1900,6 +1900,14 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             } else if (combined == XO_XOR) {
                 instr.kind = DecodedKind::XOR;
                 instr.supported = true;
+            } else if (combined == XO_EXTSB) {
+                // EXTSB sign-extends the low byte of RS. The X-form field
+                // between RA and XO is nonoperand (shown as dashes in the
+                // ISA form and unconstrained in the pinned QEMU decoder), so
+                // all five-bit patterns are accepted and ignored.
+                instr.oe = false;
+                instr.kind = DecodedKind::EXTSB;
+                instr.supported = true;
             } else if (combined == XO_EXTSW) {
                 // EXTSW is an X-form 64-bit fixed-point instruction.  The
                 // five bits between RA and XO are reserved and must be zero;
@@ -2250,6 +2258,11 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             if (!instr.supported) {
                 out << " ; invalid reserved field";
             }
+            break;
+        case DecodedKind::EXTSB:
+            out << "extsb" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt);
             break;
         case DecodedKind::CNTLZD:
             out << "cntlzd" << (instr.rc ? "." : "")
@@ -4097,6 +4110,22 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             } else {
                 result = s ^ t;
             }
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::EXTSB: {
+            // Snapshot RS before writing RA so RA==RS uses the original
+            // source. Unsigned masks make sign replication independent of
+            // host signed-char conversions and discard all upper source bits.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t byte = source & 0xFFULL;
+            const uint64_t result = (byte & 0x80ULL) != 0
+                ? byte | 0xFFFFFFFFFFFFFF00ULL
+                : byte;
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);

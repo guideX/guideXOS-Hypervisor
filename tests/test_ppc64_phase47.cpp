@@ -7,6 +7,7 @@ namespace {
 
 constexpr uint64_t kCntlzdLinuxNip47 = 0xC0000000013B2C18ULL;
 constexpr uint32_t kCntlzdLinuxWord47 = 0x7D2A0074U;
+constexpr uint64_t kExtsbLinuxNip47 = 0xC0000000013B9900ULL;
 
 uint32_t encodeCntlzd47(uint8_t rs, uint8_t ra, uint8_t field, bool rc) {
     return (31U << 26U) |
@@ -489,10 +490,10 @@ void testAuthenticLinuxCntlzd47() {
     if (kernel.empty() || fdt.empty()) return;
 
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 0U, false, false, true, false, 0U,
+        false, false, 0U, false, false, true, false, kExtsbLinuxNip47,
         kPower9SetupEntry43, true, true, false, true, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 0U, false, false, true, false, 0U,
+        false, false, 0U, false, false, true, false, kExtsbLinuxNip47,
         kPower9SetupEntry43, true, true, false, true, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
@@ -583,9 +584,12 @@ void testAuthenticLinuxCntlzd47() {
           nextWord == 0x7D4A0774U && nextPrimary == 31U &&
           nextRS == 10U && nextRA == 10U && nextRB == 0U &&
           nextXO == 954U && (nextWord & 1U) == 0U);
-    CHECK(!PPC64ISAPlugin::decodeWord(nextWord).supported &&
-          first.stopFault.category == PPC64FaultCategory::INVALID_INSTRUCTION &&
-          first.stopFetchTranslated && first.stopFetchExecuteAllowed);
+    const auto nextDecoded = PPC64ISAPlugin::decodeWord(nextWord);
+    CHECK(nextDecoded.supported && nextDecoded.kind == DecodedKind::EXTSB &&
+          nextDecoded.rt == 10U && nextDecoded.ra == 10U &&
+          !nextDecoded.rc && first.stopClass == "explicit-authentic-frontier" &&
+          !first.stopFault.valid && first.stopFetchTranslated &&
+          first.stopFetchExecuteAllowed);
     const auto nextElf = runDirectory / "next-frontier-elf-attribution.txt";
     CHECK(inspectLinuxMMCR2Frontier46(kernelFile, nextElf, first.stopNip));
     std::ifstream nextElfStream(nextElf, std::ios::binary);
@@ -739,6 +743,7 @@ void testAuthenticLinuxCntlzd47() {
 
 } // namespace
 
+#ifndef PPC64_PHASE47_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -776,3 +781,4 @@ int main() {
     (void)firstCheck;
     return failures == 0 ? 0 : 1;
 }
+#endif

@@ -1009,6 +1009,7 @@ struct AuthenticReplay {
     uint32_t srdRawWord = 0;
     uint32_t subficRawWord = 0;
     uint32_t cntlzdRawWord = 0;
+    uint32_t extsbRawWord = 0;
     uint32_t mtocrfRawWord = 0;
     uint32_t negRawWord = 0;
     uint32_t negAlignmentRawWord = 0;
@@ -1031,6 +1032,20 @@ struct AuthenticReplay {
     uint64_t sldNip = 0;
     uint64_t srdNip = 0;
     uint64_t subficNip = 0;
+    uint64_t extsbNip = 0;
+    uint16_t extsbLPID = 0;
+    uint64_t extsbTotalRetiredBefore = 0;
+    uint64_t extsbTotalRetired = 0;
+    uint64_t extsbCyclesBefore = 0;
+    uint64_t extsbCyclesAfter = 0;
+    uint64_t extsbTimebaseBefore = 0;
+    uint64_t extsbTimebaseAfter = 0;
+    uint64_t extsbRamBefore = 0;
+    uint64_t extsbRamAfter = 0;
+    uint64_t extsbFormatPointer = 0;
+    uint64_t extsbFormatCursorPointer = 0;
+    bool extsbFormatWindowRead = false;
+    std::string extsbFormatWindow;
     uint64_t mtocrfNip = 0;
     uint64_t rldicGuestRealAddress = 0;
     uint64_t rldicFetchBackingAddress = 0;
@@ -1197,6 +1212,8 @@ struct AuthenticReplay {
     PPC64RegisterView subficAfter{};
     PPC64RegisterView cntlzdBefore{};
     PPC64RegisterView cntlzdAfter{};
+    PPC64RegisterView extsbBefore{};
+    PPC64RegisterView extsbAfter{};
     PPC64RegisterView mtocrfBefore{};
     PPC64RegisterView mtocrfAfter{};
     PPC64RegisterView negBefore{};
@@ -1227,10 +1244,18 @@ struct AuthenticReplay {
     PPC64VirtualInterruptSnapshot mmcr2InterruptAfter{};
     PPC64VirtualInterruptSnapshot cntlzdInterruptBefore{};
     PPC64VirtualInterruptSnapshot cntlzdInterruptAfter{};
+    PPC64VirtualInterruptSnapshot extsbInterruptBefore{};
+    PPC64VirtualInterruptSnapshot extsbInterruptAfter{};
     std::string cntlzdDecode;
     std::string cntlzdTraceLine;
     std::vector<std::string> cntlzdPrecedingInstructions;
     std::vector<std::string> cntlzdFollowingInstructions;
+    bool extsbFetched = false;
+    bool extsbRetired = false;
+    std::string extsbDecode;
+    std::string extsbTraceLine;
+    std::vector<std::string> extsbPrecedingInstructions;
+    std::vector<std::string> extsbFollowingInstructions;
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -2081,6 +2106,77 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         context.str());
                 }
             }
+            if (following.kind == DecodedKind::EXTSB &&
+                !result.extsbFetched) {
+                result.extsbFetched = true;
+                result.extsbNip = before.nip;
+                result.extsbRawWord = following.raw;
+                result.extsbDecode = next.disassembly;
+                result.extsbBefore = before;
+                result.extsbLPID = cpu->getActiveLPID();
+                result.extsbFormatPointer = before.gpr[7];
+                result.extsbFormatCursorPointer = before.gpr[9];
+                result.extsbTotalRetiredBefore =
+                    result.prefixRetired + result.continuationRetired;
+                result.extsbCyclesBefore = vm.getCyclesExecuted();
+                result.extsbTimebaseBefore = vm.getPPC64Timebase();
+                result.extsbRamBefore = fingerprintRam(*memory);
+                result.extsbInterruptBefore =
+                    vm.getPPC64InterruptSnapshot();
+                constexpr size_t formatWindowSize = 16U;
+                const uint64_t formatGuestReal =
+                    result.extsbFormatPointer & kGuestRealMask;
+                const auto formatTranslation =
+                    PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition, formatGuestReal,
+                        PPC64TranslationAccess::READ);
+                if (formatTranslation.success &&
+                    formatTranslation.readAllowed &&
+                    formatTranslation.hostBackingAddress <=
+                        memory->GetTotalSize() - formatWindowSize) {
+                    std::array<uint8_t, formatWindowSize> formatBytes{};
+                    memory->ReadGuestReal(formatTranslation.hostBackingAddress,
+                        formatBytes.data(), formatBytes.size());
+                    std::ostringstream formatWindow;
+                    formatWindow << "bytes=";
+                    for (size_t index = 0; index < formatBytes.size(); ++index) {
+                        formatWindow << (index == 0U ? "" : " ")
+                            << wordHex(formatBytes[index]).substr(6U);
+                    }
+                    formatWindow << "\ntext=";
+                    for (uint8_t byte : formatBytes) {
+                        if (byte == 0U) {
+                            formatWindow << "\\0";
+                            break;
+                        }
+                        if (byte >= 0x20U && byte <= 0x7EU) {
+                            formatWindow << static_cast<char>(byte);
+                        } else {
+                            formatWindow << "\\x" << std::hex
+                                << static_cast<unsigned>(byte) << std::dec;
+                        }
+                    }
+                    result.extsbFormatWindow = formatWindow.str();
+                    result.extsbFormatWindowRead = true;
+                }
+                const size_t contextStart = lastInstructions.size() > 32U
+                    ? lastInstructions.size() - 32U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                << hex(lastGprs[index][reg])
+                                << (reg + 1U == lastGprs[index].size()
+                                    ? "" : ",");
+                        }
+                    }
+                    result.extsbPrecedingInstructions.push_back(
+                        context.str());
+                }
+            }
             if (following.kind == DecodedKind::EXTSW && !result.extswFetched) {
                 result.extswFetched = true;
                 result.extswNip = before.nip;
@@ -2124,6 +2220,17 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.cntlzdTimebaseAfter = vm.getPPC64Timebase();
                 result.cntlzdRamAfter = fingerprintRam(*memory);
                 result.cntlzdInterruptAfter =
+                    vm.getPPC64InterruptSnapshot();
+            }
+            if (following.kind == DecodedKind::EXTSB &&
+                result.extsbFetched && before.nip == result.extsbNip) {
+                result.extsbAfter = after;
+                result.extsbRetired = retired &&
+                    after.nip == before.nip + 4U;
+                result.extsbCyclesAfter = vm.getCyclesExecuted();
+                result.extsbTimebaseAfter = vm.getPPC64Timebase();
+                result.extsbRamAfter = fingerprintRam(*memory);
+                result.extsbInterruptAfter =
                     vm.getPPC64InterruptSnapshot();
             }
             if (following.kind == DecodedKind::MTSPR &&
@@ -2255,6 +2362,11 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             if (following.kind == DecodedKind::CNTLZD &&
                 result.cntlzdRetired && before.nip == result.cntlzdNip) {
                 result.cntlzdTotalRetired = result.prefixRetired +
+                    result.continuationRetired;
+            }
+            if (following.kind == DecodedKind::EXTSB &&
+                result.extsbRetired && before.nip == result.extsbNip) {
+                result.extsbTotalRetired = result.prefixRetired +
                     result.continuationRetired;
             }
             if (following.kind == DecodedKind::MTSPR &&
@@ -2456,6 +2568,21 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                     << result.cntlzdRetired;
                 result.cntlzdTraceLine = cntlzdLine.str();
             }
+            if (following.kind == DecodedKind::EXTSB &&
+                before.nip == result.extsbNip) {
+                std::ostringstream extsbLine;
+                extsbLine << line.str()
+                    << " R10_before=" << hex(before.gpr[10])
+                    << " low_byte=0x" << std::hex
+                    << (before.gpr[10] & 0xFFU)
+                    << " R10_after=" << hex(after.gpr[10])
+                    << " CR_before=0x" << before.cr
+                    << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " retired=" << std::boolalpha << result.extsbRetired;
+                result.extsbTraceLine = extsbLine.str();
+            }
             if (result.cntlzdRetired && before.nip != result.cntlzdNip &&
                 result.cntlzdFollowingInstructions.size() < 16U) {
                 std::ostringstream context;
@@ -2474,6 +2601,25 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         << (reg == 31U ? "" : ",");
                 }
                 result.cntlzdFollowingInstructions.push_back(context.str());
+            }
+            if (result.extsbRetired && before.nip != result.extsbNip &&
+                result.extsbFollowingInstructions.size() < 32U) {
+                std::ostringstream context;
+                context << line.str() << " CR_before=0x" << std::hex
+                    << before.cr << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " GPR_before=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(before.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                context << " GPR_after=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(after.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                result.extsbFollowingInstructions.push_back(context.str());
             }
             if (result.mmcr2Retired && before.nip > result.mmcr2Nip &&
                 before.nip <= result.mmcr2Nip + 0x2CU) {
@@ -2788,6 +2934,20 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             trace << line << "\n";
         }
         trace << "authentic_cntlzd_following_context_end\n";
+    }
+    if (result.extsbFetched) {
+        trace << "authentic_extsb_retirement="
+              << result.extsbTraceLine << "\n"
+              << "authentic_extsb_preceding_context_begin\n";
+        for (const auto& line : result.extsbPrecedingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_extsb_preceding_context_end\n"
+              << "authentic_extsb_following_context_begin\n";
+        for (const auto& line : result.extsbFollowingInstructions) {
+            trace << line << "\n";
+        }
+        trace << "authentic_extsb_following_context_end\n";
     }
     result.trace = trace.str();
     return result;
