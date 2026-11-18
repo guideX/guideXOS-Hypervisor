@@ -1403,6 +1403,38 @@ add_test(NAME RiscVLinuxProcessLifecycleTests
                  ${RISCV_LINUX_PROCESS_DTB_PATH}
                  "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv27-artifacts/$<CONFIG>")
 
+# RISCV-28 adds a separate static /bin/child ELF and observes Linux execve,
+# executable-image replacement, the constructed argv/envp stack, and reaping.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(RISCV_LINUX_EXECVE_INPUT_DIR
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv28-artifacts/inputs"
+    CACHE PATH "Path to the reproducibly generated RISCV-28 two-ELF fixture")
+add_executable(test_riscv_linux_execve_lifecycle
+    tests/test_riscv_linux_process_lifecycle.cpp
+    src/riscv/riscv_initramfs_contract.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_execve_lifecycle
+    PRIVATE RISCV28_EXECVE=1 RISCV_LINUX_STARTUP_CONTINUATION=1
+            RISCV_LINUX_CONSOLE_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_execve_lifecycle PRIVATE bcrypt)
+add_test(NAME RiscVLinuxExecveLifecycleTests
+         COMMAND test_riscv_linux_execve_lifecycle
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_CONFIG_PATH}
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_EXECVE_INPUT_DIR}/initramfs.cpio
+                 ${RISCV_LINUX_EXECVE_INPUT_DIR}/init.elf
+                 ${RISCV_LINUX_EXECVE_INPUT_DIR}/platform-initramfs.dtb
+                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv28-artifacts/$<CONFIG>")
+add_test(NAME RiscVLinuxExecveFixtureContractTests
+         COMMAND Python3::Interpreter
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_execve/test_fixture_contract.py
+                 ${RISCV_LINUX_EXECVE_INPUT_DIR}/child.elf
+                 ${RISCV_LINUX_EXECVE_INPUT_DIR}/initramfs.cpio)
+
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_image_entry
                                 test_riscv_linux_startup_continuation
@@ -1428,6 +1460,12 @@ if(MSVC)
     target_compile_options(test_riscv_linux_process_lifecycle PRIVATE /W4)
 else()
     target_compile_options(test_riscv_linux_process_lifecycle PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(MSVC)
+    target_compile_options(test_riscv_linux_execve_lifecycle PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_linux_execve_lifecycle PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

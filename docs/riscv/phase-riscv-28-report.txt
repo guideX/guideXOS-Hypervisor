@@ -1,0 +1,246 @@
+guideXOS Hypervisor — Phase RISCV-28 Report
+Authentic Linux execve, process image replacement, and second ELF execution
+Date: 2026-11-18
+
+RESULT
+------
+Outcome A — authentic Linux execve lifecycle completed in Debug and Release.
+The child created by Linux clone(SIGCHLD) called execve("/bin/child"), entered
+a distinct static ELF in U-mode with its original PID and parent, validated
+the Linux-created argv/environment stack, performed Linux syscalls, exited
+with code 42, and was reaped by PID 1 with wait status 10752. PID 1 continued.
+The page-walk discrepancy is resolved by captured instruction-page faults
+and successful Linux fault handling followed by successful read-only
+production-walker retries at the same address spaces and PCs.
+
+Repository preflight and closeout
+---------------------------------
+Branch: RISCV
+Starting HEAD: 391a2327633d3d0e8575437d2081ca8f760e3831
+The RISCV-27 implementation commit 923014b04813b10ea373c9e2065161b43ed2b31e
+is in the starting ancestry. Starting upstream divergence was ahead 5,
+behind 0 (origin/RISCV...HEAD: 0 5). The starting worktree had no tracked
+changes. Existing untracked Testing/ and fixture .build directories were
+preserved and excluded from the commit. The phase marker selected RISCV-28.
+The external CTest registry now contains 49 tests, up from 47: the lifecycle
+integration and bounded fixture-contract test were added. The focused
+selection used here contains 29 tests.
+
+The work is committed locally on RISCV. No push, reset, rebase, branch
+switch, shared .phase edit, or IA-64 implementation change was made.
+
+Pinned Linux, OpenSBI, and platform
+----------------------------------
+Linux source: v6.12, commit adc218676eef25575469234709c2d87185ca223a
+Linux Image SHA-256:
+  60ccb1172ffbe4b49cbc4447e7ccb4b705b5d60a9e92d3f10cf02a0d46bbca2c
+vmlinux SHA-256:
+  49a047dd85bac9e8da49f89907dfdcc845b8c9c564f9d6eb63ba76f68768d093
+Linux config SHA-256:
+  5dfc1dec7885ea79d1c6ca14262f7ff305d02ac37e74f01ee260cdd7317082ab
+OpenSBI v1.8.1 source commit:
+  74434f255873d74e56cc50aa762d1caf24c099f8
+OpenSBI firmware SHA-256:
+  cc4410ef1a24fd5f9cbb9019f82802351b829187de75b756c45b60479245d7a3
+
+The original firmware and Linux artifacts were hash-checked and preserved.
+The accepted one-hart RV64IMA_Zicsr, Sv39, StandardPmp16, UART0/UART1, PLIC,
+ACLINT timer, 10 MHz timebase, FDT, and Linux handoff profile were retained.
+Linux entered through unchanged OpenSBI and a genuine MRET. No host SBI
+provider, host-created task, host ELF loader, or synthetic syscall path was
+used. No QEMU run was performed.
+
+RISCV-27 baseline reproduction
+-----------------------------
+The accepted RISCV-27 process lifecycle was reproduced in Debug and Release
+before adding the second executable. Both runs passed 32/32 lifecycle checks
+with the accepted deterministic results:
+
+  post-handoff retired: 86,687,385
+  U/S/M retired: 127 / 82,495,996 / 4,191,262
+  parent PID: 1; child PID: 21; child exit: 37; wait status: 9472
+  child was reaped; PID 1 remained alive; no host SBI provider or guest fault
+
+The focused pre-phase selection had 28 tests. The RISCV-27 fixture and its
+accepted archive were not modified.
+
+Deterministic two-ELF fixture
+----------------------------
+Fixture source: tests/fixtures/riscv_linux_execve/
+Compiler: riscv64-linux-gnu-gcc 13.3.0
+GNU readelf/objdump: binutils 2.42; Python 3.12.3; DTC 1.7.0
+Archive format: uncompressed newc, uid/gid 0, fixed mtime 0, stable order.
+Archive entries: ., bin, dev, dev/console, dev/ttyS0, init, bin/child,
+TRAILER!!!. Both executables are independent static ELF64 little-endian
+RISC-V ET_EXEC images with no PT_INTERP or dynamic linker.
+
+  /init: 10,240 bytes; entry 0x10000; RX 0x10000 (732 file/memory bytes),
+    RW 0x11000 (112 bytes); SHA-256
+    cc1d3b8cafdb810e9016a106efa11020a599d8c6c2e096105a24b0dad4770b95
+  /bin/child: 9,624 bytes; entry 0x20000; RX 0x20000 (400 bytes),
+    RW 0x21000 (72 bytes); SHA-256
+    7cee7f4b5c769c24cd54e656fd6bda13cee6a601b969cd013ae04a875f7e9ce1
+  initramfs.cpio: 20,812 bytes; SHA-256
+    8d671d4b01520438caf9a09d55720b97cba63b03b3a500b28d58a1555927f91d
+  platform-initramfs.dtb SHA-256
+    c6c879a7f2eee8add59d9d76154f4428fc389b7d897f65eecf5b20cb64091c75
+
+Two independent fixture builds produced identical parent ELF, child ELF,
+archive, and generated DTB hashes. The initramfs was loaded at 0x81400000;
+FDT bounds were [0x81400000,0x8140514c), and Linux reserved the rounded
+0x6000-byte range. The six bounded fixture-contract negative cases passed,
+covering malformed ELF header/machine/type, invalid entry, truncated PT_LOAD,
+missing archive path, and incorrect executable mode. Argument and image
+identity errors are also direct lifecycle acceptance failures; no additional
+full guest boots were used for malformed-input cases.
+
+Authentic Linux execve and process identity
+------------------------------------------
+PID 1 entered the independent /init ELF at 0x10000. It used Linux getpid,
+opened /dev/ttyS0, wrote its marker, initialized private memory, and invoked
+clone(SIGCHLD) with flags 17. Linux returned child PID 21 to PID 1 and zero
+to the child. The existing COW checks still passed: child value
+0x55667788, parent value 0x11223344 after wait.
+
+Before exec, PID 21 executed /init U-mode bytes, checked getpid=21 and
+getppid=1, and wrote its distinct pre-exec marker. It issued the genuine
+Linux RISC-V execve syscall:
+
+  syscall: 221; U-mode ECALL PC: 0x101e0
+  path: /bin/child; pathname pointer: 0x1020b
+  argv pointer: 0x10216; envp pointer: 0x1022e
+  argv: ["/bin/child", "execve-riscv28"]
+  envp: ["GUIDEXOS_RISCV28=present"]
+  dispatch: __riscv_sys_execve at 0xffffffff80214580
+
+The pointers and strings were read from mapped guest U-mode memory. Linux's
+child-specific bprm_execve, begin_new_exec, setup_arg_pages, and start_thread
+events were captured. Successful exec replaced the image at entry 0x20000;
+the first retired instruction 0x00010413 matches the child ELF PT_LOAD bytes.
+PID 21, parent PID 1, and task pointer 0xffffffd6018e6780 were preserved.
+The task's satp root changed during exec, but satp was not used as the sole
+image-identity proof. The old continuation at 0x101e4 was not resumed.
+The new image retired 406 U-mode instructions.
+
+At the new ELF entry, sp was 16-byte aligned. The Linux RISC-V entry ABI was
+verified as sp -> argc, argv pointers, NULL, envp pointers, NULL, auxv.
+The guest child inspected argc=2, both argv strings, the environment token,
+and both null terminators using read-only production Sv39 translation.
+The guest validation site was reached and passed.
+
+The post-exec child called getpid (21), getppid (1), opened its own
+/dev/ttyS0 descriptor (fd 4), and wrote its marker. The write(64) returned
+46 bytes; the UART recorded 47 bytes because Linux's tty path expands the
+newline to CRLF. The child then called exit(42), entered Linux do_exit, and
+retired no further U-mode instructions. Parent wait4 returned PID 21 and
+copied status 10752 (42 << 8) to guest address 0x11008. A subsequent
+wait4(-1, ..., WNOHANG, ...) returned -ECHILD. PID 1 emitted its success
+marker and continued with getpid/sched_yield.
+
+Userspace markers were attributed to actual syscalls and UART0 MMIO:
+  PID 1:   "guideXOS RISCV-28: parent initialized\n" (38-byte write)
+  PID 21:  "guideXOS RISCV-28: child before exec\n" (37-byte write)
+  PID 21:  "guideXOS RISCV-28: new ELF argv/env ok pid=21\n" (46-byte write)
+  PID 1:   "guideXOS RISCV-28: parent reaped status=42\n" (43-byte write)
+All four writes had matched guest UART0 MMIO provenance. Their UART byte
+counts were respectively 39, 38, 47, and 44 after CRLF expansion. Linux
+printk and firmware output remain separately attributed.
+
+Scheduling proof includes a switch from PID 1 to the live PID 21 while the
+parent wait4 was active (retirement 86,810,282), with tp changing from the
+parent task pointer to the child task pointer and the kernel stacks changing.
+Linux later switched back to PID 1 after child completion and reaping.
+
+Page-walk sampler investigation
+-------------------------------
+The former auxiliary sampler's zero root PTE was a timing snapshot before
+the first successful U-mode fetch, not evidence of a translation failure.
+The audit uses Sv39Mmu::inspectPageWalk and the production
+inspectTranslationReadOnly path. Both use the existing production walker;
+the read-only translation disables A/D writes. The direct root-PTE probe is
+readable and agrees with the production walk. The diagnostic records the
+same task, VA, satp, privilege, and PC as the actual CPU step.
+
+  /init: PID 1, VA 0x10000, satp 0x8000000000082474, root table 0x82474000,
+    VPN [0,0,16]. The initial root PTE at 0x82474000 was readable zero and
+    translation failed. U-mode instruction-page fault cause 12 had PC/tval
+    0x10000. Linux do_page_fault (0xffffffff80670a44) and handle_mm_fault
+    (0xffffffff801a1e3c) executed for PID 1. The retry walk traversed all
+    three levels and translated to 0x82fe0000; its executable leaf PTE was
+    0x20bf805b. The CPU then retired 0x0ac00893, matching /init.
+  /bin/child: PID 21, VA 0x20000, satp 0x8000000000082483, root table
+    0x82483000. The initial root PTE was readable zero. U-mode instruction
+    page fault cause 12 had PC/tval 0x20000. The same child task entered
+    do_page_fault and handle_mm_fault. The retry walk traversed all levels
+    and translated to 0x81407000; its executable leaf PTE was 0x20501c5b.
+    The CPU then retired 0x00010413, matching /bin/child.
+
+For /init, the captured fault was at retirement 86,656,985; do_page_fault
+and handle_mm_fault were observed at 86,657,047 and 86,657,360. For the new
+child entry, the fault was at 86,973,710 and the handlers at 86,973,772 and
+86,974,085. Thus both pre-fault zero snapshots are explained by Linux's
+fault-driven mapping before successful fetch. The CPU uses an uncached
+walker; no TLB behavior or invalidation semantics are claimed. No MMU repair
+was required, and no translation inconsistency remains in these two cases.
+
+Debug and Release results
+------------------------
+The lifecycle integration passed 40/40 checks in each configuration:
+  Debug:   4,801.29 seconds; Outcome A
+  Release: 1,122.97 seconds; Outcome A
+
+Both stopped at process_lifecycle_complete with identical architectural
+evidence:
+  post-handoff retired: 87,068,751 of 120,000,000 ceiling
+  U/S/M retired: 513 / 82,863,617 / 4,204,621
+  step calls: 87,080,428; parent PID 1; child PID 21; wait status 10752
+  child post-exec U-mode instructions: 406
+  no terminal panic, architectural fault, or host SBI provider
+
+The run-summary, page-walk audit, execve evidence, image transition,
+argv-stack evidence, console binary/analysis, syscalls, and task-switch JSON
+files are byte-identical between Debug and Release. The 29-test focused
+CTest selection passed 29/29 in Debug (215.22 seconds) and Release
+(85.63 seconds). This selection includes the RISC-V ISA/MMU/PMP/firmware
+regressions, Linux Image Loader, EFI memory map, IA64 SAL, and the fixture
+contract test.
+
+Direct IA-64 regressions also passed in both configurations: ACPI,
+interrupt-controller, and processor-interrupt-block tests (3/3 each).
+No IA-64 implementation source changed. The existing RISCV-27 baseline
+passed its 32-check Debug and Release lifecycle reproductions. No Linux,
+OpenSBI, PMP, UART, PLIC, timer, or production translation semantics were
+changed. The only MMU addition is the non-mutating production-walker audit
+API used by tests.
+
+Artifacts and limitations
+-------------------------
+Artifact root:
+  E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv28-artifacts
+The deterministic fixture inputs and provenance are under inputs-final3/
+and the CTest inputs/ directory. Separate Debug and Release directories hold
+the run summary, execve/process transition, argv stack, user instruction
+trace, syscalls, switches, page-walk audit, traps, console binary/analysis,
+and frontier JSON. Earlier observer iterations and the obsolete partial
+Debug run are preserved in Release-pre-fix/, Release-observer-fix1/,
+Debug-pre-fix/, and related input-check directories; they are excluded from
+the accepted result.
+
+This phase proves one small static executable replacement and the listed
+Linux syscalls. It does not claim general POSIX compatibility, a libc
+runtime, an interactive shell, or general-purpose Linux distribution boot.
+
+Git result
+----------
+.phase-riscv now records RISCV-28 complete and RISCV-29 next. The scoped
+phase changes are committed locally on RISCV; no push was made. The commit
+identifier is reported in the final response.
+
+Recommended RISCV-29 scope
+-------------------------
+Keep Linux and OpenSBI pinned. A bounded next step is to exercise ordinary
+file and process interactions around the proven clone/execve/wait4 path,
+such as a second child lifecycle and explicit execve error return. Preserve
+the same evidence rules for real task identity, U-mode instruction bytes,
+Linux syscall dispatch, and guest-originated output. Do not infer full
+userspace or distribution readiness from this fixture.

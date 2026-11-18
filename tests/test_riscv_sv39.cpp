@@ -988,6 +988,46 @@ void TestSfenceAndCsrPrivilege() {
     std::cout << "PASS SFENCE encoding and CSR privilege\n";
 }
 
+void TestReadOnlyProductionWalkAudit() {
+    RV64CPU cpu;
+    std::vector<uint8_t> mem(MEM_SIZE, 0);
+    MapVa(mem, CODE_VA, CODE_PA, 0x1B); // V|R|X|U, A/D intentionally clear.
+    PutCode(mem, CODE_PA, {NOP});
+    cpu.loadProgram(BASE, mem);
+    cpu.debugWriteCsr(kSatp, (8ULL << 60) | (PT_ROOT >> 12));
+    riscv::Sv39TestHelper::SetPrivilege(cpu, PrivilegeMode::User);
+    cpu.setPC(CODE_VA);
+
+    const auto readPhysicalU64 = [&cpu](uint64_t address) {
+        uint8_t bytes[8]{};
+        Expect(cpu.readPhysical(address, bytes, sizeof(bytes)),
+               "read-only audit fixture PTE is physically readable");
+        uint64_t value = 0;
+        for (unsigned index = 0; index < 8; ++index)
+            value |= static_cast<uint64_t>(bytes[index]) << (index * 8U);
+        return value;
+    };
+    const uint64_t leafBefore = readPhysicalU64(PT_LEAF);
+    const auto audit = cpu.mmu()->inspectPageWalk(CODE_VA);
+    Expect(audit.satpReadable && audit.sv39Mode && audit.walkSucceeded,
+           "read-only audit follows the production Sv39 walker");
+    ExpectEq("walk depth", 3, audit.entries.size());
+    ExpectEq("root PTE address", PT_ROOT + 8, audit.entries[0].pteAddress);
+    ExpectEq("middle PTE address", PT_MID, audit.entries[1].pteAddress);
+    ExpectEq("leaf PTE address", PT_LEAF, audit.entries[2].pteAddress);
+    Expect(audit.entries[0].readable && audit.entries[1].readable &&
+           audit.entries[2].readable,
+           "audit reports production PTE read outcomes at every level");
+
+    const auto translation = cpu.mmu()->inspectTranslationReadOnly(
+        CODE_VA, 4, riscv::AccessType::Fetch, PrivilegeMode::User, false);
+    Expect(translation.ok, "read-only production translation accepts the user fetch");
+    ExpectEq("read-only user fetch physical address", CODE_PA, translation.paddr);
+    ExpectEq("read-only translation preserves A/D bits", leafBefore,
+             readPhysicalU64(PT_LEAF));
+    std::cout << "PASS read-only production Sv39 walk audit\n";
+}
+
 }  // namespace
 
 int main() {
@@ -1009,6 +1049,7 @@ int main() {
     TestUncachedWalkerAndAddressBounds();
     TestTranslatedPhysicalAccessFaults();
     TestSfenceAndCsrPrivilege();
+    TestReadOnlyProductionWalkAudit();
     std::cout << "All Sv39 tests passed: " << g_checks << " checks\n";
     return 0;
 }

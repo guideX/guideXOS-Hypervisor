@@ -171,6 +171,21 @@ bool Sv39Mmu::pagingEnabled() const {
     return ((satp >> kSatpModeShift) & 0xFULL) == kSatpModeSv39;
 }
 
+Sv39PageWalkAudit Sv39Mmu::inspectPageWalk(uint64_t vaddr) const {
+    Sv39PageWalkAudit audit;
+    audit.satpReadable = cpu_->readCsr(0x180U, audit.satp);
+    if (!audit.satpReadable) return audit;
+    audit.sv39Mode = ((audit.satp >> kSatpModeShift) & 0xFULL) == kSatpModeSv39;
+    if (!audit.sv39Mode) return audit;
+
+    uint64_t pte = 0;
+    uint64_t pteAddress = 0;
+    uint64_t pageSize = 0;
+    audit.walkSucceeded = walk(vaddr, pte, pteAddress, pageSize, &audit.entries) ==
+        WalkResult::Success;
+    return audit;
+}
+
 void Sv39Mmu::sfenceVma(uint64_t /*rs1*/, uint64_t /*rs2*/) const {
     // Uncached walker: no translations to invalidate. This is recognized as
     // a synchronization point; the next walk re-reads guest physical PTEs,
@@ -179,6 +194,18 @@ void Sv39Mmu::sfenceVma(uint64_t /*rs1*/, uint64_t /*rs2*/) const {
 
 Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType type,
                                    PrivilegeMode priv, bool mprv) const {
+    return translateInternal(vaddr, accessSize, type, priv, mprv, true);
+}
+
+Sv39Translation Sv39Mmu::inspectTranslationReadOnly(
+    uint64_t vaddr, size_t accessSize, AccessType type, PrivilegeMode priv,
+    bool mprv) const {
+    return translateInternal(vaddr, accessSize, type, priv, mprv, false);
+}
+
+Sv39Translation Sv39Mmu::translateInternal(uint64_t vaddr, size_t accessSize,
+                                           AccessType type, PrivilegeMode priv,
+                                           bool mprv, bool updateAdBits) const {
     Sv39Translation result;
     // The CPU's physical read/write boundary checks the complete access size
     // after translation and reports an access fault for an inaccessible PA.
@@ -249,7 +276,8 @@ Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType
     // Update A/D bits: A on any qualifying access, D on qualifying store.
     bool setA = true;
     bool setD = (type == AccessType::Store);
-    if ((setA || setD) && !updateADBits(pteAddr, pte, setA, setD)) {
+    if (updateAdBits && (setA || setD) &&
+        !updateADBits(pteAddr, pte, setA, setD)) {
         result.cause = faultCause(true);
         return result;
     }
@@ -260,7 +288,8 @@ Sv39Translation Sv39Mmu::translate(uint64_t vaddr, size_t accessSize, AccessType
 }
 
 Sv39Mmu::WalkResult Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte,
-                                  uint64_t& pteAddr, uint64_t& pageSize) const {
+                                  uint64_t& pteAddr, uint64_t& pageSize,
+                                  std::vector<Sv39PageWalkEntry>* audit) const {
     pageSize = 0;
 
     // Read satp to get root PPN and mode.
@@ -287,17 +316,29 @@ Sv39Mmu::WalkResult Sv39Mmu::walk(uint64_t vaddr, uint64_t& pte,
 
         // PTE address must be within guest memory for 8 bytes.
         if (!cpu_->rangeInGuest(pteAddrCandidate, kPteSize)) {
+            if (audit != nullptr)
+                audit->push_back({static_cast<unsigned>(level), ppn << 12ULL,
+                                  pteAddrCandidate, 0, false});
             return WalkResult::AccessFault;
         }
         // The narrow MTIMER device is not ordinary RAM and cannot serve as a
         // page table, even if an image's byte range overlaps its MMIO map.
         if (cpu_->timerMmioOverlaps(pteAddrCandidate, kPteSize)) {
+            if (audit != nullptr)
+                audit->push_back({static_cast<unsigned>(level), ppn << 12ULL,
+                                  pteAddrCandidate, 0, false});
             return WalkResult::AccessFault;
         }
 
         if (!readPte(pteAddrCandidate, pte)) {
+            if (audit != nullptr)
+                audit->push_back({static_cast<unsigned>(level), ppn << 12ULL,
+                                  pteAddrCandidate, 0, false});
             return WalkResult::AccessFault;
         }
+        if (audit != nullptr)
+            audit->push_back({static_cast<unsigned>(level), ppn << 12ULL,
+                              pteAddrCandidate, pte, true});
         pteAddr = pteAddrCandidate;
 
         // A leaf has any of R/W/X set. Validate every PTE, including non-leaves.

@@ -985,3 +985,36 @@ Validation and next target:
 - Full lifecycle counters, artifact hashes, validation, and the RISCV-28
   recommendation are in `phase-riscv-27-report.txt` and the Debug/Release
   bundles under `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv27-artifacts`.
+
+--- Phase RISCV-28: authentic Linux execve and second ELF execution ---
+
+- The pinned Linux v6.12 Image, vmlinux, config, and OpenSBI v1.8.1 hashes
+  remain unchanged. Deterministic newc initramfs inputs contain two distinct
+  static RV64 ELFs: `/init` at 0x10000 and `/bin/child` at 0x20000. Independent
+  builds matched all parent, child, archive, and DTB hashes.
+- PID 1 created child PID 21 with genuine clone(SIGCHLD). That child issued
+  Linux execve(221) for `/bin/child` using mapped guest pathname, argv, and
+  envp pointers. Linux's ELF setup and RISC-V start_thread path led to the
+  second ELF at 0x20000; its first retired instruction matched the child ELF.
+  PID 21 and parent PID 1 were preserved, the old continuation was not
+  resumed, and the guest verified argc/argv/environment on Linux's stack.
+- The new image performed getpid/getppid, opened `/dev/ttyS0`, wrote a
+  guest-originated marker, and exited through Linux with code 42. PID 1
+  collected wait status 10752, confirmed `-ECHILD`, emitted its success
+  marker, and remained alive. Debug and Release both passed 40/40 lifecycle
+  checks at 87,068,751 post-handoff retirements, with identical U/S/M totals
+  513 / 82,863,617 / 4,204,621. Their main machine-readable evidence is
+  byte-identical.
+- The prior zero-root-PTE page-walk discrepancy is resolved. At the initial
+  `/init` and `/bin/child` fetches, the read-only production walker sampled a
+  readable zero root entry immediately before an instruction-page fault.
+  For each same task and PC, Linux executed do_page_fault and handle_mm_fault;
+  a subsequent read-only production walk reached a valid executable leaf and
+  the CPU retired instruction bytes matching the corresponding ELF. This is
+  a pre-fault demand-mapping snapshot. The walker is uncached; no TLB behavior
+  or MMU repair is claimed.
+- The 29-test focused selection and three direct IA-64 regressions passed in
+  Debug and Release. No IA-64 source or Linux/OpenSBI artifact changed. The
+  full report, hashes, counters, task/syscall records, page-walk audit, and
+  console evidence are in `phase-riscv-28-report.txt` and the bundles under
+  `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv28-artifacts`.

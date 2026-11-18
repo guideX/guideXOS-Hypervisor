@@ -4,6 +4,7 @@
 
 #include "riscv/riscv_initramfs_contract.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -11,8 +12,32 @@
 namespace {
 
 constexpr uint64_t kInitramfsAddress = 0x81400000ULL;
+#if defined(RISCV28_EXECVE)
+constexpr uint64_t kRetirementCeiling = 120000000ULL;
+constexpr uint64_t kStepCeiling = 130000000ULL;
+constexpr uint64_t kChildExitCode = 42;
+constexpr char kPhaseName[] = "RISCV-28";
+constexpr char kArtifactPrefix[] = "riscv28-";
+constexpr char kParentMarker[] = "guideXOS RISCV-28: parent initialized\n";
+constexpr char kPreExecMarker[] = "guideXOS RISCV-28: child before exec\n";
+constexpr char kExecMarker[] = "guideXOS RISCV-28: new ELF argv/env ok pid=21\n";
+constexpr char kParentSuccessMarker[] =
+    "guideXOS RISCV-28: parent reaped status=42\n";
+constexpr char kExecPath[] = "/bin/child";
+constexpr char kExecArgument[] = "execve-riscv28";
+constexpr char kExecEnvironment[] = "GUIDEXOS_RISCV28=present";
+#else
 constexpr uint64_t kRetirementCeiling = 140000000ULL;
 constexpr uint64_t kStepCeiling = 150000000ULL;
+constexpr uint64_t kChildExitCode = 37;
+constexpr char kPhaseName[] = "RISCV-27";
+constexpr char kArtifactPrefix[] = "riscv27-";
+constexpr char kParentMarker[] = "guideXOS RISCV-27: parent initialized";
+constexpr char kPreExecMarker[] = "guideXOS RISCV-27: child ran";
+constexpr char kExecMarker[] = "";
+constexpr char kParentSuccessMarker[] =
+    "guideXOS RISCV-27: parent reaped status=37";
+#endif
 constexpr uint64_t kHandlerLifetimeCeiling = 6000000ULL;
 constexpr uint64_t kSyscallLifetimeCeiling = 40000000ULL;
 constexpr uint64_t kTrapCeiling = 100000ULL;
@@ -25,12 +50,19 @@ constexpr size_t kRetainedTlbLimit = 128;
 constexpr size_t kPrehistoryLimit = 64;
 constexpr uint64_t kParentCowValue = 0x11223344ULL;
 constexpr uint64_t kChildCowValue = 0x55667788ULL;
-constexpr uint64_t kExpectedWaitStatus = 37ULL << 8;
+
+std::string UartConsoleText(std::string_view userText) {
+    std::string transmitted;
+    transmitted.reserve(userText.size() +
+        static_cast<size_t>(std::count(userText.begin(), userText.end(), '\n')));
+    for (const char character : userText) {
+        if (character == '\n') transmitted.push_back('\r');
+        transmitted.push_back(character);
+    }
+    return transmitted;
+}
+constexpr uint64_t kExpectedWaitStatus = kChildExitCode << 8;
 constexpr char kSerialPath[] = "/dev/ttyS0";
-constexpr char kParentMarker[] = "guideXOS RISCV-27: parent initialized";
-constexpr char kChildMarker[] = "guideXOS RISCV-27: child ran";
-constexpr char kParentSuccessMarker[] =
-    "guideXOS RISCV-27: parent reaped status=37";
 
 struct SyscallEvent {
     uint64_t number = 0;
@@ -57,6 +89,16 @@ struct SyscallEvent {
     bool exitKernelPath = false;
     bool outputObserved = false;
     bool uartProvenanceValid = false;
+    std::vector<std::string> argv;
+    std::vector<std::string> envp;
+    bool argvNullTerminated = false;
+    bool envpNullTerminated = false;
+    bool returnedToNewImage = false;
+    uint64_t callerPid = UINT64_MAX;
+    uint64_t callerParentPid = UINT64_MAX;
+    uint64_t callerSp = 0;
+    uint64_t callerTp = 0;
+    uint64_t callerSatp = 0;
 };
 
 struct TaskEvidence {
@@ -85,6 +127,40 @@ struct TaskEvidence {
     uint64_t exitPathPc = 0;
     uint64_t userInstructionsAfterExit = 0;
     uint64_t forkReturnHandlerInstructions = 0;
+    uint64_t preExecUserInstructions = 0;
+    uint64_t postExecUserInstructions = 0;
+    uint64_t postExecFirstPc = 0;
+    uint64_t postExecFirstRaw = 0;
+    uint64_t postExecTaskPointer = 0;
+    uint64_t postExecFirstSp = 0;
+    uint64_t postExecFirstTp = 0;
+    uint64_t postExecFirstSatp = 0;
+    uint64_t postExecEntryAttempts = 0;
+    uint64_t postExecRootPteAddress = 0;
+    uint64_t postExecRootPte = 0;
+    uint64_t postExecCodePhysical = 0;
+    uint64_t postExecRetryPhysical = 0;
+    bool postExecFetchOk = false;
+    bool postExecFirstTranslationOk = false;
+    bool postExecRetryTranslationCaptured = false;
+    bool postExecRetryTranslationOk = false;
+    bool postExecRootPteReadable = false;
+    bool postExecStackReadable = false;
+    std::vector<Sv39WalkLevel> postExecCodeWalk;
+    std::vector<Sv39WalkLevel> postExecRetryCodeWalk;
+    std::vector<Sv39WalkLevel> postExecStackWalk;
+};
+
+struct UserInstructionEvent {
+    uint64_t retired = 0;
+    uint64_t taskPointer = 0;
+    uint64_t pid = UINT64_MAX;
+    uint64_t pc = 0;
+    uint32_t raw = 0;
+    uint64_t sp = 0;
+    uint64_t tp = 0;
+    uint64_t satp = 0;
+    std::string image;
 };
 
 struct TaskSwitchEvent {
@@ -175,6 +251,35 @@ bool WriteText(const std::filesystem::path& path, const std::string& text) {
     return output.good();
 }
 
+std::filesystem::path ArtifactPath(const std::filesystem::path& directory,
+                                   std::string_view suffix) {
+    return directory / (std::string(kArtifactPrefix) + std::string(suffix));
+}
+
+bool ElfInstructionAt(const std::vector<uint8_t>& elf, uint64_t address,
+                     uint32_t& instruction) {
+    if (elf.size() < 64) return false;
+    const uint64_t phoff = Le64(elf, 32);
+    const uint16_t phentsize = Le16(elf, 54);
+    const uint16_t phnum = Le16(elf, 56);
+    if (phentsize < 56 || phoff > elf.size() ||
+        static_cast<uint64_t>(phnum) > (elf.size() - phoff) / phentsize)
+        return false;
+    for (uint16_t index = 0; index < phnum; ++index) {
+        const uint64_t header = phoff + static_cast<uint64_t>(index) * phentsize;
+        if (Le32(elf, header) != 1 || (Le32(elf, header + 4) & 1U) == 0) continue;
+        const uint64_t vaddr = Le64(elf, header + 16);
+        const uint64_t filesz = Le64(elf, header + 32);
+        if (address < vaddr || address - vaddr > filesz || filesz - (address - vaddr) < 4)
+            continue;
+        const uint64_t offset = Le64(elf, header + 8) + address - vaddr;
+        if (offset > elf.size() || 4 > elf.size() - offset) return false;
+        instruction = Le32(elf, offset);
+        return true;
+    }
+    return false;
+}
+
 std::vector<RiscvInitramfsPmpRegion> ToInitramfsPmp(
     std::span<const RiscvLinuxPmpRegion> regions) {
     std::vector<RiscvInitramfsPmpRegion> result;
@@ -187,7 +292,8 @@ std::vector<RiscvInitramfsPmpRegion> ToInitramfsPmp(
 
 bool ReadUserBytes(const RV64CPU& cpu, uint64_t address, size_t size,
                    std::vector<uint8_t>& bytes, uint64_t* physical = nullptr) {
-    const auto translated = cpu.translateLoad(address, size);
+    const auto translated = cpu.mmu()->inspectTranslationReadOnly(
+        address, size, AccessType::Load, cpu.privilege(), false);
     if (!translated.ok) return false;
     bytes.assign(size, 0);
     if (!cpu.readPhysical(translated.paddr, bytes.data(), bytes.size())) return false;
@@ -215,6 +321,48 @@ uint64_t ReadUserU32(const RV64CPU& cpu, uint64_t address, bool& readable,
     for (size_t index = 0; index < 4; ++index)
         value |= static_cast<uint32_t>(bytes[index]) << (index * 8U);
     return value;
+}
+
+struct RootPteAudit {
+    uint64_t satp = 0;
+    uint64_t rootPpn = 0;
+    uint64_t rootTableAddress = 0;
+    uint64_t vpn2 = 0;
+    uint64_t pteAddress = 0;
+    uint64_t pte = 0;
+    bool readable = false;
+};
+
+std::string ReadUserCString(const RV64CPU& cpu, uint64_t address, size_t limit);
+
+RootPteAudit CaptureRootPteAudit(const RV64CPU& cpu, uint64_t virtualAddress) {
+    RootPteAudit audit;
+    audit.satp = CsrOrZero(cpu, 0x180);
+    audit.rootPpn = audit.satp & kSatpPpnMask;
+    audit.rootTableAddress = audit.rootPpn << 12U;
+    audit.vpn2 = (virtualAddress >> 30U) & 0x1FFU;
+    audit.pteAddress = audit.rootTableAddress + audit.vpn2 * 8U;
+    audit.pte = ReadGuestU64(cpu, audit.pteAddress, audit.readable);
+    return audit;
+}
+
+std::vector<std::string> ReadUserStringVector(const RV64CPU& cpu,
+                                              uint64_t arrayAddress,
+                                              bool& nullTerminated) {
+    std::vector<std::string> values;
+    nullTerminated = false;
+    for (size_t index = 0; index < 16; ++index) {
+        bool readable = false;
+        const uint64_t pointer = ReadUserU64(cpu, arrayAddress + index * 8U,
+                                             readable);
+        if (!readable) return values;
+        if (pointer == 0) {
+            nullTerminated = true;
+            return values;
+        }
+        values.push_back(ReadUserCString(cpu, pointer, 256));
+    }
+    return values;
 }
 
 bool PageWalkLeafHas(const std::vector<Sv39WalkLevel>& walk, uint64_t flags) {
@@ -275,6 +423,24 @@ std::string WalkJson(const std::vector<Sv39WalkLevel>& walk) {
     return out.str();
 }
 
+std::string StringArrayJson(const std::vector<std::string>& values) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t index = 0; index < values.size(); ++index)
+        out << (index == 0 ? "" : ",") << JsonQuote(values[index]);
+    out << ']';
+    return out.str();
+}
+
+std::string U64HexArrayJson(const std::vector<uint64_t>& values) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t index = 0; index < values.size(); ++index)
+        out << (index == 0 ? "" : ",") << JsonQuote(Hex(values[index]));
+    out << ']';
+    return out.str();
+}
+
 std::string SyscallsJson(const std::vector<SyscallEvent>& calls,
                          const std::unordered_map<uint64_t, TaskEvidence>& tasks) {
     std::ostringstream out;
@@ -290,11 +456,32 @@ std::string SyscallsJson(const std::vector<SyscallEvent>& calls,
         else out << pid;
         out << ",\"ecallPc\":" << JsonQuote(Hex(call.ecallPc))
             << ",\"retiredAtEcall\":" << call.retiredAtEcall
+            << ",\"callerPid\":";
+        if (call.callerPid == UINT64_MAX) out << "null";
+        else out << call.callerPid;
+        out << ",\"callerParentPid\":";
+        if (call.callerParentPid == UINT64_MAX) out << "null";
+        else out << call.callerParentPid;
+        out << ",\"callerSp\":" << JsonQuote(Hex(call.callerSp))
+            << ",\"callerTp\":" << JsonQuote(Hex(call.callerTp))
+            << ",\"callerSatp\":" << JsonQuote(Hex(call.callerSatp))
             << ",\"arguments\":[";
         for (size_t argument = 0; argument < call.args.size(); ++argument)
             out << (argument == 0 ? "" : ",") << JsonQuote(Hex(call.args[argument]));
         out << "],\"path\":" << JsonQuote(call.path)
             << ",\"userBuffer\":" << JsonQuote(call.userBuffer)
+            << ",\"argv\":[";
+        for (size_t argument = 0; argument < call.argv.size(); ++argument)
+            out << (argument == 0 ? "" : ",") << JsonQuote(call.argv[argument]);
+        out << "],\"envp\":[";
+        for (size_t variable = 0; variable < call.envp.size(); ++variable)
+            out << (variable == 0 ? "" : ",") << JsonQuote(call.envp[variable]);
+        out << "],\"argvNullTerminated\":"
+            << (call.argvNullTerminated ? "true" : "false")
+            << ",\"envpNullTerminated\":"
+            << (call.envpNullTerminated ? "true" : "false")
+            << ",\"returnedToNewImage\":"
+            << (call.returnedToNewImage ? "true" : "false")
             << ",\"trapDeliveredToSupervisor\":"
             << (call.trapDeliveredToSupervisor ? "true" : "false")
             << ",\"dispatchSymbol\":" << JsonQuote(call.dispatchSymbol)
@@ -533,7 +720,8 @@ std::string TrapAccountingJson(const riscv_test::TrapAccounting& accounting,
 
 std::string RunProcessLifecycle(int argc, char** argv) {
     if (argc != 11) {
-        std::cerr << "usage: test_riscv_linux_process_lifecycle fw_jump.bin fw_jump.elf Image manifest.json config vmlinux initramfs.cpio init.elf platform.dtb artifact_dir\n";
+        std::cerr << "usage: test_riscv_linux_" << (kChildExitCode == 42 ? "execve" : "process_lifecycle")
+                  << " fw_jump.bin fw_jump.elf Image manifest.json config vmlinux initramfs.cpio init.elf platform.dtb artifact_dir\n";
         return "usage_error";
     }
     const std::vector<uint8_t> firmware = ReadFile(argv[1]);
@@ -548,13 +736,17 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const std::filesystem::path artifactDir(argv[10]);
     std::error_code fsError;
     std::filesystem::create_directories(artifactDir, fsError);
-    Expect(!fsError, "RISCV-27 evidence directory is available outside the repository");
+    Expect(!fsError, std::string(kPhaseName) + " evidence directory is available outside the repository");
 
     const auto fixtureManifestPath = std::filesystem::path(argv[7]).parent_path() /
         "initramfs-manifest.json";
     const std::string fixtureManifest = AsString(ReadFile(fixtureManifestPath.string()));
     const std::string archiveHash = JsonString(fixtureManifest, "archiveSha256");
+#if defined(RISCV28_EXECVE)
+    const std::string elfHash = JsonString(fixtureManifest, "parentElfSha256");
+#else
     const std::string elfHash = JsonString(fixtureManifest, "sha256");
+#endif
     const auto sourceTree = ParseFdt(sourceFdt);
     std::string fdtFailure;
     const bool sourceFdtValid = LinuxValidatePlatformFdt(sourceFdt, false, &fdtFailure);
@@ -584,14 +776,20 @@ std::string RunProcessLifecycle(int argc, char** argv) {
            hasConfig("CONFIG_DEVTMPFS_MOUNT=y") && hasConfig("CONFIG_CLONE_BACKWARDS=y"),
            "pinned kernel enables initramfs, ELF, MMU, devtmpfs, and RISC-V clone ABI");
     Expect(sourceFdtValid && simpleBusValid,
-           "RISCV-27 FDT preserves validated platform and /soc simple-bus correction: " + fdtFailure);
+           std::string(kPhaseName) + " FDT preserves validated platform and /soc simple-bus correction: " + fdtFailure);
     Expect(kernelSymbols.valid && archiveHash.size() == 64 &&
            Sha256(independentElf) == Upper(elfHash) &&
-           JsonString(fixtureManifest, "phase") == "RISCV-27",
-           "pinned kernel symbols and independent RISCV-27 ELF/archive manifest validate");
+           JsonString(fixtureManifest, "phase") == kPhaseName,
+           "pinned kernel symbols and independent phase ELF/archive manifest validate");
+#if defined(RISCV28_EXECVE)
+    Expect(fixtureManifest.find("\"execvePath\": \"/bin/child\"") != std::string::npos &&
+           fixtureManifest.find("\"waitStatus\": 10752") != std::string::npos,
+           "fixture manifest selects authentic execve and child exit status 42");
+#else
     Expect(fixtureManifest.find("\"sharedAddressSpace\": false") != std::string::npos &&
            fixtureManifest.find("\"childExitCode\": 37") != std::string::npos,
            "fixture manifest selects fork-like clone and child status 37");
+#endif
 
     const uint64_t fdtInitrdStart = LinuxReadRangeCell(
         Property(sourceTree, "/chosen", "linux,initrd-start"), 0);
@@ -599,7 +797,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         Property(sourceTree, "/chosen", "linux,initrd-end"), 0);
     const bool initrdExact = fdtInitrdStart == kInitramfsAddress &&
         fdtInitrdEnd > fdtInitrdStart && fdtInitrdEnd - fdtInitrdStart == archive.size();
-    Expect(initrdExact, "FDT encodes the exact RISCV-27 archive physical range");
+    Expect(initrdExact, "FDT encodes the exact phase initramfs physical range");
 
     const auto reservations = LinuxExpectedReservations();
     const auto expectedPmp = LinuxExpectedPmpRegions();
@@ -630,8 +828,43 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         });
     const bool archiveElfMatches = archiveInit != archivePlan.plan.entries.end() &&
         archiveInit->data == independentElf;
+    const auto archiveChild = std::find_if(archivePlan.plan.entries.begin(),
+        archivePlan.plan.entries.end(), [](const RiscvNewcEntry& entry) {
+            return entry.name == "bin/child";
+        });
+#if defined(RISCV28_EXECVE)
+    const auto childSymbols = archiveChild == archivePlan.plan.entries.end()
+        ? std::map<std::string, uint64_t>{}
+        : ParseElfSymbolTable(archiveChild->data);
+    const std::string childElfHash = JsonString(fixtureManifest, "childElfSha256");
+    const bool archiveChildMatches = archiveChild != archivePlan.plan.entries.end() &&
+        Sha256(archiveChild->data) == Upper(childElfHash) &&
+           !childSymbols.empty() && Le64(archiveChild->data, 24) == 0x20000;
+    Expect(archivePlan.ok() && archiveElfMatches && archivePlan.plan.elfEntry == 0x10000 &&
+           archiveChildMatches,
+           "deterministic newc contains distinct static /init and /bin/child RV64 ELFs");
+    Expect(childSymbols.contains("riscv28_child_exit_ecall"),
+           "second ELF exposes its independent child-exit instruction site");
+#else
+    const std::map<std::string, uint64_t> childSymbols{};
+    const bool archiveChildMatches = archiveChild == archivePlan.plan.entries.end();
     Expect(archivePlan.ok() && archiveElfMatches && archivePlan.plan.elfEntry == 0x10000,
            "deterministic newc contains the independently built static ELF /init");
+#endif
+#if defined(RISCV28_EXECVE)
+    const bool lifecycleSymbolsValid =
+        userSymbols.contains("riscv28_clone_ecall") &&
+        userSymbols.contains("riscv28_clone_resume") &&
+        userSymbols.contains("riscv28_child_cow_store") &&
+        userSymbols.contains("riscv28_child_cow_verify") &&
+        userSymbols.contains("riscv28_parent_cow_check") &&
+        userSymbols.contains("riscv28_wait4_ecall") &&
+        userSymbols.contains("riscv28_wait4_resume") &&
+        userSymbols.contains("riscv28_execve_ecall") &&
+        userSymbols.contains("cow_value") && userSymbols.contains("wait_status");
+    Expect(lifecycleSymbolsValid,
+           "parent ELF exposes clone, COW, execve, wait, and writable status sites");
+#else
     Expect(userSymbols.contains("riscv27_clone_ecall") &&
            userSymbols.contains("riscv27_clone_resume") &&
            userSymbols.contains("riscv27_child_cow_store") &&
@@ -642,14 +875,23 @@ std::string RunProcessLifecycle(int argc, char** argv) {
            userSymbols.contains("riscv27_child_exit_ecall") &&
            userSymbols.contains("cow_value") && userSymbols.contains("wait_status"),
            "static ELF exposes the guest instructions and writable COW/status objects");
+#endif
     if (g_failures != 0 || !sourceFdtValid || !initrdExact || !imagePlan.ok() ||
-        !archivePlan.ok() || !archiveElfMatches || !kernelSymbols.valid) {
-        WriteText(artifactDir / "riscv27-linux-frontier.json",
+        !archivePlan.ok() || !archiveElfMatches || !archiveChildMatches || !kernelSymbols.valid) {
+        WriteText(ArtifactPath(artifactDir, "linux-frontier.json"),
             "{\"schemaVersion\":1,\"classification\":\"preflight_failure\"}\n");
         return "preflight_failure";
     }
 
-    WriteText(artifactDir / "riscv27-initramfs-manifest.json", fixtureManifest);
+    WriteText(ArtifactPath(artifactDir, "initramfs-manifest.json"), fixtureManifest);
+#if defined(RISCV28_EXECVE)
+    const std::filesystem::path fixtureInputDir =
+        std::filesystem::path(argv[7]).parent_path();
+    WriteText(ArtifactPath(artifactDir, "parent-elf.json"),
+        AsString(ReadFile((fixtureInputDir / "parent-elf.json").string())));
+    WriteText(ArtifactPath(artifactDir, "child-elf.json"),
+        AsString(ReadFile((fixtureInputDir / "child-elf.json").string())));
+#endif
     RV64CPU cpu(PmpMachineProfile::StandardPmp16);
     std::vector<uint8_t> ram(static_cast<size_t>(boot_contract::kRamSize), 0);
     cpu.loadProgram(boot_contract::kRamBase, ram);
@@ -716,6 +958,8 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         "unpack_to_rootfs", "kernel_execve", "start_thread", "do_trap_ecall_u",
         "__riscv_sys_getpid", "__riscv_sys_getppid", "__riscv_sys_openat",
         "__riscv_sys_write", "__riscv_sys_sched_yield", "__riscv_sys_clone",
+        "__riscv_sys_execve", "do_execve", "bprm_execve", "exec_binprm",
+        "load_elf_binary", "begin_new_exec", "elf_map", "setup_arg_pages",
         "__riscv_sys_wait4", "__riscv_sys_exit", "kernel_clone", "copy_process",
         "copy_mm", "dup_mm", "copy_page_range", "ret_from_fork", "schedule",
         "__schedule", "context_switch", "__switch_to", "do_page_fault",
@@ -736,6 +980,19 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         (archivePlan.plan.endExclusive + 0xFFFULL) & ~0xFFFULL;
     const uint64_t expectedInitrdReservationSize =
         expectedInitrdReservationEnd - expectedInitrdReservationStart;
+#if defined(RISCV28_EXECVE)
+    const uint64_t cloneEcallPc = userSymbols.at("riscv28_clone_ecall");
+    const uint64_t cloneResumePc = userSymbols.at("riscv28_clone_resume");
+    const uint64_t childCowStorePc = userSymbols.at("riscv28_child_cow_store");
+    const uint64_t childCowVerifyPc = userSymbols.at("riscv28_child_cow_verify");
+    const uint64_t parentCowCheckPc = userSymbols.at("riscv28_parent_cow_check");
+    const uint64_t wait4EcallPc = userSymbols.at("riscv28_wait4_ecall");
+    const uint64_t wait4ResumePc = userSymbols.at("riscv28_wait4_resume");
+    const uint64_t execveEcallPc = userSymbols.at("riscv28_execve_ecall");
+    const uint64_t childImageEntry = Le64(archiveChild->data, 24);
+    const uint64_t childArgvValidatedPc = childSymbols.at("riscv28_child_argv_validated");
+    const uint64_t childExitEcallPc = childSymbols.at("riscv28_child_exit_ecall");
+#else
     const uint64_t cloneEcallPc = userSymbols.at("riscv27_clone_ecall");
     const uint64_t cloneResumePc = userSymbols.at("riscv27_clone_resume");
     const uint64_t childCowStorePc = userSymbols.at("riscv27_child_cow_store");
@@ -744,6 +1001,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const uint64_t wait4EcallPc = userSymbols.at("riscv27_wait4_ecall");
     const uint64_t wait4ResumePc = userSymbols.at("riscv27_wait4_resume");
     const uint64_t childExitEcallPc = userSymbols.at("riscv27_child_exit_ecall");
+#endif
     const uint64_t cowValueVa = userSymbols.at("cow_value");
     const uint64_t waitStatusVa = userSymbols.at("wait_status");
 
@@ -782,10 +1040,39 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     uint64_t firstUserPc = 0;
     uint64_t firstUserRaw = 0;
     uint64_t firstUserRetired = 0;
-    Sv39Translation firstUserFetch{};
-    Sv39Translation firstUserStack{};
+    RootPteAudit firstUserRootAudit{};
+    uint64_t firstUserTaskPointer = 0;
+    uint64_t firstUserPrivilege = UINT64_MAX;
+    uint64_t execveCallPc = 0;
+    uint64_t execveTaskPointer = 0;
+    uint64_t execveChildPidBefore = UINT64_MAX;
+    uint64_t execveParentPidBefore = UINT64_MAX;
+    uint64_t execveSatpBefore = 0;
+    uint64_t execveOldResumePc = 0;
+    uint64_t execveOldResumeRaw = 0;
+    uint64_t execveOldResumePhysical = 0;
+    bool execveOldResumeFetchOk = false;
+    uint64_t postExecArgc = UINT64_MAX;
+    uint64_t postExecArgvAddress = 0;
+    uint64_t postExecEnvpAddress = 0;
+    std::vector<std::string> postExecArgv;
+    std::vector<std::string> postExecEnvp;
+    std::vector<uint64_t> postExecArgvPointers;
+    std::vector<uint64_t> postExecEnvpPointers;
+    bool postExecArgvValidatedObserved = false;
+    bool postExecArgvNullTerminated = false;
+    bool postExecEnvpNullTerminated = false;
+    bool oldImageResumeAfterExec = false;
+    std::vector<UserInstructionEvent> userInstructionTrace;
     std::vector<Sv39WalkLevel> firstUserCodeWalk;
     std::vector<Sv39WalkLevel> firstUserStackWalk;
+    uint64_t firstUserCodeEntryAttempts = 0;
+    uint64_t firstUserTranslationPhysical = 0;
+    uint64_t firstUserRetryPhysical = 0;
+    bool firstUserTranslationOk = false;
+    bool firstUserRetryTranslationCaptured = false;
+    bool firstUserRetryTranslationOk = false;
+    std::vector<Sv39WalkLevel> firstUserRetryCodeWalk;
     uint64_t initialCowValue = 0;
     uint64_t initialCowPaddr = 0;
     uint64_t childPreCowPaddr = 0;
@@ -816,7 +1103,8 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     std::string frontierInstruction;
     PrivilegeMode frontierPrivilege = cpu.privilege();
     std::string frontier = "retirement_ceiling";
-    std::string frontierDetail = "140 million post-handoff retirement ceiling";
+    std::string frontierDetail = std::to_string(kRetirementCeiling / 1000000ULL) +
+        " million post-handoff retirement ceiling";
     bool stopped = false;
     bool lifecycleEvidenceChanged = false;
     std::vector<size_t> pendingUartWrites;
@@ -845,8 +1133,11 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         const uint64_t a3 = cpu.readGR(13);
         const uint64_t a4 = cpu.readGR(14);
         const uint64_t a7 = cpu.readGR(17);
-        tasks.try_emplace(taskPointer, TaskEvidence{.taskPointer = taskPointer});
-        auto& task = tasks[taskPointer];
+        const uint64_t spBefore = cpu.readGR(2);
+        const uint64_t satpBefore = CsrOrZero(cpu, 0x180);
+        auto [taskIt, taskInserted] = tasks.try_emplace(taskPointer);
+        auto& task = taskIt->second;
+        if (taskInserted) task.taskPointer = taskPointer;
 
         if (before == PrivilegeMode::User) {
             if (!task.firstUserCaptured) {
@@ -860,20 +1151,17 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 if (firstUserPc == 0) {
                     firstUserPc = pc;
                     firstUserRetired = retired;
-                    firstUserFetch = cpu.translateFetch(pc, 4);
-                    if (task.firstUserSp >= 8)
-                        firstUserStack = cpu.translateStore(task.firstUserSp - 8, 8);
+                    firstUserTaskPointer = taskPointer;
+                    firstUserPrivilege = static_cast<uint64_t>(before);
+                    firstUserRootAudit = CaptureRootPteAudit(cpu, pc);
                     firstUserCodeWalk = CapturePageWalk(cpu, pc);
+                    const auto firstUserTranslation = cpu.mmu()->inspectTranslationReadOnly(
+                        pc, 4, AccessType::Fetch, before, false);
+                    firstUserTranslationOk = firstUserTranslation.ok;
+                    firstUserTranslationPhysical = firstUserTranslation.ok
+                        ? firstUserTranslation.paddr : 0;
                     if (task.firstUserSp >= 8)
                         firstUserStackWalk = CapturePageWalk(cpu, task.firstUserSp - 8);
-                    std::array<uint8_t, 4> instruction{};
-                    if (firstUserFetch.ok && cpu.readPhysical(
-                            firstUserFetch.paddr, instruction.data(), instruction.size())) {
-                        firstUserRaw = static_cast<uint32_t>(instruction[0]) |
-                            (static_cast<uint32_t>(instruction[1]) << 8) |
-                            (static_cast<uint32_t>(instruction[2]) << 16) |
-                            (static_cast<uint32_t>(instruction[3]) << 24);
-                    }
                 }
                 if (pc == cloneResumePc && a0 == 0) {
                     childTaskPointer = taskPointer;
@@ -886,6 +1174,99 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 parentTaskPointer = taskPointer;
                 task.cloneReturnPositive = true;
             }
+            if (taskPointer == firstUserTaskPointer && firstUserPc != 0 &&
+                pc == firstUserPc) {
+                if (firstUserCodeEntryAttempts > 0 &&
+                    !firstUserRetryTranslationCaptured) {
+                    const auto retryTranslation = cpu.mmu()->inspectTranslationReadOnly(
+                        pc, 4, AccessType::Fetch, before, false);
+                    firstUserRetryTranslationCaptured = true;
+                    firstUserRetryTranslationOk = retryTranslation.ok;
+                    firstUserRetryPhysical = retryTranslation.ok
+                        ? retryTranslation.paddr : 0;
+                    firstUserRetryCodeWalk = CapturePageWalk(cpu, pc);
+                }
+                ++firstUserCodeEntryAttempts;
+            }
+#if defined(RISCV28_EXECVE)
+            if (taskPointer == childTaskPointer && pc == childImageEntry &&
+                task.postExecFirstPc == 0) {
+                task.postExecFirstPc = pc;
+                task.postExecTaskPointer = taskPointer;
+                task.postExecFirstSp = cpu.readGR(2);
+                task.postExecFirstTp = cpu.readGR(4);
+                task.postExecFirstSatp = CsrOrZero(cpu, 0x180);
+                const auto firstTranslation = cpu.mmu()->inspectTranslationReadOnly(
+                    pc, 4, AccessType::Fetch, before, false);
+                task.postExecFirstTranslationOk = firstTranslation.ok;
+                task.postExecCodePhysical = firstTranslation.ok
+                    ? firstTranslation.paddr : 0;
+                const RootPteAudit rootAudit = CaptureRootPteAudit(cpu, pc);
+                task.postExecRootPteAddress = rootAudit.pteAddress;
+                task.postExecRootPte = rootAudit.pte;
+                task.postExecRootPteReadable = rootAudit.readable;
+                task.postExecCodeWalk = CapturePageWalk(cpu, pc);
+                if (task.postExecFirstSp != 0)
+                    task.postExecStackWalk = CapturePageWalk(cpu,
+                                                             task.postExecFirstSp);
+            }
+            if (taskPointer == childTaskPointer && pc == childImageEntry &&
+                task.postExecFirstPc != 0) {
+                if (task.postExecEntryAttempts > 0 &&
+                    !task.postExecRetryTranslationCaptured) {
+                    const auto retryTranslation = cpu.mmu()->inspectTranslationReadOnly(
+                        pc, 4, AccessType::Fetch, before, false);
+                    task.postExecRetryTranslationCaptured = true;
+                    task.postExecRetryTranslationOk = retryTranslation.ok;
+                    task.postExecRetryPhysical = retryTranslation.ok
+                        ? retryTranslation.paddr : 0;
+                    task.postExecRetryCodeWalk = CapturePageWalk(cpu, pc);
+                }
+                ++task.postExecEntryAttempts;
+            }
+            if (taskPointer == childTaskPointer && pc == childArgvValidatedPc &&
+                postExecArgv.empty()) {
+                postExecArgvValidatedObserved = true;
+                bool argcReadable = false;
+                postExecArgc = ReadUserU64(cpu, task.postExecFirstSp,
+                                           argcReadable);
+                const bool argvAddressReadable = task.postExecFirstSp <= UINT64_MAX - 8U;
+                postExecArgvAddress = task.postExecFirstSp + 8U;
+                if (argcReadable && argvAddressReadable &&
+                    postExecArgc <= 8 && postExecArgc <= UINT64_MAX / 8U - 2U &&
+                    task.postExecFirstSp <= UINT64_MAX - (postExecArgc + 2U) * 8U) {
+                    postExecArgv = ReadUserStringVector(cpu, postExecArgvAddress,
+                                                        postExecArgvNullTerminated);
+                    postExecEnvpAddress = task.postExecFirstSp +
+                        (postExecArgc + 2U) * 8U;
+                    postExecEnvp = ReadUserStringVector(cpu, postExecEnvpAddress,
+                                                        postExecEnvpNullTerminated);
+                    postExecArgvPointers.clear();
+                    postExecEnvpPointers.clear();
+                    for (uint64_t index = 0; index <= postExecArgc; ++index) {
+                        bool readable = false;
+                        const uint64_t pointer = ReadUserU64(cpu,
+                            postExecArgvAddress + index * 8U, readable);
+                        if (!readable) break;
+                        postExecArgvPointers.push_back(pointer);
+                        if (pointer == 0) break;
+                    }
+                    for (size_t index = 0; index < 16; ++index) {
+                        bool readable = false;
+                        const uint64_t pointer = ReadUserU64(cpu,
+                            postExecEnvpAddress + index * 8U, readable);
+                        if (!readable) break;
+                        postExecEnvpPointers.push_back(pointer);
+                        if (pointer == 0) break;
+                    }
+                    task.postExecStackReadable = postExecArgvNullTerminated &&
+                        postExecEnvpNullTerminated;
+                }
+            }
+            if (taskPointer == childTaskPointer && task.postExecFirstPc != 0 &&
+                pc == execveOldResumePc)
+                oldImageResumeAfterExec = true;
+#endif
             if (pc == cloneEcallPc) {
                 bool readable = false;
                 initialCowValue = ReadUserU64(cpu, cowValueVa, readable,
@@ -940,15 +1321,22 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                         kernelEvents.push_back({name, pc, retired, taskPointer,
                             a0, a1, a2, cpu.readGR(1)});
                     const bool lifecycleKernelEvent = name == "start_thread" ||
+                        name == "__riscv_sys_execve" || name == "do_execve" ||
+                        name == "bprm_execve" || name == "exec_binprm" ||
+                        name == "load_elf_binary" || name == "begin_new_exec" ||
+                        name == "elf_map" || name == "setup_arg_pages" ||
                         name == "__riscv_sys_clone" || name == "kernel_clone" ||
                         name == "copy_process" || name == "copy_page_range" ||
                         name == "ret_from_fork" || name == "__riscv_sys_wait4" ||
-                        name == "do_wait" || name == "__riscv_sys_exit" ||
+                        name == "do_wait" || name == "do_page_fault" ||
+                        name == "handle_mm_fault" || name == "filemap_fault" ||
+                        name == "__riscv_sys_exit" ||
                         name == "do_exit" || name == "release_task";
                     if (lifecycleKernelEvent && lifecycleKernelEvents.size() < 256)
                         lifecycleKernelEvents.push_back({name, pc, retired, taskPointer,
                             a0, a1, a2, cpu.readGR(1)});
-                    if ((name == "__riscv_sys_clone" || name == "__riscv_sys_wait4" ||
+                    if ((name == "__riscv_sys_clone" || name == "__riscv_sys_execve" ||
+                         name == "__riscv_sys_wait4" ||
                          name == "__riscv_sys_write" || name == "__riscv_sys_getpid" ||
                          name == "__riscv_sys_getppid" || name == "__riscv_sys_exit" ||
                          name == "__riscv_sys_sched_yield") &&
@@ -1031,12 +1419,40 @@ std::string RunProcessLifecycle(int argc, char** argv) {
 
         std::string openPath;
         std::string syscallBuffer;
+        std::vector<std::string> execArgv;
+        std::vector<std::string> execEnvp;
+        bool execArgvNullTerminated = false;
+        bool execEnvpNullTerminated = false;
         if (before == PrivilegeMode::User && a7 == 56) {
             openPath = ReadUserCString(cpu, a1, 128);
         } else if (before == PrivilegeMode::User && a7 == 64 && a2 <= 256) {
             std::vector<uint8_t> bytes;
             if (ReadUserBytes(cpu, a1, static_cast<size_t>(a2), bytes))
                 syscallBuffer.assign(bytes.begin(), bytes.end());
+#if defined(RISCV28_EXECVE)
+        } else if (before == PrivilegeMode::User && a7 == 221 &&
+                   pc == execveEcallPc && execveCallPc == 0) {
+            openPath = ReadUserCString(cpu, a0, 128);
+            execArgv = ReadUserStringVector(cpu, a1, execArgvNullTerminated);
+            execEnvp = ReadUserStringVector(cpu, a2, execEnvpNullTerminated);
+            execveCallPc = pc;
+            execveTaskPointer = taskPointer;
+            execveChildPidBefore = TaskPid(tasks, taskPointer);
+            execveParentPidBefore = tasks[taskPointer].parentPid;
+            execveSatpBefore = CsrOrZero(cpu, 0x180);
+            execveOldResumePc = pc + 4U;
+            const auto oldResumeTranslation = cpu.mmu()->inspectTranslationReadOnly(
+                execveOldResumePc, 4, AccessType::Fetch, PrivilegeMode::User, false);
+            execveOldResumeFetchOk = oldResumeTranslation.ok;
+            execveOldResumePhysical = oldResumeTranslation.ok
+                ? oldResumeTranslation.paddr : 0;
+            std::vector<uint8_t> oldResumeBytes;
+            if (ReadUserBytes(cpu, execveOldResumePc, 4, oldResumeBytes))
+                execveOldResumeRaw = static_cast<uint32_t>(oldResumeBytes[0]) |
+                    (static_cast<uint32_t>(oldResumeBytes[1]) << 8U) |
+                    (static_cast<uint32_t>(oldResumeBytes[2]) << 16U) |
+                    (static_cast<uint32_t>(oldResumeBytes[3]) << 24U);
+#endif
         }
         const StepResult step = cpu.step();
         ++stepCalls;
@@ -1070,6 +1486,31 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             if (before == PrivilegeMode::User) {
                 auto& evidence = tasks[taskPointer];
                 ++evidence.userInstructions;
+#if defined(RISCV28_EXECVE)
+                std::string imageIdentity = "other_user";
+                if (taskPointer == parentTaskPointer) {
+                    imageIdentity = "parent_init";
+                } else if (taskPointer == childTaskPointer &&
+                           evidence.postExecFirstPc != 0) {
+                    imageIdentity = "child_post_exec";
+                    ++evidence.postExecUserInstructions;
+                    if (pc == childImageEntry && evidence.postExecFirstRaw == 0) {
+                        evidence.postExecFirstRaw = step.insn.rawWord;
+                        evidence.postExecFetchOk = step.outcome == StepOutcome::Ok;
+                    }
+                } else if (taskPointer == childTaskPointer) {
+                    imageIdentity = "child_pre_exec";
+                    ++evidence.preExecUserInstructions;
+                }
+#else
+                const std::string imageIdentity = taskPointer == parentTaskPointer
+                    ? "parent" : taskPointer == childTaskPointer ? "child" : "other_user";
+#endif
+                if (userInstructionTrace.size() < 4096) {
+                    userInstructionTrace.push_back({retired, taskPointer,
+                        TaskPid(tasks, taskPointer), pc, step.insn.rawWord,
+                        spBefore, architecturalTp, satpBefore, imageIdentity});
+                }
                 if (!evidence.firstUserInstructionCaptured) {
                     evidence.firstUserRaw = step.insn.rawWord;
                     evidence.firstUserInstructionCaptured = true;
@@ -1131,6 +1572,10 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                     auto& call = syscalls[active->second];
                     call.sretPc = step.pc;
                     call.returnPc = cpu.getPC();
+#if defined(RISCV28_EXECVE)
+                    call.returnedToNewImage = call.number == 221 &&
+                        call.returnPc == childImageEntry;
+#endif
                     call.retiredAtReturn = retired;
                     call.returnValue = cpu.readGR(10);
                     call.returnedTaskPointer = returningTask;
@@ -1173,6 +1618,15 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 call.args = {{a0, a1, a2, a3, a4, cpu.readGR(15)}};
                 call.path = std::move(openPath);
                 call.userBuffer = std::move(syscallBuffer);
+                call.argv = std::move(execArgv);
+                call.envp = std::move(execEnvp);
+                call.argvNullTerminated = execArgvNullTerminated;
+                call.envpNullTerminated = execEnvpNullTerminated;
+                call.callerPid = TaskPid(tasks, taskPointer);
+                call.callerParentPid = task.parentPid;
+                call.callerSp = spBefore;
+                call.callerTp = architecturalTp;
+                call.callerSatp = satpBefore;
                 call.outputOffset = call.number == 64
                     ? cpu.machineUartOutput().size() : UINT64_MAX;
                 call.trapDeliveredToSupervisor = step.trapTarget == PrivilegeMode::Supervisor &&
@@ -1183,7 +1637,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 syscalls.push_back(std::move(call));
                 activeSyscallByTask[taskPointer] = index;
                 if (a7 == 220 || a7 == 93 || a7 == 260 || a7 == 172 ||
-                    a7 == 173 || a7 == 64 || a7 == 124)
+                    a7 == 173 || a7 == 64 || a7 == 124 || a7 == 221)
                     lifecycleEvidenceChanged = true;
                 if (syscalls[index].number == 64 && !syscalls[index].userBuffer.empty())
                     pendingUartWrites.push_back(index);
@@ -1198,7 +1652,14 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                  step.trapCause == TrapCause::EcallFromU &&
                  (a7 == 220 || a7 == 93 || a7 == 260)) ||
                 (step.trapCause == TrapCause::StorePageFault &&
-                 (trapTval & ~0xFFFULL) == (cowValueVa & ~0xFFFULL));
+                 (trapTval & ~0xFFFULL) == (cowValueVa & ~0xFFFULL))
+#if defined(RISCV28_EXECVE)
+                || (before == PrivilegeMode::User &&
+                    step.trapCause == TrapCause::InstructionPageFault &&
+                    ((taskPointer == firstUserTaskPointer && pc == firstUserPc) ||
+                     (taskPointer == childTaskPointer && pc == childImageEntry)))
+#endif
+                ;
             if (traps.size() < kRetainedTrapLimit ||
                 (lifecycleTrap && lifecycleTraps.size() < 128)) {
                 TrapEvent trap;
@@ -1254,11 +1715,12 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             lastObservedUartOutputSize = output.size();
             for (auto pending = pendingUartWrites.begin(); pending != pendingUartWrites.end();) {
                 auto& call = syscalls[*pending];
+                const std::string transmitted = UartConsoleText(call.userBuffer);
                 const size_t found = call.outputOffset == UINT64_MAX ? std::string::npos :
-                    output.find(call.userBuffer, static_cast<size_t>(call.outputOffset));
+                    output.find(transmitted, static_cast<size_t>(call.outputOffset));
                 if (found != std::string::npos) {
                     call.outputOffset = found;
-                    call.outputBytes = call.userBuffer.size();
+                    call.outputBytes = transmitted.size();
                     call.outputObserved = true;
                     lifecycleEvidenceChanged = true;
                     pending = pendingUartWrites.erase(pending);
@@ -1357,16 +1819,36 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 parentWaitStatus == kExpectedWaitStatus;
             const bool childExited = childTaskPointer != 0 && tasks.contains(childTaskPointer) &&
                 tasks[childTaskPointer].exitPathObserved &&
-                tasks[childTaskPointer].exitCode == 37;
+                tasks[childTaskPointer].exitCode == kChildExitCode;
             if (statusReady && childExited) {
                 frontier = "process_lifecycle_complete";
-                frontierDetail = "parent reaped child PID and verified guest wait status 37<<8";
+                frontierDetail = "parent reaped child PID and verified the guest wait status";
                 frontierPc = cpu.getPC();
                 frontierPrivilege = cpu.privilege();
                 stopped = true;
                 break;
             }
         }
+#if defined(RISCV28_EXECVE)
+        const bool execChildExited = childTaskPointer != 0 &&
+            tasks.contains(childTaskPointer) && tasks[childTaskPointer].exitPathObserved;
+        const bool execChildReaped = std::any_of(syscalls.begin(), syscalls.end(),
+            [&](const SyscallEvent& call) {
+                return call.number == 260 && TaskPid(tasks, call.taskPointer) == 1 &&
+                    call.args[0] > 0 && call.returnedToUser &&
+                    call.returnValue == call.args[0];
+            });
+        if (execChildExited && execChildReaped && waitStatusRead &&
+            (tasks[childTaskPointer].exitCode != kChildExitCode ||
+             parentWaitStatus != kExpectedWaitStatus)) {
+            frontier = "execve_child_exit_or_wait_status_invalid";
+            frontierDetail = "Linux reaped the child, but its exit code or user wait status differed";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            stopped = true;
+            break;
+        }
+#endif
         }
         if (stoppedOnArchitecturalFault || step.outcome == StepOutcome::Waiting)
             break;
@@ -1509,6 +1991,14 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const bool cowPhysicalIsolation = initialCowPaddr != 0 && childPreCowPaddr != 0 &&
         childPostCowPaddr != 0 && parentPostWaitCowPaddr != 0 &&
         childPostCowPaddr != parentPostWaitCowPaddr;
+    const auto markerWrite = [&](uint64_t pid, std::string_view marker) {
+        return std::find_if(syscalls.begin(), syscalls.end(), [&](const SyscallEvent& call) {
+            return call.number == 64 && TaskPid(tasks, call.taskPointer) == pid &&
+                call.userBuffer == marker && call.returnedToUser &&
+                call.returnValue == marker.size() && call.outputObserved &&
+                call.uartProvenanceValid;
+        }) != syscalls.end();
+    };
     const auto childCowFault = std::find_if(cowFaults.begin(), cowFaults.end(),
         [&](const CowFaultEvent& fault) {
             return fault.taskPointer == childTaskPointer && fault.stval == cowValueVa &&
@@ -1516,12 +2006,174 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         });
     const bool cowFaultValid = childCowFault != cowFaults.end();
     const bool childExitValid = childExitCall != nullptr &&
-        childExitCall->ecallPc == childExitEcallPc && childExitCall->args[0] == 37 &&
+        childExitCall->ecallPc == childExitEcallPc && childExitCall->args[0] == kChildExitCode &&
         childExitCall->trapDeliveredToSupervisor &&
         childExitCall->nonReturning && childExitCall->exitKernelPath &&
         tasks[childTaskPointer].exitPathObserved &&
-        tasks[childTaskPointer].exitCode == 37 &&
+        tasks[childTaskPointer].exitCode == kChildExitCode &&
         tasks[childTaskPointer].userInstructionsAfterExit == 0;
+#if defined(RISCV28_EXECVE)
+    const SyscallEvent* execCall = childTaskPointer == 0 ? nullptr :
+        findCall(221, TaskPid(tasks, childTaskPointer));
+    uint32_t expectedChildFirstRaw = 0;
+    const bool childEntryFileBacked = archiveChild != archivePlan.plan.entries.end() &&
+        ElfInstructionAt(archiveChild->data, childImageEntry, expectedChildFirstRaw);
+    const auto instructionPageFault = [&](uint64_t taskPointer, uint64_t address) {
+        return std::find_if(lifecycleTraps.begin(), lifecycleTraps.end(),
+            [&](const TrapEvent& trap) {
+                return trap.taskPointer == taskPointer && trap.pc == address &&
+                    trap.tval == address &&
+                    trap.cause == static_cast<uint64_t>(TrapCause::InstructionPageFault);
+            });
+    };
+    const auto faultResolvedByLinux = [&](uint64_t taskPointer,
+                                          const TrapEvent* fault,
+                                          const UserInstructionEvent* retiredFetch) {
+        if (fault == nullptr || retiredFetch == nullptr ||
+            retiredFetch->retired <= fault->retired) return false;
+        const auto kernelEventBetween = [&](std::string_view name) {
+            return std::any_of(lifecycleKernelEvents.begin(), lifecycleKernelEvents.end(),
+                [&](const KernelEvent& event) {
+                    return event.name == name && event.taskPointer == taskPointer &&
+                        event.retired > fault->retired &&
+                        event.retired < retiredFetch->retired;
+                });
+        };
+        return kernelEventBetween("do_page_fault") &&
+            kernelEventBetween("handle_mm_fault");
+    };
+    const TrapEvent* initialCodeFault = nullptr;
+    const UserInstructionEvent* initialCodeFetch = nullptr;
+    if (firstUserTaskPointer != 0 && firstUserPc != 0) {
+        const auto foundFault = instructionPageFault(firstUserTaskPointer, firstUserPc);
+        if (foundFault != lifecycleTraps.end()) initialCodeFault = &*foundFault;
+        const auto foundFetch = std::find_if(userInstructionTrace.begin(),
+            userInstructionTrace.end(), [&](const UserInstructionEvent& event) {
+                return event.taskPointer == firstUserTaskPointer &&
+                    event.pc == firstUserPc && event.raw == firstUserRaw;
+            });
+        if (foundFetch != userInstructionTrace.end()) initialCodeFetch = &*foundFetch;
+    }
+    const bool initialCodeDemandFaultResolved =
+        firstUserRetryTranslationCaptured && firstUserRetryTranslationOk &&
+        firstUserRetryCodeWalk.size() == 3 &&
+        faultResolvedByLinux(firstUserTaskPointer, initialCodeFault, initialCodeFetch);
+    const TrapEvent* postExecCodeFault = nullptr;
+    const UserInstructionEvent* postExecCodeFetch = nullptr;
+    if (childTaskPointer != 0) {
+        const auto foundFault = instructionPageFault(childTaskPointer, childImageEntry);
+        if (foundFault != lifecycleTraps.end()) postExecCodeFault = &*foundFault;
+        const auto foundFetch = std::find_if(userInstructionTrace.begin(),
+            userInstructionTrace.end(), [&](const UserInstructionEvent& event) {
+                return event.taskPointer == childTaskPointer &&
+                    event.pc == childImageEntry && event.raw == expectedChildFirstRaw &&
+                    event.image == "child_post_exec";
+            });
+        if (foundFetch != userInstructionTrace.end()) postExecCodeFetch = &*foundFetch;
+    }
+    const bool postExecCodeDemandFaultResolved = tasks.contains(childTaskPointer) &&
+        tasks[childTaskPointer].postExecRetryTranslationCaptured &&
+        tasks[childTaskPointer].postExecRetryTranslationOk &&
+        tasks[childTaskPointer].postExecRetryCodeWalk.size() == 3 &&
+        faultResolvedByLinux(childTaskPointer, postExecCodeFault, postExecCodeFetch);
+    const bool pageWalkAuditValid = (firstUserTranslationOk ||
+                                     initialCodeDemandFaultResolved) &&
+        (tasks.contains(childTaskPointer) &&
+         (tasks[childTaskPointer].postExecFirstTranslationOk ||
+          postExecCodeDemandFaultResolved));
+    const bool execveArgsValid = execCall != nullptr &&
+        execCall->ecallPc == execveEcallPc &&
+        execCall->taskPointer == childTaskPointer &&
+        execCall->args[0] != 0 && execCall->args[1] != 0 && execCall->args[2] != 0 &&
+        execCall->path == kExecPath &&
+        execCall->argv == std::vector<std::string>{kExecPath, kExecArgument} &&
+        execCall->envp == std::vector<std::string>{kExecEnvironment} &&
+        execCall->argvNullTerminated && execCall->envpNullTerminated &&
+        execCall->trapDeliveredToSupervisor && execCall->dispatchPc != 0 &&
+        execCall->dispatchSymbol == "__riscv_sys_execve";
+    uint32_t expectedOldResumeRaw = 0;
+    const bool oldResumeFileBacked = execveOldResumeFetchOk &&
+        ElfInstructionAt(independentElf, execveOldResumePc, expectedOldResumeRaw) &&
+        execveOldResumeRaw == expectedOldResumeRaw;
+    const bool processIdentityPreserved = execCall != nullptr &&
+        execveTaskPointer == childTaskPointer && execCall->taskPointer == childTaskPointer &&
+        execCall->returnedTaskPointer == childTaskPointer &&
+        execveChildPidBefore == 21 &&
+        TaskPid(tasks, childTaskPointer) == execveChildPidBefore &&
+        execveParentPidBefore == 1 &&
+        tasks[childTaskPointer].parentPid == 1 &&
+        std::any_of(syscalls.begin(), syscalls.end(), [&](const SyscallEvent& call) {
+            return call.number == 173 && call.taskPointer == childTaskPointer &&
+                call.retiredAtEcall > execCall->retiredAtReturn &&
+                call.returnedToUser && call.returnValue == 1;
+        });
+    const bool processImageReplaced = execCall != nullptr && tasks.contains(childTaskPointer) &&
+        childEntryFileBacked && oldResumeFileBacked &&
+        childImageEntry != archivePlan.plan.elfEntry &&
+        execCall->returnedToUser && execCall->returnedToNewImage &&
+        execCall->returnPc == childImageEntry &&
+        tasks[childTaskPointer].postExecTaskPointer == execCall->taskPointer &&
+        tasks[childTaskPointer].postExecFirstPc == childImageEntry &&
+        tasks[childTaskPointer].postExecFirstRaw == expectedChildFirstRaw &&
+        tasks[childTaskPointer].postExecUserInstructions >= 8 &&
+        tasks[childTaskPointer].postExecFetchOk && !oldImageResumeAfterExec;
+    const bool argvStackValid = tasks.contains(childTaskPointer) &&
+        tasks[childTaskPointer].postExecFirstSp != 0 &&
+        (tasks[childTaskPointer].postExecFirstSp & 0xFULL) == 0 &&
+        postExecArgvValidatedObserved &&
+        postExecArgc == 2 && postExecArgv == std::vector<std::string>{kExecPath, kExecArgument} &&
+        postExecEnvp == std::vector<std::string>{kExecEnvironment} &&
+        postExecArgvPointers.size() == 3 && postExecArgvPointers[0] != 0 &&
+        postExecArgvPointers[1] != 0 && postExecArgvPointers[2] == 0 &&
+        postExecEnvpPointers.size() == 2 && postExecEnvpPointers[0] != 0 &&
+        postExecEnvpPointers[1] == 0 &&
+        postExecArgvNullTerminated && postExecEnvpNullTerminated &&
+        tasks[childTaskPointer].postExecStackReadable;
+    const bool postExecSyscallsValid = execCall != nullptr &&
+        std::any_of(syscalls.begin(), syscalls.end(), [&](const SyscallEvent& call) {
+            return call.number == 172 && call.taskPointer == childTaskPointer &&
+                call.retiredAtEcall > execCall->retiredAtReturn && call.returnedToUser &&
+                call.returnValue == TaskPid(tasks, childTaskPointer);
+        }) &&
+        std::any_of(syscalls.begin(), syscalls.end(), [&](const SyscallEvent& call) {
+            return call.number == 56 && call.taskPointer == childTaskPointer &&
+                call.retiredAtEcall > execCall->retiredAtReturn &&
+                call.path == kSerialPath && call.returnedToUser &&
+                static_cast<int64_t>(call.returnValue) >= 0;
+        }) && markerWrite(TaskPid(tasks, childTaskPointer), kExecMarker) &&
+        childExitValid;
+    const auto childExecKernelEvent = [&](std::string_view name) {
+        return std::any_of(lifecycleKernelEvents.begin(), lifecycleKernelEvents.end(),
+            [&](const KernelEvent& event) {
+                return event.name == name && event.taskPointer == childTaskPointer;
+            });
+    };
+    const bool preExecElfInstructionRetired = execCall != nullptr &&
+        std::any_of(userInstructionTrace.begin(), userInstructionTrace.end(),
+            [&](const UserInstructionEvent& event) {
+                uint32_t expectedRaw = 0;
+                return event.taskPointer == childTaskPointer &&
+                    event.image == "child_pre_exec" && event.raw != 0 &&
+                    event.retired < execCall->retiredAtEcall &&
+                    event.pc < execCall->ecallPc &&
+                    ElfInstructionAt(independentElf, event.pc, expectedRaw) &&
+                    event.raw == expectedRaw;
+            });
+    const bool execKernelPathValid = execCall != nullptr &&
+        (childExecKernelEvent("load_elf_binary") || childExecKernelEvent("elf_map") ||
+         childExecKernelEvent("setup_arg_pages")) &&
+        childExecKernelEvent("start_thread") && preExecElfInstructionRetired;
+    const bool execMarkerValid = markerWrite(TaskPid(tasks, childTaskPointer), kExecMarker);
+#else
+    const bool execveArgsValid = true;
+    const bool processIdentityPreserved = true;
+    const bool processImageReplaced = true;
+    const bool argvStackValid = true;
+    const bool postExecSyscallsValid = true;
+    const bool execKernelPathValid = true;
+    const bool execMarkerValid = true;
+    const bool pageWalkAuditValid = true;
+#endif
     const bool wait4Valid = waitedChildCall != nullptr &&
         waitedChildCall->ecallPc == wait4EcallPc &&
         waitedChildCall->args[0] == cloneCall->returnValue &&
@@ -1553,17 +2205,9 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 transition.nextTask == parentTaskPointer && transition.returned &&
                 transition.tpBefore == childTaskPointer && transition.tpAfter == parentTaskPointer;
         });
-    const auto markerWrite = [&](uint64_t pid, std::string_view marker) {
-        return std::find_if(syscalls.begin(), syscalls.end(), [&](const SyscallEvent& call) {
-            return call.number == 64 && TaskPid(tasks, call.taskPointer) == pid &&
-                call.userBuffer == marker && call.returnedToUser &&
-                call.returnValue == marker.size() && call.outputObserved &&
-                call.uartProvenanceValid;
-        }) != syscalls.end();
-    };
     const bool parentInitMarkerValid = markerWrite(1, kParentMarker);
     const bool childMarkerValid = childTaskPointer != 0 &&
-        markerWrite(TaskPid(tasks, childTaskPointer), kChildMarker);
+        markerWrite(TaskPid(tasks, childTaskPointer), kPreExecMarker);
     const bool parentSuccessMarkerValid = markerWrite(1, kParentSuccessMarker);
     const bool parentRemainedAlive = callReturned(172, 1, 1) &&
         std::any_of(syscalls.begin(), syscalls.end(), [&](const SyscallEvent& call) {
@@ -1585,12 +2229,20 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         tasks[parentTaskPointer].firstUserSatp != tasks[childTaskPointer].firstUserSatp;
     const bool syscallsValid = callExists(172, 1) && callExists(56, 1) &&
         callExists(220, 1) && callExists(260, 1) && callExists(93,
-            childTaskPointer == 0 ? UINT64_MAX : TaskPid(tasks, childTaskPointer));
+            childTaskPointer == 0 ? UINT64_MAX : TaskPid(tasks, childTaskPointer))
+#if defined(RISCV28_EXECVE)
+        && callExists(221, childTaskPointer == 0 ? UINT64_MAX :
+                      TaskPid(tasks, childTaskPointer))
+#endif
+        ;
     const bool fullProof = frontier == "process_lifecycle_complete" &&
         firmwareRun.handoff && initramfsUnpacked && linuxInitrdReservationObserved &&
         parentFirstInstructionValid && cloneArgsValid && taskIdentitiesValid &&
         taskRetirementValid && cloneKernelPathValid && cowValueSemantics &&
         cowPhysicalIsolation && cowFaultValid && cowSv39Valid && childExitValid &&
+        execveArgsValid && processIdentityPreserved && processImageReplaced &&
+        argvStackValid && postExecSyscallsValid && execKernelPathValid && execMarkerValid &&
+        pageWalkAuditValid &&
         wait4Valid && noChildRemains && waitBlockedOnRunnableChild &&
         switchedBackToParent && parentInitMarkerValid && childMarkerValid &&
         parentSuccessMarkerValid && parentRemainedAlive && syscallsValid &&
@@ -1605,6 +2257,13 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             !cloneKernelPathValid ? "linux_fork_return_path_unproven" :
             !cowValueSemantics || !cowPhysicalIsolation || !cowFaultValid || !cowSv39Valid
                 ? "copy_on_write_semantics_unproven" :
+            !execveArgsValid ? "genuine_execve_arguments_or_dispatch_unproven" :
+            !processIdentityPreserved ? "execve_process_identity_not_preserved" :
+            !processImageReplaced ? "new_elf_image_execution_unproven" :
+            !argvStackValid ? "linux_execve_argv_or_environment_stack_unproven" :
+            !postExecSyscallsValid || !execMarkerValid ? "post_exec_userspace_syscalls_unproven" :
+            !execKernelPathValid ? "linux_elf_loading_or_start_thread_path_unproven" :
+            !pageWalkAuditValid ? "production_page_walk_or_demand_fault_resolution_unproven" :
             !waitBlockedOnRunnableChild || !switchedBackToParent
                 ? "authentic_task_switch_unproven" :
             !childExitValid ? "linux_child_exit_unproven" :
@@ -1633,11 +2292,28 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     Expect(waitBlockedOnRunnableChild && switchedBackToParent,
            "Linux switches parent to the live child during wait4 and later switches back");
     Expect(childExitValid,
-           "child issues exit(37), enters Linux do_exit, and stops retiring user instructions");
+           std::string("child issues exit(") + std::to_string(kChildExitCode) +
+               "), enters Linux do_exit, and stops retiring user instructions");
     Expect(wait4Valid && noChildRemains,
-           "parent wait4 returns the child PID, copies 37<<8 into user memory, and finds no child left");
+           "parent wait4 returns the child PID, copies the encoded exit status into user memory, and finds no child left");
     Expect(parentInitMarkerValid && childMarkerValid && parentSuccessMarkerValid,
            "all three userspace markers are attributed to task syscalls and UART0 guest MMIO");
+#if defined(RISCV28_EXECVE)
+    Expect(execveArgsValid,
+           "child issues genuine execve(221) with mapped /bin/child, argv, envp, and Linux dispatch");
+    Expect(processIdentityPreserved,
+           "Linux preserves child PID, parent PID, and task pointer across successful exec");
+    Expect(processImageReplaced,
+           "execve returns to the distinct second ELF entry and retires its matching U-mode bytes");
+    Expect(argvStackValid,
+           "new ELF validates argc, argv, environment, null pointers, and aligned Linux entry stack");
+    Expect(postExecSyscallsValid && execMarkerValid,
+           "new ELF performs Linux getpid/openat/write/exit and emits guest UART output");
+    Expect(execKernelPathValid,
+           "Linux's resolved ELF load and RISC-V start_thread paths are observed for the child task");
+    Expect(pageWalkAuditValid,
+           "read-only production page walks resolve initial and exec ELF entries, including any Linux demand fault");
+#endif
     Expect(parentRemainedAlive,
            "PID 1 remains alive and returns from a bounded sched_yield after reaping");
     Expect(accounting.counters().privilegeMismatches == 0 &&
@@ -1707,19 +2383,50 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         << ",\n  \"expectedFirstUserRaw\":" << JsonQuote(Hex(expectedFirstUserRaw))
         << ",\n  \"parentFirstInstructionValid\":"
         << (parentFirstInstructionValid ? "true" : "false")
-        << ",\n  \"firstUserFetchOk\":" << (firstUserFetch.ok ? "true" : "false")
-        << ",\n  \"firstUserStackOk\":" << (firstUserStack.ok ? "true" : "false")
+        << ",\n  \"firstUserFetchOk\":"
+        << (tasks.contains(firstUserTaskPointer) &&
+            tasks[firstUserTaskPointer].firstUserInstructionCaptured ? "true" : "false")
+        << ",\n  \"firstUserStackOk\":"
+        << (PageWalkLeafHas(firstUserStackWalk, 0x10ULL | 0x2ULL) ? "true" : "false")
+        << ",\n  \"firstUserFetchEvidenceMethod\":\"production step retired the U-mode instruction\""
+        << ",\n  \"pageWalkEvidenceMethod\":\"read-only production Sv39 walker\""
         << ",\n  \"firstUserCodeWalk\":" << WalkJson(firstUserCodeWalk)
         << ",\n  \"firstUserStackWalk\":" << WalkJson(firstUserStackWalk)
         << ",\n  \"firstUserRetiredAt\":" << firstUserRetired << "\n}\n";
-    WriteText(artifactDir / "riscv27-linux-process-events.json", processes.str());
-    WriteText(artifactDir / "riscv27-linux-syscalls.json", SyscallsJson(syscalls, tasks));
-    WriteText(artifactDir / "riscv27-linux-task-switches.json",
-              SwitchesJson(switches, lifecycleSwitches, tasks));
-    WriteText(artifactDir / "riscv27-linux-kernel-events.json",
+    WriteText(ArtifactPath(artifactDir, "linux-process-events.json"), processes.str());
+    const std::string syscallsJson = SyscallsJson(syscalls, tasks);
+    const std::string taskSwitchesJson =
+        SwitchesJson(switches, lifecycleSwitches, tasks);
+    WriteText(ArtifactPath(artifactDir, "linux-syscalls.json"), syscallsJson);
+    WriteText(ArtifactPath(artifactDir, "linux-task-switches.json"), taskSwitchesJson);
+#if defined(RISCV28_EXECVE)
+    WriteText(ArtifactPath(artifactDir, "syscalls.json"), syscallsJson);
+    WriteText(ArtifactPath(artifactDir, "task-switches.json"), taskSwitchesJson);
+    std::ostringstream userTraceJson;
+    userTraceJson << "{\n  \"schemaVersion\":1,\n  \"events\":[";
+    for (size_t index = 0; index < userInstructionTrace.size(); ++index) {
+        const auto& event = userInstructionTrace[index];
+        userTraceJson << (index == 0 ? "" : ",")
+            << "{\"retired\":" << event.retired
+            << ",\"taskPointer\":" << JsonQuote(Hex(event.taskPointer))
+            << ",\"pid\":";
+        if (event.pid == UINT64_MAX) userTraceJson << "null";
+        else userTraceJson << event.pid;
+        userTraceJson << ",\"image\":" << JsonQuote(event.image)
+            << ",\"pc\":" << JsonQuote(Hex(event.pc))
+            << ",\"raw\":" << JsonQuote(Hex(event.raw))
+            << ",\"sp\":" << JsonQuote(Hex(event.sp))
+            << ",\"tp\":" << JsonQuote(Hex(event.tp))
+            << ",\"satp\":" << JsonQuote(Hex(event.satp)) << '}';
+    }
+    userTraceJson << "]\n}\n";
+    WriteText(ArtifactPath(artifactDir, "user-instruction-trace.json"),
+              userTraceJson.str());
+#endif
+    WriteText(ArtifactPath(artifactDir, "linux-kernel-events.json"),
               KernelEventsJson(kernelEvents, lifecycleKernelEvents, kernelEventCounts, tasks));
-    WriteText(artifactDir / "riscv27-linux-traps.json", TrapsJson(traps, lifecycleTraps));
-    WriteText(artifactDir / "riscv27-linux-trap-accounting.json",
+    WriteText(ArtifactPath(artifactDir, "linux-traps.json"), TrapsJson(traps, lifecycleTraps));
+    WriteText(ArtifactPath(artifactDir, "linux-trap-accounting.json"),
               TrapAccountingJson(accounting, ordinarySupervisorInstructions,
                   supervisorHandlerInstructions, largestSupervisorHandlerInstructions,
                   cowFaultCount));
@@ -1742,7 +2449,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         << ",\n  \"childFirstUserA0\":"
         << JsonQuote(Hex(tasks.contains(childTaskPointer) ? tasks[childTaskPointer].firstUserA0 : UINT64_MAX))
         << "\n}\n";
-    WriteText(artifactDir / "riscv27-linux-clone-evidence.json", cloneJson.str());
+    WriteText(ArtifactPath(artifactDir, "linux-clone-evidence.json"), cloneJson.str());
 
     std::ostringstream cowJson;
     cowJson << "{\n  \"schemaVersion\":1,\n  \"address\":"
@@ -1791,19 +2498,22 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             << ",\"satp\":" << JsonQuote(Hex(event.satp)) << '}';
     }
     cowJson << "]\n}\n";
-    WriteText(artifactDir / "riscv27-linux-cow-evidence.json", cowJson.str());
+    WriteText(ArtifactPath(artifactDir, "linux-cow-evidence.json"), cowJson.str());
 
     const std::string console = cpu.machineUartOutput();
     const std::vector<uint8_t> consoleBytes(console.begin(), console.end());
-    WriteBytes(artifactDir / "riscv27-linux-console.bin", consoleBytes);
+    WriteBytes(ArtifactPath(artifactDir, "linux-console.bin"), consoleBytes);
+#if defined(RISCV28_EXECVE)
+    WriteBytes(ArtifactPath(artifactDir, "console.bin"), consoleBytes);
+#endif
     std::ostringstream consoleJson;
     consoleJson << "{\n  \"schemaVersion\":1,\n  \"consoleBytes\":"
         << console.size() << ",\n  \"parentInitialization\":"
-        << (console.find(kParentMarker) != std::string::npos ? "true" : "false")
+        << (console.find(UartConsoleText(kParentMarker)) != std::string::npos ? "true" : "false")
         << ",\n  \"childExecution\":"
-        << (console.find(kChildMarker) != std::string::npos ? "true" : "false")
+        << (console.find(UartConsoleText(kPreExecMarker)) != std::string::npos ? "true" : "false")
         << ",\n  \"parentReapSuccess\":"
-        << (console.find(kParentSuccessMarker) != std::string::npos ? "true" : "false")
+        << (console.find(UartConsoleText(kParentSuccessMarker)) != std::string::npos ? "true" : "false")
         << ",\n  \"userspaceWrites\":[";
     bool firstWrite = true;
     for (const auto& call : syscalls) {
@@ -1824,10 +2534,14 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             << (call.uartProvenanceValid ? "true" : "false") << '}';
     }
     consoleJson << "]\n}\n";
-    WriteText(artifactDir / "riscv27-linux-console-analysis.json", consoleJson.str());
+    WriteText(ArtifactPath(artifactDir, "linux-console-analysis.json"), consoleJson.str());
+#if defined(RISCV28_EXECVE)
+    WriteText(ArtifactPath(artifactDir, "console-analysis.json"), consoleJson.str());
+#endif
 
     std::ostringstream summary;
-    summary << "{\n  \"schemaVersion\":1,\n  \"phase\":\"RISCV-27\",\n  \"outcome\":"
+    summary << "{\n  \"schemaVersion\":1,\n  \"phase\":" << JsonQuote(kPhaseName)
+        << ",\n  \"outcome\":"
         << JsonQuote(fullProof ? "Outcome A" :
             (firmwareRun.handoff && firstUserPc != 0 ? "Outcome B" : "Outcome H"))
         << ",\n  \"branching\":\"real Linux clone/wait4\",\n  \"linuxImageSha256\":"
@@ -1900,7 +2614,255 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         << ",\n  \"handlerLifetimeCeiling\":" << kHandlerLifetimeCeiling
         << ",\n  \"syscallLifetimeCeiling\":" << kSyscallLifetimeCeiling
         << ",\n  \"fullProof\":" << (fullProof ? "true" : "false") << "\n}\n";
-    WriteText(artifactDir / "riscv27-linux-run-summary.json", summary.str());
+    WriteText(ArtifactPath(artifactDir, "linux-run-summary.json"), summary.str());
+
+#if defined(RISCV28_EXECVE)
+    const TaskEvidence* postExecEvidence = tasks.contains(childTaskPointer)
+        ? &tasks.at(childTaskPointer) : nullptr;
+    const auto jsonHexOrNull = [](uint64_t value) {
+        return value == UINT64_MAX ? std::string("null") : JsonQuote(Hex(value));
+    };
+    std::ostringstream execveJson;
+    execveJson << "{\n  \"schemaVersion\":1,\n  \"syscall\":\"execve\","
+        << "\n  \"number\":221,\n  \"path\":"
+        << JsonQuote(execCall == nullptr ? std::string{} : execCall->path)
+        << ",\n  \"callerPc\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->ecallPc)
+        << ",\n  \"callerPid\":"
+        << (execveChildPidBefore == UINT64_MAX ? "null" :
+            std::to_string(execveChildPidBefore))
+        << ",\n  \"callerParentPid\":"
+        << (execveParentPidBefore == UINT64_MAX ? "null" :
+            std::to_string(execveParentPidBefore))
+        << ",\n  \"taskPointer\":" << JsonQuote(Hex(execveTaskPointer))
+        << ",\n  \"callerSp\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->callerSp)
+        << ",\n  \"callerTp\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->callerTp)
+        << ",\n  \"callerSatp\":" << JsonQuote(Hex(execveSatpBefore))
+        << ",\n  \"pathnamePointer\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->args[0])
+        << ",\n  \"argvPointer\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->args[1])
+        << ",\n  \"envpPointer\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->args[2])
+        << ",\n  \"argv\":"
+        << StringArrayJson(execCall == nullptr ? std::vector<std::string>{} : execCall->argv)
+        << ",\n  \"envp\":"
+        << StringArrayJson(execCall == nullptr ? std::vector<std::string>{} : execCall->envp)
+        << ",\n  \"argvNullTerminated\":"
+        << (execCall != nullptr && execCall->argvNullTerminated ? "true" : "false")
+        << ",\n  \"envpNullTerminated\":"
+        << (execCall != nullptr && execCall->envpNullTerminated ? "true" : "false")
+        << ",\n  \"dispatchSymbol\":"
+        << JsonQuote(execCall == nullptr ? std::string{} : execCall->dispatchSymbol)
+        << ",\n  \"dispatchPc\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->dispatchPc)
+        << ",\n  \"returnedToNewImage\":"
+        << (execCall != nullptr && execCall->returnedToNewImage ? "true" : "false")
+        << ",\n  \"returnPc\":"
+        << jsonHexOrNull(execCall == nullptr ? UINT64_MAX : execCall->returnPc)
+        << ",\n  \"pidAfter\":"
+        << (TaskPid(tasks, childTaskPointer) == UINT64_MAX ? "null" :
+            std::to_string(TaskPid(tasks, childTaskPointer)))
+        << ",\n  \"newImagePc\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecFirstPc)
+        << ",\n  \"newImageRaw\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecFirstRaw)
+        << ",\n  \"expectedChildElfRaw\":" << JsonQuote(Hex(expectedChildFirstRaw))
+        << ",\n  \"postExecUserInstructions\":"
+        << (postExecEvidence == nullptr ? 0 : postExecEvidence->postExecUserInstructions)
+        << ",\n  \"oldImageResumePc\":" << JsonQuote(Hex(execveOldResumePc))
+        << ",\n  \"oldImageResumeRaw\":" << JsonQuote(Hex(execveOldResumeRaw))
+        << ",\n  \"oldImageResumePhysical\":" << JsonQuote(Hex(execveOldResumePhysical))
+        << ",\n  \"oldImageResumeTranslationOk\":"
+        << (execveOldResumeFetchOk ? "true" : "false")
+        << ",\n  \"oldImageContinuationResumed\":"
+        << (oldImageResumeAfterExec ? "true" : "false")
+        << ",\n  \"identityPreserved\":"
+        << (processIdentityPreserved ? "true" : "false")
+        << ",\n  \"imageReplaced\":"
+        << (processImageReplaced ? "true" : "false") << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "execve-evidence.json"), execveJson.str());
+
+    std::ostringstream transitionJson;
+    transitionJson << "{\n  \"schemaVersion\":1,\n  \"oldImage\":\"/init\","
+        << "\n  \"oldImageSha256\":" << JsonQuote(elfHash)
+        << ",\n  \"oldEntry\":" << JsonQuote(Hex(archivePlan.plan.elfEntry))
+        << ",\n  \"oldExecveCallerPc\":" << JsonQuote(Hex(execveCallPc))
+        << ",\n  \"oldContinuationPc\":" << JsonQuote(Hex(execveOldResumePc))
+        << ",\n  \"oldContinuationRaw\":" << JsonQuote(Hex(execveOldResumeRaw))
+        << ",\n  \"newImage\":\"/bin/child\",\n  \"newImageSha256\":"
+        << JsonQuote(childElfHash)
+        << ",\n  \"newEntry\":" << JsonQuote(Hex(childImageEntry))
+        << ",\n  \"newEntryExpectedRaw\":" << JsonQuote(Hex(expectedChildFirstRaw))
+        << ",\n  \"newEntryObservedRaw\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecFirstRaw)
+        << ",\n  \"sameTaskPointer\":"
+        << (execCall != nullptr && postExecEvidence != nullptr &&
+            execCall->taskPointer == postExecEvidence->postExecTaskPointer ? "true" : "false")
+        << ",\n  \"pidBefore\":" << (execveChildPidBefore == UINT64_MAX ? "null" :
+            std::to_string(execveChildPidBefore))
+        << ",\n  \"pidAfter\":"
+        << (TaskPid(tasks, childTaskPointer) == UINT64_MAX ? "null" :
+            std::to_string(TaskPid(tasks, childTaskPointer)))
+        << ",\n  \"parentPidBefore\":"
+        << (execveParentPidBefore == UINT64_MAX ? "null" :
+            std::to_string(execveParentPidBefore))
+        << ",\n  \"parentPidAfter\":"
+        << (postExecEvidence == nullptr ? "null" :
+            std::to_string(postExecEvidence->parentPid))
+        << ",\n  \"satpBefore\":" << JsonQuote(Hex(execveSatpBefore))
+        << ",\n  \"satpAfter\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecFirstSatp)
+        << ",\n  \"samePidAndParent\":"
+        << (processIdentityPreserved ? "true" : "false")
+        << ",\n  \"newImageInstructionRetired\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecFetchOk &&
+            postExecEvidence->postExecFirstRaw == expectedChildFirstRaw ? "true" : "false")
+        << ",\n  \"postExecUInstructions\":"
+        << (postExecEvidence == nullptr ? 0 : postExecEvidence->postExecUserInstructions)
+        << ",\n  \"oldContinuationResumed\":"
+        << (oldImageResumeAfterExec ? "true" : "false") << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "process-image-transition.json"),
+              transitionJson.str());
+
+    std::ostringstream argvJson;
+    argvJson << "{\n  \"schemaVersion\":1,\n  \"source\":\"Linux execve-built U-mode stack\","
+        << "\n  \"entryAbi\":\"sp -> argc, argv[0..argc-1], NULL, envp[], NULL, auxv\","
+        << "\n  \"newImageEntry\":" << JsonQuote(Hex(childImageEntry))
+        << ",\n  \"sp\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecFirstSp)
+        << ",\n  \"sp16ByteAligned\":"
+        << (postExecEvidence != nullptr &&
+            (postExecEvidence->postExecFirstSp & 0xFULL) == 0 ? "true" : "false")
+        << ",\n  \"argc\":"
+        << (postExecArgc == UINT64_MAX ? "null" : std::to_string(postExecArgc))
+        << ",\n  \"argvAddress\":" << JsonQuote(Hex(postExecArgvAddress))
+        << ",\n  \"argvPointers\":" << U64HexArrayJson(postExecArgvPointers)
+        << ",\n  \"argv\":" << StringArrayJson(postExecArgv)
+        << ",\n  \"argvNullTerminated\":"
+        << (postExecArgvNullTerminated ? "true" : "false")
+        << ",\n  \"envpAddress\":" << JsonQuote(Hex(postExecEnvpAddress))
+        << ",\n  \"envpPointers\":" << U64HexArrayJson(postExecEnvpPointers)
+        << ",\n  \"envp\":" << StringArrayJson(postExecEnvp)
+        << ",\n  \"envpNullTerminated\":"
+        << (postExecEnvpNullTerminated ? "true" : "false")
+        << ",\n  \"guestArgvValidationSiteReached\":"
+        << (postExecArgvValidatedObserved ? "true" : "false")
+        << ",\n  \"guestArgvValidationSucceeded\":"
+        << (argvStackValid ? "true" : "false")
+        << ",\n  \"readMethod\":\"read-only production Sv39 translation\"\n}\n";
+    WriteText(ArtifactPath(artifactDir, "argv-stack-evidence.json"), argvJson.str());
+
+    std::ostringstream pageWalkJson;
+    pageWalkJson << "{\n  \"schemaVersion\":1,"
+        << "\n  \"sampler\":\"Sv39Mmu::inspectPageWalk and production walk/readPte\","
+        << "\n  \"readOnly\":true,\n  \"writesAccessedDirtyBits\":false,"
+        << "\n  \"rootProbeUse\":\"diagnostic comparison only; zero is not translation-failure proof\","
+        << "\n  \"initialUserEntry\":{\n    \"taskPointer\":"
+        << JsonQuote(Hex(firstUserTaskPointer))
+        << ",\n    \"pid\":" << TaskPid(tasks, firstUserTaskPointer)
+        << ",\n    \"privilegeCode\":" << firstUserPrivilege
+        << ",\n    \"virtualAddress\":" << JsonQuote(Hex(firstUserPc))
+        << ",\n    \"canonicalSv39Address\":"
+        << (((firstUserPc >> 39U) == 0) || ((firstUserPc >> 39U) == 0x1FFFFFFULL)
+            ? "true" : "false")
+        << ",\n    \"vpnIndices\":["
+        << ((firstUserPc >> 30U) & 0x1FFU) << ','
+        << ((firstUserPc >> 21U) & 0x1FFU) << ','
+        << ((firstUserPc >> 12U) & 0x1FFU) << ']'
+        << ",\n    \"satp\":" << JsonQuote(Hex(firstUserRootAudit.satp))
+        << ",\n    \"rootPpn\":" << JsonQuote(Hex(firstUserRootAudit.rootPpn))
+        << ",\n    \"rootTableAddress\":" << JsonQuote(Hex(firstUserRootAudit.rootTableAddress))
+        << ",\n    \"vpn2\":" << firstUserRootAudit.vpn2
+        << ",\n    \"rootPteAddressMonitorProbe\":" << JsonQuote(Hex(firstUserRootAudit.pteAddress))
+        << ",\n    \"rootPteMonitorProbe\":" << JsonQuote(Hex(firstUserRootAudit.pte))
+        << ",\n    \"rootPteMonitorReadable\":"
+        << (firstUserRootAudit.readable ? "true" : "false")
+        << ",\n    \"monitorReadApi\":\"RV64CPU::readPhysical at captured explicit privilege\""
+        << ",\n    \"productionPteReadApi\":\"Sv39Mmu::readPte via S-mode readPhysicalAccess\""
+        << ",\n    \"monitorRootPteMatchesProduction\":"
+        << (!firstUserCodeWalk.empty() && firstUserCodeWalk[0].readable &&
+            firstUserRootAudit.readable &&
+            firstUserCodeWalk[0].pte == firstUserRootAudit.pte ? "true" : "false")
+        << ",\n    \"productionWalk\":" << WalkJson(firstUserCodeWalk)
+        << ",\n    \"initialTranslationOk\":"
+        << (firstUserTranslationOk ? "true" : "false")
+        << ",\n    \"initialTranslationPhysical\":"
+        << (firstUserTranslationOk ? JsonQuote(Hex(firstUserTranslationPhysical)) : "null")
+        << ",\n    \"entryAttempts\":" << firstUserCodeEntryAttempts
+        << ",\n    \"retryTranslationCaptured\":"
+        << (firstUserRetryTranslationCaptured ? "true" : "false")
+        << ",\n    \"retryTranslationOk\":"
+        << (firstUserRetryTranslationOk ? "true" : "false")
+        << ",\n    \"retryTranslationPhysical\":"
+        << (firstUserRetryTranslationOk ? JsonQuote(Hex(firstUserRetryPhysical)) : "null")
+        << ",\n    \"retryProductionWalk\":" << WalkJson(firstUserRetryCodeWalk)
+        << ",\n    \"instructionPageFaultObserved\":"
+        << (initialCodeFault != nullptr ? "true" : "false")
+        << ",\n    \"linuxDemandFaultResolved\":"
+        << (initialCodeDemandFaultResolved ? "true" : "false")
+        << ",\n    \"stackWalk\":" << WalkJson(firstUserStackWalk)
+        << ",\n    \"actualCpuStepRetired\":"
+        << (tasks.contains(firstUserTaskPointer) &&
+            tasks[firstUserTaskPointer].firstUserInstructionCaptured ? "true" : "false")
+        << ",\n    \"actualRetiredRaw\":" << JsonQuote(Hex(firstUserRaw))
+        << ",\n    \"elfExpectedRaw\":" << JsonQuote(Hex(expectedFirstUserRaw)) << "\n  },"
+        << "\n  \"postExecChildEntry\":{\n    \"taskPointer\":"
+        << JsonQuote(Hex(childTaskPointer))
+        << ",\n    \"virtualAddress\":" << JsonQuote(Hex(childImageEntry))
+        << ",\n    \"satp\":" << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                                      postExecEvidence->postExecFirstSatp)
+        << ",\n    \"rootPteAddressMonitorProbe\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecRootPteAddress)
+        << ",\n    \"rootPteMonitorProbe\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecRootPte)
+        << ",\n    \"rootPteMonitorReadable\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecRootPteReadable
+            ? "true" : "false")
+        << ",\n    \"productionWalk\":"
+        << (postExecEvidence == nullptr ? "[]" : WalkJson(postExecEvidence->postExecCodeWalk))
+        << ",\n    \"initialTranslationOk\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecFirstTranslationOk
+            ? "true" : "false")
+        << ",\n    \"initialTranslationPhysical\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecFirstTranslationOk
+            ? JsonQuote(Hex(postExecEvidence->postExecCodePhysical)) : "null")
+        << ",\n    \"entryAttempts\":"
+        << (postExecEvidence == nullptr ? 0 : postExecEvidence->postExecEntryAttempts)
+        << ",\n    \"retryTranslationCaptured\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecRetryTranslationCaptured
+            ? "true" : "false")
+        << ",\n    \"retryTranslationOk\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecRetryTranslationOk
+            ? "true" : "false")
+        << ",\n    \"retryTranslationPhysical\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecRetryTranslationOk
+            ? JsonQuote(Hex(postExecEvidence->postExecRetryPhysical)) : "null")
+        << ",\n    \"retryProductionWalk\":"
+        << (postExecEvidence == nullptr ? "[]" : WalkJson(postExecEvidence->postExecRetryCodeWalk))
+        << ",\n    \"instructionPageFaultObserved\":"
+        << (postExecCodeFault != nullptr ? "true" : "false")
+        << ",\n    \"linuxDemandFaultResolved\":"
+        << (postExecCodeDemandFaultResolved ? "true" : "false")
+        << ",\n    \"stackWalk\":"
+        << (postExecEvidence == nullptr ? "[]" : WalkJson(postExecEvidence->postExecStackWalk))
+        << ",\n    \"actualCpuStepRetired\":"
+        << (postExecEvidence != nullptr && postExecEvidence->postExecFetchOk ? "true" : "false")
+        << ",\n    \"actualRetiredRaw\":"
+        << jsonHexOrNull(postExecEvidence == nullptr ? UINT64_MAX :
+                         postExecEvidence->postExecFirstRaw)
+        << ",\n    \"elfExpectedRaw\":" << JsonQuote(Hex(expectedChildFirstRaw)) << "\n  }\n}\n";
+    WriteText(ArtifactPath(artifactDir, "page-walk-audit.json"), pageWalkJson.str());
+#endif
 
     std::ostringstream trapSummary;
     trapSummary << "{\n  \"schemaVersion\":1,\n  \"outcome\":"
@@ -1921,9 +2883,12 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             << ",\"outcome\":" << JsonQuote(StepOutcomeToString(item.outcome)) << '}';
     }
     trapSummary << "]\n}\n";
-    WriteText(artifactDir / "riscv27-linux-frontier.json", trapSummary.str());
+    WriteText(ArtifactPath(artifactDir, "linux-frontier.json"), trapSummary.str());
+#if defined(RISCV28_EXECVE)
+    WriteText(ArtifactPath(artifactDir, "frontier.json"), trapSummary.str());
+#endif
 
-    std::cout << "RISCV-27 checks=" << g_checks << " failures=" << g_failures
+    std::cout << kPhaseName << " checks=" << g_checks << " failures=" << g_failures
         << " retired=" << retired << " U=" << retiredByPrivilege[0]
         << " S=" << retiredByPrivilege[1] << " M=" << retiredByPrivilege[2]
         << " parentPID=" << TaskPid(tasks, parentTaskPointer)

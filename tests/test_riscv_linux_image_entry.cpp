@@ -3,6 +3,7 @@
 #include "riscv_linux_test_helpers.h"
 #include "riscv_linux_console_transcript.h"
 #include "riscv_linux_initcall_observer.h"
+#include "riscv/riscv_mmu.h"
 #include "riscv_trap_accounting.h"
 #include "riscv_uart_tx_observer.h"
 
@@ -1700,19 +1701,11 @@ void ObserveBssStep(RV64CPU& cpu, LinuxRun& run, ContinuationEvidence& evidence,
 
 std::vector<Sv39WalkLevel> CapturePageWalk(const RV64CPU& cpu, uint64_t virtualAddress) {
     std::vector<Sv39WalkLevel> result;
-    const uint64_t satp = CsrOrZero(cpu, 0x180);
-    if (((satp >> 60) & 0xFULL) != kSatpModeSv39) return result;
-    uint64_t table = (satp & kSatpPpnMask) << 12;
-    for (int level = 2; level >= 0; --level) {
-        const uint64_t vpn = (virtualAddress >> (12U + 9U * static_cast<unsigned>(level))) & 0x1FFULL;
-        const uint64_t pteAddress = table + vpn * 8ULL;
-        bool readable = false;
-        const uint64_t pte = ReadGuestU64(cpu, pteAddress, readable);
-        result.push_back({static_cast<unsigned>(level), table, pteAddress, pte, readable});
-        if (!readable || (pte & 1ULL) == 0) break;
-        if ((pte & 0xEULL) != 0) break;
-        table = ((pte >> 10) & kSatpPpnMask) << 12;
-    }
+    const Sv39PageWalkAudit audit = cpu.mmu()->inspectPageWalk(virtualAddress);
+    result.reserve(audit.entries.size());
+    for (const auto& level : audit.entries)
+        result.push_back({level.level, level.tableAddress, level.pteAddress,
+                          level.pte, level.readable});
     return result;
 }
 

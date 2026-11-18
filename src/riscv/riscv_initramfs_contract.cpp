@@ -239,6 +239,16 @@ bool ParseNewc(std::span<const uint8_t> archive, ParsedArchive& parsed,
                           archive.begin() + static_cast<std::ptrdiff_t>(dataEnd));
         if (entry.name == "init") {
             if (!ValidateElf(entry.data, parsed.initEntry, detail)) return false;
+        } else if (entry.name == "bin/child") {
+            uint64_t childEntry = 0;
+            if (!ValidateElf(entry.data, childEntry, detail)) {
+                detail = "/bin/child " + detail;
+                return false;
+            }
+            if (childEntry != 0x20000ULL) {
+                detail = "/bin/child ELF entry must be the independent 0x20000 image";
+                return false;
+            }
         }
         parsed.entries.push_back(std::move(entry));
         cursor = next;
@@ -312,25 +322,44 @@ bool ValidateElf(std::span<const uint8_t> elf, uint64_t& entry,
 }
 
 bool ValidateRequiredEntries(const ParsedArchive& parsed, std::string& detail) {
-    static constexpr std::array<std::string_view, 6> expectedNames{
+    static constexpr std::array<std::string_view, 6> processNames{
         ".", "dev", "dev/console", "dev/ttyS0", "init", "TRAILER!!!"};
-    if (parsed.entries.size() != expectedNames.size()) {
-        detail = "initramfs must contain exactly root, dev, /dev/console, /dev/ttyS0, init, and trailer";
+    static constexpr std::array<std::string_view, 8> execveNames{
+        ".", "bin", "dev", "dev/console", "dev/ttyS0", "init",
+        "bin/child", "TRAILER!!!"};
+    const bool processLayout = parsed.entries.size() == processNames.size() &&
+        std::equal(processNames.begin(), processNames.end(), parsed.entries.begin(),
+            [](std::string_view name, const RiscvNewcEntry& entry) {
+                return name == entry.name;
+            });
+    const bool execveLayout = parsed.entries.size() == execveNames.size() &&
+        std::equal(execveNames.begin(), execveNames.end(), parsed.entries.begin(),
+            [](std::string_view name, const RiscvNewcEntry& entry) {
+                return name == entry.name;
+            });
+    if (!processLayout && !execveLayout) {
+        detail = "initramfs paths must match the accepted minimal process or two-executable layout";
         return false;
     }
-    for (size_t index = 0; index < expectedNames.size(); ++index) {
+    for (size_t index = 0; index < parsed.entries.size(); ++index) {
         const auto& entry = parsed.entries[index];
-        if (entry.name != expectedNames[index] || entry.inode != index + 1U) {
-            detail = "initramfs entries are missing, reordered, duplicated, or unexpected";
+        if (entry.inode != index + 1U) {
+            detail = "initramfs entries have duplicate or non-deterministic inode numbers";
             return false;
         }
     }
     const auto& root = parsed.entries[0];
-    const auto& dev = parsed.entries[1];
-    const auto& console = parsed.entries[2];
-    const auto& serial = parsed.entries[3];
-    const auto& init = parsed.entries[4];
-    const auto& trailer = parsed.entries[5];
+    const size_t devIndex = execveLayout ? 2U : 1U;
+    const size_t consoleIndex = devIndex + 1U;
+    const size_t serialIndex = devIndex + 2U;
+    const size_t initIndex = devIndex + 3U;
+    const size_t childIndex = initIndex + 1U;
+    const size_t trailerIndex = parsed.entries.size() - 1U;
+    const auto& dev = parsed.entries[devIndex];
+    const auto& console = parsed.entries[consoleIndex];
+    const auto& serial = parsed.entries[serialIndex];
+    const auto& init = parsed.entries[initIndex];
+    const auto& trailer = parsed.entries[trailerIndex];
     if (root.mode != (kModeDirectory | 0755U) || root.links != 2 || !root.data.empty() ||
         dev.mode != (kModeDirectory | 0755U) || dev.links != 2 || !dev.data.empty() ||
         console.mode != (kModeCharacter | 0600U) || console.links != 1 ||
@@ -344,6 +373,16 @@ bool ValidateRequiredEntries(const ParsedArchive& parsed, std::string& detail) {
         !trailer.data.empty() || trailer.rdevMajor != 0 || trailer.rdevMinor != 0) {
         detail = "initramfs file type, mode, link count, or console/serial device metadata is invalid";
         return false;
+    }
+    if (execveLayout) {
+        const auto& bin = parsed.entries[1];
+        const auto& child = parsed.entries[childIndex];
+        if (bin.mode != (kModeDirectory | 0755U) || bin.links != 2 || !bin.data.empty() ||
+            child.mode != (kModeRegular | 0755U) || child.links != 1 ||
+            child.data.empty() || child.rdevMajor != 0 || child.rdevMinor != 0) {
+            detail = "two-executable initramfs requires /bin and executable static /bin/child";
+            return false;
+        }
     }
     for (const auto& entry : parsed.entries) {
         if (entry.uid != 0 || entry.gid != 0 || entry.mtime != 0) {
