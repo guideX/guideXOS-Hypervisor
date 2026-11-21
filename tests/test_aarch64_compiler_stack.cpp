@@ -1183,10 +1183,10 @@ void testPluginAndSerialization() {
     CHECK(plugin.getVersion().find("AARCH64-6") != std::string::npos);
     for (const char* feature : {"STP", "LDP", "LDUR", "STUR", "LDR_PRE", "STR_POST",
                                 "AND_IMM", "ORR_IMM", "EOR_IMM", "ANDS_IMM", "TST_IMM",
-                                "MOV_BITMASK", "CSEL", "CSINC", "CSET", "CINC"}) {
+                                "MOV_BITMASK", "CSEL", "CSINC", "CSINV", "CSNEG",
+                                "CSET", "CINC", "CINV", "CSETM", "CNEG"}) {
         CHECK(plugin.hasFeature(feature));
     }
-    CHECK(!plugin.hasFeature("CSNEG"));
 
     plugin.cpu().writeX(1, 0x1234);
     putWord(memory, 0, encodeLogical(true, 1, 1, 0, 7, 31, 0)); // MOV X0,#0xFF alias

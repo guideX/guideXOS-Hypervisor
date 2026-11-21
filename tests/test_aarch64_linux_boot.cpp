@@ -419,6 +419,7 @@ struct StepRecord {
     uint64_t preX2 = 0;
     uint64_t preX5 = 0;
     uint64_t preX7 = 0;
+    uint64_t preX28 = 0;
     uint64_t preSpEl1 = 0;
     uint32_t prePstate = 0;
     uint8_t preEl = 0;
@@ -431,9 +432,11 @@ struct StepRecord {
     uint64_t x3 = 0;
     uint64_t x5 = 0;
     uint64_t x7 = 0;
+    uint64_t x28 = 0;
     uint32_t pstate = 0;
     bool exceptionTaken = false;
     bool retired = false;
+    bool ramUnchanged = true;
     uint64_t esr = 0;
     uint64_t far = 0;
     std::string diagnostic;
@@ -449,11 +452,13 @@ struct StepRecord {
         out << " fault=" << faultName(fault)
             << " exception_taken=" << (exceptionTaken ? "yes" : "no")
             << " retired=" << (retired ? "yes" : "no")
+            << " ram_unchanged=" << (ramUnchanged ? "yes" : "no")
             << " next_pc=" << hex(nextPc, 16)
             << " pre_x0=" << hex(preX0, 16)
             << " pre_x2=" << hex(preX2, 16)
             << " pre_x5=" << hex(preX5, 16)
             << " pre_x7=" << hex(preX7, 16)
+            << " pre_x28=" << hex(preX28, 16)
             << " pre_sp_el1=" << hex(preSpEl1, 16)
             << " pre_el=" << static_cast<unsigned>(preEl)
             << " pre_pstate=" << hex(prePstate, 8)
@@ -466,6 +471,7 @@ struct StepRecord {
             << " x3=" << hex(x3, 16)
             << " x5=" << hex(x5, 16)
             << " x7=" << hex(x7, 16)
+            << " x28=" << hex(x28, 16)
             << " pstate=" << hex(pstate, 8)
             << " esr_el1=" << hex(esr, 16)
             << " far_el1=" << hex(far, 16);
@@ -579,6 +585,7 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         record.preX2 = core.readX(2);
         record.preX5 = core.readX(5);
         record.preX7 = core.readX(7);
+        record.preX28 = core.readX(28);
         record.preSpEl1 = core.spEl1();
         record.prePstate = core.pstate();
         record.preEl = static_cast<uint8_t>(core.exceptionLevel());
@@ -591,7 +598,19 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
             record.diagnostic = "instruction word is outside directly readable guest RAM";
         }
         const uint64_t oldElr = core.elrEl1();
+        std::vector<uint8_t> csinvRamBefore;
+        if (record.pc == 0x1D372A4u) {
+            const uint8_t* ramBytes = platform.ram().GetRawData();
+            csinvRamBefore.assign(ramBytes,
+                ramBytes + platform.ram().GetTotalSize());
+        }
         record.fault = core.step(platform.physicalBus());
+        if (!csinvRamBefore.empty()) {
+            const uint8_t* ramBytes = platform.ram().GetRawData();
+            record.ramUnchanged = csinvRamBefore.size() ==
+                    platform.ram().GetTotalSize() &&
+                std::equal(csinvRamBefore.begin(), csinvRamBefore.end(), ramBytes);
+        }
         record.nextPc = core.pc();
         record.timerAfter = platform.timer().counter();
         record.spEl1 = core.spEl1();
@@ -601,6 +620,7 @@ ExecutionResult executeBounded(AArch64VirtualPlatform& platform,
         record.x3 = core.readX(3);
         record.x5 = core.readX(5);
         record.x7 = core.readX(7);
+        record.x28 = core.readX(28);
         record.pstate = core.pstate();
         record.esr = core.esrEl1();
         record.far = core.farEl1();
@@ -717,6 +737,66 @@ bool authenticLinuxMultiplyRetired(const std::vector<StepRecord>& trace) {
         record.nextPc == 0x1D37260u && record.x7 == expected &&
         record.x5 == record.preX5 && record.pstate == record.prePstate &&
         record.spEl1 == record.preSpEl1 &&
+        record.timerAfter == record.timerBefore + 1u;
+}
+
+bool conditionOracle(uint8_t cond, uint32_t pstate) {
+    const bool n = (pstate & 0x80000000u) != 0;
+    const bool z = (pstate & 0x40000000u) != 0;
+    const bool c = (pstate & 0x20000000u) != 0;
+    const bool v = (pstate & 0x10000000u) != 0;
+    switch (cond & 15u) {
+    case 0: return z;
+    case 1: return !z;
+    case 2: return c;
+    case 3: return !c;
+    case 4: return n;
+    case 5: return !n;
+    case 6: return v;
+    case 7: return !v;
+    case 8: return c && !z;
+    case 9: return !c || z;
+    case 10: return n == v;
+    case 11: return n != v;
+    case 12: return !z && n == v;
+    case 13: return z || n != v;
+    case 14: return true;
+    case 15: return true;
+    }
+    return false;
+}
+
+const StepRecord* authenticLinuxCsinvRecord(
+    const std::vector<StepRecord>& trace) {
+    const auto found = std::find_if(trace.begin(), trace.end(),
+        [](const StepRecord& record) { return record.pc == 0x1D372A4u; });
+    return found == trace.end() ? nullptr : &*found;
+}
+
+uint64_t authenticLinuxCsinvExpected(const StepRecord& record) {
+    return conditionOracle(0, record.prePstate) ? record.preX28 : UINT64_MAX;
+}
+
+bool authenticLinuxCsinvRetired(const std::vector<StepRecord>& trace) {
+    const StepRecord* entry = authenticLinuxCsinvRecord(trace);
+    if (!entry) return false;
+    const StepRecord& record = *entry;
+    const Decoded decoded = Cpu::decodeWord(record.instruction, record.pc);
+    const uint32_t nzcvMask = record.prePstate & 0xF0000000u;
+    return record.instructionWordAvailable &&
+        record.instruction == 0xDA9F039Cu && decoded.valid &&
+        decoded.op == Op::Csinv && decoded.sf64 && decoded.rd == 28u &&
+        decoded.rn == 28u && decoded.rm == 31u && decoded.cond == 0u &&
+        record.preEl == 1u &&
+        record.disassembly == "csinv x28, x28, xzr, eq" &&
+        record.fault == Fault::None && !record.exceptionTaken && record.retired &&
+        record.nextPc == 0x1D372A8u &&
+        record.x28 == authenticLinuxCsinvExpected(record) &&
+        conditionOracle(0, record.prePstate) == ((record.prePstate & 0x40000000u) != 0) &&
+        (record.pstate & 0xF0000000u) == nzcvMask &&
+        record.pstate == record.prePstate &&
+        record.spEl1 == record.preSpEl1 &&
+        record.ramUnchanged &&
         record.timerAfter == record.timerBefore + 1u;
 }
 
@@ -1034,8 +1114,12 @@ int runFrontier(const std::filesystem::path& imagePath,
     const bool authenticMovnRun2 = authenticLinuxMovnRetired(run2Trace);
     const bool authenticMulRun1 = authenticLinuxMultiplyRetired(run1Trace);
     const bool authenticMulRun2 = authenticLinuxMultiplyRetired(run2Trace);
+    const bool authenticCsinvRun1 = authenticLinuxCsinvRetired(run1Trace);
+    const bool authenticCsinvRun2 = authenticLinuxCsinvRetired(run2Trace);
     const StepRecord* linuxMulRun1 = authenticLinuxMultiplyRecord(run1Trace);
     const StepRecord* linuxMulRun2 = authenticLinuxMultiplyRecord(run2Trace);
+    const StepRecord* linuxCsinvRun1 = authenticLinuxCsinvRecord(run1Trace);
+    const StepRecord* linuxCsinvRun2 = authenticLinuxCsinvRecord(run2Trace);
 
     const bool reproducible = sameTrace(run1Trace, run2Trace) &&
         run1.finalPc == run2.finalPc && run1.status == run2.status &&
@@ -1070,7 +1154,7 @@ int runFrontier(const std::filesystem::path& imagePath,
     run1File << "status: " << run1.status << '\n'
              << "execution_classification: " << executionClassification(run1) << '\n'
              << "retired_instructions: " << run1.retired << '\n'
-             << "old_frontier_accepted_retired_instructions: 115\n"
+             << "previous_phase_frontier_accepted_retired_instructions: 136\n"
              << "attempted_steps: " << run1Trace.size() << '\n'
              << "final_pc: " << hex(run1.finalPc, 16) << '\n'
              << "frontier_instruction_word: " << hex(run1Trace.back().instruction, 8) << '\n'
@@ -1087,6 +1171,15 @@ int runFrontier(const std::filesystem::path& imagePath,
              << "MUL_W7_before: " << (linuxMulRun1 ? hex(linuxMulRun1->preX7, 16) : "unobserved") << '\n'
              << "MUL_expected_X7_after: " << (linuxMulRun1 ? hex(authenticLinuxMultiplyExpected(*linuxMulRun1), 16) : "unobserved") << '\n'
              << "MUL_actual_X7_after: " << (linuxMulRun1 ? hex(linuxMulRun1->x7, 16) : "unobserved") << '\n'
+             << "authentic_CSINV_X28_at_0x1D372A4_retired_correctly: "
+             << (authenticCsinvRun1 ? "PASS" : "FAIL") << '\n'
+             << "CSINV_pre_X28: " << (linuxCsinvRun1 ? hex(linuxCsinvRun1->preX28, 16) : "unobserved") << '\n'
+             << "CSINV_pre_PSTATE: " << (linuxCsinvRun1 ? hex(linuxCsinvRun1->prePstate, 8) : "unobserved") << '\n'
+             << "CSINV_pre_NZCV: " << (linuxCsinvRun1 ? hex((linuxCsinvRun1->prePstate >> 28) & 15u, 1) : "unobserved") << '\n'
+             << "CSINV_EQ_condition_holds: " << (linuxCsinvRun1 ? (conditionOracle(0, linuxCsinvRun1->prePstate) ? "yes" : "no") : "unobserved") << '\n'
+             << "CSINV_expected_X28: " << (linuxCsinvRun1 ? hex(authenticLinuxCsinvExpected(*linuxCsinvRun1), 16) : "unobserved") << '\n'
+             << "CSINV_actual_X28: " << (linuxCsinvRun1 ? hex(linuxCsinvRun1->x28, 16) : "unobserved") << '\n'
+             << "CSINV_PC_after: " << (linuxCsinvRun1 ? hex(linuxCsinvRun1->nextPc, 16) : "unobserved") << '\n'
              << "GIC_pending/active/enabled: " << run1.gicPendingCount << "/"
              << run1.gicActiveCount << "/" << run1.gicEnabledCount << '\n'
              << "GIC_pending/active/enabled_masks: "
@@ -1128,7 +1221,7 @@ int runFrontier(const std::filesystem::path& imagePath,
     run2File << "status: " << run2.status << '\n'
              << "execution_classification: " << executionClassification(run2) << '\n'
              << "retired_instructions: " << run2.retired << '\n'
-             << "old_frontier_accepted_retired_instructions: 115\n"
+             << "previous_phase_frontier_accepted_retired_instructions: 136\n"
              << "attempted_steps: " << run2Trace.size() << '\n'
              << "final_pc: " << hex(run2.finalPc, 16) << '\n'
              << "frontier_instruction_word: " << hex(run2Trace.back().instruction, 8) << '\n'
@@ -1145,6 +1238,15 @@ int runFrontier(const std::filesystem::path& imagePath,
              << "MUL_W7_before: " << (linuxMulRun2 ? hex(linuxMulRun2->preX7, 16) : "unobserved") << '\n'
              << "MUL_expected_X7_after: " << (linuxMulRun2 ? hex(authenticLinuxMultiplyExpected(*linuxMulRun2), 16) : "unobserved") << '\n'
              << "MUL_actual_X7_after: " << (linuxMulRun2 ? hex(linuxMulRun2->x7, 16) : "unobserved") << '\n'
+             << "authentic_CSINV_X28_at_0x1D372A4_retired_correctly: "
+             << (authenticCsinvRun2 ? "PASS" : "FAIL") << '\n'
+             << "CSINV_pre_X28: " << (linuxCsinvRun2 ? hex(linuxCsinvRun2->preX28, 16) : "unobserved") << '\n'
+             << "CSINV_pre_PSTATE: " << (linuxCsinvRun2 ? hex(linuxCsinvRun2->prePstate, 8) : "unobserved") << '\n'
+             << "CSINV_pre_NZCV: " << (linuxCsinvRun2 ? hex((linuxCsinvRun2->prePstate >> 28) & 15u, 1) : "unobserved") << '\n'
+             << "CSINV_EQ_condition_holds: " << (linuxCsinvRun2 ? (conditionOracle(0, linuxCsinvRun2->prePstate) ? "yes" : "no") : "unobserved") << '\n'
+             << "CSINV_expected_X28: " << (linuxCsinvRun2 ? hex(authenticLinuxCsinvExpected(*linuxCsinvRun2), 16) : "unobserved") << '\n'
+             << "CSINV_actual_X28: " << (linuxCsinvRun2 ? hex(linuxCsinvRun2->x28, 16) : "unobserved") << '\n'
+             << "CSINV_PC_after: " << (linuxCsinvRun2 ? hex(linuxCsinvRun2->nextPc, 16) : "unobserved") << '\n'
              << "GIC_pending/active/enabled: " << run2.gicPendingCount << "/"
              << run2.gicActiveCount << "/" << run2.gicEnabledCount << '\n'
              << "GIC_pending/active/enabled_masks: "
@@ -1208,6 +1310,8 @@ int runFrontier(const std::filesystem::path& imagePath,
             << ((authenticMovnRun1 && authenticMovnRun2) ? "PASS" : "FAIL") << "\n"
             << "Authentic MUL W7 operands/result/flags/SP/PC/retirement: "
             << ((authenticMulRun1 && authenticMulRun2) ? "PASS" : "FAIL") << "\n"
+            << "Authentic CSINV X28 input/NZCV/EQ/result/PC/retirement: "
+            << ((authenticCsinvRun1 && authenticCsinvRun2) ? "PASS" : "FAIL") << "\n"
             << "Run 1 MUL inputs/result W5/W7/expected/actual: "
             << (linuxMulRun1 ? hex(linuxMulRun1->preX5, 16) + "/" +
                 hex(linuxMulRun1->preX7, 16) + "/" +
@@ -1218,9 +1322,9 @@ int runFrontier(const std::filesystem::path& imagePath,
                 hex(linuxMulRun2->preX7, 16) + "/" +
                 hex(authenticLinuxMultiplyExpected(*linuxMulRun2), 16) + "/" +
                 hex(linuxMulRun2->x7, 16) : "unobserved") << "\n"
-            << "Original accepted retirement frontier: 115\n"
-            << "Move-wide continuation retired: "
-            << ((authenticMovnRun1 && run1.retired > 115u) ? "yes" : "no") << "\n"
+            << "Previous accepted retirement frontier: 136\n"
+            << "Conditional-select continuation retired: "
+            << ((authenticCsinvRun1 && run1.retired > 136u) ? "yes" : "no") << "\n"
             << "New frontier instruction: " << hex(run1Trace.back().instruction, 8)
             << " " << run1Trace.back().disassembly << "\n"
             << "Timer counter at frontier: " << run1.timerCounter << "\n"
@@ -1246,7 +1350,8 @@ int runFrontier(const std::filesystem::path& imagePath,
     std::cout << summary.str();
     return reproducible && authenticAddRun1 && authenticAddRun2 &&
         authenticMovnRun1 && authenticMovnRun2 && authenticMulRun1 &&
-        authenticMulRun2 && run1.retired > 118u &&
+        authenticMulRun2 && authenticCsinvRun1 && authenticCsinvRun2 &&
+        run1.retired > 136u &&
         (!captureFreshCheckpoint || !snapshotReached || snapshotQualified) ? 0 : 2;
 }
 
@@ -1282,11 +1387,16 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
         restoredCore.exceptionLevel() != ExceptionLevel::EL1) {
         throw std::runtime_error("restored checkpoint did not match the accepted PC/retirement/EL baseline");
     }
-    const ExecutionResult result = executeBounded(platform, maximumAttempts, 32);
+    if (maximumAttempts <= 32u)
+        throw std::runtime_error("checkpoint continuation budget must exceed its 32-step prefix");
+    const ExecutionResult result = executeBounded(
+        platform, maximumAttempts - 32u, 32);
     const bool authenticAddRetired = authenticOldFrontierAddRetired(result.trace);
     const bool authenticMovnRetired = authenticLinuxMovnRetired(result.trace);
     const bool authenticMulRetired = authenticLinuxMultiplyRetired(result.trace);
+    const bool authenticCsinvRetired = authenticLinuxCsinvRetired(result.trace);
     const StepRecord* linuxMul = authenticLinuxMultiplyRecord(result.trace);
+    const StepRecord* linuxCsinv = authenticLinuxCsinvRecord(result.trace);
     writeText(outputDirectory / "checkpoint-trace.txt", formatTrace(result.trace));
     writeBytes(outputDirectory / "checkpoint-cpu-state.bin", result.finalCpuState);
     std::ostringstream frontier;
@@ -1337,6 +1447,15 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
              << "MUL_W7_before: " << (linuxMul ? hex(linuxMul->preX7, 16) : "unobserved") << '\n'
              << "MUL_expected_X7_after: " << (linuxMul ? hex(authenticLinuxMultiplyExpected(*linuxMul), 16) : "unobserved") << '\n'
              << "MUL_actual_X7_after: " << (linuxMul ? hex(linuxMul->x7, 16) : "unobserved") << '\n'
+             << "authentic_CSINV_X28_at_0x1D372A4_retired_correctly: "
+             << (authenticCsinvRetired ? "PASS" : "FAIL") << '\n'
+             << "CSINV_pre_X28: " << (linuxCsinv ? hex(linuxCsinv->preX28, 16) : "unobserved") << '\n'
+             << "CSINV_pre_PSTATE: " << (linuxCsinv ? hex(linuxCsinv->prePstate, 8) : "unobserved") << '\n'
+             << "CSINV_pre_NZCV: " << (linuxCsinv ? hex((linuxCsinv->prePstate >> 28) & 15u, 1) : "unobserved") << '\n'
+             << "CSINV_EQ_condition_holds: " << (linuxCsinv ? (conditionOracle(0, linuxCsinv->prePstate) ? "yes" : "no") : "unobserved") << '\n'
+             << "CSINV_expected_X28: " << (linuxCsinv ? hex(authenticLinuxCsinvExpected(*linuxCsinv), 16) : "unobserved") << '\n'
+             << "CSINV_actual_X28: " << (linuxCsinv ? hex(linuxCsinv->x28, 16) : "unobserved") << '\n'
+             << "CSINV_PC_after: " << (linuxCsinv ? hex(linuxCsinv->nextPc, 16) : "unobserved") << '\n'
              << "authentic_MOVN_W7_at_0x1D37250_retired_correctly: "
              << (authenticMovnRetired ? "PASS" : "FAIL") << '\n'
              << "authentic_ADD_at_0x36A6C_retired_correctly: "
@@ -1367,6 +1486,15 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
            << "continuation_timer_counter: " << result.timerCounter << '\n'
            << "authentic_MUL_W7_at_0x1D3725C_retired_correctly: "
            << (authenticMulRetired ? "PASS" : "FAIL") << '\n'
+           << "authentic_CSINV_X28_at_0x1D372A4_retired_correctly: "
+           << (authenticCsinvRetired ? "PASS" : "FAIL") << '\n'
+           << "CSINV_pre_X28: " << (linuxCsinv ? hex(linuxCsinv->preX28, 16) : "unobserved") << '\n'
+           << "CSINV_pre_PSTATE: " << (linuxCsinv ? hex(linuxCsinv->prePstate, 8) : "unobserved") << '\n'
+           << "CSINV_pre_NZCV: " << (linuxCsinv ? hex((linuxCsinv->prePstate >> 28) & 15u, 1) : "unobserved") << '\n'
+           << "CSINV_EQ_condition_holds: " << (linuxCsinv ? (conditionOracle(0, linuxCsinv->prePstate) ? "yes" : "no") : "unobserved") << '\n'
+           << "CSINV_expected_X28: " << (linuxCsinv ? hex(authenticLinuxCsinvExpected(*linuxCsinv), 16) : "unobserved") << '\n'
+           << "CSINV_actual_X28: " << (linuxCsinv ? hex(linuxCsinv->x28, 16) : "unobserved") << '\n'
+           << "CSINV_PC_after: " << (linuxCsinv ? hex(linuxCsinv->nextPc, 16) : "unobserved") << '\n'
            << "MUL_W5_before: " << (linuxMul ? hex(linuxMul->preX5, 16) : "unobserved") << '\n'
            << "MUL_W7_before: " << (linuxMul ? hex(linuxMul->preX7, 16) : "unobserved") << '\n'
            << "MUL_expected_X7_after: " << (linuxMul ? hex(authenticLinuxMultiplyExpected(*linuxMul), 16) : "unobserved") << '\n'
@@ -1402,7 +1530,7 @@ int runCheckpointResume(const std::filesystem::path& imagePath,
     writeText(outputDirectory / "checkpoint-replay.txt", report.str());
     std::cout << report.str();
     return authenticAddRetired && authenticMovnRetired && authenticMulRetired &&
-        result.retired > 86u ? 0 : 2;
+        authenticCsinvRetired && result.retired > 104u ? 0 : 2;
 }
 
 } // namespace
@@ -1420,8 +1548,8 @@ int main(int argc, char** argv) {
                 maximumAttempts = std::stoull(argv[4], &consumed, 10);
                 if (consumed != std::string(argv[4]).size() ||
                     (maximumAttempts != 64 && maximumAttempts != 1024 &&
-                     maximumAttempts != 16384)) {
-                    std::cerr << "frontier attempt budget must be 64, 1024, or 16384\n";
+                     maximumAttempts != 16384 && maximumAttempts != 32768)) {
+                    std::cerr << "frontier attempt budget must be 64, 1024, 16384, or 32768\n";
                     return 2;
                 }
             }
@@ -1435,8 +1563,8 @@ int main(int argc, char** argv) {
                 maximumAttempts = std::stoull(argv[4], &consumed, 10);
                 if (consumed != std::string(argv[4]).size() ||
                     (maximumAttempts != 64 && maximumAttempts != 1024 &&
-                     maximumAttempts != 16384)) {
-                    std::cerr << "frontier attempt budget must be 64, 1024, or 16384\n";
+                     maximumAttempts != 16384 && maximumAttempts != 32768)) {
+                    std::cerr << "frontier attempt budget must be 64, 1024, 16384, or 32768\n";
                     return 2;
                 }
             }
@@ -1449,16 +1577,16 @@ int main(int argc, char** argv) {
                 maximumAttempts = std::stoull(argv[5], &consumed, 10);
                 if (consumed != std::string(argv[5]).size() ||
                     (maximumAttempts != 64 && maximumAttempts != 1024 &&
-                     maximumAttempts != 16384)) {
-                    std::cerr << "resume attempt budget must be 64, 1024, or 16384\n";
+                     maximumAttempts != 16384 && maximumAttempts != 32768)) {
+                    std::cerr << "resume attempt budget must be 64, 1024, 16384, or 32768\n";
                     return 2;
                 }
             }
             return runCheckpointResume(argv[2], argv[3], argv[4], maximumAttempts);
         }
-        std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory [64|1024|16384]]\n"
-                     "       test_aarch64_linux_boot --frontier-no-snapshot Image output-directory [64|1024|16384]\n"
-                     "       test_aarch64_linux_boot --resume Image snapshot output-directory [64|1024|16384]\n";
+        std::cerr << "usage: test_aarch64_linux_boot [--frontier Image output-directory [64|1024|16384|32768]]\n"
+                     "       test_aarch64_linux_boot --frontier-no-snapshot Image output-directory [64|1024|16384|32768]\n"
+                     "       test_aarch64_linux_boot --resume Image snapshot output-directory [64|1024|16384|32768]\n";
         return 2;
     } catch (const std::exception& exception) {
         std::cerr << "AARCH64-14 Linux boot harness error: " << exception.what() << '\n';

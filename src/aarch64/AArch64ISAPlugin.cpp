@@ -483,7 +483,9 @@ bool AArch64ISAPlugin::hasFeature(const std::string& feature) const {
             feature == "STR_POST" || feature == "AND_IMM" || feature == "ORR_IMM" ||
             feature == "EOR_IMM" || feature == "ANDS_IMM" || feature == "TST_IMM" ||
             feature == "MOV_BITMASK" || feature == "CSEL" || feature == "CSINC" ||
-            feature == "CSET" || feature == "CINC" || feature == "MRS" ||
+            feature == "CSINV" || feature == "CSNEG" || feature == "CSET" ||
+            feature == "CINC" || feature == "CINV" || feature == "CSETM" ||
+            feature == "CNEG" || feature == "MRS" ||
             feature == "MSR" || feature == "SVC" || feature == "BRK" ||
             feature == "ERET" || feature == "DSB" || feature == "DMB" ||
             feature == "ISB" || feature == "SCTLR_EL1" || feature == "TCR_EL1" ||

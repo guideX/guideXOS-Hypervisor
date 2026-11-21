@@ -1489,18 +1489,23 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
         }
     }
 
-    // CSEL/CSINC: sf[31] op[30]=0 S[29]=0 11010100[28:21] Rm[20:16]
-    // cond[15:12] 0[11] o2[10] Rn[9:5] Rd[4:0]. CSEL: o2=0, CSINC: o2=1.
-    // Every fixed bit is checked (bits[30:21] and bit 11), so no other
-    // encoding can alias onto these forms.
+    // Conditional select: sf[31] op[30] S[29]=0 11010100[28:21]
+    // Rm[20:16] cond[15:12] 0[11] o2[10] Rn[9:5] Rd[4:0]. The exact
+    // fixed-bit mask includes op[30], S[29], bits[28:21], and bit 11; sf,
+    // Rm, cond, o2, Rn, and Rd remain variable. o2 selects CSEL/CSINC or
+    // CSINV/CSNEG according to op. This keeps the entire family on one
+    // decoder path without accepting adjacent data-processing encodings.
     {
-        const bool fixedMatch = (word & 0x7FE00000u) == 0x1A800000u;
-        if (fixedMatch && (word & 0x800u) == 0u) {
+        const uint32_t fixed = word & 0x7FE00800u;
+        const bool conditionalSelectClass =
+            fixed == 0x1A800000u || fixed == 0x5A800000u;
+        if (conditionalSelectClass) {
+            const bool op = (word & 0x40000000u) != 0;
             const uint32_t o2 = (word >> 10) & 1u;
             const bool sf = (word & 0x80000000u) != 0;
-            const bool isCsinc = (o2 == 1u);
             Decoded d;
-            d.op = isCsinc ? Op::Csinc : Op::Csel;
+            d.op = !op ? (o2 ? Op::Csinc : Op::Csel)
+                       : (o2 ? Op::Csneg : Op::Csinv);
             d.valid = true;
             d.sf64 = sf;
             d.word = word;
@@ -1512,32 +1517,35 @@ Decoded Cpu::decodeWord(uint32_t word, uint64_t address) {
             const std::string rdName = (d.rd == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rd);
             const std::string rnName = (d.rn == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rn);
             const std::string rmName = (d.rm == 31) ? std::string(sf ? "xzr" : "wzr") : regName(sf, d.rm);
-            const char* mnem = isCsinc ? "csinc" : "csel";
-            // Aliases are only defined for encoded conditions other than 111x.
-            // The alias condition is the INVERSE of the encoded one:
-            //   CSET Rd, <cond>     = CSINC Rd, ZR, ZR, invert(<cond>)
-            //   CINC Rd, Rn, <cond> = CSINC Rd, Rn, Rn, invert(<cond>), Rn != 31
-            const bool aliasable = (d.cond != 14u && d.cond != 15u);
+            const bool aliasable = (d.cond & 0xEu) != 0xEu;
             char buf[128];
-            if (isCsinc && d.rn == 31 && d.rm == 31 && aliasable) {
+            if (d.op == Op::Csinc && d.rn == 31 && d.rm == 31 && aliasable) {
                 std::snprintf(buf, sizeof(buf), "cset %s, %s", rdName.c_str(),
                               condName(d.cond ^ 1u));
-            } else if (isCsinc && d.rn == d.rm && d.rn != 31 && aliasable) {
+            } else if (d.op == Op::Csinc && d.rn == d.rm && d.rn != 31 && aliasable) {
                 std::snprintf(buf, sizeof(buf), "cinc %s, %s, %s", rdName.c_str(),
                               rnName.c_str(), condName(d.cond ^ 1u));
+            } else if (d.op == Op::Csinv && d.rn == d.rm && d.rn != 31 &&
+                       aliasable) {
+                std::snprintf(buf, sizeof(buf), "cinv %s, %s, %s", rdName.c_str(),
+                              rnName.c_str(), condName(d.cond ^ 1u));
+            } else if (d.op == Op::Csinv && d.rn == 31 && d.rm == 31 &&
+                       aliasable) {
+                std::snprintf(buf, sizeof(buf), "csetm %s, %s", rdName.c_str(),
+                              condName(d.cond ^ 1u));
+            } else if (d.op == Op::Csneg && d.rn == d.rm && aliasable) {
+                std::snprintf(buf, sizeof(buf), "cneg %s, %s, %s", rdName.c_str(),
+                              rnName.c_str(), condName(d.cond ^ 1u));
             } else {
-                std::snprintf(buf, sizeof(buf), "%s %s, %s, %s, %s", mnem, rdName.c_str(),
-                              rnName.c_str(), rmName.c_str(), condName(d.cond));
+                const char* mnem = d.op == Op::Csel ? "csel"
+                    : d.op == Op::Csinc ? "csinc"
+                    : d.op == Op::Csinv ? "csinv" : "csneg";
+                std::snprintf(buf, sizeof(buf), "%s %s, %s, %s, %s", mnem,
+                              rdName.c_str(), rnName.c_str(), rmName.c_str(),
+                              condName(d.cond));
             }
             d.disassembly = buf;
             return d;
-        }
-        // CSINV (op=1, o2=0) and CSNEG (op=1, o2=1) are allocated A64
-        // encodings outside this profile. They are reported as unsupported
-        // rather than silently treated as unallocated or executed.
-        if ((word & 0x7FE00800u) == 0x5A800000u) {
-            return invalid(word, address, Fault::UnsupportedFeature,
-                           "CSINV/CSNEG are outside the implemented subset");
         }
     }
 
@@ -3523,10 +3531,12 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         break;
     }
     case Op::Csel:
-    case Op::Csinc: {
+    case Op::Csinc:
+    case Op::Csinv:
+    case Op::Csneg: {
         // Conditional select. Rn/Rm==31 are XZR/WZR; Rd==31 is XZR/WZR.
-        // NZCV is never modified. CSINC increments the second operand by one
-        // when the condition is false.
+        // NZCV and SP are never modified. All sources are read before the
+        // destination write so every Rn/Rm/Rd overlap behaves architecturally.
         const uint64_t vn =
             (decoded.rn == 31)
                 ? 0
@@ -3542,13 +3552,19 @@ Fault Cpu::executeDecoded(const Decoded& decoded, ia64::IMemory& memory) {
         const bool cond =
             conditionHolds(decoded.cond, flagN(), flagZ(), flagC(), flagV());
         uint64_t result;
-        if (decoded.op == Op::Csel) {
-            result = cond ? vn : vm;
+        if (cond) {
+            result = vn;
         } else {
-            result = cond ? vn : (vm + 1);
-            if (!decoded.sf64) {
-                result &= 0xFFFFFFFFu; // 32-bit wraparound on the increment
+            switch (decoded.op) {
+            case Op::Csel: result = vm; break;
+            case Op::Csinc: result = vm + uint64_t{1}; break;
+            case Op::Csinv: result = ~vm; break;
+            case Op::Csneg: result = uint64_t{0} - vm; break;
+            default: result = 0; break; // decoder only dispatches this family
             }
+        }
+        if (!decoded.sf64) {
+            result &= 0xFFFFFFFFu; // W arithmetic wraps, then zero-extends
         }
         if (decoded.rd != 31) {
             x_[decoded.rd] = decoded.sf64 ? result : (result & 0xFFFFFFFFu);

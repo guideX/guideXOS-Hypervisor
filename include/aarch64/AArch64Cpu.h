@@ -30,7 +30,8 @@
 //     with the ARM DecodeBitMasks algorithm and reserved-encoding rejection.
 //   - Logical shifted-register AND/ORR/EOR/ANDS families, including operand
 //     inversion, LSL/LSR/ASR/ROR, and W/X zero-register behavior.
-//   - CSEL/CSINC conditional selection (and the CSET/CINC aliases).
+//   - CSEL/CSINC/CSINV/CSNEG conditional selection (and CSET/CINC/CSETM/
+//     CINV/CNEG aliases).
 //   - A three-level nested compiler-style call chain (stp/ldp frames).
 // SCOPE (Phase AARCH64-5/6, additive): EL0/EL1 synchronous exceptions,
 //   selected system registers, SVC/BRK, VBAR_EL1 vector dispatch, ERET and a
@@ -202,6 +203,8 @@ enum class Op {
     Ubfm,     // UBFM and its unsigned extract/shift aliases
     Csel,     // CSEL: conditional select
     Csinc,    // CSINC: conditional select increment (CINC/CSET aliases)
+    Csinv,    // CSINV: conditional select invert (CINV/CSETM aliases)
+    Csneg,    // CSNEG: conditional select negate (CNEG alias)
     Mrs,      // MRS Xt, system register
     Msr,      // MSR system register, Xt
     MsrPstateImm, // MSR SPSel/DAIFSet/DAIFClr, #imm
@@ -229,7 +232,7 @@ struct Decoded {
     uint8_t rn = 0;            // source register number 0..31
     uint8_t ra = 0;            // third source register number 0..31 (MADD/MSUB)
     uint8_t rt2 = 0;           // second transfer register (LDP/STP Rt2 field)
-    uint8_t rm = 0;            // second source register (CSEL/CSINC Rm field)
+    uint8_t rm = 0;            // second source register (conditional-select Rm field)
     uint8_t hw = 0;            // MOVN/MOVZ/MOVK halfword selector 0..3
     uint16_t imm16 = 0;        // MOVN/MOVZ/MOVK 16-bit immediate
     uint16_t imm12 = 0;        // ADD/SUB/LDR/STR 12-bit immediate
