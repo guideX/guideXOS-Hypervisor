@@ -11,7 +11,8 @@
 - The ignored `build/` directory and the Phase 48 artifact trees were preserved.
 - The shared IA-64 `.phase` marker was not changed. `.phase-ppc64` now records Phase 49 as complete.
 - No push or QEMU runtime was used.
-- Phase 49 implementation commit SHA: recorded in the closeout commit immediately following the implementation commit.
+- Phase 49 implementation commit SHA: `a8423aa907325ba8e0f6186dc4a1f18e703ba98c`.
+- A documentation-only closeout commit follows to record this implementation SHA. Final branch divergence after that closeout is 6 commits ahead of `origin/PPC64`, 0 behind.
 
 ## Decoder and execution
 
@@ -65,4 +66,4 @@ References: [Power ISA specifications](https://openpowerfoundation.org/specifica
 
 No instruction beyond SRADI was added. Linux is not booted to completion. QEMU/QAC runtime remains pending; QEMU was not launched. The next reproducible frontier is `extsh. r9,r9` at `0xC0000000013BB2BC`. PPC64-50 should first audit EXTSH’s exact X-form field constraints and Rc/CR0 semantics, then qualify that instruction through the production VM and continue the same unchanged Linux image to its next unsupported frontier.
 
-Implementation commit SHA: recorded in the final task closeout. Branch remains `PPC64`; no push was performed.
+Implementation commit SHA: `a8423aa907325ba8e0f6186dc4a1f18e703ba98c` (`Implement PPC64 SRADI and qualify Linux frontier`). The documentation-only closeout commit follows this commit. Branch remains `PPC64`; no push was performed.
