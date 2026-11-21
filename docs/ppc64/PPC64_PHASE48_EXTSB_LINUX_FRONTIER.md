@@ -77,12 +77,18 @@ After EXTSB, each replay retired 73 more instructions and stopped at the same ge
 - Total retirements: **2,712,698**.
 - Last successful NIP: `0xC0000000013BB2A0`.
 - First unsupported NIP / raw word: `0xC0000000013BB2A4` / `0x7D298676`.
-- Independent decode: primary opcode 31, XO 827, unsupported by this emulator.
+- Independent decode: primary opcode 31, RS=9, RA=9, SH[0:4]=16, bit 30 (SH[5])=1, and Rc=0. In the Power ISA XS-form this is `sradi r9,r9,48`; the flat 10-bit XO extraction is 827 because bit 30 is part of the split shift amount, while the XS-form opcode field is 413.
 - LPID 1 fetch translated successfully and execute permission was present.
 - Stop classification: unsupported instruction; no other instruction was added in this phase.
 - ELF symbol attribution: `string+0x14`.
 
 At the frontier, CR=`0x84000484`, XER=`0x20040000`, MSR=`0x8000000000000002`, SPRG1=`0xC000000001F42380`, and FSCR=`0x1180`. The two runs matched the next NIP and raw word. This is not a complete Linux boot.
+
+## PPC64-49 recommendation
+
+The first unsupported frontier is `sradi r9,r9,48` at `0xC0000000013BB2A4` (`0x7D298676`). Power ISA 3.1C Book I §3.3.14.2.1 defines the XS-form split shift field, and the pinned QEMU decoder spells the format `SRADI 011111 ..... ..... ..... 110011101 . . @XS`. The decoded shift amount is `SH[5] || SH[0:4] = 1 || 10000b = 48`.
+
+PPC64-49 should implement and qualify SRADI as its own focused instruction phase, including every shift amount from 0 through 63, RA=RS aliasing, record-form CR0, and the XER[CA]/XER[CA32] effects. Then replay the unchanged Linux guest from this recorded frontier and stop at its next reproducible endpoint. No SRADI handler or decoder change is included in Phase 48.
 
 ## Regression and artifact results
 
