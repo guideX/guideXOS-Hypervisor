@@ -500,6 +500,8 @@ enum class Mips64Op : uint8_t {
     Dinsu,
     // MIPS64 Release 2 doubleword insert bit field in bits 0..31.
     Dins,
+    // MIPS64 Release 2 conditional GPR move on a nonzero condition.
+    Movn,
 };
 
 struct Mips64ReservationState {

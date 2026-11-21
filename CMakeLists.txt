@@ -1426,3 +1426,18 @@ else()
     target_compile_options(test_mips64_dins PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME Mips64DinsTests COMMAND test_mips64_dins)
+
+# MIPS64-33 architectural qualification for MOVN and authentic Linux replay.
+add_executable(test_mips64_movn
+    tests/test_mips64_movn.cpp
+    ${ALL_SOURCES}
+)
+if(WIN32)
+    target_link_libraries(test_mips64_movn PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_movn PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_movn PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64MovnTests COMMAND test_mips64_movn)

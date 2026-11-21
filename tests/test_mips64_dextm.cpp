@@ -295,7 +295,9 @@ void testExactEncodingAndFieldClassification() {
     CHECK(dext.rd == 29 && dext.sa == 0);
     CHECK(Mips64Cpu{}.disassemble(dext) == "dext $17, $17, 0, 30");
     CHECK(!dextu.valid && dextu.fault == Mips64Fault::UnsupportedInstruction);
-    CHECK(!dins.valid && dins.fault == Mips64Fault::UnsupportedInstruction);
+    CHECK(dins.valid && dins.op == Mips64Op::Dins);
+    CHECK(dins.rs == 17 && dins.rt == 17 && dins.rd == 0 && dins.sa == 0);
+    CHECK(Mips64Cpu{}.disassemble(dins) == "dins $17, $17, 0, 1");
     CHECK(!reserved.valid && reserved.fault == Mips64Fault::ReservedInstruction);
 }
 

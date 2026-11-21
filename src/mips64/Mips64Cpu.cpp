@@ -81,6 +81,7 @@ constexpr uint8_t kFnSrl = 0x02;
 constexpr uint8_t kFnSra = 0x03;
 constexpr uint8_t kFnJr = 0x08;
 constexpr uint8_t kFnJalr = 0x09;
+constexpr uint8_t kFnMovn = 0x0B;
 constexpr uint8_t kFnSyscall = 0x0C;
 constexpr uint8_t kFnBreak = 0x0D;
 constexpr uint8_t kFnSync = 0x0F;
@@ -351,6 +352,13 @@ Mips64Decoded decodeInstruction(uint32_t word) {
                                     "reserved JALR hint/register encoding");
                     }
                     mapped = decoded.sa == 16 ? Mips64Op::JalrHb : Mips64Op::Jalr;
+                    break;
+                case kFnMovn:
+                    if (decoded.sa != 0) {
+                        return fail(Mips64Op::Invalid, Mips64Fault::ReservedInstruction,
+                                    "reserved MOVN shift amount must be zero");
+                    }
+                    mapped = Mips64Op::Movn;
                     break;
                 case kFnSyscall: mapped = Mips64Op::Syscall; break;
                 case kFnBreak: mapped = Mips64Op::Break; break;
@@ -1541,6 +1549,16 @@ Mips64StepResult Mips64Cpu::executeDecoded(ia64::IMemory& memory,
             writeGpr(decoded.rt, source < immediate ? 1ULL : 0ULL);
             break;
         }
+        case Mips64Op::Movn: {
+            // MOVN tests the complete condition GPR and, only when nonzero,
+            // copies the complete source GPR. Capture both operands before
+            // writing so every source/condition/destination alias uses the
+            // original pre-instruction state. The false path performs no write.
+            const uint64_t source = readGpr(decoded.rs);
+            const uint64_t condition = readGpr(decoded.rt);
+            if (condition != 0) writeGpr(decoded.rd, source);
+            break;
+        }
         case Mips64Op::Addu:
             writeGpr(decoded.rd,
                      signExtend32(low32(readGpr(decoded.rs)) + low32(readGpr(decoded.rt))));
@@ -2671,6 +2689,10 @@ std::string Mips64Cpu::disassemble(const Mips64Decoded& decoded) const {
             std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, $%u", name, decoded.rd,
                           decoded.rs, decoded.rt);
             break;
+        case Mips64Op::Movn:
+            std::snprintf(buffer, sizeof(buffer), "%s $%u, $%u, $%u", name,
+                          decoded.rd, decoded.rs, decoded.rt);
+            break;
         case Mips64Op::Mult:
         case Mips64Op::Multu:
         case Mips64Op::Div:
@@ -3396,6 +3418,7 @@ const char* Mips64Cpu::opName(Mips64Op op) {
         case Mips64Op::Dextm: return "dextm";
         case Mips64Op::Dinsu: return "dinsu";
         case Mips64Op::Dins: return "dins";
+        case Mips64Op::Movn: return "movn";
         case Mips64Op::Sync: return "sync";
         case Mips64Op::Dsllv: return "dsllv";
         case Mips64Op::Dsrlv: return "dsrlv";
