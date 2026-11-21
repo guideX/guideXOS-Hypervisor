@@ -78,7 +78,9 @@ bool LinuxValidatePlatformFdt(const std::vector<uint8_t>& bytes,
         tree, "/", "compatible", "guidexos,riscv26-linux-initramfs");
     const bool phase27Profile = LinuxFdtString(
         tree, "/", "compatible", "guidexos,riscv27-linux-process-lifecycle");
-    if (!phase25Profile && !phase26Profile && !phase27Profile) {
+    const bool phase29Profile = LinuxFdtString(
+        tree, "/", "compatible", "guidexos,riscv29-linux-process-repeat");
+    if (!phase25Profile && !phase26Profile && !phase27Profile && !phase29Profile) {
         return fail("root compatible does not identify a supported Linux boot profile");
     }
     if (!LinuxFdtU32(tree, "/", "#address-cells", 2) ||
@@ -142,12 +144,12 @@ bool LinuxValidatePlatformFdt(const std::vector<uint8_t>& bytes,
         tree, "/chosen", "linux,initrd-start");
     const bool hasInitrdEnd = LinuxFdtNodeHasProperty(
         tree, "/chosen", "linux,initrd-end");
-    if (phase26Profile || phase27Profile) {
+    if (phase26Profile || phase27Profile || phase29Profile) {
         const auto* initrdStart = Property(tree, "/chosen", "linux,initrd-start");
         const auto* initrdEnd = Property(tree, "/chosen", "linux,initrd-end");
         if (initrdStart == nullptr || initrdStart->size() != 8 ||
             initrdEnd == nullptr || initrdEnd->size() != 8) {
-            return fail("RISCV-26/27 chosen initrd addresses are not two 32-bit cells");
+            return fail("RISCV-26/27/29 chosen initrd addresses are not two 32-bit cells");
         }
         const uint64_t start = Be64Pair(*initrdStart, 0);
         const uint64_t end = Be64Pair(*initrdEnd, 0);
@@ -155,7 +157,7 @@ bool LinuxValidatePlatformFdt(const std::vector<uint8_t>& bytes,
             end > boot_contract::kRamBase + boot_contract::kRamSize ||
             (start < boot_contract::kFdtAddress + boot_contract::kFdtCapacity &&
              boot_contract::kFdtAddress < end)) {
-            return fail("RISCV-26/27 chosen initrd range is invalid, overlapping, or outside RAM");
+            return fail("RISCV-26/27/29 chosen initrd range is invalid, overlapping, or outside RAM");
         }
     } else if (hasInitrdStart || hasInitrdEnd) {
         return fail("RISCV-18 negative-control FDT must not advertise an initramfs");

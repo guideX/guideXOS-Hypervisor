@@ -1,0 +1,182 @@
+guideXOS Hypervisor — Phase RISCV-29 Report
+Repeated Linux process lifecycles and recoverable failed execve
+Date: 2026-11-21
+
+RESULT
+------
+Outcome A — the authentic Linux process lifecycle completed in Debug and
+Release. PID 1 cloned two distinct children. PID 21 successfully execve'd the
+static /bin/child ELF, exited with code 42, and was reaped with status 10752.
+PID 22 then attempted execve("/bin/riscv29-missing"). Linux returned
+-ENOENT (-2) before ELF loading, resumed PID 22 in its original /init image
+with the same task, identity, address space, and usable stack, and the child
+performed recovery syscalls before exiting with code 43. PID 1 reaped status
+11008, observed -ECHILD from wait4(-1, ..., WNOHANG), emitted its completion
+marker, and remained alive. Debug and Release architectural evidence is
+byte-identical across the checked lifecycle artifact set.
+
+Repository preflight and closeout
+---------------------------------
+Branch: RISCV
+Starting HEAD: bd0702919fa2c12e69c2439594d529a0c4ba7404
+The RISCV-27 implementation commit 923014b04813b10ea373c9e2065161b43ed2b31e
+was present in the starting ancestry. Starting upstream divergence was ahead
+6, behind 0 (origin/RISCV...HEAD: 0 6). The phase marker selected RISCV-29.
+The external CTest registry contained 49 tests before this phase and 51 after
+adding the R29 integration and fixture-contract test. The focused selection
+contained 30 tests in each configuration.
+
+The accepted RISCV-28 Debug and Release integration baselines were reproduced
+before the R29 fixture and harness changes. Both passed and matched the
+accepted R28 evidence: 87,068,751 post-handoff retirements; U/S/M totals
+513 / 82,863,617 / 4,204,621; PID 1, child PID 21, exit code 42, and wait
+status 10752. The six accepted R28 run-summary, execve, console, syscall,
+task-switch, and page-walk artifacts compared byte-for-byte with each replay.
+
+The initial untracked Testing/ and fixture .build directories were preserved
+and excluded from the commit. The R28 audit had already replaced the original
+164,396-byte LastTest.log with a 160-byte record; this phase preserved that
+surviving record and did not reconstruct or overwrite the lost log. A Python
+import generated an untracked __pycache__ file under the existing R28 fixture;
+it is excluded from the commit. The shared .phase file was not edited. The
+work is committed locally on RISCV; no push, reset, rebase, or branch switch
+was performed.
+
+Pinned Linux, OpenSBI, and platform
+----------------------------------
+Linux source: v6.12, commit adc218676eef25575469234709c2d87185ca223a
+Linux Image SHA-256:
+  60ccb1172ffbe4b49cbc4447e7ccb4b705b5d60a9e92d3f10cf02a0d46bbca2c
+vmlinux SHA-256:
+  49a047dd85bac9e8da49f89907dfdcc845b8c9c564f9d6eb63ba76f68768d093
+Linux config SHA-256:
+  5dfc1dec7885ea79d1c6ca14262f7ff305d02ac37e74f01ee260cdd7317082ab
+OpenSBI v1.8.1 source commit:
+  74434f255873d74e56cc50aa762d1caf24c099f8
+OpenSBI firmware SHA-256:
+  cc4410ef1a24fd5f9cbb9019f82802351b829187de75b756c45b60479245d7a3
+
+The original Linux and OpenSBI artifacts remained unchanged. Linux entered
+through unchanged OpenSBI and a genuine MRET using the accepted one-hart
+RV64IMA_Zicsr, Sv39, StandardPmp16, UART0/UART1, PLIC, ACLINT timer, 10 MHz
+timebase, and Linux handoff profile. No host SBI provider, host-created task,
+host ELF loader, or synthetic syscall path was used. No QEMU run was made.
+
+Deterministic R29 fixture
+------------------------
+Fixture source: tests/fixtures/riscv_linux_process_repeat/
+Compiler: riscv64-linux-gnu-gcc 13.3.0
+GNU readelf/objdump: binutils 2.42; Python 3.12.3; DTC 1.7.0
+Archive format: deterministic uncompressed newc, uid/gid 0, fixed mtime 0.
+Entries: ., bin, dev, dev/console, dev/ttyS0, init, bin/child, TRAILER!!!.
+Both files are independent static ELF64 little-endian RISC-V ET_EXEC images
+with no PT_INTERP or dynamic linker.
+
+  /init: 11,632 bytes; entry 0x10000; SHA-256
+    873338c31ea8f6fe5950a85bf7436e693f2327f88ed99300ef6bf9e83fa3a760
+  /bin/child: 9,408 bytes; entry 0x20000; SHA-256
+    035b5c35bf26ff9d7aa2702f12dc8bf18b7e15516ca19a6352a5568f4886b25f
+  initramfs.cpio: 22,020 bytes; SHA-256
+    6e895f9da501a9e4381f5a939034756a966cd9d299e4a12564aafcfe0668e8d7
+  platform-initramfs.dtb SHA-256
+    5a93352a942d75d4b7d8b735dcb06ba96e966d25392b9faf0ee1be17d48f79df
+
+The fixture contract reproduced the archive and manifest and confirmed the
+missing executable is absent from the archive. The generated FDT retains the
+supported RISCV-29 Linux profile and /soc simple-bus correction. It advertises
+initrd bounds [0x81400000, 0x81405604); Linux reserved the rounded 0x6000-byte
+range. Fixture validation passed 3/3 checks.
+
+First child: successful execve and reap
+---------------------------------------
+PID 1 entered /init at 0x10000 and created PID 21 with clone flags 17
+(SIGCHLD). Linux returned the positive child PID to PID 1 and zero to PID 21.
+The child verified getpid=21 and getppid=1, wrote its pre-exec marker, then
+issued Linux syscall 221 with the guest pathname /bin/child, argv
+["/bin/child", "execve-riscv29"], and envp ["GUIDEXOS_RISCV29=present"].
+Linux dispatched __riscv_sys_execve and entered the separate ELF at 0x20000
+while preserving PID 21 and parent PID 1. The child ELF verified its Linux
+argc/argv/environment stack, performed its success write, and exited with 42.
+PID 1 collected wait status 10752 (42 << 8) and continued.
+
+Second child: failed execve and original-image recovery
+------------------------------------------------------
+PID 1 created distinct child PID 22 with clone flags 17 and waited while the
+new child was runnable. PID 22 wrote its pre-exec marker, then issued syscall
+221 for /bin/riscv29-missing with argv
+["/bin/riscv29-missing", "expect-ENOENT"] and envp
+["GUIDEXOS_RISCV29_FAILURE=present"]. The syscall trace recorded the mapped
+pathname and arguments for PID 22. The Linux kernel trace recorded
+getname_flags, do_open_execat, and two lookup_fast events for the same task
+between the execve ECALL and its return. No ELF loading, begin_new_exec, or
+start_thread event occurred for the failed call.
+
+Linux returned -2 at the next instruction 0x10364. The resumed raw instruction
+0xffe00293 matches the independent /init ELF. PID 22 retained its task pointer,
+PID, parent PID 1, SP 0x3fc4b8fb40, TP 0, and SATP 0x8000000000082483 across
+the failure. The guest performed explicit stack store/load/restore operations
+on its original stack, rechecked getpid/getppid, and wrote its recovery marker.
+The run therefore proves that the missing-path execve was a genuine Linux
+-ENOENT return and that the same process continued in the original image.
+
+The second-child sentinel began as 0x29aabbcc. PID 22 wrote the private value
+0x29998877, triggering an observed Sv39 copy-on-write store fault at PC
+0x10310 for address 0x11008. The child's physical page separated from the
+parent; after failed execve the child's value remained 0x29998877 and PID 1
+still read 0x29aabbcc. The failed execve did not replace the address space or
+erase the child's private data.
+
+PID 22 exited with code 43 through Linux do_exit. PID 1's second wait4
+returned PID 22 and copied status 11008 (43 << 8) to guest memory. A subsequent
+wait4(-1, ..., WNOHANG) returned -10 (-ECHILD). PID 1 wrote the both-children
+collected marker and remained alive. All eight R29 user markers were matched
+to guest write syscalls and UART0 provenance; newline expansion accounts for
+the one extra UART byte per marker.
+
+Debug and Release results
+-------------------------
+The R29 lifecycle integration passed all 51 checks in each configuration:
+  Debug:   4,898.41 seconds; Outcome A
+  Release: 1,187.07 seconds; Outcome A
+
+Both runs stopped at process_lifecycle_complete with identical evidence:
+  post-handoff retired: 87,377,480
+  U/S/M retired: 623 / 83,164,628 / 4,212,229
+  step calls: 87,389,214; parent PID 1; first child PID 21; second child PID 22
+  wait statuses: 10752 and 11008; subsequent wait4 result: -ECHILD
+  terminal panic: false; architectural fault: false; host SBI provider: absent
+  privilege mismatches: 0; unmatched returns: 0; uncertain lifetimes: false
+
+The Debug and Release run summary, frontier, process/clone evidence, both
+execve records, original-image recovery, user-memory/COW evidence, wait4
+evidence, syscall trace, task-switch trace, trap trace, kernel-event trace,
+console binary, and page-walk audit are byte-identical. Their hashes are
+recorded in RISCV29/riscv29-debug-release-evidence-hash-comparison.json.
+
+The focused 30-test selection passed 30/30 in Debug (98.96 seconds) and
+Release (50.81 seconds). It includes the RISC-V ISA/MMU/PMP/firmware
+regressions, Linux Image Loader, EFI memory map, IA64 SAL, and both the R28
+and R29 fixture-contract tests. The separate R29 guest integration was run
+once in each configuration; the expensive R27/R28 lifecycle integrations
+were not included in the focused selection.
+
+Direct IA-64 ACPI, interrupt-controller, and processor-interrupt-block
+regressions passed 3/3 in both Debug and Release. No IA-64 implementation
+source changed.
+
+Artifact preservation and limitations
+-------------------------------------
+Artifact root:
+  E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv29-artifacts
+R29 fixture inputs are under inputs/; integration evidence is under
+RISCV29/Debug/ and RISCV29/Release/. The source-level Linux execve analysis is
+in riscv29-linux-source-analysis.txt. The post-run preservation manifest
+compared 114 historical evidence files and 26 historical artifact directories
+against the pre-run snapshot: all hashes, lengths, and timestamps matched, and
+all directories remain present. The R28 LastTest.log caveat above is the
+known pre-existing exception; the lost original bytes remain unrecoverable.
+
+The phase marker advances to RISCV-29 complete / RISCV-30 next. No Linux,
+OpenSBI, PMP, UART, PLIC, timer, production page-table walker, or IA-64
+implementation semantics were changed. The shared .phase marker was left
+untouched.

@@ -12,10 +12,39 @@
 namespace {
 
 constexpr uint64_t kInitramfsAddress = 0x81400000ULL;
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV29_REPEAT)
 constexpr uint64_t kRetirementCeiling = 120000000ULL;
 constexpr uint64_t kStepCeiling = 130000000ULL;
 constexpr uint64_t kChildExitCode = 42;
+constexpr uint64_t kSecondChildExitCode = 43;
+constexpr char kPhaseName[] = "RISCV-29";
+constexpr char kArtifactPrefix[] = "riscv29-";
+constexpr char kParentMarker[] = "guideXOS RISCV-29: parent initialized\n";
+constexpr char kPreExecMarker[] = "guideXOS RISCV-29: first child before exec\n";
+constexpr char kSecondPreExecMarker[] =
+    "guideXOS RISCV-29: second child before failed exec\n";
+constexpr char kExecMarker[] = "guideXOS RISCV-29: first child ELF executed\n";
+constexpr char kFirstReapedMarker[] =
+    "guideXOS RISCV-29: first child reaped code=42\n";
+constexpr char kRecoveryMarker[] =
+    "guideXOS RISCV-29: failed execve recovered in original image\n";
+constexpr char kSecondReapedMarker[] =
+    "guideXOS RISCV-29: second child reaped code=43\n";
+constexpr char kBothReapedMarker[] =
+    "guideXOS RISCV-29: both children collected\n";
+constexpr char kParentSuccessMarker[] =
+    "guideXOS RISCV-29: both children collected\n";
+constexpr char kExecPath[] = "/bin/child";
+constexpr char kExecArgument[] = "execve-riscv29";
+constexpr char kExecEnvironment[] = "GUIDEXOS_RISCV29=present";
+constexpr char kFailedExecPath[] = "/bin/riscv29-missing";
+constexpr char kFailedExecArgument[] = "expect-ENOENT";
+constexpr char kFailedExecEnvironment[] = "GUIDEXOS_RISCV29_FAILURE=present";
+#elif defined(RISCV28_EXECVE)
+constexpr uint64_t kRetirementCeiling = 120000000ULL;
+constexpr uint64_t kStepCeiling = 130000000ULL;
+constexpr uint64_t kChildExitCode = 42;
+constexpr uint64_t kSecondChildExitCode = 0;
 constexpr char kPhaseName[] = "RISCV-28";
 constexpr char kArtifactPrefix[] = "riscv28-";
 constexpr char kParentMarker[] = "guideXOS RISCV-28: parent initialized\n";
@@ -742,7 +771,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         "initramfs-manifest.json";
     const std::string fixtureManifest = AsString(ReadFile(fixtureManifestPath.string()));
     const std::string archiveHash = JsonString(fixtureManifest, "archiveSha256");
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     const std::string elfHash = JsonString(fixtureManifest, "parentElfSha256");
 #else
     const std::string elfHash = JsonString(fixtureManifest, "sha256");
@@ -781,7 +810,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
            Sha256(independentElf) == Upper(elfHash) &&
            JsonString(fixtureManifest, "phase") == kPhaseName,
            "pinned kernel symbols and independent phase ELF/archive manifest validate");
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     Expect(fixtureManifest.find("\"execvePath\": \"/bin/child\"") != std::string::npos &&
            fixtureManifest.find("\"waitStatus\": 10752") != std::string::npos,
            "fixture manifest selects authentic execve and child exit status 42");
@@ -832,7 +861,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         archivePlan.plan.entries.end(), [](const RiscvNewcEntry& entry) {
             return entry.name == "bin/child";
         });
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     const auto childSymbols = archiveChild == archivePlan.plan.entries.end()
         ? std::map<std::string, uint64_t>{}
         : ParseElfSymbolTable(archiveChild->data);
@@ -843,7 +872,11 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     Expect(archivePlan.ok() && archiveElfMatches && archivePlan.plan.elfEntry == 0x10000 &&
            archiveChildMatches,
            "deterministic newc contains distinct static /init and /bin/child RV64 ELFs");
+#if defined(RISCV29_REPEAT)
+    Expect(childSymbols.contains("riscv29_child_exit_ecall"),
+#else
     Expect(childSymbols.contains("riscv28_child_exit_ecall"),
+#endif
            "second ELF exposes its independent child-exit instruction site");
 #else
     const std::map<std::string, uint64_t> childSymbols{};
@@ -851,8 +884,27 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     Expect(archivePlan.ok() && archiveElfMatches && archivePlan.plan.elfEntry == 0x10000,
            "deterministic newc contains the independently built static ELF /init");
 #endif
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     const bool lifecycleSymbolsValid =
+#if defined(RISCV29_REPEAT)
+        userSymbols.contains("riscv29_clone_first_ecall") &&
+        userSymbols.contains("riscv29_clone_first_resume") &&
+        userSymbols.contains("riscv29_clone_second_ecall") &&
+        userSymbols.contains("riscv29_clone_second_resume") &&
+        userSymbols.contains("riscv29_child_cow_store") &&
+        userSymbols.contains("riscv29_child_cow_verify") &&
+        userSymbols.contains("riscv29_wait_first_ecall") &&
+        userSymbols.contains("riscv29_wait_first_resume") &&
+        userSymbols.contains("riscv29_wait_second_ecall") &&
+        userSymbols.contains("riscv29_wait_second_resume") &&
+        userSymbols.contains("riscv29_execve_success_ecall") &&
+        userSymbols.contains("riscv29_execve_failure_ecall") &&
+        userSymbols.contains("riscv29_execve_failure_resume") &&
+        userSymbols.contains("riscv29_private_sentinel") &&
+        userSymbols.contains("riscv29_child_second_exit_ecall") &&
+        userSymbols.contains("cow_value") && userSymbols.contains("wait_status_first") &&
+        userSymbols.contains("wait_status_second");
+#else
         userSymbols.contains("riscv28_clone_ecall") &&
         userSymbols.contains("riscv28_clone_resume") &&
         userSymbols.contains("riscv28_child_cow_store") &&
@@ -862,8 +914,9 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         userSymbols.contains("riscv28_wait4_resume") &&
         userSymbols.contains("riscv28_execve_ecall") &&
         userSymbols.contains("cow_value") && userSymbols.contains("wait_status");
+#endif
     Expect(lifecycleSymbolsValid,
-           "parent ELF exposes clone, COW, execve, wait, and writable status sites");
+           "parent ELF exposes process, execve, wait, and writable status sites");
 #else
     Expect(userSymbols.contains("riscv27_clone_ecall") &&
            userSymbols.contains("riscv27_clone_resume") &&
@@ -884,7 +937,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     }
 
     WriteText(ArtifactPath(artifactDir, "initramfs-manifest.json"), fixtureManifest);
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     const std::filesystem::path fixtureInputDir =
         std::filesystem::path(argv[7]).parent_path();
     WriteText(ArtifactPath(artifactDir, "parent-elf.json"),
@@ -966,6 +1019,11 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         "handle_mm_fault", "do_wp_page", "flush_tlb_page", "flush_tlb_mm",
         "do_wait", "kernel_wait4", "wait_consider_task", "do_exit",
         "exit_notify", "release_task",
+#if defined(RISCV29_REPEAT)
+        "do_execveat_common", "do_open_execat", "filename_lookup",
+        "path_lookupat", "lookup_fast", "lookup_slow", "kern_path",
+        "getname_flags",
+#endif
     };
     std::map<std::string, uint64_t> symbolAddresses;
     for (const auto& name : observedSymbols) {
@@ -980,7 +1038,40 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         (archivePlan.plan.endExclusive + 0xFFFULL) & ~0xFFFULL;
     const uint64_t expectedInitrdReservationSize =
         expectedInitrdReservationEnd - expectedInitrdReservationStart;
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV29_REPEAT)
+    const uint64_t cloneEcallPc = userSymbols.at("riscv29_clone_first_ecall");
+    const uint64_t cloneResumePc = userSymbols.at("riscv29_clone_first_resume");
+    const uint64_t secondCloneEcallPc = userSymbols.at("riscv29_clone_second_ecall");
+    const uint64_t secondCloneResumePc = userSymbols.at("riscv29_clone_second_resume");
+    const uint64_t childCowStorePc = userSymbols.at("riscv29_child_cow_store");
+    const uint64_t childCowVerifyPc = userSymbols.at("riscv29_child_cow_verify");
+    const uint64_t parentCowCheckPc = userSymbols.at("riscv29_parent_cow_check");
+    const uint64_t wait4EcallPc = userSymbols.at("riscv29_wait_first_ecall");
+    const uint64_t wait4ResumePc = userSymbols.at("riscv29_wait_first_resume");
+    const uint64_t secondWait4EcallPc = userSymbols.at("riscv29_wait_second_ecall");
+    const uint64_t secondWait4ResumePc = userSymbols.at("riscv29_wait_second_resume");
+    const uint64_t secondWaitNoChildrenPc = userSymbols.at("riscv29_wait_no_children_ecall");
+    const uint64_t execveEcallPc = userSymbols.at("riscv29_execve_success_ecall");
+    const uint64_t failedExecveEcallPc = userSymbols.at("riscv29_execve_failure_ecall");
+    const uint64_t failedExecveResumePc = userSymbols.at("riscv29_execve_failure_resume");
+    const uint64_t recoveryStackStorePc =
+        userSymbols.at("riscv29_recovery_stack_store");
+    const uint64_t recoveryStackLoadPc = userSymbols.at("riscv29_recovery_stack_load");
+    const uint64_t recoveryStackRestorePc =
+        userSymbols.at("riscv29_recovery_stack_restore");
+    const uint64_t privateSentinelStorePc =
+        userSymbols.at("riscv29_private_sentinel_store");
+    const uint64_t privateSentinelVerifyPc =
+        userSymbols.at("riscv29_private_sentinel_verify");
+    const uint64_t childImageEntry = Le64(archiveChild->data, 24);
+    const uint64_t childArgvValidatedPc = childSymbols.at("riscv29_child_argv_validated");
+    const uint64_t childExitEcallPc = childSymbols.at("riscv29_child_exit_ecall");
+    const uint64_t secondChildExitEcallPc =
+        userSymbols.at("riscv29_child_second_exit_ecall");
+    const uint64_t privateSentinelVa = userSymbols.at("riscv29_private_sentinel");
+    const uint64_t firstWaitStatusVa = userSymbols.at("wait_status_first");
+    const uint64_t secondWaitStatusVa = userSymbols.at("wait_status_second");
+#elif defined(RISCV28_EXECVE)
     const uint64_t cloneEcallPc = userSymbols.at("riscv28_clone_ecall");
     const uint64_t cloneResumePc = userSymbols.at("riscv28_clone_resume");
     const uint64_t childCowStorePc = userSymbols.at("riscv28_child_cow_store");
@@ -1003,7 +1094,11 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const uint64_t childExitEcallPc = userSymbols.at("riscv27_child_exit_ecall");
 #endif
     const uint64_t cowValueVa = userSymbols.at("cow_value");
+#if defined(RISCV29_REPEAT)
+    const uint64_t waitStatusVa = firstWaitStatusVa;
+#else
     const uint64_t waitStatusVa = userSymbols.at("wait_status");
+#endif
 
     std::vector<SyscallEvent> syscalls;
     std::unordered_map<uint64_t, size_t> activeSyscallByTask;
@@ -1036,7 +1131,9 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     uint64_t currentTaskPointer = 0;
     uint64_t parentTaskPointer = 0;
     uint64_t childTaskPointer = 0;
+    uint64_t secondChildTaskPointer = 0;
     uint64_t cloneChildResumeValue = UINT64_MAX;
+    uint64_t secondCloneChildResumeValue = UINT64_MAX;
     uint64_t firstUserPc = 0;
     uint64_t firstUserRaw = 0;
     uint64_t firstUserRetired = 0;
@@ -1052,6 +1149,30 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     uint64_t execveOldResumeRaw = 0;
     uint64_t execveOldResumePhysical = 0;
     bool execveOldResumeFetchOk = false;
+    uint64_t failedExecveTaskPointer = 0;
+    uint64_t failedExecveCallerPid = UINT64_MAX;
+    uint64_t failedExecveParentPid = UINT64_MAX;
+    uint64_t failedExecveCallerSp = 0;
+    uint64_t failedExecveCallerTp = 0;
+    uint64_t failedExecveCallerSatp = 0;
+    uint64_t failedExecveCallerPc = 0;
+    uint64_t failedExecveExpectedResumePc = 0;
+    uint64_t failedExecveReturnSp = 0;
+    uint64_t failedExecveReturnTp = 0;
+    uint64_t failedExecveReturnSatp = 0;
+    uint64_t failedExecveReturnValue = UINT64_MAX;
+    uint64_t failedExecveReturnPc = 0;
+    bool failedExecveReturnedToOriginalTask = false;
+    bool failedExecveResumeObserved = false;
+    uint64_t failedExecveResumeSp = 0;
+    uint64_t failedExecveResumeA0 = UINT64_MAX;
+    uint64_t failedExecveResumeRaw = 0;
+    uint64_t failedExecveSentinelBefore = 0;
+    uint64_t failedExecveSentinelAfter = 0;
+    uint64_t failedExecveSentinelBeforePaddr = 0;
+    uint64_t failedExecveSentinelAfterPaddr = 0;
+    bool failedExecveSentinelBeforeReadable = false;
+    bool failedExecveSentinelAfterReadable = false;
     uint64_t postExecArgc = UINT64_MAX;
     uint64_t postExecArgvAddress = 0;
     uint64_t postExecEnvpAddress = 0;
@@ -1082,11 +1203,27 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     uint64_t childReadbackValue = 0;
     uint64_t parentPostWaitValue = 0;
     uint64_t parentWaitStatus = 0;
+    uint64_t parentSecondWaitStatus = 0;
     bool initialCowRead = false;
     bool childPreCowRead = false;
     bool childPostCowRead = false;
     bool parentPostWaitCowRead = false;
     bool waitStatusRead = false;
+    bool secondWaitStatusRead = false;
+    uint64_t secondParentSentinelInitial = 0;
+    uint64_t secondParentSentinelInitialPaddr = 0;
+    bool secondParentSentinelInitialReadable = false;
+    uint64_t secondParentSentinel = 0;
+    uint64_t secondParentSentinelPaddr = 0;
+    bool secondParentSentinelReadable = false;
+    uint64_t secondChildSentinelBefore = 0;
+    uint64_t secondChildSentinelBeforePaddr = 0;
+    bool secondChildSentinelBeforeReadable = false;
+    bool secondChildSentinelStoreObserved = false;
+    uint64_t secondChildSentinelAfter = 0;
+    uint64_t secondChildSentinelAfterPaddr = 0;
+    bool secondChildSentinelAfterReadable = false;
+    bool secondChildSentinelInitiallyWritable = true;
     bool childStoreWriteAllowedBefore = true;
     std::vector<Sv39WalkLevel> childPreCowWalk;
     std::vector<Sv39WalkLevel> childPostCowWalk;
@@ -1168,12 +1305,73 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                     cloneChildResumeValue = a0;
                     task.cloneReturnZero = true;
                 }
+#if defined(RISCV29_REPEAT)
+                if (pc == secondCloneResumePc && a0 == 0) {
+                    secondChildTaskPointer = taskPointer;
+                    secondCloneChildResumeValue = a0;
+                    task.cloneReturnZero = true;
+                }
+#endif
             }
             if (pc == cloneResumePc && a0 > 0) {
                 cloneTaskPointer = taskPointer;
                 parentTaskPointer = taskPointer;
                 task.cloneReturnPositive = true;
             }
+#if defined(RISCV29_REPEAT)
+            if (pc == secondCloneResumePc && a0 > 0) {
+                cloneTaskPointer = taskPointer;
+                parentTaskPointer = taskPointer;
+                task.cloneReturnPositive = true;
+            }
+            if (taskPointer == parentTaskPointer && pc == secondCloneEcallPc) {
+                secondParentSentinelInitial = ReadUserU32(cpu, privateSentinelVa,
+                    secondParentSentinelInitialReadable,
+                    &secondParentSentinelInitialPaddr);
+            }
+            if (taskPointer == secondChildTaskPointer && pc == privateSentinelStorePc &&
+                !secondChildSentinelStoreObserved) {
+                secondChildSentinelBefore = ReadUserU32(cpu, privateSentinelVa,
+                    secondChildSentinelBeforeReadable, &secondChildSentinelBeforePaddr);
+                secondChildSentinelInitiallyWritable =
+                    cpu.translateStore(privateSentinelVa, 4).ok;
+                secondChildSentinelStoreObserved = true;
+            }
+            if (taskPointer == secondChildTaskPointer && pc == privateSentinelVerifyPc) {
+                secondChildSentinelAfter = ReadUserU32(cpu, privateSentinelVa,
+                    secondChildSentinelAfterReadable, &secondChildSentinelAfterPaddr);
+            }
+            if (taskPointer == secondChildTaskPointer && pc == failedExecveEcallPc) {
+                failedExecveTaskPointer = taskPointer;
+                failedExecveCallerPid = TaskPid(tasks, taskPointer);
+                failedExecveParentPid = task.parentPid;
+                failedExecveCallerSp = spBefore;
+                failedExecveCallerTp = architecturalTp;
+                failedExecveCallerSatp = satpBefore;
+                failedExecveCallerPc = pc;
+                failedExecveExpectedResumePc = pc + 4U;
+                failedExecveSentinelBefore = ReadUserU32(cpu, privateSentinelVa,
+                    failedExecveSentinelBeforeReadable, &failedExecveSentinelBeforePaddr);
+            }
+            if (taskPointer == secondChildTaskPointer && pc == failedExecveResumePc) {
+                failedExecveResumeObserved = true;
+                failedExecveResumeSp = spBefore;
+                failedExecveResumeA0 = a0;
+                failedExecveSentinelAfter = ReadUserU32(cpu, privateSentinelVa,
+                    failedExecveSentinelAfterReadable, &failedExecveSentinelAfterPaddr);
+                uint32_t resumeRaw = 0;
+                if (ElfInstructionAt(independentElf, pc, resumeRaw))
+                    failedExecveResumeRaw = resumeRaw;
+                lifecycleEvidenceChanged = true;
+            }
+            if (taskPointer == parentTaskPointer && pc == secondWait4ResumePc) {
+                parentSecondWaitStatus = ReadUserU32(cpu, secondWaitStatusVa,
+                                                      secondWaitStatusRead);
+                secondParentSentinel = ReadUserU32(cpu, privateSentinelVa,
+                    secondParentSentinelReadable, &secondParentSentinelPaddr);
+                lifecycleEvidenceChanged = true;
+            }
+#endif
             if (taskPointer == firstUserTaskPointer && firstUserPc != 0 &&
                 pc == firstUserPc) {
                 if (firstUserCodeEntryAttempts > 0 &&
@@ -1188,7 +1386,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 }
                 ++firstUserCodeEntryAttempts;
             }
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
             if (taskPointer == childTaskPointer && pc == childImageEntry &&
                 task.postExecFirstPc == 0) {
                 task.postExecFirstPc = pc;
@@ -1332,7 +1530,16 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                         name == "handle_mm_fault" || name == "filemap_fault" ||
                         name == "__riscv_sys_exit" ||
                         name == "do_exit" || name == "release_task";
-                    if (lifecycleKernelEvent && lifecycleKernelEvents.size() < 256)
+#if defined(RISCV29_REPEAT)
+                    const bool missingExecLookupEvent = name == "do_execveat_common" ||
+                        name == "do_open_execat" || name == "lookup_fast" ||
+                        name == "lookup_slow" || name == "kern_path" ||
+                        name == "getname_flags";
+#else
+                    constexpr bool missingExecLookupEvent = false;
+#endif
+                    if ((lifecycleKernelEvent || missingExecLookupEvent) &&
+                        lifecycleKernelEvents.size() < 512)
                         lifecycleKernelEvents.push_back({name, pc, retired, taskPointer,
                             a0, a1, a2, cpu.readGR(1)});
                     if ((name == "__riscv_sys_clone" || name == "__riscv_sys_execve" ||
@@ -1354,14 +1561,26 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                         if (call.number == 220) cloneTaskPointer = taskPointer;
                     }
                     if (name == "ret_from_fork" && cloneTaskPointer != 0 &&
-                        taskPointer != cloneTaskPointer && childTaskPointer == 0) {
+                        taskPointer != cloneTaskPointer
+#if defined(RISCV29_REPEAT)
+                        && (taskPointer != childTaskPointer &&
+                            taskPointer != secondChildTaskPointer)
+#else
+                        && childTaskPointer == 0
+#endif
+                        ) {
                         // The Linux RISC-V fork return path is task-specific; the
                         // guest later confirms this pointer with getpid/getppid.
                         // A newly forked task returns from __switch_to through its
                         // saved ret_from_fork address, not the caller's return
                         // address. Establish current identity here before its
                         // first U-mode SRET.
+#if defined(RISCV29_REPEAT)
+                        if (childTaskPointer == 0) childTaskPointer = taskPointer;
+                        else secondChildTaskPointer = taskPointer;
+#else
                         childTaskPointer = taskPointer;
+#endif
                         currentTaskPointer = taskPointer;
                         task.inForkReturnPath = true;
                         task.retFromForkObserved = true;
@@ -1404,7 +1623,12 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                              transition.previousTask == parentTaskPointer ||
                              transition.nextTask == parentTaskPointer ||
                              transition.previousTask == childTaskPointer ||
-                             transition.nextTask == childTaskPointer) &&
+                             transition.nextTask == childTaskPointer
+#if defined(RISCV29_REPEAT)
+                             || transition.previousTask == secondChildTaskPointer ||
+                             transition.nextTask == secondChildTaskPointer
+#endif
+                             ) &&
                             lifecycleSwitches.size() < 128) {
                             lifecycleSwitches.push_back(transition);
                             activeLifecycleSwitchIndex = lifecycleSwitches.size() - 1;
@@ -1429,7 +1653,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             std::vector<uint8_t> bytes;
             if (ReadUserBytes(cpu, a1, static_cast<size_t>(a2), bytes))
                 syscallBuffer.assign(bytes.begin(), bytes.end());
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
         } else if (before == PrivilegeMode::User && a7 == 221 &&
                    pc == execveEcallPc && execveCallPc == 0) {
             openPath = ReadUserCString(cpu, a0, 128);
@@ -1452,6 +1676,13 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                     (static_cast<uint32_t>(oldResumeBytes[1]) << 8U) |
                     (static_cast<uint32_t>(oldResumeBytes[2]) << 16U) |
                     (static_cast<uint32_t>(oldResumeBytes[3]) << 24U);
+#if defined(RISCV29_REPEAT)
+        } else if (before == PrivilegeMode::User && a7 == 221 &&
+                   pc == failedExecveEcallPc) {
+            openPath = ReadUserCString(cpu, a0, 128);
+            execArgv = ReadUserStringVector(cpu, a1, execArgvNullTerminated);
+            execEnvp = ReadUserStringVector(cpu, a2, execEnvpNullTerminated);
+#endif
 #endif
         }
         const StepResult step = cpu.step();
@@ -1486,7 +1717,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             if (before == PrivilegeMode::User) {
                 auto& evidence = tasks[taskPointer];
                 ++evidence.userInstructions;
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
                 std::string imageIdentity = "other_user";
                 if (taskPointer == parentTaskPointer) {
                     imageIdentity = "parent_init";
@@ -1501,6 +1732,10 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                 } else if (taskPointer == childTaskPointer) {
                     imageIdentity = "child_pre_exec";
                     ++evidence.preExecUserInstructions;
+#if defined(RISCV29_REPEAT)
+                } else if (taskPointer == secondChildTaskPointer) {
+                    imageIdentity = "second_child_original_image";
+#endif
                 }
 #else
                 const std::string imageIdentity = taskPointer == parentTaskPointer
@@ -1572,14 +1807,33 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                     auto& call = syscalls[active->second];
                     call.sretPc = step.pc;
                     call.returnPc = cpu.getPC();
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
                     call.returnedToNewImage = call.number == 221 &&
                         call.returnPc == childImageEntry;
+#if defined(RISCV29_REPEAT)
+                    if (call.number == 221 && call.taskPointer == secondChildTaskPointer &&
+                        call.ecallPc == failedExecveEcallPc) {
+                        failedExecveReturnSp = cpu.readGR(2);
+                        failedExecveReturnTp = cpu.readGR(4);
+                        failedExecveReturnSatp = CsrOrZero(cpu, 0x180);
+                    }
+#endif
 #endif
                     call.retiredAtReturn = retired;
                     call.returnValue = cpu.readGR(10);
                     call.returnedTaskPointer = returningTask;
                     call.returnedToUser = true;
+#if defined(RISCV29_REPEAT)
+                    if (call.number == 221 && call.taskPointer == secondChildTaskPointer &&
+                        call.ecallPc == failedExecveEcallPc) {
+                        failedExecveReturnPc = call.returnPc;
+                        failedExecveReturnValue = call.returnValue;
+                        failedExecveReturnedToOriginalTask =
+                            call.returnedTaskPointer == failedExecveTaskPointer &&
+                            call.returnPc == failedExecveExpectedResumePc &&
+                            static_cast<int64_t>(call.returnValue) == -2;
+                    }
+#endif
                     if (call.number == 172) tasks[returningTask].pid = call.returnValue;
                     if (call.number == 173)
                         tasks[returningTask].parentPid = call.returnValue;
@@ -1650,14 +1904,22 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             const bool lifecycleTrap =
                 (before == PrivilegeMode::User &&
                  step.trapCause == TrapCause::EcallFromU &&
-                 (a7 == 220 || a7 == 93 || a7 == 260)) ||
+                 (a7 == 220 || a7 == 93 || a7 == 260
+#if defined(RISCV29_REPEAT)
+                  || a7 == 221
+#endif
+                 )) ||
                 (step.trapCause == TrapCause::StorePageFault &&
                  (trapTval & ~0xFFFULL) == (cowValueVa & ~0xFFFULL))
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
                 || (before == PrivilegeMode::User &&
                     step.trapCause == TrapCause::InstructionPageFault &&
                     ((taskPointer == firstUserTaskPointer && pc == firstUserPc) ||
-                     (taskPointer == childTaskPointer && pc == childImageEntry)))
+                     (taskPointer == childTaskPointer && pc == childImageEntry)
+#if defined(RISCV29_REPEAT)
+                     || (taskPointer == secondChildTaskPointer && pc == secondCloneResumePc)
+#endif
+                     ))
 #endif
                 ;
             if (traps.size() < kRetainedTrapLimit ||
@@ -1820,16 +2082,45 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             const bool childExited = childTaskPointer != 0 && tasks.contains(childTaskPointer) &&
                 tasks[childTaskPointer].exitPathObserved &&
                 tasks[childTaskPointer].exitCode == kChildExitCode;
+#if defined(RISCV29_REPEAT)
+            const auto secondExit = std::find_if(syscalls.begin(), syscalls.end(),
+                [&](const SyscallEvent& call) {
+                    return call.number == 93 && call.taskPointer == secondChildTaskPointer &&
+                        call.args[0] == kSecondChildExitCode && call.nonReturning &&
+                        call.exitKernelPath;
+                });
+            const auto secondWait = std::find_if(syscalls.begin(), syscalls.end(),
+                [&](const SyscallEvent& call) {
+                    return call.number == 260 && call.taskPointer == parentTaskPointer &&
+                        call.args[0] > 0 && call.returnedToUser &&
+                        call.returnValue == call.args[0] &&
+                        call.args[1] == secondWaitStatusVa;
+                });
+            const bool secondStatusReady = secondWait != syscalls.end() &&
+                secondWaitStatusRead && parentSecondWaitStatus ==
+                    (kSecondChildExitCode << 8U);
+            const bool secondChildExited = secondChildTaskPointer != 0 &&
+                tasks.contains(secondChildTaskPointer) &&
+                tasks[secondChildTaskPointer].exitPathObserved &&
+                tasks[secondChildTaskPointer].exitCode == kSecondChildExitCode &&
+                tasks[secondChildTaskPointer].userInstructionsAfterExit == 0;
+            if (statusReady && childExited && secondStatusReady && secondChildExited &&
+                secondExit != syscalls.end() && failedExecveReturnedToOriginalTask &&
+                failedExecveResumeObserved && failedExecveResumeA0 == UINT64_MAX - 1U &&
+                secondChildTaskPointer != childTaskPointer &&
+                hasReturned(260, 1, UINT64_MAX - 9U)) {
+#else
             if (statusReady && childExited) {
+#endif
                 frontier = "process_lifecycle_complete";
-                frontierDetail = "parent reaped child PID and verified the guest wait status";
+                frontierDetail = "parent reaped the required child process lifecycle evidence";
                 frontierPc = cpu.getPC();
                 frontierPrivilege = cpu.privilege();
                 stopped = true;
                 break;
             }
         }
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
         const bool execChildExited = childTaskPointer != 0 &&
             tasks.contains(childTaskPointer) && tasks[childTaskPointer].exitPathObserved;
         const bool execChildReaped = std::any_of(syscalls.begin(), syscalls.end(),
@@ -2012,7 +2303,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         tasks[childTaskPointer].exitPathObserved &&
         tasks[childTaskPointer].exitCode == kChildExitCode &&
         tasks[childTaskPointer].userInstructionsAfterExit == 0;
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     const SyscallEvent* execCall = childTaskPointer == 0 ? nullptr :
         findCall(221, TaskPid(tasks, childTaskPointer));
     uint32_t expectedChildFirstRaw = 0;
@@ -2095,10 +2386,15 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const bool oldResumeFileBacked = execveOldResumeFetchOk &&
         ElfInstructionAt(independentElf, execveOldResumePc, expectedOldResumeRaw) &&
         execveOldResumeRaw == expectedOldResumeRaw;
+#if defined(RISCV29_REPEAT)
+    const bool expectedFirstChildPid = execveChildPidBefore > 1;
+#else
+    const bool expectedFirstChildPid = execveChildPidBefore == 21;
+#endif
     const bool processIdentityPreserved = execCall != nullptr &&
         execveTaskPointer == childTaskPointer && execCall->taskPointer == childTaskPointer &&
         execCall->returnedTaskPointer == childTaskPointer &&
-        execveChildPidBefore == 21 &&
+        expectedFirstChildPid &&
         TaskPid(tasks, childTaskPointer) == execveChildPidBefore &&
         execveParentPidBefore == 1 &&
         tasks[childTaskPointer].parentPid == 1 &&
@@ -2230,11 +2526,262 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const bool syscallsValid = callExists(172, 1) && callExists(56, 1) &&
         callExists(220, 1) && callExists(260, 1) && callExists(93,
             childTaskPointer == 0 ? UINT64_MAX : TaskPid(tasks, childTaskPointer))
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
         && callExists(221, childTaskPointer == 0 ? UINT64_MAX :
                       TaskPid(tasks, childTaskPointer))
 #endif
         ;
+#if defined(RISCV29_REPEAT)
+    const uint64_t firstChildPid = TaskPid(tasks, childTaskPointer);
+    const uint64_t secondChildPid = TaskPid(tasks, secondChildTaskPointer);
+    const auto secondCloneCallIt = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 220 && call.taskPointer == parentTaskPointer &&
+                call.ecallPc == secondCloneEcallPc;
+        });
+    const SyscallEvent* secondCloneCall = secondCloneCallIt == syscalls.end()
+        ? nullptr : &*secondCloneCallIt;
+    const auto failedExecCallIt = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 221 && call.taskPointer == secondChildTaskPointer &&
+                call.ecallPc == failedExecveEcallPc;
+        });
+    const SyscallEvent* failedExecCall = failedExecCallIt == syscalls.end()
+        ? nullptr : &*failedExecCallIt;
+    const auto secondExitCallIt = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 93 && call.taskPointer == secondChildTaskPointer;
+        });
+    const SyscallEvent* secondExitCall = secondExitCallIt == syscalls.end()
+        ? nullptr : &*secondExitCallIt;
+    const auto secondWaitCallIt = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 260 && call.taskPointer == parentTaskPointer &&
+                call.args[0] == secondChildPid;
+        });
+    const SyscallEvent* secondWaitCall = secondWaitCallIt == syscalls.end()
+        ? nullptr : &*secondWaitCallIt;
+    const bool secondCloneArgsValid = secondCloneCall != nullptr &&
+        secondCloneCall->args[0] == 17 && secondCloneCall->args[1] == 0 &&
+        secondCloneCall->args[2] == 0 && secondCloneCall->args[3] == 0 &&
+        secondCloneCall->args[4] == 0 && secondCloneCall->trapDeliveredToSupervisor &&
+        secondCloneCall->dispatchPc != 0 &&
+        secondCloneCall->dispatchSymbol == "__riscv_sys_clone" &&
+        secondCloneCall->returnedToUser &&
+        static_cast<int64_t>(secondCloneCall->returnValue) > 0 &&
+        secondCloneCall->returnValue == secondChildPid &&
+        secondChildTaskPointer != 0 && secondCloneChildResumeValue == 0;
+    const bool secondChildIdentityValid = secondChildTaskPointer != 0 &&
+        secondChildTaskPointer != parentTaskPointer &&
+        secondChildTaskPointer != childTaskPointer && secondChildPid > 1 &&
+        secondChildPid != firstChildPid && tasks.contains(secondChildTaskPointer) &&
+        tasks[secondChildTaskPointer].parentPid == 1 &&
+        tasks[secondChildTaskPointer].firstUserPc == secondCloneResumePc &&
+        tasks[secondChildTaskPointer].firstUserA0 == 0 &&
+        tasks[secondChildTaskPointer].cloneReturnZero &&
+        tasks[secondChildTaskPointer].retFromForkObserved &&
+        tasks[secondChildTaskPointer].forkReturnSretObserved;
+    const bool secondChildRetired = secondChildIdentityValid &&
+        tasks[secondChildTaskPointer].userInstructions > 0;
+    const bool failedExecArgsValid = failedExecCall != nullptr &&
+        failedExecCall->path == kFailedExecPath &&
+        failedExecCall->args[0] != 0 && failedExecCall->args[1] != 0 &&
+        failedExecCall->args[2] != 0 &&
+        failedExecCall->argv == std::vector<std::string>{
+            kFailedExecPath, kFailedExecArgument} &&
+        failedExecCall->envp == std::vector<std::string>{kFailedExecEnvironment} &&
+        failedExecCall->argvNullTerminated && failedExecCall->envpNullTerminated &&
+        failedExecCall->trapDeliveredToSupervisor && failedExecCall->dispatchPc != 0 &&
+        failedExecCall->dispatchSymbol == "__riscv_sys_execve" &&
+        failedExecveTaskPointer == secondChildTaskPointer &&
+        failedExecveCallerPid == secondChildPid && failedExecveParentPid == 1 &&
+        failedExecveCallerPc == failedExecveEcallPc;
+    const auto secondExecKernelEvent = [&](std::string_view name) {
+        return failedExecCall != nullptr && std::any_of(
+            lifecycleKernelEvents.begin(), lifecycleKernelEvents.end(),
+            [&](const KernelEvent& event) {
+                return event.name == name && event.taskPointer == secondChildTaskPointer &&
+                    event.retired > failedExecCall->retiredAtEcall &&
+                    event.retired < failedExecCall->retiredAtReturn;
+            });
+    };
+    const size_t secondExecLookupSteps = failedExecCall == nullptr ? 0 : std::count_if(
+        lifecycleKernelEvents.begin(), lifecycleKernelEvents.end(),
+        [&](const KernelEvent& event) {
+            return event.name == "lookup_fast" &&
+                event.taskPointer == secondChildTaskPointer &&
+                event.retired > failedExecCall->retiredAtEcall &&
+                event.retired < failedExecCall->retiredAtReturn;
+        });
+    const bool missingPathLookupObserved = secondExecKernelEvent("getname_flags") &&
+        secondExecKernelEvent("do_open_execat") && secondExecLookupSteps >= 2;
+    const bool noElfLoadForFailedExec = failedExecCall != nullptr &&
+        std::none_of(lifecycleKernelEvents.begin(), lifecycleKernelEvents.end(),
+            [&](const KernelEvent& event) {
+                return event.taskPointer == secondChildTaskPointer &&
+                    event.retired > failedExecCall->retiredAtEcall &&
+                    event.retired < failedExecCall->retiredAtReturn &&
+                    (event.name == "load_elf_binary" || event.name == "begin_new_exec" ||
+                     event.name == "start_thread" || event.name == "elf_map" ||
+                     event.name == "setup_arg_pages");
+            });
+    const bool failedExecErrorReturned = failedExecCall != nullptr &&
+        failedExecCall->returnedToUser &&
+        static_cast<int64_t>(failedExecCall->returnValue) == -2 &&
+        failedExecCall->returnPc == failedExecveResumePc &&
+        failedExecCall->returnedTaskPointer == secondChildTaskPointer &&
+        failedExecveReturnedToOriginalTask && failedExecveReturnValue == UINT64_MAX - 1U &&
+        failedExecveReturnPc == failedExecveExpectedResumePc &&
+        failedExecveReturnSp == failedExecveCallerSp &&
+        failedExecveReturnTp == failedExecveCallerTp &&
+        failedExecveReturnSatp == failedExecveCallerSatp;
+    const auto recoveryStackInstruction = [&](uint64_t address) {
+        return std::find_if(userInstructionTrace.begin(), userInstructionTrace.end(),
+            [&](const UserInstructionEvent& event) {
+                return event.taskPointer == secondChildTaskPointer &&
+                    event.pc == address && event.image == "second_child_original_image";
+            });
+    };
+    const auto recoveryStackStore = recoveryStackInstruction(recoveryStackStorePc);
+    const auto recoveryStackLoad = recoveryStackInstruction(recoveryStackLoadPc);
+    const auto recoveryStackRestore = recoveryStackInstruction(recoveryStackRestorePc);
+    uint32_t expectedStackStoreRaw = 0;
+    uint32_t expectedStackLoadRaw = 0;
+    uint32_t expectedStackRestoreRaw = 0;
+    const bool failedExecStackUseValid = failedExecErrorReturned &&
+        recoveryStackStore != userInstructionTrace.end() &&
+        recoveryStackLoad != userInstructionTrace.end() &&
+        recoveryStackRestore != userInstructionTrace.end() &&
+        recoveryStackStore->sp != 0 && recoveryStackStore->sp + 16U == failedExecveCallerSp &&
+        recoveryStackLoad->sp == recoveryStackStore->sp &&
+        recoveryStackRestore->sp == recoveryStackStore->sp &&
+        ElfInstructionAt(independentElf, recoveryStackStorePc, expectedStackStoreRaw) &&
+        recoveryStackStore->raw == expectedStackStoreRaw &&
+        ElfInstructionAt(independentElf, recoveryStackLoadPc, expectedStackLoadRaw) &&
+        recoveryStackLoad->raw == expectedStackLoadRaw &&
+        ElfInstructionAt(independentElf, recoveryStackRestorePc, expectedStackRestoreRaw) &&
+        recoveryStackRestore->raw == expectedStackRestoreRaw;
+    uint32_t expectedFailedResumeRaw = 0;
+    const bool failedExecOriginalImageResumed = failedExecErrorReturned &&
+        failedExecStackUseValid &&
+        failedExecveResumeObserved && failedExecveResumeSp == failedExecveCallerSp &&
+        failedExecveResumeA0 == UINT64_MAX - 1U &&
+        ElfInstructionAt(independentElf, failedExecveResumePc, expectedFailedResumeRaw) &&
+        failedExecveResumeRaw == expectedFailedResumeRaw &&
+        std::any_of(userInstructionTrace.begin(), userInstructionTrace.end(),
+            [&](const UserInstructionEvent& event) {
+                return event.taskPointer == secondChildTaskPointer &&
+                    event.pc == failedExecveResumePc &&
+                    event.raw == expectedFailedResumeRaw &&
+                    event.image == "second_child_original_image";
+            }) &&
+        std::none_of(userInstructionTrace.begin(), userInstructionTrace.end(),
+            [&](const UserInstructionEvent& event) {
+                return event.taskPointer == secondChildTaskPointer &&
+                    event.pc == childImageEntry;
+            });
+    const bool failedExecIdentityPreserved = failedExecveTaskPointer == secondChildTaskPointer &&
+        TaskPid(tasks, secondChildTaskPointer) == failedExecveCallerPid &&
+        tasks[secondChildTaskPointer].parentPid == failedExecveParentPid &&
+        failedExecveParentPid == 1 && failedExecveCallerSatp != 0 &&
+        failedExecveReturnSatp == failedExecveCallerSatp;
+    const auto secondChildGetpidAfterFailure = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 172 && call.taskPointer == secondChildTaskPointer &&
+                call.retiredAtEcall > (failedExecCall == nullptr ? 0 :
+                                        failedExecCall->retiredAtReturn) &&
+                call.returnedToUser && call.returnValue == secondChildPid;
+        });
+    const auto secondChildGetppidAfterFailure = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 173 && call.taskPointer == secondChildTaskPointer &&
+                call.retiredAtEcall > (failedExecCall == nullptr ? 0 :
+                                        failedExecCall->retiredAtReturn) &&
+                call.returnedToUser && call.returnValue == 1;
+        });
+    const auto secondChildRecoveryWrite = std::find_if(syscalls.begin(), syscalls.end(),
+        [&](const SyscallEvent& call) {
+            return call.number == 64 && call.taskPointer == secondChildTaskPointer &&
+                call.userBuffer == kRecoveryMarker && call.returnedToUser &&
+                call.returnValue == sizeof(kRecoveryMarker) - 1U && call.outputObserved &&
+                call.uartProvenanceValid &&
+                call.retiredAtEcall > (failedExecCall == nullptr ? 0 :
+                                        failedExecCall->retiredAtReturn);
+        });
+    const bool secondChildSyscallsValid = secondChildGetpidAfterFailure != syscalls.end() &&
+        secondChildGetppidAfterFailure != syscalls.end() &&
+        secondChildRecoveryWrite != syscalls.end() &&
+        markerWrite(secondChildPid, kSecondPreExecMarker);
+    const bool secondSentinelPreserved = secondParentSentinelInitialReadable &&
+        secondParentSentinelReadable && secondParentSentinelInitial == 0x29aabbcc &&
+        secondParentSentinel == secondParentSentinelInitial &&
+        secondChildSentinelBeforeReadable && secondChildSentinelBefore == 0x29aabbcc &&
+        !secondChildSentinelInitiallyWritable && secondChildSentinelAfterReadable &&
+        secondChildSentinelAfter == 0x29998877 && failedExecveSentinelBeforeReadable &&
+        failedExecveSentinelBefore == 0x29998877 && failedExecveSentinelAfterReadable &&
+        failedExecveSentinelAfter == failedExecveSentinelBefore &&
+        failedExecveSentinelBeforePaddr == failedExecveSentinelAfterPaddr &&
+        secondChildSentinelAfterPaddr != secondParentSentinelPaddr &&
+        secondParentSentinelPaddr != 0 && secondChildSentinelAfterPaddr != 0;
+    const auto secondSentinelCowFault = std::find_if(cowFaults.begin(), cowFaults.end(),
+        [&](const CowFaultEvent& fault) {
+            return fault.taskPointer == secondChildTaskPointer &&
+                fault.stval == privateSentinelVa && fault.pc == privateSentinelStorePc &&
+                fault.origin == PrivilegeMode::User;
+        });
+    const bool secondSentinelCowValid = secondSentinelCowFault != cowFaults.end();
+    const bool secondChildExitValid = secondExitCall != nullptr &&
+        secondExitCall->ecallPc == secondChildExitEcallPc &&
+        secondExitCall->args[0] == kSecondChildExitCode &&
+        secondExitCall->trapDeliveredToSupervisor && secondExitCall->nonReturning &&
+        secondExitCall->exitKernelPath && tasks[secondChildTaskPointer].exitPathObserved &&
+        tasks[secondChildTaskPointer].exitCode == kSecondChildExitCode &&
+        tasks[secondChildTaskPointer].userInstructionsAfterExit == 0;
+    const bool secondWait4Valid = secondWaitCall != nullptr &&
+        secondCloneCall != nullptr &&
+        secondWaitCall->ecallPc == secondWait4EcallPc &&
+        secondWaitCall->args[0] == secondCloneCall->returnValue &&
+        secondWaitCall->args[1] == secondWaitStatusVa && secondWaitCall->args[2] == 0 &&
+        secondWaitCall->args[3] == 0 && secondWaitCall->trapDeliveredToSupervisor &&
+        secondWaitCall->dispatchSymbol == "__riscv_sys_wait4" &&
+        secondWaitCall->returnedToUser &&
+        secondWaitCall->returnValue == secondCloneCall->returnValue &&
+        secondWaitStatusRead && parentSecondWaitStatus ==
+            (kSecondChildExitCode << 8U);
+    const bool secondNoChildWaitValid = noChildWait != syscalls.end() &&
+        noChildWait->ecallPc == secondWaitNoChildrenPc;
+    const bool secondWaitBlocked = std::any_of(lifecycleSwitches.begin(),
+        lifecycleSwitches.end(), [&](const TaskSwitchEvent& transition) {
+            return transition.previousTask == parentTaskPointer &&
+                transition.nextTask == secondChildTaskPointer &&
+                transition.whileParentWait4Active && transition.childWasStillAlive &&
+                transition.tpBefore == parentTaskPointer;
+        });
+    const bool secondSwitchedBack = std::any_of(lifecycleSwitches.begin(),
+        lifecycleSwitches.end(), [&](const TaskSwitchEvent& transition) {
+            return transition.previousTask == secondChildTaskPointer &&
+                transition.nextTask == parentTaskPointer && transition.returned &&
+                transition.tpBefore == secondChildTaskPointer &&
+                transition.tpAfter == parentTaskPointer;
+        });
+    const bool observerEventCapsValid = traps.size() <= kRetainedTrapLimit &&
+        switches.size() <= kRetainedSwitchLimit &&
+        lifecycleSwitches.size() <= 128 && lifecycleTraps.size() <= 128 &&
+        kernelEvents.size() <= kRetainedKernelEventLimit &&
+        lifecycleKernelEvents.size() <= 512 && userInstructionTrace.size() <= 4096 &&
+        cowFaults.size() <= 64 && tlbEvents.size() <= kRetainedTlbLimit;
+    const bool processRepeatProof = secondCloneArgsValid && secondChildIdentityValid &&
+        secondChildRetired && failedExecArgsValid && missingPathLookupObserved &&
+        noElfLoadForFailedExec && failedExecErrorReturned &&
+        failedExecOriginalImageResumed && failedExecIdentityPreserved &&
+        secondChildSyscallsValid && secondSentinelPreserved && secondSentinelCowValid &&
+        secondChildExitValid && secondWait4Valid && secondNoChildWaitValid &&
+        secondWaitBlocked && secondSwitchedBack && observerEventCapsValid &&
+        markerWrite(firstChildPid, kExecMarker) &&
+        markerWrite(1, kFirstReapedMarker) && markerWrite(secondChildPid, kRecoveryMarker) &&
+        markerWrite(1, kSecondReapedMarker) && markerWrite(1, kBothReapedMarker) &&
+        parentRemainedAlive;
+#endif
     const bool fullProof = frontier == "process_lifecycle_complete" &&
         firmwareRun.handoff && initramfsUnpacked && linuxInitrdReservationObserved &&
         parentFirstInstructionValid && cloneArgsValid && taskIdentitiesValid &&
@@ -2246,6 +2793,9 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         wait4Valid && noChildRemains && waitBlockedOnRunnableChild &&
         switchedBackToParent && parentInitMarkerValid && childMarkerValid &&
         parentSuccessMarkerValid && parentRemainedAlive && syscallsValid &&
+#if defined(RISCV29_REPEAT)
+        processRepeatProof &&
+#endif
         accounting.counters().privilegeMismatches == 0 &&
         accounting.counters().unmatchedReturns == 0 && !accounting.lifetimesUncertain() &&
         hostFaults == 0 &&
@@ -2271,6 +2821,9 @@ std::string RunProcessLifecycle(int argc, char** argv) {
             !parentInitMarkerValid || !childMarkerValid || !parentSuccessMarkerValid
                 ? "uart_guest_attribution_unproven" :
             !parentRemainedAlive ? "pid1_continuation_unproven" :
+#if defined(RISCV29_REPEAT)
+            !processRepeatProof ? "repeated_process_or_execve_recovery_unproven" :
+#endif
             "trap_accounting_or_host_sbi_integrity_unproven";
         frontierDetail = "lifecycle markers were observed, but one or more independent acceptance checks failed";
     }
@@ -2298,7 +2851,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
            "parent wait4 returns the child PID, copies the encoded exit status into user memory, and finds no child left");
     Expect(parentInitMarkerValid && childMarkerValid && parentSuccessMarkerValid,
            "all three userspace markers are attributed to task syscalls and UART0 guest MMIO");
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     Expect(execveArgsValid,
            "child issues genuine execve(221) with mapped /bin/child, argv, envp, and Linux dispatch");
     Expect(processIdentityPreserved,
@@ -2313,6 +2866,31 @@ std::string RunProcessLifecycle(int argc, char** argv) {
            "Linux's resolved ELF load and RISC-V start_thread paths are observed for the child task");
     Expect(pageWalkAuditValid,
            "read-only production page walks resolve initial and exec ELF entries, including any Linux demand fault");
+#if defined(RISCV29_REPEAT)
+    Expect(secondCloneArgsValid && secondChildIdentityValid && secondChildRetired,
+           "a distinct second clone returns a new PID and executes in its own Linux task context");
+    Expect(markerWrite(secondChildPid, kSecondPreExecMarker),
+           "the second child reaches the missing-executable recovery path in U-mode");
+    Expect(failedExecArgsValid,
+           "the second child issues execve(221) for the absent path with captured argv and envp");
+    Expect(missingPathLookupObserved && noElfLoadForFailedExec,
+           "Linux performs pathname lookup and rejects the absent executable before ELF loading");
+    Expect(failedExecErrorReturned && failedExecOriginalImageResumed &&
+           failedExecIdentityPreserved,
+           "execve returns -ENOENT to the same task and resumes the original ELF at its next instruction");
+    Expect(secondChildSyscallsValid,
+           "the recovered child still reports its PID and parent PID and writes its recovery marker");
+    Expect(secondSentinelPreserved && secondSentinelCowValid,
+           "the second child COW write remains private across failed execve and parent reaping");
+    Expect(secondChildExitValid && secondWait4Valid && secondNoChildWaitValid,
+           "Linux exits and reaps the second child with status 43, then wait4 reports ECHILD");
+    Expect(secondWaitBlocked && secondSwitchedBack,
+           "Linux switches to the second live child during wait4 and later returns to PID 1");
+    Expect(observerEventCapsValid,
+           "bounded lifecycle observers retain no more than their configured event caps");
+    Expect(processRepeatProof,
+           "both repeated child lifecycles and the failed-exec recovery proof are complete");
+#endif
 #endif
     Expect(parentRemainedAlive,
            "PID 1 remains alive and returns from a bounded sched_yield after reaping");
@@ -2399,7 +2977,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         SwitchesJson(switches, lifecycleSwitches, tasks);
     WriteText(ArtifactPath(artifactDir, "linux-syscalls.json"), syscallsJson);
     WriteText(ArtifactPath(artifactDir, "linux-task-switches.json"), taskSwitchesJson);
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     WriteText(ArtifactPath(artifactDir, "syscalls.json"), syscallsJson);
     WriteText(ArtifactPath(artifactDir, "task-switches.json"), taskSwitchesJson);
     std::ostringstream userTraceJson;
@@ -2503,7 +3081,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     const std::string console = cpu.machineUartOutput();
     const std::vector<uint8_t> consoleBytes(console.begin(), console.end());
     WriteBytes(ArtifactPath(artifactDir, "linux-console.bin"), consoleBytes);
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     WriteBytes(ArtifactPath(artifactDir, "console.bin"), consoleBytes);
 #endif
     std::ostringstream consoleJson;
@@ -2535,7 +3113,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     }
     consoleJson << "]\n}\n";
     WriteText(ArtifactPath(artifactDir, "linux-console-analysis.json"), consoleJson.str());
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     WriteText(ArtifactPath(artifactDir, "console-analysis.json"), consoleJson.str());
 #endif
 
@@ -2616,7 +3194,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
         << ",\n  \"fullProof\":" << (fullProof ? "true" : "false") << "\n}\n";
     WriteText(ArtifactPath(artifactDir, "linux-run-summary.json"), summary.str());
 
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     const TaskEvidence* postExecEvidence = tasks.contains(childTaskPointer)
         ? &tasks.at(childTaskPointer) : nullptr;
     const auto jsonHexOrNull = [](uint64_t value) {
@@ -2862,6 +3440,177 @@ std::string RunProcessLifecycle(int argc, char** argv) {
                          postExecEvidence->postExecFirstRaw)
         << ",\n    \"elfExpectedRaw\":" << JsonQuote(Hex(expectedChildFirstRaw)) << "\n  }\n}\n";
     WriteText(ArtifactPath(artifactDir, "page-walk-audit.json"), pageWalkJson.str());
+#if defined(RISCV29_REPEAT)
+    WriteText(ArtifactPath(artifactDir, "execve-success.json"), execveJson.str());
+    std::ostringstream repeatEvents;
+    repeatEvents << "{\n  \"schemaVersion\":1,\n  \"phase\":\"RISCV-29\","
+        << "\n  \"frontier\":" << JsonQuote(frontier)
+        << ",\n  \"parentPid\":" << TaskPid(tasks, parentTaskPointer)
+        << ",\n  \"parentTaskPointer\":" << JsonQuote(Hex(parentTaskPointer))
+        << ",\n  \"firstChildPid\":" << firstChildPid
+        << ",\n  \"firstChildTaskPointer\":" << JsonQuote(Hex(childTaskPointer))
+        << ",\n  \"secondChildPid\":" << secondChildPid
+        << ",\n  \"secondChildTaskPointer\":" << JsonQuote(Hex(secondChildTaskPointer))
+        << ",\n  \"childTaskPointersDistinct\":"
+        << (childTaskPointer != secondChildTaskPointer ? "true" : "false")
+        << ",\n  \"firstCloneParentReturn\":"
+        << jsonHexOrNull(cloneCall == nullptr ? UINT64_MAX : cloneCall->returnValue)
+        << ",\n  \"secondCloneParentReturn\":"
+        << jsonHexOrNull(secondCloneCall == nullptr ? UINT64_MAX : secondCloneCall->returnValue)
+        << ",\n  \"firstChildExitCode\":"
+        << (tasks.contains(childTaskPointer) ? tasks[childTaskPointer].exitCode : UINT64_MAX)
+        << ",\n  \"secondChildExitCode\":"
+        << (tasks.contains(secondChildTaskPointer) ?
+            tasks[secondChildTaskPointer].exitCode : UINT64_MAX)
+        << ",\n  \"firstWaitStatus\":" << parentWaitStatus
+        << ",\n  \"secondWaitStatus\":" << parentSecondWaitStatus
+        << ",\n  \"parentRemainedAlive\":" << (parentRemainedAlive ? "true" : "false")
+        << ",\n  \"observerEventCapsValid\":"
+        << (observerEventCapsValid ? "true" : "false")
+        << ",\n  \"processRepeatProof\":" << (processRepeatProof ? "true" : "false")
+        << ",\n  \"fullProof\":" << (fullProof ? "true" : "false") << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "process-events.json"), repeatEvents.str());
+
+    std::ostringstream failedExecJson;
+    failedExecJson << "{\n  \"schemaVersion\":1,\n  \"syscall\":\"execve\","
+        << "\n  \"number\":221,\n  \"path\":"
+        << JsonQuote(failedExecCall == nullptr ? std::string{} : failedExecCall->path)
+        << ",\n  \"callerPc\":"
+        << jsonHexOrNull(failedExecCall == nullptr ? UINT64_MAX : failedExecCall->ecallPc)
+        << ",\n  \"taskPointer\":" << JsonQuote(Hex(failedExecveTaskPointer))
+        << ",\n  \"callerPid\":" << failedExecveCallerPid
+        << ",\n  \"callerParentPid\":" << failedExecveParentPid
+        << ",\n  \"callerSp\":" << JsonQuote(Hex(failedExecveCallerSp))
+        << ",\n  \"callerTp\":" << JsonQuote(Hex(failedExecveCallerTp))
+        << ",\n  \"callerSatp\":" << JsonQuote(Hex(failedExecveCallerSatp))
+        << ",\n  \"pathnamePointer\":"
+        << jsonHexOrNull(failedExecCall == nullptr ? UINT64_MAX : failedExecCall->args[0])
+        << ",\n  \"argvPointer\":"
+        << jsonHexOrNull(failedExecCall == nullptr ? UINT64_MAX : failedExecCall->args[1])
+        << ",\n  \"envpPointer\":"
+        << jsonHexOrNull(failedExecCall == nullptr ? UINT64_MAX : failedExecCall->args[2])
+        << ",\n  \"argv\":"
+        << StringArrayJson(failedExecCall == nullptr ? std::vector<std::string>{} :
+                           failedExecCall->argv)
+        << ",\n  \"envp\":"
+        << StringArrayJson(failedExecCall == nullptr ? std::vector<std::string>{} :
+                           failedExecCall->envp)
+        << ",\n  \"argvNullTerminated\":"
+        << (failedExecCall != nullptr && failedExecCall->argvNullTerminated ? "true" : "false")
+        << ",\n  \"envpNullTerminated\":"
+        << (failedExecCall != nullptr && failedExecCall->envpNullTerminated ? "true" : "false")
+        << ",\n  \"dispatchSymbol\":"
+        << JsonQuote(failedExecCall == nullptr ? std::string{} : failedExecCall->dispatchSymbol)
+        << ",\n  \"dispatchPc\":"
+        << jsonHexOrNull(failedExecCall == nullptr ? UINT64_MAX : failedExecCall->dispatchPc)
+        << ",\n  \"returnValueSigned\":"
+        << (failedExecCall == nullptr ? 0 : static_cast<int64_t>(failedExecCall->returnValue))
+        << ",\n  \"returnPc\":"
+        << jsonHexOrNull(failedExecCall == nullptr ? UINT64_MAX : failedExecCall->returnPc)
+        << ",\n  \"returnedTaskPointer\":"
+        << JsonQuote(Hex(failedExecCall == nullptr ? 0 : failedExecCall->returnedTaskPointer))
+        << ",\n  \"returnSp\":" << JsonQuote(Hex(failedExecveReturnSp))
+        << ",\n  \"returnTp\":" << JsonQuote(Hex(failedExecveReturnTp))
+        << ",\n  \"returnSatp\":" << JsonQuote(Hex(failedExecveReturnSatp))
+        << ",\n  \"missingPathLookupObserved\":"
+        << (missingPathLookupObserved ? "true" : "false")
+        << ",\n  \"noElfLoadForFailedExec\":"
+        << (noElfLoadForFailedExec ? "true" : "false")
+        << ",\n  \"errorReturned\":" << (failedExecErrorReturned ? "true" : "false")
+        << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "execve-failure.json"), failedExecJson.str());
+
+    std::ostringstream recoveryJson;
+    recoveryJson << "{\n  \"schemaVersion\":1,\n  \"sameTaskPointer\":"
+        << (failedExecveTaskPointer == secondChildTaskPointer ? "true" : "false")
+        << ",\n  \"pid\":" << failedExecveCallerPid
+        << ",\n  \"parentPid\":" << failedExecveParentPid
+        << ",\n  \"failureCallPc\":" << JsonQuote(Hex(failedExecveCallerPc))
+        << ",\n  \"resumePc\":" << JsonQuote(Hex(failedExecveResumePc))
+        << ",\n  \"resumeRaw\":" << JsonQuote(Hex(failedExecveResumeRaw))
+        << ",\n  \"expectedElfRaw\":" << JsonQuote(Hex(expectedFailedResumeRaw))
+        << ",\n  \"resumeA0Signed\":"
+        << static_cast<int64_t>(failedExecveResumeA0)
+        << ",\n  \"resumeSp\":" << JsonQuote(Hex(failedExecveResumeSp))
+        << ",\n  \"originalImageTraceObserved\":"
+        << (failedExecOriginalImageResumed ? "true" : "false")
+        << ",\n  \"stackUsableAfterFailure\":"
+        << (failedExecStackUseValid ? "true" : "false")
+        << ",\n  \"identityPreserved\":"
+        << (failedExecIdentityPreserved ? "true" : "false")
+        << ",\n  \"getpidGetppidAndRecoveryWriteObserved\":"
+        << (secondChildSyscallsValid ? "true" : "false")
+        << ",\n  \"sentinelBefore\":" << JsonQuote(Hex(failedExecveSentinelBefore))
+        << ",\n  \"sentinelAfter\":" << JsonQuote(Hex(failedExecveSentinelAfter))
+        << ",\n  \"sentinelPreserved\":"
+        << (failedExecveSentinelBefore == failedExecveSentinelAfter &&
+            failedExecveSentinelAfterReadable ? "true" : "false")
+        << ",\n  \"proof\":" << (failedExecOriginalImageResumed &&
+            failedExecIdentityPreserved && secondChildSyscallsValid ? "true" : "false")
+        << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "original-image-recovery.json"), recoveryJson.str());
+
+    std::ostringstream memoryJson;
+    memoryJson << "{\n  \"schemaVersion\":1,\n  \"address\":"
+        << JsonQuote(Hex(privateSentinelVa))
+        << ",\n  \"initialParentValue\":" << JsonQuote(Hex(secondParentSentinelInitial))
+        << ",\n  \"parentAfterReapValue\":" << JsonQuote(Hex(secondParentSentinel))
+        << ",\n  \"childBeforeStoreValue\":" << JsonQuote(Hex(secondChildSentinelBefore))
+        << ",\n  \"childAfterStoreValue\":" << JsonQuote(Hex(secondChildSentinelAfter))
+        << ",\n  \"failedExecBeforeValue\":" << JsonQuote(Hex(failedExecveSentinelBefore))
+        << ",\n  \"failedExecAfterValue\":" << JsonQuote(Hex(failedExecveSentinelAfter))
+        << ",\n  \"parentInitialPhysical\":"
+        << JsonQuote(Hex(secondParentSentinelInitialPaddr))
+        << ",\n  \"parentAfterReapPhysical\":"
+        << JsonQuote(Hex(secondParentSentinelPaddr))
+        << ",\n  \"childBeforeStorePhysical\":"
+        << JsonQuote(Hex(secondChildSentinelBeforePaddr))
+        << ",\n  \"childAfterStorePhysical\":"
+        << JsonQuote(Hex(secondChildSentinelAfterPaddr))
+        << ",\n  \"cowFaultObserved\":"
+        << (secondSentinelCowFault != cowFaults.end() ? "true" : "false")
+        << ",\n  \"cowFaultPc\":"
+        << jsonHexOrNull(secondSentinelCowFault == cowFaults.end() ? UINT64_MAX :
+                         secondSentinelCowFault->pc)
+        << ",\n  \"cowFaultAddress\":"
+        << jsonHexOrNull(secondSentinelCowFault == cowFaults.end() ? UINT64_MAX :
+                         secondSentinelCowFault->stval)
+        << ",\n  \"parentValuePreserved\":"
+        << (secondParentSentinel == secondParentSentinelInitial ? "true" : "false")
+        << ",\n  \"physicalIsolation\":"
+        << (secondSentinelCowValid &&
+            secondChildSentinelAfterPaddr != secondParentSentinelPaddr ? "true" : "false")
+        << ",\n  \"failedExecMemoryPreserved\":"
+        << (failedExecveSentinelAfter == failedExecveSentinelBefore ? "true" : "false")
+        << ",\n  \"proof\":" << (secondSentinelPreserved && secondSentinelCowValid
+            ? "true" : "false") << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "user-memory-evidence.json"), memoryJson.str());
+
+    std::ostringstream waitJson;
+    waitJson << "{\n  \"schemaVersion\":1,\n  \"firstWait\":{\n    \"childPid\":"
+        << firstChildPid << ",\n    \"returnPid\":"
+        << jsonHexOrNull(waitedChildCall == nullptr ? UINT64_MAX : waitedChildCall->returnValue)
+        << ",\n    \"statusAddress\":" << JsonQuote(Hex(waitStatusVa))
+        << ",\n    \"status\":" << parentWaitStatus
+        << ",\n    \"valid\":" << (wait4Valid ? "true" : "false") << "\n  },"
+        << "\n  \"secondWait\":{\n    \"childPid\":" << secondChildPid
+        << ",\n    \"returnPid\":"
+        << jsonHexOrNull(secondWaitCall == nullptr ? UINT64_MAX : secondWaitCall->returnValue)
+        << ",\n    \"statusAddress\":" << JsonQuote(Hex(secondWaitStatusVa))
+        << ",\n    \"status\":" << parentSecondWaitStatus
+        << ",\n    \"valid\":" << (secondWait4Valid ? "true" : "false") << "\n  },"
+        << "\n  \"noChildWait\":{\n    \"returnValueSigned\":"
+        << (noChildWait == syscalls.end() ? 0 :
+            static_cast<int64_t>(noChildWait->returnValue))
+        << ",\n    \"valid\":" << (secondNoChildWaitValid ? "true" : "false")
+        << "\n  },\n  \"secondWaitBlocked\":"
+        << (secondWaitBlocked ? "true" : "false")
+        << ",\n  \"switchedBackToParent\":"
+        << (secondSwitchedBack ? "true" : "false")
+        << ",\n  \"proof\":" << (secondWait4Valid && secondNoChildWaitValid &&
+            secondWaitBlocked && secondSwitchedBack ? "true" : "false") << "\n}\n";
+    WriteText(ArtifactPath(artifactDir, "wait4-evidence.json"), waitJson.str());
+#endif
 #endif
 
     std::ostringstream trapSummary;
@@ -2884,7 +3633,7 @@ std::string RunProcessLifecycle(int argc, char** argv) {
     }
     trapSummary << "]\n}\n";
     WriteText(ArtifactPath(artifactDir, "linux-frontier.json"), trapSummary.str());
-#if defined(RISCV28_EXECVE)
+#if defined(RISCV28_EXECVE) || defined(RISCV29_REPEAT)
     WriteText(ArtifactPath(artifactDir, "frontier.json"), trapSummary.str());
 #endif
 

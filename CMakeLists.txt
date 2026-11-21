@@ -1176,6 +1176,9 @@ endforeach()
 
 # RISCV-18 uses an authentic pinned upstream Linux v6.12 raw Image retained
 # outside the source tree; manifest and Linux-specific FDT remain small fixtures.
+set(GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv29-artifacts"
+    CACHE PATH "Isolated output root for the active RISC-V phase")
 set(RISCV_LINUX_FIXTURE_DIR
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_image)
 set(RISCV_LINUX_IMAGE_PATH
@@ -1264,7 +1267,7 @@ add_test(NAME RiscVLinuxConsoleContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv25-artifacts/regression-runs/riscv21-console/$<CONFIG>"
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/regression/riscv21-console/$<CONFIG>"
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH})
 
@@ -1283,7 +1286,7 @@ add_test(NAME RiscVLinuxBootContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv25-artifacts/regression-runs/riscv22-boot/$<CONFIG>"
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/regression/riscv22-boot/$<CONFIG>"
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH}
                  "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv21-artifacts/Release/riscv21-linux-s-mode-uart0-retained.bin")
@@ -1304,7 +1307,7 @@ add_test(NAME RiscVLinuxAllocatorContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv25-artifacts/regression-runs/riscv23-allocator/$<CONFIG>"
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/regression/riscv23-allocator/$<CONFIG>"
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH}
                  "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv21-artifacts/Release/riscv21-linux-s-mode-uart0-retained.bin")
@@ -1327,7 +1330,7 @@ add_test(NAME RiscVLinuxInitcallContinuationTests
                  ${RISCV_LINUX_IMAGE_PATH}
                  ${RISCV_LINUX_MANIFEST_COPY}
                  ${RISCV_LINUX_DTB_COPY}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv25-artifacts/$<CONFIG>"
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/regression/riscv25-initcall/$<CONFIG>"
                  ${RISCV_LINUX_VMLINUX_PATH}
                  ${RISCV_LINUX_CONFIG_PATH}
                  "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv21-artifacts/Release/riscv21-linux-s-mode-uart0-retained.bin"
@@ -1368,7 +1371,7 @@ add_test(NAME RiscVLinuxInitramfsUserspaceTests
                  ${RISCV_LINUX_INITRAMFS_PATH}
                  ${RISCV_LINUX_INITRAMFS_ELF_PATH}
                  ${RISCV_LINUX_INITRAMFS_DTB_PATH}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv26-artifacts/$<CONFIG>")
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/regression/riscv26-initramfs-userspace/$<CONFIG>")
 
 # RISCV-27 uses a separate deterministic initramfs and observes real Linux
 # clone, copy-on-write, scheduling, exit, wait4, and UART behavior.
@@ -1401,7 +1404,7 @@ add_test(NAME RiscVLinuxProcessLifecycleTests
                  ${RISCV_LINUX_PROCESS_INITRAMFS_PATH}
                  ${RISCV_LINUX_PROCESS_ELF_PATH}
                  ${RISCV_LINUX_PROCESS_DTB_PATH}
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv27-artifacts/$<CONFIG>")
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/baseline-riscv27/$<CONFIG>")
 
 # RISCV-28 adds a separate static /bin/child ELF and observes Linux execve,
 # executable-image replacement, the constructed argv/envp stack, and reaping.
@@ -1428,12 +1431,45 @@ add_test(NAME RiscVLinuxExecveLifecycleTests
                  ${RISCV_LINUX_EXECVE_INPUT_DIR}/initramfs.cpio
                  ${RISCV_LINUX_EXECVE_INPUT_DIR}/init.elf
                  ${RISCV_LINUX_EXECVE_INPUT_DIR}/platform-initramfs.dtb
-                 "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv28-artifacts/$<CONFIG>")
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/baseline-riscv28/$<CONFIG>")
 add_test(NAME RiscVLinuxExecveFixtureContractTests
          COMMAND Python3::Interpreter
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_execve/test_fixture_contract.py
                  ${RISCV_LINUX_EXECVE_INPUT_DIR}/child.elf
                  ${RISCV_LINUX_EXECVE_INPUT_DIR}/initramfs.cpio)
+
+# RISCV-29 proves a second clone/reap cycle and recoverable ENOENT execve on
+# the still-running child, using a separate fixture and artifact directory.
+set(RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv29-artifacts/inputs"
+    CACHE PATH "Path to the reproducibly generated RISCV-29 process fixture")
+add_executable(test_riscv_linux_process_repeat
+    tests/test_riscv_linux_process_lifecycle.cpp
+    src/riscv/riscv_initramfs_contract.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_process_repeat
+    PRIVATE RISCV29_REPEAT=1 RISCV_LINUX_STARTUP_CONTINUATION=1
+            RISCV_LINUX_CONSOLE_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_process_repeat PRIVATE bcrypt)
+add_test(NAME RiscVLinuxProcessRepeatTests
+         COMMAND test_riscv_linux_process_repeat
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_CONFIG_PATH}
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/initramfs.cpio
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/init.elf
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/platform-initramfs.dtb
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/RISCV29/$<CONFIG>")
+add_test(NAME RiscVLinuxProcessRepeatFixtureContractTests
+         COMMAND Python3::Interpreter
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_process_repeat/test_fixture_contract.py
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/init.elf
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/child.elf
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/initramfs.cpio
+                 ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/initramfs-manifest.json)
 
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_image_entry
@@ -1466,6 +1502,12 @@ if(MSVC)
     target_compile_options(test_riscv_linux_execve_lifecycle PRIVATE /W4)
 else()
     target_compile_options(test_riscv_linux_execve_lifecycle PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(MSVC)
+    target_compile_options(test_riscv_linux_process_repeat PRIVATE /W4)
+else()
+    target_compile_options(test_riscv_linux_process_repeat PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(MSVC)

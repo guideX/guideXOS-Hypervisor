@@ -1018,3 +1018,24 @@ Validation and next target:
   full report, hashes, counters, task/syscall records, page-walk audit, and
   console evidence are in `phase-riscv-28-report.txt` and the bundles under
   `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv28-artifacts`.
+
+--- Phase RISCV-29: repeated Linux process lifecycle and failed execve recovery ---
+
+- The pinned Linux v6.12 and OpenSBI v1.8.1 artifacts remained unchanged. PID 1
+  created PID 21, which successfully execve'd the distinct `/bin/child` ELF,
+  exited with 42, and was reaped with wait status 10752.
+- PID 1 then created PID 22. Its execve of `/bin/riscv29-missing` returned the
+  genuine Linux `-ENOENT` value `-2` before ELF loading. Linux resumed the same
+  task, PID, parent, address space, and stack in the original `/init` ELF.
+  PID 22 performed recovery syscalls and a guest UART write, then exited with
+  43 and was reaped with status 11008. PID 1 observed `-ECHILD` and remained
+  alive.
+- Debug and Release passed the 51-check R29 integration at 87,377,480
+  post-handoff retirements with identical U/S/M totals 623 / 83,164,628 /
+  4,212,229. Both 30-test focused CTest selections and all three direct IA-64
+  regressions passed in each configuration. The 114-file / 26-directory
+  historical-artifact audit found no changes. No IA-64 implementation source
+  changed; no QEMU run was made.
+- Full syscall, task-switch, kernel lookup, COW, wait-status, console, and
+  artifact evidence is in `phase-riscv-29-report.txt` and the bundles under
+  `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv29-artifacts`.
