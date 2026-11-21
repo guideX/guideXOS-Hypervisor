@@ -1256,6 +1256,27 @@ struct AuthenticReplay {
     std::string extsbTraceLine;
     std::vector<std::string> extsbPrecedingInstructions;
     std::vector<std::string> extsbFollowingInstructions;
+    bool sradiFetched = false;
+    bool sradiRetired = false;
+    uint64_t sradiNip = 0;
+    uint64_t sradiTotalRetiredBefore = 0;
+    uint64_t sradiTotalRetired = 0;
+    uint64_t sradiCyclesBefore = 0;
+    uint64_t sradiCyclesAfter = 0;
+    uint64_t sradiTimebaseBefore = 0;
+    uint64_t sradiTimebaseAfter = 0;
+    uint64_t sradiRamBefore = 0;
+    uint64_t sradiRamAfter = 0;
+    uint16_t sradiLPID = 0;
+    uint32_t sradiRawWord = 0;
+    PPC64RegisterView sradiBefore{};
+    PPC64RegisterView sradiAfter{};
+    PPC64VirtualInterruptSnapshot sradiInterruptBefore{};
+    PPC64VirtualInterruptSnapshot sradiInterruptAfter{};
+    std::string sradiDecode;
+    std::string sradiTraceLine;
+    std::vector<std::string> sradiPrecedingInstructions;
+    std::vector<std::string> sradiFollowingInstructions;
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1284,7 +1305,8 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  bool retireMMCR0 = false,
                                  bool stopAtMMCR0 = false,
                                  bool retireMMCR1 = false,
-                                 bool retireMMCR2 = false) {
+                                 bool retireMMCR2 = false,
+                                 bool retireSRADI = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -2177,6 +2199,59 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         context.str());
                 }
             }
+            if (following.kind == DecodedKind::SRADI &&
+                !retireSRADI) {
+                // Preserve the accepted Phase 48 endpoint after SRADI becomes
+                // implemented: decode the genuine frontier, but leave the
+                // instruction unretired for historical replay callers.
+                result.stopClass = "explicit-authentic-frontier";
+                result.stopNip = before.nip;
+                result.stopWord = following.raw;
+                result.stopDisassembly = next.disassembly;
+                result.stopLPID = cpu->getActiveLPID();
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.stopFetchTranslated = translation.success;
+                result.stopFetchExecuteAllowed = translation.executeAllowed;
+                result.stopBackingAddress = translation.hostBackingAddress;
+                stopped = true;
+                break;
+            }
+            if (following.kind == DecodedKind::SRADI &&
+                retireSRADI && !result.sradiFetched) {
+                result.sradiFetched = true;
+                result.sradiNip = before.nip;
+                result.sradiRawWord = following.raw;
+                result.sradiDecode = next.disassembly;
+                result.sradiBefore = before;
+                result.sradiLPID = cpu->getActiveLPID();
+                result.sradiTotalRetiredBefore =
+                    result.prefixRetired + result.continuationRetired;
+                result.sradiCyclesBefore = vm.getCyclesExecuted();
+                result.sradiTimebaseBefore = vm.getPPC64Timebase();
+                result.sradiRamBefore = fingerprintRam(*memory);
+                result.sradiInterruptBefore =
+                    vm.getPPC64InterruptSnapshot();
+                const size_t contextStart = lastInstructions.size() > 32U
+                    ? lastInstructions.size() - 32U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                << hex(lastGprs[index][reg])
+                                << (reg + 1U == lastGprs[index].size()
+                                    ? "" : ",");
+                        }
+                    }
+                    result.sradiPrecedingInstructions.push_back(
+                        context.str());
+                }
+            }
             if (following.kind == DecodedKind::EXTSW && !result.extswFetched) {
                 result.extswFetched = true;
                 result.extswNip = before.nip;
@@ -2231,6 +2306,20 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.extsbTimebaseAfter = vm.getPPC64Timebase();
                 result.extsbRamAfter = fingerprintRam(*memory);
                 result.extsbInterruptAfter =
+                    vm.getPPC64InterruptSnapshot();
+            }
+            if (following.kind == DecodedKind::SRADI &&
+                result.sradiFetched && before.nip == result.sradiNip) {
+                result.sradiAfter = after;
+                result.sradiRetired = retired &&
+                    after.nip == before.nip + 4U;
+                result.sradiTotalRetired = result.sradiRetired
+                    ? result.sradiTotalRetiredBefore + 1U
+                    : result.sradiTotalRetiredBefore;
+                result.sradiCyclesAfter = vm.getCyclesExecuted();
+                result.sradiTimebaseAfter = vm.getPPC64Timebase();
+                result.sradiRamAfter = fingerprintRam(*memory);
+                result.sradiInterruptAfter =
                     vm.getPPC64InterruptSnapshot();
             }
             if (following.kind == DecodedKind::MTSPR &&
@@ -2583,6 +2672,20 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                     << " retired=" << std::boolalpha << result.extsbRetired;
                 result.extsbTraceLine = extsbLine.str();
             }
+            if (following.kind == DecodedKind::SRADI &&
+                before.nip == result.sradiNip) {
+                std::ostringstream sradiLine;
+                sradiLine << line.str()
+                    << " R9_before=" << hex(before.gpr[9])
+                    << " R9_after=" << hex(after.gpr[9])
+                    << " shift=" << static_cast<unsigned>(following.sh)
+                    << " CR_before=0x" << std::hex << before.cr
+                    << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " retired=" << std::boolalpha << result.sradiRetired;
+                result.sradiTraceLine = sradiLine.str();
+            }
             if (result.cntlzdRetired && before.nip != result.cntlzdNip &&
                 result.cntlzdFollowingInstructions.size() < 16U) {
                 std::ostringstream context;
@@ -2620,6 +2723,25 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         << (reg == 31U ? "" : ",");
                 }
                 result.extsbFollowingInstructions.push_back(context.str());
+            }
+            if (result.sradiRetired && before.nip != result.sradiNip &&
+                result.sradiFollowingInstructions.size() < 32U) {
+                std::ostringstream context;
+                context << line.str() << " CR_before=0x" << std::hex
+                    << before.cr << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " GPR_before=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(before.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                context << " GPR_after=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(after.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                result.sradiFollowingInstructions.push_back(context.str());
             }
             if (result.mmcr2Retired && before.nip > result.mmcr2Nip &&
                 before.nip <= result.mmcr2Nip + 0x2CU) {
@@ -2948,6 +3070,16 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
             trace << line << "\n";
         }
         trace << "authentic_extsb_following_context_end\n";
+    }
+    if (result.sradiFetched) {
+        trace << "authentic_sradi_preceding_context_begin\n";
+        for (const auto& line : result.sradiPrecedingInstructions)
+            trace << line << "\n";
+        trace << "authentic_sradi_preceding_context_end\n";
+        trace << "authentic_sradi_following_context_begin\n";
+        for (const auto& line : result.sradiFollowingInstructions)
+            trace << line << "\n";
+        trace << "authentic_sradi_following_context_end\n";
     }
     result.trace = trace.str();
     return result;

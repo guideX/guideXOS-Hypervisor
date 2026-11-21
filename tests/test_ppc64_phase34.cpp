@@ -145,8 +145,8 @@ void testExtswDecodeAndReservedFields() {
         }
     }
 
-    CHECK(PPC64ISAPlugin::decodeWord(0x7C000774U).kind ==
-          DecodedKind::UNSUPPORTED); // EXTSB remains isolated
+    const auto extsb = PPC64ISAPlugin::decodeWord(0x7C000774U);
+    CHECK(extsb.kind == DecodedKind::EXTSB && extsb.supported);
     CHECK(PPC64ISAPlugin::decodeWord(0x7C000734U).kind ==
           DecodedKind::UNSUPPORTED); // EXTSH remains isolated
     CHECK(PPC64ISAPlugin::decodeWord(0x7C000278U).kind == DecodedKind::XOR);

@@ -1638,6 +1638,26 @@ endif()
 add_test(NAME PPC64Phase48Tests COMMAND test_ppc64_phase48)
 set_tests_properties(PPC64Phase48Tests PROPERTIES TIMEOUT 3600)
 
+# POWER9 SRADI XS-form split shift, CA/CA32 semantics, and Linux continuation.
+add_executable(test_ppc64_phase49
+    tests/test_ppc64_phase49.cpp
+    ${ALL_SOURCES}
+    ${HEADERS}
+)
+if(WIN32)
+    target_link_libraries(test_ppc64_phase49 PRIVATE ws2_32)
+endif()
+target_compile_definitions(test_ppc64_phase49 PRIVATE
+    PPC64_PHASE33_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(test_ppc64_phase49 PRIVATE /W4)
+else()
+    target_compile_options(test_ppc64_phase49 PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME PPC64Phase49Tests COMMAND test_ppc64_phase49)
+set_tests_properties(PPC64Phase49Tests PROPERTIES TIMEOUT 3600)
+
 # Hosted PPC64 console demonstration; consumes real stdio through the bridge.
 add_executable(ppc64_console_demo
     tools/ppc64_console_demo.cpp

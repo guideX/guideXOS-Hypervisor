@@ -108,14 +108,16 @@ void testSrdDecode38() {
     CHECK(PPC64ISAPlugin::decodeWord(encodeSrd38(31U, 0U, 31U, true)).rc);
     CHECK(PPC64ISAPlugin::decodeWord(encodeSld37(9U, 9U, 6U)).kind ==
           DecodedKind::SLD);
-    const std::array<uint32_t, 4> unrelatedShifts{
+    const std::array<uint32_t, 3> unrelatedShifts{
         (31U << 26U) | (24U << 1U),
         (31U << 26U) | (536U << 1U),
-        (31U << 26U) | (794U << 1U),
-        (31U << 26U) | (413U << 2U)};
+        (31U << 26U) | (794U << 1U)};
     for (uint32_t word : unrelatedShifts) {
         CHECK(PPC64ISAPlugin::decodeWord(word).kind == DecodedKind::UNSUPPORTED);
     }
+    const auto sradiZero = PPC64ISAPlugin::decodeWord((31U << 26U) | (413U << 2U));
+    CHECK(sradiZero.kind == DecodedKind::SRADI && sradiZero.supported);
+    CHECK(sradiZero.sh == 0U && !sradiZero.rc);
     focusedChecks += checks - firstCheck;
 }
 

@@ -561,10 +561,10 @@ void testExtsbAuthenticLinux48() {
     // Continue through the same authenticated setup and Phase 47 CNTLZD,
     // then retire EXTSB and continue in two independent production VMs.
     AuthenticReplay first = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 0U, false, false, true, false, 0U,
+        false, false, 0U, false, false, true, false, 0xC0000000013BB2A4ULL,
         kPower9SetupEntry43, true, true, false, true, true);
     AuthenticReplay second = runAuthenticLinux(kernel, fdt, elfEvidence,
-        false, false, 0U, false, false, true, false, 0U,
+        false, false, 0U, false, false, true, false, 0xC0000000013BB2A4ULL,
         kPower9SetupEntry43, true, true, false, true, true);
     CHECK(first.setup && second.setup);
     CHECK(first.fdtMatches && second.fdtMatches);
@@ -662,6 +662,21 @@ void testExtsbAuthenticLinux48() {
           first.stopClass == second.stopClass &&
           first.stopLPID == 1U && second.stopLPID == 1U);
     CHECK(first.stopNip > kExtsbLinuxNip48 + 4U);
+
+    std::ostringstream preSradi;
+    preSradi << "source=unchanged Debian PPC64BE Linux, before Phase 49 handler\n"
+        << "retired_instructions=" << first.totalRetired
+        << "\nfrontier_nip=" << hex(first.stopNip)
+        << "\nraw=" << wordHex(first.stopWord)
+        << "\ndecode=" << first.stopDisassembly
+        << "\nLPID=" << first.stopLPID
+        << "\nfetch_translated=" << first.stopFetchTranslated
+        << "\nfetch_execute_allowed=" << first.stopFetchExecuteAllowed
+        << "\n" << registerTable48(first.final);
+    if (!writeText(runDirectory / "sradi-frontier-preimplementation.txt",
+                   preSradi.str())) {
+        std::cerr << "failed to write pre-SRADI frontier snapshot\n";
+    }
 
     const auto nextElf = runDirectory / "next-frontier-elf-attribution.txt";
     CHECK(inspectLinuxMMCR2Frontier46(kernelFile, nextElf, first.stopNip));
@@ -804,6 +819,7 @@ void testExtsbAuthenticLinux48() {
 
 } // namespace
 
+#ifndef PPC64_PHASE48_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -838,3 +854,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

@@ -1819,6 +1819,7 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
         case OPCODE_XO: {
             const uint16_t combined = static_cast<uint16_t>((word >> 1) & 0x3FFU);
             const uint16_t base = static_cast<uint16_t>(combined & 0x1FFU);
+            const uint16_t xsOpcode = static_cast<uint16_t>((word >> 2) & 0x1FFU);
             const bool oe = ((combined >> 9) & 0x1U) != 0;
             const bool rc = (word & 0x1U) != 0;
             instr.rt = static_cast<uint8_t>((word >> 21) & 0x1F);
@@ -1827,7 +1828,16 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             instr.oe = oe;
             instr.rc = rc;
             // Arithmetic family (OE selects a valid overflow variant).
-            if (combined == XO_MTOCRF) {
+            if (xsOpcode == XO_SRADI) {
+                // XS-form SRADI has a fixed nine-bit opcode in raw bits 2-10.
+                // SH[5] occupies raw bit 1, so the flat ten-bit extraction
+                // combines opcode and shift and must not be decoded as XO.
+                instr.kind = DecodedKind::SRADI;
+                instr.sh = static_cast<uint8_t>(((word >> 11) & 0x1FU) |
+                    (((word >> 1) & 1U) << 5U));
+                instr.oe = false;
+                instr.supported = true;
+            } else if (combined == XO_MTOCRF) {
                 // XFX bit 11 is reserved; bit 20 is L. L=0 is MTCRF and is
                 // deliberately left unsupported, while L=1 is the distinct
                 // single-field MTOCRF operation. Rc must be zero for both.
@@ -2587,6 +2597,12 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
                 << " r" << static_cast<unsigned>(instr.ra)
                 << ",r" << static_cast<unsigned>(instr.rt)
                 << ",r" << static_cast<unsigned>(instr.rb);
+            break;
+        case DecodedKind::SRADI:
+            out << "sradi" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt)
+                << "," << static_cast<unsigned>(instr.sh);
             break;
         case DecodedKind::SYNC:
             out << (instr.raw == ENCODING_LWSYNC ? "lwsync" : "sync");
@@ -3726,6 +3742,34 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             const unsigned shift = static_cast<unsigned>(countRegister & 0x7FULL);
             const uint64_t result = shift < 64U ? source >> shift : 0U;
             state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::SRADI: {
+            // Snapshot RS before writing RA so RA=RS has the same behavior.
+            // Construct the sign fill with unsigned shifts to avoid relying
+            // on implementation-defined signed right shift behavior.
+            const uint64_t source = state_.gpr[instr.rt];
+            const unsigned shift = instr.sh;
+            uint64_t result = source;
+            bool carry = false;
+            if (shift != 0U) {
+                result = source >> shift;
+                const bool negative = (source >> 63U) != 0U;
+                if (negative) {
+                    result |= (~uint64_t{0}) << (64U - shift);
+                }
+                const uint64_t discardedMask =
+                    (uint64_t{1} << shift) - uint64_t{1};
+                carry = negative && (source & discardedMask) != 0U;
+            }
+            state_.gpr[instr.ra] = result;
+            setXERCA(state_, carry);
+            // POWER9 implements ISA 3.0 CA32 for SRADI as the same carry-out.
+            setXERCA32(state_, carry);
             if (instr.rc) {
                 updateCR0(state_, result);
             }
