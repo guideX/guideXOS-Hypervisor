@@ -1,0 +1,329 @@
+guideXOS Hypervisor — Phase RISCV-30 Report
+Authentic Linux serial input, U-mode command processing, and console response
+Date: 2026-11-21 (America/Los_Angeles)
+
+RESULT
+------
+Outcome A — authentic bidirectional Linux userspace console.
+
+The pinned Linux v6.12 and OpenSBI v1.8.1 booted unchanged under the existing
+RV64IMA_Zicsr, Sv39, one-hart, StandardPmp16 machine profile. Linux launched a
+deterministic static `/init` as PID 1 in U-mode. The process opened `/dev/ttyS0`,
+waited in Linux's default canonical N_TTY `read`, received five complete lines
+from 41 externally injected UART0 bytes, interpreted each line in U-mode, and
+sent five corresponding responses through Linux `write` and the existing UART0
+transmitter. `quit` returned from `sched_yield`; PID 1 remained alive in U-mode.
+
+The corrected Debug and Release guest evidence is byte-identical across all 13
+phase-30 evidence files. No host-side command handling, task-memory write,
+TTY-buffer injection, synthetic syscall return, host SBI provider, Linux
+rebuild, production emulator correction, or QEMU run was used.
+
+1. Outcome classification
+-------------------------
+Outcome A in Debug and Release. The evidence establishes firmware handoff,
+Linux U-mode PID 1, real serial open/read/write syscalls, external UART input,
+UART receiver consumption, PLIC delivery, canonical TTY reads, U-mode parsing,
+guest-selected response bytes, and UART TX provenance. No unexpected fault,
+panic, input rejection, or receive overrun occurred.
+
+2. Starting and ending HEAD
+---------------------------
+Branch: `RISCV`.
+Starting HEAD: `a9ddb7a141bfac9d3e3ccbf5da49a5ec46264851`.
+Starting divergence (`@{upstream}...HEAD`): behind 0, ahead 1.
+Phase implementation and marker commit: `a304b1ee9bc4acaa59af1c676aa5f344820de44b`.
+Ending HEAD for RISCV-30 implementation: `a304b1ee9bc4acaa59af1c676aa5f344820de44b`.
+After the implementation commit, divergence was behind 0, ahead 2.
+The report is committed in a subsequent documentation-only closeout commit.
+No push was made.
+
+3. Worktree status
+------------------
+There were no tracked changes at preflight. The pre-existing untracked paths
+were preserved and excluded from the commit: `Testing/`, the `__pycache__/`
+directories under the RISCV-28 execve and RISCV-29 process-repeat fixtures,
+and `.build/` under the OpenSBI dual-UART, PLIC-UART, and PMP fixtures. After
+the implementation commit, those remain the only untracked repository paths.
+The shared `.phase` and all IA-64 implementation sources are unchanged.
+
+4. Pinned kernel and firmware
+-----------------------------
+Linux v6.12 source commit:
+`adc218676eef25575469234709c2d87185ca223a`
+
+Linux Image SHA-256:
+`60ccb1172ffbe4b49cbc4447e7ccb4b705b5d60a9e92d3f10cf02a0d46bbca2c`
+
+Linux `vmlinux` SHA-256:
+`49a047dd85bac9e8da49f89907dfdcc845b8c9c564f9d6eb63ba76f68768d093`
+
+Linux configuration SHA-256:
+`5dfc1dec7885ea79d1c6ca14262f7ff305d02ac37e74f01ee260cdd7317082ab`
+
+OpenSBI v1.8.1 source commit:
+`74434f255873d74e56cc50aa762d1caf24c099f8`
+
+OpenSBI firmware SHA-256:
+`cc4410ef1a24fd5f9cbb9019f82802351b829187de75b756c45b60479245d7a3`
+
+The run observed the existing firmware MRET handoff (39 MRET events). The
+existing RAM, FDT address, kernel entry, UART0/UART1, PLIC, ACLINT timer,
+10 MHz timebase, SBI Base/TIME, `/soc` simple-bus contract, and restricted
+StandardPmp16 supervisor domain were retained. No kernel or firmware was
+rebuilt.
+
+5. RISCV-29 unchanged lifecycle reproduction
+--------------------------------------------
+The accepted RISCV-29 process-repeat fixture was replayed unchanged in both
+configurations, with output redirected to the RISCV-30 artifact root. Its
+31-file Debug bundle and 31-file Release bundle each matched their accepted
+RISCV-29 counterparts byte-for-byte.
+
+The replay retained the accepted values: 87,377,480 post-handoff retirements;
+U/S/M totals 623 / 83,164,628 / 4,212,229; PID 21 successful execve and exit
+42 with wait status 10752; PID 22 failed execve with `-ENOENT` (-2), recovery,
+exit 43 and wait status 11008; no remaining child; PID 1 alive. The Debug
+CTest replay passed in 7,253.70 seconds; Release passed in 1,752.12 seconds.
+Comparison details are in
+`E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv30-artifacts\RISCV29\riscv29-baseline-comparison.json`.
+
+6. Deterministic RISCV-30 fixture
+---------------------------------
+Source: `tests/fixtures/riscv_linux_serial_console/`.
+The seven-file fixture source bundle SHA-256 is
+`835d298ffa1f04a5bfdb30c35e4363d663807d39592ce5f538e5bb923bb525ac`; per-file
+hashes are in `inputs\riscv30-fixture-source-manifest.json`.
+
+Static RV64 `/init` ELF SHA-256:
+`1f20d8e9ee70ca4405529575254682e82286cd6f16b8d83983e2d9c6ae7ee398`
+
+Uncompressed newc initramfs SHA-256:
+`dcb6b8b6e18fd00a0f1dcd218d85a948feda0c3336b9881398e89de9d7237dae`
+
+Generated platform FDT SHA-256:
+`75d91930e0dcac08bbe8ef104aedf3a3896c08040817021e55d4442023f9e925`
+
+The ELF is 10,984 bytes, entry 0x10000. The 11,696-byte archive contains only
+the minimal device nodes and `/init`; its reserved range is [0x81400000,
+0x81402db0). The FDT remains at 0x82200000. The fixture contract passed in
+Debug and Release, and its independent checks passed 4/4.
+
+7. Production UART receiver audit
+---------------------------------
+The production receiver retains a single pending byte. The controller used
+`RV64CPU::injectMachineUartReceiveByte` one byte at a time; it did not submit
+an entire command while RBR was occupied and did not change the UART model.
+Each next injection waited for guest execution to consume the previous byte
+from UART0 RBR. Existing LSR data-ready/overrun state, IER/IIR behavior, PLIC
+source routing, RBR clearing, transmitter-empty behavior, and UART1 isolation
+were retained.
+
+8. Linux TTY configuration and behavior
+---------------------------------------
+The fixture makes no ioctl call. It uses Linux v6.12's default N_TTY canonical
+mode and echo behavior. A read was observed pending in `n_tty_read` before
+input; scheduler transitions during those reads are recorded. A newline
+committed each canonical line and woke the blocked read. TTY echo is separated
+from userspace prompt/response writes in the console evidence. Linux's normal
+newline-to-CRLF console translation is reflected in transmitted byte counts.
+
+The source audit is recorded in
+`E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv30-artifacts\riscv30-linux-source-analysis.txt`.
+It covers the pinned UAPI syscall numbers, `serial8250_read_char`,
+`serial8250_rx_chars`, `serial8250_handle_irq`, flip-buffer work, canonical
+line commit/wake, `n_tty_read`, and `tty_read`/`copy_to_iter`.
+
+9. External input and pacing
+----------------------------
+Stimulus lines were `ping\n`, `status\n`, `echo hello\n`,
+`unrecognized\n`, and `quit\n`: 41 bytes total. All 41 were accepted; 0 were
+rejected. For each byte, the controller recorded guest retirement/PC,
+privilege, receiver-ready state, PLIC source state, injection result, and the
+later receiver-consumption sequence. It waited on observed U-mode read and
+Linux scheduling state, used no wall-clock sleep as a readiness substitute,
+and injected no command into RAM, task memory, or the TTY layer.
+
+10. UART RX, PLIC, and TTY evidence
+----------------------------------
+All 41 injections observed receiver-ready after injection and PLIC source-10
+assertion; all 41 were later consumed by UART0 RBR reads. A byte-for-byte
+cross-check matched every stimulus consume sequence and value to the
+production UART MMIO trace. There were 43 total RBR reads: the 41 injected
+characters and two zero-valued no-data reads by the Linux driver. The run
+observed 27 supervisor external IRQ deliveries, 27 source-10 PLIC claim reads,
+and 27 completion writes. Every claim was completed. RX overrun observations
+and rejected injections were both zero. Linux's driver reads LSR/IIR while
+servicing the receive path: 7,440 LSR reads and 58 IIR reads were recorded.
+The event trace retains those MMIO operations.
+
+11. Real Linux syscall evidence
+-------------------------------
+Linux UAPI numbers were verified from the pinned source: `getpid` 172,
+`openat` 56, `read` 63, `write` 64, and `sched_yield` 124. All 18 captured
+syscalls were genuine U-mode ECALLs delivered to S-mode and returned to U-mode
+through SRET.
+
+- `getpid()` returned 1.
+- `openat(AT_FDCWD=-100, "/dev/ttyS0", O_RDWR=2)` returned fd 3.
+- Five `read(fd=3, length=64)` calls returned 5, 7, 11, 13, and 5 bytes.
+- Ten writes returned the five prompt and five response buffers.
+- The final `sched_yield()` returned 0.
+
+Caller PC, dispatch PC/symbol, arguments, return value, SRET PC, return PC,
+and buffer evidence are in `riscv30-user-syscalls.json` and
+`riscv30-tty-read-evidence.json` for each configuration.
+
+12. U-mode input buffers
+------------------------
+The actual user buffers contained, including LF terminators: `ping\n`,
+`status\n`, `echo hello\n`, `unrecognized\n`, `quit\n`. Read results were
+5 / 7 / 11 / 13 / 5 bytes. Each line matched its Linux read return, was read
+back from U-mode memory after SRET, and had a user-writable PTE. No host-side
+buffer write was used. The evidence is in `riscv30-user-buffer-evidence.json`.
+
+13. U-mode command parsing
+--------------------------
+The parser's U-mode instruction PCs were 0x101d8 (`ping`), 0x101e8 (`status`),
+0x101f8 (`echo hello`), 0x10208 (unrecognized command), and 0x10218 (`quit`).
+All five expected branch instructions were observed executing in U-mode.
+Input bytes, parser labels, response buffers, write syscalls, and TX matches
+are in `riscv30-command-events.json`.
+
+14. Guest-generated responses and console provenance
+----------------------------------------------------
+The guest selected these response buffers and Linux transmitted each through
+UART0 TX MMIO:
+
+- `ping` -> `pong\n` (5 user bytes; 6 UART bytes after CRLF translation).
+- `status` -> `status:pid=1\n` (13 user bytes; 14 UART bytes).
+- `echo hello` -> `hello\n` (6 user bytes; 7 UART bytes).
+- `unrecognized` -> `unknown command\n` (16 user bytes; 17 UART bytes).
+- `quit` -> `quit acknowledged\n` (18 user bytes; 19 UART bytes).
+
+The five prompts account for 50 userspace bytes. Responses account for 58
+userspace bytes and 63 UART bytes; all 113 userspace UART bytes were matched
+to genuine Linux write buffers and guest MMIO TX writes. TTY echo accounts for
+46 distinct bytes and was observed for all five lines. The 11,965-byte console
+contains 4,356 OpenSBI pre-handoff bytes and 7,609 Linux S-mode bytes; UART1
+output was 0. After separating user writes and echo, 7,450 bytes remain
+classified as kernel/other S-mode console text; this harness does not further
+split printk from other S-mode output. See `riscv30-console-analysis.json`
+and `riscv30-console.bin`.
+
+15. Completed interactions
+--------------------------
+Five complete read/parse/respond cycles completed. They include two distinct
+recognized commands (`ping`, `status`), `echo hello`, one unrecognized case,
+and the final `quit` acknowledgement. PID 1 returned to the read loop after
+each of the first four responses.
+
+16. PID 1 final state
+--------------------
+PID 1 remained alive in U-mode in its bounded `sched_yield` loop after the
+quit response. No exit syscall was issued. UART1 remained idle. No Linux
+panic, architectural fault, or userspace fault was observed.
+
+17. Retirements
+---------------
+Debug and Release have identical totals:
+
+- Post-handoff: 85,371,151.
+- U-mode: 243.
+- S-mode: 81,211,029.
+- M-mode: 4,159,879.
+
+These totals are below the 120,000,000 post-handoff ceiling and reproduce
+identically in both configurations.
+
+18. Trap, timer, scheduler, and bounds
+--------------------------------------
+The run recorded 11,512 trap events, 3,666 timer interrupts, 25 scheduler
+entries, 214,946 supervisor handler instructions, 4,159,879 machine handler
+instructions/M-mode retires, and 20,842 sampled architectural states. The
+event-driven stop occurred at 85,382,663 CPU step calls. Limits were 120M
+retirements, 132M steps, 24,000 traps, 2M U-mode retires, 120M supervisor
+handler instructions, 8M M-mode retires, 40M retires per handler lifetime,
+8,192 device events, 256 input bytes, 5 commands, 32,768 console bytes,
+256 scheduler events, 4,096 timer events, 512 repeated-state samples, and
+32,768 retained architectural-state entries. The final run
+remained within each limit. Full counters and ceilings are in
+`riscv30-trap-accounting.json` and `riscv30-linux-run-summary.json`.
+
+19. Final frontier
+------------------
+`serial_quit_yield_complete` — PID 1 acknowledged quit, returned from Linux
+`sched_yield`, and remained in U-mode. The stop was event driven. Both
+`terminalPanic` and `architecturalFault` are false. No first-failure frontier
+remained in the corrected Debug or Release run.
+
+20. Corrections and first attempt
+---------------------------------
+No production CPU, MMU, PMP, UART, PLIC, Linux, or IA-64 correction was needed.
+The first Release attempt stopped at 70,740,626 retires with 10,001 traps,
+before U-mode. This exposed the inherited 10,000-trap test ceiling: accepted
+RISCV-29 evidence already contained 11,734 traps. The initial Release evidence
+is retained under
+`E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv30-artifacts\temporary\riscv30-release-first-run-trap-ceiling`.
+The test-only trap ceiling was set to 24,000 and M-mode retirement ceiling to
+8,000,000, against RISCV-29's 4,212,229 M-mode retires. The serial integration
+target was rebuilt and rerun successfully in Debug and Release.
+
+21. Debug and Release regression matrix
+---------------------------------------
+The registered CTest inventory contained 53 tests. The focused 31-test
+selection passed 31/31 in Debug (472.50 seconds) and Release (183.46 seconds).
+The selection includes EFI memory-map, IA64 SAL, RISC-V architecture, firmware,
+interrupt, UART, PMP, boot-contract, Linux-loader, and fixture-contract tests.
+The new authentic serial integration test ran separately and passed in Debug
+(2,476.96 seconds) and Release (1,065.83 seconds). The new fixture contract
+passed in both configurations. Debug and Release R30 evidence matched byte
+for byte across all 13 files; see
+`riscv30-debug-release-evidence-hash-comparison.json`.
+
+22. IA-64 regressions
+---------------------
+Direct ACPI, interrupt-controller, and processor-interrupt-block tests passed
+3/3 in Debug and 3/3 in Release. No IA-64 implementation source changed.
+
+23. Historical artifact preservation
+------------------------------------
+Pre-run and post-run manifests cover the same 955 historical files and 4,106
+historical directories under `E:\CodexArtifacts\guideXOS_Hypervisor`. All 955
+files matched in length, SHA-256, and last-write timestamp; no files or
+directories were missing. Manifests:
+
+- `riscv30-artifact-preservation-pre.json`
+- `riscv30-artifact-preservation.json`
+
+All builds, CTest commands, and new evidence outputs were directed to the
+independent RISCV-30 artifact root. No CMake or CTest command used an archived
+phase build directory. Pre-existing repository `Testing/`, `__pycache__/`, and
+fixture `.build/` paths were not staged or removed.
+
+24. Local commit
+----------------
+RISCV-30 implementation, fixture, decoder note, and phase marker commit:
+`a304b1ee9bc4acaa59af1c676aa5f344820de44b`.
+
+This report is included in the subsequent documentation-only closeout commit.
+Both commits are local on `RISCV`; no push was made.
+
+25. RISCV-31 recommendation
+---------------------------
+Keep the successful RISCV-30 console fixture unchanged and add small bounded
+TTY/UART robustness regressions: prove a partial command does not return from
+canonical `read` before LF, exercise the 64-byte userspace line-buffer bound,
+and isolate UART RX overrun and UART0/UART1 negative controls. Preserve the
+production RX model and Linux line discipline unless an independent targeted
+test demonstrates a real defect. Do not expand this into a shell or terminal
+emulator.
+
+EVIDENCE ROOT
+-------------
+`E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv30-artifacts`
+
+Debug and Release bundles are under `RISCV30\Debug` and `RISCV30\Release`.
+Pinned inputs and deterministic fixture binaries are under `inputs`; build
+and CTest metadata are isolated under `build-debug`, `build-release`, and
+`ctest-metadata`.
