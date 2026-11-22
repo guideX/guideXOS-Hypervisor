@@ -1219,6 +1219,22 @@ else()
 endif()
 add_test(NAME Mips64Config0Tests COMMAND test_mips64_config0)
 
+# MIPS64-34 encoded CP0 SRSCtl qualification and authenticated Linux replay.
+add_executable(test_mips64_srsctl
+    tests/test_mips64_srsctl.cpp
+    ${ALL_SOURCES}
+)
+target_include_directories(test_mips64_srsctl PRIVATE ${CMAKE_SOURCE_DIR}/tests/support)
+if(WIN32)
+    target_link_libraries(test_mips64_srsctl PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(test_mips64_srsctl PRIVATE /W4)
+else()
+    target_compile_options(test_mips64_srsctl PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME Mips64SrsctlTests COMMAND test_mips64_srsctl)
+
 # MIPS64-17 architectural qualification for variable word shift-left.
 add_executable(test_mips64_sllv
     tests/test_mips64_sllv.cpp

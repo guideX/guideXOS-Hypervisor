@@ -1023,6 +1023,12 @@ bool Mips64Cpu::requireKernel(uint64_t address, bool inDelaySlot, uint64_t branc
 }
 
 bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
+    if (rd == kCp0RegSRSCtl && sel == kCp0SelSRSCtl) {
+        // HSS=0 reports only the ordinary GPR set. This CPU has no shadow
+        // bank state, so every implemented SRSCtl field reads as zero.
+        out = kMips64SrscTlNoShadowBanks;
+        return true;
+    }
     if (rd == kCp0RegPRId && sel == kCp0SelPRId) {
         // PRId is immutable CPU-model identity and is deliberately not part
         // of the serialized mutable architectural state.
@@ -1112,6 +1118,13 @@ bool Mips64Cpu::readCp0(unsigned rd, unsigned sel, uint64_t& out) const {
 }
 
 bool Mips64Cpu::writeCp0(unsigned rd, unsigned sel, uint64_t value) {
+    if (rd == kCp0RegSRSCtl && sel == kCp0SelSRSCtl) {
+        // With HSS=0 only zero is architecturally defined for CSS, PSS, and
+        // ESS; EICSS and reserved fields are also zero. Accept the legal
+        // no-op write and deterministically reject writes that request an
+        // unimplemented shadow set. No shadow state is serialized.
+        return value == kMips64SrscTlNoShadowBanks;
+    }
     if (rd == kCp0RegIndex && sel == kCp0SelIndex) {
         index_ = value & kIndexWritableMask;
         return true;

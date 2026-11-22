@@ -200,6 +200,12 @@ constexpr unsigned kCp0RegCompare = 11;
 constexpr unsigned kCp0SelCompare = 0;
 constexpr unsigned kCp0RegStatus = 12;
 constexpr unsigned kCp0SelStatus = 0;
+constexpr unsigned kCp0RegSRSCtl = 12;
+constexpr unsigned kCp0SelSRSCtl = 2;
+// The implemented MIPS64r2 CPU subset has only its normal GPR bank. HSS=0
+// denotes that one bank and no additional shadow sets; SRSCtl is immutable
+// except that writes of its only defined value (zero) are accepted.
+constexpr uint32_t kMips64SrscTlNoShadowBanks = 0;
 constexpr unsigned kCp0RegCause = 13;
 constexpr unsigned kCp0SelCause = 0;
 constexpr unsigned kCp0RegEpc = 14;
