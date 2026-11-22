@@ -1039,3 +1039,35 @@ Validation and next target:
 - Full syscall, task-switch, kernel lookup, COW, wait-status, console, and
   artifact evidence is in `phase-riscv-29-report.txt` and the bundles under
   `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv29-artifacts`.
+
+--- Phase RISCV-30: authentic Linux serial input and U-mode response ---
+
+- The pinned Linux v6.12 and OpenSBI v1.8.1 artifacts remained unchanged. A
+  deterministic static RV64 `/init` ran as PID 1 in U-mode, opened
+  `/dev/ttyS0` read/write, and used canonical `n_tty` input without an ioctl
+  mode change.
+- The bounded stimulus controller accepted 41 single-byte injections through
+  the existing UART0 receiver. Every byte asserted the receive source, was
+  consumed by a production UART RBR read, and appeared in one of five genuine
+  Linux `read` results; there were no rejected bytes or overruns. Linux
+  delivered 27 supervisor external IRQs, with 27 PLIC source-10 claims and
+  completions.
+- PID 1 interpreted `ping`, `status`, `echo hello`, an unrecognized command,
+  and `quit` in U-mode. Five guest-selected responses returned through Linux
+  `write` and were correlated to UART0 TX MMIO writes. The `quit` path returned
+  from `sched_yield` with PID 1 still alive in U-mode. Debug and Release
+  evidence matched byte-for-byte at 85,371,151 post-handoff retirements
+  (U/S/M 243 / 81,211,029 / 4,159,879).
+- The first Release attempt exposed an inherited 10,000-trap safety ceiling
+  below the accepted RISCV-29 count of 11,734. The test-only bound was raised
+  to 24,000 traps, and the M-mode retirement bound to 8,000,000 based on the
+  RISCV-29 total of 4,212,229. The corrected integration passed in both
+  configurations. No production CPU, MMU, PMP, UART, or IA-64 source changed.
+- The 31-test focused selection and the three direct IA-64 ACPI,
+  interrupt-controller, and processor-interrupt-block regressions passed in
+  Debug and Release. A post-run audit found all 955 captured historical files
+  and all 4,106 historical directories unchanged. Decoder/ISA coverage did
+  not change in this phase.
+- Full serial and command evidence is in `phase-riscv-30-report.txt` and the
+  Debug/Release bundles under
+  `E:\CodexArtifacts\guideXOS_Hypervisor\phase-riscv30-artifacts`.

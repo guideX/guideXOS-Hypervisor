@@ -5,18 +5,45 @@
 #include "riscv/riscv_initramfs_contract.h"
 
 #include <array>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace {
 
 constexpr uint64_t kInitramfsAddress = 0x81400000ULL;
 constexpr uint64_t kPostHandoffRetirementCeiling = 120000000ULL;
 constexpr size_t kTrapEvidenceLimit = 512;
+constexpr uint64_t kStepCallCeiling = 132000000ULL;
+// RISCV-29's accepted Linux run observed 11,734 traps and 4,212,229 M-mode
+// retirements; leave bounded margin for the additional serial interactions.
+constexpr uint64_t kTrapEventCeiling = 24000ULL;
+constexpr uint64_t kMachineModeRetirementCeiling = 8000000ULL;
+constexpr uint64_t kHandlerLifetimeCeiling = 40000000ULL;
+constexpr size_t kSerialDeviceEventCeiling = 8192;
+constexpr uint64_t kSerialInputByteCeiling = 256;
+constexpr uint64_t kSerialCommandCeiling = 5;
+constexpr uint64_t kSerialConsoleByteCeiling = 32768;
+constexpr uint64_t kSerialSchedulerEventCeiling = 256;
+constexpr uint64_t kSerialTimerEventCeiling = 4096;
+constexpr uint64_t kRepeatedStateCeiling = 512;
+constexpr size_t kArchitecturalStateEntryCeiling = 32768;
 constexpr char kSerialPath[] = "/dev/ttyS0";
 constexpr char kProofMessage[] =
     "guideXOS RISCV-26: authentic U-mode /init reached";
+constexpr std::array<std::string_view, 5> kSerialCommands{{
+    "ping", "status", "echo hello", "unrecognized", "quit"}};
+constexpr std::array<std::string_view, 5> kSerialResponses{{
+    "pong\n", "status:pid=1\n", "hello\n", "unknown command\n",
+    "quit acknowledged\n"}};
+constexpr std::array<std::string_view, 5> kSerialParserLabels{{
+    "riscv30_command_ping", "riscv30_command_status", "riscv30_command_echo",
+    "riscv30_command_unknown", "riscv30_command_quit"}};
 
 struct InitramfsSyscallEvidence {
     uint64_t number = 0;
@@ -32,6 +59,81 @@ struct InitramfsSyscallEvidence {
     bool kernelCopyFromUserConfirmed = false;
     bool trapDeliveredToSupervisor = false;
     bool returnedToUser = false;
+    std::string userBuffer;
+    std::string returnedInput;
+    bool returnedInputReadable = false;
+    uint64_t outputStart = UINT64_MAX;
+    uint64_t outputEnd = UINT64_MAX;
+};
+
+struct SerialStimulusEvent {
+    uint64_t sequence = 0;
+    size_t commandIndex = 0;
+    size_t byteIndex = 0;
+    uint8_t byte = 0;
+    uint64_t retired = 0;
+    uint64_t pc = 0;
+    PrivilegeMode privilege = PrivilegeMode::Machine;
+    bool readyBefore = false;
+    bool accepted = false;
+    bool readyAfter = false;
+    bool overrunAfter = false;
+    bool plicSourceAssertedAfter = false;
+    bool plicSourcePendingAfter = false;
+    bool receiverConsumed = false;
+    uint64_t consumeRetired = 0;
+    uint64_t receiveMmioSequence = 0;
+};
+
+struct SerialDeviceEvent {
+    uint64_t sequence = 0;
+    uint64_t retired = 0;
+    uint64_t pc = 0;
+    uint64_t address = 0;
+    uint32_t value = 0;
+    uint8_t size = 0;
+    PrivilegeMode privilege = PrivilegeMode::Machine;
+    std::string operation;
+};
+
+struct SerialCommandEvent {
+    size_t commandIndex = 0;
+    std::string command;
+    std::string inputLine;
+    std::string actualReadBuffer;
+    uint64_t readSyscall = UINT64_MAX;
+    uint64_t readEcallPc = 0;
+    uint64_t readSretPc = 0;
+    uint64_t readReturnValue = UINT64_MAX;
+    uint64_t parserPc = 0;
+    uint64_t writeSyscall = UINT64_MAX;
+    uint64_t writeEcallPc = 0;
+    uint64_t writeSretPc = 0;
+    uint64_t writeReturnValue = UINT64_MAX;
+    std::string expectedResponse;
+    std::string userWriteBuffer;
+    std::string transmittedBytes;
+    uint64_t txBytesWithMmio = 0;
+    uint64_t ttyEchoStart = UINT64_MAX;
+    uint64_t ttyEchoEnd = UINT64_MAX;
+    bool ttyReadDispatchObserved = false;
+    bool ttyEchoObserved = false;
+    bool parserInstructionObserved = false;
+    bool userReadBufferValid = false;
+    bool userBufferTranslationUserWritable = false;
+    bool guestWriteBufferValid = false;
+    bool txProvenanceValid = false;
+};
+
+struct SerialUserWriteEvent {
+    uint64_t syscallIndex = UINT64_MAX;
+    std::string kind;
+    std::string userBuffer;
+    uint64_t outputStart = UINT64_MAX;
+    uint64_t outputEnd = UINT64_MAX;
+    std::string transmitted;
+    uint64_t txBytesWithMmio = 0;
+    bool txProvenanceValid = false;
 };
 
 struct KernelMilestoneEvidence {
@@ -70,6 +172,37 @@ bool WriteText(const std::filesystem::path& path, const std::string& text) {
     return output.good();
 }
 
+bool ReadUserBytes(const RV64CPU& cpu, uint64_t address, size_t size,
+                   std::vector<uint8_t>& bytes) {
+    const auto translated = cpu.mmu()->inspectTranslationReadOnly(
+        address, size, AccessType::Load, cpu.privilege(), false);
+    if (!translated.ok) return false;
+    bytes.assign(size, 0);
+    return cpu.readPhysical(translated.paddr, bytes.data(), bytes.size());
+}
+
+std::string UartConsoleText(std::string_view userText) {
+    std::string transmitted;
+    transmitted.reserve(userText.size() +
+        static_cast<size_t>(std::count(userText.begin(), userText.end(), '\n')));
+    for (const char character : userText) {
+        if (character == '\n') transmitted.push_back('\r');
+        transmitted.push_back(character);
+    }
+    return transmitted;
+}
+
+std::string ByteStringJson(std::string_view bytes) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t index = 0; index < bytes.size(); ++index) {
+        if (index != 0) out << ',';
+        out << static_cast<unsigned>(static_cast<uint8_t>(bytes[index]));
+    }
+    out << ']';
+    return out.str();
+}
+
 std::string JsonU64(uint64_t value) {
     return "\"" + Hex(value) + "\"";
 }
@@ -97,8 +230,8 @@ std::string WriteSyscallJson(const std::vector<InitramfsSyscallEvidence>& calls)
         const auto& call = calls[index];
         out << "    {\"number\":" << call.number
             << ",\"name\":" << JsonQuote(call.number == 56 ? "openat" :
-                call.number == 172 ? "getpid" : call.number == 64 ? "write" :
-                call.number == 124 ? "sched_yield" : "other")
+                call.number == 172 ? "getpid" : call.number == 63 ? "read" :
+                call.number == 64 ? "write" : call.number == 124 ? "sched_yield" : "other")
             << ",\"ecallPc\":" << JsonU64(call.ecallPc)
             << ",\"arguments\":[";
         for (size_t arg = 0; arg < call.arguments.size(); ++arg)
@@ -112,6 +245,11 @@ std::string WriteSyscallJson(const std::vector<InitramfsSyscallEvidence>& calls)
             << ",\"returnPc\":" << JsonU64(call.returnPc)
             << ",\"returnValue\":" << JsonU64(call.returnValue)
             << ",\"pathReadMatches\":" << (call.pathReadMatches ? "true" : "false")
+            << ",\"userBufferBytes\":" << ByteStringJson(call.userBuffer)
+            << ",\"returnedInputBytes\":" << ByteStringJson(call.returnedInput)
+            << ",\"returnedInputReadable\":" << (call.returnedInputReadable ? "true" : "false")
+            << ",\"outputStart\":" << JsonU64(call.outputStart)
+            << ",\"outputEnd\":" << JsonU64(call.outputEnd)
             << ",\"bufferReadMatches\":" << (call.bufferReadMatches ? "true" : "false")
             << ",\"kernelCopyFromUserConfirmed\":"
             << (call.kernelCopyFromUserConfirmed ? "true" : "false")
@@ -170,6 +308,9 @@ int RunInitramfsUserspace(int argc, char** argv) {
     const bool sourceFdtValid = LinuxValidatePlatformFdt(
         sourceFdt, false, &fdtFailure);
     const auto symbols = ParseLinuxVmlinux(vmlinux);
+#if defined(RISCV30_SERIAL_INTERACTION)
+    const auto serialUserSymbols = ParseElfSymbolTable(independentElf);
+#endif
     const auto configText = AsString(config);
     const auto requireConfig = [&](std::string_view option) {
         return configText.find(std::string(option) + "\n") != std::string::npos;
@@ -424,10 +565,59 @@ int RunInitramfsUserspace(int argc, char** argv) {
     const uint64_t getpidDispatchPc = Symbol(symbols, "__riscv_sys_getpid");
     const uint64_t writeDispatchPc = Symbol(symbols, "__riscv_sys_write");
     const uint64_t yieldDispatchPc = Symbol(symbols, "__riscv_sys_sched_yield");
+#if defined(RISCV30_SERIAL_INTERACTION)
+    const uint64_t readDispatchPc = Symbol(symbols, "__riscv_sys_read");
+    const uint64_t nttyReadPc = Symbol(symbols, "n_tty_read");
+    const uint64_t schedulePc = Symbol(symbols, "schedule");
+    const uint64_t alternateSchedulePc = Symbol(symbols, "__schedule");
+    const bool scheduleSymbolAvailable = schedulePc != 0 || alternateSchedulePc != 0;
+#endif
     std::vector<InitramfsSyscallEvidence> syscalls;
     std::vector<TrapEvidence> traps;
+#if defined(RISCV30_SERIAL_INTERACTION)
+    std::vector<SerialStimulusEvent> serialStimulus;
+    std::vector<SerialDeviceEvent> serialRxEvents;
+    std::vector<SerialDeviceEvent> serialPlicEvents;
+    std::vector<SerialCommandEvent> serialCommands;
+    std::vector<SerialUserWriteEvent> serialUserWrites;
+    for (size_t index = 0; index < kSerialCommands.size(); ++index) {
+        SerialCommandEvent event;
+        event.commandIndex = index;
+        event.command = std::string(kSerialCommands[index]);
+        event.inputLine = event.command + "\n";
+        event.expectedResponse = std::string(kSerialResponses[index]);
+        serialCommands.push_back(std::move(event));
+    }
+    uint64_t serialAcceptedBytes = 0;
+    uint64_t serialRejectedBytes = 0;
+    uint64_t serialRxOverrunObservations = 0;
+    uint64_t serialRxReadyObservations = 0;
+    uint64_t serialRxRegisterReads = 0;
+    uint64_t serialPlicClaimReads = 0;
+    uint64_t serialPlicCompleteWrites = 0;
+    uint64_t serialSupervisorExternalIrqs = 0;
+    uint64_t serialIirReceiveIdentifications = 0;
+    uint64_t serialIerReceiveEnableWrites = 0;
+    uint64_t serialSchedulerEntries = 0;
+    uint64_t serialTimerInterrupts = 0;
+    uint64_t serialMmioSequence = cpu.machineMmioEventSequence();
+    size_t serialReadCallsStarted = 0;
+    size_t serialReadCallsReturned = 0;
+    size_t serialByteIndex = 0;
+    size_t serialInFlightStimulus = SIZE_MAX;
+    size_t serialActiveCommand = SIZE_MAX;
+    bool serialNttyReadEntered = false;
+    bool serialScheduleAfterRead = false;
+    bool serialLineNewlineInjected = false;
+    bool serialQuitYieldReturned = false;
+    bool serialLastPlicOutput = false;
+    bool serialLastPlicPending = false;
+    uint64_t serialFd = UINT64_MAX;
+    uint64_t serialPid = UINT64_MAX;
+#endif
     std::array<uint64_t, 3> modeRetired{}; // U, S, M after firmware handoff
     uint64_t retired = 0;
+    uint64_t stepCalls = 0;
     uint64_t trapCount = 0;
     uint64_t firstUserPc = 0;
     uint64_t firstUserPhysical = 0;
@@ -500,12 +690,23 @@ int RunInitramfsUserspace(int argc, char** argv) {
     uint64_t activeCallIndex = UINT64_MAX;
     size_t lastScannedConsoleBytes = 0;
     size_t pendingPanicStart = std::string::npos;
+#if defined(RISCV30_SERIAL_INTERACTION)
+    uint64_t activeHandlerStartRetired = 0;
+    uint64_t supervisorHandlerInstructions = 0;
+    uint64_t machineHandlerInstructions = 0;
+    uint64_t timerEvents = 0;
+    uint64_t plicEvents = 0;
+    uint64_t uartTxEvents = 0;
+    uint64_t repeatedStateSamples = 0;
+    std::unordered_map<uint64_t, uint64_t> repeatedArchitecturalStates;
+    uint64_t lastFingerprintRetired = 0;
+#endif
     const auto retireModeIndex = [](PrivilegeMode mode) -> size_t {
         return mode == PrivilegeMode::User ? 0U :
             mode == PrivilegeMode::Supervisor ? 1U : 2U;
     };
 
-    while (retired < kPostHandoffRetirementCeiling) {
+    while (retired < kPostHandoffRetirementCeiling && stepCalls < kStepCallCeiling) {
         const uint64_t pc = cpu.getPC();
         const PrivilegeMode before = cpu.privilege();
         const uint64_t beforeA0 = cpu.readGR(10);
@@ -514,6 +715,7 @@ int RunInitramfsUserspace(int argc, char** argv) {
         const uint64_t beforeA7 = cpu.readGR(17);
         bool beforeOpenPathMatches = false;
         bool beforeWriteBufferMatches = false;
+        std::string beforeWriteBuffer;
         if (before == PrivilegeMode::User && beforeA7 == 56) {
             const auto translated = cpu.translateLoad(beforeA1, sizeof(kSerialPath));
             if (translated.ok) {
@@ -522,7 +724,17 @@ int RunInitramfsUserspace(int argc, char** argv) {
                     translated.paddr, pathBytes.data(), pathBytes.size()) &&
                     std::equal(pathBytes.begin(), pathBytes.end(), kSerialPath);
             }
-        } else if (before == PrivilegeMode::User && beforeA7 == 64 &&
+        }
+#if defined(RISCV30_SERIAL_INTERACTION)
+        else if (before == PrivilegeMode::User && beforeA7 == 64 && beforeA2 <= 256) {
+            std::vector<uint8_t> buffer;
+            beforeWriteBufferMatches = ReadUserBytes(
+                cpu, beforeA1, static_cast<size_t>(beforeA2), buffer);
+            if (beforeWriteBufferMatches)
+                beforeWriteBuffer.assign(buffer.begin(), buffer.end());
+        }
+#else
+        else if (before == PrivilegeMode::User && beforeA7 == 64 &&
                    beforeA2 == sizeof(kProofMessage) - 1U) {
             const auto translated = cpu.translateLoad(beforeA1,
                 static_cast<size_t>(beforeA2));
@@ -533,6 +745,7 @@ int RunInitramfsUserspace(int argc, char** argv) {
                     buffer == MakeProofBytes();
             }
         }
+#endif
 
         if (before == PrivilegeMode::User && !firstUserCaptured) {
             firstUserCaptured = true;
@@ -550,6 +763,22 @@ int RunInitramfsUserspace(int argc, char** argv) {
             userStackWalk = firstUserSp >= 8
                 ? CapturePageWalk(cpu, firstUserSp - 8) : std::vector<Sv39WalkLevel>{};
         }
+#if defined(RISCV30_SERIAL_INTERACTION)
+        if (before == PrivilegeMode::User) {
+            for (size_t index = 0; index < kSerialParserLabels.size(); ++index) {
+                const auto symbol = serialUserSymbols.find(
+                    std::string(kSerialParserLabels[index]));
+                if (symbol == serialUserSymbols.end() || pc != symbol->second ||
+                    serialReadCallsReturned == 0) continue;
+                const size_t commandIndex = serialReadCallsReturned - 1;
+                if (commandIndex < serialCommands.size()) {
+                    auto& command = serialCommands[commandIndex];
+                    command.parserPc = pc;
+                    command.parserInstructionObserved = true;
+                }
+            }
+        }
+#endif
         if (before == PrivilegeMode::User && !firstUserMappingCaptured) {
             const auto mappedFetch = cpu.translateFetch(pc, 4);
             if (mappedFetch.ok) {
@@ -587,20 +816,88 @@ int RunInitramfsUserspace(int argc, char** argv) {
                 auto& call = syscalls[static_cast<size_t>(activeCallIndex)];
                 const uint64_t dispatch = call.number == 56 ? openatDispatchPc :
                     call.number == 172 ? getpidDispatchPc :
+#if defined(RISCV30_SERIAL_INTERACTION)
+                    call.number == 63 ? readDispatchPc :
+#endif
                     call.number == 64 ? writeDispatchPc :
                     call.number == 124 ? yieldDispatchPc : 0;
                 if (dispatch != 0 && pc == dispatch && call.dispatchPc == 0) {
                     call.dispatchPc = pc;
                     call.dispatchSymbol = call.number == 56 ? "__riscv_sys_openat" :
                         call.number == 172 ? "__riscv_sys_getpid" :
+#if defined(RISCV30_SERIAL_INTERACTION)
+                        call.number == 63 ? "__riscv_sys_read" :
+#endif
                         call.number == 64 ? "__riscv_sys_write" :
                         "__riscv_sys_sched_yield";
                 }
+#if defined(RISCV30_SERIAL_INTERACTION)
+                if (call.number == 63 && pc == nttyReadPc) {
+                    serialNttyReadEntered = true;
+                    const size_t commandIndex = serialReadCallsStarted - 1;
+                    if (commandIndex < serialCommands.size())
+                        serialCommands[commandIndex].ttyReadDispatchObserved = true;
+                }
+                if (call.number == 63 && serialNttyReadEntered &&
+                    ((schedulePc != 0 && pc == schedulePc) ||
+                     (alternateSchedulePc != 0 && pc == alternateSchedulePc))) {
+                    serialScheduleAfterRead = true;
+                    ++serialSchedulerEntries;
+                }
+#endif
             }
         }
 
+#if defined(RISCV30_SERIAL_INTERACTION)
+        const bool guestWaitingForSerialLine = scheduleSymbolAvailable
+            ? serialScheduleAfterRead : serialNttyReadEntered;
+        if (serialActiveCommand < serialCommands.size() &&
+            activeCallIndex != UINT64_MAX && activeCallIndex < syscalls.size() &&
+            syscalls[static_cast<size_t>(activeCallIndex)].number == 63 &&
+            serialNttyReadEntered && guestWaitingForSerialLine &&
+            serialInFlightStimulus == SIZE_MAX && !serialLineNewlineInjected &&
+            serialByteIndex < serialCommands[serialActiveCommand].inputLine.size() &&
+            serialStimulus.size() < kSerialInputByteCeiling &&
+            !cpu.machineUartReceiveDataReady()) {
+            const auto& line = serialCommands[serialActiveCommand].inputLine;
+            const uint8_t byte = static_cast<uint8_t>(line[serialByteIndex]);
+            SerialStimulusEvent event;
+            event.sequence = serialStimulus.size() + 1;
+            event.commandIndex = serialActiveCommand;
+            event.byteIndex = serialByteIndex;
+            event.byte = byte;
+            event.retired = retired;
+            event.pc = cpu.getPC();
+            event.privilege = cpu.privilege();
+            event.readyBefore = cpu.machineUartReceiveDataReady();
+            event.accepted = cpu.injectMachineUartReceiveByte(byte);
+            event.readyAfter = cpu.machineUartReceiveDataReady();
+            event.overrunAfter = cpu.machineUartReceiveOverrun();
+            event.plicSourceAssertedAfter = cpu.machinePlicSourceAsserted(10);
+            event.plicSourcePendingAfter = cpu.machinePlicSourcePending(10);
+            event.receiveMmioSequence = cpu.machineMmioEventSequence();
+            serialStimulus.push_back(event);
+            if (event.accepted) {
+                ++serialAcceptedBytes;
+                serialInFlightStimulus = serialStimulus.size() - 1;
+                if (byte == '\n') serialLineNewlineInjected = true;
+                if (event.readyAfter) ++serialRxReadyObservations;
+            } else {
+                ++serialRejectedBytes;
+                frontier = "uart_rx_injection_rejected";
+                frontierDetail = "production UART rejected a byte from an empty receive register";
+                frontierPc = cpu.getPC();
+                frontierPrivilege = cpu.privilege();
+                captureCurrentFrontier();
+                break;
+            }
+        }
+#endif
+
         bool returnedToUserThisStep = false;
+        size_t returnedCallIndexThisStep = SIZE_MAX;
         const StepResult step = cpu.step();
+        ++stepCalls;
         if (step.outcome == StepOutcome::Ok) {
             ++retired;
             ++modeRetired[retireModeIndex(before)];
@@ -613,14 +910,91 @@ int RunInitramfsUserspace(int argc, char** argv) {
                 cpu.privilege() == PrivilegeMode::User &&
                 activeCallIndex != UINT64_MAX && activeCallIndex < syscalls.size()) {
                 auto& call = syscalls[static_cast<size_t>(activeCallIndex)];
+                const size_t returningCallIndex = static_cast<size_t>(activeCallIndex);
                 call.sretPc = step.pc;
                 call.returnPc = cpu.getPC();
                 call.returnValue = cpu.readGR(10);
                 call.returnedToUser = true;
                 returnedToUserThisStep = true;
-                if (call.number == 64)
+                returnedCallIndexThisStep = returningCallIndex;
+                if (call.number == 64) {
                     writeOutputEnd = cpu.machineUartOutput().size();
+#if defined(RISCV30_SERIAL_INTERACTION)
+                    call.outputEnd = cpu.machineUartOutput().size();
+                    if (call.outputStart <= call.outputEnd &&
+                        call.outputEnd <= cpu.machineUartOutput().size()) {
+                        const auto& output = cpu.machineUartOutput();
+                        const std::string transmitted = output.substr(
+                            static_cast<size_t>(call.outputStart),
+                            static_cast<size_t>(call.outputEnd - call.outputStart));
+                        const std::string expected = UartConsoleText(call.userBuffer);
+                        serialUserWrites.push_back({returningCallIndex,
+                            call.userBuffer == "guideXOS> " ? "userspace_prompt" :
+                                "userspace_write",
+                            call.userBuffer, call.outputStart, call.outputEnd,
+                            transmitted, 0, transmitted == expected});
+                        if (serialReadCallsReturned != 0) {
+                            const size_t commandIndex = serialReadCallsReturned - 1;
+                            if (commandIndex < serialCommands.size() &&
+                                call.userBuffer == kSerialResponses[commandIndex]) {
+                                auto& command = serialCommands[commandIndex];
+                                command.writeSyscall = returningCallIndex;
+                                command.writeEcallPc = call.ecallPc;
+                                command.writeSretPc = call.sretPc;
+                                command.writeReturnValue = call.returnValue;
+                                command.userWriteBuffer = call.userBuffer;
+                                command.guestWriteBufferValid =
+                                    call.bufferReadMatches &&
+                                    call.returnValue == call.arguments[2];
+                                command.transmittedBytes = transmitted;
+                                command.txProvenanceValid = transmitted == expected;
+                            }
+                        }
+#endif
+                }
+                }
+#if defined(RISCV30_SERIAL_INTERACTION)
+                if (call.number == 172) serialPid = call.returnValue;
+                if (call.number == 56) serialFd = call.returnValue;
+                if (call.number == 63 && call.returnValue > 0 &&
+                    serialReadCallsReturned < serialCommands.size()) {
+                    auto& command = serialCommands[serialReadCallsReturned];
+                    const size_t actualSize = static_cast<size_t>(std::min<uint64_t>(
+                        call.returnValue, call.arguments[2]));
+                    std::vector<uint8_t> input;
+                    call.returnedInputReadable = ReadUserBytes(
+                        cpu, call.arguments[1], actualSize, input);
+                    if (call.returnedInputReadable)
+                        call.returnedInput.assign(input.begin(), input.end());
+                    command.readSyscall = returningCallIndex;
+                    command.readEcallPc = call.ecallPc;
+                    command.readSretPc = call.sretPc;
+                    command.readReturnValue = call.returnValue;
+                    command.actualReadBuffer = call.returnedInput;
+                    const auto bufferTranslation = cpu.translateStore(
+                        call.arguments[1], std::max<size_t>(actualSize, 1));
+                    const auto bufferWalk = CapturePageWalk(cpu, call.arguments[1]);
+                    command.userBufferTranslationUserWritable = bufferTranslation.ok &&
+                        !bufferWalk.empty() && bufferWalk.back().readable &&
+                        (bufferWalk.back().pte & 0x15ULL) == 0x15ULL;
+                    command.userReadBufferValid = call.returnedInputReadable &&
+                        call.returnValue == command.inputLine.size() &&
+                        call.returnedInput == command.inputLine;
+                    ++serialReadCallsReturned;
+                    serialActiveCommand = SIZE_MAX;
+                    serialNttyReadEntered = false;
+                    serialScheduleAfterRead = false;
+                    serialByteIndex = 0;
+                    serialLineNewlineInjected = false;
+                }
+                if (call.number == 124 && serialReadCallsReturned ==
+                    kSerialCommands.size()) {
+                    serialQuitYieldReturned = call.returnValue == 0 &&
+                        call.returnPc != 0 && serialPid == 1;
+                }
+#endif
                 activeCallIndex = UINT64_MAX;
+                (void)returningCallIndex;
             }
         } else if (step.outcome == StepOutcome::Trap) {
             ++trapCount;
@@ -631,10 +1005,14 @@ int RunInitramfsUserspace(int argc, char** argv) {
             }
             if (before == PrivilegeMode::User &&
                 step.trapCause == TrapCause::EcallFromU) {
+#if defined(RISCV30_SERIAL_INTERACTION)
+                const bool syscallAlreadyTracked = false;
+#else
                 const bool syscallAlreadyTracked = std::any_of(syscalls.begin(), syscalls.end(),
                     [beforeA7](const InitramfsSyscallEvidence& call) {
                         return call.number == beforeA7;
                     });
+#endif
                 if (!syscallAlreadyTracked) {
                     InitramfsSyscallEvidence call;
                     call.number = beforeA7;
@@ -650,7 +1028,24 @@ int RunInitramfsUserspace(int argc, char** argv) {
                     } else if (beforeA7 == 64) {
                         writeOutputStart = cpu.machineUartOutput().size();
                         call.bufferReadMatches = beforeWriteBufferMatches;
+#if defined(RISCV30_SERIAL_INTERACTION)
+                        call.outputStart = cpu.machineUartOutput().size();
+                        call.userBuffer = beforeWriteBuffer;
+#endif
                     }
+#if defined(RISCV30_SERIAL_INTERACTION)
+                    if (beforeA7 == 63) {
+                        ++serialReadCallsStarted;
+                        serialActiveCommand = serialReadCallsStarted - 1;
+                        serialNttyReadEntered = false;
+                        serialScheduleAfterRead = false;
+                        serialByteIndex = 0;
+                        serialLineNewlineInjected = false;
+                        activeHandlerStartRetired = retired;
+                    }
+                    if (beforeA7 == 64) call.outputStart = cpu.machineUartOutput().size();
+                    if (beforeA7 != 63) activeHandlerStartRetired = retired;
+#endif
                     syscalls.push_back(std::move(call));
                     activeCallIndex = syscalls.size() - 1;
                 }
@@ -668,8 +1063,177 @@ int RunInitramfsUserspace(int argc, char** argv) {
             break;
         }
 
-        uartObserver.observeAfterStep(cpu, step, before,
+        const size_t txObservedThisStep = uartObserver.observeAfterStep(cpu, step, before,
             retired + (step.outcome == StepOutcome::Ok ? 0ULL : 0ULL));
+#if defined(RISCV30_SERIAL_INTERACTION)
+        uartTxEvents += txObservedThisStep;
+        if (step.interruptTaken && step.interruptCause == 9) {
+            ++serialSupervisorExternalIrqs;
+        } else if (step.interruptTaken &&
+                   (step.interruptCause == 5 || step.interruptCause == 7)) {
+            ++serialTimerInterrupts;
+            ++timerEvents;
+        }
+        if (before == PrivilegeMode::Supervisor &&
+            activeCallIndex != UINT64_MAX && activeCallIndex < syscalls.size())
+            ++supervisorHandlerInstructions;
+        if (before == PrivilegeMode::Machine) ++machineHandlerInstructions;
+
+        for (const auto& mmio : cpu.machineMmioTrace()) {
+            if (mmio.sequence <= serialMmioSequence) continue;
+            const char* operation = mmio.operation == MachineMmioOperation::Read ? "read" :
+                mmio.operation == MachineMmioOperation::Write ? "write" : "inject";
+            const bool uart0 = mmio.address >= 0x10000000ULL &&
+                mmio.address < 0x10000008ULL;
+            const bool uart1 = mmio.address >= 0x1000A000ULL &&
+                mmio.address < 0x1000A008ULL;
+            if (uart0 || uart1) {
+                const uint64_t base = uart0 ? 0x10000000ULL : 0x1000A000ULL;
+                const uint64_t offset = mmio.address - base;
+                const bool uartControlWrite = mmio.operation == MachineMmioOperation::Write &&
+                    (offset == 1 || offset == 2 || offset == 3);
+                if ((mmio.operation == MachineMmioOperation::Read ||
+                     mmio.operation == MachineMmioOperation::Inject || uartControlWrite) &&
+                    serialRxEvents.size() < kSerialDeviceEventCeiling) {
+                    serialRxEvents.push_back({mmio.sequence, retired, mmio.pc,
+                        mmio.address, mmio.value, mmio.size, mmio.privilege, operation});
+                }
+                if (uart0 && mmio.operation == MachineMmioOperation::Read && offset == 0) {
+                    ++serialRxRegisterReads;
+                    if (serialInFlightStimulus != SIZE_MAX &&
+                        serialInFlightStimulus < serialStimulus.size()) {
+                        auto& input = serialStimulus[serialInFlightStimulus];
+                        if (static_cast<uint8_t>(mmio.value) == input.byte) {
+                            input.receiverConsumed = true;
+                            input.consumeRetired = retired;
+                            input.receiveMmioSequence = mmio.sequence;
+                            serialInFlightStimulus = SIZE_MAX;
+                            ++serialByteIndex;
+                        }
+                    }
+                } else if (uart0 && mmio.operation == MachineMmioOperation::Read &&
+                           offset == 2 && (mmio.value & 0x0FU) == 0x04U) {
+                    ++serialIirReceiveIdentifications;
+                } else if (uart0 && mmio.operation == MachineMmioOperation::Read &&
+                           offset == 5) {
+                    if ((mmio.value & 0x01U) != 0U) ++serialRxReadyObservations;
+                    if ((mmio.value & 0x02U) != 0U) ++serialRxOverrunObservations;
+                } else if (uart0 && mmio.operation == MachineMmioOperation::Write &&
+                           offset == 1 && (mmio.value & 0x01U) != 0U) {
+                    ++serialIerReceiveEnableWrites;
+                }
+            }
+            if (mmio.device == MachineMmioDevice::Plic) {
+                ++plicEvents;
+                if (serialPlicEvents.size() < kSerialDeviceEventCeiling) {
+                    serialPlicEvents.push_back({mmio.sequence, retired, mmio.pc,
+                        mmio.address, mmio.value, mmio.size, mmio.privilege, operation});
+                }
+                if (mmio.address == 0x0C201004ULL &&
+                    mmio.operation == MachineMmioOperation::Read && mmio.value == 10)
+                    ++serialPlicClaimReads;
+                if (mmio.address == 0x0C201004ULL &&
+                    mmio.operation == MachineMmioOperation::Write && mmio.value == 10)
+                    ++serialPlicCompleteWrites;
+            }
+        }
+        serialMmioSequence = cpu.machineMmioEventSequence();
+        const bool plicOutput = cpu.machinePlicOutput(MachinePlicContext::Supervisor);
+        const bool plicPending = cpu.machinePlicSourcePending(10);
+        if (plicOutput != serialLastPlicOutput || plicPending != serialLastPlicPending) {
+            if (serialPlicEvents.size() < kSerialDeviceEventCeiling) {
+                serialPlicEvents.push_back({serialMmioSequence, retired, cpu.getPC(),
+                    0x0C200000ULL, (plicOutput ? 1U : 0U) | (plicPending ? 2U : 0U),
+                    0, cpu.privilege(), "source_state"});
+            }
+            serialLastPlicOutput = plicOutput;
+            serialLastPlicPending = plicPending;
+        }
+        if (cpu.machineUartReceiveOverrun()) ++serialRxOverrunObservations;
+        if (serialAcceptedBytes > kSerialInputByteCeiling ||
+            serialStimulus.size() > kSerialInputByteCeiling) {
+            frontier = "uart_rx_event_ceiling";
+            frontierDetail = "bounded UART receive stimulus exceeded 256 bytes";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            break;
+        }
+        if (serialRxEvents.size() >= kSerialDeviceEventCeiling ||
+            serialPlicEvents.size() >= kSerialDeviceEventCeiling ||
+            plicEvents > kSerialDeviceEventCeiling ||
+            timerEvents > kSerialTimerEventCeiling ||
+            uartTxEvents > kSerialConsoleByteCeiling) {
+            frontier = "device_event_ceiling";
+            frontierDetail = "bounded UART, PLIC, timer, or console event count was exceeded";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            break;
+        }
+        if (serialSchedulerEntries > kSerialSchedulerEventCeiling ||
+            serialCommands.size() > kSerialCommandCeiling ||
+            cpu.machineUartOutput().size() > kSerialConsoleByteCeiling) {
+            frontier = "console_scheduler_ceiling";
+            frontierDetail = "bounded command, scheduler, or console byte limit was exceeded";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            break;
+        }
+        if (trapCount > kTrapEventCeiling ||
+            supervisorHandlerInstructions > kPostHandoffRetirementCeiling ||
+            machineHandlerInstructions > kMachineModeRetirementCeiling ||
+            modeRetired[0] > 2000000ULL ||
+            modeRetired[2] > kMachineModeRetirementCeiling) {
+            frontier = "trap_privilege_or_handler_ceiling";
+            frontierDetail = "bounded trap, privilege retirement, or handler instruction limit was exceeded";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            break;
+        }
+        if (activeCallIndex != UINT64_MAX &&
+            retired - activeHandlerStartRetired > kHandlerLifetimeCeiling) {
+            frontier = "linux_syscall_handler_lifetime_ceiling";
+            frontierDetail = "one Linux syscall handler exceeded the 40 million retirement lifetime limit";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            break;
+        }
+        if (stepCalls >= kStepCallCeiling) {
+            frontier = "cpu_step_call_ceiling";
+            frontierDetail = "bounded CPU step-call count reached 132 million";
+            frontierPc = cpu.getPC();
+            frontierPrivilege = cpu.privilege();
+            break;
+        }
+        if (retired - lastFingerprintRetired >= 4096) {
+            lastFingerprintRetired = retired;
+            uint64_t fingerprint = 1469598103934665603ULL;
+            const auto mix = [&](uint64_t value) {
+                fingerprint ^= value;
+                fingerprint *= 1099511628211ULL;
+            };
+            mix(cpu.getPC());
+            mix(static_cast<uint64_t>(cpu.privilege()));
+            for (size_t registerIndex = 1; registerIndex < NUM_GENERAL_REGISTERS;
+                 ++registerIndex) mix(cpu.readGR(registerIndex));
+            for (const uint16_t csr : std::array<uint16_t, 7>{{
+                     0x300, 0x100, 0x180, 0x141, 0x142, 0x341, 0x342}})
+                mix(CsrOrZero(cpu, csr));
+            const uint64_t repetitions = ++repeatedArchitecturalStates[fingerprint];
+            ++repeatedStateSamples;
+            if (repetitions > kRepeatedStateCeiling ||
+                repeatedArchitecturalStates.size() > kArchitecturalStateEntryCeiling) {
+                frontier = repetitions > kRepeatedStateCeiling
+                    ? "repeated_architectural_state_ceiling"
+                    : "host_memory_evidence_ceiling";
+                frontierDetail = repetitions > kRepeatedStateCeiling
+                    ? "sampled architectural state repeated more than 512 times"
+                    : "bounded architectural-state evidence map exceeded 32768 entries";
+                frontierPc = cpu.getPC();
+                frontierPrivilege = cpu.privilege();
+                break;
+            }
+        }
+#endif
 
         if (writeOutputStart != UINT64_MAX) {
             const auto& output = cpu.machineUartOutput();
@@ -732,6 +1296,33 @@ int RunInitramfsUserspace(int argc, char** argv) {
                         call.returnValue == value;
                 });
         };
+#if defined(RISCV30_SERIAL_INTERACTION)
+        if (returnedToUserThisStep && returnedCallIndexThisStep < syscalls.size()) {
+            const auto& returnedCall = syscalls[returnedCallIndexThisStep];
+            if (static_cast<int64_t>(returnedCall.returnValue) < 0) {
+                frontier = returnedCall.number == 56 ? "linux_serial_open_failed" :
+                    returnedCall.number == 172 ? "linux_getpid_failed" :
+                    returnedCall.number == 63 ? "linux_read_failed" :
+                    returnedCall.number == 64 ? "linux_write_failed" :
+                    returnedCall.number == 124 ? "linux_sched_yield_failed" :
+                    "linux_syscall_failed";
+                frontierDetail = "Linux syscall " +
+                    std::to_string(returnedCall.number) + " returned " +
+                    std::to_string(static_cast<int64_t>(returnedCall.returnValue));
+                frontierPc = cpu.getPC();
+                frontierPrivilege = cpu.privilege();
+                captureCurrentFrontier();
+                break;
+            }
+            if (returnedCall.number == 124 && serialQuitYieldReturned) {
+                frontier = "serial_quit_yield_complete";
+                frontierDetail = "PID 1 acknowledged quit, returned from Linux sched_yield, and remains in U-mode";
+                frontierPc = cpu.getPC();
+                frontierPrivilege = cpu.privilege();
+                break;
+            }
+        }
+#else
         if (returnedToUserThisStep) {
             const auto failedCall = std::find_if(syscalls.begin(), syscalls.end(),
                 [](const InitramfsSyscallEvidence& call) {
@@ -771,6 +1362,7 @@ int RunInitramfsUserspace(int argc, char** argv) {
             frontierPrivilege = cpu.privilege();
             break;
         }
+#endif
     }
     if (frontier == "retirement_ceiling") {
         StepResult frontierStep;
@@ -827,6 +1419,544 @@ int RunInitramfsUserspace(int argc, char** argv) {
         firstUserIsElfEntry && firstUserRetiredPc == archivePlan.plan.elfEntry &&
         static_cast<uint32_t>(firstUserRaw) ==
             static_cast<uint32_t>(expectedEntryInstruction);
+#if defined(RISCV30_SERIAL_INTERACTION)
+    size_t expectedInputBytes = 0;
+    for (const auto& command : serialCommands) expectedInputBytes += command.inputLine.size();
+    bool stimulusBytesValid = serialStimulus.size() == expectedInputBytes &&
+        serialAcceptedBytes == expectedInputBytes && serialRejectedBytes == 0 &&
+        serialInFlightStimulus == SIZE_MAX;
+    size_t expectedByteCursor = 0;
+    for (const auto& command : serialCommands) {
+        for (const unsigned char byte : command.inputLine) {
+            if (expectedByteCursor >= serialStimulus.size()) {
+                stimulusBytesValid = false;
+                break;
+            }
+            const auto& input = serialStimulus[expectedByteCursor++];
+            stimulusBytesValid = stimulusBytesValid && input.accepted &&
+                input.byte == byte && input.commandIndex == command.commandIndex &&
+                input.byteIndex < command.inputLine.size() &&
+                input.readyBefore == false && input.readyAfter &&
+                input.plicSourceAssertedAfter && !input.overrunAfter &&
+                input.receiverConsumed;
+        }
+    }
+    const auto syscallAt = [&](uint64_t index) -> const InitramfsSyscallEvidence* {
+        return index < syscalls.size() ? &syscalls[static_cast<size_t>(index)] : nullptr;
+    };
+    const auto findSyscall = [&](uint64_t number) -> const InitramfsSyscallEvidence* {
+        const auto found = std::find_if(syscalls.begin(), syscalls.end(),
+            [number](const InitramfsSyscallEvidence& call) { return call.number == number; });
+        return found == syscalls.end() ? nullptr : &*found;
+    };
+    const auto* serialGetpid = findSyscall(172);
+    const auto* serialOpen = findSyscall(56);
+    const uint64_t expectedReadPc = serialUserSymbols.contains("riscv30_read_ecall")
+        ? serialUserSymbols.at("riscv30_read_ecall") : 0;
+    const uint64_t expectedReadResumePc = serialUserSymbols.contains("riscv30_read_resume")
+        ? serialUserSymbols.at("riscv30_read_resume") : 0;
+    const uint64_t expectedWritePc = serialUserSymbols.contains("riscv30_response_write_ecall")
+        ? serialUserSymbols.at("riscv30_response_write_ecall") : 0;
+    bool readSyscallsValid = serialReadCallsStarted == kSerialCommandCeiling &&
+        serialReadCallsReturned == kSerialCommandCeiling && readDispatchPc != 0 &&
+        nttyReadPc != 0 && serialSchedulerEntries >= kSerialCommandCeiling;
+    bool commandParsingValid = serialCommands.size() == kSerialCommandCeiling;
+    bool responseSyscallsValid = serialCommands.size() == kSerialCommandCeiling;
+    for (auto& command : serialCommands) {
+        const auto* read = syscallAt(command.readSyscall);
+        command.userReadBufferValid = command.userReadBufferValid &&
+            command.userBufferTranslationUserWritable;
+        readSyscallsValid = readSyscallsValid && read != nullptr && read->number == 63 &&
+            read->trapDeliveredToSupervisor && read->returnedToUser &&
+            read->dispatchPc == readDispatchPc && read->dispatchSymbol == "__riscv_sys_read" &&
+            read->arguments[0] == serialFd && read->arguments[1] != 0 &&
+            read->arguments[2] == 64 && read->returnedInputReadable &&
+            command.userReadBufferValid && command.ttyReadDispatchObserved &&
+            command.readEcallPc == expectedReadPc &&
+            command.readSretPc != 0 && read->returnPc == expectedReadResumePc &&
+            command.readReturnValue == command.inputLine.size() &&
+            command.actualReadBuffer == command.inputLine;
+        const auto label = serialUserSymbols.find(
+            std::string(kSerialParserLabels[command.commandIndex]));
+        commandParsingValid = commandParsingValid && label != serialUserSymbols.end() &&
+            command.parserInstructionObserved && command.parserPc == label->second;
+        const auto* write = syscallAt(command.writeSyscall);
+        responseSyscallsValid = responseSyscallsValid && write != nullptr &&
+            write->number == 64 && write->trapDeliveredToSupervisor &&
+            write->returnedToUser && write->dispatchPc == writeDispatchPc &&
+            write->dispatchSymbol == "__riscv_sys_write" &&
+            write->arguments[0] == serialFd &&
+            write->arguments[2] == command.expectedResponse.size() &&
+            write->bufferReadMatches && command.guestWriteBufferValid &&
+            write->userBuffer == command.expectedResponse &&
+            write->returnValue == command.expectedResponse.size() &&
+            command.writeEcallPc == expectedWritePc &&
+            command.userWriteBuffer == command.expectedResponse &&
+            command.transmittedBytes == UartConsoleText(command.expectedResponse) &&
+            command.txProvenanceValid;
+    }
+    const bool getpidValid = serialGetpid != nullptr &&
+        serialGetpid->trapDeliveredToSupervisor && serialGetpid->returnedToUser &&
+        serialGetpid->dispatchPc == getpidDispatchPc && serialGetpid->returnValue == 1 &&
+        serialPid == 1;
+    const bool openValid = serialOpen != nullptr && serialOpen->pathReadMatches &&
+        serialOpen->trapDeliveredToSupervisor && serialOpen->returnedToUser &&
+        serialOpen->dispatchPc == openatDispatchPc &&
+        serialOpen->arguments[0] == static_cast<uint64_t>(-100LL) &&
+        serialOpen->arguments[2] == 2 && serialOpen->arguments[3] == 0 &&
+        static_cast<int64_t>(serialOpen->returnValue) >= 0 && serialFd == serialOpen->returnValue;
+    bool rxRegisterConsumptionValid = serialRxRegisterReads >= expectedInputBytes &&
+        serialRxReadyObservations >= expectedInputBytes && serialRxOverrunObservations == 0;
+    bool plicRxDeliveryValid = serialSupervisorExternalIrqs > 0 &&
+        serialIirReceiveIdentifications > 0 && serialIerReceiveEnableWrites > 0 &&
+        serialPlicClaimReads > 0 &&
+        serialPlicClaimReads == serialPlicCompleteWrites;
+    const auto hasExitSyscall = std::any_of(syscalls.begin(), syscalls.end(),
+        [](const InitramfsSyscallEvidence& call) { return call.number == 93; });
+    const auto* finalYield = [&]() -> const InitramfsSyscallEvidence* {
+        const auto found = std::find_if(syscalls.begin(), syscalls.end(),
+            [](const InitramfsSyscallEvidence& call) {
+                return call.number == 124 && call.returnedToUser;
+            });
+        return found == syscalls.end() ? nullptr : &*found;
+    }();
+    const uint64_t quitYieldPc = serialUserSymbols.contains("riscv30_quit_yield_loop")
+        ? serialUserSymbols.at("riscv30_quit_yield_loop") : 0;
+    const bool pid1RemainedAlive = serialQuitYieldReturned && finalYield != nullptr &&
+        finalYield->trapDeliveredToSupervisor && finalYield->returnValue == 0 &&
+        finalYield->returnPc >= quitYieldPc && finalYield->returnPc < quitYieldPc + 16 &&
+        !hasExitSyscall && cpu.privilege() == PrivilegeMode::User && serialPid == 1;
+    const auto observerOutputCounts = uartObserver.outputByteCounts();
+    const auto observerOrigins = uartObserver.outputByteCountsByOrigin();
+    const bool uart1Isolated = observerOutputCounts[1] == 0 &&
+        cpu.machineUart1Output().empty() &&
+        std::none_of(serialRxEvents.begin(), serialRxEvents.end(),
+            [](const SerialDeviceEvent& event) {
+                return event.address >= 0x1000A000ULL && event.address < 0x1000A008ULL;
+            });
+    bool everyUserWriteHasTxProvenance = true;
+    uint64_t userWriteTxBytes = 0;
+    for (auto& userWrite : serialUserWrites) {
+        uint64_t matched = 0;
+        bool attributable = userWrite.outputEnd >= userWrite.outputStart;
+        for (const auto& event : uartObserver.observations()) {
+            if (event.uartIndex != 0 || event.uartOutputOffset < userWrite.outputStart ||
+                event.uartOutputOffset >= userWrite.outputEnd) continue;
+            const size_t expectedIndex = static_cast<size_t>(event.uartOutputOffset -
+                userWrite.outputStart);
+            attributable = attributable && expectedIndex < userWrite.transmitted.size() &&
+                event.byte == static_cast<uint8_t>(userWrite.transmitted[expectedIndex]) &&
+                event.afterLinuxHandoff && event.privilege == PrivilegeMode::Supervisor &&
+                event.origin == riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff &&
+                event.matchedMmioEvent && event.matchedStep &&
+                event.mmioAddress == 0x10000000ULL;
+            ++matched;
+        }
+        userWrite.txBytesWithMmio = matched;
+        userWrite.txProvenanceValid = attributable &&
+            matched == userWrite.transmitted.size();
+        everyUserWriteHasTxProvenance = everyUserWriteHasTxProvenance &&
+            userWrite.txProvenanceValid;
+        userWriteTxBytes += matched;
+    }
+    for (auto& command : serialCommands) {
+        const auto found = std::find_if(serialUserWrites.begin(), serialUserWrites.end(),
+            [&](const SerialUserWriteEvent& event) {
+                return event.syscallIndex == command.writeSyscall;
+            });
+        command.txProvenanceValid = found != serialUserWrites.end() &&
+            found->txProvenanceValid;
+        command.txBytesWithMmio = found == serialUserWrites.end() ? 0 :
+            found->txBytesWithMmio;
+    }
+    const bool writeProvenanceValid = everyUserWriteHasTxProvenance &&
+        serialUserWrites.size() == 2 * kSerialCommandCeiling &&
+        std::count_if(serialUserWrites.begin(), serialUserWrites.end(),
+            [](const SerialUserWriteEvent& event) {
+                return event.kind == "userspace_prompt" && event.userBuffer == "guideXOS> ";
+            }) == static_cast<std::ptrdiff_t>(kSerialCommandCeiling);
+    bool ttyEchoValid = true;
+    uint64_t ttyEchoBytes = 0;
+    for (size_t index = 0; index < serialCommands.size(); ++index) {
+        auto& command = serialCommands[index];
+        if (index * 2 + 1 >= serialUserWrites.size()) {
+            ttyEchoValid = false;
+            continue;
+        }
+        const auto& prompt = serialUserWrites[index * 2];
+        const auto& response = serialUserWrites[index * 2 + 1];
+        const std::string echo = UartConsoleText(command.inputLine);
+        const size_t found = cpu.machineUartOutput().find(echo,
+            static_cast<size_t>(prompt.outputEnd));
+        if (found != std::string::npos && found + echo.size() <= response.outputStart) {
+            command.ttyEchoObserved = true;
+            command.ttyEchoStart = found;
+            command.ttyEchoEnd = found + echo.size();
+            ttyEchoBytes += echo.size();
+        } else {
+            command.ttyEchoObserved = false;
+        }
+    }
+    const bool allCommandsComplete = readSyscallsValid && commandParsingValid &&
+        responseSyscallsValid && serialCommands.size() >= 3 &&
+        serialCommands[0].command != serialCommands[1].command &&
+        serialCommands[3].command == "unrecognized" &&
+        serialCommands[3].expectedResponse == "unknown command\n";
+    const bool noGuestFaults = !terminalPanic && !stoppedOnFault &&
+        uartObserver.attributionFailures() == 0;
+    const bool provenanceValid = firmwareRun.handoff && firmwareRun.mretCount > 0 &&
+        cpu.sbiProvider() == nullptr && sourceFdtValid && handoffFdtValid &&
+        actualPmpValid && userMappingValid && firstInstructionMatches;
+    const bool interactionProof = provenanceValid && getpidValid && openValid && stimulusBytesValid &&
+        rxRegisterConsumptionValid && plicRxDeliveryValid && allCommandsComplete &&
+        writeProvenanceValid && pid1RemainedAlive && uart1Isolated && noGuestFaults &&
+        serialRxOverrunObservations == 0 && !hasExitSyscall;
+    const char* outcome = interactionProof ? "Outcome A" :
+        (provenanceValid && firstUserCaptured ? "Outcome B" : "Outcome H");
+    if (frontier == "retirement_ceiling") {
+        frontierDetail = "120 million post-handoff retirement safety ceiling reached";
+        frontierPc = cpu.getPC();
+        frontierPrivilege = cpu.privilege();
+    }
+    if (!firstUserCaptured) {
+        frontier = "linux_u_mode_init_not_reached";
+        frontierDetail = "authentic Linux did not transfer to the init ELF in U-mode";
+    } else if (!openValid && serialOpen != nullptr && serialOpen->returnedToUser) {
+        frontier = "linux_serial_open_invalid";
+        frontierDetail = "openat did not open /dev/ttyS0 read/write as required";
+    } else if (!stimulusBytesValid && serialReadCallsStarted != 0 &&
+               serialAcceptedBytes == 0 && frontier == "retirement_ceiling") {
+        frontier = "linux_read_pending_without_uart_stimulus";
+        frontierDetail = "U-mode entered read, but the guest-observed stimulus state was not reached";
+    } else if (serialAcceptedBytes != 0 && !rxRegisterConsumptionValid &&
+               frontier == "retirement_ceiling") {
+        frontier = "uart_rx_not_consumed_by_linux";
+        frontierDetail = "UART input was injected but the expected receiver and IRQ path was not observed";
+    } else if (serialReadCallsReturned != 0 && !allCommandsComplete &&
+               frontier == "retirement_ceiling") {
+        frontier = "tty_or_userspace_command_processing_incomplete";
+        frontierDetail = "Linux returned input but the bounded command-response proof did not complete";
+    }
+
+    Expect(firstUserCaptured && firstUserIsElfEntry,
+           "pinned Linux transfers to the deterministic /init ELF in U-mode");
+    Expect(firstInstructionMatches && userMappingValid && actualPmpValid,
+           "U-mode entry, code/stack permissions, and StandardPmp16 isolation are preserved");
+    Expect(getpidValid && openValid,
+           "PID 1 performs genuine getpid and openat(/dev/ttyS0, O_RDWR) syscalls");
+    Expect(readSyscallsValid,
+           "five real Linux read syscalls return newline-terminated bytes through n_tty_read");
+    Expect(stimulusBytesValid && rxRegisterConsumptionValid,
+           "byte-at-a-time host stimulus is accepted and each byte is consumed through UART RBR");
+    Expect(plicRxDeliveryValid,
+           "UART RX readiness raises PLIC source 10 and Linux claims/completes supervisor external IRQs");
+    Expect(commandParsingValid && responseSyscallsValid,
+           "U-mode parser executes five command branches and emits each matching Linux write response");
+    Expect(writeProvenanceValid,
+           "prompt and response bytes are matched to Linux S-mode UART0 transmitter MMIO writes");
+    Expect(pid1RemainedAlive && uart1Isolated && noGuestFaults,
+           "quit leaves PID 1 alive with no unexpected fault, overrun, or UART1 activity");
+    Expect(interactionProof && frontier == "serial_quit_yield_complete",
+           "bounded authentic bidirectional console reaches quit/yield completion; frontier=" + frontier);
+
+    std::ostringstream fixtureJson;
+    fixtureJson << "{\n  \"schemaVersion\":1,\n  \"phase\":\"RISCV-30\","
+        << "\n  \"initElfSha256\":" << JsonQuote(Sha256(independentElf))
+        << ",\n  \"initElfBytes\":" << independentElf.size()
+        << ",\n  \"initElfEntry\":" << JsonU64(archivePlan.plan.elfEntry)
+        << ",\n  \"initramfsSha256\":" << JsonQuote(archivePlan.plan.archiveSha256)
+        << ",\n  \"initramfsBytes\":" << archive.size()
+        << ",\n  \"initramfsStart\":" << JsonU64(archivePlan.plan.address)
+        << ",\n  \"initramfsEndExclusive\":" << JsonU64(archivePlan.plan.endExclusive)
+        << ",\n  \"fdtSha256\":" << JsonQuote(Sha256(sourceFdt))
+        << ",\n  \"linuxImageSha256\":" << JsonQuote(Sha256(image))
+        << ",\n  \"linuxVmlinuxSha256\":" << JsonQuote(Sha256(vmlinux))
+        << ",\n  \"linuxConfigSha256\":" << JsonQuote(Sha256(config))
+        << ",\n  \"openSbiSha256\":" << JsonQuote(Sha256(firmware))
+        << ",\n  \"openSbiElfSha256\":" << JsonQuote(Sha256(firmwareElf))
+        << ",\n  \"entryProofLabels\":" << serialUserSymbols.size()
+        << ",\n  \"staticElf\":true,\n  \"interpreter\":null,\n  \"archiveReadbackMatches\":"
+        << (archiveReadback == archive ? "true" : "false") << "\n}\n";
+    WriteText(artifactDir / "riscv30-fixture-manifest.json", fixtureJson.str());
+    WriteText(artifactDir / "riscv30-user-syscalls.json", WriteSyscallJson(syscalls));
+    WriteBytes(artifactDir / "riscv30-console.bin",
+        std::vector<uint8_t>(cpu.machineUartOutput().begin(), cpu.machineUartOutput().end()));
+
+    std::ostringstream stimulusJson;
+    stimulusJson << "{\n  \"schemaVersion\":1,\n  \"acceptedByteCount\":"
+        << serialAcceptedBytes << ",\n  \"rejectedByteCount\":" << serialRejectedBytes
+        << ",\n  \"expectedByteCount\":" << expectedInputBytes << ",\n  \"events\":[\n";
+    for (size_t index = 0; index < serialStimulus.size(); ++index) {
+        const auto& event = serialStimulus[index];
+        stimulusJson << "    {\"sequence\":" << event.sequence
+            << ",\"commandIndex\":" << event.commandIndex
+            << ",\"byteIndex\":" << event.byteIndex
+            << ",\"byte\":" << static_cast<unsigned>(event.byte)
+            << ",\"character\":" << JsonQuote(std::string(1, static_cast<char>(event.byte)))
+            << ",\"retired\":" << event.retired
+            << ",\"pc\":" << JsonU64(event.pc)
+            << ",\"privilege\":" << JsonQuote(PrivilegeModeToString(event.privilege))
+            << ",\"receiverReadyBefore\":" << (event.readyBefore ? "true" : "false")
+            << ",\"accepted\":" << (event.accepted ? "true" : "false")
+            << ",\"receiverReadyAfter\":" << (event.readyAfter ? "true" : "false")
+            << ",\"overrunAfter\":" << (event.overrunAfter ? "true" : "false")
+            << ",\"plicSourceAssertedAfter\":"
+            << (event.plicSourceAssertedAfter ? "true" : "false")
+            << ",\"plicSourcePendingAfter\":"
+            << (event.plicSourcePendingAfter ? "true" : "false")
+            << ",\"receiverConsumed\":" << (event.receiverConsumed ? "true" : "false")
+            << ",\"consumeRetired\":" << event.consumeRetired
+            << ",\"consumeMmioSequence\":" << event.receiveMmioSequence << "}"
+            << (index + 1 == serialStimulus.size() ? "\n" : ",\n");
+    }
+    stimulusJson << "  ]\n}\n";
+    WriteText(artifactDir / "riscv30-serial-input-stimulus.json", stimulusJson.str());
+
+    const auto deviceEventsJson = [&](const std::vector<SerialDeviceEvent>& events) {
+        std::ostringstream out;
+        out << "{\n  \"schemaVersion\":1,\n  \"events\":[\n";
+        for (size_t index = 0; index < events.size(); ++index) {
+            const auto& event = events[index];
+            out << "    {\"sequence\":" << event.sequence
+                << ",\"retired\":" << event.retired
+                << ",\"pc\":" << JsonU64(event.pc)
+                << ",\"address\":" << JsonU64(event.address)
+                << ",\"value\":" << event.value << ",\"size\":"
+                << static_cast<unsigned>(event.size)
+                << ",\"privilege\":" << JsonQuote(PrivilegeModeToString(event.privilege))
+                << ",\"operation\":" << JsonQuote(event.operation) << "}"
+                << (index + 1 == events.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+        return out.str();
+    };
+    WriteText(artifactDir / "riscv30-uart-rx-events.json", deviceEventsJson(serialRxEvents));
+    std::ostringstream plicJson;
+    const auto plicDiagnostics = cpu.machinePlicDiagnostics();
+    plicJson << "{\n  \"schemaVersion\":1,\n  \"source\":10,\n  \"supervisorExternalIrqs\":"
+        << serialSupervisorExternalIrqs << ",\n  \"claimReadsForSource10\":"
+        << serialPlicClaimReads << ",\n  \"completeWritesForSource10\":"
+        << serialPlicCompleteWrites << ",\n  \"plicDiagnostics\":{\"claimReads\":"
+        << plicDiagnostics.claimReads << ",\"completionWrites\":"
+        << plicDiagnostics.completionWrites << "},\n  \"events\":"
+        << deviceEventsJson(serialPlicEvents) << "}\n";
+    WriteText(artifactDir / "riscv30-plic-events.json", plicJson.str());
+
+    std::ostringstream ttyJson;
+    ttyJson << "{\n  \"schemaVersion\":1,\n  \"ttyDevice\":\"/dev/ttyS0\","
+        << "\n  \"canonicalConfiguration\":\"pinned Linux v6.12 default N_TTY line discipline; no ioctl change\","
+        << "\n  \"ttyReadSymbol\":" << JsonU64(nttyReadPc)
+        << ",\n  \"schedulerEntriesDuringPendingReads\":" << serialSchedulerEntries
+        << ",\n  \"reads\":[\n";
+    for (size_t index = 0; index < serialCommands.size(); ++index) {
+        const auto& command = serialCommands[index];
+        const auto* read = syscallAt(command.readSyscall);
+        ttyJson << "    {\"commandIndex\":" << index
+            << ",\"syscallIndex\":" << command.readSyscall
+            << ",\"callerPc\":" << JsonU64(command.readEcallPc)
+            << ",\"dispatchPc\":" << JsonU64(read != nullptr ? read->dispatchPc : 0)
+            << ",\"fd\":" << JsonU64(read != nullptr ? read->arguments[0] : UINT64_MAX)
+            << ",\"userBuffer\":" << JsonU64(read != nullptr ? read->arguments[1] : 0)
+            << ",\"requestedLength\":" << (read != nullptr ? read->arguments[2] : 0)
+            << ",\"returnValue\":" << JsonU64(command.readReturnValue)
+            << ",\"sretPc\":" << JsonU64(command.readSretPc)
+            << ",\"returnPc\":" << JsonU64(read != nullptr ? read->returnPc : 0)
+            << ",\"ttyReadDispatchObserved\":"
+            << (command.ttyReadDispatchObserved ? "true" : "false")
+            << ",\"returnedLine\":" << JsonQuote(command.actualReadBuffer)
+            << ",\"returnedBytes\":" << ByteStringJson(command.actualReadBuffer)
+            << ",\"userBufferReadable\":"
+            << (read != nullptr && read->returnedInputReadable ? "true" : "false")
+            << ",\"userBufferWritablePte\":"
+            << (command.userBufferTranslationUserWritable ? "true" : "false") << "}"
+            << (index + 1 == serialCommands.size() ? "\n" : ",\n");
+    }
+    ttyJson << "  ]\n}\n";
+    WriteText(artifactDir / "riscv30-tty-read-evidence.json", ttyJson.str());
+
+    std::ostringstream bufferJson;
+    bufferJson << "{\n  \"schemaVersion\":1,\n  \"buffers\":[\n";
+    for (size_t index = 0; index < serialCommands.size(); ++index) {
+        const auto& command = serialCommands[index];
+        const auto* read = syscallAt(command.readSyscall);
+        bufferJson << "    {\"commandIndex\":" << index
+            << ",\"virtualAddress\":" << JsonU64(read != nullptr ? read->arguments[1] : 0)
+            << ",\"length\":" << command.actualReadBuffer.size()
+            << ",\"text\":" << JsonQuote(command.actualReadBuffer)
+            << ",\"bytes\":" << ByteStringJson(command.actualReadBuffer)
+            << ",\"readSyscallReturned\":" << JsonU64(command.readReturnValue)
+            << ",\"copiedIntoUserMemory\":"
+            << (command.userReadBufferValid ? "true" : "false")
+            << ",\"uModeWritablePte\":"
+            << (command.userBufferTranslationUserWritable ? "true" : "false") << "}"
+            << (index + 1 == serialCommands.size() ? "\n" : ",\n");
+    }
+    bufferJson << "  ]\n}\n";
+    WriteText(artifactDir / "riscv30-user-buffer-evidence.json", bufferJson.str());
+
+    std::ostringstream commandsJson;
+    commandsJson << "{\n  \"schemaVersion\":1,\n  \"commands\":[\n";
+    for (size_t index = 0; index < serialCommands.size(); ++index) {
+        const auto& command = serialCommands[index];
+        commandsJson << "    {\"index\":" << index
+            << ",\"input\":" << JsonQuote(command.command)
+            << ",\"inputLine\":" << JsonQuote(command.actualReadBuffer)
+            << ",\"inputBytes\":" << ByteStringJson(command.actualReadBuffer)
+            << ",\"parserPc\":" << JsonU64(command.parserPc)
+            << ",\"parserLabel\":" << JsonQuote(std::string(kSerialParserLabels[index]))
+            << ",\"parserInstructionObservedInUmode\":"
+            << (command.parserInstructionObserved ? "true" : "false")
+            << ",\"response\":" << JsonQuote(command.userWriteBuffer)
+            << ",\"expectedResponse\":" << JsonQuote(command.expectedResponse)
+            << ",\"writeSyscallIndex\":" << command.writeSyscall
+            << ",\"writeEcallPc\":" << JsonU64(command.writeEcallPc)
+            << ",\"writeSretPc\":" << JsonU64(command.writeSretPc)
+            << ",\"writeReturnValue\":" << JsonU64(command.writeReturnValue)
+            << ",\"transmittedBytes\":" << ByteStringJson(command.transmittedBytes)
+            << ",\"txBytesWithGuestMmio\":" << command.txBytesWithMmio
+            << ",\"ttyEchoObserved\":" << (command.ttyEchoObserved ? "true" : "false")
+            << ",\"ttyEchoStart\":" << JsonU64(command.ttyEchoStart)
+            << ",\"ttyEchoEnd\":" << JsonU64(command.ttyEchoEnd) << "}"
+            << (index + 1 == serialCommands.size() ? "\n" : ",\n");
+    }
+    commandsJson << "  ]\n}\n";
+    WriteText(artifactDir / "riscv30-command-events.json", commandsJson.str());
+
+    std::ostringstream consoleJson;
+    consoleJson << "{\n  \"schemaVersion\":1,\n  \"consoleBytes\":"
+        << cpu.machineUartOutput().size()
+        << ",\n  \"uart0Bytes\":" << observerOutputCounts[0]
+        << ",\n  \"uart1Bytes\":" << observerOutputCounts[1]
+        << ",\n  \"opensbiBeforeHandoffBytes\":"
+        << observerOrigins[static_cast<size_t>(riscv_test::UartTxOrigin::OpenSbiBeforeLinuxHandoff)][0]
+        << ",\n  \"linuxSupervisorAfterHandoffBytes\":"
+        << observerOrigins[static_cast<size_t>(riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff)][0]
+        << ",\n  \"openSbiAfterHandoffBytes\":"
+        << observerOrigins[static_cast<size_t>(riscv_test::UartTxOrigin::OpenSbiAfterLinuxHandoff)][0]
+        << ",\n  \"userspaceWriteBytes\":" << userWriteTxBytes
+        << ",\n  \"ttyEchoBytes\":" << ttyEchoBytes
+        << ",\n  \"ttyEchoObservedForAllCommands\":" << (ttyEchoValid ? "true" : "false")
+        << ",\n  \"kernelOrOtherSupervisorBytes\":"
+        << (observerOrigins[static_cast<size_t>(riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff)][0] >=
+            userWriteTxBytes + ttyEchoBytes
+                ? observerOrigins[static_cast<size_t>(riscv_test::UartTxOrigin::LinuxSupervisorAfterHandoff)][0] -
+                    userWriteTxBytes - ttyEchoBytes : 0)
+        << ",\n  \"userWrites\":[\n";
+    for (size_t index = 0; index < serialUserWrites.size(); ++index) {
+        const auto& event = serialUserWrites[index];
+        consoleJson << "    {\"syscallIndex\":" << event.syscallIndex
+            << ",\"kind\":" << JsonQuote(event.kind)
+            << ",\"buffer\":" << JsonQuote(event.userBuffer)
+            << ",\"start\":" << event.outputStart << ",\"end\":" << event.outputEnd
+            << ",\"transmitted\":" << JsonQuote(event.transmitted)
+            << ",\"txMmioBytes\":" << event.txBytesWithMmio
+            << ",\"provenanceValid\":" << (event.txProvenanceValid ? "true" : "false") << "}"
+            << (index + 1 == serialUserWrites.size() ? "\n" : ",\n");
+    }
+    consoleJson << "  ],\n  \"notes\":[\"OpenSBI bytes are classified by pre-handoff M-mode TX provenance.\","
+        << "\"Userspace prompt and response ranges are tied to Linux write syscalls.\","
+        << "\"TTY echo is located between the corresponding prompt and response ranges.\","
+        << "\"Remaining Linux S-mode TX bytes are kernel or other S-mode console output.\"]\n}\n";
+    WriteText(artifactDir / "riscv30-console-analysis.json", consoleJson.str());
+
+    std::ostringstream trapsJson;
+    trapsJson << "{\n  \"schemaVersion\":1,\n  \"totalTrapEvents\":" << trapCount
+        << ",\n  \"retiredByPrivilege\":{\"U\":" << modeRetired[0]
+        << ",\"S\":" << modeRetired[1] << ",\"M\":" << modeRetired[2]
+        << "},\n  \"supervisorHandlerInstructions\":" << supervisorHandlerInstructions
+        << ",\n  \"machineHandlerInstructions\":" << machineHandlerInstructions
+        << ",\n  \"timerInterruptEvents\":" << serialTimerInterrupts
+        << ",\n  \"schedulerEntries\":" << serialSchedulerEntries
+        << ",\n  \"sampledArchitecturalStates\":" << repeatedStateSamples
+        << ",\n  \"retained\":[\n";
+    for (size_t index = 0; index < traps.size(); ++index) {
+        const auto& trap = traps[index];
+        trapsJson << "    {\"pc\":" << JsonU64(trap.pc)
+            << ",\"retired\":" << trap.retired
+            << ",\"before\":" << JsonQuote(PrivilegeModeToString(trap.before))
+            << ",\"after\":" << JsonQuote(PrivilegeModeToString(trap.after))
+            << ",\"cause\":" << JsonU64(trap.cause)
+            << ",\"tval\":" << JsonU64(trap.tval)
+            << ",\"satp\":" << JsonU64(trap.satp)
+            << ",\"a0\":" << JsonU64(trap.a0)
+            << ",\"a1\":" << JsonU64(trap.a1)
+            << ",\"a7\":" << JsonU64(trap.a7) << "}"
+            << (index + 1 == traps.size() ? "\n" : ",\n");
+    }
+    trapsJson << "  ]\n}\n";
+    WriteText(artifactDir / "riscv30-trap-accounting.json", trapsJson.str());
+
+    std::ostringstream frontierJson;
+    frontierJson << "{\n  \"schemaVersion\":1,\n  \"stopClassification\":"
+        << JsonQuote(frontier) << ",\n  \"stopDetail\":" << JsonQuote(frontierDetail)
+        << ",\n  \"stopPc\":" << JsonU64(frontierPc)
+        << ",\n  \"stopPrivilege\":" << JsonQuote(PrivilegeModeToString(frontierPrivilege))
+        << ",\n  \"retirements\":" << retired
+        << ",\n  \"stepCalls\":" << stepCalls
+        << ",\n  \"terminalPanic\":" << (terminalPanic ? "true" : "false")
+        << ",\n  \"architecturalFault\":" << (stoppedOnFault ? "true" : "false")
+        << ",\n  \"eventDrivenStop\":"
+        << (frontier == "serial_quit_yield_complete" ? "true" : "false")
+        << "\n}\n";
+    WriteText(artifactDir / "riscv30-frontier.json", frontierJson.str());
+
+    std::ostringstream runJson;
+    runJson << "{\n  \"schemaVersion\":1,\n  \"phase\":\"RISCV-30\","
+        << "\n  \"outcome\":" << JsonQuote(outcome)
+        << ",\n  \"branch\":" << JsonQuote("RISCV")
+        << ",\n  \"linuxImageSha256\":" << JsonQuote(Sha256(image))
+        << ",\n  \"vmlinuxSha256\":" << JsonQuote(Sha256(vmlinux))
+        << ",\n  \"configSha256\":" << JsonQuote(Sha256(config))
+        << ",\n  \"openSbiSha256\":" << JsonQuote(Sha256(firmware))
+        << ",\n  \"initElfSha256\":" << JsonQuote(Sha256(independentElf))
+        << ",\n  \"initramfsSha256\":" << JsonQuote(archivePlan.plan.archiveSha256)
+        << ",\n  \"fdtSha256\":" << JsonQuote(Sha256(sourceFdt))
+        << ",\n  \"handoffObserved\":" << (firmwareRun.handoff ? "true" : "false")
+        << ",\n  \"firmwareMretCount\":" << firmwareRun.mretCount
+        << ",\n  \"postHandoffRetired\":" << retired
+        << ",\n  \"retiredByPrivilege\":{\"U\":" << modeRetired[0]
+        << ",\"S\":" << modeRetired[1] << ",\"M\":" << modeRetired[2] << "}"
+        << ",\n  \"safetyCeilings\":{\"postHandoffRetirements\":"
+        << kPostHandoffRetirementCeiling << ",\"stepCalls\":" << kStepCallCeiling
+        << ",\"trapEvents\":" << kTrapEventCeiling
+        << ",\"machineModeRetirements\":" << kMachineModeRetirementCeiling
+        << ",\"handlerLifetimeRetirements\":" << kHandlerLifetimeCeiling
+        << ",\"serialDeviceEvents\":" << kSerialDeviceEventCeiling
+        << ",\"inputBytes\":" << kSerialInputByteCeiling
+        << ",\"commands\":" << kSerialCommandCeiling
+        << ",\"consoleBytes\":" << kSerialConsoleByteCeiling
+        << ",\"schedulerEvents\":" << kSerialSchedulerEventCeiling
+        << ",\"timerEvents\":" << kSerialTimerEventCeiling
+        << ",\"repeatedStateSamples\":" << kRepeatedStateCeiling
+        << ",\"architecturalStateEntries\":" << kArchitecturalStateEntryCeiling
+        << "}"
+        << ",\n  \"pid1\":" << serialPid
+        << ",\n  \"openFd\":" << JsonU64(serialFd)
+        << ",\n  \"acceptedInputBytes\":" << serialAcceptedBytes
+        << ",\n  \"rejectedInputBytes\":" << serialRejectedBytes
+        << ",\n  \"completedCommands\":" << serialReadCallsReturned
+        << ",\n  \"uartRxRegisterReads\":" << serialRxRegisterReads
+        << ",\n  \"plicSource10ClaimReads\":" << serialPlicClaimReads
+        << ",\n  \"plicSource10CompleteWrites\":" << serialPlicCompleteWrites
+        << ",\n  \"supervisorExternalInterrupts\":" << serialSupervisorExternalIrqs
+        << ",\n  \"uartRxOverrunObservations\":" << serialRxOverrunObservations
+        << ",\n  \"syscallCount\":" << syscalls.size()
+        << ",\n  \"hostSbiProviderPresent\":false"
+        << ",\n  \"stopClassification\":" << JsonQuote(frontier)
+        << ",\n  \"stopDetail\":" << JsonQuote(frontierDetail)
+        << ",\n  \"terminalPanic\":" << (terminalPanic ? "true" : "false")
+        << ",\n  \"architecturalFault\":" << (stoppedOnFault ? "true" : "false")
+        << "\n}\n";
+    WriteText(artifactDir / "riscv30-linux-run-summary.json", runJson.str());
+
+    std::cout << "RISCV-30 checks=" << g_checks << " failures=" << g_failures
+        << " outcome=" << outcome << " retired=" << retired
+        << " U=" << modeRetired[0] << " S=" << modeRetired[1]
+        << " M=" << modeRetired[2] << " input=" << serialAcceptedBytes
+        << '/' << serialRejectedBytes << " frontier=" << frontier << '\n';
+    return g_failures == 0 && interactionProof &&
+        frontier == "serial_quit_yield_complete" ? 0 : 1;
+#else
     const auto findCall = [&](uint64_t number) -> const InitramfsSyscallEvidence* {
         const auto found = std::find_if(syscalls.begin(), syscalls.end(),
             [number](const auto& call) { return call.number == number; });
@@ -1042,6 +2172,7 @@ int RunInitramfsUserspace(int argc, char** argv) {
               << " S=" << modeRetired[1] << " M=" << modeRetired[2]
               << " frontier=" << frontier << '\n';
     return g_failures == 0 && frontier == "userspace_proof_complete" ? 0 : 1;
+#endif
 }
 
 } // namespace

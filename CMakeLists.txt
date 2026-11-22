@@ -1177,7 +1177,7 @@ endforeach()
 # RISCV-18 uses an authentic pinned upstream Linux v6.12 raw Image retained
 # outside the source tree; manifest and Linux-specific FDT remain small fixtures.
 set(GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT
-    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv29-artifacts"
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv30-artifacts"
     CACHE PATH "Isolated output root for the active RISC-V phase")
 set(RISCV_LINUX_FIXTURE_DIR
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_image)
@@ -1471,6 +1471,38 @@ add_test(NAME RiscVLinuxProcessRepeatFixtureContractTests
                  ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/initramfs.cpio
                  ${RISCV_LINUX_PROCESS_REPEAT_INPUT_DIR}/initramfs-manifest.json)
 
+# RISCV-30 reuses the authentic Linux initramfs boot harness and production
+# UART while a bounded controller supplies byte-at-a-time external input.
+set(RISCV_LINUX_SERIAL_INPUT_DIR
+    "E:/CodexArtifacts/guideXOS_Hypervisor/phase-riscv30-artifacts/inputs"
+    CACHE PATH "Path to the reproducibly generated RISCV-30 serial fixture")
+add_executable(test_riscv_linux_serial_interaction
+    tests/test_riscv_linux_initramfs_userspace.cpp
+    src/riscv/riscv_initramfs_contract.cpp
+    ${RISCV_LINUX_TEST_SOURCES})
+target_compile_definitions(test_riscv_linux_serial_interaction
+    PRIVATE RISCV30_SERIAL_INTERACTION=1 RISCV_LINUX_STARTUP_CONTINUATION=1
+            RISCV_LINUX_CONSOLE_CONTINUATION=1)
+target_link_libraries(test_riscv_linux_serial_interaction PRIVATE bcrypt)
+add_test(NAME RiscVLinuxSerialInteractionTests
+         COMMAND test_riscv_linux_serial_interaction
+                 ${RISCV_OPENSBI_FW_BIN_COPY}
+                 ${RISCV_OPENSBI_FW_ELF_COPY}
+                 ${RISCV_LINUX_IMAGE_PATH}
+                 ${RISCV_LINUX_MANIFEST_COPY}
+                 ${RISCV_LINUX_CONFIG_PATH}
+                 ${RISCV_LINUX_VMLINUX_PATH}
+                 ${RISCV_LINUX_SERIAL_INPUT_DIR}/initramfs.cpio
+                 ${RISCV_LINUX_SERIAL_INPUT_DIR}/init.elf
+                 ${RISCV_LINUX_SERIAL_INPUT_DIR}/platform-initramfs.dtb
+                 "${GUIDEXOS_RISCV_PHASE_ARTIFACTS_ROOT}/RISCV30/$<CONFIG>")
+add_test(NAME RiscVLinuxSerialFixtureContractTests
+         COMMAND Python3::Interpreter
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/riscv_linux_serial_console/test_fixture_contract.py
+                 ${RISCV_LINUX_SERIAL_INPUT_DIR}/init.elf
+                 ${RISCV_LINUX_SERIAL_INPUT_DIR}/initramfs.cpio
+                 ${RISCV_LINUX_SERIAL_INPUT_DIR}/initramfs-manifest.json)
+
 foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_image_entry
                                 test_riscv_linux_startup_continuation
@@ -1478,7 +1510,8 @@ foreach(riscv18_target IN ITEMS test_riscv_linux_image_loader
                                 test_riscv_linux_boot_continuation
                                 test_riscv_linux_allocator_continuation
                                 test_riscv_linux_initcall_continuation
-                                test_riscv_linux_trap_continuation)
+                                test_riscv_linux_trap_continuation
+                                test_riscv_linux_serial_interaction)
     if(MSVC)
         target_compile_options(${riscv18_target} PRIVATE /W4)
     else()
