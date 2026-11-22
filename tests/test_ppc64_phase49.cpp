@@ -581,8 +581,12 @@ void testAuthenticLinuxSradi49() {
           ((nextRaw >> 21U) & 31U) == 9U &&
           ((nextRaw >> 16U) & 31U) == 9U &&
           ((nextRaw >> 1U) & 1023U) == 922U && (nextRaw & 1U) == 1U);
-    CHECK(!nextDecoded.supported &&
-          nextDecoded.kind == DecodedKind::UNSUPPORTED);
+    CHECK(nextDecoded.supported &&
+          nextDecoded.kind == DecodedKind::EXTSH &&
+          nextDecoded.rt == 9U && nextDecoded.ra == 9U &&
+          nextDecoded.rc &&
+          PPC64ISAPlugin::disassembleDecoded(nextDecoded, first.stopNip) ==
+              "extsh. r9,r9");
 
     const auto frontierElf = runDirectory / "sradi-linux-elf-attribution.txt";
     CHECK(inspectLinuxMMCR2Frontier46(kernelFile, frontierElf,
@@ -737,6 +741,7 @@ void testAuthenticLinuxSradi49() {
 
 } // namespace
 
+#ifndef PPC64_PHASE49_EMBEDDED
 int main() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -768,3 +773,4 @@ int main() {
     std::printf("artifact_directory=%s\n", runDirectory.string().c_str());
     return failures == 0 ? 0 : 1;
 }
+#endif

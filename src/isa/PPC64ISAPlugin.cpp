@@ -1910,6 +1910,13 @@ DecodedInstruction PPC64ISAPlugin::decodeWord(uint32_t word) {
             } else if (combined == XO_XOR) {
                 instr.kind = DecodedKind::XOR;
                 instr.supported = true;
+            } else if (combined == XO_EXTSH) {
+                // EXTSH sign-extends the low halfword of RS. The five-bit
+                // field between RA and XO is nonoperand (///), like EXTSB,
+                // and is unconstrained by the supported POWER9 profile.
+                instr.oe = false;
+                instr.kind = DecodedKind::EXTSH;
+                instr.supported = true;
             } else if (combined == XO_EXTSB) {
                 // EXTSB sign-extends the low byte of RS. The X-form field
                 // between RA and XO is nonoperand (shown as dashes in the
@@ -2260,6 +2267,11 @@ std::string PPC64ISAPlugin::disassembleDecoded(const DecodedInstruction& instr, 
             out << " r" << static_cast<int>(instr.ra)
                 << ",r" << static_cast<int>(instr.rt)
                 << ",r" << static_cast<int>(instr.rb);
+            break;
+        case DecodedKind::EXTSH:
+            out << "extsh" << (instr.rc ? "." : "")
+                << " r" << static_cast<unsigned>(instr.ra)
+                << ",r" << static_cast<unsigned>(instr.rt);
             break;
         case DecodedKind::EXTSW:
             out << "extsw" << (instr.rc ? "." : "")
@@ -4154,6 +4166,22 @@ ISAExecutionResult PPC64ISAPlugin::executeDecoded(IMemory& memory,
             } else {
                 result = s ^ t;
             }
+            state_.gpr[instr.ra] = result;
+            if (instr.rc) {
+                updateCR0(state_, result);
+            }
+            state_.nip = cia + INSN_WIDTH;
+            return ISAExecutionResult::CONTINUE;
+        }
+        case DecodedKind::EXTSH: {
+            // Snapshot RS before writing RA so RA==RS uses the original
+            // source. Unsigned masks explicitly sign-fill bits 16-63 and
+            // discard the upper 48 source bits without signed narrowing.
+            const uint64_t source = state_.gpr[instr.rt];
+            const uint64_t halfword = source & 0xFFFFULL;
+            const uint64_t result = (halfword & 0x8000ULL) != 0
+                ? halfword | 0xFFFFFFFFFFFF0000ULL
+                : halfword;
             state_.gpr[instr.ra] = result;
             if (instr.rc) {
                 updateCR0(state_, result);

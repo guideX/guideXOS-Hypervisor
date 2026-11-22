@@ -1277,6 +1277,31 @@ struct AuthenticReplay {
     std::string sradiTraceLine;
     std::vector<std::string> sradiPrecedingInstructions;
     std::vector<std::string> sradiFollowingInstructions;
+    bool extshFetched = false;
+    bool extshRetired = false;
+    uint64_t extshNip = 0;
+    uint64_t extshTotalRetiredBefore = 0;
+    uint64_t extshTotalRetired = 0;
+    uint64_t extshCyclesBefore = 0;
+    uint64_t extshCyclesAfter = 0;
+    uint64_t extshTimebaseBefore = 0;
+    uint64_t extshTimebaseAfter = 0;
+    uint64_t extshRamBefore = 0;
+    uint64_t extshRamAfter = 0;
+    uint16_t extshLPID = 0;
+    uint32_t extshRawWord = 0;
+    bool extshStackMapped = false;
+    uint64_t extshStackGuestReal = 0;
+    uint64_t extshStackBackingAddress = 0;
+    std::vector<uint8_t> extshStackWindow;
+    PPC64RegisterView extshBefore{};
+    PPC64RegisterView extshAfter{};
+    PPC64VirtualInterruptSnapshot extshInterruptBefore{};
+    PPC64VirtualInterruptSnapshot extshInterruptAfter{};
+    std::string extshDecode;
+    std::string extshTraceLine;
+    std::vector<std::string> extshPrecedingInstructions;
+    std::vector<std::string> extshFollowingInstructions;
     PPC64RegisterView final{};
     std::string trace;
 };
@@ -1306,7 +1331,8 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                                  bool stopAtMMCR0 = false,
                                  bool retireMMCR1 = false,
                                  bool retireMMCR2 = false,
-                                 bool retireSRADI = false) {
+                                 bool retireSRADI = false,
+                                 bool retireExtsh = false) {
     AuthenticReplay result;
     VirtualMachine vm(static_cast<size_t>(kLinuxRamSize), 1, "PPC64",
                       platformConfig());
@@ -1507,6 +1533,9 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                               rldicContinuationBudget};
     }
     if (retireSubfic && !retireMMCR2) {
+        activeStageBudgets = {1U, 256U, 4096U, 16384U, 65536U};
+    }
+    if (retireExtsh) {
         activeStageBudgets = {1U, 256U, 4096U, 16384U, 65536U};
     }
     const bool phase39RetirementMode = retireSubfic && !retireMMCR2;
@@ -2219,6 +2248,75 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 stopped = true;
                 break;
             }
+            if (following.kind == DecodedKind::EXTSH && !retireExtsh) {
+                // Preserve the accepted Phase 49 endpoint when EXTSH is
+                // implemented: later authentic Linux replays opt in to
+                // retiring this next instruction explicitly.
+                result.stopClass = "explicit-authentic-frontier";
+                result.stopNip = before.nip;
+                result.stopWord = following.raw;
+                result.stopDisassembly = next.disassembly;
+                result.stopLPID = cpu->getActiveLPID();
+                const uint64_t gra = before.nip & kGuestRealMask;
+                const auto translation = PPC64PartitionMMU::translateGuestReal(
+                    vm.getMemory(), *partition, gra,
+                    PPC64TranslationAccess::FETCH);
+                result.stopFetchTranslated = translation.success;
+                result.stopFetchExecuteAllowed = translation.executeAllowed;
+                result.stopBackingAddress = translation.hostBackingAddress;
+                stopped = true;
+                break;
+            }
+            if (following.kind == DecodedKind::EXTSH && retireExtsh &&
+                !result.extshFetched) {
+                result.extshFetched = true;
+                result.extshNip = before.nip;
+                result.extshRawWord = following.raw;
+                result.extshDecode = next.disassembly;
+                result.extshBefore = before;
+                result.extshLPID = cpu->getActiveLPID();
+                result.extshTotalRetiredBefore =
+                    result.prefixRetired + result.continuationRetired;
+                result.extshCyclesBefore = vm.getCyclesExecuted();
+                result.extshTimebaseBefore = vm.getPPC64Timebase();
+                result.extshRamBefore = fingerprintRam(*memory);
+                result.extshInterruptBefore =
+                    vm.getPPC64InterruptSnapshot();
+                result.extshStackGuestReal =
+                    before.gpr[1] & kGuestRealMask;
+                const auto stackTranslation =
+                    PPC64PartitionMMU::translateGuestReal(
+                        vm.getMemory(), *partition, result.extshStackGuestReal,
+                        PPC64TranslationAccess::READ);
+                if (stackTranslation.success && stackTranslation.readAllowed &&
+                    stackTranslation.hostBackingAddress <=
+                        kLinuxRamSize - 256U) {
+                    result.extshStackMapped = true;
+                    result.extshStackBackingAddress =
+                        stackTranslation.hostBackingAddress;
+                    result.extshStackWindow.resize(256U);
+                    memory->ReadGuestReal(result.extshStackBackingAddress,
+                        result.extshStackWindow.data(),
+                        result.extshStackWindow.size());
+                }
+                const size_t contextStart = lastInstructions.size() > 32U
+                    ? lastInstructions.size() - 32U : 0U;
+                for (size_t index = contextStart;
+                     index < lastInstructions.size(); ++index) {
+                    std::ostringstream context;
+                    context << lastInstructions[index] << " gprs=";
+                    if (index < lastGprs.size()) {
+                        for (size_t reg = 0; reg < lastGprs[index].size(); ++reg) {
+                            context << "r" << reg << "="
+                                << hex(lastGprs[index][reg])
+                                << (reg + 1U == lastGprs[index].size()
+                                    ? "" : ",");
+                        }
+                    }
+                    result.extshPrecedingInstructions.push_back(
+                        context.str());
+                }
+            }
             if (following.kind == DecodedKind::SRADI &&
                 retireSRADI && !result.sradiFetched) {
                 result.sradiFetched = true;
@@ -2321,6 +2419,23 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                 result.sradiRamAfter = fingerprintRam(*memory);
                 result.sradiInterruptAfter =
                     vm.getPPC64InterruptSnapshot();
+            }
+            if (following.kind == DecodedKind::EXTSH &&
+                result.extshFetched && before.nip == result.extshNip) {
+                result.extshAfter = after;
+                result.extshRetired = retired &&
+                    after.nip == before.nip + 4U;
+                result.extshTotalRetired = result.extshRetired
+                    ? result.extshTotalRetiredBefore + 1U
+                    : result.extshTotalRetiredBefore;
+                result.extshCyclesAfter = vm.getCyclesExecuted();
+                result.extshTimebaseAfter = vm.getPPC64Timebase();
+                result.extshRamAfter = fingerprintRam(*memory);
+                result.extshInterruptAfter =
+                    vm.getPPC64InterruptSnapshot();
+                result.extshTraceLine = "nip=" + hex(before.nip) +
+                    " raw=" + wordHex(following.raw) +
+                    " instruction=" + next.disassembly;
             }
             if (following.kind == DecodedKind::MTSPR &&
                 following.sprn == SPR_MMCRA &&
@@ -2742,6 +2857,25 @@ AuthenticReplay runAuthenticLinux(const std::vector<uint8_t>& kernel,
                         << (reg == 31U ? "" : ",");
                 }
                 result.sradiFollowingInstructions.push_back(context.str());
+            }
+            if (result.extshRetired && before.nip != result.extshNip &&
+                result.extshFollowingInstructions.size() < 16U) {
+                std::ostringstream context;
+                context << line.str() << " CR_before=0x" << std::hex
+                    << before.cr << " CR_after=0x" << after.cr
+                    << " XER_before=0x" << before.xer
+                    << " XER_after=0x" << after.xer << std::dec
+                    << " GPR_before=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(before.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                context << " GPR_after=";
+                for (unsigned reg = 0; reg < 32U; ++reg) {
+                    context << "r" << reg << "=" << hex(after.gpr[reg])
+                        << (reg == 31U ? "" : ",");
+                }
+                result.extshFollowingInstructions.push_back(context.str());
             }
             if (result.mmcr2Retired && before.nip > result.mmcr2Nip &&
                 before.nip <= result.mmcr2Nip + 0x2CU) {

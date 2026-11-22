@@ -325,6 +325,7 @@ constexpr uint16_t XO_OR = 444;    // no OE form
 constexpr uint16_t XO_XOR = 316;   // no OE form
 constexpr uint16_t XO_CMP = 0;     // Rc must be 0
 constexpr uint16_t XO_CMPL = 32;   // Rc must be 0
+constexpr uint16_t XO_EXTSH = 922; // extend sign halfword, Rc selects CR0 update
 constexpr uint16_t XO_EXTSB = 954; // extend sign byte, Rc selects CR0 update
 constexpr uint16_t XO_EXTSW = 986; // extend sign word, Rc selects CR0 update
 constexpr uint16_t XO_CNTLZD = 58; // count leading zeros doubleword
@@ -514,6 +515,7 @@ enum class DecodedKind {
     AND,        // and[.]     (X-form, XO 28)
     OR,         // or[.]      (X-form, XO 444)
     XOR,        // xor[.]     (X-form, XO 316)
+    EXTSH,      // extsh[.]   (X-form, XO 922; 64-bit fixed-point facility)
     EXTSB,      // extsb[.]   (X-form, XO 954; 64-bit fixed-point facility)
     EXTSW,      // extsw[.]   (X-form, XO 986; 64-bit fixed-point facility)
     CNTLZD,     // cntlzd[.] (X-form, XO 58; 64-bit fixed-point facility)
